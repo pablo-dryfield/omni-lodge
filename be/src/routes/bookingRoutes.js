@@ -1,6 +1,7 @@
 import express from 'express';
 import * as bookingController from '../controllers/bookingController.js';
 import { check, param, validationResult } from 'express-validator';
+import authMiddleware from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
@@ -36,18 +37,18 @@ const validate = (req, res, next) => {
 };
 
 // Get all bookings
-router.get('/', bookingController.getAllBookings);
+router.get('/', authMiddleware, bookingController.getAllBookings);
 
 // Get a single booking by ID
-router.get('/:id', validateId, validate, bookingController.getBookingById);
+router.get('/:id', authMiddleware, validateId, validate, bookingController.getBookingById);
 
 // Create a new booking
-router.post('/', validateBookingPOST, validate, bookingController.createBooking);
+router.post('/', authMiddleware, validateBookingPOST, validate, bookingController.createBooking);
 
 // Update an existing booking by ID
-router.put('/:id', [...validateId, ...validateBookingPUT], validate, bookingController.updateBooking);
+router.put('/:id', authMiddleware, [...validateId, ...validateBookingPUT], validate, bookingController.updateBooking);
 
 // Delete a booking by ID
-router.delete('/:id', validateId, validate, bookingController.deleteBooking);
+router.delete('/:id', authMiddleware, validateId, validate, bookingController.deleteBooking);
 
 export default router;

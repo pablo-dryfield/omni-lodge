@@ -1,10 +1,19 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import rateLimit from 'express-rate-limit';
 import guestRoutes from './routes/guestRoutes.js';
 import bookingRoutes from './routes/bookingRoutes.js';
 import channelRoutes from './routes/channelRoutes.js';
+import userRoutes from './routes/userRoutes.js';
 import { sequelize } from './models/index.js'; // Import Sequelize instance
+import logger from './utils/logger.js';
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100,
+  message: "Too many requests from this IP, please try again after 15 minutes"
+});
 
 // Load environment variables
 dotenv.config();
@@ -16,10 +25,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Apply the rate limit middleware to all routes
+app.use("/api/", apiLimiter);
+
 // Import Routes
 app.use('/api/guests', guestRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/channels', channelRoutes);
+app.use('/api/users', userRoutes);
 
 // Sample Endpoint
 app.get('/', (req, res) => {
@@ -32,11 +45,11 @@ sequelize.sync()
   .then(() => {
   
     app.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
+      logger.info(`Server is running on port ${PORT}`);
     });
   })
   .catch(err => {
-    console.error('Unable to connect to the database:', err);
+    logger.error('Unable to connect to the database:', err);
   });
   
 
