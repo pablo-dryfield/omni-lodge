@@ -8,6 +8,7 @@ import channelRoutes from './routes/channelRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import { sequelize } from './models/index.js'; // Import Sequelize instance
 import logger from './utils/logger.js';
+import instrumentMiddleware from './middleware/instrumentMiddleware.js';
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -24,6 +25,9 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Instrumentation 
+app.use(instrumentMiddleware);
 
 // Apply the rate limit middleware to all routes
 app.use("/api/", apiLimiter);
