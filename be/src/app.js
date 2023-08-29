@@ -30,7 +30,23 @@ dotenv.config();
 const app = express();
 
 // Middleware
-app.use(cors());
+//const allowedOrigins = ['https://yourwebsite.com', 'https://www.yourwebsite.com'];
+const allowedOrigins = ['http://localhost:3000'];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (allowedOrigins.includes(origin) || !origin) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Authorization', 'Content-Type'],
+  })
+);
+
 app.use(express.json());
 
 // Use helmet middleware to set various security headers, including CSP
