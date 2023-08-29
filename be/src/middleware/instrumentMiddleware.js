@@ -1,0 +1,25 @@
+import { createNamespace } from 'cls-hooked';
+import logger from '../utils/logger.js';
+import { collectDefaultMetrics, register } from 'prom-client'; // Import Prometheus modules
+
+// Initialize default metrics collection
+collectDefaultMetrics();
+
+const instrumentMiddleware = (req, res, next) => {
+  const ns = createNamespace('my-namespace');
+  ns.run(() => {
+    // Set up any context data using the namespace
+    ns.set('key', 'value');
+
+    // Log the incoming request
+    logger.info(`Request received: ${req.method} ${req.url}`);
+
+    // Update Prometheus metrics here
+    // For example: httpRequestDurationMicroseconds.labels(req.method, req.route.path).observe(duration);
+
+    // Continue with the request handling
+    next();
+  });
+};
+
+export default instrumentMiddleware;
