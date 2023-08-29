@@ -8,8 +8,15 @@ import channelRoutes from './routes/channelRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import { sequelize } from './models/index.js'; // Import Sequelize instance
 import logger from './utils/logger.js';
+import { collectDefaultMetrics } from 'prom-client';
 import instrumentMiddleware from './middleware/instrumentMiddleware.js';
+import errorMiddleware from './middleware/errorMiddleware.js';
+import helmet from 'helmet';
 
+// Initialize default metrics collection
+collectDefaultMetrics();
+
+// API Requests limiter
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100,
@@ -26,6 +33,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Use helmet middleware to set various security headers, including CSP
+app.use(helmet.contentSecurityPolicy({
+  directives: {
+    defaultSrc: ["'self'"], // Allow content from the same origin
+    scriptSrc: ["'self'", "'unsafe-inline'"], // Allow inline scripts (unsafe)
+    styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'], // Allow inline styles and Google Fonts
+    // Add more directives as needed
+  },
+}));
+
 // Instrumentation 
 app.use(instrumentMiddleware);
 
@@ -37,6 +54,9 @@ app.use('/api/guests', guestRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/channels', channelRoutes);
 app.use('/api/users', userRoutes);
+
+// Error Handling
+app.use(errorMiddleware);
 
 // Sample Endpoint
 app.get('/', (req, res) => {
