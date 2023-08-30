@@ -50,11 +50,13 @@ import {
       case CREATE_CHANNEL_SUCCESS:
         return {
           ...state,
+          loading: false,
           channels: [...state.channels, action.payload],
         };
       case UPDATE_CHANNEL_SUCCESS:
         return {
           ...state,
+          loading: false,
           channels: state.channels.map((channel) =>
             channel.id === action.payload.id ? action.payload : channel
           ),
@@ -62,6 +64,7 @@ import {
       case DELETE_CHANNEL_SUCCESS:
         return {
           ...state,
+          loading: false,
           channels: state.channels.filter((channel) => channel.id !== action.payload),
         };
       default:

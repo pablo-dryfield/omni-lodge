@@ -50,11 +50,13 @@ const guestReducer = (state = initialState, action) => {
     case CREATE_GUEST_SUCCESS:
       return {
         ...state,
+        loading: false,
         guests: [...state.guests, action.payload],
       };
     case UPDATE_GUEST_SUCCESS:
       return {
         ...state,
+        loading: false,
         guests: state.guests.map((guest) =>
           guest.id === action.payload.id ? action.payload : guest
         ),
@@ -62,6 +64,7 @@ const guestReducer = (state = initialState, action) => {
     case DELETE_GUEST_SUCCESS:
       return {
         ...state,
+        loading: false,
         guests: state.guests.filter((guest) => guest.id !== action.payload),
       };
     default:

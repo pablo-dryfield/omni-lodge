@@ -50,11 +50,13 @@ import {
       case CREATE_BOOKING_SUCCESS:
         return {
           ...state,
+          loading: false,
           bookings: [...state.bookings, action.payload],
         };
       case UPDATE_BOOKING_SUCCESS:
         return {
           ...state,
+          loading: false,
           bookings: state.bookings.map((booking) =>
             booking.id === action.payload.id ? action.payload : booking
           ),
@@ -62,6 +64,7 @@ import {
       case DELETE_BOOKING_SUCCESS:
         return {
           ...state,
+          loading: false,
           bookings: state.bookings.filter((booking) => booking.id !== action.payload),
         };
       default:

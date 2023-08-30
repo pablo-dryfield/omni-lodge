@@ -50,11 +50,13 @@ import {
       case CREATE_USER_SUCCESS:
         return {
           ...state,
+          loading: false,
           users: [...state.users, action.payload],
         };
       case UPDATE_USER_SUCCESS:
         return {
           ...state,
+          loading: false,
           users: state.users.map((user) =>
             user.id === action.payload.id ? action.payload : user
           ),
@@ -62,6 +64,7 @@ import {
       case DELETE_USER_SUCCESS:
         return {
           ...state,
+          loading: false,
           users: state.users.filter((user) => user.id !== action.payload),
         };
       default:
