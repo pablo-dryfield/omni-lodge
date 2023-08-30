@@ -1,50 +1,51 @@
 import React from 'react';
-import { Container, Typography, Button } from '@mui/material';
-import { makeStyles } from '@mui/styles';
+import styled from 'styled-components';
+import { Paper, Typography } from '@mui/material';
+import { createTheme, ThemeProvider } from '@mui/material/styles';
 
-const useStyles = makeStyles((theme) => ({
-  container: {
-    backgroundColor: '#1a1a1a',
-    minHeight: '100vh',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: theme.spacing(4),
-    color: 'white',
-  },
-  title: {
-    fontSize: '2.5rem',
-    marginBottom: theme.spacing(2),
-  },
-  description: {
-    fontSize: '1.2rem',
-    marginBottom: theme.spacing(4),
-  },
-  button: {
-    backgroundColor: '#009688',
-    color: 'white',
-    '&:hover': {
-      backgroundColor: '#00796b',
+// Define a light theme
+const theme = createTheme({
+  palette: {
+    primary: {
+      main: '#3f90f0', // Blue color
+    },
+    secondary: {
+      main: '#32c787', // Green color
+    },
+    background: {
+      default: '#ffffff', // White background color
     },
   },
-}));
+});
+
+// Styled components
+const Container = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+`;
+
+const StyledPaper = styled(Paper)`
+  padding: 20px;
+`;
+
+const Title = styled(Typography)`
+  margin-bottom: 20px;
+`;
 
 const Home = () => {
-  const classes = useStyles();
-
   return (
-    <Container className={classes.container}>
-      <Typography className={classes.title} variant="h1">
-        Welcome to OmniLodge
-      </Typography>
-      <Typography className={classes.description} variant="body1">
-        Your all-in-one solution for managing guests, bookings, channels, and users.
-      </Typography>
-      <Button className={classes.button} variant="contained">
-        Get Started
-      </Button>
-    </Container>
+    <ThemeProvider theme={theme}>
+      <Container>
+        <StyledPaper elevation={3}>
+          <Title variant="h4">Welcome to OmniLodge</Title>
+          <Typography>
+            Your dynamic and cool home page content goes here!
+          </Typography>
+        </StyledPaper>
+      </Container>
+    </ThemeProvider>
   );
 };
 
