@@ -13,7 +13,7 @@ const theme = createTheme({
       main: '#32c787', // Green color
     },
     background: {
-      default: '#ffffff', // White background color
+      default: '#e1ddf7', // White background color
     },
   },
 });
