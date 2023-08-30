@@ -4,7 +4,7 @@ import { fetchUsers, deleteUser } from '../../actions/userActions'; // Import th
 
 const UserList = () => {
   const dispatch = useDispatch();
-  const { users, loading } = useSelector((state) => state.users); // Access users state from Redux store
+  const { users, loading, error } = useSelector((state) => state.users); // Access users state from Redux store
 
   useEffect(() => {
     // Fetch users when the component mounts
@@ -23,9 +23,13 @@ const UserList = () => {
       <h2>User List</h2>
       {loading ? (
         <p>Loading...</p>
-      ) : (
+      ) : error ? (
+        <p>Error retriving data: <i>{error}</i></p>
+        ) : (
         <ul>
-          {users.map((user) => (
+          {users ? (
+          <p>No users found.</p>
+          ) : users.map((user) => (
             <li key={user.id}>
               <span>{user.username}</span>
               <span>{user.email}</span>

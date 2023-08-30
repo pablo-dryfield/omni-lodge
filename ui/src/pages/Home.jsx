@@ -1,50 +1,56 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
+import { Grid, Paper, Typography, ThemeProvider } from '@mui/material';
 import styled from 'styled-components';
-import { Paper, Typography } from '@mui/material';
-import { createTheme, ThemeProvider } from '@mui/material/styles';
+import BookIcon from '@mui/icons-material/Book';
+import PeopleIcon from '@mui/icons-material/People';
+import TvIcon from '@mui/icons-material/Tv';
+import PersonIcon from '@mui/icons-material/Person';
+import { createTheme } from '@mui/material/styles';
 
-// Define a light theme
-const theme = createTheme({
-  palette: {
-    primary: {
-      main: '#3f90f0', // Blue color
-    },
-    secondary: {
-      main: '#32c787', // Green color
-    },
-    background: {
-      default: '#e1ddf7', // White background color
-    },
-  },
-});
+const theme = createTheme(); // Create a theme instance
 
-// Styled components
-const Container = styled.div`
+const LogoTile = styled(Paper)`
+  width: 120px;
+  height: 120px;
+  background-color: ${({ tiletheme }) => tiletheme.palette.grey[100]}; // Use a different prop name
+  border-radius: 50%;
   display: flex;
-  align-items: center;
   justify-content: center;
-  height: 100vh;
-`;
-
-const StyledPaper = styled(Paper)`
-  padding: 20px;
-`;
-
-const Title = styled(Typography)`
-  margin-bottom: 20px;
+  align-items: center;
+  margin-bottom: ${({ tiletheme }) => tiletheme.spacing(2)}px;
 `;
 
 const Home = () => {
+  const pageData = [
+    { name: 'Bookings', path: '/bookings', icon: <BookIcon fontSize="large" /> },
+    { name: 'Guests', path: '/guests', icon: <PeopleIcon fontSize="large" /> },
+    { name: 'Channels', path: '/channels', icon: <TvIcon fontSize="large" /> },
+    { name: 'Users', path: '/users', icon: <PersonIcon fontSize="large" /> },
+    // Add more entries for other pages
+  ];
+
   return (
     <ThemeProvider theme={theme}>
-      <Container>
-        <StyledPaper elevation={3}>
-          <Title variant="h4">Welcome to OmniLodge</Title>
-          <Typography>
-            Your dynamic and cool home page content goes here!
-          </Typography>
-        </StyledPaper>
-      </Container>
+      <div>
+        <Typography variant="h4" align="center" gutterBottom>
+          Welcome to OmniLodge
+        </Typography>
+        <Grid container spacing={2} justifyContent="center">
+          {pageData.map((page) => (
+            <Link to={page.path} key={page.name}>
+              <Grid item xs={12} sm={6} md={4}>
+                <LogoTile elevation={3} tiletheme={theme}>
+                  {page.icon}
+                </LogoTile>
+                <Typography variant="subtitle1" align="center">
+                  {page.name}
+                </Typography>
+              </Grid>
+            </Link>
+          ))}
+        </Grid>
+      </div>
     </ThemeProvider>
   );
 };
