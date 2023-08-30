@@ -1,6 +1,9 @@
 import axios from 'axios';
+import config from '../config/devConfig';
 
-const instance = axios.create();
+const instance = axios.create({
+  baseURL: config.baseURL, // Replace with the actual URL of your server
+});
 
 // Add a request interceptor
 instance.interceptors.request.use(
