@@ -1,11 +1,11 @@
 import React from 'react';
 import { Route, Routes as ReactRoutes } from 'react-router-dom';
 
-import Home from '../pages/Home';
-import Guests from '../pages/Guests';
-import Bookings from '../pages/Bookings';
-import Channels from '../pages/Channels';
-import Users from '../pages/Users';
+import Home from '../../pages/Home';
+import Guests from '../../pages/Guests';
+import Bookings from '../../pages/Bookings';
+import Channels from '../../pages/Channels';
+import Users from '../../pages/Users';
 
 const Routes = () => {
   return (
