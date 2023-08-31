@@ -76,19 +76,19 @@ const NavBar = () => {
         </SystemName>
         {showMobileMenu ? (
           <>
-          <NavItem onClick={openMenu} open={isMenuOpen && showMobileMenu}>
-            <IconButton
-              size="large"
-              aria-controls="menu"
-              aria-haspopup="true"
-              color="inherit"
-            >
-              <MenuIcon />
-            </IconButton>
-            <Typography variant="subtitle2" sx={{ color: 'white' }}>
-              Menu
-            </Typography>
-          </NavItem>
+            <NavItem onClick={openMenu} open={isMenuOpen}>
+              <IconButton
+                size="large"
+                aria-controls="menu"
+                aria-haspopup="true"
+                color="inherit"
+              >
+                <MenuIcon />
+              </IconButton>
+              <Typography variant="subtitle2" sx={{ color: 'white' }}>
+                Menu
+              </Typography>
+            </NavItem>
             <Menu
               id="menu"
               anchorEl={menuAnchor}
@@ -110,10 +110,10 @@ const NavBar = () => {
           </>
         ) : (
           <>
-            {pageData.map((page) => (         
-              <NavItem to={page.path} key={page.name} open={isMenuOpen && !showMobileMenu}>
+            {pageData.map((page) => (
+              <NavItem to={page.path} key={page.name}>
                 {page.name}
-              </NavItem>           
+              </NavItem>
             ))}
           </>
         )}
