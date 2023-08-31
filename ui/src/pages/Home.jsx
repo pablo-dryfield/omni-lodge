@@ -1,25 +1,14 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { Grid, Paper, Typography, ThemeProvider } from '@mui/material';
-import styled from 'styled-components';
+import { styled } from '@mui/system';
 import BookIcon from '@mui/icons-material/Book';
 import PeopleIcon from '@mui/icons-material/People';
 import TvIcon from '@mui/icons-material/Tv';
 import PersonIcon from '@mui/icons-material/Person';
 import { createTheme } from '@mui/material/styles';
 
-const theme = createTheme(); // Create a theme instance
-
-const LogoTile = styled(Paper)`
-  width: 120px;
-  height: 120px;
-  background-color: ${({ tiletheme }) => tiletheme.palette.grey[100]}; // Use a different prop name
-  border-radius: 50%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin-bottom: ${({ tiletheme }) => tiletheme.spacing(2)}px;
-`;
+const theme = createTheme();
 
 const Home = () => {
   const pageData = [
@@ -30,24 +19,49 @@ const Home = () => {
     // Add more entries for other pages
   ];
 
+  const LogoTile = styled(Paper)(({ theme }) => ({
+    width: 160,
+    height: 160,
+    backgroundColor: theme.palette.grey[100],
+    borderRadius: '50%',
+    display: 'flex',
+    flexDirection: 'column', // Arrange icon and text in a column
+    justifyContent: 'center',
+    alignItems: 'center',
+    margin: '0 auto', // Center the items
+    marginBottom: theme.spacing(2), // Add spacing between items
+    marginTop: theme.spacing(2), // Add spacing between items
+    transition: 'background-color 0.3s', // Add transition
+    '&:hover': {
+      backgroundColor: theme.palette.grey[300], // Darker background on hover
+    },
+    '&:active': {
+      backgroundColor: theme.palette.grey[500], // Even darker background on click
+    },
+  }));
+
+  const PageName = styled(Typography)({
+    color: 'black',
+    textDecoration: 'none',
+    textAlign: 'center',
+    marginTop: theme.spacing(1), // Add spacing between icon and text
+  });
+
   return (
     <ThemeProvider theme={theme}>
       <div>
-        <Typography variant="h4" align="center" gutterBottom>
-          Welcome to OmniLodge
-        </Typography>
-        <Grid container spacing={2} justifyContent="center">
+        <Grid container spacing={2} justifyContent="center" sx={{ maxWidth: 1100, margin: '0 auto' }}>
           {pageData.map((page) => (
-            <Link to={page.path} key={page.name}>
-              <Grid item xs={12} sm={6} md={4}>
-                <LogoTile elevation={3} tiletheme={theme}>
+            <Grid item xs={12} sm={6} md={4} key={page.name}>
+              <Link to={page.path} style={{ textDecoration: 'none' }}>
+                <LogoTile elevation={3}>
                   {page.icon}
+                  <PageName variant="subtitle1">
+                    {page.name}
+                  </PageName>
                 </LogoTile>
-                <Typography variant="subtitle1" align="center">
-                  {page.name}
-                </Typography>
-              </Grid>
-            </Link>
+              </Link>
+            </Grid>
           ))}
         </Grid>
       </div>
