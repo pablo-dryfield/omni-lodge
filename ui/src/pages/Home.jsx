@@ -10,6 +10,13 @@ import { createTheme } from '@mui/material/styles';
 
 const theme = createTheme();
 
+const CenteredContainer = styled('div')({
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minHeight: '100vh',
+});
+
 const Home = () => {
   const pageData = [
     { name: 'Bookings', path: '/bookings', icon: <BookIcon fontSize="large" /> },
@@ -28,7 +35,6 @@ const Home = () => {
     flexDirection: 'column', // Arrange icon and text in a column
     justifyContent: 'center',
     alignItems: 'center',
-    margin: '0 auto', // Center the items
     marginBottom: theme.spacing(2), // Add spacing between items
     marginTop: theme.spacing(2), // Add spacing between items
     transition: 'background-color 0.3s', // Add transition
@@ -49,22 +55,24 @@ const Home = () => {
 
   return (
     <ThemeProvider theme={theme}>
-      <div>
-        <Grid container spacing={2} justifyContent="center" sx={{ maxWidth: 1100, margin: '0 auto' }}>
-          {pageData.map((page) => (
-            <Grid item xs={12} sm={6} md={4} key={page.name}>
-              <Link to={page.path} style={{ textDecoration: 'none' }}>
-                <LogoTile elevation={3}>
-                  {page.icon}
-                  <PageName variant="subtitle1">
-                    {page.name}
-                  </PageName>
-                </LogoTile>
-              </Link>
-            </Grid>
-          ))}
-        </Grid>
-      </div>
+      <CenteredContainer>
+        <div>
+          <Grid container justifyContent="center" >
+            {pageData.map((page) => (
+              <Grid item xs={12} sm={6} md={4} key={page.name}>
+                <Link to={page.path} style={{ padding: '3vh', textDecoration: 'none', alignItems:'center', display: 'flex', justifyContent: 'center',}}>
+                  <LogoTile elevation={3}>
+                    {page.icon}
+                    <PageName variant="subtitle1">
+                      {page.name}
+                    </PageName>
+                  </LogoTile>
+                </Link>
+              </Grid>
+            ))}
+          </Grid>
+        </div>
+      </CenteredContainer>
     </ThemeProvider>
   );
 };
