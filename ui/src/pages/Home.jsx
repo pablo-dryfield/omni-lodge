@@ -4,6 +4,7 @@ import { Grid, Paper, Typography, ThemeProvider } from '@mui/material';
 import { styled } from '@mui/system';
 import BookIcon from '@mui/icons-material/Book';
 import PeopleIcon from '@mui/icons-material/People';
+import CalendarMonth from '@mui/icons-material/People';
 import TvIcon from '@mui/icons-material/Tv';
 import PersonIcon from '@mui/icons-material/Person';
 import { createTheme } from '@mui/material/styles';
@@ -20,6 +21,7 @@ const CenteredContainer = styled('div')({
 const Home = () => {
   const pageData = [
     { name: 'Bookings', path: '/bookings', icon: <BookIcon fontSize="large" /> },
+    { name: 'Availability Calendar', path: '/calendar', icon: <CalendarMonth fontSize="large" /> },
     { name: 'Guests', path: '/guests', icon: <PeopleIcon fontSize="large" /> },
     { name: 'Channels', path: '/channels', icon: <TvIcon fontSize="large" /> },
     { name: 'Users', path: '/users', icon: <PersonIcon fontSize="large" /> },

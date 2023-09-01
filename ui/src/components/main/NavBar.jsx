@@ -42,8 +42,9 @@ const NavBar = () => {
     { name: 'Home', path: '/' },
     { name: 'Guests', path: '/guests' },
     { name: 'Bookings', path: '/bookings' },
+    { name: 'Calendar', path: '/calendar' },
     { name: 'Channels', path: '/channels' },
-    { name: 'Users', path: '/users' },
+    { name: 'Users', path: '/users' }, 
   ];
 
   const [menuAnchor, setMenuAnchor] = useState(null);
