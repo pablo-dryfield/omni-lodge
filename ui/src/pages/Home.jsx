@@ -14,7 +14,7 @@ const CenteredContainer = styled('div')({
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  minHeight: '93vh',
+  height:'100%',
 });
 
 const Home = () => {
