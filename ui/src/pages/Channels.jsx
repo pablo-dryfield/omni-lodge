@@ -1,10 +1,10 @@
 import React from 'react';
+import ChannelList from '../components/channels/ChannelsList';
 
 const Channels = () => {
   return (
     <div>
-      <h1>CHANNELS</h1>
-      {/* Other content */}
+      <ChannelList />
     </div>
   );
 };
