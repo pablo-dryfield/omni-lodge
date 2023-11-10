@@ -1,0 +1,11 @@
+import { google } from 'googleapis';
+
+// Create a client with the credentials
+const googleClient = new google.auth.JWT(
+    "yes-trips@omni-lodge.iam.gserviceaccount.com",
+    null,
+    "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCrWhoM/tHTHntD\nIUhB3zXpiumYDCuM92W921cBqBa/HnvL6EQcFKF2DBfaJa+q8QntRQ4j4CWlgJ/e\nZkemq7Ya/Z1i71WoQEGXfRIHDeAOrdpnDxnbs9ydxkM8UvVrm6MFLzCuhcXqVo5l\nbJ5pXjsL3PJgH1QnVGg4L3rGyWDEAWC1lKq8t0oLeXDjUWP7fSEnlS1KwEVwBTqq\nEoSGPB7NaVxl4ScYSUgnTYv7Lk7tocRh+K4E+q/SLrBjyHm8/aSN161+gHbLsuA1\njXSva9FBht9UciVfwi5E3csdoBIpm+XskIoumxnaB6yK0VbbLduvfsiuPA6BtU2p\n38yAQfwRAgMBAAECggEACodLQXrTdALpSlB8YEZxnsDL0JgILFhegSy91bAOfGjI\nQi5VJ6/hfzTdWaiQzifoVxKz/I1UaC0VOvToOHv61la4pHBrQB7OnkXE5U0QyXty\nMic8jKzVBJa+4TEsZj5rulunb0RwoDui8pAa0wOYt4ZjGCKPU6lSjAfoJdhldeA7\n9qCNzS1JxpyKNZztilz2G5HOngGexk+O8YLQbQ/cbvdwxLyig3OooW/0/eXTHg5U\n0VO8kr+7P8kRPs+j378Bs911Q2aJnZyd3JJsrXMTs6Yr9uPtaUgLKnBas4FCZWgn\nF3hYgojdk4gZDvbDIbZUUS6W6jK1pQmrxlfX0mCjRwKBgQDkLucSzqDgX9Tu/8lO\n3K8weTUPl5kkIjzVI0VSWWQqFrT8F40Ug+vzAgAsRYJ5YM7Xg9t7b+/o4ynYjUkA\nZVJ1xAvZcwKxLm44Mcv9KXdluJ6cEls5srKNqHLrcXEQTgcvr943JsWwNavohys8\nSzz6WZiYKGOmRB/43bGpkLMtHwKBgQDAPZ7T6FbLaRp6vNaeKpYtbHc5RVM4vuQG\nObZ+YDwwwl4lG5TpiY6Fzh29mIYaMiZv518DW8vD5vpZ/cBUEwx0GidNbSRtzJgx\nkLDOK+BHYP27lptYpiJn99W+FTsU+OKcWCHtztZZPyCzPM1gInAhoPxGcrDy2M9P\nxj08PA+AzwKBgD8Rf6jBF9IsaqxMYpW7hWh+d94BZsCH/gxjHUvvjTHc6NUspT/g\nXpziFq4l4DQwP7ttpIJvo/3Ym75Q/rZvSuVl9Gh702ipjqlVii5FAc1Jw/0bTb+a\n1qM0xd6xkjCRgIb7sw3HV6imjQdOJPMbUJVZokWcFD7mYXflvq9BYWS9AoGAU/LU\nx/7+4Ab+zDholFtOh3mFOto+NFqP4vQS8G7/+d73E8dOqQkr1tyieif/77KUvGtS\nP3o3qk3UZ7X65fwHhS/il9ogfV5J2+MugmoAn8sIIoHrRrQN9E7y5PYKfecNtm56\nKooXapO5qOvVV7TSOK0/XVg6U2JAbbrJBOPJdVsCgYEAn+mgXlCjaDHpwjoP2Fh1\nKWuPFj6hKRy7b0FK5Dj9ciMVZ4jTH4i0OxmdOpEsW4P5XALMEKARwh0Dg+Vwb9qA\nhx//asS7xk4bTJDUaHz01VlezpHIvzJ61WCIlAq4gtSjmwGmB7TQf8o4Q6jdKaYy\n96W/BmqwNbMoju13GR4408w=\n-----END PRIVATE KEY-----\n",
+    ['https://www.googleapis.com/auth/spreadsheets']
+);
+
+  export default googleClient;

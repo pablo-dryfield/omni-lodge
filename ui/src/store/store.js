@@ -5,6 +5,8 @@ import guestReducer from './../reducers/guestReducer';
 import bookingReducer from './../reducers/bookingReducer'; 
 import channelReducer from './../reducers/channelReducer'; 
 import userReducer from './../reducers/userReducer';
+import navBarReducer from './../reducers/navBarReducer';
+import leftSidebarReducer from './../reducers/leftSidebarReducer';
 
 // Combine your reducers
 const rootReducer = combineReducers({
@@ -12,6 +14,8 @@ const rootReducer = combineReducers({
   bookings: bookingReducer,
   channels: channelReducer,
   users: userReducer,
+  navBar: navBarReducer,
+  leftSidebar: leftSidebarReducer,
   // Add more reducers here as your app grows
 });
 
