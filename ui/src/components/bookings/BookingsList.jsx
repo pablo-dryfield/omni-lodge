@@ -40,7 +40,7 @@ const BookingList = () => {
       ) : (
         <TableContainer>
           <StyledTable>
-            <Table/>
+            <Table bookings={bookings}/>
           </StyledTable>
         </TableContainer>
       )}
