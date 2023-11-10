@@ -16,7 +16,7 @@ const MainContent = styled('div')({
   flexDirection: 'column', // Stack content vertically
   flexGrow: 1,
   justifyContent: 'center',
-  alignItems: 'center',
+  alignItems: 'stretch',
   backgroundColor: 'white', // White background color
   borderRadius: '20px', // Rounded corners
   boxShadow: '0px 8px 16px rgba(0, 0, 0, 0.2)', // Increased shadow intensity

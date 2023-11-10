@@ -6,6 +6,11 @@ import BookIcon from '@mui/icons-material/Book';
 import PeopleIcon from '@mui/icons-material/People';
 import TvIcon from '@mui/icons-material/Tv';
 import PersonIcon from '@mui/icons-material/Person';
+import { useDispatch } from 'react-redux';
+import {
+  showGuests,
+  showBookings,
+} from '../../actions/leftSidebarActions'; // Import the actions
 
 const SidebarContainer = styled('div')(({ isOpen }) => ({
   backgroundColor: '#9cb6ae',
@@ -27,6 +32,9 @@ const pageData = [
 ];
 
 const LeftSidebar = () => {
+  // Use Redux to access the left sidebar state
+  const dispatch = useDispatch();
+  
   const [isOpen, setIsOpen] = useState(window.innerWidth > 600);
 
   useEffect(() => {
@@ -50,6 +58,20 @@ const LeftSidebar = () => {
             button
             component={Link}
             to={page.path}
+            onClick={() => {
+              // Dispatch the appropriate action based on the selected page
+              if (page.name === 'Guests') {
+                dispatch(showGuests());
+              } else if (page.name === 'Bookings') {
+                dispatch(showBookings());
+              } 
+              // Add more conditions for other pages as needed
+
+              // You can also add a condition to close the sidebar if it's open
+              if (!isOpen) {
+                setIsOpen(true);
+              }
+            }}
             sx={{ flexDirection: isOpen ? 'row' : 'row-reverse' }} // Reverse the direction of flex items when collapsed
           >
             <ListItemIcon>{page.icon}</ListItemIcon>
