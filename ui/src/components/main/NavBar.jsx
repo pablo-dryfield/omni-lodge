@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { styled } from '@mui/system';
+import { useSelector } from 'react-redux'; // Import useSelector and useDispatch
 import {
   AppBar,
   Toolbar,
@@ -17,35 +18,29 @@ const SystemName = styled(Typography)({
   marginRight: '18px',
 });
 
-const NavItem = styled(Link)(({ open}) => ({
+const NavItem = styled(Link)(({ open }) => ({
   minHeight: 'inherit',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   textDecoration: 'none',
   color: 'white',
-  padding: '0 20px', // Add padding to make the clickable area larger
-  borderRadius: '4px', // Add rounded corners
-  transition: 'background-color 0.3s, color 0.3s', // Add transitions
-  backgroundColor: open ? '#222' : 'transparent', // Darker gray if menu is open
+  padding: '0 20px',
+  borderRadius: '4px',
+  transition: 'background-color 0.3s, color 0.3s',
+  backgroundColor: open ? '#222' : 'transparent',
   '&:hover': {
-    backgroundColor: '#222' // Darker gray on hover if menu is closed
+    backgroundColor: '#222',
   },
   '&:active': {
-    backgroundColor: 'black', // Black on click
-    color: 'white', // Text becomes white
+    backgroundColor: 'black',
+    color: 'white',
   },
 }));
 
 const NavBar = () => {
-  const pageData = [
-    { name: 'Home', path: '/' },
-    { name: 'Guests', path: '/guests' },
-    { name: 'Bookings', path: '/bookings' },
-    { name: 'Calendar', path: '/calendar' },
-    { name: 'Channels', path: '/channels' },
-    { name: 'Users', path: '/users' }, 
-  ];
+  // Use useSelector to get pageData from the Redux store
+  const { pageData } = useSelector((state) => state.navBar); 
 
   const [menuAnchor, setMenuAnchor] = useState(null);
   const openMenu = (event) => setMenuAnchor(event.currentTarget);

@@ -27,7 +27,7 @@ const UserList = () => {
         <p>Error retriving data: <i>{error}</i></p>
         ) : (
         <ul>
-          {users ? (
+          {!users ? (
           <p>No users found.</p>
           ) : users.map((user) => (
             <li key={user.id}>

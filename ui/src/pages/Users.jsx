@@ -5,7 +5,6 @@ import UserForm from '../components/users/UserForm';
 const Users = () => {
   return (
     <div>
-      <h1>Users</h1>
       <UsersList />
       <UserForm />
     </div>

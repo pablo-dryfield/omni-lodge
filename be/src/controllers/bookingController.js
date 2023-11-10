@@ -1,14 +1,45 @@
 import Booking from '../models/Booking.js';
+import { google } from 'googleapis';
+const sheets = google.sheets('v4');
+
+// Temp Google Data - Remove later
+import googleClient from '../config/googleClient.js';
 
 // Get All Bookings
-export const getAllBookings = async (req, res) => {
+/*export const getAllBookings = async (req, res) => {
   try {
     const bookings = await Booking.findAll();
     res.status(200).json(bookings);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
+};*/
+
+// Get All Bookings
+googleClient.authorize((err, tokens) => {
+  if (err) {
+    console.error('Error authorizing client:', err);
+    return;
+  }
+});
+
+export const getAllBookings = async (req, res) => {
+  try {
+    const resultsHostelWorld = await sheets.spreadsheets.values.get(
+      {
+        auth: googleClient,
+        spreadsheetId: '1En-HJE8QXKKDLAPwH12vuhd34DhhAWbkRmlgTkmAgEY',
+        range: 'Hostelworld!A1:X300',
+      });
+
+      res.status(200).json(resultsHostelWorld.data.values);
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
 };
+
+  
 
 // Get Booking by ID
 export const getBookingById = async (req, res) => {
