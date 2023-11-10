@@ -1,10 +1,20 @@
 import React from 'react';
 import { MDBBadge, MDBBtn, MDBTable, MDBTableHead, MDBTableBody } from 'mdb-react-ui-kit';
 
-const Table = () => {
+const Table = (props) => {
   return (
+    /* Hacer verificacion de props aca y refactorizar los dos bloques de codigos comentados de abajo*/
     <MDBTable align='middle'>
       <MDBTableHead>
+        {/* {!props.bookings || props.bookings.length === 0 ? (
+              <p>No bookings found.</p>
+            ) : (
+              <>
+                {props.bookings[0].map((header, index) => (
+                  <th key={index}>{header}</th>
+                ))}
+              </>
+            )} */}
         <tr>
           <th scope='col'>Name</th>
           <th scope='col'>Title</th>
@@ -14,6 +24,13 @@ const Table = () => {
         </tr>
       </MDBTableHead>
       <MDBTableBody>
+      {/*{props.bookings.slice(1).map((booking, rowIndex) => (
+                    <Row key={rowIndex}>
+                      {booking.map((cell, cellIndex) => (
+                        <Cell key={cellIndex}>{cell}</Cell>
+                      ))}
+                    </Row>
+                  ))} */}
       <tr>
           <td>
             <div className='d-flex align-items-center'>
