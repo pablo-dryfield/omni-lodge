@@ -1,10 +1,10 @@
 import React from 'react';
+import GuestsList from '../components/guests/GuestsList';
 
 const Guests = () => {
   return (
     <div>
-      <h1>GUESTS</h1>
-      {/* Other content */}
+      <GuestsList />
     </div>
   );
 };
