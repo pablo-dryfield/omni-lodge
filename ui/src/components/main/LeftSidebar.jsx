@@ -33,7 +33,7 @@ const LeftSidebar = () => {
     <Sidebar collapsed={!isOpen} breakPoint={'sm'}>
       <Menu iconShape="square">
         {pageData.map((page) => (
-          <MenuItem icon={<PeopleIcon />}>{page.name}</MenuItem>
+          <MenuItem key={page.name} icon={<PeopleIcon />}>{page.name}</MenuItem>
         ))}
       </Menu>
     </Sidebar>
