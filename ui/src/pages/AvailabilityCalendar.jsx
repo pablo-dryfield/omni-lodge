@@ -32,7 +32,6 @@ const AvailabilityCalendar = () => (
       events={bookings}
       startAccessor="start"
       endAccessor="end"
-      style={{ height: "740px" }}
     />
   </AvailabilityCalendarContainer>
 );
