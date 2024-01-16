@@ -5,13 +5,15 @@ import bcrypt from 'bcryptjs';
 // Register New User
 export const registerUser = async (req, res) => {
   try {
-    const { username, email, password } = req.body;
+    const { username, firstName, lastName, email, password } = req.body;
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
     const newUser = await User.create({
       username,
+      firstName,
+      lastName,
       email,
       password: hashedPassword,
     });
