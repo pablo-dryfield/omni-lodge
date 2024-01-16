@@ -46,8 +46,6 @@ class Channel extends Model {
       sequelize,
       modelName: 'Channel',
       tableName: 'channels',
-      createdAt: 'created_at',
-      updatedAt: 'updated_at'
     });
   }
 

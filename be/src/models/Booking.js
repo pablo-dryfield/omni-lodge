@@ -58,8 +58,6 @@ class Booking extends Model {
       sequelize,
       modelName: 'Booking',
       tableName: 'bookings',
-      createdAt: 'created_at',
-      updatedAt: 'updated_at'
     });
   }
 

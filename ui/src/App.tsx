@@ -1,7 +1,7 @@
 import React from 'react';
 import { BrowserRouter } from 'react-router-dom';
 import NavBar from './components/main/NavBar'; 
-import LeftSidebar from './components/main/LeftSidebar';
+import LeftSidebar from './components/main/LeftSidebar/LeftSidebar';
 import Routes from './components/main/Routes';
 import { styled } from '@mui/system';
 
