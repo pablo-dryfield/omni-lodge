@@ -81,7 +81,7 @@ app.get('/', (req, res) => {
 
 // Sync database and then start server
 const PORT = process.env.PORT || 3001;
-sequelize.sync()
+sequelize.sync({ force: true }/*remove if you dont want the data to be removed and database structure to be changed*/)
   .then(() => {
   
     app.listen(PORT, () => {

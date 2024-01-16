@@ -58,8 +58,6 @@ class Guest extends Model {
       sequelize,
       modelName: 'Guest',
       tableName: 'guests',
-      createdAt: 'created_at',
-      updatedAt: 'updated_at'
     });
   }
 

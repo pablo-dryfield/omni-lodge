@@ -12,6 +12,8 @@
     "@mui/icons-material": "^5.14.7",
     "@mui/material": "^5.14.7",
     "@mui/styled-engine-sc": "^5.14.7",
+    "@reduxjs/toolkit": "^2.0.1",
+    "@storybook/react": "^7.6.8",
     "@tabler/icons-react": "^2.40.0",
     "@testing-library/jest-dom": "^5.17.0",
     "@testing-library/react": "^13.4.0",

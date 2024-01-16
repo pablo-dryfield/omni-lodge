@@ -13,6 +13,14 @@ class User extends Model {
         allowNull: false,
         unique: true
       },
+      firstName: {
+        type: DataTypes.STRING,
+        allowNull: false
+      },
+      lastName: {
+        type: DataTypes.STRING,
+        allowNull: false
+      },
       email: {
         type: DataTypes.STRING,
         allowNull: false,
@@ -31,13 +39,19 @@ class User extends Model {
         type: DataTypes.DATE,
         allowNull: false,
         defaultValue: DataTypes.NOW
+      },
+      createdBy: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+      },
+      updatedBy: {
+        type: DataTypes.INTEGER,
+        allowNull: true
       }
     }, {
       sequelize,
       modelName: 'User',
       tableName: 'users',
-      createdAt: 'created_at',
-      updatedAt: 'updated_at'
     });
   }
 
