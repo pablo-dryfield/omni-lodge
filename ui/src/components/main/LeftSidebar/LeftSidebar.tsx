@@ -1,6 +1,5 @@
 import React from 'react';
 import { Sidebar, Menu, MenuItem, SubMenu, menuClasses, MenuItemStyles } from './src';
-import { Switch } from './components/Switch';
 import { SidebarHeader } from './components/SidebarHeader';
 import { Diamond } from './icons/Diamond';
 import { BarChart } from './icons/BarChart';

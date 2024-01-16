@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import {
   MantineReactTable,
   useMantineReactTable,
+  MRT_TableOptions,
   type MRT_ColumnDef,
   MRT_GlobalFilterTextInput as MRTGlobalFilterTextInput,
   MRT_ToggleFiltersButton as MRTToggleFiltersButton ,
@@ -97,6 +98,18 @@ const Table = <T extends {}>({ data, actions }: TableProps<T>) => {
     [],
   );
 
+  const handleSaveRow: MRT_TableOptions<T>['onEditingRowSave'] = async ({
+    table,
+    row,
+    values,
+  }) => {
+    //if using flat data and simple accessorKeys/ids, you can just do a simple assignment here.
+    //data[row.index] = values;
+    //send/receive api updates here
+   // actions.updateUser(row.original.id, values);
+    table.setEditingRow(null); //exit editing mode
+  };
+
   const table = useMantineReactTable({
     columns,
     data, //must be memoized or stable (useState, useMemo, defined outside of this component, etc.)
@@ -109,6 +122,9 @@ const Table = <T extends {}>({ data, actions }: TableProps<T>) => {
     enableRowSelection: true,
     enableStickyHeader: true,
     enableStickyFooter: true,
+    editDisplayMode:'modal',
+    enableEditing: true,
+    onEditingRowSave: handleSaveRow,
     initialState: { showColumnFilters: false, showGlobalFilter: true },
     mantineTableContainerProps: { sx: { maxHeight: '520px' } },
     paginationDisplayMode: 'pages',
@@ -171,7 +187,7 @@ const Table = <T extends {}>({ data, actions }: TableProps<T>) => {
           <Flex style={{ gap: '8px' }}>
             <Button
               color="green"
-              disabled={!table.getIsSomeRowsSelected()}
+              disabled={table.getIsSomeRowsSelected()}
               onClick={handleActivate}
               variant="filled"
             >
