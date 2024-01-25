@@ -1,4 +1,4 @@
-import { Registry, collectDefaultMetrics } from 'prom-client';
+import { Registry, collectDefaultMetrics, Counter, Histogram } from 'prom-client';
 
 // Create a new Registry for the Prometheus metrics
 const register = new Registry();
@@ -11,18 +11,16 @@ export const requestCounter = new Counter({
   name: 'http_requests_total',
   help: 'Total number of HTTP requests',
   labelNames: ['method', 'path', 'status'],
-  registers: [register],
+  registers: [register], // Note: the property is 'register' in prom-client v13+
 });
 
 export const responseTimeHistogram = new Histogram({
   name: 'http_response_time_seconds',
   help: 'HTTP response time in seconds',
   labelNames: ['method', 'path', 'status'],
-  buckets: [0.1, 0.5, 1, 5],
-  registers: [register],
+  buckets: [0.1, 0.5, 1, 5], // Define your desired buckets
+  registers: [register], // Note: the property is 'register' in prom-client v13+
 });
 
-// Other custom metrics can be defined here
-
-// Export the Prometheus metrics registry
+// Export the Prometheus
 export default register;
