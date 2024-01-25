@@ -1,20 +1,29 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
+import { collectDefaultMetrics } from 'prom-client';
+import { ValidationError  } from 'sequelize';
+
+// TypeScript routes imports (make sure all route files are .ts)
 import guestRoutes from './routes/guestRoutes.js';
 import bookingRoutes from './routes/bookingRoutes.js';
 import channelRoutes from './routes/channelRoutes.js';
 import userRoutes from './routes/userRoutes.js';
-import { sequelize } from './models/index.js'; // Import Sequelize instance
+
+// Sequelize instance and middlewares (make sure these are also migrated to .ts)
+import sequelize from './config/database.js';
 import logger from './utils/logger.js';
-import { collectDefaultMetrics } from 'prom-client';
 import instrumentMiddleware from './middleware/instrumentMiddleware.js';
 import errorMiddleware from './middleware/errorMiddleware.js';
-import helmet from 'helmet';
+import { defineAssociations } from './models/defineAssociations.js';
 
 // Initialize default metrics collection
 collectDefaultMetrics();
+
+// Load environment variables
+dotenv.config();
 
 // API Requests limiter
 const apiLimiter = rateLimit({
@@ -23,39 +32,32 @@ const apiLimiter = rateLimit({
   message: "Too many requests from this IP, please try again after 15 minutes"
 });
 
-// Load environment variables
-dotenv.config();
-
 // Initialize Express
 const app = express();
 
 // Middleware
-//const allowedOrigins = ['https://yourwebsite.com', 'https://www.yourwebsite.com'];
 const allowedOrigins = ['http://localhost:3000'];
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (allowedOrigins.includes(origin) || !origin) {
-        callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
-      }
-    },
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Authorization', 'Content-Type'],
-  })
-);
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Authorization', 'Content-Type'],
+}));
 
 app.use(express.json());
 
 // Use helmet middleware to set various security headers, including CSP
 app.use(helmet.contentSecurityPolicy({
   directives: {
-    defaultSrc: ["'self'"], // Allow content from the same origin
-    scriptSrc: ["'self'", "'unsafe-inline'"], // Allow inline scripts (unsafe)
-    styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'], // Allow inline styles and Google Fonts
-    // Add more directives as needed
+    defaultSrc: ["'self'"],
+    scriptSrc: ["'self'", "'unsafe-inline'"],
+    styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
   },
 }));
 
@@ -65,7 +67,7 @@ app.use(instrumentMiddleware);
 // Apply the rate limit middleware to all routes
 app.use("/api/", apiLimiter);
 
-// Import Routes
+// Routes
 app.use('/api/guests', guestRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/channels', channelRoutes);
@@ -75,21 +77,25 @@ app.use('/api/users', userRoutes);
 app.use(errorMiddleware);
 
 // Sample Endpoint
-app.get('/', (req, res) => {
+app.get('/', (req: Request, res: Response) => {
   res.send('OmniLodge Backend API');
 });
 
 // Sync database and then start server
 const PORT = process.env.PORT || 3001;
-sequelize.sync({ force: true }/*remove if you dont want the data to be removed and database structure to be changed*/)
+sequelize.sync({ force: false }) // Set to 'true' carefully, it will drop the database
   .then(() => {
-  
+    defineAssociations();
     app.listen(PORT, () => {
       logger.info(`Server is running on port ${PORT}`);
     });
   })
-  .catch(err => {
-    logger.error('Unable to connect to the database:', err);
+  .catch((err: Error | ValidationError) => {
+    if (err instanceof ValidationError) {
+      // Handle validation errors
+      logger.error('Validation error:', err.errors);
+    } else {
+      // Handle generic errors
+      logger.error('Unable to connect to the database:', err.message);
+    }
   });
-  
-

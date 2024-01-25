@@ -1,9 +1,9 @@
-import express from 'express';
-import * as channelController from '../controllers/channelController.js';
+import express, { Request, Response, NextFunction, Router } from 'express';
+import * as channelController from '../controllers/channelController.js'; // Adjust the import path as necessary
 import { check, param, validationResult } from 'express-validator';
-import authMiddleware from '../middleware/authMiddleware.js';
+import authMiddleware from '../middleware/authMiddleware.js'; // Adjust the import path as necessary
 
-const router = express.Router();
+const router: Router = express.Router();
 
 // Validation for ID parameter
 const validateId = [
@@ -17,15 +17,16 @@ const validateChannelPOST = [
 ];
 
 const validateChannelPUT = [
-    check('name').optional().trim().isString().isLength({ min: 3, max: 50 }).withMessage('Name must be a string between 3 and 50 characters'),
-    check('type').optional().trim().isIn(['public', 'private']).withMessage('Type must be one of: public, private')
+  check('name').optional().trim().isString().isLength({ min: 3, max: 50 }).withMessage('Name must be a string between 3 and 50 characters'),
+  check('type').optional().trim().isIn(['public', 'private']).withMessage('Type must be one of: public, private')
 ];
 
 // Middleware to check validation result
-const validate = (req, res, next) => {
+const validate = (req: Request, res: Response, next: NextFunction): void => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
+    res.status(400).json({ errors: errors.array() }); // Removed 'return' to adhere to 'void' type
+    return; 
   }
   next();
 };

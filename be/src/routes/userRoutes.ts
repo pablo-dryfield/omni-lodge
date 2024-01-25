@@ -1,9 +1,9 @@
-import express from 'express';
-import * as userController from '../controllers/userController.js';
+import express, { Request, Response, NextFunction, Router } from 'express';
+import * as userController from '../controllers/userController.js'; // Adjust the import path as necessary
 import { check, param, validationResult } from 'express-validator';
-import authMiddleware from '../middleware/authMiddleware.js';
+import authMiddleware from '../middleware/authMiddleware.js'; // Adjust the import path as necessary
 
-const router = express.Router();
+const router: Router = express.Router();
 
 // Validation for ID parameter
 const validateId = [
@@ -31,10 +31,11 @@ const validateUserPUT = [
 ];
 
 // Middleware to check validation result
-const validate = (req, res, next) => {
+const validate = (req: Request, res: Response, next: NextFunction): void => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
+    res.status(400).json({ errors: errors.array() });
+    return; 
   }
   next();
 };
@@ -46,15 +47,15 @@ router.post('/register', validateUserPOST, validate, userController.registerUser
 router.post('/login', validateUserLogin, validate, userController.loginUser);
 
 // Get all users
-router.get('/', /*authMiddleware,*/ validate, userController.getAllUsers);
+router.get('/', /* authMiddleware, */ validate, userController.getAllUsers);
 
 // Get a single user by ID
-router.get('/:id', /*authMiddleware,*/ validateId, validate, userController.getUserById);
+router.get('/:id', /* authMiddleware, */ validateId, validate, userController.getUserById);
 
 // Update an existing user by ID
-router.put('/:id', /*authMiddleware,*/ [...validateId, ...validateUserPUT], validate, userController.updateUser);
+router.put('/:id', /* authMiddleware, */ [...validateId, ...validateUserPUT], validate, userController.updateUser);
 
 // Delete a user by ID
-router.delete('/:id', /*authMiddleware,*/ validateId, validate, userController.deleteUser);
+router.delete('/:id', /* authMiddleware, */ validateId, validate, userController.deleteUser);
 
 export default router;

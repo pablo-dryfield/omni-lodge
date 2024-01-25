@@ -14,89 +14,13 @@ type TableActions = {
 }
 
 // Define the TableProps interface with the dynamic actions
-type TableProps<T> = {
+type TableProps<T extends Record<string, any>> = {
   data: T[];
+  columns: MRT_ColumnDef<T>[];
   actions: TableActions;
 }
 
-const Table = <T extends {}>({ data, actions }: TableProps<T>) => {
-  const columns = useMemo<MRT_ColumnDef<T>[]>(
-    () => [
-      {
-        accessorKey: 'username', //accessorKey used to define `data` column. `id` gets set to accessorKey automatically
-        enableClickToCopy: true,
-        header: 'Username',
-        size: 300,
-      },
-      {
-        accessorFn: (row) => `${(row as any).firstName} ${(row as any).lastName}`, //accessorFn used to join multiple data into a single cell
-        id: 'name', //id is still required when using accessorFn instead of accessorKey
-        header: 'Name',
-        size: 250,
-        filterVariant: 'autocomplete',
-        Cell: ({ renderedCellValue, row }) => (
-          <Box
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '16px',
-            }}
-          >
-            <img
-              alt="avatar"
-              height={30}
-              src="https://cloudflare-ipfs.com/ipfs/Qmd3W5DuhgHirLHGVixi6V76LhCkZUz6pnFt5AJBiyvHye/avatar/528.jpg"
-              style={{ borderRadius: '50%' }}
-            />
-            <span>{renderedCellValue}</span>
-          </Box>
-        ),
-      },
-      {
-        accessorKey: 'email', //accessorKey used to define `data` column. `id` gets set to accessorKey automatically
-        enableClickToCopy: true,
-        header: 'Email',
-        size: 300,
-      },
-      {
-        accessorKey: 'password', //accessorKey used to define `data` column. `id` gets set to accessorKey automatically
-        enableClickToCopy: true,
-        header: 'Password',
-        size: 300,
-      },
-      {
-        accessorFn: (row) => {
-          //convert to Date for sorting and filtering
-          const sDay = new Date((row as any).createdAt);
-          sDay.setHours(0, 0, 0, 0); // remove time from date (useful if filter by equals exact date)
-          return sDay;
-        },
-        id: 'createdAt',
-        header: 'Created Date',
-        filterVariant: 'date-range',
-        sortingFn: 'datetime',
-        enableColumnFilterModes: false, //keep this as only date-range filter with between inclusive filterFn
-        Cell: ({ cell }) => cell.getValue<Date>()?.toLocaleDateString(), //render Date as a string
-        Header: ({ column }) => <em>{column.columnDef.header}</em>, //custom header markup
-      },
-      {
-        accessorFn: (row) => {
-          //convert to Date for sorting and filtering
-          const sDay = new Date((row as any).createdAt);
-          sDay.setHours(0, 0, 0, 0); // remove time from date (useful if filter by equals exact date)
-          return sDay;
-        },
-        id: 'updatedAt',
-        header: 'Updated Date',
-        filterVariant: 'date-range',
-        sortingFn: 'datetime',
-        enableColumnFilterModes: false, //keep this as only date-range filter with between inclusive filterFn
-        Cell: ({ cell }) => cell.getValue<Date>()?.toLocaleDateString(), //render Date as a string
-        Header: ({ column }) => <em>{column.columnDef.header}</em>, //custom header markup
-      },
-    ],
-    [],
-  );
+const Table = <T extends {}>({ data, columns, actions }: TableProps<T>) => {
 
   const handleSaveRow: MRT_TableOptions<T>['onEditingRowSave'] = async ({
     table,

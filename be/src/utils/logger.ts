@@ -1,7 +1,7 @@
 import winston from 'winston';
 
 // Define the log levels
-const logLevels = {
+const logLevels: winston.config.AbstractConfigSetLevels = {
   error: 0,
   warn: 1,
   info: 2,

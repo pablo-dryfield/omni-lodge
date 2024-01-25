@@ -1,9 +1,9 @@
-import express from 'express';
-import * as bookingController from '../controllers/bookingController.js';
+import express, { Request, Response, NextFunction, Router } from 'express';
+import * as bookingController from '../controllers/bookingController.js'; // Adjust the import path as necessary
 import { check, param, validationResult } from 'express-validator';
-import authMiddleware from '../middleware/authMiddleware.js';
+import authMiddleware from '../middleware/authMiddleware.js'; // Adjust the import path as necessary
 
-const router = express.Router();
+const router: Router = express.Router();
 
 // Validation for ID parameter
 const validateId = [
@@ -20,18 +20,19 @@ const validateBookingPOST = [
 ];
 
 const validateBookingPUT = [
-    check('guestId').optional().isInt({ gt: 0 }).withMessage('guestId must be a positive integer'),
-    check('channelId').optional().isInt({ gt: 0 }).withMessage('channelId must be a positive integer'),
-    check('startDate').optional().isISO8601().withMessage('startDate must be a valid date (ISO 8601)'),
-    check('endDate').optional().isISO8601().withMessage('endDate must be a valid date (ISO 8601)'),
-    check('status').optional().isIn(['confirmed', 'cancelled', 'pending']).withMessage('status must be one of: confirmed, cancelled, pending'),
-  ];
+  check('guestId').optional().isInt({ gt: 0 }).withMessage('guestId must be a positive integer'),
+  check('channelId').optional().isInt({ gt: 0 }).withMessage('channelId must be a positive integer'),
+  check('startDate').optional().isISO8601().withMessage('startDate must be a valid date (ISO 8601)'),
+  check('endDate').optional().isISO8601().withMessage('endDate must be a valid date (ISO 8601)'),
+  check('status').optional().isIn(['confirmed', 'cancelled', 'pending']).withMessage('status must be one of: confirmed, cancelled, pending'),
+];
 
 // Middleware to check validation result
-const validate = (req, res, next) => {
+const validate = (req: Request, res: Response, next: NextFunction): void => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
+    res.status(400).json({ errors: errors.array() }); // Adjusted for TypeScript
+    return;
   }
   next();
 };

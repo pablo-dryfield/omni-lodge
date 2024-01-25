@@ -1,9 +1,9 @@
-import express from 'express';
-import * as guestController from '../controllers/guestController.js';
+import express, { Request, Response, NextFunction, Router } from 'express';
+import * as guestController from '../controllers/guestController.js'; // Adjust import path as necessary
 import { check, param, validationResult } from 'express-validator';
-import authMiddleware from '../middleware/authMiddleware.js';
+import authMiddleware from '../middleware/authMiddleware.js'; // Adjust import path as necessary
 
-const router = express.Router();
+const router: Router = express.Router();
 
 // Validation for ID parameter
 const validateId = [
@@ -18,16 +18,17 @@ const validateGuestPOST = [
 ];
 
 const validateGuestPUT = [
-    check('firstName').optional().trim().isString().isLength({ min: 2, max: 50 }).withMessage('First name must be a string between 2 and 50 characters'),
-    check('lastName').optional().trim().isString().isLength({ min: 2, max: 50 }).withMessage('Last name must be a string between 2 and 50 characters'),
-    check('email').optional().trim().isEmail().withMessage('Email must be a valid email address')
-  ];
+  check('firstName').optional().trim().isString().isLength({ min: 2, max: 50 }).withMessage('First name must be a string between 2 and 50 characters'),
+  check('lastName').optional().trim().isString().isLength({ min: 2, max: 50 }).withMessage('Last name must be a string between 2 and 50 characters'),
+  check('email').optional().trim().isEmail().withMessage('Email must be a valid email address')
+];
 
 // Middleware to check validation result
-const validate = (req, res, next) => {
+const validate = (req: Request, res: Response, next: NextFunction): void => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
+    res.status(400).json({ errors: errors.array() });
+    return; 
   }
   next();
 };
