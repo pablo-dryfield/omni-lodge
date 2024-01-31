@@ -82,7 +82,7 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
           type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
         };
       });
-    res.status(200).json({ data, columns });
+    res.status(200).json([{ data, columns }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json({ message: errorMessage });
