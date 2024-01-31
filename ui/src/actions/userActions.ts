@@ -1,5 +1,6 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
 import axiosInstance from './../utils/axiosInstance';
+import { ServerResponse } from '../types/general/ServerResponse';
 import { User } from '../types/users/User';
 import { UpdateUserData } from '../types/users/UpdateUserData';
 import { PostUserData } from '../types/users/PostUserData';
@@ -9,7 +10,7 @@ export const fetchUsers = createAsyncThunk(
   'users/fetchUsers',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<User[]>('/api/users');
+      const response = await axiosInstance.get<ServerResponse<User>>('/api/users');
       return response.data;
     } catch (error) {
       if (error instanceof Error) {
@@ -25,6 +26,7 @@ export const createUser = createAsyncThunk(
   'users/createUser',
   async (userData: PostUserData, { rejectWithValue }) => {
     try {
+      console.log(userData);
       const response = await axiosInstance.post<User>('/api/users/register', userData);
       return response.data;
     } catch (error) {

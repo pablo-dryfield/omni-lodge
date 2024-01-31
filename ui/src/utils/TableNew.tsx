@@ -8,7 +8,7 @@ import {
   MRT_ToggleFiltersButton as MRTToggleFiltersButton ,
 } from 'mantine-react-table';
 import { Box, Button, Flex, Text, Title } from '@mantine/core';
-
+import cloneDeep from 'lodash/cloneDeep';
 type TableActions = {
   [actionName: string]: (...args: any[]) => void;
 }
@@ -22,20 +22,17 @@ type TableProps<T extends Record<string, any>> = {
 
 const Table = <T extends {}>({ data, columns, actions }: TableProps<T>) => {
 
-  const handleSaveRow: MRT_TableOptions<T>['onEditingRowSave'] = async ({
-    table,
-    row,
+  const handleCreateUser: MRT_TableOptions<T>['onCreatingRowSave'] =  ({
     values,
+    exitCreatingMode,
   }) => {
-    //if using flat data and simple accessorKeys/ids, you can just do a simple assignment here.
-    //data[row.index] = values;
-    //send/receive api updates here
-   // actions.updateUser(row.original.id, values);
-    table.setEditingRow(null); //exit editing mode
+    console.log(values)
+    actions.createUser(values);
+    exitCreatingMode();
   };
-
+  
   const table = useMantineReactTable({
-    columns,
+    columns: cloneDeep(columns),
     data, //must be memoized or stable (useState, useMemo, defined outside of this component, etc.)
     enableColumnFilterModes: true,
     enableColumnOrdering: true,
@@ -48,7 +45,7 @@ const Table = <T extends {}>({ data, columns, actions }: TableProps<T>) => {
     enableStickyFooter: true,
     editDisplayMode:'modal',
     enableEditing: true,
-    onEditingRowSave: handleSaveRow,
+    onCreatingRowSave: handleCreateUser,
     initialState: { showColumnFilters: false, showGlobalFilter: true },
     mantineTableContainerProps: { sx: { maxHeight: '520px' } },
     paginationDisplayMode: 'pages',
@@ -89,10 +86,8 @@ const Table = <T extends {}>({ data, columns, actions }: TableProps<T>) => {
         });
       };
 
-      const handleActivate = () => {
-        table.getSelectedRowModel().flatRows.map((row) => { 
-          alert('activating ' + row.getValue('name'));
-        });
+      const handleCreate = () => {
+        table.setCreatingRow(true); 
       };
 
       const handleContact = () => {
@@ -112,7 +107,7 @@ const Table = <T extends {}>({ data, columns, actions }: TableProps<T>) => {
             <Button
               color="green"
               disabled={table.getIsSomeRowsSelected()}
-              onClick={handleActivate}
+              onClick={handleCreate}
               variant="filled"
             >
               Add New
