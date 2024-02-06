@@ -9,16 +9,16 @@ import {
 import { useMemo } from 'react';
 
 import { User } from '../../types/users/User';
+import { ResponseModifications } from '../../types/general/ResponseModifications';
 
 const modifyColumn = (
   columns: MRT_ColumnDef<User>[],
-  accessorKey: string,
-  modifications: Partial<MRT_ColumnDef<User>>
+  modifications: ResponseModifications<User>[]
 ): MRT_ColumnDef<User>[] => {
   return columns.map((column) => {
-    if (column.accessorKey === accessorKey) {
-      // Directly merge modifications with the column
-      return { ...column, ...modifications };
+    const modification = modifications.find(m => m.accessorKey === column.accessorKey);
+    if (modification) {
+      return { ...column, ...modification.modifications };
     }
     return column;
   });
@@ -45,27 +45,42 @@ const StyledTable = styled('div')({
 const UserList = () => {
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.users)[0]; 
+  const handleCreateUser = async (data:User) => {
+    await dispatch(createUser(data));
+    dispatch(fetchUsers());
+  };
 
   useEffect(() => {
     dispatch(fetchUsers())
   }, [dispatch]);
 
   const modifiedColumns = useMemo<MRT_ColumnDef<User>[]>(
-    () => modifyColumn(data[0].columns, 'createdAt', {
-    accessorFn: (row) => {
-      const sDay = new Date(row.createdAt);
-      sDay.setHours(0, 0, 0, 0); // remove time from date
-      return sDay;
-    },
-    id: 'createdAt',
-    header: 'Created Date',
-    filterVariant: 'date-range',
-    sortingFn: 'datetime',
-    enableColumnFilterModes: false,
-    Cell: ({ cell }) => cell.getValue<Date>()?.toLocaleDateString(),
-    Header: ({ column }) => <em>{column.columnDef.header}</em>,
-  })
-  ,[data]);
+    () => modifyColumn(data[0].columns, [
+      {
+        accessorKey: 'createdAt',
+        modifications: {
+          accessorFn: (row) => {
+            const sDay = new Date(row.createdAt);
+            sDay.setHours(0, 0, 0, 0); // remove time from date
+            return sDay;
+          },
+          id: 'createdAt',
+          header: 'Created Date',
+          filterVariant: 'date-range',
+          sortingFn: 'datetime',
+          enableColumnFilterModes: false,
+          Cell: ({ cell }) => cell.getValue<Date>()?.toLocaleDateString(),
+          Header: ({ column }) => <em>{column.columnDef.header}</em>,
+        }
+      },
+      {
+        accessorKey: 'password',
+        modifications: {
+          Cell: () => <span>••••••••</span>,
+        }
+      }
+    ])
+    , [data]);
 
   return (
     <UserListContainer>
@@ -80,7 +95,7 @@ const UserList = () => {
             <Table
               data={data[0].data} 
               columns={modifiedColumns} 
-              actions={{ deleteUser, createUser, updateUser}} 
+              actions={{ deleteUser, handleCreateUser, updateUser}} 
             /> 
           </StyledTable>
         </TableContainer>

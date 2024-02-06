@@ -2,14 +2,13 @@ import { createAsyncThunk } from '@reduxjs/toolkit';
 import axiosInstance from './../utils/axiosInstance';
 import { ServerResponse } from '../types/general/ServerResponse';
 import { User } from '../types/users/User';
-import { UpdateUserData } from '../types/users/UpdateUserData';
-import { PostUserData } from '../types/users/PostUserData';
 
 // Async thunk for fetching users
 export const fetchUsers = createAsyncThunk(
   'users/fetchUsers',
   async (_, { rejectWithValue }) => {
     try {
+      console.log("Fetch");
       const response = await axiosInstance.get<ServerResponse<User>>('/api/users');
       return response.data;
     } catch (error) {
@@ -24,9 +23,9 @@ export const fetchUsers = createAsyncThunk(
 // Async thunk for creating a user
 export const createUser = createAsyncThunk(
   'users/createUser',
-  async (userData: PostUserData, { rejectWithValue }) => {
+  async (userData: User, { rejectWithValue }) => {
     try {
-      console.log(userData);
+      console.log("Create");
       const response = await axiosInstance.post<User>('/api/users/register', userData);
       return response.data;
     } catch (error) {
@@ -41,7 +40,7 @@ export const createUser = createAsyncThunk(
 // Async thunk for updating a user
 export const updateUser = createAsyncThunk(
   'users/updateUser',
-  async ({ userId, userData }: { userId: number; userData: UpdateUserData; }, { rejectWithValue }) => {
+  async ({ userId, userData }: { userId: number; userData: User; }, { rejectWithValue }) => {
     try {
       const response = await axiosInstance.put<User>(`/api/users/${userId}`, userData);
       return response.data;

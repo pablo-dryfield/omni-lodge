@@ -1,13 +1,13 @@
-import { useMemo } from 'react';
 import {
   MantineReactTable,
   useMantineReactTable,
   MRT_TableOptions,
   type MRT_ColumnDef,
   MRT_GlobalFilterTextInput as MRTGlobalFilterTextInput,
-  MRT_ToggleFiltersButton as MRTToggleFiltersButton ,
+  MRT_ToggleFiltersButton as MRTToggleFiltersButton, 
+  MRT_EditActionButtons,
 } from 'mantine-react-table';
-import { Box, Button, Flex, Text, Title } from '@mantine/core';
+import { Box, Button, Flex, Stack, Text, Title } from '@mantine/core';
 import cloneDeep from 'lodash/cloneDeep';
 type TableActions = {
   [actionName: string]: (...args: any[]) => void;
@@ -26,8 +26,7 @@ const Table = <T extends {}>({ data, columns, actions }: TableProps<T>) => {
     values,
     exitCreatingMode,
   }) => {
-    console.log(values)
-    actions.createUser(values);
+    actions.handleCreateUser(values);
     exitCreatingMode();
   };
   
@@ -57,6 +56,19 @@ const Table = <T extends {}>({ data, columns, actions }: TableProps<T>) => {
     mantineSearchTextInputProps: {
       placeholder: 'Search Employees',
     },
+    renderCreateRowModalContent: ({
+      internalEditComponents,
+      row,
+      table
+    }) => (
+       <Stack>
+          <Title order={5}>My Custom Edit Modal</Title>
+          {internalEditComponents}
+          <Flex justify="flex-end">
+            <MRT_EditActionButtons row={row} table={table} variant="text" />
+          </Flex>
+        </Stack>
+    ),
     renderDetailPanel: ({ row }) => (
       <Box
         style={{
