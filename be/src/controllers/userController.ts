@@ -33,10 +33,10 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
       password: hashedPassword,
     });
 
-    res.status(201).json(newUser);
+    res.status(201).json([newUser]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json([{ message: errorMessage }]);
   }
 };
 
@@ -61,10 +61,10 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
       expiresIn: '1h',
     });
 
-    res.status(200).json({ token });
+    res.status(200).json([{ token }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json([{ message: errorMessage }]);
   }
 };
 
@@ -74,7 +74,7 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
     const data = await User.findAll();
     const attributes = User.getAttributes();
     const columns = Object.entries(attributes)
-      .filter(([key]) => key !== 'password') 
+      //.filter(([key]) => key !== 'password') 
       .map(([key, attribute]) => {
         return {
           header: key.charAt(0).toUpperCase() + key.slice(1),
@@ -85,7 +85,7 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
     res.status(200).json([{ data, columns }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json([{ message: errorMessage }]);
   }
 };
 
