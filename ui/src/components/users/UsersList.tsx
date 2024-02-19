@@ -85,21 +85,17 @@ const UserList = () => {
   return (
     <UserListContainer>
       <h2>Users</h2>
-      {loading ? (
-        <p>Loading...</p>
-      ) : error ? (
-        <p>Error retrieving data: <i>{error}</i></p>
-      ) : (
         <TableContainer>
           <StyledTable>
             <Table
               data={data[0].data} 
+              loading={loading}
+              error={error}
               columns={modifiedColumns} 
               actions={{ deleteUser, handleCreateUser, updateUser}} 
             /> 
           </StyledTable>
         </TableContainer>
-      )}
     </UserListContainer>
   );
 };
