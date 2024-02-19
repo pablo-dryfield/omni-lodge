@@ -90,11 +90,20 @@ const UserList = () => {
         accessorKey: 'password',
         modifications: {
           Cell: () => <span>••••••••</span>,
+          enableHiding: false,
         }
       }
     ])
     , [data]);
 
+    const initialState = {
+      showColumnFilters: false, 
+      showGlobalFilter: true,
+      columnVisibility: {
+        id: false, 
+        password: false,
+      },
+    }
   return (
     <UserListContainer>
       <h2>Users</h2>
@@ -106,6 +115,7 @@ const UserList = () => {
               error={error}
               columns={modifiedColumns} 
               actions={{ handleDelete, handleCreate, handleUpdate}} 
+              initialState={initialState}
             /> 
           </StyledTable>
         </TableContainer>
