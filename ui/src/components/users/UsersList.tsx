@@ -45,8 +45,21 @@ const StyledTable = styled('div')({
 const UserList = () => {
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.users)[0]; 
-  const handleCreateUser = async (data:User) => {
+
+  const handleCreate = async (data:User) => {
     await dispatch(createUser(data));
+    dispatch(fetchUsers());
+  };
+
+  const handleDelete = async (data:User) => {
+    await dispatch(deleteUser(data.id));
+    dispatch(fetchUsers());
+  };
+
+  const handleUpdate = async (data:User) => {
+    const userId = data.id;
+    const userData = data;
+    await dispatch(updateUser({userId, userData}));
     dispatch(fetchUsers());
   };
 
@@ -92,7 +105,7 @@ const UserList = () => {
               loading={loading}
               error={error}
               columns={modifiedColumns} 
-              actions={{ deleteUser, handleCreateUser, updateUser}} 
+              actions={{ handleDelete, handleCreate, handleUpdate}} 
             /> 
           </StyledTable>
         </TableContainer>

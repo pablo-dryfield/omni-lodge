@@ -34,19 +34,26 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
     exitCreatingMode();
   };
 
-  // const openDeleteConfirmModal = (row: MRT_Row<T>) =>
-  // modals.openConfirmModal({
-  //   title: 'Are you sure you want to delete this user?',
-  //   children: (
-  //     <Text>
-  //       Are you sure you want to delete {row.original.firstName}{' '}
-  //       {row.original.lastName}? This action cannot be undone.
-  //     </Text>
-  //   ),
-  //   labels: { confirm: 'Delete', cancel: 'Cancel' },
-  //   confirmProps: { color: 'red' },
-  //   onConfirm: () => deleteUser(row.original.id),
-  // });
+   const handleUpdate: MRT_TableOptions<T>['onEditingRowSave'] = async ({
+    values,
+    table,
+  }) => {
+    await actions.handleUpdate(values);
+    table.setEditingRow(null); //exit editing mode
+  };
+
+  const openDeleteConfirmModal = (row: MRT_Row<T>) =>
+  modals.openConfirmModal({
+    title: 'Are you sure you want to delete this user?',
+    children: (
+      <Text>
+        Are you sure you want to delete? This action cannot be undone.
+      </Text>
+    ),
+    labels: { confirm: 'Delete', cancel: 'Cancel' },
+    confirmProps: { color: 'red' },
+    onConfirm: () => actions.handleDelete(row.original),
+  });
   
   const table = useMantineReactTable({
     columns: cloneDeep(columns),
@@ -60,9 +67,11 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
     enableRowSelection: true,
     enableStickyHeader: true,
     enableStickyFooter: true,
+    createDisplayMode: 'modal', 
     editDisplayMode:'modal',
     enableEditing: true,
     onCreatingRowSave: handleCreate,
+    onEditingRowSave: handleUpdate,
     initialState: { showColumnFilters: false, showGlobalFilter: true },
     mantineTableContainerProps: { style: { maxHeight: '520px' } },
     paginationDisplayMode: 'pages',
@@ -80,12 +89,19 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
       table
     }) => (
        <Stack>
-          <Title order={5}>My Custom Edit Modal</Title>
           {internalEditComponents}
           <Flex justify="flex-end">
             <MRT_EditActionButtons row={row} table={table} variant="text" />
           </Flex>
         </Stack>
+    ),
+    renderEditRowModalContent: ({ table, row, internalEditComponents }) => (
+      <Stack>
+        {internalEditComponents}
+        <Flex justify="flex-end" mt="xl">
+          <MRT_EditActionButtons variant="text" table={table} row={row} />
+        </Flex>
+      </Stack>
     ),
     renderDetailPanel: ({ row }) => (
       <Box
@@ -110,9 +126,9 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
       </Box>
     ),
     renderTopToolbar: ({ table }) => {
-      const handleDeactivate = () => {
+      const handleDelete = () => {
         table.getSelectedRowModel().flatRows.map((row) => {  
-          alert('deactivating ' + row.getValue('name'));
+          openDeleteConfirmModal(row);
         });
       };
 
@@ -120,10 +136,10 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
         table.setCreatingRow(true); 
       };
 
-      const handleContact = () => {
+      const handleUpdate = () => {
         table.getSelectedRowModel().flatRows.map((row) => { 
-          alert('contact ' + row.getValue('name'));
-        });
+          table.setEditingRow(row);
+        });  
       };
 
       return (
@@ -145,7 +161,7 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
             <Button
               color="blue"
               disabled={!table.getIsSomeRowsSelected()}
-              onClick={handleContact}
+              onClick={handleUpdate}
               variant="filled"
             >
               Update
@@ -153,7 +169,7 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
             <Button
               color="red"
               disabled={!table.getIsSomeRowsSelected()}
-              onClick={handleDeactivate}
+              onClick={handleDelete}
               variant="filled"
             >
               Remove
@@ -164,7 +180,9 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
     },
   });
 
-  return <MantineReactTable table={table} />;
+  return (<ModalsProvider>
+            <MantineReactTable table={table} />
+          </ModalsProvider>);
 };
 
 export default Table;
