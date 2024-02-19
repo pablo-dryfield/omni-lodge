@@ -7,6 +7,7 @@ import {
   MRT_ToggleFiltersButton as MRTToggleFiltersButton, 
   MRT_EditActionButtons,
   MRT_Row,
+  MRT_TableState,
 } from 'mantine-react-table';
 import { Box, Button, Flex, Stack, Text, Title } from '@mantine/core';
 import { ModalsProvider, modals } from '@mantine/modals';
@@ -22,9 +23,10 @@ type TableProps<T extends Record<string, any>> = {
   error: string | null;
   columns: MRT_ColumnDef<T>[];
   actions: TableActions;
+  initialState: Partial<MRT_TableState<T>>;
 }
 
-const Table = <T extends {}>({ data, loading, error, columns, actions }: TableProps<T>) => {
+const Table = <T extends {}>({ data, loading, error, columns, actions, initialState }: TableProps<T>) => {
 
   const handleCreate: MRT_TableOptions<T>['onCreatingRowSave'] =  ({
     values,
@@ -46,7 +48,7 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
     const count = rows.length;
     let iterator = 1;
     modals.openConfirmModal({
-      title: 'Are you sure you want to delete this user?',
+      title: 'Are you sure you want to delete this row?',
       children: (
         <Text>
           Are you sure you want to delete? This action cannot be undone.
@@ -69,16 +71,16 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
     enableFacetedValues: true,
     enableGrouping: true,
     enablePinning: true,
-    enableRowActions: true,
+    enableRowActions: false,
     enableRowSelection: true,
     enableStickyHeader: true,
     enableStickyFooter: true,
     createDisplayMode: 'modal', 
     editDisplayMode:'modal',
-    enableEditing: true,
+    enableEditing: false,
     onCreatingRowSave: handleCreate,
     onEditingRowSave: handleUpdate,
-    initialState: { showColumnFilters: false, showGlobalFilter: true },
+    initialState: initialState,
     mantineTableContainerProps: { style: { maxHeight: '520px' } },
     paginationDisplayMode: 'pages',
     positionToolbarAlertBanner: 'bottom',
