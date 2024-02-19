@@ -8,7 +8,6 @@ export const fetchUsers = createAsyncThunk(
   'users/fetchUsers',
   async (_, { rejectWithValue }) => {
     try {
-      console.log("Fetch");
       const response = await axiosInstance.get<ServerResponse<User>>('/api/users');
       return response.data;
     } catch (error) {
@@ -25,7 +24,6 @@ export const createUser = createAsyncThunk(
   'users/createUser',
   async (userData: User, { rejectWithValue }) => {
     try {
-      console.log("Create");
       const response = await axiosInstance.post<User>('/api/users/register', userData);
       return response.data;
     } catch (error) {
