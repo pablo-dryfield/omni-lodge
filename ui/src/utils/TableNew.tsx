@@ -42,18 +42,24 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
     table.setEditingRow(null); //exit editing mode
   };
 
-  const openDeleteConfirmModal = (row: MRT_Row<T>) =>
-  modals.openConfirmModal({
-    title: 'Are you sure you want to delete this user?',
-    children: (
-      <Text>
-        Are you sure you want to delete? This action cannot be undone.
-      </Text>
-    ),
-    labels: { confirm: 'Delete', cancel: 'Cancel' },
-    confirmProps: { color: 'red' },
-    onConfirm: () => actions.handleDelete(row.original),
-  });
+  const openDeleteConfirmModal = (rows: MRT_Row<T>[]) => {
+    const count = rows.length;
+    let iterator = 1;
+    modals.openConfirmModal({
+      title: 'Are you sure you want to delete this user?',
+      children: (
+        <Text>
+          Are you sure you want to delete? This action cannot be undone.
+        </Text>
+      ),
+      labels: { confirm: 'Delete', cancel: 'Cancel' },
+      confirmProps: { color: 'red' },
+      onConfirm: () => rows.map((row) => {
+        actions.handleDelete(row.original, count, iterator);
+        iterator += 1;
+      }),
+    });
+  }
   
   const table = useMantineReactTable({
     columns: cloneDeep(columns),
@@ -81,7 +87,7 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
       size: 'lg',
     },
     mantineSearchTextInputProps: {
-      placeholder: 'Search Employees',
+      placeholder: 'Search',
     },
     renderCreateRowModalContent: ({
       internalEditComponents,
@@ -127,9 +133,7 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
     ),
     renderTopToolbar: ({ table }) => {
       const handleDelete = () => {
-        table.getSelectedRowModel().flatRows.map((row) => {  
-          openDeleteConfirmModal(row);
-        });
+        openDeleteConfirmModal(table.getSelectedRowModel().flatRows);
       };
 
       const handleCreate = () => {
@@ -152,7 +156,7 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
           <Flex style={{ gap: '8px' }}>
             <Button
               color="green"
-              disabled={table.getIsSomeRowsSelected()}
+              disabled={table.getIsSomeRowsSelected() || table.getIsSomePageRowsSelected() || table.getIsAllPageRowsSelected() || table.getIsAllRowsSelected()}
               onClick={handleCreate}
               variant="filled"
             >
@@ -160,7 +164,7 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
             </Button>
             <Button
               color="blue"
-              disabled={!table.getIsSomeRowsSelected()}
+              disabled={Object.keys(table.getSelectedRowModel().rowsById).length !== 1}
               onClick={handleUpdate}
               variant="filled"
             >
@@ -168,7 +172,7 @@ const Table = <T extends {}>({ data, loading, error, columns, actions }: TablePr
             </Button>
             <Button
               color="red"
-              disabled={!table.getIsSomeRowsSelected()}
+              disabled={!table.getIsSomeRowsSelected() && !table.getIsSomePageRowsSelected() && !table.getIsAllPageRowsSelected() && !table.getIsAllRowsSelected()}
               onClick={handleDelete}
               variant="filled"
             >

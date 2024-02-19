@@ -46,19 +46,19 @@ const UserList = () => {
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.users)[0]; 
 
-  const handleCreate = async (data:User) => {
-    await dispatch(createUser(data));
+  const handleCreate = async (dataCreate:User) => {
+    await dispatch(createUser(dataCreate));
     dispatch(fetchUsers());
   };
 
-  const handleDelete = async (data:User) => {
-    await dispatch(deleteUser(data.id));
-    dispatch(fetchUsers());
+  const handleDelete = async (dataDelete:User, count:number, iterator:number) => {
+    await dispatch(deleteUser(dataDelete.id));
+    if(count === iterator){dispatch(fetchUsers());}
   };
 
-  const handleUpdate = async (data:User) => {
-    const userId = data.id;
-    const userData = data;
+  const handleUpdate = async (dataUpdate:User) => {
+    const userId = dataUpdate.id;
+    const userData = dataUpdate;
     await dispatch(updateUser({userId, userData}));
     dispatch(fetchUsers());
   };
