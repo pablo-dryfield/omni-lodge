@@ -6,8 +6,10 @@ import {
   MRT_GlobalFilterTextInput as MRTGlobalFilterTextInput,
   MRT_ToggleFiltersButton as MRTToggleFiltersButton, 
   MRT_EditActionButtons,
+  MRT_Row,
 } from 'mantine-react-table';
 import { Box, Button, Flex, Stack, Text, Title } from '@mantine/core';
+import { ModalsProvider, modals } from '@mantine/modals';
 import cloneDeep from 'lodash/cloneDeep';
 type TableActions = {
   [actionName: string]: (...args: any[]) => void;
@@ -16,19 +18,35 @@ type TableActions = {
 // Define the TableProps interface with the dynamic actions
 type TableProps<T extends Record<string, any>> = {
   data: T[];
+  loading: boolean;
+  error: string | null;
   columns: MRT_ColumnDef<T>[];
   actions: TableActions;
 }
 
-const Table = <T extends {}>({ data, columns, actions }: TableProps<T>) => {
+const Table = <T extends {}>({ data, loading, error, columns, actions }: TableProps<T>) => {
 
-  const handleCreateUser: MRT_TableOptions<T>['onCreatingRowSave'] =  ({
+  const handleCreate: MRT_TableOptions<T>['onCreatingRowSave'] =  ({
     values,
     exitCreatingMode,
   }) => {
-    actions.handleCreateUser(values);
+    actions.handleCreate(values);
     exitCreatingMode();
   };
+
+  // const openDeleteConfirmModal = (row: MRT_Row<T>) =>
+  // modals.openConfirmModal({
+  //   title: 'Are you sure you want to delete this user?',
+  //   children: (
+  //     <Text>
+  //       Are you sure you want to delete {row.original.firstName}{' '}
+  //       {row.original.lastName}? This action cannot be undone.
+  //     </Text>
+  //   ),
+  //   labels: { confirm: 'Delete', cancel: 'Cancel' },
+  //   confirmProps: { color: 'red' },
+  //   onConfirm: () => deleteUser(row.original.id),
+  // });
   
   const table = useMantineReactTable({
     columns: cloneDeep(columns),
@@ -44,9 +62,9 @@ const Table = <T extends {}>({ data, columns, actions }: TableProps<T>) => {
     enableStickyFooter: true,
     editDisplayMode:'modal',
     enableEditing: true,
-    onCreatingRowSave: handleCreateUser,
+    onCreatingRowSave: handleCreate,
     initialState: { showColumnFilters: false, showGlobalFilter: true },
-    mantineTableContainerProps: { sx: { maxHeight: '520px' } },
+    mantineTableContainerProps: { style: { maxHeight: '520px' } },
     paginationDisplayMode: 'pages',
     positionToolbarAlertBanner: 'bottom',
     mantinePaginationProps: {

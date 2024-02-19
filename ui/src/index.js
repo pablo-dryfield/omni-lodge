@@ -7,11 +7,17 @@ import { store } from './store/store'; // Import your Redux store
 import reportWebVitals from './reportWebVitals';
 import 'mdb-react-ui-kit/dist/css/mdb.min.css';
 import "@fortawesome/fontawesome-free/css/all.min.css";
+import '@mantine/core/styles.css'; //import Mantine V7 styles needed by MRT
+import '@mantine/dates/styles.css'; //if using mantine component features
+import 'mantine-react-table/styles.css'; //import MRT styles
+import { MantineProvider } from '@mantine/core';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <Provider store={store}>
+    <MantineProvider>
       <App />
+    </MantineProvider>
   </Provider>
 );
 
