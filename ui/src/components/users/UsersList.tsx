@@ -9,6 +9,8 @@ import {
 import { useMemo } from 'react';
 import { User } from '../../types/users/User';
 import { ResponseModifications } from '../../types/general/ResponseModifications';
+import dayjs from 'dayjs';
+import { Space, Title } from '@mantine/core';
 
 const modifyColumn = (
   columns: MRT_ColumnDef<User>[],
@@ -69,11 +71,48 @@ const UserList = () => {
   const modifiedColumns = useMemo<MRT_ColumnDef<User>[]>(
     () => modifyColumn(data[0].columns, [
       {
+        accessorKey: 'id',
+        modifications: {
+          id: 'id',
+          header: 'ID',
+          Header: ({ column }) => <div>{column.columnDef.header}</div>,
+          Edit: () => null,
+          visibleInShowHideMenu: false,
+        }
+      },
+      {
+        accessorKey: 'email',
+        modifications: {
+          enableClickToCopy: true,
+          id: 'email',
+          header: 'Email',
+          Header: ({ column }) => <div>{column.columnDef.header}</div>,
+          mantineEditTextInputProps: {
+            type: 'email',
+            required: true,
+          },
+        }
+      },
+      {
+        accessorKey: 'username',
+        modifications: {
+          id: 'username',
+          header: 'Username',
+          Header: ({ column }) => <div>{column.columnDef.header}</div>,
+          mantineEditTextInputProps: {
+            required: true,
+          },
+        }
+      },
+      {
         accessorKey: 'firstName',
         modifications: {
           id: 'firstName',
           header: 'First Name',
           Header: ({ column }) => <div>{column.columnDef.header}</div>,
+          mantineEditTextInputProps: {
+            required: true,
+          },
         }
       },
       {
@@ -82,6 +121,9 @@ const UserList = () => {
           id: 'lastName',
           header: 'Last Name',
           Header: ({ column }) => <div>{column.columnDef.header}</div>,
+          mantineEditTextInputProps: {
+            required: true,
+          },
         }
       },
       {
@@ -90,6 +132,7 @@ const UserList = () => {
           id: 'createdBy',
           header: 'Created By',
           Header: ({ column }) => <div>{column.columnDef.header}</div>,
+          Edit: () => null,
         }
       },
       {
@@ -98,55 +141,42 @@ const UserList = () => {
           id: 'updatedBy',
           header: 'Updated By',
           Header: ({ column }) => <div>{column.columnDef.header}</div>,
+          Edit: () => null,
         }
       },
       {
         accessorKey: 'createdAt',
         modifications: {
-          accessorFn: (row) => {
-            const sDay = new Date(row.createdAt);
-            sDay.setHours(0, 0, 0, 0); // remove time from date
-            return sDay;
-          },
           id: 'createdAt',
           header: 'Created Date',
           filterVariant: 'date-range',
           sortingFn: 'datetime',
           enableColumnFilterModes: false,
-          Cell: ({ cell }) => cell.getValue<Date>()?.toLocaleDateString('en-CA', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-          }),
+          Cell: ({ cell }) => dayjs(cell.getValue<Date>()).format('YYYY-MM-DD HH:mm:ss'),
           Header: ({ column }) => <div>{column.columnDef.header}</div>,
+          Edit: () => null,
         }
       },
       {
         accessorKey: 'updatedAt',
         modifications: {
-          accessorFn: (row) => {
-            const sDay = new Date(row.updatedAt);
-            sDay.setHours(0, 0, 0, 0); // remove time from date
-            return sDay;
-          },
           id: 'updatedAt',
           header: 'Updated Date',
           filterVariant: 'date-range',
           sortingFn: 'datetime',
           enableColumnFilterModes: false,
-          Cell: ({ cell }) => cell.getValue<Date>().toLocaleDateString('en-CA', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-          }),
+          Cell: ({ cell }) => dayjs(cell.getValue<Date>()).format('YYYY-MM-DD HH:mm:ss'),
           Header: ({ column }) => <div>{column.columnDef.header}</div>,
+          Edit: () => null,
         }
       },
       {
         accessorKey: 'password',
         modifications: {
           Cell: () => <span>••••••••</span>,
-          enableHiding: false,
+          mantineEditTextInputProps: {
+            required: true,
+          },
         }
       }
     ])
@@ -162,10 +192,12 @@ const UserList = () => {
     }
   return (
     <UserListContainer>
-      <h2>Users</h2>
+      <Title order={2}>Users</Title>
+      <Space h="sm" />
         <TableContainer>
           <StyledTable>
             <Table
+              pageTitle="Users"
               data={data[0].data} 
               loading={loading}
               error={error}
