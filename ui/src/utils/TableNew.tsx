@@ -9,15 +9,18 @@ import {
   MRT_Row,
   MRT_TableState,
 } from 'mantine-react-table';
-import { Box, Button, Flex, Stack, Text, Title } from '@mantine/core';
+import { Box, Button, Flex, Grid, Modal, Stack, Text, Title } from '@mantine/core';
 import { ModalsProvider, modals } from '@mantine/modals';
+import { ModalContent } from './ModalContent';
 import cloneDeep from 'lodash/cloneDeep';
+import { useEffect, useState } from 'react';
 type TableActions = {
   [actionName: string]: (...args: any[]) => void;
 }
 
 // Define the TableProps interface with the dynamic actions
 type TableProps<T extends Record<string, any>> = {
+  pageTitle: string
   data: T[];
   loading: boolean;
   error: string | null;
@@ -26,7 +29,10 @@ type TableProps<T extends Record<string, any>> = {
   initialState: Partial<MRT_TableState<T>>;
 }
 
-const Table = <T extends {}>({ data, loading, error, columns, actions, initialState }: TableProps<T>) => {
+const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions, initialState }: TableProps<T>) => {
+
+  const [createModalOpened, setCreateModalOpened] = useState(false);
+  const [updateModalOpened, setUpdateModalOpened] = useState(false);
 
   const handleCreate: MRT_TableOptions<T>['onCreatingRowSave'] =  ({
     values,
@@ -56,6 +62,7 @@ const Table = <T extends {}>({ data, loading, error, columns, actions, initialSt
       ),
       labels: { confirm: 'Delete', cancel: 'Cancel' },
       confirmProps: { color: 'red' },
+      centered: true,
       onConfirm: () => rows.map((row) => {
         actions.handleDelete(row.original, count, iterator);
         iterator += 1;
@@ -65,22 +72,56 @@ const Table = <T extends {}>({ data, loading, error, columns, actions, initialSt
   
   const table = useMantineReactTable({
     columns: cloneDeep(columns),
-    data, //must be memoized or stable (useState, useMemo, defined outside of this component, etc.)
+    data,
     enableColumnFilterModes: true,
     enableColumnOrdering: true,
     enableFacetedValues: true,
     enableGrouping: true,
     enablePinning: true,
-    enableRowActions: false,
-    enableEditing: false,
+    mantineTableBodyProps:{
+      style: {
+        '& tr:nthOfType(odd)': {
+          backgroundColor: '#f5f5f5',
+        },
+        borderTop: '2px solid #e0e0e0',
+      },
+    },
     enableRowSelection: true,
     enableStickyHeader: true,
     enableStickyFooter: true,
-    createDisplayMode: 'modal', 
-    editDisplayMode:'modal',
     onCreatingRowSave: handleCreate,
     onEditingRowSave: handleUpdate,
     initialState: initialState,
+    enableColumnResizing: true,
+    layoutMode: 'grid',
+    mantineProgressProps: ({ isTopToolbar }) => ({
+      color: 'orange',
+      sx: { display: isTopToolbar ? 'block' : 'none' }, //only show top toolbar progress bar
+      value: 100, 
+      striped: true,
+      animated: true,
+    }),
+    state: {
+      isLoading:loading,
+      showProgressBars:loading,
+      showAlertBanner: error !== null,
+    },
+    mantineToolbarAlertBannerProps: error
+    ? {
+        color: 'red',
+        children: error,
+      }
+    : undefined,
+    mantineTableHeadCellProps: {
+      style: {
+        flex: '0 0 auto',
+      },
+    },
+    mantineTableBodyCellProps: {
+      style: {
+        flex: '0 0 auto',
+      },
+    },
     mantineTableContainerProps: { style: { maxHeight: '520px', minHeight: '520px',} },
     paginationDisplayMode: 'pages',
     positionToolbarAlertBanner: 'bottom',
@@ -91,26 +132,22 @@ const Table = <T extends {}>({ data, loading, error, columns, actions, initialSt
     mantineSearchTextInputProps: {
       placeholder: 'Search',
     },
-    renderCreateRowModalContent: ({
-      internalEditComponents,
-      row,
-      table
-    }) => (
-       <Stack>
-          {internalEditComponents}
-          <Flex justify="flex-end">
-            <MRT_EditActionButtons row={row} table={table} variant="text" />
-          </Flex>
-        </Stack>
-    ),
-    renderEditRowModalContent: ({ table, row, internalEditComponents }) => (
-      <Stack>
-        {internalEditComponents}
-        <Flex justify="flex-end" mt="xl">
-          <MRT_EditActionButtons variant="text" table={table} row={row} />
-        </Flex>
-      </Stack>
-    ),
+    renderCreateRowModalContent: ({ internalEditComponents, row, table }) => (<ModalContent
+      internalEditComponents={internalEditComponents}
+      row={row}
+      table={table}
+      opened={createModalOpened}
+      setOpened={setCreateModalOpened}
+      title={"Create " + pageTitle}
+    />),
+    renderEditRowModalContent: ({ table, row, internalEditComponents }) => (<ModalContent
+      internalEditComponents={internalEditComponents}
+      row={row}
+      table={table}
+      opened={updateModalOpened}
+      setOpened={setUpdateModalOpened}
+      title={"Edit " + pageTitle}
+    />),
     renderDetailPanel: ({ row }) => (
       <Box
         style={{
