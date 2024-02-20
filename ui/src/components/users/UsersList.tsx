@@ -7,7 +7,6 @@ import {
   type MRT_ColumnDef,
 } from 'mantine-react-table';
 import { useMemo } from 'react';
-
 import { User } from '../../types/users/User';
 import { ResponseModifications } from '../../types/general/ResponseModifications';
 
@@ -70,6 +69,38 @@ const UserList = () => {
   const modifiedColumns = useMemo<MRT_ColumnDef<User>[]>(
     () => modifyColumn(data[0].columns, [
       {
+        accessorKey: 'firstName',
+        modifications: {
+          id: 'firstName',
+          header: 'First Name',
+          Header: ({ column }) => <div>{column.columnDef.header}</div>,
+        }
+      },
+      {
+        accessorKey: 'lastName',
+        modifications: {
+          id: 'lastName',
+          header: 'Last Name',
+          Header: ({ column }) => <div>{column.columnDef.header}</div>,
+        }
+      },
+      {
+        accessorKey: 'createdBy',
+        modifications: {
+          id: 'createdBy',
+          header: 'Created By',
+          Header: ({ column }) => <div>{column.columnDef.header}</div>,
+        }
+      },
+      {
+        accessorKey: 'updatedBy',
+        modifications: {
+          id: 'updatedBy',
+          header: 'Updated By',
+          Header: ({ column }) => <div>{column.columnDef.header}</div>,
+        }
+      },
+      {
         accessorKey: 'createdAt',
         modifications: {
           accessorFn: (row) => {
@@ -82,8 +113,33 @@ const UserList = () => {
           filterVariant: 'date-range',
           sortingFn: 'datetime',
           enableColumnFilterModes: false,
-          Cell: ({ cell }) => cell.getValue<Date>()?.toLocaleDateString(),
-          Header: ({ column }) => <em>{column.columnDef.header}</em>,
+          Cell: ({ cell }) => cell.getValue<Date>()?.toLocaleDateString('en-CA', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          }),
+          Header: ({ column }) => <div>{column.columnDef.header}</div>,
+        }
+      },
+      {
+        accessorKey: 'updatedAt',
+        modifications: {
+          accessorFn: (row) => {
+            const sDay = new Date(row.updatedAt);
+            sDay.setHours(0, 0, 0, 0); // remove time from date
+            return sDay;
+          },
+          id: 'updatedAt',
+          header: 'Updated Date',
+          filterVariant: 'date-range',
+          sortingFn: 'datetime',
+          enableColumnFilterModes: false,
+          Cell: ({ cell }) => cell.getValue<Date>().toLocaleDateString('en-CA', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          }),
+          Header: ({ column }) => <div>{column.columnDef.header}</div>,
         }
       },
       {
@@ -114,7 +170,7 @@ const UserList = () => {
               loading={loading}
               error={error}
               columns={modifiedColumns} 
-              actions={{ handleDelete, handleCreate, handleUpdate}} 
+              actions={{handleDelete, handleCreate, handleUpdate}} 
               initialState={initialState}
             /> 
           </StyledTable>
