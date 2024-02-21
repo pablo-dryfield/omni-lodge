@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { DataType } from 'sequelize-typescript';
-import Channel from '../models/Channel.js'; // Adjust the import path as necessary
+import Channel from '../models/Channel.js';
 
 // Assuming you have a more specific error type
 interface ErrorWithMessage {
@@ -13,7 +13,6 @@ export const getAllChannels = async (req: Request, res: Response): Promise<void>
     const data = await Channel.findAll();
     const attributes = Channel.getAttributes();
     const columns = Object.entries(attributes)
-      .filter(([key]) => key !== 'password') 
       .map(([key, attribute]) => {
         return {
           header: key.charAt(0).toUpperCase() + key.slice(1),
@@ -23,8 +22,8 @@ export const getAllChannels = async (req: Request, res: Response): Promise<void>
       });
     res.status(200).json([{ data, columns }]);
   } catch (error) {
-    const e = error as ErrorWithMessage;
-    res.status(500).json([{ message: e.message }]);
+    const errorMessage = (error as ErrorWithMessage).message;
+    res.status(500).json([{ message: errorMessage }]);
   }
 };
 
@@ -33,16 +32,23 @@ export const getChannelById = async (req: Request, res: Response): Promise<void>
   try {
     const { id } = req.params;
     const data = await Channel.findByPk(id);
-
+    const attributes = Channel.getAttributes();
+    const columns = Object.entries(attributes)
+      .map(([key, attribute]) => {
+        return {
+          header: key.charAt(0).toUpperCase() + key.slice(1),
+          accessorKey: key,
+          type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
+        };
+      });
     if (!data) {
       res.status(404).json([{ message: 'Channel not found' }]);
       return;
     }
-
-    res.status(200).json([data]);
+    res.status(200).json([{ data, columns }]);
   } catch (error) {
-    const e = error as ErrorWithMessage;
-    res.status(500).json([{ message: e.message }]);
+    const errorMessage = (error as ErrorWithMessage).message;
+    res.status(500).json({ message: errorMessage });
   }
 };
 
@@ -56,7 +62,6 @@ export const createChannel = async (req: Request, res: Response): Promise<void> 
       apiKey,
       apiSecret
     });
-
     res.status(201).json([newChannel]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
@@ -78,8 +83,8 @@ export const updateChannel = async (req: Request, res: Response): Promise<void> 
     const updatedChannel = await Channel.findByPk(id);
     res.status(200).json([updatedChannel]);
   } catch (error) {
-    const e = error as ErrorWithMessage;
-    res.status(500).json([{ message: e.message }]);
+    const errorMessage = (error as ErrorWithMessage).message;
+    res.status(500).json([{ message: errorMessage }]);
   }
 };
 
@@ -96,7 +101,7 @@ export const deleteChannel = async (req: Request, res: Response): Promise<void> 
 
     res.status(204).send(); // Properly using send() for a 204 response
   } catch (error) {
-    const e = error as ErrorWithMessage;
-    res.status(500).json([{ message: e.message }]);
+    const errorMessage = (error as ErrorWithMessage).message;
+    res.status(500).json([{ message: errorMessage }]);
   }
 };

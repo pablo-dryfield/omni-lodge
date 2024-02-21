@@ -1,8 +1,8 @@
 import jwt from 'jsonwebtoken';
-import User from '../models/User.js'; // Adjust the import path as necessary
 import bcrypt from 'bcryptjs';
-import { DataType } from 'sequelize-typescript';
 import { Request, Response } from 'express';
+import { DataType } from 'sequelize-typescript';
+import User from '../models/User.js';
 
 // Assuming you have an environment variable type definition
 interface Env {
@@ -74,7 +74,6 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
     const data = await User.findAll();
     const attributes = User.getAttributes();
     const columns = Object.entries(attributes)
-      //.filter(([key]) => key !== 'password') 
       .map(([key, attribute]) => {
         return {
           header: key.charAt(0).toUpperCase() + key.slice(1),
@@ -93,14 +92,21 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
 export const getUserById = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const user = await User.findByPk(id);
-
-    if (!user) {
-      res.status(404).json({ message: 'User not found' });
+    const data = await User.findByPk(id);
+    const attributes = User.getAttributes();
+    const columns = Object.entries(attributes)
+      .map(([key, attribute]) => {
+        return {
+          header: key.charAt(0).toUpperCase() + key.slice(1),
+          accessorKey: key,
+          type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
+        };
+      });
+    if (!data) {
+      res.status(404).json([{ message: 'User not found' }]);
       return;
     }
-
-    res.status(200).json(user);
+    res.status(200).json([{ data, columns }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json({ message: errorMessage });
@@ -111,20 +117,18 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
 export const updateUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const [updated] = await User.update(req.body, {
-      where: { id },
-    });
+    const [updated] = await User.update(req.body, { where: { id } });
 
     if (!updated) {
-      res.status(404).json({ message: 'User not found' });
+      res.status(404).json([{ message: 'User not found' }]);
       return;
     }
 
     const updatedUser = await User.findByPk(id);
-    res.status(200).json(updatedUser);
+    res.status(200).json([updatedUser]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json([{ message: errorMessage }]);
   }
 };
 
@@ -132,18 +136,16 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
 export const deleteUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const deleted = await User.destroy({
-      where: { id },
-    });
+    const deleted = await User.destroy({ where: { id } });
 
     if (!deleted) {
-      res.status(404).json({ message: 'User not found' });
+      res.status(404).json([{ message: 'User not found' }]);
       return;
     }
 
     res.status(204).send(); // No content to send back
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json([{ message: errorMessage }]);
   }
 };
