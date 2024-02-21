@@ -1,4 +1,3 @@
-import React from 'react';
 import ChannelList from '../components/channels/ChannelsList';
 
 const Channels = () => {

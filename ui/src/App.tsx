@@ -1,4 +1,3 @@
-import React from 'react';
 import { BrowserRouter } from 'react-router-dom';
 import NavBar from './components/main/NavBar'; 
 import LeftSidebar from './components/main/LeftSidebar/LeftSidebar';

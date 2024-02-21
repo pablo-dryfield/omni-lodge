@@ -103,7 +103,7 @@
   "include": ["src/**/*"], // Adjust this to point to your source files
   "exclude": [
     "node_modules",
-    "postcss.config.cjs",
+    "postcss.config.cts",
     "**/*.spec.ts",
   ]
 }
