@@ -1,4 +1,3 @@
-import React from 'react';
 import BookingList from '../components/bookings/BookingsList';
 
 const Bookings = () => {

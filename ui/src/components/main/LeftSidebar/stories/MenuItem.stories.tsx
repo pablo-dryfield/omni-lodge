@@ -1,4 +1,3 @@
-import React from 'react';
 import { ComponentStory, ComponentMeta } from '@storybook/react';
 import { Menu, menuClasses, MenuItem, Sidebar } from '../src';
 import { Icon } from '../icons/Icon';

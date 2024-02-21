@@ -1,19 +1,17 @@
 import {
   MantineReactTable,
   useMantineReactTable,
-  MRT_TableOptions,
   type MRT_ColumnDef,
   MRT_GlobalFilterTextInput as MRTGlobalFilterTextInput,
   MRT_ToggleFiltersButton as MRTToggleFiltersButton, 
-  MRT_EditActionButtons,
   MRT_Row,
   MRT_TableState,
 } from 'mantine-react-table';
-import { Box, Button, Flex, Grid, Modal, Stack, Text, Title } from '@mantine/core';
+import { Box, Button, Flex, Text, Title } from '@mantine/core';
 import { ModalsProvider, modals } from '@mantine/modals';
 import { ModalContent } from './ModalContent';
 import cloneDeep from 'lodash/cloneDeep';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 type TableActions = {
   [actionName: string]: (...args: any[]) => void;
 }
@@ -34,22 +32,6 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
   const [createModalOpened, setCreateModalOpened] = useState(false);
   const [updateModalOpened, setUpdateModalOpened] = useState(false);
 
-  const handleCreate: MRT_TableOptions<T>['onCreatingRowSave'] =  ({
-    values,
-    exitCreatingMode,
-  }) => {
-    actions.handleCreate(values);
-    exitCreatingMode();
-  };
-
-   const handleUpdate: MRT_TableOptions<T>['onEditingRowSave'] = async ({
-    values,
-    table,
-  }) => {
-    await actions.handleUpdate(values);
-    table.setEditingRow(null); //exit editing mode
-  };
-
   const openDeleteConfirmModal = (rows: MRT_Row<T>[]) => {
     const count = rows.length;
     let iterator = 1;
@@ -63,7 +45,7 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
       labels: { confirm: 'Delete', cancel: 'Cancel' },
       confirmProps: { color: 'red' },
       centered: true,
-      onConfirm: () => rows.map((row) => {
+      onConfirm: () => rows.forEach((row) => {
         actions.handleDelete(row.original, count, iterator);
         iterator += 1;
       }),
@@ -89,11 +71,17 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
     enableRowSelection: true,
     enableStickyHeader: true,
     enableStickyFooter: true,
-    onCreatingRowSave: handleCreate,
-    onEditingRowSave: handleUpdate,
     initialState: initialState,
     enableColumnResizing: true,
     layoutMode: 'grid',
+    onCreatingRowSave: ({ values, exitCreatingMode, }) => {
+      actions.handleCreate(values);
+      exitCreatingMode();
+    },
+    onEditingRowSave: ({ values, table, }) => {
+      actions.handleUpdate(values);
+      table.setEditingRow(null); 
+    },
     mantineProgressProps: ({ isTopToolbar }) => ({
       color: 'orange',
       sx: { display: isTopToolbar ? 'block' : 'none' }, //only show top toolbar progress bar
@@ -122,7 +110,8 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
         flex: '0 0 auto',
       },
     },
-    mantineTableContainerProps: { style: { maxHeight: '520px', minHeight: '520px',} },
+    mantineTableContainerProps: { style: { maxHeight: '570px', minHeight: '570px',} },
+    mantinePaperProps: { shadow:'none', style: { border: '0px'} },
     paginationDisplayMode: 'pages',
     positionToolbarAlertBanner: 'bottom',
     mantinePaginationProps: {
@@ -180,7 +169,7 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
       };
 
       const handleUpdate = () => {
-        table.getSelectedRowModel().flatRows.map((row) => { 
+        table.getSelectedRowModel().flatRows.forEach((row) => { 
           table.setEditingRow(row);
         });  
       };

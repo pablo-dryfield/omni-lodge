@@ -1,4 +1,3 @@
-import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Provider } from 'react-redux';
 import './index.css';
@@ -12,10 +11,14 @@ import '@mantine/dates/styles.css'; //if using mantine component features
 import 'mantine-react-table/styles.css'; //import MRT styles
 import { MantineProvider } from '@mantine/core';
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
+const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(
   <Provider store={store}>
-    <MantineProvider>
+    <MantineProvider theme={{
+      fontFamily: 'Open Sans, sans-serif',
+      fontFamilyMonospace: 'Fira Code, monospace',
+      headings: { fontFamily: 'Roboto Slab, serif' },
+    }}>
       <App />
     </MantineProvider>
   </Provider>
