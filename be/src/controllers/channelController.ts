@@ -21,10 +21,10 @@ export const getAllChannels = async (req: Request, res: Response): Promise<void>
           type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
         };
       });
-    res.status(200).json({ data, columns });
+    res.status(200).json([{ data, columns }]);
   } catch (error) {
     const e = error as ErrorWithMessage;
-    res.status(500).json({ message: e.message });
+    res.status(500).json([{ message: e.message }]);
   }
 };
 
@@ -32,17 +32,17 @@ export const getAllChannels = async (req: Request, res: Response): Promise<void>
 export const getChannelById = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const channel = await Channel.findByPk(id);
+    const data = await Channel.findByPk(id);
 
-    if (!channel) {
-      res.status(404).json({ message: 'Channel not found' });
+    if (!data) {
+      res.status(404).json([{ message: 'Channel not found' }]);
       return;
     }
 
-    res.status(200).json(channel);
+    res.status(200).json([data]);
   } catch (error) {
     const e = error as ErrorWithMessage;
-    res.status(500).json({ message: e.message });
+    res.status(500).json([{ message: e.message }]);
   }
 };
 
@@ -50,10 +50,10 @@ export const getChannelById = async (req: Request, res: Response): Promise<void>
 export const createChannel = async (req: Request, res: Response): Promise<void> => {
   try {
     const newChannel = await Channel.create(req.body);
-    res.status(201).json(newChannel);
+    res.status(201).json([newChannel]);
   } catch (error) {
     const e = error as ErrorWithMessage;
-    res.status(500).json({ message: e.message });
+    res.status(500).json([{ message: e.message }]);
   }
 };
 
@@ -64,15 +64,15 @@ export const updateChannel = async (req: Request, res: Response): Promise<void> 
     const [updated] = await Channel.update(req.body, { where: { id } });
 
     if (!updated) {
-      res.status(404).json({ message: 'Channel not found' });
+      res.status(404).json([{ message: 'Channel not found' }]);
       return;
     }
 
     const updatedChannel = await Channel.findByPk(id);
-    res.status(200).json(updatedChannel);
+    res.status(200).json([updatedChannel]);
   } catch (error) {
     const e = error as ErrorWithMessage;
-    res.status(500).json({ message: e.message });
+    res.status(500).json([{ message: e.message }]);
   }
 };
 
@@ -83,13 +83,13 @@ export const deleteChannel = async (req: Request, res: Response): Promise<void> 
     const deleted = await Channel.destroy({ where: { id } });
 
     if (!deleted) {
-      res.status(404).json({ message: 'Channel not found' });
+      res.status(404).json([{ message: 'Channel not found' }]);
       return;
     }
 
     res.status(204).send(); // Properly using send() for a 204 response
   } catch (error) {
     const e = error as ErrorWithMessage;
-    res.status(500).json({ message: e.message });
+    res.status(500).json([{ message: e.message }]);
   }
 };
