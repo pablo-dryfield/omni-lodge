@@ -49,11 +49,18 @@ export const getChannelById = async (req: Request, res: Response): Promise<void>
 // Create New Channel
 export const createChannel = async (req: Request, res: Response): Promise<void> => {
   try {
-    const newChannel = await Channel.create(req.body);
+    const { name, description, apiKey, apiSecret } = req.body;
+    const newChannel = await Channel.create({
+      name,
+      description,
+      apiKey,
+      apiSecret
+    });
+
     res.status(201).json([newChannel]);
   } catch (error) {
-    const e = error as ErrorWithMessage;
-    res.status(500).json([{ message: e.message }]);
+    const errorMessage = (error as ErrorWithMessage).message;
+    res.status(500).json([{ message: errorMessage }]);
   }
 };
 
