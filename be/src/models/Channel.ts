@@ -1,66 +1,50 @@
-import {
-  Table,
-  Column,
-  Model,
-  PrimaryKey,
-  AutoIncrement,
-  DataType,
-  CreatedAt,
-  UpdatedAt,
-  HasMany
-} from 'sequelize-typescript';
+import { Model, Table, Column, PrimaryKey, AutoIncrement, Unique, AllowNull, Default, DataType } from 'sequelize-typescript';
 
 @Table({
   timestamps: true,
   modelName: 'Channels',
   tableName: 'channels'
 })
-export default class Channel extends Model<Channel> {
+export default class Channel extends Model {
   @PrimaryKey
   @AutoIncrement
   @Column(DataType.INTEGER)
   declare id: number;
 
-  @Column({
-    type: DataType.STRING,
-    allowNull: false,
-  })
+  @Unique
+  @AllowNull(false)
+  @Column(DataType.STRING)
   declare name: string;
 
-  @Column({
-    type: DataType.TEXT,
-    allowNull: true,
-  })
-  declare description?: string;
+  @AllowNull(false)
+  @Column(DataType.STRING)
+  declare description: string;
 
-  @Column({
-    type: DataType.STRING,
-    allowNull: true,
-  })
-  declare apiKey?: string;
+  @AllowNull(false)
+  @Column(DataType.STRING)
+  declare apiKey: string;
 
-  @Column({
-    type: DataType.STRING,
-    allowNull: true,
-  })
-  declare apiSecret?: string;
+  @AllowNull(false)
+  @Column(DataType.STRING)
+  declare apiSecret: string;
 
-  @CreatedAt
+  @AllowNull(false)
+  @Default(DataType.NOW)
+  @Column(DataType.DATE)
   declare createdAt: Date;
 
-  @UpdatedAt
+  @AllowNull(false)
+  @Default(DataType.NOW)
+  @Column(DataType.DATE)
   declare updatedAt: Date;
 
-  @Column({
-    type: DataType.INTEGER,
-    allowNull: true,
-  })
+  @AllowNull(true)
+  @Column(DataType.INTEGER)
   declare createdBy?: number;
 
-  @Column({
-    type: DataType.INTEGER,
-    allowNull: true,
-  })
+  @AllowNull(true)
+  @Column(DataType.INTEGER)
   declare updatedBy?: number;
+  
 
 }

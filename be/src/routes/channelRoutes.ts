@@ -13,12 +13,10 @@ const validateId = [
 // Validation rules for channel data
 const validateChannelPOST = [
   check('name').isString().trim().isLength({ min: 3, max: 50 }).withMessage('Name must be a string between 3 and 50 characters'),
-  check('type').isIn(['public', 'private']).trim().withMessage('Type must be one of: public, private')
 ];
 
 const validateChannelPUT = [
   check('name').optional().trim().isString().isLength({ min: 3, max: 50 }).withMessage('Name must be a string between 3 and 50 characters'),
-  check('type').optional().trim().isIn(['public', 'private']).withMessage('Type must be one of: public, private')
 ];
 
 // Middleware to check validation result
