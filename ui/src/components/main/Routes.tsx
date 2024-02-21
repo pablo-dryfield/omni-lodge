@@ -14,8 +14,8 @@ const Routes = () => {
       <Route path="/guests" element={<Guests />} />
       <Route path="/bookings" element={<Bookings />} />
       <Route path="/calendar" element={<AvailabilityCalendar />} />
-      <Route path="/channels" element={<Channels />} />
-      <Route path="/users" element={<Users />} />
+      <Route path="/channels" element={<Channels title="Channels" />} />
+      <Route path="/users" element={<Users title="Users" />} />
     </ReactRoutes>
   );
 };
