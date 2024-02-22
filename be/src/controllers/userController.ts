@@ -47,13 +47,13 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
 
     const user = await User.findOne({ where: { email } });
     if (!user) {
-      res.status(400).json({ message: 'Invalid email or password' });
+      res.status(400).json([{ message: 'Invalid email or password' }]);
       return;
     }
 
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
-      res.status(400).json({ message: 'Invalid email or password' });
+      res.status(400).json([{ message: 'Invalid email or password' }]);
       return;
     }
 
@@ -109,7 +109,7 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
     res.status(200).json([{ data, columns }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json([{ message: errorMessage }]);
   }
 };
 
