@@ -48,7 +48,7 @@ export const getChannelById = async (req: Request, res: Response): Promise<void>
     res.status(200).json([{ data, columns }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json({ message: errorMessage });
+    res.status(500).json([{ message: errorMessage }]);
   }
 };
 
