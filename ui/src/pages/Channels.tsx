@@ -3,10 +3,13 @@ import ChannelsList from '../components/channels/ChannelsList';
 import { GenericPageProps } from '../types/general/GenericPageProps';
 import { useAppDispatch } from '../store/hooks';
 import { navigateToPage } from '../actions/navigationActions';
+import { useEffect } from 'react';
 
 const Channels = (props: GenericPageProps) => {
   const dispatch = useAppDispatch();
-  dispatch(navigateToPage(props.title));
+  useEffect(() => {
+    dispatch(navigateToPage(props.title));
+  }, [dispatch, props.title]);
   return (
     <div>
       <Center>
