@@ -1,15 +1,4 @@
-import {
-  Table,
-  Column,
-  Model,
-  PrimaryKey,
-  AutoIncrement,
-  DataType,
-  CreatedAt,
-  UpdatedAt,
-  BelongsTo,
-  ForeignKey
-} from 'sequelize-typescript';
+import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, DataType } from 'sequelize-typescript';
 
 @Table({
   timestamps: true,
@@ -22,63 +11,51 @@ export default class Booking extends Model<Booking> {
   @Column(DataType.INTEGER)
   declare id: number;
 
-  @Column({
-    type: DataType.DATE,
-    allowNull: false,
-  })
+  @AllowNull(false)
+  @Default(DataType.NOW)
+  @Column(DataType.DATE)
   declare checkInDate: Date;
 
-  @Column({
-    type: DataType.DATE,
-    allowNull: false,
-  })
+  @AllowNull(false)
+  @Default(DataType.NOW)
+  @Column(DataType.DATE)
   declare checkOutDate: Date;
 
-  @Column({
-    type: DataType.FLOAT,
-    allowNull: true,
-  })
-  declare totalAmount?: number;
+  @AllowNull(true)
+  @Column(DataType.FLOAT)
+  declare totalAmount: number;
 
-  @Column({
-    type: DataType.STRING,
-    allowNull: true,
-  })
-  declare paymentStatus?: string;
+  @AllowNull(true)
+  @Column(DataType.STRING)
+  declare paymentStatus: string;
 
-  @Column({
-    type: DataType.STRING,
-    allowNull: true,
-  })
-  declare roomType?: string;
+  @AllowNull(true)
+  @Column(DataType.STRING)
+  declare roomType: string;
 
-  @Column({
-    type: DataType.INTEGER,
-    allowNull: true,
-  })
-  declare numGuests?: number;
+  @AllowNull(true)
+  @Column(DataType.FLOAT)
+  declare numGuests: number;
 
-  @Column({
-    type: DataType.TEXT,
-    allowNull: true,
-  })
-  declare notes?: string;
+  @AllowNull(true)
+  @Column(DataType.TEXT)
+  declare notes: string;
 
-  @CreatedAt
+  @AllowNull(false)
+  @Default(DataType.NOW)
+  @Column(DataType.DATE)
   declare createdAt: Date;
 
-  @UpdatedAt
+  @AllowNull(false)
+  @Default(DataType.NOW)
+  @Column(DataType.DATE)
   declare updatedAt: Date;
 
-  @Column({
-    type: DataType.INTEGER,
-    allowNull: true,
-  })
+  @AllowNull(true)
+  @Column(DataType.INTEGER)
   declare createdBy?: number;
 
-  @Column({
-    type: DataType.INTEGER,
-    allowNull: true,
-  })
+  @AllowNull(true)
+  @Column(DataType.INTEGER)
   declare updatedBy?: number;
 }
