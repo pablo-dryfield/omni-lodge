@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { fetchUsers, deleteUser, createUser, updateUser } from '../../actions/userActions';
-import Table from '../../utils/TableNew';
+import Table from '../../utils/Table';
 import { useMemo } from 'react';
 import { User } from '../../types/users/User';
 import { modifyColumn } from '../../utils/modifyColumn';
@@ -43,12 +43,12 @@ const UserList = () => {
     if (count === iterator) { dispatch(fetchUsers()); }
   };
 
-  const modifiedColumns = useMemo<MRT_ColumnDef<User>[]>(() => modifyColumn(data[0].columns, usersColumnDef), [data]);
+  const modifiedColumns = useMemo<MRT_ColumnDef<User>[]>(() => modifyColumn(data[0]?.columns || [], usersColumnDef), [data]);
 
   return (
     <Table
       pageTitle={currentPage}
-      data={data[0].data}
+      data={data[0]?.data || []}
       loading={loading}
       error={error}
       columns={modifiedColumns}

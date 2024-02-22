@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { fetchChannels, deleteChannel, createChannel, updateChannel } from '../../actions/channelActions';
-import Table from '../../utils/TableNew';
+import Table from '../../utils/Table';
 import { useMemo } from 'react';
 import { Channel } from '../../types/channels/Channel';
 import { modifyColumn } from '../../utils/modifyColumn';
@@ -43,12 +43,12 @@ const ChannelList = () => {
     if (count === iterator) { dispatch(fetchChannels()); }
   };
 
-  const modifiedColumns = useMemo<MRT_ColumnDef<Channel>[]>(() => modifyColumn(data[0].columns, channelsColumnDef), [data]);
+  const modifiedColumns = useMemo<MRT_ColumnDef<Channel>[]>(() => modifyColumn(data[0]?.columns || [], channelsColumnDef), [data]);
 
   return (
     <Table
       pageTitle={currentPage}
-      data={data[0].data}
+      data={data[0]?.data || []}
       loading={loading}
       error={error}
       columns={modifiedColumns}

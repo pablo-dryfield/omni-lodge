@@ -1,9 +1,7 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { User } from '../types/users/User';
 import { DataState } from '../types/general/DataState';
-import {
-  type ServerResponse,
-} from '../types/general/ServerResponse';
+import { type ServerResponse } from '../types/general/ServerResponse';
 import { fetchUsers, createUser, updateUser, deleteUser } from '../actions/userActions'; // Import thunks
 
 // Define the initial state using that type
