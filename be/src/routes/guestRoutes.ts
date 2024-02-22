@@ -12,14 +12,12 @@ const validateId = [
 
 // Validation rules for guest data
 const validateGuestPOST = [
-  check('firstName').isString().trim().isLength({ min: 2, max: 50 }).withMessage('First name must be a string between 2 and 50 characters'),
-  check('lastName').isString().trim().isLength({ min: 2, max: 50 }).withMessage('Last name must be a string between 2 and 50 characters'),
+  check('name').isString().trim().isLength({ min: 2, max: 50 }).withMessage('First name must be a string between 2 and 50 characters'),
   check('email').isEmail().trim().withMessage('Email must be a valid email address')
 ];
 
 const validateGuestPUT = [
-  check('firstName').optional().trim().isString().isLength({ min: 2, max: 50 }).withMessage('First name must be a string between 2 and 50 characters'),
-  check('lastName').optional().trim().isString().isLength({ min: 2, max: 50 }).withMessage('Last name must be a string between 2 and 50 characters'),
+  check('name').optional().trim().isString().isLength({ min: 2, max: 50 }).withMessage('First name must be a string between 2 and 50 characters'),
   check('email').optional().trim().isEmail().withMessage('Email must be a valid email address')
 ];
 
