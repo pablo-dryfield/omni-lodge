@@ -1,0 +1,1 @@
+export type MenuAnchorState = HTMLElement | null;
