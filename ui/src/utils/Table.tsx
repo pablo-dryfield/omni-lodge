@@ -94,7 +94,7 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
       showProgressBars:loading,
       showAlertBanner: error !== null || columns.length === 0,
     },
-    mantineToolbarAlertBannerProps: error!== null || (columns.length === 0)? {
+    mantineToolbarAlertBannerProps: (error!== null || (columns.length === 0)) && !loading ?  {
         color: 'red',
         children: error !== null ? error : "Error processing the data",
       }
