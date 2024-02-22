@@ -14,17 +14,17 @@ const validateId = [
 const validateBookingPOST = [
   check('guestId').isInt({ gt: 0 }).withMessage('guestId must be a positive integer'),
   check('channelId').isInt({ gt: 0 }).withMessage('channelId must be a positive integer'),
-  check('startDate').isISO8601().withMessage('startDate must be a valid date (ISO 8601)'),
-  check('endDate').isISO8601().withMessage('endDate must be a valid date (ISO 8601)'),
-  check('status').isIn(['confirmed', 'cancelled', 'pending']).withMessage('status must be one of: confirmed, cancelled, pending'),
+  check('checkInDate').isISO8601().withMessage('checkInDate must be a valid date (ISO 8601)'),
+  check('checkOutDate').isISO8601().withMessage('checkOutDate must be a valid date (ISO 8601)'),
+  check('paymentStatus').isIn(['confirmed', 'cancelled', 'pending']).withMessage('paymentStatus must be one of: confirmed, cancelled, pending'),
 ];
 
 const validateBookingPUT = [
   check('guestId').optional().isInt({ gt: 0 }).withMessage('guestId must be a positive integer'),
   check('channelId').optional().isInt({ gt: 0 }).withMessage('channelId must be a positive integer'),
-  check('startDate').optional().isISO8601().withMessage('startDate must be a valid date (ISO 8601)'),
-  check('endDate').optional().isISO8601().withMessage('endDate must be a valid date (ISO 8601)'),
-  check('status').optional().isIn(['confirmed', 'cancelled', 'pending']).withMessage('status must be one of: confirmed, cancelled, pending'),
+  check('checkInDate').isISO8601().withMessage('checkInDate must be a valid date (ISO 8601)'),
+  check('checkOutDate').isISO8601().withMessage('checkOutDate must be a valid date (ISO 8601)'),
+  check('paymentStatus').isIn(['confirmed', 'cancelled', 'pending']).withMessage('paymentStatus must be one of: confirmed, cancelled, pending'),
 ];
 
 // Middleware to check validation result
