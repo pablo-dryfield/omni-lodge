@@ -67,7 +67,7 @@ export const SidebarFooter: React.FC<SidebarFooterProps> = ({ children, collapse
           <div style={{ marginBottom: '12px' }}>
             <Github size={30} />
           </div>
-          <Typography fontWeight={600}>Pro Sidebar</Typography>
+          <Typography fontWeight={600}>Omnilodge</Typography>
           <Typography variant="caption" style={{ letterSpacing: 1, opacity: 0.7 }}>
             V paul-dryfield
           </Typography>

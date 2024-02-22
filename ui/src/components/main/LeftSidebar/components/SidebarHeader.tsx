@@ -52,7 +52,7 @@ export const SidebarHeader: React.FC<SidebarHeaderProps> = ({ children, rtl, ...
       <div style={{ display: 'flex', alignItems: 'center' }}>
         <StyledLogo rtl={rtl}>P</StyledLogo>
         <Typography variant="subtitle1" fontWeight={700} color="#0098e5">
-          Pro Sidebar
+          Settings
         </Typography>
       </div>
     </StyledSidebarHeader>
