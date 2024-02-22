@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { styled } from '@mui/system';
-import { useSelector } from 'react-redux'; // Import useSelector and useDispatch
 import {
   AppBar,
   Toolbar,
@@ -11,6 +10,9 @@ import {
   IconButton,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
+import { NavItemProps } from '../../types/general/NavItemProps';
+import { useAppSelector } from '../../store/hooks';
+import { MenuAnchorState } from '../../types/general/MenuAnchorState';
 
 const SystemName = styled(Typography)({
   textDecoration: 'none',
@@ -18,7 +20,7 @@ const SystemName = styled(Typography)({
   marginRight: '18px',
 });
 
-const NavItem = styled(Link)(({ open }) => ({
+const NavItem = styled(Link)<NavItemProps>(({ open }) => ({
   minHeight: 'inherit',
   display: 'flex',
   alignItems: 'center',
@@ -39,11 +41,9 @@ const NavItem = styled(Link)(({ open }) => ({
 }));
 
 const NavBar = () => {
-  // Use useSelector to get pages from the Redux store
-  const { pages } = useSelector((state) => state.navigation); 
-
-  const [menuAnchor, setMenuAnchor] = useState(null);
-  const openMenu = (event) => setMenuAnchor(event.currentTarget);
+  const { pages } = useAppSelector((state) => state.navigation);
+  const [menuAnchor, setMenuAnchor] = useState<MenuAnchorState>(null);
+  const openMenu = (event: React.MouseEvent<HTMLElement> | React.TouchEvent<HTMLElement>) => setMenuAnchor(event.currentTarget);
   const closeMenu = () => setMenuAnchor(null);
 
   const isMenuOpen = Boolean(menuAnchor);
@@ -67,12 +67,14 @@ const NavBar = () => {
   return (
     <AppBar position="sticky" sx={{ backgroundColor: '#333', boxShadow: 'none' }}>
       <Toolbar>
-        <SystemName component={Link} to="/">
+      <SystemName>
+        <Link to="/" style={{ textDecoration: 'none', color: 'white' }}>
           OmniLodge
-        </SystemName>
+        </Link>
+      </SystemName>
         {showMobileMenu ? (
           <>
-            <NavItem onClick={openMenu} open={isMenuOpen}>
+            <NavItem onClick={openMenu} open={isMenuOpen} to={'#'}>
               <IconButton
                 size="large"
                 aria-controls="menu"
