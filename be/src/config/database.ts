@@ -1,6 +1,5 @@
 import { Sequelize } from 'sequelize-typescript';
 import dotenv from 'dotenv';
-import path from 'path';
 import User from '../models/User.js';
 import Booking from '../models/Booking.js';
 import Channel from '../models/Channel.js';
