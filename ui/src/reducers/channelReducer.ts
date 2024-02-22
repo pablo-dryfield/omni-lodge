@@ -1,9 +1,7 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { Channel } from '../types/channels/Channel';
 import { DataState } from '../types/general/DataState';
-import {
-  type ServerResponse,
-} from '../types/general/ServerResponse';
+import { type ServerResponse } from '../types/general/ServerResponse';
 import { fetchChannels, createChannel, updateChannel, deleteChannel } from '../actions/channelActions'; // Import thunks
 
 // Define the initial state using that type

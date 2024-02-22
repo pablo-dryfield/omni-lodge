@@ -10,9 +10,9 @@ import Users from '../../pages/Users';
 const Routes = () => {
   return (
     <ReactRoutes>
-      <Route path="/" element={<Home />} />
-      <Route path="/guests" element={<Guests />} />
-      <Route path="/bookings" element={<Bookings />} />
+      <Route path="/" element={<Home title="Home"/>} />
+      <Route path="/guests" element={<Guests title="Guests"/>} />
+      <Route path="/bookings" element={<Bookings title="Bookings"/>} />
       <Route path="/calendar" element={<AvailabilityCalendar />} />
       <Route path="/channels" element={<Channels title="Channels" />} />
       <Route path="/users" element={<Users title="Users" />} />

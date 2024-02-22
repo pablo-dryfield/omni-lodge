@@ -1,50 +1,60 @@
-import React, { useEffect } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
-import { fetchGuests } from '../../actions/guestActions';
-import { styled } from '@mui/system';
+import { useEffect } from 'react';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { fetchGuests, deleteGuest, createGuest, updateGuest } from '../../actions/guestActions';
 import Table from '../../utils/Table';
-
-const GuestListContainer = styled('div')({
-  width: '93%',
-  margin: '0 auto', // Center the container
-  padding: '20px',
-  borderRadius: '4px',
-});
-
-const TableContainer = styled('div')({
-  overflowY: 'auto', // Add vertical scrolling
-  maxHeight: '650px', // Adjust the maximum height as needed
-  position: 'relative', // Add relative positioning
-});
-
-const StyledTable = styled('div')({
-  borderCollapse: 'collapse',
-  width: '100%',
-});
+import { useMemo } from 'react';
+import { Guest } from '../../types/guests/Guest';
+import { modifyColumn } from '../../utils/modifyColumn';
+import { guestsColumnDef } from './guestsColumnDef';
+import { type MRT_ColumnDef } from 'mantine-react-table';
 
 const GuestList = () => {
-  const dispatch = useDispatch();
-  const { guests, loading, error } = useSelector((state) => state.guests);
+
+  const dispatch = useAppDispatch();
+  const { data, loading, error } = useAppSelector((state) => state.guests)[0];
+  const { currentPage } = useAppSelector((state) => state.navigation);
+  const initialState = {
+    showColumnFilters: false,
+    showGlobalFilter: true,
+    columnVisibility: {
+      id: false,
+      password: false,
+    },
+  }
 
   useEffect(() => {
-    dispatch(fetchGuests());
+    dispatch(fetchGuests())
   }, [dispatch]);
 
+  const handleCreate = async (dataCreate: Guest) => {
+    await dispatch(createGuest(dataCreate));
+    dispatch(fetchGuests());
+  };
+
+  const handleUpdate = async (dataUpdate: Guest) => {
+    const guestId = dataUpdate.id;
+    const guestData = dataUpdate;
+    await dispatch(updateGuest({ guestId, guestData }));
+    dispatch(fetchGuests());
+  };
+
+  const handleDelete = async (dataDelete: Guest, count: number, iterator: number) => {
+    await dispatch(deleteGuest(dataDelete.id));
+    if (count === iterator) { dispatch(fetchGuests()); }
+  };
+
+  const modifiedColumns = useMemo<MRT_ColumnDef<Guest>[]>(() => modifyColumn(data[0]?.columns || [], guestsColumnDef), [data]);
+
   return (
-    <GuestListContainer>
-      <h2>Guests</h2>
-      {loading ? (
-        <p>Loading...</p>
-      ) : error ? (
-        <p>Error retrieving data: <i>{error}</i></p>
-      ) : (
-        <TableContainer>
-          <StyledTable>
-            <Table guests={guests}/>
-          </StyledTable>
-        </TableContainer>
-      )}
-    </GuestListContainer>
+    <Table
+      pageTitle={currentPage}
+      data={data[0]?.data || []}
+      loading={loading}
+      error={error}
+      columns={modifiedColumns}
+      actions={{ handleDelete, handleCreate, handleUpdate }}
+      initialState={initialState}
+    />
   );
 };
 

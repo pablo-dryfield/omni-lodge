@@ -1,50 +1,60 @@
-import React, { useEffect } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
-import { fetchBookings } from '../../actions/bookingActions';
-import { styled } from '@mui/system';
+import { useEffect } from 'react';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { fetchBookings, deleteBooking, createBooking, updateBooking } from '../../actions/bookingActions';
 import Table from '../../utils/Table';
-
-const BookingListContainer = styled('div')({
-  width: '93%',
-  margin: '0 auto', // Center the container
-  padding: '20px',
-  borderRadius: '4px',
-});
-
-const TableContainer = styled('div')({
-  overflowY: 'auto', // Add vertical scrolling
-  maxHeight: '650px', // Adjust the maximum height as needed
-  position: 'relative', // Add relative positioning
-});
-
-const StyledTable = styled('div')({
-  borderCollapse: 'collapse',
-  width: '100%',
-});
+import { useMemo } from 'react';
+import { Booking } from '../../types/bookings/Booking';
+import { modifyColumn } from '../../utils/modifyColumn';
+import { bookingsColumnDef } from './bookingsColumnDef';
+import { type MRT_ColumnDef } from 'mantine-react-table';
 
 const BookingList = () => {
-  const dispatch = useDispatch();
-  const { bookings, loading, error } = useSelector((state) => state.bookings);
+
+  const dispatch = useAppDispatch();
+  const { data, loading, error } = useAppSelector((state) => state.bookings)[0];
+  const { currentPage } = useAppSelector((state) => state.navigation);
+  const initialState = {
+    showColumnFilters: false,
+    showGlobalFilter: true,
+    columnVisibility: {
+      id: false,
+      password: false,
+    },
+  }
 
   useEffect(() => {
-    dispatch(fetchBookings());
+    dispatch(fetchBookings())
   }, [dispatch]);
 
+  const handleCreate = async (dataCreate: Booking) => {
+    await dispatch(createBooking(dataCreate));
+    dispatch(fetchBookings());
+  };
+
+  const handleUpdate = async (dataUpdate: Booking) => {
+    const bookingId = dataUpdate.id;
+    const bookingData = dataUpdate;
+    await dispatch(updateBooking({ bookingId, bookingData }));
+    dispatch(fetchBookings());
+  };
+
+  const handleDelete = async (dataDelete: Booking, count: number, iterator: number) => {
+    await dispatch(deleteBooking(dataDelete.id));
+    if (count === iterator) { dispatch(fetchBookings()); }
+  };
+
+  const modifiedColumns = useMemo<MRT_ColumnDef<Booking>[]>(() => modifyColumn(data[0]?.columns || [], bookingsColumnDef), [data]);
+
   return (
-    <BookingListContainer>
-      <h2>Bookings</h2>
-      {loading ? (
-        <p>Loading...</p>
-      ) : error ? (
-        <p>Error retrieving data: <i>{error}</i></p>
-      ) : (
-        <TableContainer>
-          <StyledTable>
-            <Table bookings={bookings}/>
-          </StyledTable>
-        </TableContainer>
-      )}
-    </BookingListContainer>
+    <Table
+      pageTitle={currentPage}
+      data={data[0]?.data || []}
+      loading={loading}
+      error={error}
+      columns={modifiedColumns}
+      actions={{ handleDelete, handleCreate, handleUpdate }}
+      initialState={initialState}
+    />
   );
 };
 

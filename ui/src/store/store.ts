@@ -3,7 +3,6 @@ import guestReducer from './../reducers/guestReducer';
 import bookingReducer from './../reducers/bookingReducer';
 import channelReducer from './../reducers/channelReducer';
 import userReducer from './../reducers/userReducer';
-import navBarReducer from './../reducers/navBarReducer';
 import navigationReducer from './../reducers/navigationReducer';
 
 // Create the Redux store using configureStore
@@ -13,7 +12,6 @@ export const store = configureStore({
     bookings: bookingReducer,
     channels: channelReducer,
     users: userReducer,
-    navBar: navBarReducer,
     navigation: navigationReducer,
   },
   // If you have additional middleware, you can add them here

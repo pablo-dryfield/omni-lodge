@@ -7,6 +7,9 @@ import CalendarMonth from '@mui/icons-material/People';
 import TvIcon from '@mui/icons-material/Tv';
 import PersonIcon from '@mui/icons-material/Person';
 import { createTheme } from '@mui/material/styles';
+import { GenericPageProps } from '../types/general/GenericPageProps';
+import { useAppDispatch } from '../store/hooks';
+import { navigateToPage } from '../actions/navigationActions';
 
 const theme = createTheme();
 
@@ -17,7 +20,10 @@ const CenteredContainer = styled('div')({
   height:'100%',
 });
 
-const Home = () => {
+const Home = (props: GenericPageProps) => {
+  
+  const dispatch = useAppDispatch();
+  dispatch(navigateToPage(props.title));
   const pageData = [
     { name: 'Bookings', path: '/bookings', icon: <BookIcon fontSize="large" /> },
     { name: 'Availability Calendar', path: '/calendar', icon: <CalendarMonth fontSize="large" /> },

@@ -92,12 +92,11 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
     state: {
       isLoading:loading,
       showProgressBars:loading,
-      showAlertBanner: error !== null,
+      showAlertBanner: error !== null || columns.length === 0,
     },
-    mantineToolbarAlertBannerProps: error
-    ? {
+    mantineToolbarAlertBannerProps: error!== null || (columns.length === 0)? {
         color: 'red',
-        children: error,
+        children: error !== null ? error : "Error processing the data",
       }
     : undefined,
     mantineTableHeadCellProps: {

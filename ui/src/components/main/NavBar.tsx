@@ -39,8 +39,8 @@ const NavItem = styled(Link)(({ open }) => ({
 }));
 
 const NavBar = () => {
-  // Use useSelector to get pageData from the Redux store
-  const { pageData } = useSelector((state) => state.navBar); 
+  // Use useSelector to get pages from the Redux store
+  const { pages } = useSelector((state) => state.navigation); 
 
   const [menuAnchor, setMenuAnchor] = useState(null);
   const openMenu = (event) => setMenuAnchor(event.currentTarget);
@@ -92,7 +92,7 @@ const NavBar = () => {
               open={Boolean(menuAnchor)}
               onClose={closeMenu}
             >
-              {pageData.map((page) => (
+              {pages.map((page) => (
                 <MenuItem
                   key={page.name}
                   component={Link}
@@ -106,7 +106,7 @@ const NavBar = () => {
           </>
         ) : (
           <>
-            {pageData.map((page) => (
+            {pages.map((page) => (
               <NavItem to={page.path} key={page.name}>
                 {page.name}
               </NavItem>
