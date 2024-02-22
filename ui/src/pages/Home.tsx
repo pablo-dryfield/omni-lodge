@@ -10,6 +10,7 @@ import { createTheme } from '@mui/material/styles';
 import { GenericPageProps } from '../types/general/GenericPageProps';
 import { useAppDispatch } from '../store/hooks';
 import { navigateToPage } from '../actions/navigationActions';
+import { useEffect } from 'react';
 
 const theme = createTheme();
 
@@ -17,13 +18,15 @@ const CenteredContainer = styled('div')({
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  height:'100%',
+  height: '100%',
 });
 
 const Home = (props: GenericPageProps) => {
-  
+
   const dispatch = useAppDispatch();
-  dispatch(navigateToPage(props.title));
+  useEffect(() => {
+    dispatch(navigateToPage(props.title));
+  }, [dispatch, props.title]);
   const pageData = [
     { name: 'Bookings', path: '/bookings', icon: <BookIcon fontSize="large" /> },
     { name: 'Availability Calendar', path: '/calendar', icon: <CalendarMonth fontSize="large" /> },
@@ -67,7 +70,7 @@ const Home = (props: GenericPageProps) => {
           <Grid container justifyContent="center" >
             {pageData.map((page) => (
               <Grid item xs={12} sm={6} md={4} key={page.name}>
-                <Link to={page.path} style={{ padding: '3vh', textDecoration: 'none', alignItems:'center', display: 'flex', justifyContent: 'center',}}>
+                <Link to={page.path} style={{ padding: '3vh', textDecoration: 'none', alignItems: 'center', display: 'flex', justifyContent: 'center', }}>
                   <LogoTile elevation={3}>
                     {page.icon}
                     <PageName variant="subtitle1">
