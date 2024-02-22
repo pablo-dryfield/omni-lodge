@@ -67,11 +67,11 @@ const NavBar = () => {
   return (
     <AppBar position="sticky" sx={{ backgroundColor: '#333', boxShadow: 'none' }}>
       <Toolbar>
-      <SystemName>
-        <Link to="/" style={{ textDecoration: 'none', color: 'white' }}>
-          OmniLodge
-        </Link>
-      </SystemName>
+        <SystemName>
+          <Link to="/" style={{ textDecoration: 'none', color: 'white' }}>
+            OmniLodge
+          </Link>
+        </SystemName>
         {showMobileMenu ? (
           <>
             <NavItem onClick={openMenu} open={isMenuOpen} to={'#'}>
