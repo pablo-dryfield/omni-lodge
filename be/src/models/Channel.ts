@@ -1,4 +1,4 @@
-import { Model, Table, Column, PrimaryKey, AutoIncrement, Unique, AllowNull, Default, DataType } from 'sequelize-typescript';
+import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, DataType } from 'sequelize-typescript';
 
 @Table({
   timestamps: true,
@@ -11,7 +11,6 @@ export default class Channel extends Model {
   @Column(DataType.INTEGER)
   declare id: number;
 
-  @Unique
   @AllowNull(false)
   @Column(DataType.STRING)
   declare name: string;
