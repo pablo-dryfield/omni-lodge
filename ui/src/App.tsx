@@ -7,6 +7,7 @@ import Login from './pages/Login';
 import { useAppDispatch, useAppSelector } from './store/hooks';
 import { useEffect } from 'react';
 import { fetchSession } from './actions/sessionActions';
+import { Center, Loader } from '@mantine/core';
 
 const AppContainer = styled('div')({
   display: 'grid',
@@ -49,13 +50,22 @@ const MainContent = styled('div')({
 });
 
 const App = () => {
-  const { authenticated } = useAppSelector((state) => state.session);
+  const { authenticated, checkingSession } = useAppSelector((state) => state.session);
   const dispatch = useAppDispatch();
   useEffect(() => {
     if (!authenticated) {
       dispatch(fetchSession());
     }
   }, [dispatch, authenticated]);
+
+  if (checkingSession) {
+    return (
+      <Center style={{ height: '100vh' }}>
+        <Loader variant="dots" /> 
+      </Center>
+    ); 
+  }
+
   return (
     <BrowserRouter>
       {authenticated ? (
