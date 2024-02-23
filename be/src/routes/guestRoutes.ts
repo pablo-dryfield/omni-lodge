@@ -32,18 +32,18 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
 };
 
 // Get all guests
-router.get('/', /*authMiddleware,*/ guestController.getAllGuests);
+router.get('/', authMiddleware, guestController.getAllGuests);
 
 // Get a single guest by ID
-router.get('/:id', /*authMiddleware,*/ validateId, validate, guestController.getGuestById);
+router.get('/:id', authMiddleware, validateId, validate, guestController.getGuestById);
 
 // Create a new guest
-router.post('/', /*authMiddleware,*/ validateGuestPOST, validate, guestController.createGuest);
+router.post('/', authMiddleware, validateGuestPOST, validate, guestController.createGuest);
 
 // Update an existing guest by ID
-router.put('/:id', /*authMiddleware,*/ [...validateId, ...validateGuestPUT], validate, guestController.updateGuest);
+router.put('/:id', authMiddleware, [...validateId, ...validateGuestPUT], validate, guestController.updateGuest);
 
 // Delete a guest by ID
-router.delete('/:id', /*authMiddleware,*/ validateId, validate, guestController.deleteGuest);
+router.delete('/:id', authMiddleware, validateId, validate, guestController.deleteGuest);
 
 export default router;
