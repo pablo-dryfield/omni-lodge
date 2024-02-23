@@ -20,7 +20,7 @@ Provide examples of how to use your project for various tasks, possibly with scr
 
 ## License
 
-This project is licensed under the [Insert License Here] License - see the [LICENSE.md](LICENSE.md) file for details.
+This project itself has Exclusive Rights - see the [LICENSE.md](LICENSE.md) file for details.
 
 ## Contact
 
