@@ -24,7 +24,7 @@ This project is licensed under the [Insert License Here] License - see the [LICE
 
 ## Contact
 
-Pablo José Cabrera CAmposeco - [Linkedin](https://www.linkedin.com/in/pablo-jose-cabrera-camposeco/)
+Pablo José Cabrera Camposeco - [Linkedin](https://www.linkedin.com/in/pablo-jose-cabrera-camposeco/)
 
 Project Link: [https://github.com/pablo-dryfield/omni-lodge](https://github.com/pablo-dryfield/omni-lodge)
 
