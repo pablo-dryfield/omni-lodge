@@ -25,7 +25,9 @@ export const fetchUsers = createAsyncThunk(
   'users/fetchUsers',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<User>>('/api/users');
+      const response = await axiosInstance.get<ServerResponse<User>>('/api/users', {
+        withCredentials: true
+      });
       return response.data;
     } catch (error) {
       if (error instanceof Error) {
@@ -41,7 +43,9 @@ export const createUser = createAsyncThunk(
   'users/createUser',
   async (userData: User, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<User>('/api/users/register', userData);
+      const response = await axiosInstance.post<User>('/api/users/register', userData, {
+        withCredentials: true
+      });
       return response.data;
     } catch (error) {
       if (error instanceof Error) {
@@ -57,7 +61,9 @@ export const updateUser = createAsyncThunk(
   'users/updateUser',
   async ({ userId, userData }: { userId: number; userData: User; }, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.put<User>(`/api/users/${userId}`, userData);
+      const response = await axiosInstance.put<User>(`/api/users/${userId}`, userData, {
+        withCredentials: true
+      });
       return response.data;
     } catch (error) {
       if (error instanceof Error) {
@@ -73,7 +79,9 @@ export const deleteUser = createAsyncThunk(
   'users/deleteUser',
   async (userId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/users/${userId}`);
+      await axiosInstance.delete(`/api/users/${userId}`, {
+        withCredentials: true
+      });
       return userId;
     } catch (error) {
       if (error instanceof Error) {
