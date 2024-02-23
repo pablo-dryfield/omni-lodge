@@ -3,6 +3,23 @@ import axiosInstance from './../utils/axiosInstance';
 import { ServerResponse } from '../types/general/ServerResponse';
 import { User } from '../types/users/User';
 
+export const loginUser = createAsyncThunk(
+  'users/loginUser',
+  async (credentials: Partial<User>, { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.post<[{message:string}]>('/api/users/login', credentials, {
+        withCredentials: true
+      });
+      return response.data;
+    } catch (error) {
+      if (error instanceof Error) {
+        return rejectWithValue(error.message);
+      }
+      return rejectWithValue('An unknown error occurred');
+    }
+  }
+);
+
 // Async thunk for fetching users
 export const fetchUsers = createAsyncThunk(
   'users/fetchUsers',

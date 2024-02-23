@@ -11,19 +11,14 @@ interface AuthenticatedRequest extends Request {
 }
 
 const authenticateJWT = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
-    // Get the token from the header
-    const authHeader = req.headers.authorization;
-
-    if (authHeader) {
-        const token = authHeader.split(' ')[1]; // Authorization: Bearer <token>
-
-        jwt.verify(token, process.env.JWT_SECRET || '', (err, user) => {
+    const token = req.cookies['token'];
+    if (token) {
+        jwt.verify(token, process.env.JWT_SECRET || '', (err: Error | null, decoded: string | jwt.JwtPayload | undefined) => {
             if (err) {
-                return res.status(403).json({ error: 'Forbidden' });
+                return res.status(403).json({ error: 'Forbidden, invalid or expired token' });
             }
 
-            // Forward the user info to the next middleware
-            req.user = user;
+            req.user = decoded;
             next();
         });
     } else {

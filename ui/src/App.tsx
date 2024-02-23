@@ -1,8 +1,12 @@
 import { BrowserRouter } from 'react-router-dom';
-import NavBar from './components/main/NavBar'; 
+import NavBar from './components/main/NavBar';
 import LeftSidebar from './components/main/LeftSidebar/LeftSidebar';
 import Routes from './components/main/Routes';
 import { styled } from '@mui/system';
+import Login from './pages/Login';
+import { useAppDispatch, useAppSelector } from './store/hooks';
+import { useEffect } from 'react';
+import { fetchSession } from './actions/sessionActions';
 
 const AppContainer = styled('div')({
   display: 'grid',
@@ -45,19 +49,30 @@ const MainContent = styled('div')({
 });
 
 const App = () => {
+  const { authenticated } = useAppSelector((state) => state.session);
+  const dispatch = useAppDispatch();
+  useEffect(() => {
+    if (!authenticated) {
+      dispatch(fetchSession());
+    }
+  }, [dispatch, authenticated]);
   return (
     <BrowserRouter>
-      <AppContainer>
-        <NavBarStyled>
-          <NavBar />
-        </NavBarStyled>
-        <LeftSidebarStyled>
-          <LeftSidebar />
-        </LeftSidebarStyled>
-        <MainContent>
-          <Routes />
-        </MainContent>
-      </AppContainer>
+      {authenticated ? (
+        <AppContainer>
+          <NavBarStyled>
+            <NavBar />
+          </NavBarStyled>
+          <LeftSidebarStyled>
+            <LeftSidebar />
+          </LeftSidebarStyled>
+          <MainContent>
+            <Routes />
+          </MainContent>
+        </AppContainer>
+      ) : (
+        <Login />
+      )}
     </BrowserRouter>
   );
 };

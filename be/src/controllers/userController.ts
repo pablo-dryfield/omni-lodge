@@ -7,6 +7,7 @@ import User from '../models/User.js';
 // Assuming you have an environment variable type definition
 interface Env {
   JWT_SECRET: string;
+  NODE_ENV: string;
 }
 
 interface ErrorWithMessage {
@@ -61,7 +62,13 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
       expiresIn: '1h',
     });
 
-    res.status(200).json([{ token }]);
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production', // Ensure cookies are secure in production
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Adjust for cross-origin compatibility
+      maxAge: 3600000, // Set cookie expiry as needed
+    });
+    res.status(200).json([{ message: 'Logged in successfully' }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);
