@@ -8,7 +8,9 @@ export const fetchChannels = createAsyncThunk(
   'channels/fetchChannels',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Channel>>('/api/channels');
+      const response = await axiosInstance.get<ServerResponse<Channel>>('/api/channels', {
+        withCredentials: true
+      });
       return response.data;
     } catch (error) {
       if (error instanceof Error) {
@@ -24,7 +26,9 @@ export const createChannel = createAsyncThunk(
   'channels/createChannel',
   async (channelData: Channel, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Channel>('/api/channels', channelData);
+      const response = await axiosInstance.post<Channel>('/api/channels', channelData, {
+        withCredentials: true
+      });
       return response.data;
     } catch (error) {
       if (error instanceof Error) {
@@ -40,7 +44,9 @@ export const updateChannel = createAsyncThunk(
   'channels/updateChannel',
   async ({ channelId, channelData }: { channelId: number; channelData: Channel; }, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.put<Channel>(`/api/channels/${channelId}`, channelData);
+      const response = await axiosInstance.put<Channel>(`/api/channels/${channelId}`, channelData, {
+        withCredentials: true
+      });
       return response.data;
     } catch (error) {
       if (error instanceof Error) {
@@ -56,7 +62,9 @@ export const deleteChannel = createAsyncThunk(
   'channels/deleteChannel',
   async (channelId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/channels/${channelId}`);
+      await axiosInstance.delete(`/api/channels/${channelId}`, {
+        withCredentials: true
+      });
       return channelId;
     } catch (error) {
       if (error instanceof Error) {

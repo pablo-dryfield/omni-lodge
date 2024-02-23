@@ -8,7 +8,9 @@ export const fetchGuests = createAsyncThunk(
   'guests/fetchGuests',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Guest>>('/api/guests');
+      const response = await axiosInstance.get<ServerResponse<Guest>>('/api/guests', {
+        withCredentials: true
+      });
       return response.data;
     } catch (error) {
       if (error instanceof Error) {
@@ -24,7 +26,9 @@ export const createGuest = createAsyncThunk(
   'guests/createGuest',
   async (guestData: Guest, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Guest>('/api/guests', guestData);
+      const response = await axiosInstance.post<Guest>('/api/guests', guestData, {
+        withCredentials: true
+      });
       return response.data;
     } catch (error) {
       if (error instanceof Error) {
@@ -40,7 +44,9 @@ export const updateGuest = createAsyncThunk(
   'guests/updateGuest',
   async ({ guestId, guestData }: { guestId: number; guestData: Guest; }, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.put<Guest>(`/api/guests/${guestId}`, guestData);
+      const response = await axiosInstance.put<Guest>(`/api/guests/${guestId}`, guestData, {
+        withCredentials: true
+      });
       return response.data;
     } catch (error) {
       if (error instanceof Error) {
@@ -56,7 +62,9 @@ export const deleteGuest = createAsyncThunk(
   'guests/deleteGuest',
   async (guestId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/guests/${guestId}`);
+      await axiosInstance.delete(`/api/guests/${guestId}`, {
+        withCredentials: true
+      });
       return guestId;
     } catch (error) {
       if (error instanceof Error) {

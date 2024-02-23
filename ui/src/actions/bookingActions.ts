@@ -8,7 +8,9 @@ export const fetchBookings = createAsyncThunk(
   'bookings/fetchBookings',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Booking>>('/api/bookings');
+      const response = await axiosInstance.get<ServerResponse<Booking>>('/api/bookings', {
+        withCredentials: true
+      });
       return response.data;
     } catch (error) {
       if (error instanceof Error) {
@@ -24,7 +26,9 @@ export const createBooking = createAsyncThunk(
   'bookings/createBooking',
   async (bookingData: Booking, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Booking>('/api/bookings', bookingData);
+      const response = await axiosInstance.post<Booking>('/api/bookings', bookingData, {
+        withCredentials: true
+      });
       return response.data;
     } catch (error) {
       if (error instanceof Error) {
@@ -40,7 +44,9 @@ export const updateBooking = createAsyncThunk(
   'bookings/updateBooking',
   async ({ bookingId, bookingData }: { bookingId: number; bookingData: Booking; }, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.put<Booking>(`/api/bookings/${bookingId}`, bookingData);
+      const response = await axiosInstance.put<Booking>(`/api/bookings/${bookingId}`, bookingData, {
+        withCredentials: true
+      });
       return response.data;
     } catch (error) {
       if (error instanceof Error) {
@@ -56,7 +62,9 @@ export const deleteBooking = createAsyncThunk(
   'bookings/deleteBooking',
   async (bookingId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/bookings/${bookingId}`);
+      await axiosInstance.delete(`/api/bookings/${bookingId}`, {
+        withCredentials: true
+      });
       return bookingId;
     } catch (error) {
       if (error instanceof Error) {

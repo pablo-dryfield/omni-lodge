@@ -47,7 +47,7 @@ router.post('/register', validateUserPOST, validate, userController.registerUser
 router.post('/login', validateUserLogin, validate, userController.loginUser);
 
 // Get all users
-router.get('/', /* authMiddleware, */ validate, userController.getAllUsers);
+router.get('/', authMiddleware, validate, userController.getAllUsers);
 
 // Get a single user by ID
 router.get('/:id', /* authMiddleware, */ validateId, validate, userController.getUserById);
