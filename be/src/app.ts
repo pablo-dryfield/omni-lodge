@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import { collectDefaultMetrics } from 'prom-client';
 import { ValidationError  } from 'sequelize';
 
@@ -11,6 +12,7 @@ import guestRoutes from './routes/guestRoutes.js';
 import bookingRoutes from './routes/bookingRoutes.js';
 import channelRoutes from './routes/channelRoutes.js';
 import userRoutes from './routes/userRoutes.js';
+import sessionRoutes from './routes/sessionRoutes.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -38,6 +40,9 @@ const app = express();
 // Middleware
 const allowedOrigins = ['http://localhost:3000'];
 
+// Cookies 
+app.use(cookieParser());
+
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -46,6 +51,7 @@ app.use(cors({
       callback(new Error('Not allowed by CORS'));
     }
   },
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type'],
 }));
@@ -72,6 +78,7 @@ app.use('/api/guests', guestRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/channels', channelRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/session', sessionRoutes);
 
 // Error Handling
 app.use(errorMiddleware);
