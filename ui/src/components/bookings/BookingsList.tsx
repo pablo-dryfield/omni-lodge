@@ -18,7 +18,6 @@ const BookingList = () => {
     showGlobalFilter: true,
     columnVisibility: {
       id: false,
-      password: false,
     },
   }
 

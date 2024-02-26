@@ -18,7 +18,6 @@ const ChannelList = () => {
     showGlobalFilter: true,
     columnVisibility: {
       id: false,
-      password: false,
     },
   }
 
