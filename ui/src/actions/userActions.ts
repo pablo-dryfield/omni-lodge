@@ -25,7 +25,7 @@ export const fetchUsers = createAsyncThunk(
   'users/fetchUsers',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<User>>('/api/users', {
+      const response = await axiosInstance.get<ServerResponse<Partial<User>>>('/api/users', {
         withCredentials: true
       });
       return response.data;
@@ -41,9 +41,9 @@ export const fetchUsers = createAsyncThunk(
 // Async thunk for creating a user
 export const createUser = createAsyncThunk(
   'users/createUser',
-  async (userData: User, { rejectWithValue }) => {
+  async (userData: Partial<User>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<User>('/api/users/register', userData, {
+      const response = await axiosInstance.post<Partial<User>>('/api/users/register', userData, {
         withCredentials: true
       });
       return response.data;
@@ -59,9 +59,9 @@ export const createUser = createAsyncThunk(
 // Async thunk for updating a user
 export const updateUser = createAsyncThunk(
   'users/updateUser',
-  async ({ userId, userData }: { userId: number; userData: User; }, { rejectWithValue }) => {
+  async ({ userId, userData }: { userId: number; userData: Partial<User>; }, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.put<User>(`/api/users/${userId}`, userData, {
+      const response = await axiosInstance.put<Partial<User>>(`/api/users/${userId}`, userData, {
         withCredentials: true
       });
       return response.data;

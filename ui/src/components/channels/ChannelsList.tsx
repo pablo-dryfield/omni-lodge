@@ -26,24 +26,32 @@ const ChannelList = () => {
     dispatch(fetchChannels())
   }, [dispatch]);
 
-  const handleCreate = async (dataCreate: Channel) => {
+  const handleCreate = async (dataCreate: Partial<Channel>) => {
     await dispatch(createChannel(dataCreate));
     dispatch(fetchChannels());
   };
 
-  const handleUpdate = async (dataUpdate: Channel) => {
+  const handleUpdate = async (dataUpdate: Partial<Channel>) => {
     const channelId = dataUpdate.id;
     const channelData = dataUpdate;
-    await dispatch(updateChannel({ channelId, channelData }));
-    dispatch(fetchChannels());
+    if (typeof channelId === 'number') {
+      await dispatch(updateChannel({ channelId, channelData }));
+      dispatch(fetchChannels());
+    }else{
+      console.error('Channel ID is undefined.');
+    }
   };
 
-  const handleDelete = async (dataDelete: Channel, count: number, iterator: number) => {
-    await dispatch(deleteChannel(dataDelete.id));
-    if (count === iterator) { dispatch(fetchChannels()); }
+  const handleDelete = async (dataDelete: Partial<Channel>, count: number, iterator: number) => {
+    if (typeof dataDelete.id === 'number') {
+      await dispatch(deleteChannel(dataDelete.id));
+      if (count === iterator) { dispatch(fetchChannels()); }
+    }else{
+      console.error('Channel ID is undefined.');
+    }
   };
 
-  const modifiedColumns = useMemo<MRT_ColumnDef<Channel>[]>(() => modifyColumn(data[0]?.columns || [], channelsColumnDef), [data]);
+  const modifiedColumns = useMemo<MRT_ColumnDef<Partial<Channel>>[]>(() => modifyColumn(data[0]?.columns || [], channelsColumnDef), [data]);
 
   return (
     <Table

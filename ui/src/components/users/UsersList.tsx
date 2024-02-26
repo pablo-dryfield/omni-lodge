@@ -26,24 +26,32 @@ const UserList = () => {
     dispatch(fetchUsers())
   }, [dispatch]);
 
-  const handleCreate = async (dataCreate: User) => {
+  const handleCreate = async (dataCreate: Partial<User>) => {
     await dispatch(createUser(dataCreate));
     dispatch(fetchUsers());
   };
 
-  const handleUpdate = async (dataUpdate: User) => {
+  const handleUpdate = async (dataUpdate: Partial<User>) => {
     const userId = dataUpdate.id;
     const userData = dataUpdate;
-    await dispatch(updateUser({ userId, userData }));
-    dispatch(fetchUsers());
+    if (typeof userId === 'number') {
+      await dispatch(updateUser({ userId, userData }));
+      dispatch(fetchUsers());
+    }else{
+      console.error('User ID is undefined.');
+    }
   };
 
-  const handleDelete = async (dataDelete: User, count: number, iterator: number) => {
-    await dispatch(deleteUser(dataDelete.id));
-    if (count === iterator) { dispatch(fetchUsers()); }
+  const handleDelete = async (dataDelete: Partial<User>, count: number, iterator: number) => {
+    if (typeof dataDelete.id === 'number') {
+      await dispatch(deleteUser(dataDelete.id));
+      if (count === iterator) { dispatch(fetchUsers()); }
+    }else{
+      console.error('User ID is undefined.');
+    }
   };
 
-  const modifiedColumns = useMemo<MRT_ColumnDef<User>[]>(() => modifyColumn(data[0]?.columns || [], usersColumnDef), [data]);
+  const modifiedColumns = useMemo<MRT_ColumnDef<Partial<User>>[]>(() => modifyColumn(data[0]?.columns || [], usersColumnDef), [data]);
 
   return (
     <Table

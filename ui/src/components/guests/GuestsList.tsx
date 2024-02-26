@@ -26,24 +26,32 @@ const GuestList = () => {
     dispatch(fetchGuests())
   }, [dispatch]);
 
-  const handleCreate = async (dataCreate: Guest) => {
+  const handleCreate = async (dataCreate: Partial<Guest>) => {
     await dispatch(createGuest(dataCreate));
     dispatch(fetchGuests());
   };
 
-  const handleUpdate = async (dataUpdate: Guest) => {
+  const handleUpdate = async (dataUpdate: Partial<Guest>) => {
     const guestId = dataUpdate.id;
     const guestData = dataUpdate;
-    await dispatch(updateGuest({ guestId, guestData }));
-    dispatch(fetchGuests());
+    if (typeof guestId === 'number') {
+      await dispatch(updateGuest({ guestId, guestData }));
+      dispatch(fetchGuests());
+    }else{
+      console.error('Guest ID is undefined.');
+    }
   };
 
-  const handleDelete = async (dataDelete: Guest, count: number, iterator: number) => {
-    await dispatch(deleteGuest(dataDelete.id));
-    if (count === iterator) { dispatch(fetchGuests()); }
+  const handleDelete = async (dataDelete: Partial<Guest>, count: number, iterator: number) => {
+    if (typeof dataDelete.id === 'number') {
+      await dispatch(deleteGuest(dataDelete.id));
+      if (count === iterator) { dispatch(fetchGuests()); }
+    }else{
+      console.error('Guest ID is undefined.');
+    }
   };
 
-  const modifiedColumns = useMemo<MRT_ColumnDef<Guest>[]>(() => modifyColumn(data[0]?.columns || [], guestsColumnDef), [data]);
+  const modifiedColumns = useMemo<MRT_ColumnDef<Partial<Guest>>[]>(() => modifyColumn(data[0]?.columns || [], guestsColumnDef), [data]);
 
   return (
     <Table
