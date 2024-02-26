@@ -7,7 +7,7 @@ export const loginUser = createAsyncThunk(
   'users/loginUser',
   async (credentials: Partial<User>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<[{message:string}]>('/api/users/login', credentials, {
+      const response = await axiosInstance.post<[{message: string, userId: number}]>('/api/users/login', credentials, {
         withCredentials: true
       });
       return response.data;
