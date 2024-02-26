@@ -18,7 +18,6 @@ const UserList = () => {
     showGlobalFilter: true,
     columnVisibility: {
       id: false,
-      password: false,
     },
   }
 
