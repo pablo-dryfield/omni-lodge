@@ -1,31 +1,17 @@
 import {
   MantineReactTable,
   useMantineReactTable,
-  type MRT_ColumnDef,
   MRT_GlobalFilterTextInput as MRTGlobalFilterTextInput,
   MRT_ToggleFiltersButton as MRTToggleFiltersButton, 
   MRT_Row,
-  MRT_TableState,
 } from 'mantine-react-table';
 import { Box, Button, Flex, Text, Title } from '@mantine/core';
 import { ModalsProvider, modals } from '@mantine/modals';
 import { ModalContent } from './ModalContent';
 import cloneDeep from 'lodash/cloneDeep';
 import { useState } from 'react';
-type TableActions = {
-  [actionName: string]: (...args: any[]) => void;
-}
-
-// Define the TableProps interface with the dynamic actions
-type TableProps<T extends Record<string, any>> = {
-  pageTitle: string
-  data: T[];
-  loading: boolean;
-  error: string | null;
-  columns: MRT_ColumnDef<T>[];
-  actions: TableActions;
-  initialState: Partial<MRT_TableState<T>>;
-}
+import { removeEmptyKeys } from './removeEmptyKeys';
+import { TableProps } from '../types/general/TableProps';
 
 const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions, initialState }: TableProps<T>) => {
 
@@ -75,11 +61,11 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
     enableColumnResizing: true,
     layoutMode: 'grid',
     onCreatingRowSave: ({ values, exitCreatingMode, }) => {
-      actions.handleCreate(values);
+      actions.handleCreate(removeEmptyKeys(values));
       exitCreatingMode();
     },
     onEditingRowSave: ({ values, table, }) => {
-      actions.handleUpdate(values);
+      actions.handleUpdate(removeEmptyKeys(values));
       table.setEditingRow(null); 
     },
     mantineProgressProps: ({ isTopToolbar }) => ({
