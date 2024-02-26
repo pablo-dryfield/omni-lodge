@@ -26,24 +26,32 @@ const BookingList = () => {
     dispatch(fetchBookings())
   }, [dispatch]);
 
-  const handleCreate = async (dataCreate: Booking) => {
+  const handleCreate = async (dataCreate: Partial<Booking>) => {
     await dispatch(createBooking(dataCreate));
     dispatch(fetchBookings());
   };
 
-  const handleUpdate = async (dataUpdate: Booking) => {
+  const handleUpdate = async (dataUpdate: Partial<Booking>) => {
     const bookingId = dataUpdate.id;
     const bookingData = dataUpdate;
+    if (typeof bookingId === 'number') {
     await dispatch(updateBooking({ bookingId, bookingData }));
     dispatch(fetchBookings());
+    }else{
+      console.error('Booking ID is undefined.');
+    }
   };
 
-  const handleDelete = async (dataDelete: Booking, count: number, iterator: number) => {
-    await dispatch(deleteBooking(dataDelete.id));
-    if (count === iterator) { dispatch(fetchBookings()); }
+  const handleDelete = async (dataDelete: Partial<Booking>, count: number, iterator: number) => {
+    if (typeof dataDelete.id === 'number') {
+      await dispatch(deleteBooking(dataDelete.id));
+      if (count === iterator) { dispatch(fetchBookings()); }
+    }else{
+      console.error('Booking ID is undefined.');
+    }
   };
 
-  const modifiedColumns = useMemo<MRT_ColumnDef<Booking>[]>(() => modifyColumn(data[0]?.columns || [], bookingsColumnDef), [data]);
+  const modifiedColumns = useMemo<MRT_ColumnDef<Partial<Booking>>[]>(() => modifyColumn(data[0]?.columns || [], bookingsColumnDef), [data]);
 
   return (
     <Table
