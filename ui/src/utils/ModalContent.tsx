@@ -1,15 +1,7 @@
 import { Box, Flex, Grid, Modal, ScrollArea } from "@mantine/core";
-import { MRT_EditActionButtons, MRT_Row, MRT_RowData, useMantineReactTable } from "mantine-react-table";
+import { MRT_EditActionButtons } from "mantine-react-table";
 import { useEffect } from "react";
-
-interface ModalContentProps<T extends MRT_RowData> {
-    internalEditComponents: React.ReactNode[];
-    row: MRT_Row<T>;
-    table: ReturnType<typeof useMantineReactTable<T>>;
-    opened: boolean;
-    setOpened: (opened: boolean) => void;
-    title: string;
-  }
+import { ModalContentProps } from "../types/general/ModalContentProps";
 
 export const ModalContent = <T extends {}>({
     internalEditComponents,

@@ -26,6 +26,7 @@ const UserList = () => {
   }, [dispatch]);
 
   const handleCreate = async (dataCreate: Partial<User>) => {
+    console.log(dataCreate);
     await dispatch(createUser(dataCreate));
     dispatch(fetchUsers());
   };
