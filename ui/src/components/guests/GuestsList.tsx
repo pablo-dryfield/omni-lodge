@@ -18,7 +18,6 @@ const GuestList = () => {
     showGlobalFilter: true,
     columnVisibility: {
       id: false,
-      password: false,
     },
   }
 
