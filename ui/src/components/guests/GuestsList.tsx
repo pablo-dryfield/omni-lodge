@@ -30,12 +30,14 @@ const GuestList = () => {
     dispatch(fetchGuests());
   };
 
-  const handleUpdate = async (dataUpdate: Partial<Guest>) => {
-    const guestId = dataUpdate.id;
-    const guestData = dataUpdate;
-    if (typeof guestId === 'number') {
-      await dispatch(updateGuest({ guestId, guestData }));
-      dispatch(fetchGuests());
+  const handleUpdate = async (originalData: Partial<Guest>, dataUpdated: Partial<Guest>) => {
+    const dataId = originalData.id;
+    const dataUpdate = dataUpdated;
+    if (typeof dataId === 'number') {
+      if(Object.keys(dataUpdate).length !== 0){
+        await dispatch(updateGuest({ guestId:dataId, guestData:dataUpdate }));
+        dispatch(fetchGuests());
+      }
     }else{
       console.error('Guest ID is undefined.');
     }

@@ -30,12 +30,14 @@ const ChannelList = () => {
     dispatch(fetchChannels());
   };
 
-  const handleUpdate = async (dataUpdate: Partial<Channel>) => {
-    const channelId = dataUpdate.id;
-    const channelData = dataUpdate;
-    if (typeof channelId === 'number') {
-      await dispatch(updateChannel({ channelId, channelData }));
-      dispatch(fetchChannels());
+  const handleUpdate = async (originalData: Partial<Channel>, dataUpdated: Partial<Channel>) => {
+    const dataId = originalData.id;
+    const dataUpdate = dataUpdated;
+    if (typeof dataId === 'number') {
+      if(Object.keys(dataUpdate).length !== 0){
+        await dispatch(updateChannel({ channelId:dataId, channelData:dataUpdate }));
+        dispatch(fetchChannels());
+      }
     }else{
       console.error('Channel ID is undefined.');
     }

@@ -26,17 +26,18 @@ const UserList = () => {
   }, [dispatch]);
 
   const handleCreate = async (dataCreate: Partial<User>) => {
-    console.log(dataCreate);
     await dispatch(createUser(dataCreate));
     dispatch(fetchUsers());
   };
 
-  const handleUpdate = async (dataUpdate: Partial<User>) => {
-    const userId = dataUpdate.id;
-    const userData = dataUpdate;
-    if (typeof userId === 'number') {
-      await dispatch(updateUser({ userId, userData }));
-      dispatch(fetchUsers());
+  const handleUpdate = async (originalData: Partial<User>, dataUpdated: Partial<User>) => {
+    const dataId = originalData.id;
+    const dataUpdate = dataUpdated;
+    if (typeof dataId === 'number') {
+      if(Object.keys(dataUpdate).length !== 0){
+        await dispatch(updateUser({ userId:dataId, userData:dataUpdate }));
+        dispatch(fetchUsers());
+      }
     }else{
       console.error('User ID is undefined.');
     }

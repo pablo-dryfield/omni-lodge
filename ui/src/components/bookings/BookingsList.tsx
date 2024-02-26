@@ -30,12 +30,14 @@ const BookingList = () => {
     dispatch(fetchBookings());
   };
 
-  const handleUpdate = async (dataUpdate: Partial<Booking>) => {
-    const bookingId = dataUpdate.id;
-    const bookingData = dataUpdate;
-    if (typeof bookingId === 'number') {
-    await dispatch(updateBooking({ bookingId, bookingData }));
-    dispatch(fetchBookings());
+  const handleUpdate = async (originalData: Partial<Booking>, dataUpdated: Partial<Booking>) => {
+    const dataId = originalData.id;
+    const dataUpdate = dataUpdated;
+    if (typeof dataId === 'number') {
+      if(Object.keys(dataUpdate).length !== 0){
+        await dispatch(updateBooking({ bookingId:dataId, bookingData:dataUpdate }));
+        dispatch(fetchBookings());
+      }
     }else{
       console.error('Booking ID is undefined.');
     }
