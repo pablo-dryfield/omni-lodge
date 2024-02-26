@@ -3,4 +3,5 @@ export type SessionState = {
     password: string;
     authenticated: boolean;
     checkingSession: boolean;
+    loggedUserId: number;
 };
