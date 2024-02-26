@@ -11,6 +11,7 @@ import { ModalContent } from './ModalContent';
 import cloneDeep from 'lodash/cloneDeep';
 import { useState } from 'react';
 import { removeEmptyKeys } from './removeEmptyKeys';
+import { getChangedValues } from './getChangedValues';
 import { TableProps } from '../types/general/TableProps';
 
 const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions, initialState }: TableProps<T>) => {
@@ -64,8 +65,8 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
       actions.handleCreate(removeEmptyKeys(values));
       exitCreatingMode();
     },
-    onEditingRowSave: ({ values, table, }) => {
-      actions.handleUpdate(removeEmptyKeys(values));
+    onEditingRowSave: ({ values, table, row}) => {
+      actions.handleUpdate(row.original, getChangedValues(row.original, values));
       table.setEditingRow(null); 
     },
     mantineProgressProps: ({ isTopToolbar }) => ({
