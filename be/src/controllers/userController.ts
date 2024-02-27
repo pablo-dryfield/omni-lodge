@@ -3,16 +3,8 @@ import bcrypt from 'bcryptjs';
 import { Request, Response } from 'express';
 import { DataType } from 'sequelize-typescript';
 import User from '../models/User.js';
-
-// Assuming you have an environment variable type definition
-interface Env {
-  JWT_SECRET: string;
-  NODE_ENV: string;
-}
-
-interface ErrorWithMessage {
-  message: string;
-}
+import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
+import { Env } from '../types/Env.js';
 
 declare const process: {
   env: Env;
@@ -21,18 +13,12 @@ declare const process: {
 // Register New User
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { username, firstName, lastName, email, password } = req.body;
+    const data = { ...req.body };
 
     const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
+    data.password = await bcrypt.hash(data.password, salt);
 
-    const newUser = await User.create({
-      username,
-      firstName,
-      lastName,
-      email,
-      password: hashedPassword,
-    });
+    const newUser = await User.create(data);
 
     res.status(201).json([newUser]);
   } catch (error) {
@@ -124,7 +110,12 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
 export const updateUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const [updated] = await User.update(req.body, { where: { id } });
+    const data = { ...req.body };
+
+    const salt = await bcrypt.genSalt(10);
+    data.password = await bcrypt.hash(data.password, salt);
+
+    const [updated] = await User.update(data, { where: { id } });
 
     if (!updated) {
       res.status(404).json([{ message: 'User not found' }]);

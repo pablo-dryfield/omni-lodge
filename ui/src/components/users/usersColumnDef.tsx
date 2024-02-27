@@ -76,6 +76,19 @@ export const usersColumnDef: ResponseModifications<Partial<User>>[] = [
           )
         }
       />,
+      Edit: ({ cell }) => <PasswordInput
+        disabled
+        label="Password"
+        style={{ marginTop:'14px', width: '100%', border: '0px' }}
+        defaultValue={cell.getValue<string>()}
+        visibilityToggleIcon={({ reveal }) =>
+          reveal ? (
+            <IconEyeOff style={{ width: 'var(--psi-icon-size)', height: 'var(--psi-icon-size)' }} />
+          ) : (
+            <IconEyeCheck style={{ width: 'var(--psi-icon-size)', height: 'var(--psi-icon-size)' }} />
+          )
+        }
+      />,
       mantineEditTextInputProps: {
         required: true,
       },

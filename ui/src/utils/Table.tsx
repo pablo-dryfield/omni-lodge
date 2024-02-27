@@ -10,17 +10,12 @@ import { ModalsProvider, modals } from '@mantine/modals';
 import { ModalContent } from './ModalContent';
 import cloneDeep from 'lodash/cloneDeep';
 import { useState } from 'react';
-import { removeEmptyKeys } from './removeEmptyKeys';
-import { getChangedValues } from './getChangedValues';
 import { TableProps } from '../types/general/TableProps';
-import { useAppSelector } from '../store/hooks';
 
 const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions, initialState }: TableProps<T>) => {
 
   const [createModalOpened, setCreateModalOpened] = useState(false);
   const [updateModalOpened, setUpdateModalOpened] = useState(false);
-
-  const { loggedUserId } = useAppSelector((state) => state.session);
 
   const openDeleteConfirmModal = (rows: MRT_Row<T>[]) => {
     const count = rows.length;
@@ -65,11 +60,11 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
     enableColumnResizing: true,
     layoutMode: 'grid',
     onCreatingRowSave: ({ values, exitCreatingMode, }) => {
-      actions.handleCreate(removeEmptyKeys(values, loggedUserId));
+      actions.handleCreate(values);
       exitCreatingMode();
     },
     onEditingRowSave: ({ values, table, row}) => {
-      actions.handleUpdate(row.original, getChangedValues(row.original, values, loggedUserId));
+      actions.handleUpdate(row.original, values);
       table.setEditingRow(null); 
     },
     mantineProgressProps: ({ isTopToolbar }) => ({

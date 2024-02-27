@@ -8,7 +8,7 @@ const initialState: SessionState = {
     user:"",
     password:"",
     authenticated: false,
-    checkingSession: true,
+    checkingSession: false,
     loggedUserId: 0,
 };
 
@@ -27,7 +27,8 @@ const sessionSlice = createSlice({
     },
   },
   extraReducers: (builder) => {
-    builder.addCase(loginUser.fulfilled, (state, action: PayloadAction<[{message: string, userId: number}]>) => {
+    builder
+    .addCase(loginUser.fulfilled, (state, action) => {
       state.loggedUserId = action.payload[0].userId;
       state.authenticated = true;
     })
@@ -35,6 +36,7 @@ const sessionSlice = createSlice({
       state.checkingSession = true;
     })
     .addCase(fetchSession.fulfilled, (state, action) => {
+      state.loggedUserId = action.payload[0].userId;
       state.authenticated = true;
       state.checkingSession = false;
     })
