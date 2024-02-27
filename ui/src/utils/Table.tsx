@@ -30,10 +30,14 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
       labels: { confirm: 'Delete', cancel: 'Cancel' },
       confirmProps: { color: 'red' },
       centered: true,
-      onConfirm: () => rows.forEach((row) => {
-        actions.handleDelete(row.original, count, iterator);
-        iterator += 1;
-      }),
+      onConfirm: () => {
+        rows.forEach((row) => {
+          actions.handleDelete(row.original, count, iterator);
+          iterator += 1;
+        });
+        // After all deletions are processed, reset the row selection
+        table.setRowSelection({}); // This clears the selection
+      },
     });
   }
   
@@ -66,6 +70,7 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
     onEditingRowSave: ({ values, table, row}) => {
       actions.handleUpdate(row.original, values);
       table.setEditingRow(null); 
+      table.setRowSelection({});
     },
     mantineProgressProps: ({ isTopToolbar }) => ({
       color: 'orange',
