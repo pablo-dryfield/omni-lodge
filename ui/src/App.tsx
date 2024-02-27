@@ -30,7 +30,7 @@ const NavBarStyled = styled('div')({
 const LeftSidebarStyled = styled('div')({
   gridColumn: '1', // Sidebar is in the first column
   gridRow: '2', // Sidebar is in the second row
-  // ... other styles
+  maxHeight: 'calc(100vh - 7vh)',
 });
 
 
@@ -46,7 +46,6 @@ const MainContent = styled('div')({
   borderRadius: '20px',
   boxShadow: '0px 8px 16px rgba(0, 0, 0, 0.2)',
   overflow: 'auto',
-  // ... other styles
 });
 
 const App = () => {
