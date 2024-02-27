@@ -1,14 +1,10 @@
-import { Request, Response, NextFunction } from 'express';
-import jwt, { JwtPayload } from 'jsonwebtoken';
+import { Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
+import { AuthenticatedRequest } from '../types/AuthenticatedRequest';
 
 // Load environment variables
 dotenv.config();
-
-// Extending the Express Request type to include the user property
-interface AuthenticatedRequest extends Request {
-    user?: string | JwtPayload;
-}
 
 const authenticateJWT = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
     const token = req.cookies['token'];

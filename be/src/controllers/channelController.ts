@@ -1,11 +1,7 @@
 import { Request, Response } from 'express';
 import { DataType } from 'sequelize-typescript';
 import Channel from '../models/Channel.js';
-
-// Assuming you have a more specific error type
-interface ErrorWithMessage {
-  message: string;
-}
+import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 
 // Get All Channels
 export const getAllChannels = async (req: Request, res: Response): Promise<void> => {

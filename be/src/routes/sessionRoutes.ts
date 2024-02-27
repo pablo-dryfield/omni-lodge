@@ -1,10 +1,10 @@
-import express from 'express';
+import express, { Request, Response, NextFunction, Router } from 'express';
 import authenticateJWT from '../middleware/authMiddleware.js';
+import { validationResult } from 'express-validator';
+import * as sessionController from '../controllers/sessionController.js'; 
 
-const router = express.Router();
+const router: Router = express.Router();
 
-router.get('/', authenticateJWT, (req, res) => {
-    res.json([{authenticated: true }]);
-});
+router.get('/', authenticateJWT, sessionController.checkSession);
 
 export default router;

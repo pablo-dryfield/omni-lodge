@@ -5,20 +5,16 @@
  * @returns A new object of type Partial<T> with non-empty values and 'createdBy' updated if present.
  */
 export const removeEmptyKeys = <T extends Record<string, any>>(obj: Partial<T>, loggedUserId: number): Partial<T> => {
-  let cleaned: Partial<T> = {};
+  const cleaned = Object.entries(obj).reduce<Record<string, any>>((acc, [key, value]) => {
+    if (value !== "") {
+      acc[key] = value;
+    }
+    return acc;
+  }, {});
 
-  // Initialize cleaned object with updated 'createdBy' if it exists in the original object
-  if ('createdBy' in obj) {
-      cleaned = { ...cleaned, createdBy: loggedUserId };
-  }
-
-  // Filter out keys with empty values
-  cleaned = Object.entries(obj).reduce((acc, [key, value]) => {
-      if (value !== "") {
-          acc[key as keyof T] = value;
-      }
-      return acc;
-  }, cleaned);
-
-  return cleaned;
+  // Optionally update 'createdBy' if it exists, using spread operator to conditionally add it
+  return {
+    ...cleaned,
+    ...(obj.createdBy !== undefined && { createdBy: loggedUserId })
+  } as Partial<T>;
 };

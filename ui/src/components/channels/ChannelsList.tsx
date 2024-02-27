@@ -7,12 +7,16 @@ import { Channel } from '../../types/channels/Channel';
 import { modifyColumn } from '../../utils/modifyColumn';
 import { channelsColumnDef } from './channelsColumnDef';
 import { type MRT_ColumnDef } from 'mantine-react-table';
+import { removeEmptyKeys } from '../../utils/removeEmptyKeys';
+import { getChangedValues } from '../../utils/getChangedValues';
 
 const ChannelList = () => {
 
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.channels)[0];
   const { currentPage } = useAppSelector((state) => state.navigation);
+  const { loggedUserId } = useAppSelector((state) => state.session);
+
   const initialState = {
     showColumnFilters: false,
     showGlobalFilter: true,
@@ -26,15 +30,18 @@ const ChannelList = () => {
   }, [dispatch]);
 
   const handleCreate = async (dataCreate: Partial<Channel>) => {
-    await dispatch(createChannel(dataCreate));
-    dispatch(fetchChannels());
+    const dataCreated = removeEmptyKeys(dataCreate, loggedUserId);
+    if(Object.keys(dataCreated).some(key => key !== 'createdBy') && Object.keys(dataCreated).length !== 0){
+      await dispatch(createChannel(dataCreated));
+      dispatch(fetchChannels());
+    }
   };
 
   const handleUpdate = async (originalData: Partial<Channel>, dataUpdated: Partial<Channel>) => {
     const dataId = originalData.id;
-    const dataUpdate = dataUpdated;
+    const dataUpdate = getChangedValues(originalData, dataUpdated, loggedUserId);
     if (typeof dataId === 'number') {
-      if(Object.keys(dataUpdate).length !== 0){
+      if(Object.keys(dataUpdate).some(key => key !== 'updatedBy') && Object.keys(dataUpdate).length !== 0){
         await dispatch(updateChannel({ channelId:dataId, channelData:dataUpdate }));
         dispatch(fetchChannels());
       }

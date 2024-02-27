@@ -7,12 +7,16 @@ import { Guest } from '../../types/guests/Guest';
 import { modifyColumn } from '../../utils/modifyColumn';
 import { guestsColumnDef } from './guestsColumnDef';
 import { type MRT_ColumnDef } from 'mantine-react-table';
+import { removeEmptyKeys } from '../../utils/removeEmptyKeys';
+import { getChangedValues } from '../../utils/getChangedValues';
 
 const GuestList = () => {
 
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.guests)[0];
   const { currentPage } = useAppSelector((state) => state.navigation);
+  const { loggedUserId } = useAppSelector((state) => state.session);
+
   const initialState = {
     showColumnFilters: false,
     showGlobalFilter: true,
@@ -26,15 +30,18 @@ const GuestList = () => {
   }, [dispatch]);
 
   const handleCreate = async (dataCreate: Partial<Guest>) => {
-    await dispatch(createGuest(dataCreate));
-    dispatch(fetchGuests());
+    const dataCreated = removeEmptyKeys(dataCreate, loggedUserId);
+    if(Object.keys(dataCreated).some(key => key !== 'createdBy') && Object.keys(dataCreated).length !== 0){
+      await dispatch(createGuest(dataCreated));
+      dispatch(fetchGuests());
+    }
   };
 
   const handleUpdate = async (originalData: Partial<Guest>, dataUpdated: Partial<Guest>) => {
     const dataId = originalData.id;
-    const dataUpdate = dataUpdated;
+    const dataUpdate = getChangedValues(originalData, dataUpdated, loggedUserId);
     if (typeof dataId === 'number') {
-      if(Object.keys(dataUpdate).length !== 0){
+      if(Object.keys(dataUpdate).some(key => key !== 'updatedBy') && Object.keys(dataUpdate).length !== 0){
         await dispatch(updateGuest({ guestId:dataId, guestData:dataUpdate }));
         dispatch(fetchGuests());
       }

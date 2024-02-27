@@ -1,5 +1,5 @@
 import React, { ChangeEvent } from 'react';
-import { TextInput, PasswordInput, Button, Paper, Title, Container, Group, Checkbox, Anchor, Avatar, Center } from '@mantine/core';
+import { TextInput, PasswordInput, Button, Paper, Title, Container, /*Group, Checkbox, Anchor,*/ Avatar, Center } from '@mantine/core';
 import { IconUser, IconLock } from '@tabler/icons-react';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { setPasswordState, setUserState } from '../actions/sessionActions';
@@ -12,7 +12,7 @@ const LoginPage: React.FC = () => {
     const handleLogin = async (event: React.FormEvent) => {
         event.preventDefault();
         // Assuming your loginUser action creator expects an object with email and password
-        await dispatch(loginUser({ email: /*user*/ 'rob@t5social.com', password: /*password*/ '12341234' }));
+        await dispatch(loginUser({ email: /*user*/ 'admin@admin.admin', password: /*password*/ 'adminadminadmin' }));
     };
 
     return (
@@ -42,10 +42,10 @@ const LoginPage: React.FC = () => {
                         //required
                         mt="md"
                     />
-                    <Group mt="md">
+                    {/* <Group mt="md">
                         <Checkbox label="Remember Me" />
                         <Anchor href="#" size="sm" onClick={(event) => event.preventDefault()}>Forgot Password?</Anchor>
-                    </Group>
+                    </Group> */}
                     <Button fullWidth mt="xl" type="submit">
                         Login
                     </Button>
