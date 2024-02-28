@@ -3,7 +3,11 @@ import axiosInstance from './../utils/axiosInstance';
 import { ServerResponse } from '../types/general/ServerResponse';
 import { Booking } from '../types/bookings/Booking';
 
-// Async thunk for fetching bookings
+/**
+ * Fetches bookings from the server.
+ * @returns A promise containing the server response with booking data.
+ * @throws Will throw an error message string if the request fails.
+ */
 export const fetchBookings = createAsyncThunk(
   'bookings/fetchBookings',
   async (_, { rejectWithValue }) => {
@@ -21,7 +25,12 @@ export const fetchBookings = createAsyncThunk(
   }
 );
 
-// Async thunk for creating a booking
+/**
+ * Creates a new booking.
+ * @param bookingData - The data for the new booking.
+ * @returns A promise containing the created booking data.
+ * @throws Will throw an error message string if the creation fails.
+ */
 export const createBooking = createAsyncThunk(
   'bookings/createBooking',
   async (bookingData: Partial<Booking>, { rejectWithValue }) => {
@@ -39,7 +48,13 @@ export const createBooking = createAsyncThunk(
   }
 );
 
-// Async thunk for updating a booking
+/**
+ * Updates an existing booking.
+ * @param bookingId - The ID of the booking to update.
+ * @param bookingData - The new data for the booking.
+ * @returns A promise containing the updated booking data.
+ * @throws Will throw an error message string if the update fails.
+ */
 export const updateBooking = createAsyncThunk(
   'bookings/updateBooking',
   async ({ bookingId, bookingData }: { bookingId: number; bookingData: Partial<Booking>; }, { rejectWithValue }) => {
@@ -57,7 +72,12 @@ export const updateBooking = createAsyncThunk(
   }
 );
 
-// Async thunk for deleting a booking
+/**
+ * Deletes a booking.
+ * @param bookingId - The ID of the booking to delete.
+ * @returns A promise containing the ID of the deleted booking.
+ * @throws Will throw an error message string if the deletion fails.
+ */
 export const deleteBooking = createAsyncThunk(
   'bookings/deleteBooking',
   async (bookingId: number, { rejectWithValue }) => {

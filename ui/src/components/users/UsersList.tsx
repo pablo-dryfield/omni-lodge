@@ -10,6 +10,20 @@ import { type MRT_ColumnDef } from 'mantine-react-table';
 import { removeEmptyKeys } from '../../utils/removeEmptyKeys';
 import { getChangedValues } from '../../utils/getChangedValues';
 
+/**
+ * UserList component for displaying and interacting with a list of users.
+ * 
+ * This component fetches and displays user data in a table format, with capabilities
+ * to create, update, and delete users. It uses custom hooks from Redux for state management
+ * and dispatching actions. It also utilizes memoization to ensure that column modifications
+ * are only recalculated when necessary.
+ *
+ * The table is configured to hide the 'id' column and display a global filter.
+ * Error handling is also incorporated to log to the console when the user ID is undefined.
+ *
+ * @returns {JSX.Element} The table component populated with user data and configured actions.
+ */
+
 const UserList = () => {
 
   const dispatch = useAppDispatch();
