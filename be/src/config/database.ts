@@ -17,6 +17,13 @@ const sequelize = new Sequelize({
   username: DB_USER,
   password: DB_PASSWORD,
   host: DB_HOST,
+  ssl: true, // Required if using Heroku Postgres Hobby Dev plan
+  dialectOptions: {
+    ssl: {
+      require: true,
+      rejectUnauthorized: false // Required if using Heroku Postgres Hobby Dev plan
+    }
+  },
   port: parseInt(DB_PORT || '5432', 10), // Ensure the port is a number
   logging: false,
   models: [User, Booking, Channel, Guest, Review], // Specify the path to your models
