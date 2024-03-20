@@ -1,10 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import logger from '../utils/logger.js'; // Adjust the path if necessary
-
-// If you have a custom error type, you can define it here
-interface CustomError extends Error {
-  status?: number;
-}
+import { CustomError } from '../types/CustomError.js';
 
 const errorMiddleware = (err: CustomError, req: Request, res: Response, next: NextFunction): void => {
   logger.error(`An error occurred: ${err.message}`);

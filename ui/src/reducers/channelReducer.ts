@@ -5,7 +5,7 @@ import { type ServerResponse } from '../types/general/ServerResponse';
 import { fetchChannels, createChannel, updateChannel, deleteChannel } from '../actions/channelActions'; // Import thunks
 
 // Define the initial state using that type
-const initialState: DataState<Channel> = [{
+const initialState: DataState<Partial<Channel>> = [{
   loading: false,
   data: [{
     data: [],
@@ -26,7 +26,7 @@ const channelSlice = createSlice({
       .addCase(fetchChannels.pending, (state) => {
         state[0].loading = true;
       })
-      .addCase(fetchChannels.fulfilled, (state, action: PayloadAction<ServerResponse<Channel>>) => {
+      .addCase(fetchChannels.fulfilled, (state, action: PayloadAction<ServerResponse<Partial<Channel>>>) => {
         state[0].loading = false;
         state[0].data = action.payload;
         state[0].error = null;
@@ -40,7 +40,7 @@ const channelSlice = createSlice({
       .addCase(createChannel.pending, (state) => {
         state[0].loading = true;
       })
-      .addCase(createChannel.fulfilled, (state, action: PayloadAction<Channel>) => {
+      .addCase(createChannel.fulfilled, (state, action: PayloadAction<Partial<Channel>>) => {
         state[0].loading = false;
         state[0].data[0].data.push(action.payload);
         state[0].error = null;
@@ -54,7 +54,7 @@ const channelSlice = createSlice({
       .addCase(updateChannel.pending, (state) => {
         state[0].loading = true;
       })
-      .addCase(updateChannel.fulfilled, (state, action: PayloadAction<Channel>) => {
+      .addCase(updateChannel.fulfilled, (state, action: PayloadAction<Partial<Channel>>) => {
         state[0].loading = false;
         state[0].data[0].data = state[0].data[0].data.map(channel => 
           channel.id === action.payload.id ? action.payload : channel

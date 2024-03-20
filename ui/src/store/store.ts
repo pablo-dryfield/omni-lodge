@@ -4,6 +4,7 @@ import bookingReducer from './../reducers/bookingReducer';
 import channelReducer from './../reducers/channelReducer';
 import userReducer from './../reducers/userReducer';
 import navigationReducer from './../reducers/navigationReducer';
+import sessionReducer from './../reducers/sessionReducer';
 
 // Create the Redux store using configureStore
 export const store = configureStore({
@@ -13,6 +14,7 @@ export const store = configureStore({
     channels: channelReducer,
     users: userReducer,
     navigation: navigationReducer,
+    session: sessionReducer,
   },
   // If you have additional middleware, you can add them here
   // middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(yourAdditionalMiddleware),

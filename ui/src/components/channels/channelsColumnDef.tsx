@@ -2,7 +2,7 @@ import { ResponseModifications } from "../../types/general/ResponseModifications
 import { Channel } from '../../types/channels/Channel';
 import dayjs from 'dayjs';
 
-export const channelsColumnDef: ResponseModifications<Channel>[] = [
+export const channelsColumnDef: ResponseModifications<Partial<Channel>>[] = [
   {
     accessorKey: 'id',
     modifications: {
