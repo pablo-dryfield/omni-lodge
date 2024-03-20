@@ -4,7 +4,7 @@ import { User } from '../../types/users/User';
 import dayjs from 'dayjs';
 import { IconEyeCheck, IconEyeOff } from "@tabler/icons-react";
 
-export const usersColumnDef: ResponseModifications<User>[] = [
+export const usersColumnDef: ResponseModifications<Partial<User>>[] = [
   {
     accessorKey: 'id',
     modifications: {

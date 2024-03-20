@@ -3,15 +3,8 @@ import bcrypt from 'bcryptjs';
 import { Request, Response } from 'express';
 import { DataType } from 'sequelize-typescript';
 import User from '../models/User.js';
-
-// Assuming you have an environment variable type definition
-interface Env {
-  JWT_SECRET: string;
-}
-
-interface ErrorWithMessage {
-  message: string;
-}
+import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
+import { Env } from '../types/Env.js';
 
 declare const process: {
   env: Env;
@@ -20,18 +13,12 @@ declare const process: {
 // Register New User
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { username, firstName, lastName, email, password } = req.body;
+    const data = { ...req.body };
 
     const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
+    data.password = await bcrypt.hash(data.password, salt);
 
-    const newUser = await User.create({
-      username,
-      firstName,
-      lastName,
-      email,
-      password: hashedPassword,
-    });
+    const newUser = await User.create(data);
 
     res.status(201).json([newUser]);
   } catch (error) {
@@ -61,7 +48,13 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
       expiresIn: '1h',
     });
 
-    res.status(200).json([{ token }]);
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production', // Ensure cookies are secure in production
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Adjust for cross-origin compatibility
+      maxAge: 3600000, // Set cookie expiry as needed
+    });
+    res.status(200).json([{ message: 'Logged in successfully', userId:user.id }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);
@@ -117,7 +110,12 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
 export const updateUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const [updated] = await User.update(req.body, { where: { id } });
+    const data = { ...req.body };
+
+    const salt = await bcrypt.genSalt(10);
+    data.password = await bcrypt.hash(data.password, salt);
+
+    const [updated] = await User.update(data, { where: { id } });
 
     if (!updated) {
       res.status(404).json([{ message: 'User not found' }]);

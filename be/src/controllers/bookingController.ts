@@ -1,10 +1,7 @@
 import { Request, Response } from 'express';
 import { DataType } from 'sequelize-typescript';
-import Booking from '../models/Booking.js'; // Adjust the import path as necessary
-
-interface ErrorWithMessage {
-  message: string;
-}
+import Booking from '../models/Booking.js'; 
+import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 
 export const getAllBookings = async (req: Request, res: Response): Promise<void> => {
   try {

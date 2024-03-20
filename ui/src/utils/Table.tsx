@@ -1,31 +1,16 @@
 import {
   MantineReactTable,
   useMantineReactTable,
-  type MRT_ColumnDef,
   MRT_GlobalFilterTextInput as MRTGlobalFilterTextInput,
   MRT_ToggleFiltersButton as MRTToggleFiltersButton, 
   MRT_Row,
-  MRT_TableState,
 } from 'mantine-react-table';
 import { Box, Button, Flex, Text, Title } from '@mantine/core';
 import { ModalsProvider, modals } from '@mantine/modals';
 import { ModalContent } from './ModalContent';
 import cloneDeep from 'lodash/cloneDeep';
 import { useState } from 'react';
-type TableActions = {
-  [actionName: string]: (...args: any[]) => void;
-}
-
-// Define the TableProps interface with the dynamic actions
-type TableProps<T extends Record<string, any>> = {
-  pageTitle: string
-  data: T[];
-  loading: boolean;
-  error: string | null;
-  columns: MRT_ColumnDef<T>[];
-  actions: TableActions;
-  initialState: Partial<MRT_TableState<T>>;
-}
+import { TableProps } from '../types/general/TableProps';
 
 const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions, initialState }: TableProps<T>) => {
 
@@ -45,10 +30,14 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
       labels: { confirm: 'Delete', cancel: 'Cancel' },
       confirmProps: { color: 'red' },
       centered: true,
-      onConfirm: () => rows.forEach((row) => {
-        actions.handleDelete(row.original, count, iterator);
-        iterator += 1;
-      }),
+      onConfirm: () => {
+        rows.forEach((row) => {
+          actions.handleDelete(row.original, count, iterator);
+          iterator += 1;
+        });
+        // After all deletions are processed, reset the row selection
+        table.setRowSelection({}); // This clears the selection
+      },
     });
   }
   
@@ -78,9 +67,10 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
       actions.handleCreate(values);
       exitCreatingMode();
     },
-    onEditingRowSave: ({ values, table, }) => {
-      actions.handleUpdate(values);
+    onEditingRowSave: ({ values, table, row}) => {
+      actions.handleUpdate(row.original, values);
       table.setEditingRow(null); 
+      table.setRowSelection({});
     },
     mantineProgressProps: ({ isTopToolbar }) => ({
       color: 'orange',

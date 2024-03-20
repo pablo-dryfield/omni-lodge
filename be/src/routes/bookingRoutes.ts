@@ -38,18 +38,18 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
 };
 
 // Get all bookings
-router.get('/', /*authMiddleware,*/  bookingController.getAllBookings);
+router.get('/', authMiddleware,  bookingController.getAllBookings);
 
 // Get a single booking by ID
-router.get('/:id', /*authMiddleware,*/  validateId, validate, bookingController.getBookingById);
+router.get('/:id', authMiddleware,  validateId, validate, bookingController.getBookingById);
 
 // Create a new booking
-router.post('/', /*authMiddleware,*/  validateBookingPOST, validate, bookingController.createBooking);
+router.post('/', authMiddleware,  validateBookingPOST, validate, bookingController.createBooking);
 
 // Update an existing booking by ID
-router.put('/:id', /*authMiddleware,*/  [...validateId, ...validateBookingPUT], validate, bookingController.updateBooking);
+router.put('/:id', authMiddleware,  [...validateId, ...validateBookingPUT], validate, bookingController.updateBooking);
 
 // Delete a booking by ID
-router.delete('/:id', /*authMiddleware,*/  validateId, validate, bookingController.deleteBooking);
+router.delete('/:id', authMiddleware,  validateId, validate, bookingController.deleteBooking);
 
 export default router;

@@ -1,8 +1,13 @@
 import { BrowserRouter } from 'react-router-dom';
-import NavBar from './components/main/NavBar'; 
+import NavBar from './components/main/NavBar';
 import LeftSidebar from './components/main/LeftSidebar/LeftSidebar';
 import Routes from './components/main/Routes';
 import { styled } from '@mui/system';
+import Login from './pages/Login';
+import { useAppDispatch, useAppSelector } from './store/hooks';
+import { useEffect } from 'react';
+import { fetchSession } from './actions/sessionActions';
+import { Center, Loader } from '@mantine/core';
 
 const AppContainer = styled('div')({
   display: 'grid',
@@ -25,7 +30,7 @@ const NavBarStyled = styled('div')({
 const LeftSidebarStyled = styled('div')({
   gridColumn: '1', // Sidebar is in the first column
   gridRow: '2', // Sidebar is in the second row
-  // ... other styles
+  maxHeight: 'calc(100vh - 7vh)',
 });
 
 
@@ -41,23 +46,42 @@ const MainContent = styled('div')({
   borderRadius: '20px',
   boxShadow: '0px 8px 16px rgba(0, 0, 0, 0.2)',
   overflow: 'auto',
-  // ... other styles
 });
 
 const App = () => {
+  const { authenticated, checkingSession } = useAppSelector((state) => state.session);
+  const dispatch = useAppDispatch();
+  useEffect(() => {
+    if (!authenticated) {
+      dispatch(fetchSession());
+    }
+  }, [dispatch, authenticated]);
+
+  if (checkingSession) {
+    return (
+      <Center style={{ height: '100vh' }}>
+        <Loader variant="dots" /> 
+      </Center>
+    ); 
+  }
+
   return (
     <BrowserRouter>
-      <AppContainer>
-        <NavBarStyled>
-          <NavBar />
-        </NavBarStyled>
-        <LeftSidebarStyled>
-          <LeftSidebar />
-        </LeftSidebarStyled>
-        <MainContent>
-          <Routes />
-        </MainContent>
-      </AppContainer>
+      {authenticated ? (
+        <AppContainer>
+          <NavBarStyled>
+            <NavBar />
+          </NavBarStyled>
+          <LeftSidebarStyled>
+            <LeftSidebar />
+          </LeftSidebarStyled>
+          <MainContent>
+            <Routes />
+          </MainContent>
+        </AppContainer>
+      ) : (
+        <Login />
+      )}
     </BrowserRouter>
   );
 };
