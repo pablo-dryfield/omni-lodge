@@ -2,7 +2,7 @@ import { ResponseModifications } from "../../types/general/ResponseModifications
 import { Booking } from '../../types/bookings/Booking';
 import dayjs from 'dayjs';
 
-export const bookingsColumnDef: ResponseModifications<Booking>[] = [
+export const bookingsColumnDef: ResponseModifications<Partial<Booking>>[] = [
   {
     accessorKey: 'id',
     modifications: {

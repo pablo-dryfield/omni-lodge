@@ -1,10 +1,7 @@
 import { Request, Response } from 'express';
 import { DataType } from 'sequelize-typescript';
-import Guest from '../models/Guest.js'; // Adjust the import path as necessary
-
-interface ErrorWithMessage {
-  message: string;
-}
+import Guest from '../models/Guest.js';
+import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 
 // Get All Guests
 export const getAllGuests = async (req: Request, res: Response): Promise<void> => {
