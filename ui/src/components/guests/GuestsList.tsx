@@ -7,18 +7,21 @@ import { Guest } from '../../types/guests/Guest';
 import { modifyColumn } from '../../utils/modifyColumn';
 import { guestsColumnDef } from './guestsColumnDef';
 import { type MRT_ColumnDef } from 'mantine-react-table';
+import { removeEmptyKeys } from '../../utils/removeEmptyKeys';
+import { getChangedValues } from '../../utils/getChangedValues';
 
 const GuestList = () => {
 
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.guests)[0];
   const { currentPage } = useAppSelector((state) => state.navigation);
+  const { loggedUserId } = useAppSelector((state) => state.session);
+
   const initialState = {
     showColumnFilters: false,
     showGlobalFilter: true,
     columnVisibility: {
       id: false,
-      password: false,
     },
   }
 
@@ -26,24 +29,37 @@ const GuestList = () => {
     dispatch(fetchGuests())
   }, [dispatch]);
 
-  const handleCreate = async (dataCreate: Guest) => {
-    await dispatch(createGuest(dataCreate));
-    dispatch(fetchGuests());
+  const handleCreate = async (dataCreate: Partial<Guest>) => {
+    const dataCreated = removeEmptyKeys(dataCreate, loggedUserId);
+    if(Object.keys(dataCreated).some(key => key !== 'createdBy') && Object.keys(dataCreated).length !== 0){
+      await dispatch(createGuest(dataCreated));
+      dispatch(fetchGuests());
+    }
   };
 
-  const handleUpdate = async (dataUpdate: Guest) => {
-    const guestId = dataUpdate.id;
-    const guestData = dataUpdate;
-    await dispatch(updateGuest({ guestId, guestData }));
-    dispatch(fetchGuests());
+  const handleUpdate = async (originalData: Partial<Guest>, dataUpdated: Partial<Guest>) => {
+    const dataId = originalData.id;
+    const dataUpdate = getChangedValues(originalData, dataUpdated, loggedUserId);
+    if (typeof dataId === 'number') {
+      if(Object.keys(dataUpdate).some(key => key !== 'updatedBy') && Object.keys(dataUpdate).length !== 0){
+        await dispatch(updateGuest({ guestId:dataId, guestData:dataUpdate }));
+        dispatch(fetchGuests());
+      }
+    }else{
+      console.error('Guest ID is undefined.');
+    }
   };
 
-  const handleDelete = async (dataDelete: Guest, count: number, iterator: number) => {
-    await dispatch(deleteGuest(dataDelete.id));
-    if (count === iterator) { dispatch(fetchGuests()); }
+  const handleDelete = async (dataDelete: Partial<Guest>, count: number, iterator: number) => {
+    if (typeof dataDelete.id === 'number') {
+      await dispatch(deleteGuest(dataDelete.id));
+      if (count === iterator) { dispatch(fetchGuests()); }
+    }else{
+      console.error('Guest ID is undefined.');
+    }
   };
 
-  const modifiedColumns = useMemo<MRT_ColumnDef<Guest>[]>(() => modifyColumn(data[0]?.columns || [], guestsColumnDef), [data]);
+  const modifiedColumns = useMemo<MRT_ColumnDef<Partial<Guest>>[]>(() => modifyColumn(data[0]?.columns || [], guestsColumnDef), [data]);
 
   return (
     <Table

@@ -5,7 +5,7 @@ import { type ServerResponse } from '../types/general/ServerResponse';
 import { fetchBookings, createBooking, updateBooking, deleteBooking } from '../actions/bookingActions'; // Import thunks
 
 // Define the initial state using that type
-const initialState: DataState<Booking> = [{
+const initialState: DataState<Partial<Booking>> = [{
   loading: false,
   data: [{
     data: [],
@@ -26,7 +26,7 @@ const bookingSlice = createSlice({
       .addCase(fetchBookings.pending, (state) => {
         state[0].loading = true;
       })
-      .addCase(fetchBookings.fulfilled, (state, action: PayloadAction<ServerResponse<Booking>>) => {
+      .addCase(fetchBookings.fulfilled, (state, action: PayloadAction<ServerResponse<Partial<Booking>>>) => {
         state[0].loading = false;
         state[0].data = action.payload;
         state[0].error = null;
@@ -40,7 +40,7 @@ const bookingSlice = createSlice({
       .addCase(createBooking.pending, (state) => {
         state[0].loading = true;
       })
-      .addCase(createBooking.fulfilled, (state, action: PayloadAction<Booking>) => {
+      .addCase(createBooking.fulfilled, (state, action: PayloadAction<Partial<Booking>>) => {
         state[0].loading = false;
         state[0].data[0].data.push(action.payload);
         state[0].error = null;
@@ -54,7 +54,7 @@ const bookingSlice = createSlice({
       .addCase(updateBooking.pending, (state) => {
         state[0].loading = true;
       })
-      .addCase(updateBooking.fulfilled, (state, action: PayloadAction<Booking>) => {
+      .addCase(updateBooking.fulfilled, (state, action: PayloadAction<Partial<Booking>>) => {
         state[0].loading = false;
         state[0].data[0].data = state[0].data[0].data.map(booking => 
           booking.id === action.payload.id ? action.payload : booking
