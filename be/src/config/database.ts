@@ -4,6 +4,7 @@ import User from '../models/User.js';
 import Booking from '../models/Booking.js';
 import Channel from '../models/Channel.js';
 import Guest from '../models/Guest.js';
+import Review from '../models/Review.js';
 
 dotenv.config();
 
@@ -18,7 +19,7 @@ const sequelize = new Sequelize({
   host: DB_HOST,
   port: parseInt(DB_PORT || '5432', 10), // Ensure the port is a number
   logging: false,
-  models: [User,Booking, Channel, Guest], // Specify the path to your models
+  models: [User, Booking, Channel, Guest, Review], // Specify the path to your models
   // You can also directly import models and add them here like [User, Post, ...]
 });
 

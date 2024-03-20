@@ -13,6 +13,7 @@ import bookingRoutes from './routes/bookingRoutes.js';
 import channelRoutes from './routes/channelRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import sessionRoutes from './routes/sessionRoutes.js';
+import reviewRoutes from './routes/reviewRoutes.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -20,6 +21,9 @@ import logger from './utils/logger.js';
 import instrumentMiddleware from './middleware/instrumentMiddleware.js';
 import errorMiddleware from './middleware/errorMiddleware.js';
 import { defineAssociations } from './models/defineAssociations.js';
+
+// Scrapers
+import { scrapeTripAdvisor } from './scrapers/tripAdvisorScraper.js';
 
 // Initialize default metrics collection
 collectDefaultMetrics();
@@ -79,6 +83,7 @@ app.use('/api/bookings', bookingRoutes);
 app.use('/api/channels', channelRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/session', sessionRoutes);
+app.use('/api/reviews', reviewRoutes);
 
 // Error Handling
 app.use(errorMiddleware);
