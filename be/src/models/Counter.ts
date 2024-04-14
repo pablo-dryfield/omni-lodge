@@ -2,30 +2,22 @@ import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, Da
 
 @Table({
   timestamps: true,
-  modelName: 'Channels',
-  tableName: 'channels'
+  modelName: 'Counters',
+  tableName: 'counters'
 })
-export default class Channel extends Model {
+export default class Counter extends Model {
   @PrimaryKey
   @AutoIncrement
   @Column(DataType.INTEGER)
   declare id: number;
 
   @AllowNull(false)
-  @Column(DataType.STRING)
-  declare name: string;
+  @Column(DataType.INTEGER)
+  declare userId: number;
 
   @AllowNull(false)
-  @Column(DataType.STRING)
-  declare description: string;
-
-  @AllowNull(false)
-  @Column(DataType.STRING)
-  declare apiKey: string;
-
-  @AllowNull(false)
-  @Column(DataType.STRING)
-  declare apiSecret: string;
+  @Column(DataType.DATE)
+  declare date: Date;
 
   @AllowNull(false)
   @Default(DataType.NOW)
@@ -44,6 +36,4 @@ export default class Channel extends Model {
   @AllowNull(true)
   @Column(DataType.INTEGER)
   declare updatedBy: number;
-  
-
 }

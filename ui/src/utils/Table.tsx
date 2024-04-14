@@ -64,6 +64,7 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
     enableColumnResizing: true,
     layoutMode: 'grid',
     onCreatingRowSave: ({ values, exitCreatingMode, }) => {
+      console.log(values);
       actions.handleCreate(values);
       exitCreatingMode();
     },

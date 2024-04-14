@@ -2,10 +2,10 @@ import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, Da
 
 @Table({
   timestamps: true,
-  modelName: 'Channels',
-  tableName: 'channels'
+  modelName: 'Products',
+  tableName: 'products'
 })
-export default class Channel extends Model {
+export default class Product extends Model {
   @PrimaryKey
   @AutoIncrement
   @Column(DataType.INTEGER)
@@ -16,16 +16,12 @@ export default class Channel extends Model {
   declare name: string;
 
   @AllowNull(false)
-  @Column(DataType.STRING)
-  declare description: string;
+  @Column(DataType.INTEGER)
+  declare productTypeId: number;
 
   @AllowNull(false)
-  @Column(DataType.STRING)
-  declare apiKey: string;
-
-  @AllowNull(false)
-  @Column(DataType.STRING)
-  declare apiSecret: string;
+  @Column(DataType.DOUBLE)
+  declare price: number;
 
   @AllowNull(false)
   @Default(DataType.NOW)
@@ -44,6 +40,4 @@ export default class Channel extends Model {
   @AllowNull(true)
   @Column(DataType.INTEGER)
   declare updatedBy: number;
-  
-
 }

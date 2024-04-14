@@ -33,22 +33,26 @@ export default class User extends Model {
   @Column(DataType.STRING)
   declare password: string;
 
+  @AllowNull(true)
+  @Column(DataType.INTEGER)
+  declare userTypeId: number;
+
   @AllowNull(false)
   @Default(DataType.NOW)
   @Column(DataType.DATE)
   declare createdAt: Date;
 
-  @AllowNull(false)
+  @AllowNull(true)
   @Default(DataType.NOW)
   @Column(DataType.DATE)
   declare updatedAt: Date;
 
   @AllowNull(true)
   @Column(DataType.INTEGER)
-  declare createdBy?: number;
+  declare createdBy: number;
 
   @AllowNull(true)
   @Column(DataType.INTEGER)
-  declare updatedBy?: number;
+  declare updatedBy: number;
   
 }

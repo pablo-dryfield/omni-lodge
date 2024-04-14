@@ -40,18 +40,21 @@ export const ModalContent = <T extends {}>({
         }}
       >
         <Box style={{ maxHeight: '80vh' }}>
-          <Grid>
-            <Grid.Col span={6} style={{ padding: '8px 16px' }}>
-              {internalEditComponents.slice(0, splitIndex).map((field, index) => (
-                <div key={index} style={{ marginBottom: '15px' }}>{field}</div>
-              ))}
+          {/*<Grid>
+             <Grid.Col span={6} style={{ padding: '8px 16px' }}>
+              {internalEditComponents.slice(0, splitIndex).map((field, index) => {
+                return <div key={index} style={{ marginBottom: '15px' }}>{field}</div>;
+})}
             </Grid.Col>
             <Grid.Col span={6} style={{ padding: '8px 16px' }}>
               {internalEditComponents.slice(splitIndex).map((field, index) => (
                 <div key={index} style={{ marginBottom: '15px' }}>{field}</div>
               ))}
-            </Grid.Col>
-          </Grid>
+             
+            </Grid.Col> 
+            
+          </Grid>*/}
+          {internalEditComponents}
           <Flex justify="flex-end">
             <MRT_EditActionButtons row={row} table={table} variant="text" />
           </Flex>
