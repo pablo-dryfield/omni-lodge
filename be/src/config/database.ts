@@ -5,6 +5,11 @@ import Booking from '../models/Booking.js';
 import Channel from '../models/Channel.js';
 import Guest from '../models/Guest.js';
 import Review from '../models/Review.js';
+import Counter from '../models/Counter.js';
+import CounterProduct from '../models/CounterProduct.js';
+import Product from '../models/Product.js';
+import ProductType from '../models/ProductType.js';
+import UserType from '../models/UserType.js';
 
 dotenv.config();
 
@@ -18,15 +23,15 @@ const sequelize = new Sequelize({
   password: DB_PASSWORD,
   host: DB_HOST,
   ssl: true, // Required if using Heroku Postgres Hobby Dev plan
-  dialectOptions: {
+  /*dialectOptions: {
     ssl: {
       require: true,
       rejectUnauthorized: false // Required if using Heroku Postgres Hobby Dev plan
     }
-  },
+  },*/
   port: parseInt(DB_PORT || '5432', 10), // Ensure the port is a number
   logging: false,
-  models: [User, Booking, Channel, Guest, Review], // Specify the path to your models
+  models: [User, Booking, Channel, Guest, Review, Counter, CounterProduct, Product, ProductType, UserType], // Specify the path to your models
   // You can also directly import models and add them here like [User, Post, ...]
 });
 
