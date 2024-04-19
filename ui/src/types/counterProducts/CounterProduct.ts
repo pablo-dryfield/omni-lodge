@@ -1,8 +1,9 @@
-export type Counter = {
+export type CounterProduct = {
     id: number;
-    userId: number;
+    counterId: number;
+    productId: number;
+    quantity: number;
     total: number;
-    date: Date;
     createdAt: Date;
     updatedAt: Date;
     createdBy: number;

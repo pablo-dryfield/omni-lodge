@@ -1,6 +1,7 @@
 import { ResponseModifications } from "../../types/general/ResponseModifications";
 import { Counter } from '../../types/counters/Counter';
 import dayjs from 'dayjs';
+import ProductCounterModal from "../products/ProductCounterModal";
 
 export const countersColumnDef: ResponseModifications<Partial<Counter>>[] = [
   {
@@ -9,16 +10,7 @@ export const countersColumnDef: ResponseModifications<Partial<Counter>>[] = [
       id: 'id',
       header: 'ID',
       Header: ({ column }) => <div>{column.columnDef.header}</div>,
-      Edit: () => null,
-      visibleInShowHideMenu: false,
-    }
-  },
-  {
-    accessorKey: 'test',
-    modifications: {
-      id: 'test',
-      header: 'test',
-      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Edit: () => <ProductCounterModal />,
       visibleInShowHideMenu: false,
     }
   },
@@ -33,16 +25,73 @@ export const countersColumnDef: ResponseModifications<Partial<Counter>>[] = [
     }
   },
   {
+    accessorKey: 'user',
+    modifications: {
+      id: 'user',
+      header: 'Manager',
+      Cell: ({ cell }) => {
+        const user = cell.getValue() as { firstName: string } | null;
+        return user ? <div>{user.firstName}</div> : null;
+      },
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Edit: () => null,
+      visibleInShowHideMenu: false,
+    }
+  },
+  {
     accessorKey: 'date',
     modifications: {
       id: 'date',
-      header: 'Date',
+      header: 'Take Date',
       filterVariant: 'date-range',
       sortingFn: 'datetime',
       enableColumnFilterModes: false,
-      Cell: ({ cell }) => dayjs(cell.getValue<Date>()).format('YYYY-MM-DD HH:mm:ss'),
+      Cell: ({ cell }) => dayjs(cell.getValue<Date>()).format('YYYY-MM-DD'),
       Header: ({ column }) => <div>{column.columnDef.header}</div>,
       Edit: () => null,
+    }
+  },
+  {
+    accessorKey: 'total',
+    modifications: {
+      id: 'total',
+      header: 'Grand Total',
+      Cell: ({ cell }) => {
+        const total = cell.getValue<Number>();
+        if (total !== undefined && total !== null) {
+          return total.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' });
+        } else {
+          return '' // Or any default value you want to display if total is not available
+        }
+      },
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Edit: () => null,
+      mantineEditTextInputProps: {
+        required: true,
+      },
+    }
+  },
+  {
+    accessorKey: 'createdBy',
+    modifications: {
+      id: 'createdBy',
+      header: 'Created By ID',
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Edit: () => null,
+    }
+  },
+  {
+    accessorKey: 'createdByUser',
+    modifications: {
+      id: 'createdByUser',
+      header: 'Created By',
+      Cell: ({ cell }) => {
+        const user = cell.getValue() as { firstName: string } | null;
+        return user ? <div>{user.firstName}</div> : null;
+      },
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Edit: () => null,
+      visibleInShowHideMenu: false,
     }
   },
   {
@@ -72,21 +121,26 @@ export const countersColumnDef: ResponseModifications<Partial<Counter>>[] = [
     }
   },
   {
-    accessorKey: 'createdBy',
+    accessorKey: 'updatedBy',
     modifications: {
-      id: 'createdBy',
-      header: 'Created By',
+      id: 'updatedBy',
+      header: 'Updated By ID',
       Header: ({ column }) => <div>{column.columnDef.header}</div>,
       Edit: () => null,
     }
   },
   {
-    accessorKey: 'updatedBy',
+    accessorKey: 'updatedByUser',
     modifications: {
-      id: 'updatedBy',
+      id: 'updatedByUser',
       header: 'Updated By',
+      Cell: ({ cell }) => {
+        const user = cell.getValue() as { firstName: string } | null;
+        return user ? <div>{user.firstName}</div> : null;
+      },
       Header: ({ column }) => <div>{column.columnDef.header}</div>,
       Edit: () => null,
+      visibleInShowHideMenu: false,
     }
   },
 ];

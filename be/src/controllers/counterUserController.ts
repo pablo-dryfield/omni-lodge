@@ -1,33 +1,22 @@
 import { Request, Response } from 'express';
 import { DataType } from 'sequelize-typescript';
-import Counter from '../models/Counter.js';
+import CounterUser from '../models/CounterUser.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import User from '../models/User.js';
-import sequelize from '../config/database.js';
 
-// Get All Counters
-export const getAllCounters = async (req: Request, res: Response): Promise<void> => {
+// Get All CounterUsers
+export const getAllCounterUsers = async (req: Request, res: Response): Promise<void> => {
   try {
-    const data = await Counter.findAll({
+    const data = await CounterUser.findAll({
       include: [
         {
           model: User,
-          as: 'user',
+          as: 'counterUser',
           attributes: ['firstName']
         },
-        {
-          model: User,
-          as: 'createdByUser',
-          attributes: ['firstName']
-        },
-        {
-          model: User,
-          as: 'updatedByUser',
-          attributes: ['firstName']
-        }
       ]
     });
-    const attributes = Counter.getAttributes();
+    const attributes = CounterUser.getAttributes();
     const columns = Object.entries(attributes)
       .map(([key, attribute]) => {
         return {
@@ -43,12 +32,12 @@ export const getAllCounters = async (req: Request, res: Response): Promise<void>
   }
 };
 
-// Get Counter by ID
-export const getCounterById = async (req: Request, res: Response): Promise<void> => {
+// Get CounterUser by ID
+export const getCounterUserById = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const data = await Counter.findByPk(id);
-    const attributes = Counter.getAttributes();
+    const data = await CounterUser.findByPk(id);
+    const attributes = CounterUser.getAttributes();
     const columns = Object.entries(attributes)
       .map(([key, attribute]) => {
         return {
@@ -58,7 +47,7 @@ export const getCounterById = async (req: Request, res: Response): Promise<void>
         };
       });
     if (!data) {
-      res.status(404).json([{ message: 'Counter not found' }]);
+      res.status(404).json([{ message: 'CounterUser not found' }]);
       return;
     }
     res.status(200).json([{ data, columns }]);
@@ -68,44 +57,44 @@ export const getCounterById = async (req: Request, res: Response): Promise<void>
   }
 };
 
-// Create New Counter
-export const createCounter = async (req: Request, res: Response): Promise<void> => {
+// Create New Counter Product
+export const createCounterUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const newCounter = await Counter.create(req.body);
-    res.status(201).json([newCounter]);
+    const newCounterUser = await CounterUser.create(req.body);
+    res.status(201).json([newCounterUser]);
   } catch (error) {
     const e = error as ErrorWithMessage;
     res.status(500).json([{ message: e.message }]);
   }
 };
 
-// Update Counter
-export const updateCounter = async (req: Request, res: Response): Promise<void> => {
+// Update CounterUser
+export const updateCounterUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const [updated] = await Counter.update(req.body, { where: { id } });
+    const [updated] = await CounterUser.update(req.body, { where: { id } });
 
     if (!updated) {
-      res.status(404).json([{ message: 'Counter not found' }]);
+      res.status(404).json([{ message: 'CounterUser not found' }]);
       return;
     }
 
-    const updatedCounter = await Counter.findByPk(id);
-    res.status(200).json([updatedCounter]);
+    const updatedCounterUser = await CounterUser.findByPk(id);
+    res.status(200).json([updatedCounterUser]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);
   }
 };
 
-// Delete Counter
-export const deleteCounter = async (req: Request, res: Response): Promise<void> => {
+// Delete CounterUser
+export const deleteCounterUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const deleted = await Counter.destroy({ where: { id } });
+    const deleted = await CounterUser.destroy({ where: { id } });
 
     if (!deleted) {
-      res.status(404).json([{ message: 'Counter not found' }]);
+      res.status(404).json([{ message: 'CounterUser not found' }]);
       return;
     }
 

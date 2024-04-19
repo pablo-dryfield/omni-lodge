@@ -8,7 +8,7 @@ import { useEffect } from 'react';
 const Counters = (props: GenericPageProps) => {
   const dispatch = useAppDispatch();
   useEffect(() => {
-    dispatch(navigateToPage(props.title));
+    dispatch(navigateToPage("Counters"));
   }, [dispatch, props.title]);
   return (
     <div>

@@ -13,15 +13,19 @@ export default class CounterProduct extends Model {
 
   @AllowNull(false)
   @Column(DataType.INTEGER)
-  declare counterid: number;
+  declare counterId: number;
 
   @AllowNull(false)
   @Column(DataType.INTEGER)
-  declare productid: number;
+  declare productId: number;
 
   @AllowNull(false)
   @Column(DataType.INTEGER)
   declare quantity: number;
+
+  @AllowNull(false)
+  @Column(DataType.INTEGER)
+  declare total: number;
 
   @AllowNull(false)
   @Default(DataType.NOW)

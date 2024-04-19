@@ -16,6 +16,7 @@ import sessionRoutes from './routes/sessionRoutes.js';
 import reviewRoutes from './routes/reviewRoutes.js';
 import counterRoutes from './routes/counterRoutes.js';
 import counterProductRoutes from './routes/counterProductRoutes.js';
+import counterUserRoutes from './routes/counterUserRoutes.js';
 import productRoutes from './routes/productRoutes.js';
 import productTypeRoutes from './routes/productTypeRoutes.js';
 import userTypeRoutes from './routes/userTypeRoutes.js';
@@ -90,7 +91,8 @@ app.use('/api/users', userRoutes);
 app.use('/api/session', sessionRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/counters', counterRoutes);
-app.use('/api/countersProducts', counterProductRoutes);
+app.use('/api/counterProducts', counterProductRoutes);
+app.use('/api/counterUsers', counterUserRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/productTypes', productTypeRoutes);
 app.use('/api/userTypes', userTypeRoutes);
@@ -105,7 +107,7 @@ app.get('/', (req: Request, res: Response) => {
 
 // Sync database and then start server
 const PORT = process.env.PORT || 3001;
-sequelize.sync({ force: false }) // Set to 'true' carefully, it will drop the database
+sequelize.sync({ force: true }) // Set to 'true' carefully, it will drop the database
   .then(() => {
     defineAssociations();
     app.listen(PORT, () => {

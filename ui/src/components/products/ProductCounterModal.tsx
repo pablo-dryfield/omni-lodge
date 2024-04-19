@@ -11,6 +11,12 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import CloseIcon from '@mui/icons-material/Close';
 import { DatePicker, DateValidationError, PickerChangeHandlerContext } from '@mui/x-date-pickers';
 import { Dayjs } from 'dayjs';
+import { createCounter } from '../../actions/counterActions';
+import { createCounterProduct } from '../../actions/counterProductActions';
+import { createCounterUser } from '../../actions/counterUserActions';
+import { Counter } from '../../types/counters/Counter';
+import { CounterProduct } from '../../types/counterProducts/CounterProduct';
+import { CounterUser } from '../../types/counterUsers/CounterUser';
 
 const ProductCounterModal: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -21,6 +27,7 @@ const ProductCounterModal: React.FC = () => {
   const [selectedUsers, setSelectedUsers] = useState<User[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [counterDate, setCounterDate] = useState<Dayjs | null>(null);
+  const { loggedUserId } = useAppSelector((state) => state.session);
 
   useEffect(() => {
     dispatch(fetchProducts());
@@ -32,6 +39,60 @@ const ProductCounterModal: React.FC = () => {
       setProducts(productData[0].data);
     }
   }, [productData]);
+
+  const handleCancel = () => {
+    // Add logic to reset any temporary state or close the modal
+  };
+
+  const handleSave = async () => {
+    if (!counterDate || !selectedUsers.length || !Object.keys(quantities).length) {
+      // Add logic to handle incomplete data
+      return;
+    }
+
+    try {
+      const total = products.reduce((acc, product) => {
+        const id = product.id || 0;
+        const quantity = quantities[id] || 0;
+        return acc + (product.price || 0) * quantity;
+      }, 0);
+      
+      const counterData: Partial<Counter> = {
+        userId: loggedUserId, // For simplicity, just pick the first user
+        date: counterDate.toDate(), // Convert Dayjs to Date
+        total: total, // Calculate total
+        createdBy: loggedUserId,
+      };
+
+      const createdCounter = await dispatch(createCounter(counterData));
+
+      // Step 2: Create Counter Products
+      const counterId = (createdCounter.payload as any)?.[0]?.id;
+
+      const counterProductData: Partial<CounterProduct>[] = products.map((product) => ({
+        counterId: counterId,
+        productId: product.id || 0,
+        quantity: quantities[product.id || 0] || 0,
+        total: (product.price || 0) * (quantities[product.id || 0] || 0),
+        createdBy: loggedUserId,
+      }));
+
+      await Promise.all(counterProductData.map((data) => dispatch(createCounterProduct(data))));
+
+         // Step 3: Create Counter Users
+      const counterUserData: Partial<CounterUser>[] = selectedUsers.map((user) => ({
+        counterId: counterId,
+        userId: user.id || 0,
+        createdBy: loggedUserId,
+      }));
+
+      await Promise.all(counterUserData.map((data) => dispatch(createCounterUser(data))));
+
+      // Handle success
+    } catch (error) {
+      // Handle error
+    }
+  };
 
   const handleDecrease = (productId: number, productTypeId: number) => {
     setQuantities((prevQuantities) => ({
@@ -61,6 +122,9 @@ const ProductCounterModal: React.FC = () => {
         }
       }
     }
+
+    // Reset selected user and selected user ID
+    setSelectedUserId(null);
   };
 
   const handleRemoveUser = (userId: number) => {
@@ -128,7 +192,11 @@ const ProductCounterModal: React.FC = () => {
         value={selectedUserId || ''}
         onChange={(e) => setSelectedUserId(Number(e.target.value))}
         fullWidth
+        displayEmpty  
       >
+        <MenuItem disabled value="">
+          Select Staff
+        </MenuItem>
         {userData && userData[0].data.map((user: Partial<User>) => (
           <MenuItem key={user.id} value={user.id}>{user.firstName}</MenuItem>
         ))}
@@ -142,6 +210,10 @@ const ProductCounterModal: React.FC = () => {
         value={counterDate}
         onChange={(newValue: Dayjs | null, context: PickerChangeHandlerContext<DateValidationError>) => setCounterDate(newValue)}
       />
+    </Box>
+    <Box sx={{ mt: 2 }}>
+      <Button variant="outlined" onClick={handleCancel} sx={{ mt: 2 }}>Cancel</Button>
+      <Button variant="contained" onClick={handleSave} sx={{ mt: 2, ml: 2 }}>Save</Button>
     </Box>
     </>
   );
