@@ -2,10 +2,10 @@ import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, Da
 
 @Table({
   timestamps: true,
-  modelName: 'Counters',
-  tableName: 'counters'
+  modelName: 'CounterUsers',
+  tableName: 'counterUsers'
 })
-export default class Counter extends Model {
+export default class CounterUser extends Model {
   @PrimaryKey
   @AutoIncrement
   @Column(DataType.INTEGER)
@@ -13,15 +13,11 @@ export default class Counter extends Model {
 
   @AllowNull(false)
   @Column(DataType.INTEGER)
-  declare userId: number;
+  declare counterId: number;
 
   @AllowNull(false)
   @Column(DataType.INTEGER)
-  declare total: number;
-
-  @AllowNull(false)
-  @Column(DataType.DATE)
-  declare date: Date;
+  declare userId: number;
 
   @AllowNull(false)
   @Default(DataType.NOW)

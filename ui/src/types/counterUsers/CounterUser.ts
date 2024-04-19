@@ -1,8 +1,7 @@
-export type Counter = {
+export type CounterUser = {
     id: number;
+    counterId: number;
     userId: number;
-    total: number;
-    date: Date;
     createdAt: Date;
     updatedAt: Date;
     createdBy: number;

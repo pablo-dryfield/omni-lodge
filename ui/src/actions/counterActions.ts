@@ -25,6 +25,7 @@ export const fetchCounters = createAsyncThunk(
   }
 );
 
+
 /**
  * Creates a new counter with the provided data.
  * @param counterData - The data for the new counter to be created.

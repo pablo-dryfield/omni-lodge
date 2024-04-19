@@ -9,6 +9,8 @@ import userTypeReducer from './../reducers/userTypeReducer';
 import productTypeReducer from '../reducers/productTypeReducer';
 import productReducer from '../reducers/productReducer';
 import counterReducer from '../reducers/counterReducer';
+import counterProductsReducer from '../reducers/counterProductsReducer';
+import counterUsersReducer from '../reducers/counterUsersReducer';
 
 
 // Create the Redux store using configureStore
@@ -24,6 +26,8 @@ export const store = configureStore({
     productTypes: productTypeReducer,
     products: productReducer,
     counters: counterReducer,
+    counterProducts: counterProductsReducer,
+    counterUsers: counterUsersReducer,
   },
   // If you have additional middleware, you can add them here
   // middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(yourAdditionalMiddleware),
