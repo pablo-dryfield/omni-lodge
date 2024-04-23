@@ -1,5 +1,5 @@
 import { Box, Flex, Modal, ScrollArea, Grid } from "@mantine/core";
-import { MRT_EditActionButtons, MRT_EditCellTextInput } from "mantine-react-table";
+import { MRT_EditActionButtons } from "mantine-react-table";
 import { useEffect } from "react";
 import { ModalContentProps } from "../types/general/ModalContentProps";
 
@@ -80,6 +80,7 @@ export const ModalContent = <T extends {}>({
               </Grid.Col> 
             </Grid>
             <Flex justify="flex-end">
+              {/* eslint-disable-next-line react/jsx-pascal-case */}
               <MRT_EditActionButtons row={row} table={table} variant="text" />
             </Flex>
           </Box>
