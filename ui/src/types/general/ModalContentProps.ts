@@ -7,4 +7,6 @@ export type ModalContentProps<T extends MRT_RowData> = {
     opened: boolean;
     setOpened: (opened: boolean) => void;
     title: string;
+    action: string;
+    custom: boolean;
 }

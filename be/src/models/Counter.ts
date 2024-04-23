@@ -16,7 +16,7 @@ export default class Counter extends Model {
   declare userId: number;
 
   @AllowNull(false)
-  @Column(DataType.INTEGER)
+  @Column(DataType.DECIMAL(10, 2))
   declare total: number;
 
   @AllowNull(false)

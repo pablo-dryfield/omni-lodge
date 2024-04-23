@@ -4,6 +4,8 @@ import Counter from '../models/Counter.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import User from '../models/User.js';
 import sequelize from '../config/database.js';
+import CounterProduct from '../models/CounterProduct.js';
+import CounterUser from '../models/CounterUser.js';
 
 // Get All Counters
 export const getAllCounters = async (req: Request, res: Response): Promise<void> => {
@@ -102,9 +104,11 @@ export const updateCounter = async (req: Request, res: Response): Promise<void> 
 export const deleteCounter = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
+    const counterProductDeleted = await CounterProduct.destroy({ where: { counterId: id } });
+    const counterUserDeleted = await CounterUser.destroy({ where: { counterId: id } });
     const deleted = await Counter.destroy({ where: { id } });
 
-    if (!deleted) {
+    if (!deleted || !counterProductDeleted || !counterUserDeleted) {
       res.status(404).json([{ message: 'Counter not found' }]);
       return;
     }
