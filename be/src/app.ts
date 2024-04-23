@@ -14,6 +14,12 @@ import channelRoutes from './routes/channelRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import sessionRoutes from './routes/sessionRoutes.js';
 import reviewRoutes from './routes/reviewRoutes.js';
+import counterRoutes from './routes/counterRoutes.js';
+import counterProductRoutes from './routes/counterProductRoutes.js';
+import counterUserRoutes from './routes/counterUserRoutes.js';
+import productRoutes from './routes/productRoutes.js';
+import productTypeRoutes from './routes/productTypeRoutes.js';
+import userTypeRoutes from './routes/userTypeRoutes.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -84,6 +90,12 @@ app.use('/api/channels', channelRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/session', sessionRoutes);
 app.use('/api/reviews', reviewRoutes);
+app.use('/api/counters', counterRoutes);
+app.use('/api/counterProducts', counterProductRoutes);
+app.use('/api/counterUsers', counterUserRoutes);
+app.use('/api/products', productRoutes);
+app.use('/api/productTypes', productTypeRoutes);
+app.use('/api/userTypes', userTypeRoutes);
 
 // Error Handling
 app.use(errorMiddleware);
@@ -95,7 +107,7 @@ app.get('/', (req: Request, res: Response) => {
 
 // Sync database and then start server
 const PORT = process.env.PORT || 3001;
-sequelize.sync({ force: false }) // Set to 'true' carefully, it will drop the database
+sequelize.sync({ force: true }) // Set to 'true' carefully, it will drop the database
   .then(() => {
     defineAssociations();
     app.listen(PORT, () => {
