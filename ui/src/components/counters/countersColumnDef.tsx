@@ -1,7 +1,7 @@
 import { ResponseModifications } from "../../types/general/ResponseModifications";
 import { Counter } from '../../types/counters/Counter';
 import dayjs from 'dayjs';
-import ProductCounterModal from "../products/ProductCounterModal";
+import CounterProductModal from "../counters/CounterProductModal";
 
 export const countersColumnDef: ResponseModifications<Partial<Counter>>[] = [
   {
@@ -10,7 +10,7 @@ export const countersColumnDef: ResponseModifications<Partial<Counter>>[] = [
       id: 'id',
       header: 'ID',
       Header: ({ column }) => <div>{column.columnDef.header}</div>,
-      Edit: () => <ProductCounterModal />,
+      Edit: ({ table, row, cell }) => <CounterProductModal table={table} row={row} cell={cell}/>,
       visibleInShowHideMenu: false,
     }
   },
@@ -59,7 +59,7 @@ export const countersColumnDef: ResponseModifications<Partial<Counter>>[] = [
       Cell: ({ cell }) => {
         const total = cell.getValue<Number>();
         if (total !== undefined && total !== null) {
-          return total.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' });
+          return total.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN', minimumFractionDigits: 2});
         } else {
           return '' // Or any default value you want to display if total is not available
         }

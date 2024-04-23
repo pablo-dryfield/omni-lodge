@@ -16,7 +16,6 @@ import { getChangedValues } from '../../utils/getChangedValues';
 import { CounterProduct } from '../../types/counterProducts/CounterProduct';
 import { Grid, Paper, Typography } from '@mui/material'; // Import Material-UI components
 import { Product } from '../../types/products/Product';
-import { User } from '../../types/users/User';
 import { CounterUser } from '../../types/counterUsers/CounterUser';
 
 const CounterList = () => {
@@ -50,7 +49,7 @@ const CounterList = () => {
   const renderDetailPanel = (row: MRT_Row<Partial<Counter>>) => {
     // Extract the counter ID from the row
     const counterId = row.getValue('id');
-  
+
     // Filter the counter products data based on the counterId
     const counterProducts: Partial<CounterProduct>[] = dataCounterProducts[0]?.data.filter(
       (product: Partial<CounterProduct>) => product.counterId === counterId
@@ -60,71 +59,67 @@ const CounterList = () => {
       (user: Partial<CounterUser>) => user.counterId === counterId
     );
 
-  
-    // Display counter products data
-    return (
-      <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap' }}>
-        {counterProducts.map((product: Partial<CounterProduct>) => {
-          // Find the matching product information
-          const matchedProduct: Partial<Product> | undefined = dataProducts[0]?.data.find(
-            (productArray: Partial<Product>) => productArray.id === product.productId
-          ) as Partial<Product> | undefined;
-    
-          // Define an array to hold pairs of product information fields
-          const productFields = [
-            { label: 'Quantity:', value: product.quantity },
-            { label: 'Price:', value: matchedProduct?.price?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })},
-            { label: 'Total:', value: product.total?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' }) }
-          ];
 
-          // Function to render user names
-          const renderUserNames = (users: Partial<CounterUser>[]) => (
-            <div>
-              
-            </div>
-          );
-    
-          // Function to render a pair of product information fields
-          const renderFields = (fields: Array<{ label: string, value: any }>) => (
-            <Grid container spacing={2}>
-              {fields.map((field, index) => (
-                <Grid item xs={6} key={index}>
-                  <Typography variant="subtitle1">
-                    <span style={{ fontWeight: 'bold' }}>{field.label}</span> {field.value}
-                  </Typography>
-                </Grid>
-              ))}
-                <Grid item xs={6} key="staffCounterUser">
-                  <Typography variant="subtitle1">
-                    <span style={{ fontWeight: 'bold' }}>Staff:</span>
-                    {counterUsers.map((user, index) => (
-                      (user as { counterUser: { firstName: string } })?.counterUser?.firstName && (
-                        <span key={index}>
-                          {index !== 0 && ', '} {/* Add comma before names except for the first one */}
-                          {(user as { counterUser: { firstName: string } }).counterUser.firstName}
-                        </span>
-                      )
-                    ))}
-                  </Typography>
-                </Grid>
-            </Grid>
-          );
- 
-          // Display the product details
-          return (
-            <Paper key={product.id} elevation={3} style={{ margin: '20px', padding: '20px', maxWidth: '300px', flexGrow: 1 }}>
-              <Typography variant="h5" gutterBottom>{matchedProduct?.name}</Typography>
-              {renderFields(productFields)}
-            </Paper>
-          );
-        })}
-      </div>
-    );
+    // Display counter products data
+return (
+  <div style={{ display: 'flex', flexDirection: 'column' }}>
+    <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap' }}>
+      {counterProducts.map((product: Partial<CounterProduct>) => {
+        // Find the matching product information
+        const matchedProduct: Partial<Product> | undefined = dataProducts[0]?.data.find(
+          (productArray: Partial<Product>) => productArray.id === product.productId
+        ) as Partial<Product> | undefined;
+
+        // Define an array to hold pairs of product information fields
+        const productFields = [
+          { label: 'Quantity:', value: product.quantity },
+          { label: 'Price:', value: matchedProduct?.price?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })},
+          { label: 'Total:', value: product.total?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' }) }
+        ];
+
+        // Function to render a pair of product information fields
+        const renderFields = (fields: Array<{ label: string, value: any }>) => (
+          <Grid container spacing={2}>
+            {fields.map((field, index) => (
+              <Grid item xs={6} key={index}>
+                <Typography variant="subtitle1">
+                  <span style={{ fontWeight: 'bold' }}>{field.label}</span> {field.value}
+                </Typography>
+              </Grid>
+            ))}
+          </Grid>
+        );
+
+        // Display the product details
+        return (
+          <Paper key={product.id} elevation={3} style={{ margin: '20px', padding: '20px', maxWidth: '300px', flexGrow: 1 }}>
+            <Typography variant="h5" gutterBottom>{matchedProduct?.name}</Typography>
+            {renderFields(productFields)}
+          </Paper>
+        );
+      })}
+    </div>
+    {/* Paper component for staffCounterUser information */}
+    <Paper elevation={3} style={{ margin: '20px', padding: '20px', maxWidth: '300px', flexGrow: 1, backgroundColor: '#ddf1c1' }}>
+      <Typography variant="h5" gutterBottom>Staff:</Typography>
+      <Typography variant="subtitle1">
+        {counterUsers.map((user, index) => (
+          (user as { counterUser: { firstName: string } })?.counterUser?.firstName && (
+            <span key={index}>
+              {index !== 0 && ', '} {/* Add comma before names except for the first one */}
+              {(user as { counterUser: { firstName: string } }).counterUser.firstName}
+            </span>
+          )
+        ))}
+      </Typography>
+    </Paper>
+  </div>
+);
   };
 
   const handleCreate = async (dataCreate: Partial<Counter>) => {
     const dataCreated = removeEmptyKeys(dataCreate, loggedUserId);
-    if(Object.keys(dataCreated).some(key => key !== 'createdBy') && Object.keys(dataCreated).length !== 0){
+    if (Object.keys(dataCreated).some(key => key !== 'createdBy') && Object.keys(dataCreated).length !== 0) {
       await dispatch(createCounter(dataCreated));
       dispatch(fetchCounters());
     }
@@ -134,11 +129,11 @@ const CounterList = () => {
     const dataId = originalData.id;
     const dataUpdate = getChangedValues(originalData, dataUpdated, loggedUserId);
     if (typeof dataId === 'number') {
-      if(Object.keys(dataUpdate).some(key => key !== 'updatedBy') && Object.keys(dataUpdate).length !== 0){
-        await dispatch(updateCounter({ counterId:dataId, counterData:dataUpdate }));
+      if (Object.keys(dataUpdate).some(key => key !== 'updatedBy') && Object.keys(dataUpdate).length !== 0) {
+        await dispatch(updateCounter({ counterId: dataId, counterData: dataUpdate }));
         dispatch(fetchCounters());
       }
-    }else{
+    } else {
       console.error('Counter ID is undefined.');
     }
   };
@@ -147,7 +142,7 @@ const CounterList = () => {
     if (typeof dataDelete.id === 'number') {
       await dispatch(deleteCounter(dataDelete.id));
       if (count === iterator) { dispatch(fetchCounters()); }
-    }else{
+    } else {
       console.error('Counter ID is undefined.');
     }
   };

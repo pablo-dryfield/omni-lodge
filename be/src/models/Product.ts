@@ -20,7 +20,7 @@ export default class Product extends Model {
   declare productTypeId: number;
 
   @AllowNull(false)
-  @Column(DataType.DOUBLE)
+  @Column(DataType.DECIMAL(10, 2))
   declare price: number;
 
   @AllowNull(false)

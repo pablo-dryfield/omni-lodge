@@ -5,7 +5,7 @@ import {
   MRT_ToggleFiltersButton as MRTToggleFiltersButton, 
   MRT_Row,
 } from 'mantine-react-table';
-import { Box, Button, Flex, Text, Title } from '@mantine/core';
+import { Button, Flex, Text } from '@mantine/core';
 import { ModalsProvider, modals } from '@mantine/modals';
 import { ModalContent } from './ModalContent';
 import cloneDeep from 'lodash/cloneDeep';
@@ -122,6 +122,8 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
       opened={createModalOpened}
       setOpened={setCreateModalOpened}
       title={"Create " + pageTitle}
+      action="create"
+      custom={renderDetailPanel ? true : false}
     />),
     renderEditRowModalContent: ({ table, row, internalEditComponents }) => (<ModalContent
       internalEditComponents={internalEditComponents}
@@ -130,6 +132,8 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
       opened={updateModalOpened}
       setOpened={setUpdateModalOpened}
       title={"Edit " + pageTitle}
+      action="edit"
+      custom={renderDetailPanel ? true : false}
     />),
     renderDetailPanel: renderDetailPanel
     ? ({ row }) => renderDetailPanel(row)

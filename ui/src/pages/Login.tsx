@@ -12,7 +12,7 @@ const LoginPage: React.FC = () => {
     const handleLogin = async (event: React.FormEvent) => {
         event.preventDefault();
         // Assuming your loginUser action creator expects an object with email and password
-        await dispatch(loginUser({ email: /*user*/ 'admin@admin.com', password: /*password*/ 'adminadmin' }));
+        await dispatch(loginUser({ email: /*user*/ 'Pablo@Pablo.Pablo', password: /*password*/ 'PabloPablo' }));
     };
 
     return (
