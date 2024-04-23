@@ -107,7 +107,7 @@ app.get('/', (req: Request, res: Response) => {
 
 // Sync database and then start server
 const PORT = process.env.PORT || 3001;
-sequelize.sync({ force: true }) // Set to 'true' carefully, it will drop the database
+sequelize.sync({ force: false }) // Set to 'true' carefully, it will drop the database
   .then(() => {
     defineAssociations();
     app.listen(PORT, () => {
