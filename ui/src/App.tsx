@@ -72,9 +72,9 @@ const App = () => {
           <NavBarStyled>
             <NavBar />
           </NavBarStyled>
-          <LeftSidebarStyled>
+          {/* <LeftSidebarStyled>
             <LeftSidebar />
-          </LeftSidebarStyled>
+          </LeftSidebarStyled> */}
           <MainContent>
             <Routes />
           </MainContent>
