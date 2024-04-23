@@ -46,16 +46,16 @@ export default class Booking extends Model<Booking> {
   @Column(DataType.DATE)
   declare createdAt: Date;
 
-  @AllowNull(false)
+  @AllowNull(true)
   @Default(DataType.NOW)
   @Column(DataType.DATE)
   declare updatedAt: Date;
 
-  @AllowNull(true)
+  @AllowNull(false)
   @Column(DataType.INTEGER)
-  declare createdBy?: number;
+  declare createdBy: number;
 
   @AllowNull(true)
   @Column(DataType.INTEGER)
-  declare updatedBy?: number;
+  declare updatedBy: number;
 }
