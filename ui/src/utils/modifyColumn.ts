@@ -1,6 +1,5 @@
 import { MRT_ColumnDef } from "mantine-react-table";
 import { ResponseModifications } from "../types/general/ResponseModifications";
-import { ServerResponse } from "../types/general/ServerResponse";
 
 /**
  * Modifies columns definitions for a table based on provided modifications.
