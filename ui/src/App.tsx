@@ -1,6 +1,6 @@
 import { BrowserRouter } from 'react-router-dom';
 import NavBar from './components/main/NavBar';
-import LeftSidebar from './components/main/LeftSidebar/LeftSidebar';
+//import LeftSidebar from './components/main/LeftSidebar/LeftSidebar';
 import Routes from './components/main/Routes';
 import { styled } from '@mui/system';
 import Login from './pages/Login';
@@ -27,11 +27,11 @@ const NavBarStyled = styled('div')({
   // ... other styles
 });
 
-const LeftSidebarStyled = styled('div')({
-  gridColumn: '1', // Sidebar is in the first column
-  gridRow: '2', // Sidebar is in the second row
-  maxHeight: 'calc(100vh - 7vh)',
-});
+// const LeftSidebarStyled = styled('div')({
+//   gridColumn: '1', // Sidebar is in the first column
+//   gridRow: '2', // Sidebar is in the second row
+//   maxHeight: 'calc(100vh - 7vh)',
+// });
 
 
 const MainContent = styled('div')({

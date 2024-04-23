@@ -77,6 +77,7 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
             setSelectedUsers(initialUsers);
             setInitialSelectedUsers([...initialUsers]); // Create a clone of selectedUsers
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [userData]);
 
     const initialQuantities: { [key: number]: number } = counterProducts.reduce((quantitiesObj, counterProduct) => {
@@ -136,7 +137,7 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
             await Promise.all(counterProductData.map((data) => {
                 const { id, ...rest } = data;
                 const partialCounterProduct: Partial<CounterProduct> = rest;
-                dispatch(updateCounterProduct({ counterProductId: data.id || 0, counterProductData: partialCounterProduct }))
+                return dispatch(updateCounterProduct({ counterProductId: data.id || 0, counterProductData: partialCounterProduct }))
             }
             ));
 
