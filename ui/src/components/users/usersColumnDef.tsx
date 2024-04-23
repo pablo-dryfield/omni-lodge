@@ -64,6 +64,9 @@ export const usersColumnDef: ResponseModifications<Partial<User>>[] = [
   {
     accessorKey: 'password',
     modifications: {
+      id: 'password',
+      header: 'Password',
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
       Cell: ({ cell }) => <PasswordInput
         disabled
         style={{ width: '100%', border: '0px' }}

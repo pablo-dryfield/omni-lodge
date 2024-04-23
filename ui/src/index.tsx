@@ -10,6 +10,8 @@ import '@mantine/core/styles.css'; //import Mantine V7 styles needed by MRT
 import '@mantine/dates/styles.css'; //if using mantine component features
 import 'mantine-react-table/styles.css'; //import MRT styles
 import { MantineProvider } from '@mantine/core';
+import { LocalizationProvider } from '@mui/x-date-pickers';
+import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(
@@ -19,7 +21,9 @@ root.render(
       fontFamilyMonospace: 'Fira Code, monospace',
       headings: { fontFamily: 'Roboto Slab, serif' },
     }}>
-      <App />
+      <LocalizationProvider dateAdapter={AdapterDayjs}>
+        <App />
+      </LocalizationProvider>
     </MantineProvider>
   </Provider>
 );

@@ -5,14 +5,14 @@ import {
   MRT_ToggleFiltersButton as MRTToggleFiltersButton, 
   MRT_Row,
 } from 'mantine-react-table';
-import { Box, Button, Flex, Text, Title } from '@mantine/core';
+import { Button, Flex, Text } from '@mantine/core';
 import { ModalsProvider, modals } from '@mantine/modals';
 import { ModalContent } from './ModalContent';
 import cloneDeep from 'lodash/cloneDeep';
 import { useState } from 'react';
 import { TableProps } from '../types/general/TableProps';
 
-const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions, initialState }: TableProps<T>) => {
+const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions, initialState, renderDetailPanel }: TableProps<T>) => {
 
   const [createModalOpened, setCreateModalOpened] = useState(false);
   const [updateModalOpened, setUpdateModalOpened] = useState(false);
@@ -64,7 +64,12 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
     enableColumnResizing: true,
     layoutMode: 'grid',
     onCreatingRowSave: ({ values, exitCreatingMode, }) => {
-      actions.handleCreate(values);
+      if(typeof values.id === 'object'){
+        console.log(values.customModal);
+        actions.handleCreate(values.customModal);
+      }else{
+        actions.handleCreate(values);
+      }
       exitCreatingMode();
     },
     onEditingRowSave: ({ values, table, row}) => {
@@ -117,6 +122,8 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
       opened={createModalOpened}
       setOpened={setCreateModalOpened}
       title={"Create " + pageTitle}
+      action="create"
+      custom={renderDetailPanel ? true : false}
     />),
     renderEditRowModalContent: ({ table, row, internalEditComponents }) => (<ModalContent
       internalEditComponents={internalEditComponents}
@@ -125,29 +132,12 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
       opened={updateModalOpened}
       setOpened={setUpdateModalOpened}
       title={"Edit " + pageTitle}
+      action="edit"
+      custom={renderDetailPanel ? true : false}
     />),
-    renderDetailPanel: ({ row }) => (
-      <Box
-        style={{
-          display: 'flex',
-          justifyContent: 'flex-start',
-          alignItems: 'center',
-          gap: '16px',
-          padding: '16px',
-        }}
-      >
-        <img
-          alt="avatar"
-          height={200}
-          src="https://cloudflare-ipfs.com/ipfs/Qmd3W5DuhgHirLHGVixi6V76LhCkZUz6pnFt5AJBiyvHye/avatar/528.jpg"
-          style={{ borderRadius: '50%' }}
-        />
-        <Box style={{ textAlign: 'center' }}>
-          <Title>Signature Catch Phrase:</Title>
-          <Text>&quot;Front-line logistical service-desk&quot;</Text>
-        </Box>
-      </Box>
-    ),
+    renderDetailPanel: renderDetailPanel
+    ? ({ row }) => renderDetailPanel(row)
+    : undefined,
     renderTopToolbar: ({ table }) => {
       const handleDelete = () => {
         openDeleteConfirmModal(table.getSelectedRowModel().flatRows);
