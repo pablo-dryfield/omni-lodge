@@ -1,5 +1,5 @@
 import axios from 'axios';
-import config from '../config/devConfig';
+import config from '../config/prodConfig';
 
 const instance = axios.create({
   baseURL: config.baseURL, // Replace with the actual URL of your server
