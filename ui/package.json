@@ -73,6 +73,7 @@
     "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
     "@types/lodash": "^4.14.202",
     "@types/react-big-calendar": "^1.8.8",
+    "autoprefixer": "^10.4.19",
     "eslint-plugin-react-hooks": "^4.6.0",
     "postcss": "^8.4.38",
     "postcss-preset-mantine": "^1.14.4",
