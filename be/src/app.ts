@@ -50,7 +50,7 @@ const apiLimiter = rateLimit({
 const app = express();
 
 // Middleware
-const allowedOrigins = ['http://localhost:3000', 'https://omni-lodge.netlify.app/'];
+const allowedOrigins = ['http://localhost:3000', 'https://omni-lodge.netlify.app'];
 
 // Cookies 
 app.use(cookieParser());
