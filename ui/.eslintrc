@@ -3,7 +3,7 @@
         "react-hooks"
     ],
     "ignorePatterns": [
-        "node_modules/mantine-react-table",
+        "node_modules/",
         "*.css"
     ],
     "rules": {
