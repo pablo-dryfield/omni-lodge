@@ -22,9 +22,9 @@ const CounterList = () => {
 
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.counters)[0];
-  const { data: dataCounterProducts, loading: loadingCounterProducts, error: errorCounterProducts } = useAppSelector((state) => state.counterProducts)[0];
-  const { data: dataCounterUsers, loading: loadingCounterUsers, error: errorCounterUsers } = useAppSelector((state) => state.counterUsers)[0];
-  const { data: dataProducts, loading: loadingProducts, error: errorProducts } = useAppSelector((state) => state.products)[0];
+  const { data: dataCounterProducts } = useAppSelector((state) => state.counterProducts)[0];
+  const { data: dataCounterUsers } = useAppSelector((state) => state.counterUsers)[0];
+  const { data: dataProducts } = useAppSelector((state) => state.products)[0];
   const { currentPage } = useAppSelector((state) => state.navigation);
   const { loggedUserId } = useAppSelector((state) => state.session);
 

@@ -10,5 +10,8 @@ module.exports = {
           'mantine-breakpoint-xl': '88em',
         },
       },
+      'postcss-exclude-files': {
+        files: ['node_modules/mantine-react-table/styles.css'],
+      },
     },
   };
