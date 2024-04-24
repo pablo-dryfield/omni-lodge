@@ -35,12 +35,14 @@ import { scrapeTripAdvisor } from './scrapers/tripAdvisorScraper.js';
 collectDefaultMetrics();
 
 // Load environment variables
-dotenv.config();
+const environment = process.env.NODE_ENV || 'development';
+const envFile = environment === 'production' ? '.env.prod' : '.env.dev';
+dotenv.config({ path: envFile });
 
 // API Requests limiter
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
+  max: 1000,
   message: "Too many requests from this IP, please try again after 15 minutes"
 });
 
@@ -48,7 +50,7 @@ const apiLimiter = rateLimit({
 const app = express();
 
 // Middleware
-const allowedOrigins = ['http://localhost:3000'];
+const allowedOrigins = ['http://localhost:3000', 'https://omni-lodge.netlify.app/'];
 
 // Cookies 
 app.use(cookieParser());
