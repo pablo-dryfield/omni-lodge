@@ -49,23 +49,23 @@ const apiLimiter = rateLimit({
 // Initialize Express
 const app = express();
 
-// Middleware
-const allowedOrigins = ['http://localhost:3000', 'https://omni-lodge.netlify.app'];
-
 // Cookies 
 app.use(cookieParser());
 
+// Configure CORS middleware
+const allowedOrigins = ['http://localhost:3000', 'https://omni-lodge.netlify.app'];
+
 app.use(cors({
-  origin: (origin, callback) => {
+  origin: function(origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type'],
+  credentials: true // enable CORS credentials
 }));
 
 app.use(express.json());
