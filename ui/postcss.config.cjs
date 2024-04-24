@@ -11,7 +11,7 @@ module.exports = {
         },
       },
       'postcss-exclude-files': {
-        files: ['./mantine-react-table/styles.css'],
+        files: ['mantine-react-table/styles.css'],
       },
       cssnano: {
         preset: [
