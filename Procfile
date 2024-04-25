@@ -1,1 +1,1 @@
-worker: cd be && npm start
+web: cd be && npm start
