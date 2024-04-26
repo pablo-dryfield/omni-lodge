@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { collectDefaultMetrics } from 'prom-client';
-import { ValidationError  } from 'sequelize';
+import { ValidationError } from 'sequelize';
 
 // TypeScript routes imports (make sure all route files are .ts)
 import guestRoutes from './routes/guestRoutes.js';
@@ -29,7 +29,7 @@ import errorMiddleware from './middleware/errorMiddleware.js';
 import { defineAssociations } from './models/defineAssociations.js';
 
 // Scrapers
-import { scrapeTripAdvisor } from './scrapers/tripAdvisorScraper.js';
+// import { scrapeTripAdvisor } from './scrapers/tripAdvisorScraper.js';
 
 // Initialize default metrics collection
 collectDefaultMetrics();
@@ -53,28 +53,20 @@ const app = express();
 app.use(cookieParser());
 
 // Configure CORS middleware
-// const allowedOrigins = ['http://localhost:3000', 'https://omni-lodge.netlify.app'];
+const allowedOrigins = ['http://localhost:3000', 'https://omni-lodge.netlify.app'];
 
-// app.use(cors({
-//   origin: function(origin, callback) {
-//     if (!origin || allowedOrigins.includes(origin)) {
-//       callback(null, true);
-//     } else {
-//       callback(new Error('Not allowed by CORS'));
-//     }
-//   },
-//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-//   allowedHeaders: ['Authorization', 'Content-Type'],
-//   credentials: true // enable CORS credentials
-// }));
-
-// Disable CORS for all routes (only for development)
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*'); // Allow requests from all origins
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS'); // Allow specified HTTP methods
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization'); // Allow specified headers
-  next();
-});
+app.use(cors({
+  origin: function(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Authorization', 'Content-Type'],
+  credentials: true // enable CORS credentials
+}));
 
 app.use(express.json());
 
