@@ -7,7 +7,9 @@
   "scripts": {
     "build:clean": "rimraf dist",
     "build": "npm run build:clean && tsc",
-    "start": "npm run build && node --optimize_for_size --max_old_space_size=920 --gc_interval=100 dist/app.js",
+    "start": "npm run build && node dist/app.js",
+    "start:prod": "NODE_ENV=production npm run build && node dist/app.js",
+    "start:dev": "NODE_ENV=development nodemon dist/app.js",
     "postinstall": "tsc",
     "dev": "nodemon src/app.ts",
     "test": "jest"
