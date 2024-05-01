@@ -110,11 +110,11 @@ app.get('/', (req: Request, res: Response) => {
 });
 
 // Sync database and then start server
-const PORT = process.env.PORT || 3001;
+const PORT: number = parseInt(process.env.PORT || '3001');
 sequelize.sync({ force: false }) // Set to 'true' carefully, it will drop the database
   .then(() => {
     defineAssociations();
-    app.listen(PORT, () => {
+    app.listen(PORT, '0.0.0.0', () => {
       logger.info(`Server is running on port ${PORT}`);
     });
   })
