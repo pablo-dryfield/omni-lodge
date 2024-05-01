@@ -27,6 +27,7 @@ import logger from './utils/logger.js';
 import instrumentMiddleware from './middleware/instrumentMiddleware.js';
 import errorMiddleware from './middleware/errorMiddleware.js';
 import { defineAssociations } from './models/defineAssociations.js';
+import reportRoutes from './routes/reportRoutes.js';
 
 // Scrapers
 // import { scrapeTripAdvisor } from './scrapers/tripAdvisorScraper.js';
@@ -35,7 +36,7 @@ import { defineAssociations } from './models/defineAssociations.js';
 collectDefaultMetrics();
 
 // Load environment variables
-const environment = process.env.NODE_ENV || 'development';
+const environment = (process.env.NODE_ENV || 'development').trim();
 const envFile = environment === 'production' ? '.env.prod' : '.env.dev';
 dotenv.config({ path: envFile });
 
@@ -53,7 +54,7 @@ const app = express();
 app.use(cookieParser());
 
 // Configure CORS middleware
-const allowedOrigins = ['http://localhost:3000', 'https://omni-lodge.netlify.app'];
+const allowedOrigins = ['http://localhost:3000', 'https://omni-lodge.netlify.app', '195.20.3.6'];
 
 app.use(cors({
   origin: function(origin, callback) {
@@ -98,6 +99,7 @@ app.use('/api/counterUsers', counterUserRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/productTypes', productTypeRoutes);
 app.use('/api/userTypes', userTypeRoutes);
+app.use('/api/reports', reportRoutes);
 
 // Error Handling
 app.use(errorMiddleware);

@@ -30,8 +30,8 @@ export function defineAssociations() {
   ProductType.belongsTo(User, { foreignKey: 'updatedBy' });
 
   // Counter Associations
-  Counter.hasMany(CounterProduct, { foreignKey: 'counterId', onDelete: 'CASCADE' });
-  Counter.hasMany(CounterUser, { foreignKey: 'counterId', onDelete: 'CASCADE' });
+  Counter.hasMany(CounterProduct, { foreignKey: 'counterId', onDelete: 'CASCADE', as: 'products' });
+  Counter.hasMany(CounterUser, { foreignKey: 'counterId', onDelete: 'CASCADE', as: 'users' });
   Counter.belongsTo(User, { foreignKey: 'userId', as: 'user' });
   Counter.belongsTo(User, { foreignKey: 'createdBy', as: 'createdByUser' });
   Counter.belongsTo(User, { foreignKey: 'updatedBy', as: 'updatedByUser' });
@@ -43,7 +43,7 @@ export function defineAssociations() {
   CounterProduct.belongsTo(User, { foreignKey: 'updatedBy', as: 'counterProductUpdatedByUser' });
 
   // CounterUser Associations
-  CounterUser.belongsTo(Counter, { foreignKey: 'counterId', onDelete: 'CASCADE' });
+  CounterUser.belongsTo(Counter, { foreignKey: 'counterId', onDelete: 'CASCADE' , as: 'counter'});
   CounterUser.belongsTo(User, { foreignKey: 'userId', as: 'counterUser' });
   CounterUser.belongsTo(User, { foreignKey: 'createdBy', as: 'counterCreatedByUser' });
   CounterUser.belongsTo(User, { foreignKey: 'updatedBy', as: 'counterUpdatedByUser' });
