@@ -14,7 +14,7 @@ import UserType from '../models/UserType.js';
 
 // Load environment variables
 const environment = process.env.NODE_ENV || 'development';
-const envFile = environment === 'production' ? '.env.prod' : '.env.dev';
+const envFile = (environment.trim() === 'production' ? '.env.prod' : '.env.dev');
 dotenv.config({ path: envFile });
 
 const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, PGSSLMODE } = process.env;
