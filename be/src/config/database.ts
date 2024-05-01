@@ -22,8 +22,6 @@ const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, PGSSLMODE } = process.e
 // Determine whether SSL should be enabled
 const sslConfig = PGSSLMODE === 'require' ? { ssl: true } : { ssl: false };
 
-console.log("process.env: "+JSON.stringify(process.env))
-
 // Create an instance of Sequelize for `sequelize-typescript`
 const sequelize = new Sequelize({
   database: DB_NAME,
