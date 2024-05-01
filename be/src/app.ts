@@ -124,7 +124,6 @@ sequelize.sync({ force: false }) // Set to 'true' carefully, it will drop the da
       logger.error('Validation error:', err.errors);
     } else {
       // Handle generic errors
-      console.log("Error: "+err.message)
       logger.error('Unable to connect to the database:', err.message);
     }
   });
