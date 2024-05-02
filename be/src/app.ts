@@ -1,6 +1,8 @@
 import https from 'https';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -37,6 +39,9 @@ import reportRoutes from './routes/reportRoutes.js';
 
 // Initialize default metrics collection
 collectDefaultMetrics();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Load environment variables
 const environment = (process.env.NODE_ENV || 'development').trim();
