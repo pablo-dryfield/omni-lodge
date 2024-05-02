@@ -1,5 +1,5 @@
 const config = {
-    baseURL: 'https://omni-lodge-be.herokuapp.com',
+    baseURL: 'http://23.95.192.213:3001',
 };
 
 export default config;
