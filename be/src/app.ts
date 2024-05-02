@@ -141,6 +141,7 @@ sequelize.sync({ force: false }) // Set to 'true' carefully, it will drop the da
   .catch((err: Error | ValidationError) => {
     if (err instanceof ValidationError) {
       // Handle validation errors
+      console.log(err.errors)
       logger.error('Validation error:', err.errors);
     } else {
       // Handle generic errors
