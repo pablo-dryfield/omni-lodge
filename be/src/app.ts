@@ -1,3 +1,6 @@
+import https from 'https';
+import fs from 'fs';
+import path from 'path';
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -111,10 +114,22 @@ app.get('/', (req: Request, res: Response) => {
 
 // Sync database and then start server
 const PORT: number = parseInt(process.env.PORT || '3001');
+
 sequelize.sync({ force: false }) // Set to 'true' carefully, it will drop the database
   .then(() => {
     defineAssociations();
-    app.listen(PORT, '0.0.0.0', () => {
+
+    // Define the directory path where the SSL certificate files are located
+    const sslDir = path.join(__dirname, 'ssl');
+
+    // Read SSL certificate and private key files
+    const options = {
+      key: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.key')), // Read the private key file
+      cert: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.cer')), // Read the SSL certificate file
+      ca: fs.readFileSync(path.join(sslDir, 'ca.cer')), // Read the CA certificate file (if applicable)
+    };
+    const server = https.createServer(options, app);
+    server.listen(PORT, '0.0.0.0', () => {
       logger.info(`Server is running on port ${PORT}`);
     });
   })
