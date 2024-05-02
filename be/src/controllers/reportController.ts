@@ -94,8 +94,6 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             // Calculate commission per booking for this day
             const commissionPerBooking = totalQuantity * 6 / staffForDay.length;
 
-            console.log(commissionPerBooking);
-
             // Update commission and bookings for each staff member
             staffForDay.forEach((staff) => {
                 const userId = staff.dataValues.userId;
