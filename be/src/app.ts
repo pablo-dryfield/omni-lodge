@@ -125,7 +125,7 @@ sequelize.sync({ force: false }) // Set to 'true' carefully, it will drop the da
     defineAssociations();
 
     // Define the directory path where the SSL certificate files are located
-    const sslDir = path.join(__dirname, 'ssl');
+    const sslDir = path.join(__dirname, '../src/ssl');
 
     // Read SSL certificate and private key files
     const options = {
