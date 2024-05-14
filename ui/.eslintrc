@@ -1,14 +1,11 @@
 {
     "plugins": [
-        "react-hooks",
-        "@babel"
+        "react-hooks"
     ],
     "ignorePatterns": [
         "node_modules/",
         "*.css"
     ],
-    "parser": "@babel/eslint-parser",
-    "extends": ["eslint:recommended", "plugin:@babel/recommended"],
     "rules": {
         "react-hooks/exhaustive-deps": "warn"
     }
