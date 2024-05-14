@@ -4,3 +4,4 @@ static/
 client/dist/
 dist/
 node_modules
+src/index.tsx
