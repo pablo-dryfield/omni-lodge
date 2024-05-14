@@ -123,25 +123,29 @@ const PORT: number = parseInt(process.env.PORT || '3001');
 sequelize.sync({ force: false }) // Set to 'true' carefully, it will drop the database
   .then(() => {
     defineAssociations();
+    if(process.env.NODE_ENV === 'production'){
+      // Define the directory path where the SSL certificate files are located
+      const sslDir = path.join(__dirname, '../src/ssl');
 
-    // Define the directory path where the SSL certificate files are located
-    const sslDir = path.join(__dirname, '../src/ssl');
-
-    // Read SSL certificate and private key files
-    const options = {
-      key: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.key')), // Read the private key file
-      cert: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.cer')), // Read the SSL certificate file
-      ca: fs.readFileSync(path.join(sslDir, 'ca.cer')), // Read the CA certificate file (if applicable)
-    };
-    const server = https.createServer(options, app);
-    server.listen(PORT, '0.0.0.0', () => {
-      logger.info(`Server is running on port ${PORT}`);
+      // Read SSL certificate and private key files
+      const options = {
+        key: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.key')), // Read the private key file
+        cert: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.cer')), // Read the SSL certificate file
+        ca: fs.readFileSync(path.join(sslDir, 'ca.cer')), // Read the CA certificate file (if applicable)
+      };
+      const server = https.createServer(options, app);
+      server.listen(PORT, '0.0.0.0', () => {
+        logger.info(`Server is running on port ${PORT}`);
     });
+    }else{
+      app.listen(PORT, '0.0.0.0', () => {
+        logger.info(`Server is running on port ${PORT}`);
+      });
+    }
   })
   .catch((err: Error | ValidationError) => {
     if (err instanceof ValidationError) {
       // Handle validation errors
-      console.log(err.errors)
       logger.error('Validation error:', err.errors);
     } else {
       // Handle generic errors

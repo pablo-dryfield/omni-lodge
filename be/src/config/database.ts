@@ -32,7 +32,7 @@ const sequelize = new Sequelize({
   port: parseInt(DB_PORT || '5432', 10), // Ensure the port is a number
   logging: false,
   dialectOptions: {
-    ssl: PGSSLMODE === 'require' ? { require: true, rejectUnauthorized: false } : undefined,
+    ssl: PGSSLMODE === 'require' ? { require: true, rejectUnauthorized: false } : false,
   },
   ...sslConfig,
   models: [User, Booking, Channel, Guest, Review, Counter, CounterProduct, CounterUser, Product, ProductType, UserType],
