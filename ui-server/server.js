@@ -1,7 +1,12 @@
 import express from 'express';
 import https from 'https';
 import fs from 'fs';
-import path from 'path';
+import path, { dirname }  from 'path';
+import { fileURLToPath } from 'url';
+import logger from './utils/logger.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const app = express();
 
