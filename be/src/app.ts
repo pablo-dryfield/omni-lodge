@@ -62,7 +62,7 @@ const app = express();
 app.use(cookieParser());
 
 // Configure CORS middleware
-const allowedOrigins = ['http://localhost:3000', 'https://omni-lodge.netlify.app', '195.20.3.6', 'https://omni-lodge.work.gd', 'http://23.95.192.213:3000'];
+const allowedOrigins = ['http://localhost:3000', 'https://omni-lodge.netlify.app', '195.20.3.6', 'https://omni-lodge.work.gd:443','http://omni-lodge.work.gd:443', 'http://23.95.192.213:443', 'https://23.95.192.213:443', 'https://23.95.192.213', 'http://23.95.192.213','https://omni-lodge.work.gd','http://omni-lodge.work.gd'];
 
 app.use(cors({
   origin: function(origin, callback) {
