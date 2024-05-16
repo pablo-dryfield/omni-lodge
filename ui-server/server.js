@@ -1,8 +1,9 @@
-const express = require('express');
-const path = require('path');
+import express from 'express';
+import https from 'https';
+import fs from 'fs';
+import path from 'path';
 
 const app = express();
-const PORT = process.env.PORT || 3000; // Use port 3000 by default, or get port from environment variable
 
 // Serve static files from the 'build' directory
 app.use(express.static(path.join(__dirname, '..', 'ui', 'build')));
@@ -12,7 +13,22 @@ app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '..', 'ui', 'build', 'index.html'));
 });
 
-// Start the server
-app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+if(process.env.NODE_ENV === 'production'){
+  // Define the directory path where the SSL certificate files are located
+  const sslDir = path.join(__dirname, '..', 'be', 'src','ssl');
+
+  // Read SSL certificate and private key files
+  const options = {
+    key: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.key')), // Read the private key file
+    cert: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.cer')), // Read the SSL certificate file
+    ca: fs.readFileSync(path.join(sslDir, 'ca.cer')), // Read the CA certificate file (if applicable)
+  };
+  const server = https.createServer(options, app);
+  server.listen(443, '0.0.0.0', () => {
+    logger.info(`Server is running on port 443`);
 });
+}else{
+  app.listen(3000, '0.0.0.0', () => {
+    logger.info(`Server is running on port 3000`);
+  });
+}
