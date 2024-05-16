@@ -45,6 +45,9 @@ router.post('/register', validateUserPOST, validate, userController.registerUser
 // Login a user
 router.post('/login', validateUserLogin, validate, userController.loginUser);
 
+// Logout a user
+router.post('/logout', validate, userController.logoutUser);
+
 // Get all users
 router.get('/', authMiddleware, validate, userController.getAllUsers);
 

@@ -8,11 +8,14 @@ import {
   Menu,
   MenuItem,
   IconButton,
+  Box,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
+import LogoutIcon from '@mui/icons-material/Logout';
 import { NavItemProps } from '../../types/general/NavItemProps';
-import { useAppSelector } from '../../store/hooks';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { MenuAnchorState } from '../../types/general/MenuAnchorState';
+import { logoutUser } from '../../actions/userActions';
 
 const SystemName = styled(Typography)({
   textDecoration: 'none',
@@ -41,6 +44,7 @@ const NavItem = styled(Link)<NavItemProps>(({ open }) => ({
 }));
 
 const NavBar = () => {
+  const dispatch = useAppDispatch();
   const { pages } = useAppSelector((state) => state.navigation);
   const [menuAnchor, setMenuAnchor] = useState<MenuAnchorState>(null);
   const openMenu = (event: React.MouseEvent<HTMLElement> | React.TouchEvent<HTMLElement>) => setMenuAnchor(event.currentTarget);
@@ -63,6 +67,12 @@ const NavBar = () => {
       window.removeEventListener('resize', handleResize);
     };
   }, []);
+
+  const handleSignOut = () => {
+    document.cookie = 'token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+    dispatch(logoutUser());
+    window.location.href = '/';
+  };
 
   return (
     <AppBar position="sticky" sx={{ backgroundColor: '#333', boxShadow: 'none' }}>
@@ -115,6 +125,11 @@ const NavBar = () => {
             ))}
           </>
         )}
+        <Box marginLeft="auto">
+          <IconButton onClick={handleSignOut} color="inherit">
+            <LogoutIcon />
+          </IconButton>
+        </Box>
       </Toolbar>
     </AppBar>
   );
