@@ -5,6 +5,7 @@ import { DataType } from 'sequelize-typescript';
 import User from '../models/User.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { Env } from '../types/Env.js';
+import { Op } from 'sequelize';
 
 declare const process: {
   env: Env;
@@ -30,17 +31,23 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
 // Login User
 export const loginUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, password } = req.body;
+    const { email , password } = req.body;
 
-    const user = await User.findOne({ where: { email } });
+    // Find user by email or username
+    const user = await User.findOne({
+      where: {
+        [Op.or]: [{ email: email }, { username: email }],
+      },
+    });
+
     if (!user) {
-      res.status(400).json([{ message: 'Invalid email or password' }]);
+      res.status(400).json([{ message: 'Invalid email or username' }]);
       return;
     }
 
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
-      res.status(400).json([{ message: 'Invalid email or password' }]);
+      res.status(400).json([{ message: 'Invalid password' }]);
       return;
     }
 

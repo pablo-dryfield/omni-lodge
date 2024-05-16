@@ -15,6 +15,19 @@ export const countersColumnDef: ResponseModifications<Partial<Counter>>[] = [
     }
   },
   {
+    accessorKey: 'date',
+    modifications: {
+      id: 'date',
+      header: 'Take Date',
+      filterVariant: 'date-range',
+      sortingFn: 'datetime',
+      enableColumnFilterModes: false,
+      Cell: ({ cell }) => dayjs(cell.getValue<Date>()).format('YYYY-MM-DD'),
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Edit: () => null,
+    }
+  },
+  {
     accessorKey: 'userId',
     modifications: {
       id: 'userId',
@@ -36,19 +49,6 @@ export const countersColumnDef: ResponseModifications<Partial<Counter>>[] = [
       Header: ({ column }) => <div>{column.columnDef.header}</div>,
       Edit: () => null,
       visibleInShowHideMenu: false,
-    }
-  },
-  {
-    accessorKey: 'date',
-    modifications: {
-      id: 'date',
-      header: 'Take Date',
-      filterVariant: 'date-range',
-      sortingFn: 'datetime',
-      enableColumnFilterModes: false,
-      Cell: ({ cell }) => dayjs(cell.getValue<Date>()).format('YYYY-MM-DD'),
-      Header: ({ column }) => <div>{column.columnDef.header}</div>,
-      Edit: () => null,
     }
   },
   {

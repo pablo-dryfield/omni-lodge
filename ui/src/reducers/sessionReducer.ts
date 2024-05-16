@@ -5,8 +5,7 @@ import { fetchSession } from '../actions/sessionActions';
 
 // Define the initial state using that type
 const initialState: SessionState = {
-    user:"",
-    password:"",
+    user: "",
     authenticated: false,
     checkingSession: false,
     loggedUserId: 0,
@@ -18,9 +17,6 @@ const sessionSlice = createSlice({
   reducers: {
     setUser: (state, action: PayloadAction<string>) => {
       state.user = action.payload;
-    },
-    setPassword: (state, action: PayloadAction<string>) => {
-      state.password = action.payload;
     },
     setAuthenticated: (state, action: PayloadAction<boolean>) => {
       state.authenticated = action.payload;
@@ -47,5 +43,5 @@ const sessionSlice = createSlice({
   }
 });
 
-export const { setUser , setPassword, setAuthenticated } = sessionSlice.actions;
+export const { setUser , setAuthenticated } = sessionSlice.actions;
 export default sessionSlice.reducer;
