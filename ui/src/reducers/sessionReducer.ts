@@ -1,6 +1,6 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { SessionState } from '../types/general/SessionState';
-import { loginUser } from '../actions/userActions';
+import { loginUser, logoutUser } from '../actions/userActions';
 import { fetchSession } from '../actions/sessionActions';
 
 // Define the initial state using that type
@@ -27,6 +27,11 @@ const sessionSlice = createSlice({
     .addCase(loginUser.fulfilled, (state, action) => {
       state.loggedUserId = action.payload[0].userId;
       state.authenticated = true;
+    })
+    .addCase(logoutUser.fulfilled, (state) => {
+      state.loggedUserId = 0;
+      state.authenticated = false;
+      state.user = "";
     })
     .addCase(fetchSession.pending, (state) => {
       state.checkingSession = true;

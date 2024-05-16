@@ -20,6 +20,23 @@ export const loginUser = createAsyncThunk(
   }
 );
 
+export const logoutUser = createAsyncThunk(
+  'users/logoutUser',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.post<[{message: string}]>('/api/users/logout', {
+        withCredentials: true
+      });
+      return response.data;
+    } catch (error) {
+      if (error instanceof Error) {
+        return rejectWithValue(error.message);
+      }
+      return rejectWithValue('An unknown error occurred');
+    }
+  }
+);
+
 // Async thunk for fetching users
 export const fetchUsers = createAsyncThunk(
   'users/fetchUsers',

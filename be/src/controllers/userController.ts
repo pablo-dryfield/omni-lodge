@@ -68,6 +68,25 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
   }
 };
 
+// Log Out Session
+export const logoutUser = async (req: Request, res: Response): Promise<void> => {
+  try {
+    // Clear the token cookie by setting its expiration to a past date
+    res.cookie('token', '', {
+      expires: new Date(0),
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    });
+
+    // Send a response indicating successful logout
+    res.status(200).json([{ message: 'Logged out successfully' }]);
+  } catch (error) {
+    const errorMessage = (error as ErrorWithMessage).message;
+    res.status(500).json([{ message: errorMessage }]);
+  }
+};
+
 // Get All Users
 export const getAllUsers = async (req: Request, res: Response): Promise<void> => {
   try {
