@@ -11,9 +11,9 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import CloseIcon from '@mui/icons-material/Close';
 import { DatePicker, DateValidationError, PickerChangeHandlerContext } from '@mui/x-date-pickers';
 import { Dayjs } from 'dayjs';
-import { createCounter } from '../../actions/counterActions';
-import { createCounterProduct } from '../../actions/counterProductActions';
-import { createCounterUser } from '../../actions/counterUserActions';
+import { fetchCounters, createCounter } from '../../actions/counterActions';
+import { fetchCounterProducts, createCounterProduct } from '../../actions/counterProductActions';
+import { fetchCounterUsers, createCounterUser } from '../../actions/counterUserActions';
 import { Counter } from '../../types/counters/Counter';
 import { CounterProduct } from '../../types/counterProducts/CounterProduct';
 import { CounterUser } from '../../types/counterUsers/CounterUser';
@@ -29,6 +29,7 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
     const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
     const [counterDate, setCounterDate] = useState<Dayjs | null>(null);
     const { loggedUserId } = useAppSelector((state) => state.session);
+    const [saving, setSaving] = useState(false);
 
     useEffect(() => {
         dispatch(fetchProducts());
@@ -46,10 +47,15 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
     };
 
     const handleSave = async () => {
+
+        if (saving) return;
+
         if (!counterDate || !selectedUsers.length || !Object.keys(quantities).length) {
             // Add logic to handle incomplete data
             return;
         }
+
+        setSaving(true); 
 
         try {
 
@@ -90,10 +96,16 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
 
             await Promise.all(counterUserData.map((data) => dispatch(createCounterUser(data))));
 
+            dispatch(fetchCounters());
+            dispatch(fetchCounterProducts());
+            dispatch(fetchCounterUsers());
+
             // Handle success
             table.setCreatingRow(null);
         } catch (error) {
             // Handle error
+        } finally {
+            setSaving(false); // Set saving to false after saving is done
         }
     };
 
@@ -213,9 +225,9 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
                 onChange={(newValue: Dayjs | null, context: PickerChangeHandlerContext<DateValidationError>) => setCounterDate(newValue)}
             />
         </Box>
-        <Box sx={{ mt: 2 }}>
+        <Box sx={{ mt: 2, borderBottom: '1px solid white', pb: 3 }}>
             <Button variant="outlined" onClick={handleCancel} sx={{ mt: 2 }}>Cancel</Button>
-            <Button variant="contained" onClick={handleSave} sx={{ mt: 2, ml: 2 }}>Save</Button>
+            <Button variant="contained" onClick={handleSave} sx={{ mt: 2, ml: 2 }} disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button>
         </Box>
     </>
 }

@@ -65,7 +65,6 @@ const Table = <T extends {}>({ pageTitle, data, loading, error, columns, actions
     layoutMode: 'grid',
     onCreatingRowSave: ({ values, exitCreatingMode, }) => {
       if(typeof values.id === 'object'){
-        console.log(values.customModal);
         actions.handleCreate(values.customModal);
       }else{
         actions.handleCreate(values);

@@ -15,9 +15,9 @@ import { Counter } from '../../types/counters/Counter';
 import { CounterProduct } from '../../types/counterProducts/CounterProduct';
 import { CounterUser } from '../../types/counterUsers/CounterUser';
 import { CounterProductModalProps } from '../../types/counterProducts/CounterProductModalProps';
-import { updateCounter } from '../../actions/counterActions';
-import { updateCounterProduct } from '../../actions/counterProductActions';
-import { createCounterUser, deleteCounterUser } from '../../actions/counterUserActions';
+import { fetchCounters, updateCounter } from '../../actions/counterActions';
+import { fetchCounterProducts, updateCounterProduct } from '../../actions/counterProductActions';
+import { fetchCounterUsers, createCounterUser, deleteCounterUser } from '../../actions/counterUserActions';
 
 const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) => {
     const dispatch = useAppDispatch();
@@ -28,6 +28,7 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
     const [products, setProducts] = useState<Partial<Product>[]>([]);
     const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
     const { loggedUserId } = useAppSelector((state) => state.session);
+    const [saving, setSaving] = useState(false);
 
     useEffect(() => {
         dispatch(fetchProducts());
@@ -96,10 +97,15 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
     };
 
     const handleSave = async () => {
+        
+        if (saving) return;
+
         if (!counterDate || !selectedUsers.length || !Object.keys(quantities).length) {
             // Add logic to handle incomplete data
             return;
         }
+
+        setSaving(true); 
 
         try {
             // Step 1: Update Counter
@@ -149,7 +155,6 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
             // If the selectedUsers list has been modified, perform the necessary actions
             if (usersModified) {
 
-                console.log("Funciona")
                 // Create an array of user IDs from selectedUsers
                 const selectedUserIds = selectedUsers.map((user) => user.id);
 
@@ -178,12 +183,18 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
                 counterUserDataToDelete.forEach((user) => dispatch(deleteCounterUser(user)));
             }
 
+            dispatch(fetchCounters());
+            dispatch(fetchCounterProducts());
+            dispatch(fetchCounterUsers());
+
             // Handle success
             table.setEditingRow(null);
             table.setRowSelection({});
 
         } catch (error) {
             // Handle error
+        } finally {
+            setSaving(false); // Set saving to false after saving is done
         }
     };
 
@@ -305,9 +316,9 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
                 onChange={(newValue: Dayjs | null, context: PickerChangeHandlerContext<DateValidationError>) => setCounterDate(newValue)}
             />
         </Box>
-        <Box sx={{ mt: 2 }}>
+        <Box sx={{ mt: 2, borderBottom: '1px solid white', pb: 3 }}>
             <Button variant="outlined" onClick={handleCancel} sx={{ mt: 2 }}>Cancel</Button>
-            <Button variant="contained" onClick={handleSave} sx={{ mt: 2, ml: 2 }}>Save</Button>
+            <Button variant="contained" onClick={handleSave} sx={{ mt: 2, ml: 2 }} disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button>
         </Box>
     </>
 }

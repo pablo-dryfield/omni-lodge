@@ -1,9 +1,8 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
 import axiosInstance from './../utils/axiosInstance';
-import { setUser, setPassword, setAuthenticated } from '../reducers/sessionReducer';
+import { setUser, setAuthenticated } from '../reducers/sessionReducer';
 
 export const setUserState = (user: string) => setUser(user);
-export const setPasswordState = (password: string) => setPassword(password);
 export const setAuthenticatedState = (auth: boolean) => setAuthenticated(auth);
 
 // Async thunk for fetching users

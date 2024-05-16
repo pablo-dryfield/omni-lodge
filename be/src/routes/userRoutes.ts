@@ -19,7 +19,6 @@ const validateUserPOST = [
 
 // Validation rules for user login
 const validateUserLogin = [
-  check('email').trim().isEmail().normalizeEmail().withMessage('Email must be a valid email address'),
   check('password').trim().exists().withMessage('Password is required')
 ];
 
