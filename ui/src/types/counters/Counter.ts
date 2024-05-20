@@ -2,7 +2,7 @@ export type Counter = {
     id: number;
     userId: number;
     total: number;
-    date: Date;
+    date: Date | string;
     createdAt: Date;
     updatedAt: Date;
     createdBy: number;

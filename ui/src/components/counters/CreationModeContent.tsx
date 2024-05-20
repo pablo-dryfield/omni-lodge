@@ -65,9 +65,11 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
                 return acc + (product.price || 0) * quantity;
             }, 0);
 
+            const adjustedDate = counterDate ? counterDate.add(10, 'hour') : null;
+
             const counterData: Partial<Counter> = {
                 userId: loggedUserId, // For simplicity, just pick the first user
-                date: counterDate.toDate(), // Convert Dayjs to Date
+                date: adjustedDate?.toISOString(), // Convert Dayjs to Date
                 total: total, // Calculate total
                 createdBy: loggedUserId,
             };
@@ -220,7 +222,7 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
         <Box sx={{ mt: 2 }}>
             <DatePicker
                 label="Counter Date"
-                format="DD/MM/YYYY"
+                format="YYYY-MM-DD"
                 value={counterDate}
                 onChange={(newValue: Dayjs | null, context: PickerChangeHandlerContext<DateValidationError>) => setCounterDate(newValue)}
             />
