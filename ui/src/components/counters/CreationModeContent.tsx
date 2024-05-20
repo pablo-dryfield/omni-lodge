@@ -50,7 +50,7 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
 
         if (saving) return;
 
-        if (!counterDate || !selectedUsers.length || !Object.keys(quantities).length) {
+        if (!counterDate || !selectedUsers.length ) {
             // Add logic to handle incomplete data
             return;
         }
