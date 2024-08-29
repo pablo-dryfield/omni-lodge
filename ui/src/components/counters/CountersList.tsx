@@ -101,7 +101,7 @@ return (
     </div>
     {/* Paper component for staffCounterUser information */}
     <Paper elevation={3} style={{ margin: '20px', padding: '20px', maxWidth: '300px', flexGrow: 1, backgroundColor: '#ddf1c1' }}>
-      <Typography variant="h5">Staff:</Typography>
+      <Typography variant="h5">Staff: {counterUsers.reduce((total, user) => total + 1, 0)}</Typography> 
       <Typography variant="subtitle1" gutterBottom>
         {counterUsers.map((user, index) => (
           (user as { counterUser: { firstName: string } })?.counterUser?.firstName && (
@@ -112,10 +112,7 @@ return (
           )
         ))}
       </Typography>
-      <Typography variant="h5">Customers:</Typography>
-      <Typography variant="subtitle1">
-        {counterProducts.reduce((total, product) => total + (product.quantity || 0), 0)}
-      </Typography>
+      <Typography variant="h5">Customers: {counterProducts.reduce((total, product) => total + (product.quantity || 0), 0)}</Typography>
     </Paper>
   </div>
 );

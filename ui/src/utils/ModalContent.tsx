@@ -20,7 +20,7 @@ export const ModalContent = <T extends {}>({
         }
     }, [table, setOpened]);
 
-    const isMobile = useMediaQuery("(max-width: 768px)");
+    const isMobile = useMediaQuery("(max-width: 1024px)");
 
     const handleClose = () => {
         setOpened(false);
@@ -28,7 +28,7 @@ export const ModalContent = <T extends {}>({
         table.setEditingRow(null);
     };
 
-    const modalSize = isMobile ? "100%" : "40%";
+    const modalSize = isMobile ? "100%" : "60%";
 
     if (custom) {
         return (
