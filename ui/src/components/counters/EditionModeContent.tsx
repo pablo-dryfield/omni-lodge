@@ -17,7 +17,7 @@ import { CounterUser } from '../../types/counterUsers/CounterUser';
 import { CounterProductModalProps } from '../../types/counterProducts/CounterProductModalProps';
 import { fetchCounters, updateCounter } from '../../actions/counterActions';
 import { fetchCounterProducts, updateCounterProduct } from '../../actions/counterProductActions';
-import { fetchCounterUsers, createCounterUser, deleteCounterUser } from '../../actions/counterUserActions';
+import { fetchCounterUsers, createBulkCounterUser, deleteCounterUser } from '../../actions/counterUserActions';
 
 const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) => {
     const dispatch = useAppDispatch();
@@ -177,7 +177,7 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
                     .map((counterUser) => counterUser.id || 0);
 
                 // Dispatch actions for newly added users
-                counterUserDataToAdd.forEach((user) => dispatch(createCounterUser(user)));
+                await dispatch(createBulkCounterUser(counterUserDataToAdd));
 
                 // Dispatch actions for deleted users
                 counterUserDataToDelete.forEach((user) => dispatch(deleteCounterUser(user)));

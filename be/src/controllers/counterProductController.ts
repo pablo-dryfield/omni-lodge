@@ -59,6 +59,30 @@ export const createCounterProduct = async (req: Request, res: Response): Promise
   }
 };
 
+// Create New Counter Product
+export const createBulkCounterProduct = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const counterProducts = req.body.data;
+
+    if (!Array.isArray(counterProducts) || counterProducts.length === 0) {
+      res.status(400).json([{ message: 'Invalid data format or empty data array' }]);
+      return; // Ensure no further code is executed
+    }
+
+    // Using bulkCreate to create multiple records at once
+    const newCounterProducts = await CounterProduct.bulkCreate(counterProducts, {
+      validate: true, // Ensures all records are validated
+      individualHooks: true, // Runs individual hooks (like beforeCreate) on each record
+    });
+
+    // Respond with the created records
+    res.status(201).json(newCounterProducts);
+  } catch (error) {
+    const e = error as ErrorWithMessage;
+    res.status(500).json([{ message: e.message }]);
+  }
+};
+
 // Update CounterProduct
 export const updateCounterProduct = async (req: Request, res: Response): Promise<void> => {
   try {

@@ -25,6 +25,7 @@ import counterUserRoutes from './routes/counterUserRoutes.js';
 import productRoutes from './routes/productRoutes.js';
 import productTypeRoutes from './routes/productTypeRoutes.js';
 import userTypeRoutes from './routes/userTypeRoutes.js';
+import reportRoutes from './routes/reportRoutes.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -32,7 +33,6 @@ import logger from './utils/logger.js';
 import instrumentMiddleware from './middleware/instrumentMiddleware.js';
 import errorMiddleware from './middleware/errorMiddleware.js';
 import { defineAssociations } from './models/defineAssociations.js';
-import reportRoutes from './routes/reportRoutes.js';
 
 // Scrapers
 // import { scrapeTripAdvisor } from './scrapers/tripAdvisorScraper.js';

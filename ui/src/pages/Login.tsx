@@ -24,6 +24,7 @@ const LoginPage: React.FC = () => {
     const [lastName, setLastName] = useState("");
     const [email, setEmail] = useState("");
     const [passwordsMatch, setPasswordsMatch] = useState(true); // Track if passwords match
+    const [loading, setLoading] = useState(false);
 
     // Password verification rules
     const rules = [
@@ -49,15 +50,23 @@ const LoginPage: React.FC = () => {
 
     const handleLogin = async (event: React.FormEvent) => {
         event.preventDefault();
-        // Assuming your loginUser action creator expects an object with email and password
-        await dispatch(loginUser({ email: user, password }));
+        setLoading(true); // Set loading to true when form is submitted
+        try {
+            await dispatch(loginUser({ email: user, password }));
+        } finally {
+            setLoading(false); // Set loading to false when login process is complete
+        }
     };
 
     const handleSignUp = async (event: React.FormEvent) => {
         event.preventDefault();
-        // Assuming your loginUser action creator expects an object with email and password
-        await dispatch(createUser({ email, password, username:user, firstName, lastName }));
-        handleToggleMode();
+        setLoading(true); // Set loading to true when form is submitted
+        try {
+            await dispatch(createUser({ email, password, username: user, firstName, lastName }));
+            handleToggleMode();
+        } finally {
+            setLoading(false); // Set loading to false when signup process is complete
+        }
     };
 
     const handlePasswordChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -154,7 +163,13 @@ const LoginPage: React.FC = () => {
                     {isSignup && !passwordsMatch && (
                         <div style={{ color: 'red', marginTop: 4 }}>Passwords do not match</div>
                     )}
-                    <Button fullWidth mt="xl" type="submit" disabled={(!passwordsMatch || !isPasswordValid(password)) && isSignup || password === "" || user === ""}> {/* Disable button if passwords don't match */}
+                    <Button
+                        fullWidth
+                        mt="xl"
+                        type="submit"
+                        disabled={loading || ((!passwordsMatch || !isPasswordValid(password)) && isSignup || password === "" || user === "")}
+                        loading={loading} // Show loading spinner when loading is true
+                    >
                         {isSignup ? 'Sign Up' : 'Login'}
                     </Button>
                 </form>
