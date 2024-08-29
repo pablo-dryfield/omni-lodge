@@ -49,6 +49,23 @@ export const createCounterProduct = createAsyncThunk(
   }
 );
 
+export const createBulkCounterProduct = createAsyncThunk(
+  'counterProducts/createBulkCounterProduct',
+  async (counterProductData: Partial<CounterProduct>[], { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.post<Partial<CounterProduct>>('/api/counterProducts/bulkCounterProducts', {data: counterProductData}, {
+        withCredentials: true
+      });
+      return response.data;
+    } catch (error) {
+      if (error instanceof Error) {
+        return rejectWithValue(error.message);
+      }
+      return rejectWithValue('An unknown error occurred');
+    }
+  }
+);
+
 /**
  * Creates a new counterProduct with the provided data.
  * @param counterProductProductData - The data for the new counterProduct to be created.

@@ -10,12 +10,14 @@ const initialState: NavigationState = {
       { name: 'Guests', path: '/guests', icon: <PersonIcon fontSize="large" /> },
       { name: 'Bookings', path: '/bookings', icon: <PersonIcon fontSize="large" /> },
       { name: 'Calendar', path: '/calendar', icon: <PersonIcon fontSize="large" /> },
-      { name: 'Channels', path: '/channels', icon: <PersonIcon fontSize="large" /> },*/
-      { name: 'User Types', path: '/userTypes', icon: <PersonIcon fontSize="large" />}, 
+      { name: 'Channels', path: '/channels', icon: <PersonIcon fontSize="large" /> },
+      { name: 'User Types', path: '/userTypes', icon: <PersonIcon fontSize="large" />},*/
       { name: 'Users', path: '/users', icon: <PersonIcon fontSize="large" />}, 
       { name: 'Product Types', path: '/productTypes', icon: <PersonIcon fontSize="large" /> }, 
       { name: 'Product', path: '/products', icon: <PersonIcon fontSize="large" />}, 
       { name: 'Counters', path: '/counters', icon: <PersonIcon fontSize="large" /> }, 
+      { name: 'Staff Payment', path: '/pays', icon: <PersonIcon fontSize="large" /> }, 
+      /*{ name: 'Venue Numbers', path: '/venueNumbers', icon: <PersonIcon fontSize="large" /> },*/
     ],
 };
 

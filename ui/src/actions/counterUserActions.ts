@@ -49,6 +49,23 @@ export const createCounterUser = createAsyncThunk(
   }
 );
 
+export const createBulkCounterUser = createAsyncThunk(
+  'counterUsers/createBulkCounterUser',
+  async (counterUserData: Partial<CounterUser>[], { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.post<Partial<CounterUser>>('/api/counterUsers/bulkCounterUsers', {data: counterUserData}, {
+        withCredentials: true
+      });
+      return response.data;
+    } catch (error) {
+      if (error instanceof Error) {
+        return rejectWithValue(error.message);
+      }
+      return rejectWithValue('An unknown error occurred');
+    }
+  }
+);
+
 /**
  * Updates a counterUser with the given ID using the provided data.
  * @param counterUserId - The ID of the counterUser to update.

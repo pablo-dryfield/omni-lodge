@@ -12,8 +12,8 @@ import CloseIcon from '@mui/icons-material/Close';
 import { DatePicker, DateValidationError, PickerChangeHandlerContext } from '@mui/x-date-pickers';
 import { Dayjs } from 'dayjs';
 import { fetchCounters, createCounter } from '../../actions/counterActions';
-import { fetchCounterProducts, createCounterProduct } from '../../actions/counterProductActions';
-import { fetchCounterUsers, createCounterUser } from '../../actions/counterUserActions';
+import { fetchCounterProducts, createBulkCounterProduct } from '../../actions/counterProductActions';
+import { fetchCounterUsers, createBulkCounterUser } from '../../actions/counterUserActions';
 import { Counter } from '../../types/counters/Counter';
 import { CounterProduct } from '../../types/counterProducts/CounterProduct';
 import { CounterUser } from '../../types/counterUsers/CounterUser';
@@ -87,7 +87,7 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
                 createdBy: loggedUserId,
             }));
 
-            await Promise.all(counterProductData.map((data) => dispatch(createCounterProduct(data))));
+            await dispatch(createBulkCounterProduct(counterProductData));
 
             // Step 3: Create Counter Users
             const counterUserData: Partial<CounterUser>[] = selectedUsers.map((user) => ({
@@ -96,7 +96,7 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
                 createdBy: loggedUserId,
             }));
 
-            await Promise.all(counterUserData.map((data) => dispatch(createCounterUser(data))));
+            await dispatch(createBulkCounterUser(counterUserData));
 
             dispatch(fetchCounters());
             dispatch(fetchCounterProducts());

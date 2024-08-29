@@ -57,11 +57,35 @@ export const getCounterUserById = async (req: Request, res: Response): Promise<v
   }
 };
 
-// Create New Counter Product
+// Create New Counter User
 export const createCounterUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const newCounterUser = await CounterUser.create(req.body);
     res.status(201).json([newCounterUser]);
+  } catch (error) {
+    const e = error as ErrorWithMessage;
+    res.status(500).json([{ message: e.message }]);
+  }
+};
+
+// Create New Counter User
+export const createBulkCounterUser = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const counterUsers = req.body.data;
+
+    if (!Array.isArray(counterUsers) || counterUsers.length === 0) {
+      res.status(400).json([{ message: 'Invalid data format or empty data array' }]);
+      return; // Ensure no further code is executed
+    }
+
+    // Using bulkCreate to create multiple records at once
+    const newCounterUsers = await CounterUser.bulkCreate(counterUsers, {
+      validate: true, // Ensures all records are validated
+      individualHooks: true, // Runs individual hooks (like beforeCreate) on each record
+    });
+
+    // Respond with the created records
+    res.status(201).json(newCounterUsers);
   } catch (error) {
     const e = error as ErrorWithMessage;
     res.status(500).json([{ message: e.message }]);

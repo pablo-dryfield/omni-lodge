@@ -10,6 +10,8 @@ import Counters from '../../pages/Counters';
 import Products from '../../pages/Products';
 import ProductTypes from '../../pages/ProductTypes';
 import UserTypes from '../../pages/UserTypes';
+import VenueNumbers from '../../pages/VenueNumbers';
+import Pays from '../../pages/Pays';
 
 const Routes = () => {
   return (
@@ -24,6 +26,8 @@ const Routes = () => {
       <Route path="/products" element={<Products title="Products" />} />
       <Route path="/productTypes" element={<ProductTypes title="Product Types" />} />
       <Route path="/userTypes" element={<UserTypes title="User Types" />} />
+      <Route path="/venueNumbers" element={<VenueNumbers title="Venue Numbers" />} />
+      <Route path="/pays" element={<Pays/>} />
     </ReactRoutes>
   );
 };

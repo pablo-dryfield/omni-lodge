@@ -29,6 +29,9 @@ router.get('/:id', authMiddleware, validateId, validate, counterUserController.g
 // Create a new counterUser
 router.post('/', authMiddleware, validate, counterUserController.createCounterUser);
 
+// Create a new bulkCounterUser
+router.post('/bulkCounterUsers', authMiddleware, counterUserController.createBulkCounterUser);
+
 // Update an existing counterUser by ID
 router.put('/:id', authMiddleware, [...validateId], validate, counterUserController.updateCounterUser);
 

@@ -29,6 +29,9 @@ router.get('/:id', authMiddleware, validateId, validate, counterProductControlle
 // Create a new counterProduct
 router.post('/', authMiddleware, validate, counterProductController.createCounterProduct);
 
+// Create a new bulkCounterProduct
+router.post('/bulkCounterProducts', authMiddleware, counterProductController.createBulkCounterProduct);
+
 // Update an existing counterProduct by ID
 router.put('/:id', authMiddleware, [...validateId], validate, counterProductController.updateCounterProduct);
 
