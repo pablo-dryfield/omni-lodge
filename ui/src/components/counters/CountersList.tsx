@@ -37,6 +37,12 @@ const CounterList = () => {
       createdBy: false,
       updatedBy: false
     },
+    sorting: [
+      {
+        id: 'date', 
+        desc: true,
+      }
+    ],
   }
 
   useEffect(() => {
