@@ -50,12 +50,12 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
 
         if (saving) return;
 
-        if (!counterDate || !selectedUsers.length ) {
+        if (!counterDate || !selectedUsers.length) {
             // Add logic to handle incomplete data
             return;
         }
 
-        setSaving(true); 
+        setSaving(true);
 
         try {
 
@@ -167,17 +167,35 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
                 return (
                     <Grid item xs={12} key={id}>
                         <Paper elevation={1} sx={{ p: 2 }}>
-                            <Typography variant="h6">{name}</Typography>
-                            <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                                <Typography>Quantity:</Typography>
-                                <IconButton size="small" onClick={() => handleDecrease(id, productTypeId || 0)}><RemoveIcon /></IconButton>
-                                <Typography>{quantity}</Typography>
-                                <IconButton size="small" onClick={() => handleIncrease(id, productTypeId || 0)}><AddIcon /></IconButton>
-                            </Box>
-                            <Typography>Price: {price?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</Typography>
-                            <Typography>Total: {total?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</Typography>
+                            <Grid container alignItems="center">
+                                <Grid item xs={8}>
+                                    <Typography variant="h6">{name}</Typography>
+                                    <Typography sx={{ mt: 1 }}>Price: {price?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</Typography>
+                                    <Typography>Total: {total?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</Typography>
+                                </Grid>
+                                <Grid item xs={4}>
+                                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                        <IconButton
+                                            size="large"
+                                            onClick={() => handleDecrease(id, productTypeId || 0)}
+                                            sx={{ fontSize: '40px' }}
+                                        >
+                                            <RemoveIcon fontSize="inherit" />
+                                        </IconButton>
+                                        <Typography variant="h4" sx={{ mx: 2 }}>{quantity}</Typography>
+                                        <IconButton
+                                            size="large"
+                                            onClick={() => handleIncrease(id, productTypeId || 0)}
+                                            sx={{ fontSize: '40px' }}
+                                        >
+                                            <AddIcon fontSize="inherit" />
+                                        </IconButton>
+                                    </Box>
+                                </Grid>
+                            </Grid>
                         </Paper>
                     </Grid>
+
                 );
             })}
         </Grid>

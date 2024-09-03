@@ -60,21 +60,21 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
 
     const [selectedUsers, setSelectedUsers] = useState<User[]>([]);
     const [initialSelectedUsers, setInitialSelectedUsers] = useState<User[]>([]); // Add this line
-    
+
     useEffect(() => {
         if (userData && userData.length > 0) {
             const userIDsInCounterUsers: number[] = counterUsers
                 .map((user) => user.userId)
                 .filter((id) => id !== undefined) as number[];
-    
+
             const usersInCounterUsers: Partial<User>[] = userData[0]?.data.filter((user) =>
                 userIDsInCounterUsers.includes(user.id || 0)
             );
-    
+
             const initialUsers = usersInCounterUsers
                 .filter((user) => user.id !== undefined)
                 .map((user) => user as User);
-    
+
             setSelectedUsers(initialUsers);
             setInitialSelectedUsers([...initialUsers]); // Create a clone of selectedUsers
         }
@@ -97,7 +97,7 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
     };
 
     const handleSave = async () => {
-        
+
         if (saving) return;
 
         if (!counterDate || !selectedUsers.length || !Object.keys(quantities).length) {
@@ -105,7 +105,7 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
             return;
         }
 
-        setSaving(true); 
+        setSaving(true);
 
         try {
             // Step 1: Update Counter
@@ -257,15 +257,32 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
                 return (
                     <Grid item xs={12} key={id}>
                         <Paper elevation={1} sx={{ p: 2 }}>
-                            <Typography variant="h6">{name}</Typography>
-                            <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                                <Typography>Quantity:</Typography>
-                                <IconButton size="small" onClick={() => handleDecrease(id, productTypeId || 0)}><RemoveIcon /></IconButton>
-                                <Typography>{quantity}</Typography>
-                                <IconButton size="small" onClick={() => handleIncrease(id, productTypeId || 0)}><AddIcon /></IconButton>
-                            </Box>
-                            <Typography>Price: {price?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</Typography>
-                            <Typography>Total: {total?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</Typography>
+                            <Grid container alignItems="center">
+                                <Grid item xs={8}>
+                                    <Typography variant="h6">{name}</Typography>
+                                    <Typography sx={{ mt: 1 }}>Price: {price?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</Typography>
+                                    <Typography>Total: {total?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</Typography>
+                                </Grid>
+                                <Grid item xs={4}>
+                                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                        <IconButton
+                                            size="large"
+                                            onClick={() => handleDecrease(id, productTypeId || 0)}
+                                            sx={{ fontSize: '40px' }}
+                                        >
+                                            <RemoveIcon fontSize="inherit" />
+                                        </IconButton>
+                                        <Typography variant="h4" sx={{ mx: 2 }}>{quantity}</Typography>
+                                        <IconButton
+                                            size="large"
+                                            onClick={() => handleIncrease(id, productTypeId || 0)}
+                                            sx={{ fontSize: '40px' }}
+                                        >
+                                            <AddIcon fontSize="inherit" />
+                                        </IconButton>
+                                    </Box>
+                                </Grid>
+                            </Grid>
                         </Paper>
                     </Grid>
                 );
