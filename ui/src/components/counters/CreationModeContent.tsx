@@ -208,6 +208,11 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
                     return acc + total;
                 }, 0)?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })
             }</Typography>
+            <Typography variant="h6">
+                Customers: {
+                    Object.values(quantities).reduce((sum, quantity) => sum + quantity, 0)
+                }
+            </Typography>
             <Button onClick={handleReset} variant="outlined" endIcon={<RefreshIcon />}>Reset</Button>
         </Box>
         <Box sx={{ mt: 2 }}>
