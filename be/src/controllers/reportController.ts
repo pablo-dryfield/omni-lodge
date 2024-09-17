@@ -5,6 +5,7 @@ import CounterProduct from '../models/CounterProduct.js';
 import CounterUser from '../models/CounterUser.js';
 import { Sequelize } from 'sequelize-typescript';
 import User from '../models/User.js';
+import dayjs from 'dayjs';
 
 export const getCommissionByDateRange = async (req: Request, res: Response): Promise<void> => {
     try {
@@ -15,6 +16,10 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             res.status(400).json([{ message: 'Start date and end date are required' }]);
             return;
         }
+
+        // Convert startDate to the beginning of the day and endDate to the end of the day
+        const start = dayjs(startDate as string).startOf('day').toDate();
+        const end = dayjs(endDate as string).endOf('day').toDate();
 
         // Find total quantity sold within the date range
         const commissionReport = await Counter.findAll({
@@ -32,7 +37,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             ],
             where: {
                 date: {
-                    [Op.between]: [startDate, endDate],
+                    [Op.between]: [start, end],
                 },
             },
             group: ['Counters.id'], // Corrected alias here
@@ -61,8 +66,8 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
                 },
             ],
             where: {
-                '$counter.date$': { // Access the 'date' field through the 'Counter' association
-                    [Op.between]: [startDate, endDate],
+                '$counter.date$': {
+                    [Op.between]: [start, end],
                 },
             }
         });
@@ -81,7 +86,6 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             const firstName = staff.dataValues.counterUser.dataValues.firstName;
             commissionDataByUser[userId] = { firstName, totalCommission: 0, totalBookings: 0 };
         });
-
 
         // Calculate commission per day and distribute it among staff members
         commissionReport.forEach((report) => {
