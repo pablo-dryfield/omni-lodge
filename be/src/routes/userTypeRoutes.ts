@@ -21,18 +21,18 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
 };
 
 // Get all userTypes
-router.get('/', authMiddleware, userTypeController.getAllUserTypes);
+router.get('/', /*authMiddleware*/ userTypeController.getAllUserTypes);
 
 // Get a single userType by ID
-router.get('/:id', authMiddleware, validateId, validate, userTypeController.getUserTypeById);
+router.get('/:id', /*authMiddleware*/ validateId, validate, userTypeController.getUserTypeById);
 
 // Create a new userType
-router.post('/', authMiddleware, validate, userTypeController.createUserType);
+router.post('/', /*authMiddleware*/ validate, userTypeController.createUserType);
 
 // Update an existing userType by ID
-router.put('/:id', authMiddleware, [...validateId], validate, userTypeController.updateUserType);
+router.put('/:id', /*authMiddleware*/ [...validateId], validate, userTypeController.updateUserType);
 
 // Delete a userType by ID
-router.delete('/:id', authMiddleware, validateId, validate, userTypeController.deleteUserType);
+router.delete('/:id', /*authMiddleware*/ validateId, validate, userTypeController.deleteUserType);
 
 export default router;
