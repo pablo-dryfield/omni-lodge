@@ -37,4 +37,8 @@ const sequelize = new Sequelize({
   models: [User, Booking, Channel, Guest, Review, Counter, CounterProduct, CounterUser, Product, ProductType, UserType],
 });
 
+sequelize.authenticate()
+  .then(() => console.log('Database connection successful'))
+  .catch(err => console.error('Database connection error:', err));
+
 export default sequelize;
