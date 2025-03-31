@@ -1,8 +1,10 @@
-import { PasswordInput } from "@mantine/core";
+import { Checkbox, PasswordInput } from "@mantine/core";
 import { ResponseModifications } from "../../types/general/ResponseModifications";
 import { User } from '../../types/users/User';
 import dayjs from 'dayjs';
 import { IconEyeCheck, IconEyeOff } from "@tabler/icons-react";
+import React from "react";
+import CustomEditSwitch from "../../utils/CustomEditSwitch";
 
 export const usersColumnDef: ResponseModifications<Partial<User>>[] = [
   {
@@ -126,6 +128,18 @@ export const usersColumnDef: ResponseModifications<Partial<User>>[] = [
       header: 'Updated By',
       Header: ({ column }) => <div>{column.columnDef.header}</div>,
       Edit: () => null,
+    }
+  },
+  {
+    accessorKey: 'status',
+    modifications: {
+      id: 'status',
+      header: 'Status',
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Cell: ({ cell }) => <Checkbox
+                            checked={Boolean(cell.getValue<boolean>())}
+                          />,
+      Edit: ({ cell, row, table }) => <CustomEditSwitch cell={cell} row={row} table={table} />
     }
   },
 ];
