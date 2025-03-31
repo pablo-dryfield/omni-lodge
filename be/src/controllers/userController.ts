@@ -90,7 +90,9 @@ export const logoutUser = async (req: Request, res: Response): Promise<void> => 
 // Get All Users
 export const getAllUsers = async (req: Request, res: Response): Promise<void> => {
   try {
-    const data = await User.findAll();
+    const data = await User.findAll({
+      where: { status: true },
+    });
     const attributes = User.getAttributes();
     const columns = Object.entries(attributes)
       .map(([key, attribute]) => {
