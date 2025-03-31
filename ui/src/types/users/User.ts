@@ -9,4 +9,5 @@ export type User = {
     updatedAt: Date;
     createdBy: number;
     updatedBy: number;
+    status: boolean;
 };
