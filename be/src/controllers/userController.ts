@@ -135,6 +135,7 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
 // Update User
 export const updateUser = async (req: Request, res: Response): Promise<void> => {
   try {
+    console.log('Request body:', req.body);
     const { id } = req.params;
     const data = { ...req.body };
 
