@@ -54,5 +54,10 @@ export default class User extends Model {
   @AllowNull(true)
   @Column(DataType.INTEGER)
   declare updatedBy: number;
+
+  @AllowNull(false)
+  @Default(true)
+  @Column(DataType.BOOLEAN)
+  declare status: boolean;
   
 }
