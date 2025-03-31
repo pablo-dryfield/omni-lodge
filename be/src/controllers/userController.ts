@@ -133,14 +133,15 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
 };
 
 // Update User
-export const updateUser = async (req: Request, res: Response): Promise<void> => {
+export const updateUser = async (req: Request, res: Response): Promise<void> => { 
   try {
-    console.log('Request body:', req.body);
     const { id } = req.params;
     const data = { ...req.body };
 
-    const salt = await bcrypt.genSalt(10);
-    data.password = await bcrypt.hash(data.password, salt);
+    if (data.password) {
+      const salt = await bcrypt.genSalt(10);
+      data.password = await bcrypt.hash(data.password, salt);
+    }
 
     const [updated] = await User.update(data, { where: { id } });
 
