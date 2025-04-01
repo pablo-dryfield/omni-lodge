@@ -42,7 +42,7 @@ export const fetchUsers = createAsyncThunk(
   'users/fetchUsers',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<User>>>('/api/users', {
+      const response = await axiosInstance.get<ServerResponse<Partial<User>>>('/api/users/active', {
         withCredentials: true
       });
       return response.data;
