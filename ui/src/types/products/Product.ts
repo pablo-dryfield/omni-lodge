@@ -7,4 +7,5 @@ export type Product = {
     updatedAt: Date;
     createdBy: number;
     updatedBy: number;
+    status: boolean;
 };

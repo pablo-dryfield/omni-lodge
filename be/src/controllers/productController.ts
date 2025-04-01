@@ -6,7 +6,9 @@ import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 // Get All Products
 export const getAllProducts = async (req: Request, res: Response): Promise<void> => {
   try {
-    const data = await Product.findAll();
+    const data = await Product.findAll({
+      where: { status: true },
+    });
     const attributes = Product.getAttributes();
     const columns = Object.entries(attributes)
       .map(([key, attribute]) => {
