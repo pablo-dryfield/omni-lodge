@@ -29,6 +29,10 @@ const CustomEditSwitch = <TData extends {}>({ cell, table, row }: CustomEditSwit
       checked={value}
       onChange={handleChange}
       onBlur={handleBlur}
+      onLabel="ON" 
+      offLabel="OFF"
+      label="Status"
+      labelPosition="left"
     />
   );
 };

@@ -1,4 +1,4 @@
-import { Checkbox, PasswordInput } from "@mantine/core";
+import { Checkbox, PasswordInput, Switch } from "@mantine/core";
 import { ResponseModifications } from "../../types/general/ResponseModifications";
 import { User } from '../../types/users/User';
 import dayjs from 'dayjs';
@@ -136,9 +136,11 @@ export const usersColumnDef: ResponseModifications<Partial<User>>[] = [
       id: 'status',
       header: 'Status',
       Header: ({ column }) => <div>{column.columnDef.header}</div>,
-      Cell: ({ cell }) => <Checkbox
+      Cell: ({ cell }) => <Switch
                             checked={Boolean(cell.getValue<boolean>())}
-                          />,
+                            onLabel="ON" 
+                            offLabel="OFF"
+                            />,
       Edit: ({ cell, row, table }) => <CustomEditSwitch cell={cell} row={row} table={table} />
     }
   },

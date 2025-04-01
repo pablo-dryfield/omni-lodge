@@ -1,6 +1,8 @@
+import { Switch } from "@mantine/core";
 import { ResponseModifications } from "../../types/general/ResponseModifications";
 import { Product } from "../../types/products/Product";
 import dayjs from 'dayjs';
+import CustomEditSwitch from "../../utils/CustomEditSwitch";
 
 export const productsColumnDef: ResponseModifications<Partial<Product>>[] = [
   {
@@ -88,6 +90,20 @@ export const productsColumnDef: ResponseModifications<Partial<Product>>[] = [
       header: 'Updated By',
       Header: ({ column }) => <div>{column.columnDef.header}</div>,
       Edit: () => null,
+    }
+  },
+  {
+    accessorKey: 'status',
+    modifications: {
+      id: 'status',
+      header: 'Status',
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Cell: ({ cell }) => <Switch
+                            checked={Boolean(cell.getValue<boolean>())}
+                            onLabel="ON" 
+                            offLabel="OFF"
+                            />,
+      Edit: ({ cell, row, table }) => <CustomEditSwitch cell={cell} row={row} table={table} />
     }
   },
 ];
