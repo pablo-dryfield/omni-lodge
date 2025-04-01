@@ -50,6 +50,8 @@ router.post('/logout', validate, userController.logoutUser);
 
 // Get all users
 router.get('/', authMiddleware, validate, userController.getAllUsers);
+// Get all users
+router.get('/active', authMiddleware, validate, userController.getAllActiveUsers);
 
 // Get a single user by ID
 router.get('/:id', authMiddleware, validateId, validate, userController.getUserById);

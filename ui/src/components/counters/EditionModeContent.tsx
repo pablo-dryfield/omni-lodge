@@ -129,7 +129,7 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
 
             const counterProductData: Partial<CounterProduct>[] = counterProducts.map((counterProduct) => {
                 const product: Partial<Product> = productData[0]?.data.filter(
-                    (product: Partial<Product>) => product.id === counterProduct.productId
+                    (product: Partial<Product>) => product.id || 0 === counterProduct.productId
                 )[0];
                 return {
                     id: counterProduct.id,
@@ -248,7 +248,7 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
         <Grid container spacing={2}>
             {counterProducts.map((counterProduct) => {
                 const product: Partial<Product> = productData[0]?.data.filter(
-                    (product: Partial<Product>) => product.id === counterProduct.productId
+                    (product: Partial<Product>) => product.id || 0 === counterProduct.productId
                 )[0];
                 const id = product.id || 0; // Ensure id is always a number
                 const { name, price, productTypeId } = product;

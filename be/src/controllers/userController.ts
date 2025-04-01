@@ -90,6 +90,26 @@ export const logoutUser = async (req: Request, res: Response): Promise<void> => 
 // Get All Users
 export const getAllUsers = async (req: Request, res: Response): Promise<void> => {
   try {
+    const data = await User.findAll();
+    const attributes = User.getAttributes();
+    const columns = Object.entries(attributes)
+      .map(([key, attribute]) => {
+        return {
+          header: key.charAt(0).toUpperCase() + key.slice(1),
+          accessorKey: key,
+          type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
+        };
+      });
+    res.status(200).json([{ data, columns }]);
+  } catch (error) {
+    const errorMessage = (error as ErrorWithMessage).message;
+    res.status(500).json([{ message: errorMessage }]);
+  }
+};
+
+// Get All Active Users
+export const getAllActiveUsers = async (req: Request, res: Response): Promise<void> => {
+  try {
     const data = await User.findAll({
       where: { status: true },
     });

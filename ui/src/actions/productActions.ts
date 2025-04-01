@@ -12,7 +12,7 @@ export const fetchProducts = createAsyncThunk(
   'products/fetchProducts',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<Product>>>('/api/products', {
+      const response = await axiosInstance.get<ServerResponse<Partial<Product>>>('/api/products/active', {
         withCredentials: true
       });
       return response.data;

@@ -23,6 +23,9 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
 // Get all products
 router.get('/', authMiddleware, productController.getAllProducts);
 
+// Get all active products
+router.get('/active', authMiddleware, productController.getAllActiveProducts);
+
 // Get a single product by ID
 router.get('/:id', authMiddleware, validateId, validate, productController.getProductById);
 

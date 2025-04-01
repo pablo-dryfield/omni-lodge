@@ -6,6 +6,25 @@ import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 // Get All Products
 export const getAllProducts = async (req: Request, res: Response): Promise<void> => {
   try {
+    const data = await Product.findAll();
+    const attributes = Product.getAttributes();
+    const columns = Object.entries(attributes)
+      .map(([key, attribute]) => {
+        return {
+          header: key.charAt(0).toUpperCase() + key.slice(1),
+          accessorKey: key,
+          type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
+        };
+      });
+    res.status(200).json([{ data, columns }]);
+  } catch (error) {
+    const errorMessage = (error as ErrorWithMessage).message;
+    res.status(500).json([{ message: errorMessage }]);
+  }
+};
+
+export const getAllActiveProducts = async (req: Request, res: Response): Promise<void> => {
+  try {
     const data = await Product.findAll({
       where: { status: true },
     });
