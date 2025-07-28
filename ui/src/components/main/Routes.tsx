@@ -12,6 +12,7 @@ import ProductTypes from '../../pages/ProductTypes';
 import UserTypes from '../../pages/UserTypes';
 import VenueNumbers from '../../pages/VenueNumbers';
 import Pays from '../../pages/Pays';
+import Reports from '../../pages/Reports';
 
 const Routes = () => {
   return (
@@ -28,6 +29,7 @@ const Routes = () => {
       <Route path="/userTypes" element={<UserTypes title="User Types" />} />
       <Route path="/venueNumbers" element={<VenueNumbers title="Venue Numbers" />} />
       <Route path="/pays" element={<Pays/>} />
+      <Route path="/reports" element={<Reports title={'Reports'}/>} />
     </ReactRoutes>
   );
 };

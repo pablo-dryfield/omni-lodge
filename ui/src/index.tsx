@@ -10,6 +10,7 @@ import '@mantine/core/styles.css'; //import Mantine V7 styles needed by MRT
 import '@mantine/dates/styles.css'; //if using mantine component features
 import 'mantine-react-table/styles.css'; //import MRT styles
 import { MantineProvider } from '@mantine/core';
+import type { MantineTheme } from '@mantine/core';
 import { LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 
@@ -20,6 +21,41 @@ root.render(
       fontFamily: 'Open Sans, sans-serif',
       fontFamilyMonospace: 'Fira Code, monospace',
       headings: { fontFamily: 'Roboto Slab, serif' },
+      components: {
+        NavLink: {
+          styles: (theme: MantineTheme, props: any) => ({
+            root: {
+              borderRadius: 8,
+              height: 36,
+              paddingLeft: 6,
+              alignItems: "center",
+              cursor: "pointer",
+              letterSpacing: 0.1,
+              transition: "background 0.14s, color 0.14s",
+              fontWeight: 900,
+              // Hover effect (pseudo-class is not possible inline, so use CSS variable below!)
+            },
+            label: {
+              color: props.active ? "#0a6ece" : "#23292f",
+              fontWeight: 900,
+            },
+          }),
+          vars: (theme: MantineTheme, props: any) => ({
+            root: {
+              "--nl-hover": props.active ? "#cce6ff" : "#e3e3e3",
+              "--nl-bg": props.active ? "#cce6ff" : "transparent",
+              "--nl-color": props.active ? "#0a6ece" : "#23292f",
+            },
+          }),
+        },
+        Drawer: {
+          vars: (theme: MantineTheme, props: any) => ({
+            root: {
+              "--drawer-height": "100%",
+            },
+          }),
+        },
+      },
     }}>
       <LocalizationProvider dateAdapter={AdapterDayjs}>
         <App />

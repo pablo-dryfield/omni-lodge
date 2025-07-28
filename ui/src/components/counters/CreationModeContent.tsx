@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { fetchProducts } from '../../actions/productActions';
-import { fetchUsers } from '../../actions/userActions';
+import { fetchActiveProducts } from '../../actions/productActions';
+import { fetchActiveUsers } from '../../actions/userActions';
 import { Product } from '../../types/products/Product';
 import { User } from '../../types/users/User';
 import { Button, Grid, Typography, Paper, Box, IconButton, MenuItem, Select } from '@mui/material';
@@ -18,6 +18,7 @@ import { Counter } from '../../types/counters/Counter';
 import { CounterProduct } from '../../types/counterProducts/CounterProduct';
 import { CounterUser } from '../../types/counterUsers/CounterUser';
 import { CounterProductModalProps } from '../../types/counterProducts/CounterProductModalProps';
+import CounterCard from './CounterCards';
 
 const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row }) => {
     const dispatch = useAppDispatch();
@@ -32,8 +33,8 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
-        dispatch(fetchProducts());
-        dispatch(fetchUsers());
+        dispatch(fetchActiveProducts());
+        dispatch(fetchActiveUsers());
     }, [dispatch]);
 
     useEffect(() => {
@@ -114,14 +115,14 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
     const handleDecrease = (productId: number, productTypeId: number) => {
         setQuantities((prevQuantities) => ({
             ...prevQuantities,
-            [productId]: Math.max((prevQuantities[productId] || 0) - (productTypeId === 2 ? -1 : 1), 0),
+            [productId]: Math.max((prevQuantities[productId] || 0) - 1, 0),
         }));
     };
 
     const handleIncrease = (productId: number, productTypeId: number) => {
         setQuantities((prevQuantities) => ({
             ...prevQuantities,
-            [productId]: (prevQuantities[productId] || 0) + (productTypeId === 2 ? -1 : 1),
+            [productId]: (prevQuantities[productId] || 0) + 1,
         }));
     };
 
@@ -165,37 +166,20 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
                 const total = price ? price * quantity : 0;
 
                 return (
-                    <Grid item xs={12} key={id}>
-                        <Paper elevation={1} sx={{ p: 2 }}>
-                            <Grid container alignItems="center">
-                                <Grid item xs={8}>
-                                    <Typography variant="h6">{name}</Typography>
-                                    <Typography sx={{ mt: 1 }}>Price: {price?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</Typography>
-                                    <Typography>Total: {total?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</Typography>
-                                </Grid>
-                                <Grid item xs={4}>
-                                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                        <IconButton
-                                            size="large"
-                                            onClick={() => handleDecrease(id, productTypeId || 0)}
-                                            sx={{ fontSize: '40px' }}
-                                        >
-                                            <RemoveIcon fontSize="inherit" />
-                                        </IconButton>
-                                        <Typography variant="h4" sx={{ mx: 2 }}>{quantity}</Typography>
-                                        <IconButton
-                                            size="large"
-                                            onClick={() => handleIncrease(id, productTypeId || 0)}
-                                            sx={{ fontSize: '40px' }}
-                                        >
-                                            <AddIcon fontSize="inherit" />
-                                        </IconButton>
-                                    </Box>
-                                </Grid>
-                            </Grid>
-                        </Paper>
+                    <Grid item xs={12} sm={6} md={4} key={id}>
+                        <CounterCard
+                        productId={id}
+                        productTypeId={productTypeId}
+                        name={name}
+                        normalCount={0}
+                        cocktailCount={0}
+                        quantity={quantities[id] || 0}
+                        price={price}
+                        total={total}
+                        onIncrease={(pid) => handleIncrease(pid, product.productTypeId || 0)}
+                        onDecrease={(pid) => handleDecrease(pid, product.productTypeId || 0)}
+                        />
                     </Grid>
-
                 );
             })}
         </Grid>

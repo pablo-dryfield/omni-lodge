@@ -20,6 +20,6 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
   next();
 };
 
-router.get('/getCommissionByDateRange', /*authMiddleware,*/ reportController.getCommissionByDateRange);
+router.get('/getCommissionByDateRange', authMiddleware, reportController.getCommissionByDateRange);
 
 export default router;

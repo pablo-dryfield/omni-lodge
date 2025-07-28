@@ -5,7 +5,7 @@ import RemoveIcon from '@mui/icons-material/Remove';
 
 interface CounterCardProps {
   productId: number;
-  productTypeId: number | undefined;
+  productTypeId: number;
   name: string | undefined;
   normalCount: number;
   cocktailCount: number;
@@ -67,10 +67,10 @@ const CounterCard: React.FC<CounterCardProps> = ({
               <Box sx={{ display: 'flex', flexDirection: 'row', alignItems: 'center' }}>
                 <Typography variant="h5" sx={{ mx: 1, fontWeight: 'bold' }}>{quantity}</Typography>
                 <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-                  <IconButton size="small" onClick={() => onIncrease(productId, productTypeId || 0)} sx={{ border: '1px solid #ccc' }}>
+                  <IconButton size="small" onClick={() => onIncrease(productId, productTypeId)} sx={{ border: '1px solid #ccc' }}>
                     <AddIcon />
                   </IconButton>
-                  <IconButton size="small" onClick={() => onDecrease(productId, productTypeId || 0)} sx={{ border: '1px solid #ccc', mt: 0.5 }}>
+                  <IconButton size="small" onClick={() => onDecrease(productId, productTypeId)} sx={{ border: '1px solid #ccc', mt: 0.5 }}>
                     <RemoveIcon />
                   </IconButton>
                 </Box>
