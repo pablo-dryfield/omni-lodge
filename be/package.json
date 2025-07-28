@@ -34,6 +34,7 @@
     "@types/jsonwebtoken": "^9.0.5",
     "@types/node": "^20.11.6",
     "@types/sequelize": "^4.28.20",
+    "axios": "^1.11.0",
     "bcryptjs": "^2.4.3",
     "cls-hooked": "^4.2.2",
     "cookie-parser": "^1.4.6",

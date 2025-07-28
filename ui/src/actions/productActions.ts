@@ -12,6 +12,29 @@ export const fetchProducts = createAsyncThunk(
   'products/fetchProducts',
   async (_, { rejectWithValue }) => {
     try {
+      const response = await axiosInstance.get<ServerResponse<Partial<Product>>>('/api/products', {
+        withCredentials: true
+      });
+      return response.data;
+    } catch (error) {
+      if (error instanceof Error) {
+        return rejectWithValue(error.message);
+      }
+      return rejectWithValue('An unknown error occurred');
+    }
+  }
+);
+
+
+/**
+ * Fetches a list of active products from the server.
+ * @returns A promise that resolves to the list of products or an error message string.
+ * @throws Will throw an error if the server response is not as expected or if there is a network issue.
+ */
+export const fetchActiveProducts = createAsyncThunk(
+  'products/fetchProducts',
+  async (_, { rejectWithValue }) => {
+    try {
       const response = await axiosInstance.get<ServerResponse<Partial<Product>>>('/api/products/active', {
         withCredentials: true
       });

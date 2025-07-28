@@ -129,7 +129,7 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
 
             const counterProductData: Partial<CounterProduct>[] = counterProducts.map((counterProduct) => {
                 const product: Partial<Product> = productData[0]?.data.filter(
-                    (product: Partial<Product>) => product.id || 0 === counterProduct.productId
+                    (product: Partial<Product>) => product.id === counterProduct.productId
                 )[0];
                 return {
                     id: counterProduct.id,
@@ -202,14 +202,14 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
     const handleDecrease = (productId: number, productTypeId: number) => {
         setQuantities((prevQuantities) => ({
             ...prevQuantities,
-            [productId]: Math.max((prevQuantities[productId] || 0) - (productTypeId === 2 ? -1 : 1), 0),
+            [productId]: Math.max((prevQuantities[productId] || 0) - 1, 0),
         }));
     };
 
     const handleIncrease = (productId: number, productTypeId: number) => {
         setQuantities((prevQuantities) => ({
             ...prevQuantities,
-            [productId]: (prevQuantities[productId] || 0) + (productTypeId === 2 ? -1 : 1),
+            [productId]: (prevQuantities[productId] || 0) + 1,
         }));
     };
 
@@ -248,8 +248,9 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
         <Grid container spacing={2}>
             {counterProducts.map((counterProduct) => {
                 const product: Partial<Product> = productData[0]?.data.filter(
-                    (product: Partial<Product>) => product.id || 0 === counterProduct.productId
+                    (product: Partial<Product>) => product.id === counterProduct.productId
                 )[0];
+                console.log(product);
                 const id = product.id || 0; // Ensure id is always a number
                 const { name, price, productTypeId } = product;
                 const quantity = quantities[id] || 0;
@@ -259,7 +260,7 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
                     <Grid item xs={12} sm={6} md={4} key={id}>
                         <CounterCard
                         productId={id}
-                        productTypeId={productTypeId}
+                        productTypeId={productTypeId || 0}
                         name={name}
                         normalCount={0}
                         cocktailCount={0}

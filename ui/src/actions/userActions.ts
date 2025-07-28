@@ -42,6 +42,24 @@ export const fetchUsers = createAsyncThunk(
   'users/fetchUsers',
   async (_, { rejectWithValue }) => {
     try {
+      const response = await axiosInstance.get<ServerResponse<Partial<User>>>('/api/users', {
+        withCredentials: true
+      });
+      return response.data;
+    } catch (error) {
+      if (error instanceof Error) {
+        return rejectWithValue(error.message);
+      }
+      return rejectWithValue('An unknown error occurred');
+    }
+  }
+);
+
+// Async thunk for fetching active users
+export const fetchActiveUsers = createAsyncThunk(
+  'users/fetchUsers',
+  async (_, { rejectWithValue }) => {
+    try {
       const response = await axiosInstance.get<ServerResponse<Partial<User>>>('/api/users/active', {
         withCredentials: true
       });

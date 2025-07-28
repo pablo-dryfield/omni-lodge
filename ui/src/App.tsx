@@ -1,53 +1,60 @@
-import { BrowserRouter } from 'react-router-dom';
-import NavBar from './components/main/NavBar';
-//import LeftSidebar from './components/main/LeftSidebar/LeftSidebar';
-import Routes from './components/main/Routes';
-import Login from './pages/Login';
-import { useAppDispatch, useAppSelector } from './store/hooks';
-import { useEffect } from 'react';
-import { fetchSession } from './actions/sessionActions';
-import { Center, Loader } from '@mantine/core';
-import { AppContainer } from './styles/main/AppContainer';
-import { NavBarStyled } from './styles/main/NavBarStyled';
-import { MainContent } from './styles/main/MainContent';
-
-// const LeftSidebarStyled = styled('div')({
-//   gridColumn: '1', // Sidebar is in the first column
-//   gridRow: '2', // Sidebar is in the second row
-//   maxHeight: 'calc(100vh - 7vh)',
-// });
+import React, { useEffect } from "react";
+import { BrowserRouter } from "react-router-dom";
+import { AppShell, Center, Loader } from "@mantine/core";
+import MainTabs from "./components/main/MainTabs";
+import Routes from "./components/main/Routes"; // your route switch
+import Login from "./pages/Login";
+import { useAppDispatch, useAppSelector } from "./store/hooks";
+import { fetchSession } from "./actions/sessionActions";
+import { getNavbarSettings } from "./utils/getNavbarSettings";
+import { NavBarRouter } from "./components/main/NavBarRouter";
 
 const App = () => {
   const { authenticated, checkingSession } = useAppSelector((state) => state.session);
+  const { currentPage } = useAppSelector((state) => state.navigation);
   const dispatch = useAppDispatch();
+
   useEffect(() => {
     if (!authenticated) {
       dispatch(fetchSession());
     }
-  }, [dispatch, authenticated]);
+  }, [dispatch, authenticated, currentPage]);
 
   if (checkingSession) {
     return (
-      <Center style={{ height: '100vh' }}>
-        <Loader variant="dots" /> 
+      <Center style={{ height: "100vh" }}>
+        <Loader variant="dots" />
       </Center>
-    ); 
+    );
   }
 
   return (
     <BrowserRouter>
-      {authenticated ? (
-        <AppContainer>
-          <NavBarStyled>
-            <NavBar />
-          </NavBarStyled>
-          {/* <LeftSidebarStyled>
-            <LeftSidebar />
-          </LeftSidebarStyled> */}
-          <MainContent>
-            <Routes />
-          </MainContent>
-        </AppContainer>
+      {authenticated ? ( 
+      <AppShell
+        header={{ height: 40 }}
+        navbar={getNavbarSettings(currentPage)}
+        padding="md"
+        styles={{
+          main: {
+            backgroundColor: "#f4f4f7",
+            minHeight: "100vh",
+          },
+        }}
+      >
+        <AppShell.Header>
+          <MainTabs />
+        </AppShell.Header>
+        <AppShell.Navbar style={{
+          boxShadow: "2px 0 35px -2px rgba(60, 60, 60, 0.07)",
+          zIndex: 12,
+        }}>
+          <NavBarRouter currentPage={currentPage} />
+        </AppShell.Navbar>
+        <AppShell.Main>
+          <Routes />
+        </AppShell.Main>
+      </AppShell>
       ) : (
         <Login />
       )}

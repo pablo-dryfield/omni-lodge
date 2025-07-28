@@ -17,6 +17,7 @@ const initialState: NavigationState = {
       { name: 'Product', path: '/products', icon: <PersonIcon fontSize="large" />}, 
       { name: 'Counters', path: '/counters', icon: <PersonIcon fontSize="large" /> }, 
       { name: 'Staff Payment', path: '/pays', icon: <PersonIcon fontSize="large" /> }, 
+      { name: 'Reports', path: '/reports', icon: <PersonIcon fontSize="large" /> }, 
       /*{ name: 'Venue Numbers', path: '/venueNumbers', icon: <PersonIcon fontSize="large" /> },*/
     ],
 };
