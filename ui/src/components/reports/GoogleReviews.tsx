@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import {
   Card,
   Avatar,
@@ -8,7 +8,6 @@ import {
   TableTh,
   TableTd,
   TableTbody,
-  ScrollArea,
   Badge,
   Text,
   Group,
@@ -17,25 +16,69 @@ import {
 import { IconStarFilled } from "@tabler/icons-react";
 import { fetchGoogleReviews } from "../../actions/reviewsActions";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
-import { Review } from "../../types/general/Reviews";
 
 const ratingColor = {
   ONE: "red",
-  TWO: "orange",
-  THREE: "yellow",
-  FOUR: "lime",
+  TWO: "red",
+  THREE: "red",
+  FOUR: "blue",
   FIVE: "green",
 };
 
-const GoogleReviews: React.FC<any> = () => {
-
+const GoogleReviews: React.FC = () => {
   const dispatch = useAppDispatch();
   const reviewsState = useAppSelector((state) => state.reviews);
   const reviews = reviewsState[0]?.data?.[0]?.data ?? [];
+  const nextPageToken = reviewsState[0]?.data?.[0]?.columns[0] ?? '';
+  const loaderRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    dispatch(fetchGoogleReviews())
+    dispatch(fetchGoogleReviews({}));
   }, [dispatch]);
+
+  useEffect(() => {
+  const currentRef = loaderRef.current;
+
+  const observer = new IntersectionObserver(
+    (entries) => {
+      const first = entries[0];
+      if (first.isIntersecting && nextPageToken) {
+        dispatch(fetchGoogleReviews({ nextPageToken }));
+      }
+    },
+    { threshold: 1.0 }
+  );
+
+  if (currentRef) {
+    observer.observe(currentRef);
+  }
+
+  return () => {
+    if (currentRef) {
+      observer.unobserve(currentRef);
+    }
+  };
+}, [dispatch, nextPageToken]);
+
+
+  const formatDate = (dateStr?: string) =>
+    dateStr
+      ? new Date(dateStr).toLocaleDateString("en-GB", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        })
+      : "";
+
+  const isSuspicious = (createTime?: string, updateTime?: string) => {
+    if (!createTime || !updateTime) return false;
+    const created = new Date(createTime);
+    const updated = new Date(updateTime);
+    return created.getMonth() !== updated.getMonth() || created.getFullYear() !== updated.getFullYear();
+  };
 
   return (
     <Card shadow="sm" padding="lg" radius="md" withBorder>
@@ -43,14 +86,16 @@ const GoogleReviews: React.FC<any> = () => {
         Google Reviews
       </Text>
 
-      <ScrollArea h={600} type="auto">
+      <Box style={{ height: 600, overflowY: "auto" }}>
         <Table striped highlightOnHover withColumnBorders>
           <TableThead>
             <TableTr>
               <TableTh>User</TableTh>
               <TableTh>Rating</TableTh>
               <TableTh>Comment</TableTh>
-              <TableTh>Date</TableTh>
+              <TableTh>Creation Date</TableTh>
+              <TableTh>Update Date</TableTh>
+              <TableTh>Status</TableTh>
             </TableTr>
           </TableThead>
           <TableTbody>
@@ -66,7 +111,6 @@ const GoogleReviews: React.FC<any> = () => {
                   <Badge
                     color={ratingColor[review.starRating as keyof typeof ratingColor] || "gray"}
                     leftSection={<IconStarFilled size={14} />}
-                    variant="light"
                   >
                     {review.starRating
                       ? review.starRating.charAt(0) + review.starRating.slice(1).toLowerCase()
@@ -80,22 +124,31 @@ const GoogleReviews: React.FC<any> = () => {
                 </TableTd>
                 <TableTd>
                   <Text size="xs" c="gray">
-                    {review.createTime &&
-                      new Date(review.createTime).toLocaleDateString("en-GB", {
-                        year: "numeric",
-                        month: "short",
-                        day: "numeric",
-                        hour: '2-digit', 
-                        minute:'2-digit',
-                        second: '2-digit'
-                      })}
+                    {formatDate(review.createTime)}
                   </Text>
+                </TableTd>
+                <TableTd>
+                  <Text size="xs" c="gray">
+                    {formatDate(review.updateTime)}
+                  </Text>
+                </TableTd>
+                <TableTd>
+                  {isSuspicious(review.createTime, review.updateTime) ? (
+                    <Badge color="red" >
+                      Suspicious
+                    </Badge>
+                  ) : (
+                    <Badge color="green">
+                      Not Suspicious
+                    </Badge>
+                  )}
                 </TableTd>
               </TableTr>
             ))}
           </TableTbody>
         </Table>
-      </ScrollArea>
+        <div ref={loaderRef} style={{ height: 1 }} />
+      </Box>
     </Card>
   );
 };

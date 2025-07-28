@@ -28,7 +28,9 @@ const reviewsSlice = createSlice({
       })
       .addCase(fetchGoogleReviews.fulfilled, (state, action: PayloadAction<ServerResponse<Partial<Review>>>) => {
         state[0].loading = false;
-        state[0].data = action.payload;
+        const newReviews = action.payload[0].data;
+        state[0].data[0].data.push(...newReviews);
+        state[0].data[0].columns[0] = action.payload[0].columns[0] ?? '';
         state[0].error = null;
       })
       .addCase(fetchGoogleReviews.rejected, (state, action) => {
