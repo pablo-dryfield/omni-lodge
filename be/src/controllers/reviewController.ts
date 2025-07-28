@@ -32,6 +32,7 @@ export const getAllGoogleReviews = async (req: Request, res: Response) => {
     const accessToken = tokenResponse.data.access_token;
     // Step 2: Fetch reviews
     const reviewsResponse = await axios.get(
+      `https://mybusiness.googleapis.com/v4/accounts/${ACCOUNT_ID}/locations/${LOCATION_ID}/reviews${req.query.pageToken ? `?pageToken=${req.query.pageToken}` : ''}`,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
