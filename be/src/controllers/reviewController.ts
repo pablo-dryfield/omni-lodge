@@ -4,6 +4,15 @@ import Review from '../models/Review.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { scrapeTripAdvisor } from '../scrapers/tripAdvisorScraper.js';
 import axios from 'axios';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const {
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  GOOGLE_REFRESH_TOKEN
+} = process.env;
 
 const ACCOUNT_ID = '113350814099227260053';
 const LOCATION_ID = '13077434667897843628';
@@ -13,9 +22,9 @@ export const getAllGoogleReviews = async (req: Request, res: Response) => {
     // Step 1: Get fresh access token
     const tokenResponse = await axios.post('https://oauth2.googleapis.com/token', null, {
       params: {
-        client_id: '306087693282-lfhmu5656j47v3a9d432asr851bibk5m.apps.googleusercontent.com',
-        client_secret: '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',
-        refresh_token: '1//04SBYXI7JG00bCgYIARAAGAQSNwF-L9IrzOBCKEujNHynHKaS7nOyZyh4_7j3ftIG2auTxa4tf5Oj4HWXFM2Lq-f7VbF8jKnWwzc',
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        refresh_token: GOOGLE_REFRESH_TOKEN,
         grant_type: 'refresh_token',
       },
     });
