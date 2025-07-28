@@ -5,17 +5,14 @@ import { Review } from "../types/general/Reviews";
 
 export const fetchGoogleReviews = createAsyncThunk(
   'googleReviews/fetchGoogleReviews',
-  async (_, { rejectWithValue }) => {
+  async ({ nextPageToken }: { nextPageToken?: string } = {}, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<Review>>>('/api/reviews/googleReviews', {
-        withCredentials: true
+      const response = await axiosInstance.get<ServerResponse<Partial<Review>>>(`/api/reviews/googleReviews${nextPageToken ? `?pageToken=${nextPageToken}` : ''}`, {
+        withCredentials: true,
       });
       return response.data;
     } catch (error) {
-      if (error instanceof Error) {
-        return rejectWithValue(error.message);
-      }
-      return rejectWithValue('An unknown error occurred');
+      return rejectWithValue(error instanceof Error ? error.message : 'Unknown error');
     }
   }
 );

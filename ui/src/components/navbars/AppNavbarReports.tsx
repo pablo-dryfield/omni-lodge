@@ -33,7 +33,7 @@ export function AppNavbarReports() {
   
   const dispatch = useAppDispatch();
     useEffect(() => {
-      dispatch(setActiveKey("Overview"));
+      dispatch(setActiveKey("GoogleReviews"));
     }, [dispatch]);
 
   // All sidebar options (one can have drawerSections)
