@@ -2,10 +2,10 @@ import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, Da
 
 @Table({
   timestamps: true,
-  modelName: 'UserTypes',
-  tableName: 'userTypes'
+  modelName: 'Action',
+  tableName: 'actions'
 })
-export default class UserType extends Model {
+export default class Action extends Model {
   @PrimaryKey
   @AutoIncrement
   @Column(DataType.INTEGER)
@@ -14,7 +14,7 @@ export default class UserType extends Model {
   @Unique
   @AllowNull(false)
   @Column(DataType.STRING)
-  declare slug: string;
+  declare key: string;
 
   @AllowNull(false)
   @Column(DataType.STRING)
@@ -25,9 +25,9 @@ export default class UserType extends Model {
   declare description: string | null;
 
   @AllowNull(false)
-  @Default(false)
+  @Default(true)
   @Column(DataType.BOOLEAN)
-  declare isDefault: boolean;
+  declare isAssignable: boolean;
 
   @AllowNull(false)
   @Default(true)
