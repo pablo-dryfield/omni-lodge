@@ -1,38 +1,46 @@
-import { Sequelize } from 'sequelize-typescript';
-import dotenv from 'dotenv';
-import User from '../models/User.js';
-import Booking from '../models/Booking.js';
-import Channel from '../models/Channel.js';
-import Guest from '../models/Guest.js';
-import Review from '../models/Review.js';
-import Counter from '../models/Counter.js';
-import CounterProduct from '../models/CounterProduct.js';
-import CounterUser from '../models/CounterUser.js';
-import Product from '../models/Product.js';
-import ProductType from '../models/ProductType.js';
-import UserType from '../models/UserType.js';
-import Page from '../models/Page.js';
-import Module from '../models/Module.js';
-import Action from '../models/Action.js';
-import ModuleAction from '../models/ModuleAction.js';
-import RolePagePermission from '../models/RolePagePermission.js';
-import RoleModulePermission from '../models/RoleModulePermission.js';
+import { Sequelize } from "sequelize-typescript";
+import dotenv from "dotenv";
+import User from "../models/User.js";
+import Booking from "../models/Booking.js";
+import Channel from "../models/Channel.js";
+import Guest from "../models/Guest.js";
+import Review from "../models/Review.js";
+import Counter from "../models/Counter.js";
+import CounterProduct from "../models/CounterProduct.js";
+import CounterUser from "../models/CounterUser.js";
+import Product from "../models/Product.js";
+import ProductType from "../models/ProductType.js";
+import UserType from "../models/UserType.js";
+import Page from "../models/Page.js";
+import Module from "../models/Module.js";
+import Action from "../models/Action.js";
+import ModuleAction from "../models/ModuleAction.js";
+import RolePagePermission from "../models/RolePagePermission.js";
+import RoleModulePermission from "../models/RoleModulePermission.js";
 
-// Load environment variables
-const environment = process.env.NODE_ENV || 'development';
-const envFile = (environment.trim() === 'production' ? '.env.prod' : '.env.dev');
-dotenv.config({ path: envFile });
+const environment = (process.env.NODE_ENV || "development").trim();
+const envFile = environment === "production" ? ".env.prod" : ".env.dev";
+const configResult = dotenv.config({ path: envFile });
+
+if (configResult.error) {
+  console.warn(`dotenv: failed to load ${envFile}. Falling back to existing process.env values.`);
+} else {
+  console.log(`dotenv: loaded ${envFile} for NODE_ENV=${environment}`);
+}
 
 const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD } = process.env;
 
-// Create an instance of Sequelize for `sequelize-typescript`
+if (!DB_HOST || !DB_PORT || !DB_NAME || !DB_USER) {
+  console.warn("Database configuration is incomplete. Check DB_HOST, DB_PORT, DB_NAME, DB_USER environment variables.");
+}
+
 const sequelize = new Sequelize({
   database: DB_NAME,
-  dialect: 'postgres',
+  dialect: "postgres",
   username: DB_USER,
   password: DB_PASSWORD,
   host: DB_HOST,
-  port: parseInt(DB_PORT || '5432', 10),
+  port: parseInt(DB_PORT || "5432", 10),
   logging: false,
   dialectOptions: {
     ssl: false,
@@ -59,8 +67,7 @@ const sequelize = new Sequelize({
 });
 
 sequelize.authenticate()
-  .then(() => console.log('Database connection successful'))
-  .catch(err => console.error('Database connection error:', err));
+  .then(() => console.log("Database connection successful"))
+  .catch(err => console.error("Database connection error:", err));
 
 export default sequelize;
-
