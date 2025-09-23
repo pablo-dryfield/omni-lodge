@@ -1,15 +1,22 @@
-import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, DataType, Unique } from 'sequelize-typescript';
+import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, DataType, Unique, ForeignKey } from 'sequelize-typescript';
+import Page from './Page.js';
+import User from './User.js';
 
 @Table({
   timestamps: true,
-  modelName: 'UserTypes',
-  tableName: 'userTypes'
+  modelName: 'Module',
+  tableName: 'modules'
 })
-export default class UserType extends Model {
+export default class Module extends Model {
   @PrimaryKey
   @AutoIncrement
   @Column(DataType.INTEGER)
   declare id: number;
+
+  @ForeignKey(() => Page)
+  @AllowNull(false)
+  @Column(DataType.INTEGER)
+  declare pageId: number;
 
   @Unique
   @AllowNull(false)
@@ -24,10 +31,14 @@ export default class UserType extends Model {
   @Column(DataType.STRING)
   declare description: string | null;
 
+  @AllowNull(true)
+  @Column(DataType.STRING)
+  declare componentRef: string | null;
+
   @AllowNull(false)
-  @Default(false)
-  @Column(DataType.BOOLEAN)
-  declare isDefault: boolean;
+  @Default(0)
+  @Column(DataType.INTEGER)
+  declare sortOrder: number;
 
   @AllowNull(false)
   @Default(true)
@@ -44,10 +55,12 @@ export default class UserType extends Model {
   @Column(DataType.DATE)
   declare updatedAt: Date;
 
+  @ForeignKey(() => User)
   @AllowNull(true)
   @Column(DataType.INTEGER)
   declare createdBy: number | null;
 
+  @ForeignKey(() => User)
   @AllowNull(true)
   @Column(DataType.INTEGER)
   declare updatedBy: number | null;

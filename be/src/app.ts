@@ -26,6 +26,12 @@ import productRoutes from './routes/productRoutes.js';
 import productTypeRoutes from './routes/productTypeRoutes.js';
 import userTypeRoutes from './routes/userTypeRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
+import pageRoutes from './routes/pageRoutes.js';
+import moduleRoutes from './routes/moduleRoutes.js';
+import actionRoutes from './routes/actionRoutes.js';
+import moduleActionRoutes from './routes/moduleActionRoutes.js';
+import rolePagePermissionRoutes from './routes/rolePagePermissionRoutes.js';
+import roleModulePermissionRoutes from './routes/roleModulePermissionRoutes.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -33,6 +39,7 @@ import logger from './utils/logger.js';
 import instrumentMiddleware from './middleware/instrumentMiddleware.js';
 import errorMiddleware from './middleware/errorMiddleware.js';
 import { defineAssociations } from './models/defineAssociations.js';
+import { initializeAccessControl } from './utils/initializeAccessControl.js';
 
 // Scrapers
 // import { scrapeTripAdvisor } from './scrapers/tripAdvisorScraper.js';
@@ -48,11 +55,13 @@ const environment = (process.env.NODE_ENV || 'development').trim();
 const envFile = environment === 'production' ? '.env.prod' : '.env.dev';
 dotenv.config({ path: envFile });
 
+const shouldAlterSchema = (process.env.DB_SYNC_ALTER ?? 'true').toLowerCase() !== 'false';
+
 // API Requests limiter
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 1000,
-  message: "Too many requests from this IP, please try again after 15 minutes"
+  message: 'Too many requests from this IP, please try again after 15 minutes'
 });
 
 // Initialize Express
@@ -74,12 +83,11 @@ app.use(cors({
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type'],
-  credentials: true // enable CORS credentials
+  credentials: true
 }));
 
 app.use(express.json());
 
-// Use helmet middleware to set various security headers, including CSP
 app.use(helmet.contentSecurityPolicy({
   directives: {
     defaultSrc: ["'self'"],
@@ -88,13 +96,10 @@ app.use(helmet.contentSecurityPolicy({
   },
 }));
 
-// Instrumentation 
 app.use(instrumentMiddleware);
 
-// Apply the rate limit middleware to all routes
-app.use("/api/", apiLimiter);
+app.use('/api/', apiLimiter);
 
-// Routes
 app.use('/api/guests', guestRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/channels', channelRoutes);
@@ -108,30 +113,39 @@ app.use('/api/products', productRoutes);
 app.use('/api/productTypes', productTypeRoutes);
 app.use('/api/userTypes', userTypeRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/pages', pageRoutes);
+app.use('/api/modules', moduleRoutes);
+app.use('/api/actions', actionRoutes);
+app.use('/api/moduleActions', moduleActionRoutes);
+app.use('/api/rolePagePermissions', rolePagePermissionRoutes);
+app.use('/api/roleModulePermissions', roleModulePermissionRoutes);
 
-// Error Handling
 app.use(errorMiddleware);
 
-// Sample Endpoint
 app.get('/', (req: Request, res: Response) => {
   res.send('OmniLodge Backend API');
 });
 
-// Sync database and then start server
 const PORT: number = parseInt(process.env.PORT || '3001');
 
-sequelize.sync({ force: false }) // Set to 'true' carefully, it will drop the database
-  .then(() => {
+logger.info(`Synchronizing database schema (alter=${shouldAlterSchema})`);
+
+sequelize.sync({ force: false, alter: shouldAlterSchema })
+  .then(async () => {
     defineAssociations();
+
+    try {
+      await initializeAccessControl();
+    } catch (seedError) {
+      logger.error('Failed to initialize access control data', seedError);
+    }
     if(process.env.NODE_ENV === 'production'){
-      // Define the directory path where the SSL certificate files are located
       const sslDir = path.join(__dirname, '../src/ssl');
 
-      // Read SSL certificate and private key files
       const options = {
-        key: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.key')), // Read the private key file
-        cert: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.cer')), // Read the SSL certificate file
-        ca: fs.readFileSync(path.join(sslDir, 'ca.cer')), // Read the CA certificate file (if applicable)
+        key: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.key')),
+        cert: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.cer')),
+        ca: fs.readFileSync(path.join(sslDir, 'ca.cer')),
       };
       const server = https.createServer(options, app);
       server.listen(PORT, '0.0.0.0', () => {
@@ -145,10 +159,9 @@ sequelize.sync({ force: false }) // Set to 'true' carefully, it will drop the da
   })
   .catch((err: Error | ValidationError) => {
     if (err instanceof ValidationError) {
-      // Handle validation errors
       logger.error('Validation error:', err.errors);
     } else {
-      // Handle generic errors
       logger.error('Unable to connect to the database:', err.message);
     }
   });
+

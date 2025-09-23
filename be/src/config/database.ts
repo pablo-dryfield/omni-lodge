@@ -11,16 +11,19 @@ import CounterUser from '../models/CounterUser.js';
 import Product from '../models/Product.js';
 import ProductType from '../models/ProductType.js';
 import UserType from '../models/UserType.js';
+import Page from '../models/Page.js';
+import Module from '../models/Module.js';
+import Action from '../models/Action.js';
+import ModuleAction from '../models/ModuleAction.js';
+import RolePagePermission from '../models/RolePagePermission.js';
+import RoleModulePermission from '../models/RoleModulePermission.js';
 
 // Load environment variables
 const environment = process.env.NODE_ENV || 'development';
 const envFile = (environment.trim() === 'production' ? '.env.prod' : '.env.dev');
 dotenv.config({ path: envFile });
 
-const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, PGSSLMODE } = process.env;
-
-// Determine whether SSL should be enabled
-const sslConfig = PGSSLMODE === 'require' ? { ssl: true } : { ssl: false };
+const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD } = process.env;
 
 // Create an instance of Sequelize for `sequelize-typescript`
 const sequelize = new Sequelize({
@@ -29,12 +32,30 @@ const sequelize = new Sequelize({
   username: DB_USER,
   password: DB_PASSWORD,
   host: DB_HOST,
-  port: parseInt(DB_PORT || '5432', 10), // Ensure the port is a number
+  port: parseInt(DB_PORT || '5432', 10),
   logging: false,
   dialectOptions: {
     ssl: false,
   },
-  models: [User, Booking, Channel, Guest, Review, Counter, CounterProduct, CounterUser, Product, ProductType, UserType],
+  models: [
+    User,
+    Booking,
+    Channel,
+    Guest,
+    Review,
+    Counter,
+    CounterProduct,
+    CounterUser,
+    Product,
+    ProductType,
+    UserType,
+    Page,
+    Module,
+    Action,
+    ModuleAction,
+    RolePagePermission,
+    RoleModulePermission,
+  ],
 });
 
 sequelize.authenticate()
@@ -42,3 +63,4 @@ sequelize.authenticate()
   .catch(err => console.error('Database connection error:', err));
 
 export default sequelize;
+
