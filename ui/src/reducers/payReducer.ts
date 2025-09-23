@@ -1,40 +1,40 @@
-import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import { Pay } from '../types/pays/Pay';
-import { DataState } from '../types/general/DataState';
+import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { type Pay } from '../types/pays/Pay';
+import { type DataState } from '../types/general/DataState';
 import { type ServerResponse } from '../types/general/ServerResponse';
-import { fetchPays } from '../actions/payActions'; // Import thunks
+import { fetchPays } from '../actions/payActions';
 
-// Define the initial state using that type
-const initialState: DataState<Partial<Pay>> = [{
-  loading: false,
-  data: [{
-    data: [],
-    columns: []
-  }],
-  error: null,
-}];
+const initialState: DataState<Pay> = [
+  {
+    loading: false,
+    data: [
+      {
+        data: [],
+        columns: [],
+      },
+    ],
+    error: null,
+  },
+];
 
 const paySlice = createSlice({
   name: 'pays',
   initialState,
-  reducers: {
-    // Synchronous actions (if any)
-  },
+  reducers: {},
   extraReducers: (builder) => {
     builder
-      // Fetch Pays
       .addCase(fetchPays.pending, (state) => {
         state[0].loading = true;
       })
-      .addCase(fetchPays.fulfilled, (state, action: PayloadAction<ServerResponse<Partial<Pay>>>) => {
+      .addCase(fetchPays.fulfilled, (state, action: PayloadAction<ServerResponse<Pay>>) => {
         state[0].loading = false;
         state[0].data = action.payload;
         state[0].error = null;
       })
       .addCase(fetchPays.rejected, (state, action) => {
         state[0].loading = false;
-        state[0].error = action.error.message || 'Failed to fetch pays';
-      })
+        state[0].error = action.error.message ?? 'Failed to fetch pays';
+      });
   },
 });
 
