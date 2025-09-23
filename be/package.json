@@ -8,8 +8,8 @@
     "build:clean": "rimraf dist",
     "build": "npm run build:clean && tsc",
     "start": "npm run build && node dist/app.js",
-    "start:prod": "set NODE_ENV=production && npm run build && node dist/app.js",
-    "start:dev": "set NODE_ENV=development && npm run build && node dist/app.js",
+    "start:prod": "NODE_ENV=production npm run build && NODE_ENV=production node dist/app.js",
+    "start:dev": "NODE_ENV=development npm run build && NODE_ENV=development node dist/app.js",
     "postinstall": "tsc",
     "dev": "nodemon src/app.ts",
     "test": "jest"
