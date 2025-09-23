@@ -161,7 +161,6 @@ sequelize.sync({ force: false, alter: shouldAlterSchema })
     if (err instanceof ValidationError) {
       logger.error(`Validation error: ${JSON.stringify(err.errors, null, 2)}`);
     } else {
-      const details = err instanceof Error ? `${err.name}: ${err.message}\n${err.stack ?? '}` : JSON.stringify(err);
-      logger.error(`Database synchronization failed: ${details}`);
+      logger.error('Database synchronization failed', err);
     }
   });
