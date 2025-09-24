@@ -45,11 +45,18 @@ const defaultModules = [
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
-  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'pays'],
+  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'pays', 'settings',
+'settings-users',
+'settings-user-types',
+'settings-pages',
+'settings-modules',
+'settings-permissions',
+'settings-permissions-pages',
+'settings-permissions-modules'],
   owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'pays'],
   manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'pays'],
   'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'pays'],
-  staff: ['dashboard', 'bookings', 'pays'],
+  guide: ['dashboard', 'bookings', 'pays'],
 };
 
 const roleModuleMatrix: Record<string, Record<string, string[]>> = {
@@ -58,6 +65,14 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'booking-management': ['view', 'create', 'update', 'delete'],
     'booking-manifest': ['view'],
     'user-directory': ['view', 'create', 'update', 'delete'],
+'settings-home': ['view', 'create', 'update', 'delete'],
+'settings-users-admin': ['view', 'create', 'update', 'delete'],
+'settings-user-types-admin': ['view', 'create', 'update', 'delete'],
+'settings-pages-admin': ['view', 'create', 'update', 'delete'],
+'settings-modules-admin': ['view', 'create', 'update', 'delete'],
+'settings-permissions-overview': ['view', 'create', 'update', 'delete'],
+'settings-page-permissions': ['view', 'create', 'update', 'delete'],
+'settings-module-permissions': ['view', 'create', 'update', 'delete'],
     reporting: ['view', 'create', 'update', 'delete'],
     'staff-payouts-all': ['view'],
   },
