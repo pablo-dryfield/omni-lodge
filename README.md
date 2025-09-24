@@ -14,9 +14,7 @@ Omnilodge is a comprehensive, full-stack application designed to streamline the 
 
 These instructions will get you a copy of the project up and running on your local machine for development and testing purposes.
 
-## Usage
-
-Provide examples of how to use your project for various tasks, possibly with screenshots or video links.
+## Usage\r\n\r\n### Admin Console\r\n- All CRUD tables now load related records (users, roles, pages, modules, actions) automatically, so the create/update dialogs present dropdown selectors instead of raw ID inputs.\r\n- Pick the labeled option from each selector when linking records (for example, choose a page name when assigning a module) rather than typing numeric IDs.\r\n- If a dropdown is empty, refresh the permission snapshot or ensure the supporting data has been seeded via the API scripts.\r\n\r\nProvide examples of how to use your project for various tasks, possibly with screenshots or video links.
 
 ## License
 

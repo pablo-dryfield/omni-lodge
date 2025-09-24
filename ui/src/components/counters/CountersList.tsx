@@ -1,25 +1,24 @@
-import { useEffect } from 'react';
-import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { fetchCounters, deleteCounter, createCounter, updateCounter } from '../../actions/counterActions';
-import { fetchCounterProducts } from '../../actions/counterProductActions';
-import { fetchCounterUsers } from '../../actions/counterUserActions';
-import { fetchProducts } from '../../actions/productActions';
-import Table from '../../utils/Table';
-import { useMemo } from 'react';
-import { Counter } from '../../types/counters/Counter';
-import { modifyColumn } from '../../utils/modifyColumn';
-import { countersColumnDef } from './countersColumnDef';
-import { type MRT_ColumnDef } from 'mantine-react-table';
-import { MRT_Row } from 'mantine-react-table';
-import { removeEmptyKeys } from '../../utils/removeEmptyKeys';
-import { getChangedValues } from '../../utils/getChangedValues';
-import { CounterProduct } from '../../types/counterProducts/CounterProduct';
-import { Grid, Paper, Typography } from '@mui/material'; // Import Material-UI components
-import { Product } from '../../types/products/Product';
-import { CounterUser } from '../../types/counterUsers/CounterUser';
+import { useEffect, useMemo } from "react";
+import { useAppDispatch, useAppSelector } from "../../store/hooks";
+import { fetchCounters, deleteCounter, createCounter, updateCounter } from "../../actions/counterActions";
+import { fetchCounterProducts } from "../../actions/counterProductActions";
+import { fetchCounterUsers } from "../../actions/counterUserActions";
+import { fetchProducts } from "../../actions/productActions";
+import Table from "../../utils/Table";
+import { Counter } from "../../types/counters/Counter";
+import { modifyColumn } from "../../utils/modifyColumn";
+import { countersColumnDef } from "./countersColumnDef";
+import { type MRT_ColumnDef, MRT_Row } from "mantine-react-table";
+import { removeEmptyKeys } from "../../utils/removeEmptyKeys";
+import { getChangedValues } from "../../utils/getChangedValues";
+import { CounterProduct } from "../../types/counterProducts/CounterProduct";
+import { Box, Grid, Paper, Typography } from "@mui/material";
+import { Product } from "../../types/products/Product";
+import { CounterUser } from "../../types/counterUsers/CounterUser";
+
+const MODULE_SLUG = "counter-operations";
 
 const CounterList = () => {
-
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.counters)[0];
   const { data: dataCounterProducts } = useAppSelector((state) => state.counterProducts)[0];
@@ -28,6 +27,13 @@ const CounterList = () => {
   const { currentPage } = useAppSelector((state) => state.navigation);
   const { loggedUserId } = useAppSelector((state) => state.session);
 
+  const productLookup = useMemo(() => {
+    const products = Array.isArray(dataProducts[0]?.data)
+      ? (dataProducts[0]?.data as Partial<Product>[])
+      : [];
+    return new Map(products.map((product) => [product.id, product]));
+  }, [dataProducts]);
+
   const initialState = {
     showColumnFilters: false,
     showGlobalFilter: true,
@@ -35,15 +41,15 @@ const CounterList = () => {
       id: false,
       userId: false,
       createdBy: false,
-      updatedBy: false
+      updatedBy: false,
     },
     sorting: [
       {
-        id: 'date', 
+        id: "date",
         desc: true,
-      }
+      },
     ],
-  }
+  };
 
   useEffect(() => {
     dispatch(fetchCounters());
@@ -53,108 +59,182 @@ const CounterList = () => {
   }, [dispatch]);
 
   const renderDetailPanel = (row: MRT_Row<Partial<Counter>>) => {
-    // Extract the counter ID from the row
-    const counterId = row.getValue('id');
+    const counterId = row.getValue("id");
 
-    // Filter the counter products data based on the counterId
-    const counterProducts: Partial<CounterProduct>[] = dataCounterProducts[0]?.data.filter(
-      (product: Partial<CounterProduct>) => product.counterId === counterId
+    const counterProducts: Partial<CounterProduct>[] = Array.isArray(dataCounterProducts[0]?.data)
+      ? (dataCounterProducts[0]?.data as Partial<CounterProduct>[]).filter(
+          (product) => product.counterId === counterId,
+        )
+      : [];
+
+    const counterUsers: Partial<CounterUser>[] = Array.isArray(dataCounterUsers[0]?.data)
+      ? (dataCounterUsers[0]?.data as Partial<CounterUser>[]).filter(
+          (user) => user.counterId === counterId,
+        )
+      : [];
+
+    const staffNames = counterUsers
+      .map(
+        (user) =>
+          (user as { counterUser?: { firstName?: string; lastName?: string } }).counterUser?.firstName,
+      )
+      .filter((name): name is string => Boolean(name));
+
+    const totalCustomers = counterProducts.reduce(
+      (total, product) => total + (product.quantity || 0),
+      0,
     );
 
-    const counterUsers: Partial<CounterUser>[] = dataCounterUsers[0]?.data.filter(
-      (user: Partial<CounterUser>) => user.counterId === counterId
-    );
+    const staffCount = counterUsers.length;
 
-
-    // Display counter products data
-return (
-  <div style={{ display: 'flex', flexDirection: 'column' }}>
-    <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap' }}>
-      {counterProducts.map((product: Partial<CounterProduct>) => {
-        // Find the matching product information
-        const matchedProduct: Partial<Product> | undefined = dataProducts[0]?.data.find(
-          (productArray: Partial<Product>) => productArray.id === product.productId
-        ) as Partial<Product> | undefined;
-
-        // Define an array to hold pairs of product information fields
-        const productFields = [
-          { label: 'Quantity:', value: product.quantity },
-          { label: 'Price:', value: matchedProduct?.price?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })},
-          { label: 'Total:', value: product.total?.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' }) }
-        ];
-
-        // Function to render a pair of product information fields
-        const renderFields = (fields: Array<{ label: string, value: any }>) => (
-          <Grid container spacing={2}>
-            {fields.map((field, index) => (
-              <Grid item xs={6} key={index}>
-                <Typography variant="subtitle1">
-                  <span style={{ fontWeight: 'bold' }}>{field.label}</span> {field.value}
-                </Typography>
-              </Grid>
-            ))}
+    const renderFields = (
+      fields: Array<{ label: string; value: string | number | null | undefined }>,
+    ) => (
+      <Grid container spacing={1}>
+        {fields.map(({ label, value }) => (
+          <Grid item xs={12} sm={6} key={label}>
+            <Typography variant="subtitle1">
+              <Box component="span" sx={{ fontWeight: 600 }}>
+                {label}
+              </Box>{" "}
+              {value ?? "N/A"}
+            </Typography>
           </Grid>
-        );
-
-        // Display the product details
-        return (
-          <Paper key={product.id} elevation={3} style={{ margin: '20px', padding: '20px', maxWidth: '300px', flexGrow: 1 }}>
-            <Typography variant="h5" gutterBottom>{matchedProduct?.name}</Typography>
-            {renderFields(productFields)}
-          </Paper>
-        );
-      })}
-    </div>
-    {/* Paper component for staffCounterUser information */}
-    <Paper elevation={3} style={{ margin: '20px', padding: '20px', maxWidth: '300px', flexGrow: 1, backgroundColor: '#ddf1c1' }}>
-      <Typography variant="h5">Staff: {counterUsers.reduce((total, user) => total + 1, 0)}</Typography> 
-      <Typography variant="subtitle1" gutterBottom>
-        {counterUsers.map((user, index) => (
-          (user as { counterUser: { firstName: string } })?.counterUser?.firstName && (
-            <span key={index}>
-              {index !== 0 && ', '} {/* Add comma before names except for the first one */}
-              {(user as { counterUser: { firstName: string } }).counterUser.firstName}
-            </span>
-          )
         ))}
-      </Typography>
-      <Typography variant="h5">Customers: {counterProducts.reduce((total, product) => total + (product.quantity || 0), 0)}</Typography>
-    </Paper>
-  </div>
-);
+      </Grid>
+    );
+
+    return (
+      <Box sx={{ width: "100%", py: 1 }}>
+        <Box
+          sx={{
+            display: "grid",
+            gap: { xs: 2, sm: 3 },
+            gridTemplateColumns: { xs: "1fr", sm: "repeat(auto-fit, minmax(260px, 1fr))" },
+          }}
+        >
+          {counterProducts.length === 0 ? (
+            <Paper elevation={3} sx={{ p: { xs: 2.5, sm: 3 } }}>
+              <Typography variant="h6" gutterBottom>
+                No products linked to this counter yet
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Assign a product to see its sales breakdown here.
+              </Typography>
+            </Paper>
+          ) : (
+            counterProducts.map((product) => {
+              const matchedProduct =
+                typeof product.productId === "number"
+                  ? productLookup.get(product.productId)
+                  : undefined;
+
+              const productFields = [
+                { label: "Quantity:", value: product.quantity },
+                {
+                  label: "Price:",
+                  value: matchedProduct?.price?.toLocaleString("pl-PL", {
+                    style: "currency",
+                    currency: "PLN",
+                  }),
+                },
+                {
+                  label: "Total:",
+                  value: product.total?.toLocaleString("pl-PL", {
+                    style: "currency",
+                    currency: "PLN",
+                  }),
+                },
+              ];
+
+              const productKey = product.id ?? product.productId ?? counterId;
+
+              return (
+                <Paper
+                  key={"product-" + productKey}
+                  elevation={3}
+                  sx={{
+                    p: { xs: 2.5, sm: 3 },
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 2,
+                    minHeight: 180,
+                  }}
+                >
+                  <Typography variant="h6" gutterBottom sx={{ wordBreak: "break-word" }}>
+                    {matchedProduct?.name ?? "Unnamed product"}
+                  </Typography>
+                  {renderFields(productFields)}
+                </Paper>
+              );
+            })
+          )}
+          <Paper
+            elevation={3}
+            sx={{
+              p: { xs: 2.5, sm: 3 },
+              display: "flex",
+              flexDirection: "column",
+              gap: 1,
+              backgroundColor: "#ddf1c1",
+            }}
+          >
+            <Typography variant="h6">Staff: {staffCount}</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ minHeight: 24 }}>
+              {staffNames.length > 0 ? staffNames.join(', ') : 'No staff assigned'}
+            </Typography>
+            <Typography variant="h6" sx={{ mt: 1 }}>
+              Customers: {totalCustomers}
+            </Typography>
+          </Paper>
+        </Box>
+      </Box>
+    );
   };
 
   const handleCreate = async (dataCreate: Partial<Counter>) => {
     const dataCreated = removeEmptyKeys(dataCreate, loggedUserId);
-    if (Object.keys(dataCreated).some(key => key !== 'createdBy') && Object.keys(dataCreated).length !== 0) {
+    if (Object.keys(dataCreated).some((key) => key !== "createdBy") && Object.keys(dataCreated).length !== 0) {
       await dispatch(createCounter(dataCreated));
       dispatch(fetchCounters());
     }
   };
 
-  const handleUpdate = async (originalData: Partial<Counter>, dataUpdated: Partial<Counter>) => {
+  const handleUpdate = async (
+    originalData: Partial<Counter>,
+    dataUpdated: Partial<Counter>
+  ) => {
     const dataId = originalData.id;
     const dataUpdate = getChangedValues(originalData, dataUpdated, loggedUserId);
-    if (typeof dataId === 'number') {
-      if (Object.keys(dataUpdate).some(key => key !== 'updatedBy') && Object.keys(dataUpdate).length !== 0) {
+    if (typeof dataId === "number") {
+      if (Object.keys(dataUpdate).some((key) => key !== "updatedBy") && Object.keys(dataUpdate).length !== 0) {
         await dispatch(updateCounter({ counterId: dataId, counterData: dataUpdate }));
         dispatch(fetchCounters());
       }
     } else {
-      console.error('Counter ID is undefined.');
+      console.error("Counter ID is undefined.");
     }
   };
 
-  const handleDelete = async (dataDelete: Partial<Counter>, count: number, iterator: number) => {
-    if (typeof dataDelete.id === 'number') {
+  const handleDelete = async (
+    dataDelete: Partial<Counter>,
+    count: number,
+    iterator: number
+  ) => {
+    if (typeof dataDelete.id === "number") {
       await dispatch(deleteCounter(dataDelete.id));
-      if (count === iterator) { dispatch(fetchCounters()); }
+      if (count === iterator) {
+        dispatch(fetchCounters());
+      }
     } else {
-      console.error('Counter ID is undefined.');
+      console.error("Counter ID is undefined.");
     }
   };
 
-  const modifiedColumns = useMemo<MRT_ColumnDef<Partial<Counter>>[]>(() => modifyColumn(data[0]?.columns || [], countersColumnDef), [data]);
+  const modifiedColumns = useMemo<MRT_ColumnDef<Partial<Counter>>[]>(
+    () => modifyColumn(data[0]?.columns || [], countersColumnDef),
+    [data]
+  );
 
   return (
     <Table
@@ -166,6 +246,7 @@ return (
       actions={{ handleDelete, handleCreate, handleUpdate }}
       initialState={initialState}
       renderDetailPanel={renderDetailPanel}
+      moduleSlug={MODULE_SLUG}
     />
   );
 };

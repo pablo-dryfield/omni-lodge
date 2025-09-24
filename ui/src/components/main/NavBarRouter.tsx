@@ -1,15 +1,22 @@
 // src/components/main/NavBarRouter.tsx
 import React from "react";
-import { AppNavbarReports } from "../navbars/AppNavbarReports"; // The dummy Reports navbar component
+import { useLocation } from "react-router-dom";
+import { AppNavbarReports } from "../navbars/AppNavbarReports";
+import { AppNavbarSettings } from "../navbars/AppNavbarSettings";
 
 interface NavBarRouterProps {
   currentPage: string;
 }
 
 export function NavBarRouter({ currentPage }: NavBarRouterProps) {
-  // Example: Only show navbar on "/reports" and children
-  if (currentPage.startsWith("Reports")) {
+  const location = useLocation();
+
+  if (currentPage.startsWith("Reports") || location.pathname.startsWith("/reports")) {
     return <AppNavbarReports />;
+  }
+
+  if (currentPage === "Settings" || location.pathname.startsWith("/settings")) {
+    return <AppNavbarSettings />;
   }
 
   // Default: no navbar

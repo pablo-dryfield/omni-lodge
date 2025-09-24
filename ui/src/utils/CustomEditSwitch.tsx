@@ -1,6 +1,11 @@
-import { Switch } from '@mantine/core';
-import { useState } from 'react';
-import { MRT_Cell, MRT_TableInstance, MRT_Row, MRT_RowData } from 'mantine-react-table';
+import { Switch } from "@mantine/core";
+import { useState, ChangeEvent } from "react";
+import {
+  MRT_Cell,
+  MRT_Row,
+  MRT_RowData,
+  MRT_TableInstance,
+} from "mantine-react-table";
 
 interface CustomEditSwitchProps<TData extends MRT_RowData> {
   cell: MRT_Cell<TData, boolean>;
@@ -8,30 +13,35 @@ interface CustomEditSwitchProps<TData extends MRT_RowData> {
   row: MRT_Row<TData>;
 }
 
-const CustomEditSwitch = <TData extends {}>({ cell, table, row }: CustomEditSwitchProps<TData>) => {
-  // Get the initial value from the cell, ensuring it's a boolean.
+const resolveSwitchLabel = (labelCandidate: unknown, fallback: string) => {
+  if (typeof labelCandidate === "string" || typeof labelCandidate === "number") {
+    return String(labelCandidate);
+  }
+
+  return fallback;
+};
+
+const CustomEditSwitch = <TData extends MRT_RowData>({ cell, table, row }: CustomEditSwitchProps<TData>) => {
   const [value, setValue] = useState<boolean>(() => Boolean(cell.getValue()));
 
-  // When the switch is toggled, update local state.
-  const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     setValue(event.currentTarget.checked);
   };
 
-  // When the switch loses focus, save the new value to the row's cache.
   const handleBlur = () => {
-    // Update the internal row cache for this cell.
     (row as any)._valuesCache[cell.column.id] = value;
-
   };
+
+  const label = resolveSwitchLabel(cell.column.columnDef.header, cell.column.id);
 
   return (
     <Switch
       checked={value}
       onChange={handleChange}
       onBlur={handleBlur}
-      onLabel="ON" 
+      onLabel="ON"
       offLabel="OFF"
-      label="Status"
+      label={label}
       labelPosition="left"
     />
   );

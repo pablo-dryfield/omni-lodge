@@ -1,20 +1,27 @@
 // This interface is a union of fields needed by your app, regardless of platform.
 export interface UnifiedProduct {
-    id: string;
-    name: string;
-    platform: 'ecwid' | 'viator' | 'getyourguide' | string;
-    [key: string]: any; // for future extension
-  }
-  
-  export interface UnifiedOrder {
-    id: string;
-    productId: string;
-    productName: string;
-    date: string;
-    timeslot: string;
-    quantity: number;
-    customerName: string;
-    platform: 'ecwid' | 'viator' | 'getyourguide' | string;
-    rawData?: any; // keep original platform data for edge cases
-  }
-  
+  id: string;
+  name: string;
+  platform: 'ecwid' | 'viator' | 'getyourguide' | string;
+  [key: string]: any;
+}
+
+export interface UnifiedOrder {
+  id: string;
+  productId: string;
+  productName: string;
+  date: string; // pickup date in YYYY-MM-DD (UTC-normalized)
+  timeslot: string; // pickup time in HH:mm (24h)
+  quantity: number; // total participants represented by this line item
+  menCount: number;
+  womenCount: number;
+  customerName: string;
+  customerPhone?: string;
+  platform: 'ecwid' | 'viator' | 'getyourguide' | string;
+  pickupDateTime?: string;
+  rawData?: any;
+}
+
+export type UnifiedOrderMap = {
+  [orderId: string]: UnifiedOrder;
+};

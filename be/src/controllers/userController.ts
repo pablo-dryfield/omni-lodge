@@ -11,7 +11,6 @@ declare const process: {
   env: Env;
 };
 
-// Register New User
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const data = { ...req.body };
@@ -28,26 +27,29 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
   }
 };
 
-// Login User
 export const loginUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email , password } = req.body;
+    const { email, password } = req.body;
 
-    // Find user by email or username
     const user = await User.findOne({
       where: {
-        [Op.or]: [{ email: email }, { username: email }],
+        [Op.or]: [{ email }, { username: email }],
       },
     });
 
     if (!user) {
-      res.status(400).json([{ message: 'Invalid email or username' }]);
+      res.status(404).json([{ message: 'Account not found. Double-check the username or email.' }]);
+      return;
+    }
+
+    if (!user.status) {
+      res.status(403).json([{ message: 'This account is inactive. Contact an administrator for access.' }]);
       return;
     }
 
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
-      res.status(400).json([{ message: 'Invalid password' }]);
+      res.status(400).json([{ message: 'Password is incorrect. Please try again.' }]);
       return;
     }
 
@@ -57,21 +59,19 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
 
     res.cookie('token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production', // Ensure cookies are secure in production
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Adjust for cross-origin compatibility
-      maxAge: 3600000, // Set cookie expiry as needed
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      maxAge: 3600000,
     });
-    res.status(200).json([{ message: 'Logged in successfully', userId:user.id }]);
+    res.status(200).json([{ message: 'Logged in successfully', userId: user.id }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);
   }
 };
 
-// Log Out Session
 export const logoutUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    // Clear the token cookie by setting its expiration to a past date
     res.cookie('token', '', {
       expires: new Date(0),
       httpOnly: true,
@@ -79,7 +79,6 @@ export const logoutUser = async (req: Request, res: Response): Promise<void> => 
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     });
 
-    // Send a response indicating successful logout
     res.status(200).json([{ message: 'Logged out successfully' }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
@@ -87,19 +86,17 @@ export const logoutUser = async (req: Request, res: Response): Promise<void> => 
   }
 };
 
-// Get All Users
 export const getAllUsers = async (req: Request, res: Response): Promise<void> => {
   try {
     const data = await User.findAll();
     const attributes = User.getAttributes();
-    const columns = Object.entries(attributes)
-      .map(([key, attribute]) => {
-        return {
-          header: key.charAt(0).toUpperCase() + key.slice(1),
-          accessorKey: key,
-          type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
-        };
-      });
+    const columns = Object.entries(attributes).map(([key, attribute]) => {
+      return {
+        header: key.charAt(0).toUpperCase() + key.slice(1),
+        accessorKey: key,
+        type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
+      };
+    });
     res.status(200).json([{ data, columns }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
@@ -107,21 +104,19 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
   }
 };
 
-// Get All Active Users
 export const getAllActiveUsers = async (req: Request, res: Response): Promise<void> => {
   try {
     const data = await User.findAll({
       where: { status: true },
     });
     const attributes = User.getAttributes();
-    const columns = Object.entries(attributes)
-      .map(([key, attribute]) => {
-        return {
-          header: key.charAt(0).toUpperCase() + key.slice(1),
-          accessorKey: key,
-          type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
-        };
-      });
+    const columns = Object.entries(attributes).map(([key, attribute]) => {
+      return {
+        header: key.charAt(0).toUpperCase() + key.slice(1),
+        accessorKey: key,
+        type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
+      };
+    });
     res.status(200).json([{ data, columns }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
@@ -129,20 +124,18 @@ export const getAllActiveUsers = async (req: Request, res: Response): Promise<vo
   }
 };
 
-// Get User by ID
 export const getUserById = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
     const data = await User.findByPk(id);
     const attributes = User.getAttributes();
-    const columns = Object.entries(attributes)
-      .map(([key, attribute]) => {
-        return {
-          header: key.charAt(0).toUpperCase() + key.slice(1),
-          accessorKey: key,
-          type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
-        };
-      });
+    const columns = Object.entries(attributes).map(([key, attribute]) => {
+      return {
+        header: key.charAt(0).toUpperCase() + key.slice(1),
+        accessorKey: key,
+        type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
+      };
+    });
     if (!data) {
       res.status(404).json([{ message: 'User not found' }]);
       return;
@@ -154,8 +147,7 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
   }
 };
 
-// Update User
-export const updateUser = async (req: Request, res: Response): Promise<void> => { 
+export const updateUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
     const data = { ...req.body };
@@ -180,7 +172,6 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
   }
 };
 
-// Delete User
 export const deleteUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
@@ -191,7 +182,7 @@ export const deleteUser = async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
-    res.status(204).send(); // No content to send back
+    res.status(204).send();
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);

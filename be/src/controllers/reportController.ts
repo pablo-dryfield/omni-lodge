@@ -6,8 +6,10 @@ import Counter from "../models/Counter.js";
 import CounterProduct from "../models/CounterProduct.js";
 import CounterUser from "../models/CounterUser.js";
 import User from "../models/User.js";
+import { AuthenticatedRequest } from "../types/AuthenticatedRequest";
 
 type CommissionSummary = {
+  userId: number;
   firstName: string;
   totalCommission: number;
   breakdown: Array<{
@@ -30,9 +32,18 @@ type DailyAggregate = {
   guides: Map<number, GuideDailyBreakdown>;
 };
 
+const FULL_ACCESS_ROLE_SLUGS = new Set([
+  "admin",
+  "owner",
+  "manager",
+  "assistant-manager",
+  "assistant_manager",
+  "assistantmanager",
+]);
+
 export const getCommissionByDateRange = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { startDate, endDate } = req.query;
+    const { startDate, endDate, scope } = req.query;
 
     if (!startDate || !endDate) {
       res.status(400).json([{ message: "Start date and end date are required" }]);
@@ -104,6 +115,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
 
       if (!commissionDataByUser.has(userId)) {
         commissionDataByUser.set(userId, {
+          userId,
           firstName,
           totalCommission: 0,
           breakdown: [],
@@ -181,7 +193,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
 
     aggregateDailyBreakdownByUser(dailyAggregates, commissionDataByUser);
 
-    const data = Array.from(commissionDataByUser.values()).map((entry) => ({
+    const allSummaries = Array.from(commissionDataByUser.values()).map((entry) => ({
       ...entry,
       totalCommission: Number(entry.totalCommission.toFixed(2)),
       breakdown: entry.breakdown.map((item) => ({
@@ -189,6 +201,18 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         commission: Number(item.commission.toFixed(2)),
       })),
     }));
+
+    const authRequest = req as AuthenticatedRequest;
+    const requesterId = authRequest.authContext?.id ?? null;
+    const requesterRoleSlug = authRequest.authContext?.roleSlug ?? null;
+
+    const requesterHasFullAccess = requesterRoleSlug ? FULL_ACCESS_ROLE_SLUGS.has(requesterRoleSlug) : false;
+    const forceSelfScope = scope === "self";
+    const shouldLimitToSelf = forceSelfScope || !requesterHasFullAccess;
+
+    const data = shouldLimitToSelf && requesterId !== null
+      ? allSummaries.filter((entry) => entry.userId === requesterId)
+      : allSummaries;
 
     res.status(200).json([{ data, columns: [] }]);
   } catch (error) {

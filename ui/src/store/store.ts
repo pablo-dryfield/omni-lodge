@@ -4,17 +4,22 @@ import bookingReducer from './../reducers/bookingReducer';
 import channelReducer from './../reducers/channelReducer';
 import userReducer from './../reducers/userReducer';
 import navigationReducer from './../reducers/navigationReducer';
+import actionReducer from '../reducers/actionReducer';
 import sessionReducer from './../reducers/sessionReducer';
 import userTypeReducer from './../reducers/userTypeReducer';
 import productTypeReducer from '../reducers/productTypeReducer';
 import productReducer from '../reducers/productReducer';
+import moduleReducer from '../reducers/moduleReducer';
+import rolePagePermissionReducer from '../reducers/rolePagePermissionReducer';
+import roleModulePermissionReducer from '../reducers/roleModulePermissionReducer';
+import pageReducer from '../reducers/pageReducer';
 import counterReducer from '../reducers/counterReducer';
 import counterProductsReducer from '../reducers/counterProductsReducer';
 import counterUsersReducer from '../reducers/counterUsersReducer';
 import payReducer from '../reducers/payReducer';
 import reportsNavBarActiveKeyReducer from '../reducers/reportsNavBarActiveKeyReducer';
 import reviewsReducer from '../reducers/reviewsReducer';
-
+import accessControlReducer from '../reducers/accessControlReducer';
 
 // Create the Redux store using configureStore
 export const store = configureStore({
@@ -23,17 +28,23 @@ export const store = configureStore({
     bookings: bookingReducer,
     channels: channelReducer,
     users: userReducer,
+    actions: actionReducer,
     navigation: navigationReducer,
     session: sessionReducer,
     userTypes: userTypeReducer,
     productTypes: productTypeReducer,
     products: productReducer,
+    modules: moduleReducer,
+    rolePagePermissions: rolePagePermissionReducer,
+    roleModulePermissions: roleModulePermissionReducer,
+    pages: pageReducer,
     counters: counterReducer,
     counterProducts: counterProductsReducer,
     counterUsers: counterUsersReducer,
     pays: payReducer,
     reportsNavBarActiveKey: reportsNavBarActiveKeyReducer,
     reviews: reviewsReducer,
+    accessControl: accessControlReducer,
   },
   // If you have additional middleware, you can add them here
   // middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(yourAdditionalMiddleware),

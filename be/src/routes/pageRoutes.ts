@@ -6,12 +6,29 @@ import * as pageController from '../controllers/pageController.js';
 const router: Router = express.Router();
 
 const validateId = [
-  param('id').isInt({ gt: 0 }).withMessage('ID must be a positive integer')
+  param('id').isInt({ gt: 0 }).withMessage('ID must be a positive integer'),
 ];
 
-const validatePageBody = [
+const validatePageCreateBody = [
   check('slug').isString().trim().notEmpty().withMessage('Slug is required'),
-  check('name').isString().trim().notEmpty().withMessage('Name is required')
+  check('name').isString().trim().notEmpty().withMessage('Name is required'),
+];
+
+const validatePageUpdateBody = [
+  check('slug')
+    .optional({ nullable: true })
+    .isString()
+    .bail()
+    .trim()
+    .notEmpty()
+    .withMessage('Slug is required'),
+  check('name')
+    .optional({ nullable: true })
+    .isString()
+    .bail()
+    .trim()
+    .notEmpty()
+    .withMessage('Name is required'),
 ];
 
 const validate = (req: Request, res: Response, next: NextFunction): void => {
@@ -23,11 +40,16 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
   next();
 };
 
-router.get('/', authMiddleware, validate, pageController.getAllPages);
+router.get('/', authMiddleware, pageController.getAllPages);
 router.get('/:id', authMiddleware, validateId, validate, pageController.getPageById);
-router.post('/', authMiddleware, validatePageBody, validate, pageController.createPage);
-router.put('/:id', authMiddleware, [...validateId, ...validatePageBody], validate, pageController.updatePage);
+router.post('/', authMiddleware, validatePageCreateBody, validate, pageController.createPage);
+router.put(
+  '/:id',
+  authMiddleware,
+  [...validateId, ...validatePageUpdateBody],
+  validate,
+  pageController.updatePage,
+);
 router.delete('/:id', authMiddleware, validateId, validate, pageController.deletePage);
 
 export default router;
-

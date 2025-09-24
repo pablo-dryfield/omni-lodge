@@ -6,6 +6,7 @@ export type PayBreakdown = {
 };
 
 export type Pay = {
+  userId?: number;
   firstName: string;
   totalCommission: number;
   breakdown: PayBreakdown[];
