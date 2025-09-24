@@ -14,7 +14,7 @@ import { ValidationError } from 'sequelize';
 
 // TypeScript routes imports (make sure all route files are .ts)
 import guestRoutes from './routes/guestRoutes.js';
-import bookingRoutes from './routes/bookingRoutes.js';
+//import bookingRoutes from './routes/bookingRoutes.js';
 import channelRoutes from './routes/channelRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import sessionRoutes from './routes/sessionRoutes.js';
@@ -32,6 +32,8 @@ import actionRoutes from './routes/actionRoutes.js';
 import moduleActionRoutes from './routes/moduleActionRoutes.js';
 import rolePagePermissionRoutes from './routes/rolePagePermissionRoutes.js';
 import roleModulePermissionRoutes from './routes/roleModulePermissionRoutes.js';
+import accessControlRoutes from './routes/accessControlRoutes.js';
+import ecwidRoutes from './routes/ecwidRoutes.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -101,7 +103,7 @@ app.use(instrumentMiddleware);
 app.use('/api/', apiLimiter);
 
 app.use('/api/guests', guestRoutes);
-app.use('/api/bookings', bookingRoutes);
+//app.use('/api/bookings', bookingRoutes);
 app.use('/api/channels', channelRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/session', sessionRoutes);
@@ -119,6 +121,8 @@ app.use('/api/actions', actionRoutes);
 app.use('/api/moduleActions', moduleActionRoutes);
 app.use('/api/rolePagePermissions', rolePagePermissionRoutes);
 app.use('/api/roleModulePermissions', roleModulePermissionRoutes);
+app.use('/api/accessControl', accessControlRoutes);
+app.use('/api/ecwid', ecwidRoutes);
 
 app.use(errorMiddleware);
 
@@ -164,3 +168,10 @@ sequelize.sync({ force: false, alter: shouldAlterSchema })
       logger.error('Database synchronization failed', err);
     }
   });
+
+
+
+
+
+
+

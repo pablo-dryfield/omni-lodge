@@ -1,0 +1,25 @@
+export const PAGE_SLUGS = {
+  dashboard: "dashboard",
+  bookings: "bookings",
+  guests: "guests",
+  channels: "channels",
+  counters: "counters",
+  products: "products",
+  productTypes: "product-types",
+  pays: "pays",
+  reports: "reports",
+  users: "users",
+  userTypes: "user-types",
+  venueNumbers: "venue-numbers",
+  availabilityCalendar: "availability-calendar",
+  settings: "settings",
+  settingsUsers: "settings-users",
+  settingsUserTypes: "settings-user-types",
+  settingsPages: "settings-pages",
+  settingsModules: "settings-modules",
+  settingsPermissions: "settings-permissions",
+  settingsPagePermissions: "settings-permissions-pages",
+  settingsModulePermissions: "settings-permissions-modules",
+};
+
+export type PageSlugKey = keyof typeof PAGE_SLUGS;

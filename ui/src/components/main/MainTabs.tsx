@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Tabs,
   Menu,
@@ -13,11 +13,14 @@ import {
 import { IconMenu2, IconLogout } from "@tabler/icons-react";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { logoutUser } from "../../actions/userActions";
+import { selectAllowedNavigationPages } from "../../selectors/accessControlSelectors";
 
 const MainTabs = () => {
   const dispatch = useAppDispatch();
-  const { pages, currentPage } = useAppSelector((state) => state.navigation);
+  const allowedPages = useAppSelector(selectAllowedNavigationPages);
+  const { currentPage } = useAppSelector((state) => state.navigation);
   const navigate = useNavigate();
+  const location = useLocation();
   const [menuOpened, setMenuOpened] = useState(false);
 
   const [showMobileMenu, setShowMobileMenu] = useState(window.innerWidth <= 600);
@@ -33,8 +36,25 @@ const MainTabs = () => {
     window.location.href = "/";
   };
 
-  // Find active tab value by pathname
-  const activeTab = pages.find((p) => p.name === currentPage)?.path || pages[0]?.path;
+  const activeTab = useMemo(() => {
+    if (allowedPages.length === 0) {
+      return undefined;
+    }
+
+    const matchByPath = allowedPages.find((page) => {
+      if (page.path === "/") {
+        return location.pathname === "/";
+      }
+      return location.pathname.startsWith(page.path);
+    });
+
+    if (matchByPath) {
+      return matchByPath.path;
+    }
+
+    const matchByName = allowedPages.find((page) => page.name === currentPage);
+    return matchByName?.path ?? allowedPages[0]?.path;
+  }, [allowedPages, location.pathname, currentPage]);
 
   return (
     <div
@@ -84,12 +104,13 @@ const MainTabs = () => {
                 px={14}
                 style={{ color: "white", fontWeight: 600, background: "transparent" }}
                 leftSection={<IconMenu2 size={20} color="white" />}
+                disabled={allowedPages.length === 0}
               >
                 Menu
               </Button>
             </Menu.Target>
             <Menu.Dropdown>
-              {pages.map((page) => (
+              {allowedPages.map((page) => (
                 <Menu.Item
                   key={page.name}
                   onClick={() => {
@@ -108,7 +129,7 @@ const MainTabs = () => {
           </Menu>
         ) : (
           <Tabs
-            value={activeTab}
+            value={activeTab ?? null}
             onChange={(val) => val && navigate(val)}
             variant="pills"
             radius="xs"
@@ -153,7 +174,7 @@ const MainTabs = () => {
             }}
           >
             <Tabs.List>
-              {pages.map((page) => (
+              {allowedPages.map((page) => (
                 <Tabs.Tab value={page.path} key={page.name}>
                   {page.name}
                 </Tabs.Tab>

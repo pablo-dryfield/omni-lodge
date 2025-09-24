@@ -1,4 +1,11 @@
+export type NavigationPage = {
+  name: string;
+  path: string;
+  icon: JSX.Element;
+  slug: string;
+};
+
 export type NavigationState = {
-    currentPage: string;
-    pages: { name: string; path: string; icon: JSX.Element }[]
+  currentPage: string;
+  pages: NavigationPage[];
 };

@@ -19,45 +19,72 @@ const defaultActions = [
 
 const defaultRoles = [
   { slug: 'admin', name: 'Administrator', description: 'Full platform access', isDefault: false },
+  { slug: 'owner', name: 'Owner', description: 'Business owner', isDefault: false },
   { slug: 'manager', name: 'Manager', description: 'Manage day-to-day operations', isDefault: false },
-  { slug: 'staff', name: 'Staff', description: 'Limited operational access', isDefault: true },
+  { slug: 'assistant-manager', name: 'Assistant Manager', description: 'Assist managers with operations', isDefault: false },
+  { slug: 'guide', name: 'Guide', description: 'Front line staff', isDefault: true },
 ];
 
 const defaultPages = [
   { slug: 'dashboard', name: 'Dashboard', description: 'System overview', sortOrder: 1 },
   { slug: 'bookings', name: 'Bookings', description: 'Booking management', sortOrder: 2 },
+  { slug: 'bookings-manifest', name: 'Bookings Manifest', description: 'Bookings manifest view', sortOrder: 3 },
   { slug: 'users', name: 'Users', description: 'User administration', sortOrder: 3 },
   { slug: 'reports', name: 'Reports', description: 'Analytics and reports', sortOrder: 4 },
+  { slug: 'pays', name: 'Staff Payment', description: 'Staff commission overview', sortOrder: 5 },
 ];
 
 const defaultModules = [
   { slug: 'dashboard-overview', name: 'Dashboard Overview', pageSlug: 'dashboard', description: 'Key platform metrics', componentRef: 'DashboardOverview', sortOrder: 1 },
   { slug: 'booking-management', name: 'Booking Management', pageSlug: 'bookings', description: 'Create and manage bookings', componentRef: 'BookingTable', sortOrder: 1 },
+  { slug: 'booking-manifest', name: 'Booking Manifest', pageSlug: 'bookings-manifest', description: 'View manifest by pickup date', componentRef: 'BookingManifest', sortOrder: 1 },
   { slug: 'user-directory', name: 'User Directory', pageSlug: 'users', description: 'Manage platform users', componentRef: 'UserTable', sortOrder: 1 },
   { slug: 'reporting', name: 'Reporting', pageSlug: 'reports', description: 'Generate platform reports', componentRef: 'ReportBuilder', sortOrder: 1 },
+  { slug: 'staff-payouts-all', name: 'Staff Payments (All)', pageSlug: 'pays', description: 'View commission data for all staff', componentRef: 'StaffPayoutsAll', sortOrder: 1 },
+  { slug: 'staff-payouts-self', name: 'Staff Payments (Self)', pageSlug: 'pays', description: 'View personal commission data', componentRef: 'StaffPayoutsSelf', sortOrder: 2 },
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
-  admin: ['dashboard', 'bookings', 'users', 'reports'],
-  manager: ['dashboard', 'bookings', 'reports'],
-  staff: ['dashboard', 'bookings'],
+  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'pays'],
+  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'pays'],
+  manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'pays'],
+  'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'pays'],
+  staff: ['dashboard', 'bookings', 'pays'],
 };
 
 const roleModuleMatrix: Record<string, Record<string, string[]>> = {
   admin: {
     'dashboard-overview': ['view', 'update'],
     'booking-management': ['view', 'create', 'update', 'delete'],
+    'booking-manifest': ['view'],
     'user-directory': ['view', 'create', 'update', 'delete'],
     reporting: ['view', 'create', 'update', 'delete'],
+    'staff-payouts-all': ['view'],
+  },
+  owner: {
+    'dashboard-overview': ['view', 'update'],
+    'booking-management': ['view', 'create', 'update', 'delete'],
+    'booking-manifest': ['view'],
+    'user-directory': ['view', 'create', 'update', 'delete'],
+    reporting: ['view', 'create', 'update', 'delete'],
+    'staff-payouts-all': ['view'],
   },
   manager: {
     'dashboard-overview': ['view'],
     'booking-management': ['view', 'create', 'update'],
     reporting: ['view', 'create'],
+    'staff-payouts-all': ['view'],
   },
-  staff: {
+  'assistant-manager': {
+    'dashboard-overview': ['view'],
+    'booking-management': ['view', 'create', 'update'],
+    reporting: ['view'],
+    'staff-payouts-all': ['view'],
+  },
+  guide: {
     'dashboard-overview': ['view'],
     'booking-management': ['view'],
+    'staff-payouts-self': ['view'],
   },
 };
 
@@ -210,5 +237,23 @@ export async function initializeAccessControl(): Promise<void> {
       }
     }
   }
+
+  const adminRole = roleMap.get('admin');
+  if (adminRole) {
+    const adminUser = await User.findByPk(1);
+    if (adminUser && adminUser.userTypeId !== adminRole.id) {
+      adminUser.userTypeId = adminRole.id;
+      await adminUser.save();
+    }
+  }
 }
+
+
+
+
+
+
+
+
+
 

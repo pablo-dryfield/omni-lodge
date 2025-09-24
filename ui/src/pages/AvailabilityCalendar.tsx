@@ -3,8 +3,11 @@ import { Calendar, momentLocalizer } from "react-big-calendar";
 import moment from "moment";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import { styled } from "@mui/system";
+import { PageAccessGuard } from "../components/access/PageAccessGuard";
+import { PAGE_SLUGS } from "../constants/pageSlugs";
 
 const localizer = momentLocalizer(moment);
+const PAGE_SLUG = PAGE_SLUGS.availabilityCalendar;
 
 const bookings = [
   {
@@ -23,17 +26,19 @@ const AvailabilityCalendarContainer = styled("div")({
 });
 
 const AvailabilityCalendar = () => (
-  <AvailabilityCalendarContainer>
-    <Calendar
-      onSelectEvent={(event) => {
-        console.log("Selected event:", event);
-      }}
-      localizer={localizer}
-      events={bookings}
-      startAccessor="start"
-      endAccessor="end"
-    />
-  </AvailabilityCalendarContainer>
+  <PageAccessGuard pageSlug={PAGE_SLUG}>
+    <AvailabilityCalendarContainer>
+      <Calendar
+        onSelectEvent={(event) => {
+          console.log("Selected event:", event);
+        }}
+        localizer={localizer}
+        events={bookings}
+        startAccessor="start"
+        endAccessor="end"
+      />
+    </AvailabilityCalendarContainer>
+  </PageAccessGuard>
 );
 
 export default AvailabilityCalendar;

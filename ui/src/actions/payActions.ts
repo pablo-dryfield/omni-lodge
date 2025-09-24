@@ -6,12 +6,13 @@ import { type ServerResponse } from '../types/general/ServerResponse';
 export const fetchPays = createAsyncThunk(
   'pay/pay',
   async (
-    { startDate, endDate }: { startDate: string; endDate: string },
+    { startDate, endDate, scope }: { startDate: string; endDate: string; scope?: 'self' | 'all' },
     { rejectWithValue },
   ) => {
     try {
+      const scopeQuery = scope ? `&scope=${scope}` : '';
       const response = await axiosInstance.get<ServerResponse<Pay>>(
-        `/api/reports/getCommissionByDateRange?startDate=${startDate}&endDate=${endDate}`,
+        `/api/reports/getCommissionByDateRange?startDate=${startDate}&endDate=${endDate}${scopeQuery}`,
         {
           withCredentials: true,
         },

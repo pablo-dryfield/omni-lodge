@@ -3,12 +3,12 @@ import { SessionState } from '../types/general/SessionState';
 import { loginUser, logoutUser } from '../actions/userActions';
 import { fetchSession } from '../actions/sessionActions';
 
-// Define the initial state using that type
 const initialState: SessionState = {
-    user: "",
-    authenticated: false,
-    checkingSession: false,
-    loggedUserId: 0,
+  user: '',
+  authenticated: false,
+  checkingSession: false,
+  loggedUserId: 0,
+  error: null,
 };
 
 const sessionSlice = createSlice({
@@ -17,36 +17,51 @@ const sessionSlice = createSlice({
   reducers: {
     setUser: (state, action: PayloadAction<string>) => {
       state.user = action.payload;
+      state.error = null;
     },
     setAuthenticated: (state, action: PayloadAction<boolean>) => {
       state.authenticated = action.payload;
     },
+    clearSessionError: (state) => {
+      state.error = null;
+    },
   },
   extraReducers: (builder) => {
     builder
-    .addCase(loginUser.fulfilled, (state, action) => {
-      state.loggedUserId = action.payload[0].userId;
-      state.authenticated = true;
-    })
-    .addCase(logoutUser.fulfilled, (state) => {
-      state.loggedUserId = 0;
-      state.authenticated = false;
-      state.user = "";
-    })
-    .addCase(fetchSession.pending, (state) => {
-      state.checkingSession = true;
-    })
-    .addCase(fetchSession.fulfilled, (state, action) => {
-      state.loggedUserId = action.payload[0].userId;
-      state.authenticated = true;
-      state.checkingSession = false;
-    })
-    .addCase(fetchSession.rejected, (state) => {
-      state.checkingSession = false;
-      state.authenticated = false;
-    });
-  }
+      .addCase(loginUser.pending, (state) => {
+        state.error = null;
+      })
+      .addCase(loginUser.fulfilled, (state, action) => {
+        state.loggedUserId = action.payload[0].userId;
+        state.authenticated = true;
+        state.error = null;
+      })
+      .addCase(loginUser.rejected, (state, action) => {
+        state.loggedUserId = 0;
+        state.authenticated = false;
+        state.error = (action.payload as string) ?? action.error.message ?? 'Login failed';
+      })
+      .addCase(logoutUser.fulfilled, (state) => {
+        state.loggedUserId = 0;
+        state.authenticated = false;
+        state.user = '';
+        state.error = null;
+      })
+      .addCase(fetchSession.pending, (state) => {
+        state.checkingSession = true;
+      })
+      .addCase(fetchSession.fulfilled, (state, action) => {
+        state.loggedUserId = action.payload[0].userId;
+        state.authenticated = true;
+        state.checkingSession = false;
+        state.error = null;
+      })
+      .addCase(fetchSession.rejected, (state) => {
+        state.checkingSession = false;
+        state.authenticated = false;
+      });
+  },
 });
 
-export const { setUser , setAuthenticated } = sessionSlice.actions;
+export const { setUser, setAuthenticated, clearSessionError } = sessionSlice.actions;
 export default sessionSlice.reducer;

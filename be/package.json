@@ -9,7 +9,8 @@
                     "build":  "npm run build:clean \u0026\u0026 tsc",
                     "start":  "npm run build \u0026\u0026 node dist/app.js",
                     "start:prod":  "cross-env NODE_ENV=production npm run build \u0026\u0026 cross-env NODE_ENV=production node dist/app.js",
-                    "start:dev":  "cross-env NODE_ENV=development npm run build \u0026\u0026 cross-env NODE_ENV=development node dist/app.js",
+                    "start:dev": "cross-env NODE_ENV=development npm run build \u0026\u0026 cross-env NODE_ENV=development node dist/app.js",
+                    "sync:access-control": "npm run build \u0026\u0026 node dist/scripts/syncAccessControl.js",
                     "postinstall":  "tsc",
                     "dev":  "nodemon src/app.ts",
                     "test":  "jest"
@@ -72,3 +73,4 @@
                             "ts-node":  "^10.9.2"
                         }
 }
+
