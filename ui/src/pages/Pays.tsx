@@ -173,6 +173,18 @@ const Pays: React.FC = () => {
           </Paper>
         );
       })}
+      <Paper key={9999999} shadow="sm" radius="lg" p="md" withBorder>
+        <Stack gap="sm">
+          <Group justify="space-between" align="flex-start">
+            <div>
+              <Title order={4}>Total: </Title>
+              <Text fw={600} size="lg">
+                {formatCurrency(summaries.reduce((a, item) => item.totalCommission + a, 0))}
+              </Text>
+            </div>
+          </Group>
+        </Stack>
+      </Paper>
     </Stack>
   );
 
