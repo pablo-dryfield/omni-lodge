@@ -56,7 +56,7 @@ const rolePageMatrix: Record<string, string[]> = {
   owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'pays'],
   manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'pays'],
   'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'pays'],
-  guide: ['dashboard', 'bookings', 'pays'],
+  guide: ['dashboard', 'bookings', 'bookings-manifest', 'pays'],
 };
 
 const roleModuleMatrix: Record<string, Record<string, string[]>> = {
@@ -87,18 +87,21 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
   manager: {
     'dashboard-overview': ['view'],
     'booking-management': ['view', 'create', 'update'],
+    'booking-manifest': ['view'],
     reporting: ['view', 'create'],
     'staff-payouts-all': ['view'],
   },
   'assistant-manager': {
     'dashboard-overview': ['view'],
     'booking-management': ['view', 'create', 'update'],
+    'booking-manifest': ['view'],
     reporting: ['view'],
     'staff-payouts-all': ['view'],
   },
   guide: {
     'dashboard-overview': ['view'],
     'booking-management': ['view'],
+    'booking-manifest': ['view'],
     'staff-payouts-self': ['view'],
   },
 };

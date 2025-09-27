@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import { UnifiedProduct, UnifiedOrder } from '../store/bookingPlatformsTypes';
 
 export type BookingCell = {
@@ -12,6 +13,28 @@ export type BookingCell = {
 };
 
 export type BookingGrid = Record<string, Record<string, BookingCell[]>>;
+
+const normalizeCount = (value?: number): number => {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return 0;
+  }
+  return value;
+};
+
+const resolveDisplayTime = (order: UnifiedOrder): string => {
+  if (order.pickupDateTime) {
+    const parsed = dayjs(order.pickupDateTime);
+    if (parsed.isValid()) {
+      return parsed.format('HH:mm');
+    }
+  }
+
+  if (order.timeslot && order.timeslot.trim()) {
+    return order.timeslot;
+  }
+
+  return '--:--';
+};
 
 const ensureProductDates = (
   grid: BookingGrid,
@@ -55,12 +78,13 @@ export function prepareBookingGrid(
 
     ensureProductDates(grid, order.productId, dateRange);
 
+    const displayTime = resolveDisplayTime(order);
     const dateCells = grid[order.productId][order.date];
-    let cell = dateCells.find((entry) => entry.time === order.timeslot);
+    let cell = dateCells.find((entry) => entry.time === displayTime);
 
     if (!cell) {
       cell = {
-        time: order.timeslot,
+        time: displayTime,
         date: order.date,
         productId: order.productId,
         productName: order.productName,
@@ -72,10 +96,13 @@ export function prepareBookingGrid(
       dateCells.push(cell);
     }
 
-    cell.totalPeople += order.quantity;
-    cell.menCount += order.menCount;
-    cell.womenCount += order.womenCount;
-    cell.orders.push(order);
+    const menCount = normalizeCount(order.menCount);
+    const womenCount = normalizeCount(order.womenCount);
+
+    cell.totalPeople += menCount + womenCount;
+    cell.menCount += menCount;
+    cell.womenCount += womenCount;
+    cell.orders.push({ ...order, timeslot: displayTime });
   });
 
   sortTimeslots(grid);

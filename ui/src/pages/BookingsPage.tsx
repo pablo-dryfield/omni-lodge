@@ -8,7 +8,6 @@ import { navigateToPage } from "../actions/navigationActions";
 import { GenericPageProps } from "../types/general/GenericPageProps";
 import { BookingsGrid } from "../components/BookingsGrid";
 import axiosInstance from "../utils/axiosInstance";
-import { transformEcwidOrders } from "../utils/ecwidAdapter";
 import { UnifiedOrder, UnifiedProduct } from "../store/bookingPlatformsTypes";
 import { prepareBookingGrid, BookingGrid } from "../utils/prepareBookingGrid";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
@@ -16,7 +15,6 @@ import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useModuleAccess } from "../hooks/useModuleAccess";
 
 const DATE_FORMAT = "YYYY-MM-DD";
-const RANGE_QUERY_FORMAT = "YYYY-MM-DD";
 
 type ViewMode = "week" | "month";
 
@@ -43,7 +41,7 @@ const formatRangeLabel = (start: Dayjs, end: Dayjs, mode: ViewMode): string => {
     return start.format("D MMM YYYY");
   }
 
-  return `${start.format("D MMM")} � ${end.format("D MMM YYYY")}`;
+  return `${start.format("D MMM")} - ${end.format("D MMM YYYY")}`;
 };
 
 const deriveErrorMessage = (error: unknown): string => {
@@ -143,6 +141,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
         productId: target.productId,
         time: target.time,
       });
+      params.set("productName", target.productName);
 
       navigate(`/bookings/manifest?${params.toString()}`, { state: { orders } });
     },
@@ -155,8 +154,8 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     }
 
     const controller = new AbortController();
-    const startParam = rangeStart.format(RANGE_QUERY_FORMAT);
-    const endParam = rangeEnd.format(RANGE_QUERY_FORMAT);
+    const startIso = rangeStart.startOf("day").format('YYYY-MM-DD');
+    const endIso = rangeEnd.endOf("day").format('YYYY-MM-DD');
 
     const fetchOrders = async () => {
       setFetchStatus("loading");
@@ -165,23 +164,18 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       try {
         const response = await axiosInstance.get("/api/ecwid/orders", {
           params: {
-            pickupFrom: startParam,
-            pickupTo: endParam,
+            pickupFrom: startIso,
+            pickupTo: endIso,
             limit: 200,
           },
           signal: controller.signal,
           withCredentials: true,
         });
+        const productsPayload = Array.isArray(response.data?.products) ? response.data.products : [];
+        const ordersPayload = Array.isArray(response.data?.orders) ? response.data.orders : [];
 
-        const rawItems = Array.isArray(response.data?.items)
-          ? response.data.items
-          : Array.isArray(response.data)
-          ? response.data
-          : [];
-
-        const transformed = transformEcwidOrders(rawItems as any[]);
-        setProducts(transformed.products);
-        setOrders(transformed.orders);
+        setProducts(productsPayload as UnifiedProduct[]);
+        setOrders(ordersPayload as UnifiedOrder[]);
         setFetchStatus("success");
       } catch (error) {
         if (controller.signal.aborted) {
@@ -294,8 +288,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                 grid={grid}
                 selectedDate={selectedDateKey}
                 onSelectDate={(nextDate) => setSelectedDate(dayjs(nextDate))}
-               // rangeStart={rangeStart.format(DATE_FORMAT)}
-                //setRangeStart={(next) => setRangeAnchor(dayjs(next))}
+                onOpenManifest={handleOpenManifest}
                 viewMode={viewMode}
               />
             )}
@@ -307,6 +300,5 @@ const BookingsPage = ({ title }: GenericPageProps) => {
 };
 
 export default BookingsPage;
-
 
 
