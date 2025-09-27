@@ -6,6 +6,12 @@ export interface UnifiedProduct {
   [key: string]: any;
 }
 
+export interface OrderExtras {
+  tshirts: number;
+  cocktails: number;
+  photos: number;
+}
+
 export interface UnifiedOrder {
   id: string;
   productId: string;
@@ -19,6 +25,7 @@ export interface UnifiedOrder {
   customerPhone?: string;
   platform: 'ecwid' | 'viator' | 'getyourguide' | string;
   pickupDateTime?: string;
+  extras?: OrderExtras;
   rawData?: any;
 }
 

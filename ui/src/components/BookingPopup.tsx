@@ -50,7 +50,7 @@ export const BookingPopup = ({ cell, onClose, onViewManifest }: BookingPopupProp
         <div>
           <Text fw={700}>{cell.productName}</Text>
           <Text size="sm" c="dimmed">
-            {cell.date} · {cell.time}
+            {cell.date} - {cell.time}
           </Text>
         </div>
         <Stack gap={4}>
@@ -70,3 +70,4 @@ export const BookingPopup = ({ cell, onClose, onViewManifest }: BookingPopupProp
     </div>
   );
 };
+

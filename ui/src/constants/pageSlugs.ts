@@ -1,6 +1,7 @@
 export const PAGE_SLUGS = {
   dashboard: "dashboard",
   bookings: "bookings",
+  bookingsManifest: "bookings-manifest",
   guests: "guests",
   channels: "channels",
   counters: "counters",

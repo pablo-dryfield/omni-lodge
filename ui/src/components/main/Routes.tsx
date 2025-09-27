@@ -3,6 +3,7 @@ import { Route, Routes as ReactRoutes } from "react-router-dom";
 import Home from "../../pages/Home";
 import Guests from "../../pages/Guests";
 import BookingsPage from "../../pages/BookingsPage";
+import BookingsManifestPage from "../../pages/BookingsManifestPage";
 import AvailabilityCalendar from "../../pages/AvailabilityCalendar";
 import Channels from "../../pages/Channels";
 import Counters from "../../pages/Counters";
@@ -27,6 +28,7 @@ const Routes = () => {
       <Route path="/" element={<Home title="Home" />} />
       <Route path="/guests" element={<Guests title="Guests" />} />
       <Route path="/bookings" element={<BookingsPage title="Bookings" />} />
+      <Route path="/bookings/manifest" element={<BookingsManifestPage title="Bookings Manifest" />} />
       <Route path="/calendar" element={<AvailabilityCalendar />} />
       <Route path="/channels" element={<Channels title="Channels" />} />
       <Route path="/counters" element={<Counters title="Counters" />} />
@@ -51,3 +53,4 @@ const Routes = () => {
 };
 
 export default Routes;
+

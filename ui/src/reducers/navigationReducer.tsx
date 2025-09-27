@@ -1,10 +1,14 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import PersonIcon from "@mui/icons-material/Person";
+import EventAvailableIcon from "@mui/icons-material/EventAvailable";
+import AssignmentTurnedInIcon from "@mui/icons-material/AssignmentTurnedIn";
 import SettingsIcon from "@mui/icons-material/Settings";
 import { NavigationState, NavigationPage } from "../types/general/NavigationState";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 
 export const baseNavigationPages: NavigationPage[] = [
+  { name: "Bookings", path: "/bookings", slug: PAGE_SLUGS.bookings, icon: <EventAvailableIcon fontSize="large" /> },
+  { name: "Manifest", path: "/bookings/manifest", slug: PAGE_SLUGS.bookingsManifest, icon: <AssignmentTurnedInIcon fontSize="large" /> },
   { name: "Product Types", path: "/productTypes", slug: PAGE_SLUGS.productTypes, icon: <PersonIcon fontSize="large" /> },
   { name: "Product", path: "/products", slug: PAGE_SLUGS.products, icon: <PersonIcon fontSize="large" /> },
   { name: "Counters", path: "/counters", slug: PAGE_SLUGS.counters, icon: <PersonIcon fontSize="large" /> },
@@ -33,3 +37,5 @@ const navigationSlice = createSlice({
 
 export const { setCurrentPage, setPages } = navigationSlice.actions;
 export default navigationSlice.reducer;
+
+
