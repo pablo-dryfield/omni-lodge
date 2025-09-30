@@ -4,11 +4,25 @@ import fs from 'fs';
 import path, { dirname }  from 'path';
 import { fileURLToPath } from 'url';
 import logger from './utils/logger.js';
+import { createProxyMiddleware } from 'http-proxy-middleware';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
+app.set('trust proxy', 1);
+
+app.use('/api', createProxyMiddleware({
+  target: 'http://127.0.0.1:3001',
+  changeOrigin: false,
+  xfwd: true,
+  ws: true,
+  proxyTimeout: 30000,
+  onError(err, req, res) {
+    logger.error('API proxy error', err);
+    res.status(502).send('Bad gateway');
+  }
+}));
 
 // Serve static files from the 'build' directory
 app.use(express.static(path.join(__dirname, '..', 'ui', 'build')));

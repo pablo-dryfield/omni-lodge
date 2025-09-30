@@ -8,7 +8,7 @@ export const fetchProductTypes = createAsyncThunk(
   'productTypes/fetchProductTypes',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<ProductType>>>('/api/productTypes', {
+      const response = await axiosInstance.get<ServerResponse<Partial<ProductType>>>('/productTypes', {
         withCredentials: true
       });
       return response.data;
@@ -26,7 +26,7 @@ export const createProductType = createAsyncThunk(
   'productTypes/createProductType',
   async (productTypeData: Partial<ProductType>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<ProductType>>('/api/productTypes', productTypeData, {
+      const response = await axiosInstance.post<Partial<ProductType>>('/productTypes', productTypeData, {
         withCredentials: true
       });
       return response.data;
@@ -44,7 +44,7 @@ export const updateProductType = createAsyncThunk(
   'productTypes/updateProductType',
   async ({ productTypeId, productTypeData }: { productTypeId: number; productTypeData: Partial<ProductType>; }, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.put<Partial<ProductType>>(`/api/productTypes/${productTypeId}`, productTypeData, {
+      const response = await axiosInstance.put<Partial<ProductType>>(`/productTypes/${productTypeId}`, productTypeData, {
         withCredentials: true
       });
       return response.data;
@@ -62,7 +62,7 @@ export const deleteProductType = createAsyncThunk(
   'productTypes/deleteProductType',
   async (productTypeId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/productTypes/${productTypeId}`, {
+      await axiosInstance.delete(`/productTypes/${productTypeId}`, {
         withCredentials: true
       });
       return productTypeId;

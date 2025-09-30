@@ -7,7 +7,7 @@ export const fetchGoogleReviews = createAsyncThunk(
   'googleReviews/fetchGoogleReviews',
   async ({ nextPageToken }: { nextPageToken?: string } = {}, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<Review>>>(`/api/reviews/googleReviews${nextPageToken ? `?pageToken=${nextPageToken}` : ''}`, {
+      const response = await axiosInstance.get<ServerResponse<Partial<Review>>>(`/reviews/googleReviews${nextPageToken ? `?pageToken=${nextPageToken}` : ''}`, {
         withCredentials: true,
       });
       return response.data;

@@ -8,7 +8,7 @@ export const fetchRolePagePermissions = createAsyncThunk(
   async (_, { rejectWithValue }) => {
     try {
       const response = await axiosInstance.get<ServerResponse<Partial<RolePagePermission>>>(
-        "/api/rolePagePermissions",
+        "/rolePagePermissions",
         {
           withCredentials: true,
         }
@@ -28,7 +28,7 @@ export const createRolePagePermission = createAsyncThunk(
   async (payload: Partial<RolePagePermission>, { rejectWithValue }) => {
     try {
       const response = await axiosInstance.post<Partial<RolePagePermission>[]>(
-        "/api/rolePagePermissions",
+        "/rolePagePermissions",
         payload,
         {
           withCredentials: true,
@@ -55,7 +55,7 @@ export const updateRolePagePermission = createAsyncThunk(
   ) => {
     try {
       const response = await axiosInstance.put<Partial<RolePagePermission>[]>(
-        `/api/rolePagePermissions/${id}`,
+        `/rolePagePermissions/${id}`,
         updates,
         {
           withCredentials: true,
@@ -75,7 +75,7 @@ export const deleteRolePagePermission = createAsyncThunk(
   "rolePagePermissions/deleteRolePagePermission",
   async (id: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/rolePagePermissions/${id}`, {
+      await axiosInstance.delete(`/rolePagePermissions/${id}`, {
         withCredentials: true,
       });
       return id;

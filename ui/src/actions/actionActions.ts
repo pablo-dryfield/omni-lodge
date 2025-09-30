@@ -8,7 +8,7 @@ export const fetchActions = createAsyncThunk(
   async (_, { rejectWithValue }) => {
     try {
       const response = await axiosInstance.get<ServerResponse<Partial<Action>>>(
-        "/api/actions",
+        "/actions",
         {
           withCredentials: true,
         }

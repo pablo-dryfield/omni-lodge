@@ -12,7 +12,7 @@ export const fetchCounterUsers = createAsyncThunk(
   'counterUsers/fetchCounterUsers',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<CounterUser>>>('/api/counterUsers', {
+      const response = await axiosInstance.get<ServerResponse<Partial<CounterUser>>>('/counterUsers', {
         withCredentials: true
       });
       return response.data;
@@ -36,7 +36,7 @@ export const createCounterUser = createAsyncThunk(
   'counterUsers/createCounterUser',
   async (counterUserData: Partial<CounterUser>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<CounterUser>>('/api/counterUsers', counterUserData, {
+      const response = await axiosInstance.post<Partial<CounterUser>>('/counterUsers', counterUserData, {
         withCredentials: true
       });
       return response.data;
@@ -53,7 +53,7 @@ export const createBulkCounterUser = createAsyncThunk(
   'counterUsers/createBulkCounterUser',
   async (counterUserData: Partial<CounterUser>[], { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<CounterUser>>('/api/counterUsers/bulkCounterUsers', {data: counterUserData}, {
+      const response = await axiosInstance.post<Partial<CounterUser>>('/counterUsers/bulkCounterUsers', {data: counterUserData}, {
         withCredentials: true
       });
       return response.data;
@@ -77,7 +77,7 @@ export const updateCounterUser = createAsyncThunk(
   'counterUsers/updateCounterUser',
   async ({ counterUserId, counterUserData }: { counterUserId: number; counterUserData: Partial<CounterUser>; }, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.put<Partial<CounterUser>>(`/api/counterUsers/${counterUserId}`, counterUserData, {
+      const response = await axiosInstance.put<Partial<CounterUser>>(`/counterUsers/${counterUserId}`, counterUserData, {
         withCredentials: true
       });
       return response.data;
@@ -100,7 +100,7 @@ export const deleteCounterUser = createAsyncThunk(
   'counterUsers/deleteCounterUser',
   async (counterUserId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/counterUsers/${counterUserId}`, {
+      await axiosInstance.delete(`/counterUsers/${counterUserId}`, {
         withCredentials: true
       });
       return counterUserId;

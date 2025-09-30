@@ -12,7 +12,7 @@ export const fetchProducts = createAsyncThunk(
   'products/fetchProducts',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<Product>>>('/api/products', {
+      const response = await axiosInstance.get<ServerResponse<Partial<Product>>>('/products', {
         withCredentials: true
       });
       return response.data;
@@ -35,7 +35,7 @@ export const fetchActiveProducts = createAsyncThunk(
   'products/fetchProducts',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<Product>>>('/api/products/active', {
+      const response = await axiosInstance.get<ServerResponse<Partial<Product>>>('/products/active', {
         withCredentials: true
       });
       return response.data;
@@ -58,7 +58,7 @@ export const createProduct = createAsyncThunk(
   'products/createProduct',
   async (productData: Partial<Product>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<Product>>('/api/products', productData, {
+      const response = await axiosInstance.post<Partial<Product>>('/products', productData, {
         withCredentials: true
       });
       return response.data;
@@ -82,7 +82,7 @@ export const updateProduct = createAsyncThunk(
   'products/updateProduct',
   async ({ productId, productData }: { productId: number; productData: Partial<Product>; }, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.put<Partial<Product>>(`/api/products/${productId}`, productData, {
+      const response = await axiosInstance.put<Partial<Product>>(`/products/${productId}`, productData, {
         withCredentials: true
       });
       return response.data;
@@ -105,7 +105,7 @@ export const deleteProduct = createAsyncThunk(
   'products/deleteProduct',
   async (productId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/products/${productId}`, {
+      await axiosInstance.delete(`/products/${productId}`, {
         withCredentials: true
       });
       return productId;

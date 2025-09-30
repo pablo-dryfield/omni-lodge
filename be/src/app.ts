@@ -1,10 +1,8 @@
-import https from 'https';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import express, { Request, Response } from 'express';
-import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
@@ -97,28 +95,20 @@ const allowedOrigins = [
   '195.20.3.6'
 ];
 
-app.use(cors({
-  origin: function(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Authorization', 'Content-Type'],
-  credentials: true
-}));
-
 app.use(express.json());
 
-app.use(helmet.contentSecurityPolicy({
-  directives: {
-    defaultSrc: ["'self'"],
-    scriptSrc: ["'self'", "'unsafe-inline'"],
-    styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-  },
-}));
+app.use(
+  helmet.contentSecurityPolicy({
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
+      imgSrc: ["'self'", "data:"],
+      connectSrc: ["'self'"], // same-origin API calls
+    },
+  })
+);
 
 app.use(instrumentMiddleware);
 
@@ -167,15 +157,8 @@ sequelize.sync({ force: false, alter: shouldAlterSchema })
     }
     if(process.env.NODE_ENV === 'production'){
       app.set('trust proxy', 1);
-      const sslDir = path.join(__dirname, '../src/ssl');
-
-      const options = {
-        key: fs.readFileSync(path.join(sslDir, 'cf-origin.key')),
-        cert: fs.readFileSync(path.join(sslDir, 'cf-origin.pem')),
-      };
-      const server = https.createServer(options, app);
-      server.listen(PORT, '0.0.0.0', () => {
-        logger.info(`Server is running on port ${PORT}`);
+      app.listen(PORT, '127.0.0.1', () => {
+      logger.info(`backend listening on http://127.0.0.1:${PORT}`);
     });
     }else{
       app.listen(PORT, '0.0.0.0', () => {
