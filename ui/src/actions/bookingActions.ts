@@ -12,7 +12,7 @@ export const fetchBookings = createAsyncThunk(
   'bookings/fetchBookings',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<Booking>>>('/api/bookings', {
+      const response = await axiosInstance.get<ServerResponse<Partial<Booking>>>('/bookings', {
         withCredentials: true
       });
       return response.data;
@@ -35,7 +35,7 @@ export const createBooking = createAsyncThunk(
   'bookings/createBooking',
   async (bookingData: Partial<Booking>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<Booking>>('/api/bookings', bookingData, {
+      const response = await axiosInstance.post<Partial<Booking>>('/bookings', bookingData, {
         withCredentials: true
       });
       return response.data;
@@ -59,7 +59,7 @@ export const updateBooking = createAsyncThunk(
   'bookings/updateBooking',
   async ({ bookingId, bookingData }: { bookingId: number; bookingData: Partial<Booking>; }, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.put<Partial<Booking>>(`/api/bookings/${bookingId}`, bookingData, {
+      const response = await axiosInstance.put<Partial<Booking>>(`/bookings/${bookingId}`, bookingData, {
         withCredentials: true
       });
       return response.data;
@@ -82,7 +82,7 @@ export const deleteBooking = createAsyncThunk(
   'bookings/deleteBooking',
   async (bookingId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/bookings/${bookingId}`, {
+      await axiosInstance.delete(`/bookings/${bookingId}`, {
         withCredentials: true
       });
       return bookingId;

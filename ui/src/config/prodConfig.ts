@@ -1,5 +1,5 @@
 const config = {
-    baseURL: 'https://api.omni-lodge.com',
+    baseURL: '/api',
 };
 
 export default config;

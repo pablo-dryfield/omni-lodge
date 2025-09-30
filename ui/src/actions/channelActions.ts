@@ -12,7 +12,7 @@ export const fetchChannels = createAsyncThunk(
   'channels/fetchChannels',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<Channel>>>('/api/channels', {
+      const response = await axiosInstance.get<ServerResponse<Partial<Channel>>>('/channels', {
         withCredentials: true
       });
       return response.data;
@@ -35,7 +35,7 @@ export const createChannel = createAsyncThunk(
   'channels/createChannel',
   async (channelData: Partial<Channel>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<Channel>>('/api/channels', channelData, {
+      const response = await axiosInstance.post<Partial<Channel>>('/channels', channelData, {
         withCredentials: true
       });
       return response.data;
@@ -59,7 +59,7 @@ export const updateChannel = createAsyncThunk(
   'channels/updateChannel',
   async ({ channelId, channelData }: { channelId: number; channelData: Partial<Channel>; }, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.put<Partial<Channel>>(`/api/channels/${channelId}`, channelData, {
+      const response = await axiosInstance.put<Partial<Channel>>(`/channels/${channelId}`, channelData, {
         withCredentials: true
       });
       return response.data;
@@ -82,7 +82,7 @@ export const deleteChannel = createAsyncThunk(
   'channels/deleteChannel',
   async (channelId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/channels/${channelId}`, {
+      await axiosInstance.delete(`/channels/${channelId}`, {
         withCredentials: true
       });
       return channelId;

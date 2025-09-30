@@ -7,7 +7,7 @@ export const fetchModules = createAsyncThunk(
   "modules/fetchModules",
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<Module>>>("/api/modules", {
+      const response = await axiosInstance.get<ServerResponse<Partial<Module>>>("/modules", {
         withCredentials: true,
       });
       return response.data;
@@ -24,7 +24,7 @@ export const createModule = createAsyncThunk(
   "modules/createModule",
   async (moduleData: Partial<Module>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<Module>[]>("/api/modules", moduleData, {
+      const response = await axiosInstance.post<Partial<Module>[]>("/modules", moduleData, {
         withCredentials: true,
       });
       return response.data[0];
@@ -45,7 +45,7 @@ export const updateModule = createAsyncThunk(
   ) => {
     try {
       const response = await axiosInstance.put<Partial<Module>[]>(
-        `/api/modules/${moduleId}`,
+        `/modules/${moduleId}`,
         moduleData,
         {
           withCredentials: true,
@@ -65,7 +65,7 @@ export const deleteModule = createAsyncThunk(
   "modules/deleteModule",
   async (moduleId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/modules/${moduleId}`, {
+      await axiosInstance.delete(`/modules/${moduleId}`, {
         withCredentials: true,
       });
       return moduleId;

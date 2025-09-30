@@ -25,7 +25,7 @@ export const loginUser = createAsyncThunk(
   async (credentials: Partial<User>, { rejectWithValue }) => {
     try {
       const response = await axiosInstance.post<[{ message: string; userId: number }]>(
-        '/api/users/login',
+        '/users/login',
         credentials,
         {
           withCredentials: true,
@@ -43,7 +43,7 @@ export const logoutUser = createAsyncThunk(
   async (_, { rejectWithValue }) => {
     try {
       const response = await axiosInstance.post<[{ message: string }]>(
-        '/api/users/logout',
+        '/users/logout',
         {
           withCredentials: true,
         },
@@ -60,7 +60,7 @@ export const fetchUsers = createAsyncThunk(
   async (_, { rejectWithValue }) => {
     try {
       const response = await axiosInstance.get<ServerResponse<Partial<User>>>(
-        '/api/users',
+        '/users',
         {
           withCredentials: true,
         },
@@ -77,7 +77,7 @@ export const fetchActiveUsers = createAsyncThunk(
   async (_, { rejectWithValue }) => {
     try {
       const response = await axiosInstance.get<ServerResponse<Partial<User>>>(
-        '/api/users/active',
+        '/users/active',
         {
           withCredentials: true,
         },
@@ -94,7 +94,7 @@ export const createUser = createAsyncThunk(
   async (userData: Partial<User>, { rejectWithValue }) => {
     try {
       const response = await axiosInstance.post<Partial<User>>(
-        '/api/users/register',
+        '/users/register',
         userData,
         {
           withCredentials: true,
@@ -115,7 +115,7 @@ export const updateUser = createAsyncThunk(
   ) => {
     try {
       const response = await axiosInstance.put<Partial<User>>(
-        `/api/users/${userId}`,
+        `/users/${userId}`,
         userData,
         {
           withCredentials: true,
@@ -132,7 +132,7 @@ export const deleteUser = createAsyncThunk(
   'users/deleteUser',
   async (userId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/users/${userId}`, {
+      await axiosInstance.delete(`/users/${userId}`, {
         withCredentials: true,
       });
       return userId;

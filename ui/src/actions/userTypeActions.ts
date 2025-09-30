@@ -8,7 +8,7 @@ export const fetchUserTypes = createAsyncThunk(
   'userTypes/fetchUserTypes',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<UserType>>>('/api/userTypes', {
+      const response = await axiosInstance.get<ServerResponse<Partial<UserType>>>('/userTypes', {
         withCredentials: true
       });
       return response.data;
@@ -26,7 +26,7 @@ export const createUserType = createAsyncThunk(
   'userTypes/createUserType',
   async (userTypeData: Partial<UserType>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<UserType>>('/api/userTypes', userTypeData, {
+      const response = await axiosInstance.post<Partial<UserType>>('/userTypes', userTypeData, {
         withCredentials: true
       });
       return response.data;
@@ -44,7 +44,7 @@ export const updateUserType = createAsyncThunk(
   'userTypes/updateUserType',
   async ({ userTypeId, userTypeData }: { userTypeId: number; userTypeData: Partial<UserType>; }, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.put<Partial<UserType>>(`/api/userTypes/${userTypeId}`, userTypeData, {
+      const response = await axiosInstance.put<Partial<UserType>>(`/userTypes/${userTypeId}`, userTypeData, {
         withCredentials: true
       });
       return response.data;
@@ -62,7 +62,7 @@ export const deleteUserType = createAsyncThunk(
   'userTypes/deleteUserType',
   async (userTypeId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/userTypes/${userTypeId}`, {
+      await axiosInstance.delete(`/userTypes/${userTypeId}`, {
         withCredentials: true
       });
       return userTypeId;

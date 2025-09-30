@@ -12,7 +12,7 @@ export const fetchPays = createAsyncThunk(
     try {
       const scopeQuery = scope ? `&scope=${scope}` : '';
       const response = await axiosInstance.get<ServerResponse<Pay>>(
-        `/api/reports/getCommissionByDateRange?startDate=${startDate}&endDate=${endDate}${scopeQuery}`,
+        `/reports/getCommissionByDateRange?startDate=${startDate}&endDate=${endDate}${scopeQuery}`,
         {
           withCredentials: true,
         },

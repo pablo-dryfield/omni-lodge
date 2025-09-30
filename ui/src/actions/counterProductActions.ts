@@ -12,7 +12,7 @@ export const fetchCounterProducts = createAsyncThunk(
   'counterProducts/fetchCounterProducts',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<CounterProduct>>>('/api/counterProducts', {
+      const response = await axiosInstance.get<ServerResponse<Partial<CounterProduct>>>('/counterProducts', {
         withCredentials: true
       });
       return response.data;
@@ -36,7 +36,7 @@ export const createCounterProduct = createAsyncThunk(
   'counterProducts/createCounterProduct',
   async (counterProductData: Partial<CounterProduct>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<CounterProduct>>('/api/counterProducts', counterProductData, {
+      const response = await axiosInstance.post<Partial<CounterProduct>>('/counterProducts', counterProductData, {
         withCredentials: true
       });
       return response.data;
@@ -53,7 +53,7 @@ export const createBulkCounterProduct = createAsyncThunk(
   'counterProducts/createBulkCounterProduct',
   async (counterProductData: Partial<CounterProduct>[], { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<CounterProduct>>('/api/counterProducts/bulkCounterProducts', {data: counterProductData}, {
+      const response = await axiosInstance.post<Partial<CounterProduct>>('/counterProducts/bulkCounterProducts', {data: counterProductData}, {
         withCredentials: true
       });
       return response.data;
@@ -76,7 +76,7 @@ export const createCounterProductProduct = createAsyncThunk(
   'counterProducts/createCounterProductProduct',
   async (counterProductProductData: Partial<CounterProduct>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<CounterProduct>>('/api/counterProductProducts', counterProductProductData, {
+      const response = await axiosInstance.post<Partial<CounterProduct>>('/counterProductProducts', counterProductProductData, {
         withCredentials: true
       });
       return response.data;
@@ -100,7 +100,7 @@ export const updateCounterProduct = createAsyncThunk(
   'counterProducts/updateCounterProduct',
   async ({ counterProductId, counterProductData }: { counterProductId: number; counterProductData: Partial<CounterProduct>; }, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.put<Partial<CounterProduct>>(`/api/counterProducts/${counterProductId}`, counterProductData, {
+      const response = await axiosInstance.put<Partial<CounterProduct>>(`/counterProducts/${counterProductId}`, counterProductData, {
         withCredentials: true
       });
       return response.data;
@@ -123,7 +123,7 @@ export const deleteCounterProduct = createAsyncThunk(
   'counterProducts/deleteCounterProduct',
   async (counterProductId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/counterProducts/${counterProductId}`, {
+      await axiosInstance.delete(`/counterProducts/${counterProductId}`, {
         withCredentials: true
       });
       return counterProductId;

@@ -7,7 +7,7 @@ export const fetchPages = createAsyncThunk(
   "pages/fetchPages",
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<Page>>>("/api/pages", {
+      const response = await axiosInstance.get<ServerResponse<Partial<Page>>>("/pages", {
         withCredentials: true,
       });
       return response.data;
@@ -24,7 +24,7 @@ export const createPage = createAsyncThunk(
   "pages/createPage",
   async (pageData: Partial<Page>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<Page>[]>("/api/pages", pageData, {
+      const response = await axiosInstance.post<Partial<Page>[]>("/pages", pageData, {
         withCredentials: true,
       });
       return response.data[0];
@@ -45,7 +45,7 @@ export const updatePage = createAsyncThunk(
   ) => {
     try {
       const response = await axiosInstance.put<Partial<Page>[]>(
-        `/api/pages/${pageId}`,
+        `/pages/${pageId}`,
         pageData,
         {
           withCredentials: true,
@@ -65,7 +65,7 @@ export const deletePage = createAsyncThunk(
   "pages/deletePage",
   async (pageId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/pages/${pageId}`, {
+      await axiosInstance.delete(`/pages/${pageId}`, {
         withCredentials: true,
       });
       return pageId;

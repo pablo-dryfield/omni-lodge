@@ -12,7 +12,7 @@ export const fetchCounters = createAsyncThunk(
   'counters/fetchCounters',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<Counter>>>('/api/counters', {
+      const response = await axiosInstance.get<ServerResponse<Partial<Counter>>>('/counters', {
         withCredentials: true
       });
       return response.data;
@@ -36,7 +36,7 @@ export const createCounter = createAsyncThunk(
   'counters/createCounter',
   async (counterData: Partial<Counter>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<Counter>>('/api/counters', counterData, {
+      const response = await axiosInstance.post<Partial<Counter>>('/counters', counterData, {
         withCredentials: true
       });
       return response.data;
@@ -60,7 +60,7 @@ export const updateCounter = createAsyncThunk(
   'counters/updateCounter',
   async ({ counterId, counterData }: { counterId: number; counterData: Partial<Counter>; }, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.put<Partial<Counter>>(`/api/counters/${counterId}`, counterData, {
+      const response = await axiosInstance.put<Partial<Counter>>(`/counters/${counterId}`, counterData, {
         withCredentials: true
       });
       return response.data;
@@ -83,7 +83,7 @@ export const deleteCounter = createAsyncThunk(
   'counters/deleteCounter',
   async (counterId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/api/counters/${counterId}`, {
+      await axiosInstance.delete(`/counters/${counterId}`, {
         withCredentials: true
       });
       return counterId;

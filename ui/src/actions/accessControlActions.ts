@@ -8,7 +8,7 @@ export const fetchAccessSnapshot = createAsyncThunk<
   { rejectValue: string }
 >("accessControl/fetchSnapshot", async (_, { rejectWithValue }) => {
   try {
-    const response = await axiosInstance.get<AccessSnapshot>("/api/accessControl/me", {
+    const response = await axiosInstance.get<AccessSnapshot>("/accessControl/me", {
       withCredentials: true,
     });
 
