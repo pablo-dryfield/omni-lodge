@@ -20,13 +20,7 @@ app.use(
     xfwd: true,
     ws: true,
     proxyTimeout: 30000,
-    // ⬇️ THIS is the important bit
-    pathRewrite: (path) => `/api${path}`,  // '/users/login' -> '/api/users/login'
-    logLevel: 'debug',
-    onProxyReq(proxyReq, req) {
-      // helpful one-liner to see exactly what hits the BE
-      console.log('→ proxying', req.method, req.originalUrl, 'to', proxyReq.path);
-    },
+    pathRewrite: (path) => `/api${path}`,  
   })
 );
 
