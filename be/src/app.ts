@@ -73,7 +73,29 @@ const app = express();
 app.use(cookieParser());
 
 // Configure CORS middleware
-const allowedOrigins = ['http://localhost:3000', 'https://omni-lodge.netlify.app', '195.20.3.6', 'https://omni-lodge.work.gd:443','http://omni-lodge.work.gd:443', 'http://23.95.192.213:443', 'https://23.95.192.213:443', 'https://23.95.192.213', 'http://23.95.192.213','https://omni-lodge.work.gd','http://omni-lodge.work.gd','http://omni-lodge.com','http://omni-lodge.com','https://omni-lodge.com:443','http://omni-lodge.com:443'];
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'https://omni-lodge.netlify.app',
+  'https://omni-lodge.com',
+  'https://omni-lodge.com:443',
+  'https://www.omni-lodge.com',
+  'https://www.omni-lodge.com:443',
+  'http://omni-lodge.com',
+  'http://www.omni-lodge.com',
+  'https://omni-lodge.work.gd',
+  'https://omni-lodge.work.gd:443',
+  'http://omni-lodge.work.gd',
+  'http://omni-lodge.work.gd:443',
+  'https://api.omni-lodge.com',
+  'https://api.omni-lodge.com:443',
+  'http://api.omni-lodge.com',
+  'https://23.95.192.213',
+  'https://23.95.192.213:443',
+  'http://23.95.192.213',
+  'http://23.95.192.213:443',
+  '195.20.3.6'
+];
 
 app.use(cors({
   origin: function(origin, callback) {
@@ -168,10 +190,4 @@ sequelize.sync({ force: false, alter: shouldAlterSchema })
       logger.error('Database synchronization failed', err);
     }
   });
-
-
-
-
-
-
 
