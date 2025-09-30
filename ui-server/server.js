@@ -32,6 +32,11 @@ app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '..', 'ui', 'build', 'index.html'));
 });
 
+// catch-all only for non-API routes
+app.get(/^\/(?!api).*/, (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'ui', 'build', 'index.html'));
+});
+
 if(process.env.NODE_ENV === 'production'){
   // Define the directory path where the SSL certificate files are located
   const sslDir = path.join(__dirname, '..', 'be', 'src','ssl');
