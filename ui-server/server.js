@@ -24,9 +24,8 @@ if(process.env.NODE_ENV === 'production'){
 
   // Read SSL certificate and private key files
   const options = {
-    key: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.key')), // Read the private key file
-    cert: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.cer')), // Read the SSL certificate file
-    ca: fs.readFileSync(path.join(sslDir, 'ca.cer')), // Read the CA certificate file (if applicable)
+    key: fs.readFileSync(path.join(sslDir, 'cf-origin.key')), // Read the private key file
+    cert: fs.readFileSync(path.join(sslDir, 'cf-origin.pem')), // Read the SSL certificate file
   };
   const server = https.createServer(options, app);
   server.listen(443, '0.0.0.0', () => {
