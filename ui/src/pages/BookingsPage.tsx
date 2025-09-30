@@ -162,7 +162,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       setErrorMessage(null);
 
       try {
-        const response = await axiosInstance.get("/api/ecwid/orders", {
+        const response = await axiosInstance.get("/ecwid/orders", {
           params: {
             pickupFrom: startIso,
             pickupTo: endIso,

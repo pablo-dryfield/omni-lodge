@@ -332,7 +332,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
       try {
 
-        const response = await axiosInstance.get<ManifestResponse>("/api/ecwid/manifest", {
+        const response = await axiosInstance.get<ManifestResponse>("/ecwid/manifest", {
 
           params: {
 
