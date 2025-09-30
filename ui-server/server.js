@@ -12,17 +12,17 @@ const __dirname = dirname(__filename);
 const app = express();
 app.set('trust proxy', 1);
 
-app.use('/api', createProxyMiddleware({
-  target: 'http://127.0.0.1:3001',
-  changeOrigin: false,
-  xfwd: true,
-  ws: true,
-  proxyTimeout: 30000,
-  onError(err, req, res) {
-    logger.error('API proxy error', err);
-    res.status(502).send('Bad gateway');
-  }
-}));
+app.use(
+  '/api',
+  createProxyMiddleware({
+    target: 'http://127.0.0.1:3001',
+    changeOrigin: false,
+    xfwd: true,
+    ws: true,
+    proxyTimeout: 30000,
+    pathRewrite: (path, req) => path, // keep /api prefix
+  })
+);
 
 // Serve static files from the 'build' directory
 app.use(express.static(path.join(__dirname, '..', 'ui', 'build')));
