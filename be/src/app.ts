@@ -150,7 +150,6 @@ sequelize.sync({ force: false, alter: shouldAlterSchema })
       const options = {
         key: fs.readFileSync(path.join(sslDir, 'cf-origin.key')),
         cert: fs.readFileSync(path.join(sslDir, 'cf-origin.pem')),
-        ca: fs.readFileSync(path.join(sslDir, 'ca.cer')),
       };
       const server = https.createServer(options, app);
       server.listen(PORT, '0.0.0.0', () => {
