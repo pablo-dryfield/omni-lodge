@@ -27,11 +27,6 @@ app.use('/api', createProxyMiddleware({
 // Serve static files from the 'build' directory
 app.use(express.static(path.join(__dirname, '..', 'ui', 'build')));
 
-// Route for serving the index.html file (for client-side routing)
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '..', 'ui', 'build', 'index.html'));
-});
-
 // catch-all only for non-API routes
 app.get(/^\/(?!api).*/, (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'ui', 'build', 'index.html'));
