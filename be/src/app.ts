@@ -73,7 +73,7 @@ const app = express();
 app.use(cookieParser());
 
 // Configure CORS middleware
-const allowedOrigins = ['http://localhost:3000', 'https://omni-lodge.netlify.app', '195.20.3.6', 'https://omni-lodge.work.gd:443','http://omni-lodge.work.gd:443', 'http://23.95.192.213:443', 'https://23.95.192.213:443', 'https://23.95.192.213', 'http://23.95.192.213','https://omni-lodge.work.gd','http://omni-lodge.work.gd'];
+const allowedOrigins = ['http://localhost:3000', 'https://omni-lodge.netlify.app', '195.20.3.6', 'https://omni-lodge.work.gd:443','http://omni-lodge.work.gd:443', 'http://23.95.192.213:443', 'https://23.95.192.213:443', 'https://23.95.192.213', 'http://23.95.192.213','https://omni-lodge.work.gd','http://omni-lodge.work.gd','http://omni-lodge.com','http://omni-lodge.com','https://omni-lodge.com:443','http://omni-lodge.com:443'];
 
 app.use(cors({
   origin: function(origin, callback) {
@@ -144,11 +144,12 @@ sequelize.sync({ force: false, alter: shouldAlterSchema })
       logger.error('Failed to initialize access control data', seedError);
     }
     if(process.env.NODE_ENV === 'production'){
+      app.set('trust proxy', 1);
       const sslDir = path.join(__dirname, '../src/ssl');
 
       const options = {
-        key: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.key')),
-        cert: fs.readFileSync(path.join(sslDir, 'omni-lodge.work.gd.cer')),
+        key: fs.readFileSync(path.join(sslDir, 'cf-origin.key')),
+        cert: fs.readFileSync(path.join(sslDir, 'cf-origin.pem')),
         ca: fs.readFileSync(path.join(sslDir, 'ca.cer')),
       };
       const server = https.createServer(options, app);
