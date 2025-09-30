@@ -20,7 +20,8 @@ app.use(
     xfwd: true,
     ws: true,
     proxyTimeout: 30000,
-    pathRewrite: (path, req) => path, // keep /api prefix
+    pathRewrite: (path) => path.replace(/^\/api/, '/api'), // keep /api in forwarded path
+    logLevel: 'debug',
   })
 );
 
