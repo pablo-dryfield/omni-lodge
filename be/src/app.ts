@@ -1,5 +1,4 @@
-import fs from 'fs';
-import path from 'path';
+import cors from 'cors';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import express, { Request, Response } from 'express';
@@ -48,7 +47,6 @@ import { initializeAccessControl } from './utils/initializeAccessControl.js';
 collectDefaultMetrics();
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 // Load environment variables
 const environment = (process.env.NODE_ENV || 'development').trim();
@@ -73,27 +71,20 @@ app.use(cookieParser());
 // Configure CORS middleware
 const allowedOrigins = [
   'http://localhost:3000',
-  'http://localhost:3001',
-  'https://omni-lodge.netlify.app',
-  'https://omni-lodge.com',
-  'https://omni-lodge.com:443',
-  'https://www.omni-lodge.com',
-  'https://www.omni-lodge.com:443',
-  'http://omni-lodge.com',
-  'http://www.omni-lodge.com',
-  'https://omni-lodge.work.gd',
-  'https://omni-lodge.work.gd:443',
-  'http://omni-lodge.work.gd',
-  'http://omni-lodge.work.gd:443',
-  'https://api.omni-lodge.com',
-  'https://api.omni-lodge.com:443',
-  'http://api.omni-lodge.com',
-  'https://23.95.192.213',
-  'https://23.95.192.213:443',
-  'http://23.95.192.213',
-  'http://23.95.192.213:443',
-  '195.20.3.6'
 ];
+
+// CORS: dev only
+if (process.env.NODE_ENV !== 'production') {
+  app.use(
+    cors({
+      origin: allowedOrigins, // your UI dev server
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Authorization', 'Content-Type'],
+    })
+  );
+  app.options('*', cors()); // handle preflight
+}
 
 app.use(express.json());
 
