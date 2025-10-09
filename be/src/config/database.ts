@@ -17,6 +17,9 @@ import Action from "../models/Action.js";
 import ModuleAction from "../models/ModuleAction.js";
 import RolePagePermission from "../models/RolePagePermission.js";
 import RoleModulePermission from "../models/RoleModulePermission.js";
+import Addon from "../models/Addon.js";
+import ProductAddon from "../models/ProductAddon.js";
+import CounterChannelMetric from "../models/CounterChannelMetric.js";
 
 const environment = (process.env.NODE_ENV || "development").trim();
 const envFile = environment === "production" ? ".env.prod" : ".env.dev";
@@ -54,8 +57,11 @@ const sequelize = new Sequelize({
     Counter,
     CounterProduct,
     CounterUser,
+    CounterChannelMetric,
     Product,
+    ProductAddon,
     ProductType,
+    Addon,
     UserType,
     Page,
     Module,

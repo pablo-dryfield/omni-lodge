@@ -1,4 +1,5 @@
-import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, DataType } from 'sequelize-typescript';
+import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, DataType, HasMany } from 'sequelize-typescript';
+import ProductAddon from './ProductAddon.js';
 
 @Table({
   timestamps: true,
@@ -45,4 +46,7 @@ export default class Product extends Model {
   @Default(true)
   @Column(DataType.BOOLEAN)
   declare status: boolean;
+
+  @HasMany(() => ProductAddon, { foreignKey: 'product_id', as: 'productAddons' })
+  declare productAddons?: ProductAddon[] | undefined;
 }

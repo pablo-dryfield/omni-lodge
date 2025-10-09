@@ -1,4 +1,5 @@
-import { Op } from 'sequelize';
+import { Op, Transaction } from 'sequelize';
+import sequelize from '../config/database.js';
 import Action from '../models/Action.js';
 import Page from '../models/Page.js';
 import Module from '../models/Module.js';
@@ -7,6 +8,10 @@ import RolePagePermission from '../models/RolePagePermission.js';
 import RoleModulePermission from '../models/RoleModulePermission.js';
 import User from '../models/User.js';
 import UserType from '../models/UserType.js';
+import Channel from '../models/Channel.js';
+import Addon from '../models/Addon.js';
+import Product from '../models/Product.js';
+import ProductAddon from '../models/ProductAddon.js';
 
 const slugify = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
@@ -106,7 +111,172 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
   },
 };
 
+const CHANNEL_SEEDS = [
+  { name: 'Fareharbor', description: 'Fareharbor bookings' },
+  { name: 'Viator', description: 'Viator bookings' },
+  { name: 'GetYourGuide', description: 'GetYourGuide bookings' },
+  { name: 'FreeTour', description: 'FreeTour bookings' },
+  { name: 'Walk-In', description: 'Walk-in guests' },
+  { name: 'Ecwid', description: 'Ecwid online store' },
+  { name: 'Email', description: 'Email reservations' },
+  { name: 'Hostel Atlantis', description: 'Hostel Atlantis partners' },
+  { name: 'XperiencePoland', description: 'XperiencePoland partners' },
+  { name: 'TopDeck', description: 'TopDeck partners' },
+];
+
+const ADDON_SEEDS = [
+  { name: 'Cocktails' },
+  { name: 'T-Shirts' },
+  { name: 'Photos' },
+];
+
+const PRODUCT_NAME = 'Pub Crawl';
+
+const PRODUCT_ADDON_SEEDS = [
+  { addonName: 'Cocktails', maxPerAttendee: 1, sortOrder: 0 },
+  { addonName: 'T-Shirts', maxPerAttendee: null, sortOrder: 1 },
+  { addonName: 'Photos', maxPerAttendee: null, sortOrder: 2 },
+];
+
+async function seedPubCrawlCatalog(): Promise<void> {
+  await sequelize.transaction(async (transaction: Transaction) => {
+    for (const channelSeed of CHANNEL_SEEDS) {
+      const apiKey = channelSeed.name.replace(/\s+/g, '-').toLowerCase();
+      const apiSecret = `${apiKey}-secret`;
+      const [channel, created] = await Channel.findOrCreate({
+        where: { name: channelSeed.name },
+        defaults: {
+          description: channelSeed.description,
+          apiKey,
+          apiSecret,
+          createdBy: 1,
+          updatedBy: 1,
+        },
+        transaction,
+      });
+
+      if (!created) {
+        let needsUpdate = false;
+        if (channel.description !== channelSeed.description) {
+          channel.description = channelSeed.description;
+          needsUpdate = true;
+        }
+        if (channel.apiKey !== apiKey) {
+          channel.apiKey = apiKey;
+          needsUpdate = true;
+        }
+        if (channel.apiSecret !== apiSecret) {
+          channel.apiSecret = apiSecret;
+          needsUpdate = true;
+        }
+        if (channel.updatedBy !== 1) {
+          channel.updatedBy = 1;
+          needsUpdate = true;
+        }
+        if (needsUpdate) {
+          await channel.save({ transaction });
+        }
+      }
+    }
+
+    const addonMap = new Map<string, Addon>();
+
+    for (const addonSeed of ADDON_SEEDS) {
+      const [addon] = await Addon.findOrCreate({
+        where: { name: addonSeed.name },
+        defaults: {
+          basePrice: null,
+          taxRate: null,
+          isActive: true,
+        },
+        transaction,
+      });
+
+      let addonNeedsUpdate = false;
+      if (!addon.isActive) {
+        addon.isActive = true;
+        addonNeedsUpdate = true;
+      }
+      if (addon.name !== addonSeed.name) {
+        addon.name = addonSeed.name;
+        addonNeedsUpdate = true;
+      }
+      if (addonNeedsUpdate) {
+        await addon.save({ transaction });
+      }
+      addonMap.set(addonSeed.name, addon);
+    }
+
+    const referenceProduct = await Product.findOne({ order: [['id', 'ASC']], transaction });
+    const productTypeId = referenceProduct?.productTypeId ?? 1;
+    const createdBy = referenceProduct?.createdBy ?? 1;
+
+    await Product.update(
+      { status: false },
+      { where: { name: { [Op.ne]: PRODUCT_NAME } }, transaction },
+    );
+
+    const [product] = await Product.findOrCreate({
+      where: { name: PRODUCT_NAME },
+      defaults: {
+        productTypeId,
+        price: 0,
+        status: true,
+        createdBy,
+        updatedBy: createdBy,
+      },
+      transaction,
+    });
+
+    let productNeedsUpdate = false;
+    if (product.productTypeId == null) {
+      product.productTypeId = productTypeId;
+      productNeedsUpdate = true;
+    }
+    if (product.price !== 0) {
+      product.price = 0;
+      productNeedsUpdate = true;
+    }
+    if (!product.status) {
+      product.status = true;
+      productNeedsUpdate = true;
+    }
+    if (!product.createdBy) {
+      product.createdBy = createdBy;
+      productNeedsUpdate = true;
+    }
+    if (product.updatedBy !== createdBy) {
+      product.updatedBy = createdBy;
+      productNeedsUpdate = true;
+    }
+    if (productNeedsUpdate) {
+      await product.save({ transaction });
+    }
+
+    await ProductAddon.destroy({ where: { productId: product.id }, transaction });
+
+    for (const entry of PRODUCT_ADDON_SEEDS) {
+      const addon = addonMap.get(entry.addonName);
+      if (!addon) {
+        continue;
+      }
+      await ProductAddon.create(
+        {
+          productId: product.id,
+          addonId: addon.id,
+          maxPerAttendee: entry.maxPerAttendee,
+          priceOverride: null,
+          sortOrder: entry.sortOrder,
+        },
+        { transaction },
+      );
+    }
+  });
+}
+
 export async function initializeAccessControl(): Promise<void> {
+  await seedPubCrawlCatalog();
+
   const existingRoles = await UserType.findAll();
   await Promise.all(existingRoles.map(async role => {
     if (!role.slug || !role.slug.trim()) {

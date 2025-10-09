@@ -20,32 +20,38 @@ import payReducer from '../reducers/payReducer';
 import reportsNavBarActiveKeyReducer from '../reducers/reportsNavBarActiveKeyReducer';
 import reviewsReducer from '../reducers/reviewsReducer';
 import accessControlReducer from '../reducers/accessControlReducer';
+import catalogReducer from './catalogSlice';
+import counterRegistryReducer from './counterRegistrySlice';
 
-// Create the Redux store using configureStore
+const reducer = {
+  guests: guestReducer,
+  bookings: bookingReducer,
+  channels: channelReducer,
+  users: userReducer,
+  actions: actionReducer,
+  navigation: navigationReducer,
+  session: sessionReducer,
+  userTypes: userTypeReducer,
+  productTypes: productTypeReducer,
+  products: productReducer,
+  modules: moduleReducer,
+  rolePagePermissions: rolePagePermissionReducer,
+  roleModulePermissions: roleModulePermissionReducer,
+  pages: pageReducer,
+  counters: counterReducer,
+  counterProducts: counterProductsReducer,
+  counterUsers: counterUsersReducer,
+  catalog: catalogReducer,
+  counterRegistry: counterRegistryReducer,
+  pays: payReducer,
+  reportsNavBarActiveKey: reportsNavBarActiveKeyReducer,
+  reviews: reviewsReducer,
+  accessControl: accessControlReducer,
+};
+
 export const store = configureStore({
-  reducer: {
-    guests: guestReducer,
-    bookings: bookingReducer,
-    channels: channelReducer,
-    users: userReducer,
-    actions: actionReducer,
-    navigation: navigationReducer,
-    session: sessionReducer,
-    userTypes: userTypeReducer,
-    productTypes: productTypeReducer,
-    products: productReducer,
-    modules: moduleReducer,
-    rolePagePermissions: rolePagePermissionReducer,
-    roleModulePermissions: roleModulePermissionReducer,
-    pages: pageReducer,
-    counters: counterReducer,
-    counterProducts: counterProductsReducer,
-    counterUsers: counterUsersReducer,
-    pays: payReducer,
-    reportsNavBarActiveKey: reportsNavBarActiveKeyReducer,
-    reviews: reviewsReducer,
-    accessControl: accessControlReducer,
-  },
+  reducer,
+  devTools: process.env.NODE_ENV !== 'production',
   // If you have additional middleware, you can add them here
   // middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(yourAdditionalMiddleware),
 });

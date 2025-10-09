@@ -10,10 +10,55 @@ import {
   Box,
   rem,
 } from "@mantine/core";
+import { css } from "@emotion/react";
 import { IconMenu2, IconLogout } from "@tabler/icons-react";
+
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { logoutUser } from "../../actions/userActions";
 import { selectAllowedNavigationPages } from "../../selectors/accessControlSelectors";
+
+const tabsRootClass = css({
+  background: 'none',
+});
+
+const tabsListClass = css({
+  background: 'none',
+  marginLeft: 8,
+  marginBottom: 0,
+  minHeight: 44,
+  gap: 2,
+  borderBottom: 'none',
+  alignItems: 'center',
+});
+
+const tabClass = css({
+  color: 'white',
+  fontWeight: 700,
+  fontSize: 17,
+  height: 40,
+  minWidth: 110,
+  margin: 0,
+  cursor: 'pointer',
+  background: 'transparent',
+  borderRadius: 8,
+  transition: 'background 0.14s, color 0.14s, border 0.14s',
+  border: 'none',
+  '&[data-active]': {
+    background: '#222',
+    color: '#fff',
+    boxShadow: 'none',
+    border: 'none',
+  },
+  '&:hover': {
+    background: '#444',
+    color: '#fff',
+  },
+  '&:active': {
+    background: '#111',
+    color: '#fff',
+  },
+});
+
 
 const MainTabs = () => {
   const dispatch = useAppDispatch();
@@ -133,44 +178,10 @@ const MainTabs = () => {
             onChange={(val) => val && navigate(val)}
             variant="pills"
             radius="xs"
-            styles={{
-              root: { background: "none" },
-              list: {
-                background: "none",
-                marginLeft: 8,
-                marginBottom: 0,
-                minHeight: 44,
-                gap: 2,
-                borderBottom: "none",
-                alignItems: "center",
-              },
-              tab: {
-                color: "white",
-                fontWeight: 700,
-                fontSize: 17,
-                height: 40,
-                minWidth: 110,
-                margin: 0,
-                cursor: "pointer",
-                background: "transparent",
-                borderRadius: 8,
-                transition: "background 0.14s, color 0.14s, border 0.14s",
-                border: "none",
-                '&[data-active]': {
-                  background: "#222",
-                  color: "#fff",
-                  boxShadow: "none",
-                  border: "none",
-                },
-                "&:hover": {
-                  background: "#444",
-                  color: "#fff",
-                },
-                "&:active": {
-                  background: "#111",
-                  color: "#fff",
-                },
-              },
+            classNames={{
+              root: tabsRootClass,
+              list: tabsListClass,
+              tab: tabClass,
             }}
           >
             <Tabs.List>
@@ -202,3 +213,11 @@ const MainTabs = () => {
 };
 
 export default MainTabs;
+
+
+
+
+
+
+
+

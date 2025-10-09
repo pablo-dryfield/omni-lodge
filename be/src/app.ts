@@ -19,6 +19,7 @@ import reviewRoutes from './routes/reviewRoutes.js';
 import counterRoutes from './routes/counterRoutes.js';
 import counterProductRoutes from './routes/counterProductRoutes.js';
 import counterUserRoutes from './routes/counterUserRoutes.js';
+import addonRoutes from './routes/addonRoutes.js';
 import productRoutes from './routes/productRoutes.js';
 import productTypeRoutes from './routes/productTypeRoutes.js';
 import userTypeRoutes from './routes/userTypeRoutes.js';
@@ -53,7 +54,7 @@ const environment = (process.env.NODE_ENV || 'development').trim();
 const envFile = environment === 'production' ? '.env.prod' : '.env.dev';
 dotenv.config({ path: envFile });
 
-const shouldAlterSchema = (process.env.DB_SYNC_ALTER ?? 'true').toLowerCase() !== 'false';
+const shouldAlterSchema = (process.env.DB_SYNC_ALTER ?? 'false').toLowerCase() === 'true';
 
 // API Requests limiter
 const apiLimiter = rateLimit({
@@ -79,7 +80,7 @@ if (process.env.NODE_ENV !== 'production') {
     cors({
       origin: allowedOrigins, // your UI dev server
       credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Authorization', 'Content-Type'],
     })
   );
@@ -115,6 +116,7 @@ app.use('/api/counters', counterRoutes);
 app.use('/api/counterProducts', counterProductRoutes);
 app.use('/api/counterUsers', counterUserRoutes);
 app.use('/api/products', productRoutes);
+app.use('/api/addons', addonRoutes);
 app.use('/api/productTypes', productTypeRoutes);
 app.use('/api/userTypes', userTypeRoutes);
 app.use('/api/reports', reportRoutes);
@@ -135,33 +137,45 @@ app.get('/', (req: Request, res: Response) => {
 
 const PORT: number = parseInt(process.env.PORT || '3001');
 
-logger.info(`Synchronizing database schema (alter=${shouldAlterSchema})`);
+defineAssociations();
 
-sequelize.sync({ force: false, alter: shouldAlterSchema })
-  .then(async () => {
-    defineAssociations();
+if (shouldAlterSchema) {
+  logger.warn('DB_SYNC_ALTER=true: sequelize.sync will attempt to alter existing tables. Prefer running migrations instead.');
+}
+
+const syncOptions = { force: false, alter: shouldAlterSchema } as const;
+
+async function bootstrap(): Promise<void> {
+  logger.info(`Synchronizing database schema (alter=${shouldAlterSchema})`);
+  try {
+    await sequelize.sync(syncOptions);
 
     try {
       await initializeAccessControl();
     } catch (seedError) {
       logger.error('Failed to initialize access control data', seedError);
     }
-    if(process.env.NODE_ENV === 'production'){
+
+    if (process.env.NODE_ENV === 'production') {
       app.set('trust proxy', 1);
       app.listen(PORT, '127.0.0.1', () => {
-      logger.info(`backend listening on http://127.0.0.1:${PORT}`);
-    });
-    }else{
+        logger.info(`backend listening on http://127.0.0.1:${PORT}`);
+      });
+    } else {
       app.listen(PORT, '0.0.0.0', () => {
         logger.info(`Server is running on port ${PORT}`);
       });
     }
-  })
-  .catch((err: Error | ValidationError) => {
+  } catch (err) {
     if (err instanceof ValidationError) {
       logger.error(`Validation error: ${JSON.stringify(err.errors, null, 2)}`);
     } else {
       logger.error('Database synchronization failed', err);
     }
-  });
+  }
+}
+
+void bootstrap();
+
+
 

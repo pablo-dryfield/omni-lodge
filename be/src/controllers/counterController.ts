@@ -1,121 +1,324 @@
-import { Request, Response } from 'express';
+import { Response } from 'express';
 import { DataType } from 'sequelize-typescript';
+import CounterRegistryService, { type MetricInput } from '../services/counterRegistryService.js';
+import HttpError from '../errors/HttpError.js';
+import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
+import logger from '../utils/logger.js';
 import Counter from '../models/Counter.js';
-import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
-import User from '../models/User.js';
-import sequelize from '../config/database.js';
 import CounterProduct from '../models/CounterProduct.js';
 import CounterUser from '../models/CounterUser.js';
+import User from '../models/User.js';
+import Product from '../models/Product.js';
+import CounterChannelMetric from '../models/CounterChannelMetric.js';
 
-// Get All Counters
-export const getAllCounters = async (req: Request, res: Response): Promise<void> => {
+const REGISTRY_FORMAT = 'registry';
+
+function requireActorId(req: AuthenticatedRequest): number {
+  const actorId = req.authContext?.id;
+  if (!actorId) {
+    throw new HttpError(401, 'Unauthorized');
+  }
+  return actorId;
+}
+
+function resolveFormat(req: AuthenticatedRequest): string {
+  const body = (req.body ?? {}) as { format?: unknown };
+  const raw =
+    (req.query.format ?? req.query.view ?? (typeof body.format === 'string' ? body.format : '') ?? '').toString();
+  return raw.toLowerCase();
+}
+
+function buildCounterColumns() {
+  const attributes = Counter.getAttributes();
+  return Object.entries(attributes).map(([key, attribute]) => ({
+    header: key.charAt(0).toUpperCase() + key.slice(1),
+    accessorKey: key,
+    type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
+  }));
+}
+
+async function fetchTableCounters(where: Record<string, unknown> = {}) {
+  return Counter.findAll({
+    where,
+    include: [
+      { model: User, as: 'manager', attributes: ['id', 'firstName', 'lastName'] },
+      { model: User, as: 'createdByUser', attributes: ['id', 'firstName', 'lastName'] },
+      { model: User, as: 'updatedByUser', attributes: ['id', 'firstName', 'lastName'] },
+      { model: Product, as: 'product', attributes: ['id', 'name'] },
+    ],
+    order: [['date', 'DESC']],
+  });
+}
+
+function parseBodyAsArray(payload: unknown): MetricInput[] {
+  if (!Array.isArray(payload)) {
+    throw new HttpError(400, 'Metrics payload must be an array');
+  }
+
+  return payload.map((item) => {
+    const typed = item as Partial<MetricInput>;
+    if (typeof typed.channelId !== 'number') {
+      throw new HttpError(400, 'channelId is required for each metric');
+    }
+    if (typeof typed.kind !== 'string') {
+      throw new HttpError(400, 'kind is required for each metric');
+    }
+    if (typeof typed.tallyType !== 'string') {
+      throw new HttpError(400, 'tallyType is required for each metric');
+    }
+    if (typeof typed.qty !== 'number') {
+      throw new HttpError(400, 'qty is required for each metric');
+    }
+
+    return {
+      channelId: Number(typed.channelId),
+      kind: typed.kind,
+      addonId: typed.addonId == null ? null : Number(typed.addonId),
+      tallyType: typed.tallyType,
+      period: (typed.period ?? null) as MetricInput['period'],
+      qty: Number(typed.qty),
+    } satisfies MetricInput;
+  });
+}
+
+function handleError(res: Response, error: unknown): void {
+  if (error instanceof HttpError) {
+    const payload: Record<string, unknown> = { message: error.message };
+    if (error.details !== undefined) {
+      payload.details = error.details;
+    }
+    res.status(error.status).json(payload);
+    return;
+  }
+
+  logger.error('Counter controller error', error);
+  res.status(500).json({ message: 'Internal server error' });
+}
+
+export const createOrLoadCounter = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const format = resolveFormat(req);
+
+  if (format !== REGISTRY_FORMAT) {
+    try {
+      const newCounter = await Counter.create(req.body);
+      res.status(201).json([newCounter]);
+    } catch (error) {
+      const message = (error as { message?: string }).message ?? 'Failed to create counter';
+      res.status(500).json([{ message }]);
+    }
+    return;
+  }
+
   try {
-    const data = await Counter.findAll({
-      include: [
-        {
-          model: User,
-          as: 'user',
-          attributes: ['firstName']
-        },
-        {
-          model: User,
-          as: 'createdByUser',
-          attributes: ['firstName']
-        },
-        {
-          model: User,
-          as: 'updatedByUser',
-          attributes: ['firstName']
-        }
-      ]
+    const actorId = requireActorId(req);
+    const body = (req.body ?? {}) as {
+      date?: string;
+      userId?: number;
+      productId?: number | null;
+      notes?: string | null;
+    };
+
+    const payload = await CounterRegistryService.findOrCreateCounter(
+      {
+        date: body.date ?? '',
+        userId: body.userId ?? actorId,
+        productId: body.productId ?? null,
+        notes: body.notes ?? null,
+      },
+      actorId,
+    );
+
+    res.status(200).json(payload);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const getCounterByDate = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const format = resolveFormat(req);
+
+  if (format !== REGISTRY_FORMAT) {
+    try {
+      const where: Record<string, unknown> = {};
+      if (typeof req.query.date === 'string' && req.query.date.trim()) {
+        where.date = req.query.date;
+      }
+      const data = await fetchTableCounters(where);
+      res.status(200).json([{ data, columns: buildCounterColumns() }]);
+    } catch (error) {
+      const message = (error as { message?: string }).message ?? 'Failed to fetch counters';
+      res.status(500).json([{ message }]);
+    }
+    return;
+  }
+
+  try {
+    const date = req.query.date;
+    if (typeof date !== 'string') {
+      throw new HttpError(400, 'date query parameter is required');
+    }
+
+    const payload = await CounterRegistryService.getCounterByDate(date);
+    res.status(200).json(payload);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const getCounterById = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const format = resolveFormat(req);
+
+  if (format !== REGISTRY_FORMAT) {
+    try {
+      const { id } = req.params;
+      const data = await Counter.findByPk(id, {
+        include: [
+          { model: User, as: 'manager', attributes: ['id', 'firstName', 'lastName'] },
+          { model: User, as: 'createdByUser', attributes: ['id', 'firstName', 'lastName'] },
+          { model: User, as: 'updatedByUser', attributes: ['id', 'firstName', 'lastName'] },
+        ],
+      });
+
+      if (!data) {
+        res.status(404).json([{ message: 'Counter not found' }]);
+        return;
+      }
+
+      res.status(200).json([{ data, columns: buildCounterColumns() }]);
+    } catch (error) {
+      const message = (error as { message?: string }).message ?? 'Failed to fetch counter';
+      res.status(500).json([{ message }]);
+    }
+    return;
+  }
+
+  try {
+    const counterId = Number(req.params.id);
+    if (!Number.isInteger(counterId) || counterId <= 0) {
+      throw new HttpError(400, 'Invalid counter id');
+    }
+
+    const payload = await CounterRegistryService.getCounterById(counterId);
+    res.status(200).json(payload);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const updateCounter = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const format = resolveFormat(req);
+
+  if (format !== REGISTRY_FORMAT) {
+    try {
+      const { id } = req.params;
+      const [updated] = await Counter.update(req.body, { where: { id } });
+
+      if (!updated) {
+        res.status(404).json([{ message: 'Counter not found' }]);
+        return;
+      }
+
+      const updatedCounter = await Counter.findByPk(id);
+      res.status(200).json([updatedCounter]);
+    } catch (error) {
+      const message = (error as { message?: string }).message ?? 'Failed to update counter';
+      res.status(500).json([{ message }]);
+    }
+    return;
+  }
+
+  try {
+    const actorId = requireActorId(req);
+    const counterId = Number(req.params.id);
+    if (!Number.isInteger(counterId) || counterId <= 0) {
+      throw new HttpError(400, 'Invalid counter id');
+    }
+
+    const body = (req.body ?? {}) as { status?: string; notes?: string | null };
+
+    const payload = await CounterRegistryService.updateCounterMetadata(counterId, body, actorId);
+    res.status(200).json(payload);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const deleteCounter = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const counterId = Number(id);
+    if (!Number.isInteger(counterId) || counterId <= 0) {
+      throw new HttpError(400, 'Invalid counter id');
+    }
+
+    const sequelize = Counter.sequelize;
+    if (!sequelize) {
+      throw new HttpError(500, 'Database connection is not available');
+    }
+
+    let deleted = 0;
+    await sequelize.transaction(async (transaction) => {
+      await CounterChannelMetric.destroy({ where: { counterId }, transaction });
+      await CounterUser.destroy({ where: { counterId }, transaction });
+      await CounterProduct.destroy({ where: { counterId }, transaction });
+      deleted = await Counter.destroy({ where: { id: counterId }, transaction });
     });
-    const attributes = Counter.getAttributes();
-    const columns = Object.entries(attributes)
-      .map(([key, attribute]) => {
-        return {
-          header: key.charAt(0).toUpperCase() + key.slice(1),
-          accessorKey: key,
-          type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
-        };
-      });
-    res.status(200).json([{ data, columns }]);
-  } catch (error) {
-    const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
-  }
-};
 
-// Get Counter by ID
-export const getCounterById = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
-    const data = await Counter.findByPk(id);
-    const attributes = Counter.getAttributes();
-    const columns = Object.entries(attributes)
-      .map(([key, attribute]) => {
-        return {
-          header: key.charAt(0).toUpperCase() + key.slice(1),
-          accessorKey: key,
-          type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
-        };
-      });
-    if (!data) {
-      res.status(404).json([{ message: 'Counter not found' }]);
-      return;
-    }
-    res.status(200).json([{ data, columns }]);
-  } catch (error) {
-    const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
-  }
-};
-
-// Create New Counter
-export const createCounter = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const newCounter = await Counter.create(req.body);
-    res.status(201).json([newCounter]);
-  } catch (error) {
-    const e = error as ErrorWithMessage;
-    res.status(500).json([{ message: e.message }]);
-  }
-};
-
-// Update Counter
-export const updateCounter = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
-    const [updated] = await Counter.update(req.body, { where: { id } });
-
-    if (!updated) {
+    if (!deleted) {
       res.status(404).json([{ message: 'Counter not found' }]);
       return;
     }
 
-    const updatedCounter = await Counter.findByPk(id);
-    res.status(200).json([updatedCounter]);
+    res.status(204).send();
   } catch (error) {
-    const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    handleError(res, error);
   }
 };
 
-// Delete Counter
-export const deleteCounter = async (req: Request, res: Response): Promise<void> => {
+export const updateCounterStaff = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
-    const counterProductDeleted = await CounterProduct.destroy({ where: { counterId: id } });
-    const counterUserDeleted = await CounterUser.destroy({ where: { counterId: id } });
-    const deleted = await Counter.destroy({ where: { id } });
-
-    if (!deleted || !counterProductDeleted || !counterUserDeleted) {
-      res.status(404).json([{ message: 'Counter not found' }]);
-      return;
+    if (resolveFormat(req) !== REGISTRY_FORMAT) {
+      throw new HttpError(400, 'Counter staff updates require registry format');
     }
 
-    res.status(204).send(); // Properly using send() for a 204 response
+    const actorId = requireActorId(req);
+    const counterId = Number(req.params.id);
+    if (!Number.isInteger(counterId) || counterId <= 0) {
+      throw new HttpError(400, 'Invalid counter id');
+    }
+
+    const rawIds = Array.isArray(req.body?.userIds) ? (req.body.userIds as unknown[]) : [];
+    const userIds = rawIds.map((value) => {
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new HttpError(400, 'userIds must contain positive integers');
+      }
+      return parsed;
+    });
+
+    const payload = await CounterRegistryService.updateCounterStaff(counterId, userIds, actorId);
+    res.status(200).json(payload);
   } catch (error) {
-    const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    handleError(res, error);
+  }
+};
+
+export const upsertCounterMetrics = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (resolveFormat(req) !== REGISTRY_FORMAT) {
+      throw new HttpError(400, 'Counter metrics updates require registry format');
+    }
+
+    const actorId = requireActorId(req);
+    const counterId = Number(req.params.id);
+    if (!Number.isInteger(counterId) || counterId <= 0) {
+      throw new HttpError(400, 'Invalid counter id');
+    }
+
+    const rows = parseBodyAsArray(req.body);
+    const result = await CounterRegistryService.upsertMetrics(counterId, rows, actorId);
+    res.status(200).json(result);
+  } catch (error) {
+    handleError(res, error);
   }
 };
