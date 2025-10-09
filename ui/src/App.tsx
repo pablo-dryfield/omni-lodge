@@ -56,6 +56,10 @@ const App = () => {
   }, [isMobile, closeSidebar]);
 
   useEffect(() => {
+    closeSidebar();
+  }, [currentPage, closeSidebar]);
+
+  useEffect(() => {
     if (!authenticated) {
       dispatch(fetchSession());
     }

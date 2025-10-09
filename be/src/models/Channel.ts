@@ -61,10 +61,13 @@ export default class Channel extends Model {
 
   @ForeignKey(() => PaymentMethod)
   @AllowNull(false)
-  @Column(DataType.INTEGER)
+  @Column({
+    field: 'payment_method_id',
+    type: DataType.INTEGER,
+  })
   declare paymentMethodId: number;
 
-  @BelongsTo(() => PaymentMethod, { foreignKey: 'paymentMethodId', as: 'paymentMethod' })
+  @BelongsTo(() => PaymentMethod, { foreignKey: 'payment_method_id', as: 'paymentMethod' })
   declare paymentMethod?: PaymentMethod;
 
   @HasMany(() => CounterChannelMetric, { foreignKey: 'channel_id', as: 'counterMetrics' })

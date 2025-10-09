@@ -133,4 +133,4 @@ dist
 .vscode/settings.json
 
 #VScode
-.history*
+.history/

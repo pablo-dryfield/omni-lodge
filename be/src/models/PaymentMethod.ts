@@ -40,6 +40,6 @@ export default class PaymentMethod extends Model {
   @Column(DataType.DATE)
   declare updatedAt: Date;
 
-  @HasMany(() => Channel, { foreignKey: 'paymentMethodId', as: 'channels' })
+  @HasMany(() => Channel, { foreignKey: 'payment_method_id', as: 'channels' })
   declare channels?: Channel[];
 }

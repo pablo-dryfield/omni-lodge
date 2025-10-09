@@ -12,6 +12,7 @@ import Channel from '../models/Channel.js';
 import Addon from '../models/Addon.js';
 import Product from '../models/Product.js';
 import ProductAddon from '../models/ProductAddon.js';
+import PaymentMethod from '../models/PaymentMethod.js';
 
 const slugify = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
@@ -111,6 +112,21 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
   },
 };
 
+export const PAYMENT_METHOD_SEED = [
+  { name: 'Online/Card', description: 'Online or card-based payments' },
+  { name: 'Bank Transfer', description: 'Payments received via bank transfer' },
+  { name: 'Transfer', description: 'Third-party transfer payments' },
+  { name: 'Cash', description: 'Payments collected in cash' },
+];
+
+export const CHANNEL_PAYMENT_METHOD_OVERRIDES: Record<string, string> = {
+  email: 'Bank Transfer',
+  xperiencepoland: 'Transfer',
+  'walk-in': 'Cash',
+  topdeck: 'Cash',
+  'hostel atlantis': 'Cash',
+};
+
 const CHANNEL_SEEDS = [
   { name: 'Fareharbor', description: 'Fareharbor bookings' },
   { name: 'Viator', description: 'Viator bookings' },
@@ -140,9 +156,32 @@ const PRODUCT_ADDON_SEEDS = [
 
 async function seedPubCrawlCatalog(): Promise<void> {
   await sequelize.transaction(async (transaction: Transaction) => {
+    const paymentMethodMap = new Map<string, PaymentMethod>();
+    for (const method of PAYMENT_METHOD_SEED) {
+      const [record] = await PaymentMethod.findOrCreate({
+        where: { name: method.name },
+        defaults: {
+          description: method.description,
+        },
+        transaction,
+      });
+      paymentMethodMap.set(record.name.toLowerCase(), record);
+    }
+
+    const defaultPaymentMethod = paymentMethodMap.get('online/card');
+    if (!defaultPaymentMethod) {
+      throw new Error('Default payment method "Online/Card" is required but could not be created.');
+    }
+
     for (const channelSeed of CHANNEL_SEEDS) {
       const apiKey = channelSeed.name.replace(/\s+/g, '-').toLowerCase();
       const apiSecret = `${apiKey}-secret`;
+      const channelNameKey = channelSeed.name.trim().toLowerCase();
+      const overrideName = CHANNEL_PAYMENT_METHOD_OVERRIDES[channelNameKey];
+      const overridePaymentMethod = overrideName ? paymentMethodMap.get(overrideName.toLowerCase()) : undefined;
+      const targetPaymentMethod = overridePaymentMethod ?? defaultPaymentMethod;
+      const paymentMethodId = targetPaymentMethod.id;
+
       const [channel, created] = await Channel.findOrCreate({
         where: { name: channelSeed.name },
         defaults: {
@@ -151,12 +190,17 @@ async function seedPubCrawlCatalog(): Promise<void> {
           apiSecret,
           createdBy: 1,
           updatedBy: 1,
+          paymentMethodId,
         },
         transaction,
       });
 
       if (!created) {
         let needsUpdate = false;
+        if (channel.paymentMethodId !== paymentMethodId) {
+          channel.paymentMethodId = paymentMethodId;
+          needsUpdate = true;
+        }
         if (channel.description !== channelSeed.description) {
           channel.description = channelSeed.description;
           needsUpdate = true;

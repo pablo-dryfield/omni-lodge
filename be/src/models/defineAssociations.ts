@@ -105,10 +105,7 @@ export function defineAssociations() {
   Channel.hasMany(Booking, { foreignKey: 'channelId' });
   Channel.belongsTo(User, { foreignKey: 'createdBy' });
   Channel.belongsTo(User, { foreignKey: 'updatedBy' });
-  Channel.belongsTo(PaymentMethod, { foreignKey: 'paymentMethodId', as: 'paymentMethod' });
-
-  // Payment Method Associations
-  PaymentMethod.hasMany(Channel, { foreignKey: 'paymentMethodId', as: 'channels' });
+  // Payment Method associations are defined via decorators on the models
 }
 
 
