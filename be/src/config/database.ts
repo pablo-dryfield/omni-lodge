@@ -51,6 +51,7 @@ const sequelize = new Sequelize({
   },
   models: [
     User,
+    PaymentMethod,
     Booking,
     Channel,
     Guest,
@@ -63,7 +64,6 @@ const sequelize = new Sequelize({
     ProductAddon,
     ProductType,
     Addon,
-    PaymentMethod,
     UserType,
     Page,
     Module,

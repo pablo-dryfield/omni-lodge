@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   ActionIcon,
@@ -83,6 +83,10 @@ const MainTabs = ({
     closeDrawer();
   };
 
+  useEffect(() => {
+    closeDrawer();
+  }, [location.pathname, closeDrawer]);
+
   const shellStyle: React.CSSProperties = {
     background: `linear-gradient(135deg, ${theme.colors.dark[7]} 0%, ${theme.colors.dark[8]} 45%, ${theme.colors.dark[9]} 100%)`,
     borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
@@ -96,30 +100,38 @@ const MainTabs = ({
     width: "100%",
     margin: "0 auto",
     padding: `${rem(10)} ${isMobile ? rem(16) : rem(28)}`,
-    display: "flex",
+    display: "grid",
+    gridTemplateColumns: "auto 1fr auto",
     alignItems: "center",
-    gap: rem(18),
+    columnGap: rem(18),
     minHeight: isMobile ? rem(56) : rem(68),
   };
 
   const navContainerStyle: React.CSSProperties = {
-    flex: 1,
     display: isTablet ? "none" : "flex",
     justifyContent: "center",
+    alignItems: "center",
+    width: "100%",
+    justifySelf: "center",
   };
 
   const actionsStyle: React.CSSProperties = {
     display: "flex",
     alignItems: "center",
     gap: rem(8),
-    marginLeft: "auto",
+    justifySelf: "end",
   };
 
   return (
     <>
       <header style={shellStyle}>
         <div style={innerStyle}>
-          <Group gap="sm" align="center" wrap="nowrap" style={{ flexShrink: 0, minWidth: 0 }}>
+          <Group
+            gap="sm"
+            align="center"
+            wrap="nowrap"
+            style={{ minWidth: 0, justifySelf: "start" }}
+          >
             {isTablet && allowedPages.length > 0 && (
               <Burger
                 opened={drawerOpened}
@@ -208,7 +220,7 @@ const MainTabs = ({
                         color: theme.black,
                         borderColor: "transparent",
                       },
-                      "&[data-active]": {
+                      "&[dataActive]": {
                         backgroundColor: theme.white,
                         color: theme.black,
                         borderColor: "transparent",
