@@ -9,6 +9,9 @@ import type {
   CounterStatus,
   CounterSummary,
   MetricCell,
+  MetricKind,
+  MetricPeriod,
+  MetricTallyType,
   StaffOption,
 } from '../types/counters/CounterRegistry';
 import type { RootState } from './store';
@@ -21,6 +24,7 @@ type CounterRegistryState = {
   addons: AddonConfig[];
   summary: CounterSummary | null;
   metricsByKey: Record<string, MetricCell>;
+  persistedMetricsByKey: Record<string, MetricCell>;
   dirtyMetricKeys: string[];
   savingMetrics: boolean;
   savingStaff: boolean;
@@ -69,6 +73,7 @@ const initialState: CounterRegistryState = {
   addons: [],
   summary: null,
   metricsByKey: {},
+  persistedMetricsByKey: {},
   dirtyMetricKeys: [],
   savingMetrics: false,
   savingStaff: false,
@@ -90,6 +95,12 @@ const ingestPayload = (state: CounterRegistryState, payload: CounterRegistryPayl
   state.addons = payload.addons.map((addon) => ({ ...addon }));
   state.summary = payload.derivedSummary;
   state.metricsByKey = {};
+  state.persistedMetricsByKey = {};
+  normalizedMetrics.forEach((metric) => {
+    if (metric.id != null) {
+      state.persistedMetricsByKey[buildMetricKey(metric)] = metric;
+    }
+  });
   state.dirtyMetricKeys = [];
   state.error = null;
 };
@@ -237,14 +248,36 @@ export const flushDirtyMetrics = createAsyncThunk<
   const rows = state.dirtyMetricKeys
     .map((key) => state.metricsByKey[key])
     .filter((metric): metric is MetricCell => Boolean(metric))
-    .map((metric) => ({
-      channelId: metric.channelId,
-      kind: metric.kind,
-      addonId: metric.addonId,
-      tallyType: metric.tallyType,
-      period: metric.period,
-      qty: metric.qty,
-    }));
+    .filter((metric) => {
+      const key = buildMetricKey(metric);
+      const persisted = state.persistedMetricsByKey[key];
+      const nextQty = Math.max(0, Number(metric.qty) || 0);
+      if (persisted) {
+        const persistedQty = Math.max(0, Number(persisted.qty) || 0);
+        return nextQty !== persistedQty;
+      }
+      return nextQty > 0;
+    })
+    .map((metric) => {
+      const key = buildMetricKey(metric);
+      const persisted = state.persistedMetricsByKey[key];
+      const nextQty = Math.max(0, Number(metric.qty) || 0);
+      return {
+        channelId: metric.channelId,
+        kind: metric.kind,
+        addonId: metric.addonId,
+        tallyType: metric.tallyType,
+        period: metric.period,
+        qty: nextQty,
+      } satisfies {
+        channelId: number;
+        kind: MetricKind;
+        addonId: number | null;
+        tallyType: MetricTallyType;
+        period: MetricPeriod;
+        qty: number;
+      };
+    });
 
   if (rows.length === 0) {
     return {
@@ -291,6 +324,20 @@ const counterRegistrySlice = createSlice({
     setMetric: (state, action: PayloadAction<MetricCell>) => {
       const metric = normalizeMetric(action.payload);
       const key = buildMetricKey(metric);
+      const persisted = state.persistedMetricsByKey[key];
+      if (!persisted && metric.qty === 0) {
+        if (state.counter) {
+          const existingIndex = state.counter.metrics.findIndex(
+            (existing) => buildMetricKey(existing) === key,
+          );
+          if (existingIndex >= 0) {
+            state.counter.metrics.splice(existingIndex, 1);
+          }
+        }
+        delete state.metricsByKey[key];
+        state.dirtyMetricKeys = state.dirtyMetricKeys.filter((item) => item !== key);
+        return;
+      }
       state.metricsByKey[key] = metric;
       if (!state.dirtyMetricKeys.includes(key)) {
         state.dirtyMetricKeys.push(key);
@@ -386,11 +433,21 @@ const counterRegistrySlice = createSlice({
         state.savingMetrics = false;
         const payload = action.payload;
         if (state.counter) {
-          state.counter.metrics = payload.metrics.map(normalizeMetric);
-        }
-        state.summary = payload.derivedSummary;
-        state.metricsByKey = {};
-        state.dirtyMetricKeys = [];
+      state.counter.metrics = payload.metrics.map(normalizeMetric);
+    }
+    state.summary = payload.derivedSummary;
+    state.metricsByKey = {};
+    state.persistedMetricsByKey = {};
+    state.persistedMetricsByKey = {};
+    payload.metrics.forEach((metric) => {
+      const normalized = normalizeMetric(metric);
+      if (normalized.id != null) {
+        state.persistedMetricsByKey[buildMetricKey(normalized)] = normalized;
+      } else {
+        delete state.persistedMetricsByKey[buildMetricKey(normalized)];
+      }
+    });
+    state.dirtyMetricKeys = [];
       })
       .addCase(flushDirtyMetrics.rejected, (state, action) => {
         state.savingMetrics = false;

@@ -373,7 +373,7 @@ const loadCounterForDate = useCallback(
   );
 
   const metricsMap = registry.metricsByKey;
-  const mergedMetrics = useMemo<MetricCell[]>(() => {
+const mergedMetrics = useMemo<MetricCell[]>(() => {
     const map = new Map<string, MetricCell>();
     const baseMetrics = registry.counter?.metrics ?? [];
     baseMetrics.forEach((metric) => {
@@ -385,7 +385,12 @@ const loadCounterForDate = useCallback(
       map.set(buildMetricKey(normalized), normalized);
     });
     return Array.from(map.values());
-  }, [metricsMap, registry.counter]);
+}, [metricsMap, registry.counter]);
+
+ const channelHasAnyQty = useCallback(
+   (channelId: number) => mergedMetrics.some((metric) => metric.channelId === channelId && metric.qty > 0),
+   [mergedMetrics],
+ );
 
 
   const allowedAfterCutoffChannelIds = useMemo(
@@ -440,9 +445,9 @@ const loadCounterForDate = useCallback(
 
   const channelsWithAfterCutoffMetrics = useMemo(() => {
     const results = new Set<number>();
-    Object.values(metricsMap).forEach((metric) => {
+    mergedMetrics.forEach((metric) => {
       if (
-        metric.kind === 'people' &&
+        (metric.kind === 'people' || metric.kind === 'addon') &&
         metric.tallyType === 'booked' &&
         metric.period === 'after_cutoff' &&
         metric.qty > 0
@@ -451,7 +456,7 @@ const loadCounterForDate = useCallback(
       }
     });
     return results;
-  }, [metricsMap]);
+  }, [mergedMetrics]);
 
   const appliedPlatformSelectionRef = useRef<number | null>(null);
   const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([]);
@@ -497,40 +502,6 @@ const loadCounterForDate = useCallback(
       return next;
     });
   }, [allowedAfterCutoffChannelIds, channelsWithAfterCutoffMetrics]);
-
-  useEffect(() => {
-    const baseChannelIds =
-      selectedChannelIds.length > 0 ? selectedChannelIds : savedPlatformChannelIds;
-    if (baseChannelIds.length === 0) {
-      return;
-    }
-    const autoIncludeIds = baseChannelIds.filter((id) => {
-      if (!allowedAfterCutoffChannelIds.includes(id)) {
-        return false;
-      }
-      const channel = registry.channels.find((item) => item.id === id);
-      const normalizedName = channel?.name?.toLowerCase() ?? '';
-      return AFTER_CUTOFF_ALLOWED.has(normalizedName);
-    });
-    if (autoIncludeIds.length === 0) {
-      return;
-    }
-    setSelectedAfterCutoffChannelIds((prev) => {
-      const merged = new Set<number>(prev);
-      let changed = false;
-      autoIncludeIds.forEach((id) => {
-        if (!merged.has(id)) {
-          merged.add(id);
-          changed = true;
-        }
-      });
-      if (!changed) {
-        return prev;
-      }
-      return Array.from(merged);
-    });
-  }, [allowedAfterCutoffChannelIds, registry.channels, savedPlatformChannelIds, selectedChannelIds]);
-
   const getMetric = useCallback(
     (
       channelId: number,
@@ -548,6 +519,12 @@ const loadCounterForDate = useCallback(
         return existing;
       }
       const metricsList = registry.counter?.metrics ?? [];
+      const desiredPeriod =
+        tallyType === 'booked'
+          ? period ?? 'before_cutoff'
+          : tallyType === 'attended'
+            ? null
+            : period ?? null;
       const fallback = metricsList.find((metric) => {
         if (metric.channelId !== channelId) {
           return false;
@@ -561,41 +538,15 @@ const loadCounterForDate = useCallback(
         if (metric.tallyType !== tallyType) {
           return false;
         }
-        const normalizedMetricPeriod =
+        const normalizedPeriod =
           metric.tallyType === 'booked'
             ? metric.period ?? 'before_cutoff'
             : metric.tallyType === 'attended'
               ? null
               : metric.period ?? null;
-        const normalizedRequestedPeriod =
-          tallyType === 'booked'
-            ? period ?? 'before_cutoff'
-            : tallyType === 'attended'
-              ? null
-              : period ?? null;
-        return normalizedMetricPeriod === normalizedRequestedPeriod;
+        return normalizedPeriod === desiredPeriod;
       });
-      if (fallback) {
-        return {
-          ...fallback,
-          qty: Number.isFinite(Number(fallback.qty)) ? Number(fallback.qty) : 0,
-          period:
-            fallback.tallyType === 'booked'
-              ? (fallback.period ?? 'before_cutoff')
-              : fallback.tallyType === 'attended'
-                ? null
-                : fallback.period ?? null,
-        };
-      }
-      return {
-        counterId,
-        channelId,
-        kind,
-        addonId,
-        tallyType,
-        period,
-        qty: 0,
-      };
+      return fallback ? { ...fallback } : null;
     },
     [counterId, metricsMap, registry.counter],
   );
@@ -942,12 +893,19 @@ const loadCounterForDate = useCallback(
 
   const dirtyMetricCount = registry.dirtyMetricKeys.length;
   const hasDirtyMetrics = dirtyMetricCount > 0;
-  const effectiveSelectedChannelIds = useMemo<number[]>(() => {
+const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     if (selectedChannelIds.length > 0) {
       return selectedChannelIds;
     }
     return savedPlatformChannelIds;
-  }, [savedPlatformChannelIds, selectedChannelIds]);
+}, [savedPlatformChannelIds, selectedChannelIds]);
+
+ useEffect(() => {
+   setSelectedChannelIds((prev) => {
+     const filtered = prev.filter((id) => channelHasAnyQty(id));
+     return filtered.length === prev.length ? prev : filtered;
+   });
+ }, [channelHasAnyQty]);
 
   const effectiveAfterCutoffIds = useMemo<number[]>(() => {
     if (selectedAfterCutoffChannelIds.length > 0) {
@@ -955,6 +913,60 @@ const loadCounterForDate = useCallback(
     }
     return savedAfterCutoffChannelIds.filter((id: number) => allowedAfterCutoffChannelIds.includes(id));
   }, [allowedAfterCutoffChannelIds, savedAfterCutoffChannelIds, selectedAfterCutoffChannelIds]);
+
+  useEffect(() => {
+    setSelectedAfterCutoffChannelIds((prev) => {
+      const filtered = prev.filter((id) => channelHasAnyQty(id));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [channelHasAnyQty]);
+  const autoAfterCutoffChannelIds = useMemo(() => {
+    const autoIds = new Set<number>();
+    channelsWithAfterCutoffMetrics.forEach((id) => {
+      if (effectiveSelectedChannelIds.includes(id)) {
+        autoIds.add(id);
+      }
+    });
+    return autoIds;
+  }, [channelsWithAfterCutoffMetrics, effectiveSelectedChannelIds]);
+  const ecwidChannelId = useMemo(() => {
+    const ecwid = registry.channels.find((channel) => channel.name?.toLowerCase() === 'ecwid');
+    return ecwid ? ecwid.id : null;
+  }, [registry.channels]);
+  const isEcwidSelected = useMemo(
+    () => (ecwidChannelId != null ? effectiveSelectedChannelIds.includes(ecwidChannelId) : false),
+    [effectiveSelectedChannelIds, ecwidChannelId],
+  );
+  useEffect(() => {
+    if (autoAfterCutoffChannelIds.size === 0) {
+      return;
+    }
+    setSelectedAfterCutoffChannelIds((prev) => {
+      const merged = new Set<number>(prev);
+      let changed = false;
+      autoAfterCutoffChannelIds.forEach((id) => {
+        if (!merged.has(id)) {
+          merged.add(id);
+          changed = true;
+        }
+      });
+      return changed ? Array.from(merged) : prev;
+    });
+  }, [autoAfterCutoffChannelIds]);
+  const shouldHideAfterCutoffChannel = useCallback(
+    (channel: ChannelConfig | undefined) => {
+      if (!channel) {
+        return false;
+      }
+      const normalizedName = channel.name?.toLowerCase() ?? '';
+      if (normalizedName === 'ecwid') {
+        return isEcwidSelected;
+      }
+      return false;
+    },
+    [isEcwidSelected],
+  );
+
 
   const summaryChannelOrder = useMemo<number[]>(() => {
     const order: number[] = [];
@@ -1543,7 +1555,14 @@ const loadCounterForDate = useCallback(
         <Button
           variant="contained"
           onClick={handleProceedToPlatforms}
-          disabled={catalog.loading || registry.loading || ensuringCounter || managerValue == null}
+          disabled={
+            catalog.loading ||
+            registry.loading ||
+            ensuringCounter ||
+            managerValue == null ||
+            productValue == null ||
+            effectiveStaffIds.length === 0
+          }
         >
           Proceed with Platform Check
         </Button>
@@ -1611,10 +1630,16 @@ const loadCounterForDate = useCallback(
 
   const renderReservationsStep = () => {
     const selectedAfterCutoffChannels = effectiveAfterCutoffIds
-      .map((channelId: number) =>
-        afterCutoffChannels.find((channel: ChannelConfig) => channel.id === channelId),
-      )
-      .filter((channel): channel is ChannelConfig => Boolean(channel));
+      .map((channelId: number) => {
+        const channel =
+          afterCutoffChannels.find((item) => item.id === channelId) ??
+          registry.channels.find((item) => item.id === channelId);
+        return channel;
+      })
+      .filter(
+        (channel): channel is ChannelConfig =>
+          Boolean(channel) && !shouldHideAfterCutoffChannel(channel),
+      );
 
     return (
       <Stack spacing={3}>
@@ -1644,24 +1669,26 @@ const loadCounterForDate = useCallback(
               Booked After Cut-Off
             </Typography>
             <Stack spacing={2}>
-              <ToggleButtonGroup
-                value={effectiveAfterCutoffIds}
-                onChange={handleAfterCutoffChannelSelection}
-                size="small"
-                aria-label="Channels allowing after cut-off bookings"
-                sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 1, rowGap: 1 }}
-              >
-                {afterCutoffChannels.map((channel: ChannelConfig) => (
-                  <ToggleButton
-                    key={channel.id}
-                    value={channel.id}
-                    sx={{ flex: '0 0 auto' }}
-                    disabled={registry.savingMetrics || confirmingMetrics}
-                  >
-                    {channel.name}
-                  </ToggleButton>
-                ))}
-              </ToggleButtonGroup>
+          <ToggleButtonGroup
+            value={effectiveAfterCutoffIds}
+            onChange={handleAfterCutoffChannelSelection}
+            size="small"
+            aria-label="Channels allowing after cut-off bookings"
+            sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 1, rowGap: 1 }}
+          >
+            {afterCutoffChannels
+              .filter((channel) => !shouldHideAfterCutoffChannel(channel))
+              .map((channel: ChannelConfig) => (
+                <ToggleButton
+                  key={channel.id}
+                  value={channel.id}
+                  sx={{ flex: '0 0 auto' }}
+                  disabled={registry.savingMetrics || confirmingMetrics}
+                >
+                  {channel.name}
+                </ToggleButton>
+              ))}
+          </ToggleButtonGroup>
               {selectedAfterCutoffChannels.length === 0 ? (
                 <Alert severity="info">Select a channel to record bookings after the cut-off.</Alert>
               ) : (
@@ -2329,6 +2356,7 @@ type SummaryRowOptions = {
 };
 
 export default Counters;
+
 
 
 
