@@ -1,4 +1,5 @@
-import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, DataType } from 'sequelize-typescript';
+import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, DataType, HasMany } from 'sequelize-typescript';
+import CounterChannelMetric from './CounterChannelMetric.js';
 
 @Table({
   timestamps: true,
@@ -44,6 +45,7 @@ export default class Channel extends Model {
   @AllowNull(true)
   @Column(DataType.INTEGER)
   declare updatedBy: number;
-  
 
+  @HasMany(() => CounterChannelMetric, { foreignKey: 'channel_id', as: 'counterMetrics' })
+  declare counterMetrics?: CounterChannelMetric[];
 }

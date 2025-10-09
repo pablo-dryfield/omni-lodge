@@ -2,24 +2,42 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { Request, Response } from 'express';
 import { DataType } from 'sequelize-typescript';
+import { Op } from 'sequelize';
 import User from '../models/User.js';
+import UserType from '../models/UserType.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { Env } from '../types/Env.js';
-import { Op } from 'sequelize';
+
+const NAME_TO_SLUG: Record<string, string[]> = {
+  guide: ['guide', 'pub-crawl-guide'],
+  'pub crawl guide': ['pub-crawl-guide'],
+  'pub_crawl_guide': ['pub-crawl-guide'],
+  manager: ['manager', 'owner'],
+  'assistant manager': ['assistant-manager'],
+  'assistant-manager': ['assistant-manager'],
+  'assistant_manager': ['assistant-manager'],
+  'assistantmanager': ['assistant-manager'],
+};
 
 declare const process: {
   env: Env;
 };
 
+function buildUserColumns() {
+  const attributes = User.getAttributes();
+  return Object.entries(attributes).map(([key, attribute]) => ({
+    header: key.charAt(0).toUpperCase() + key.slice(1),
+    accessorKey: key,
+    type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
+  }));
+}
+
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const data = { ...req.body };
-
     const salt = await bcrypt.genSalt(10);
     data.password = await bcrypt.hash(data.password, salt);
-
     const newUser = await User.create(data);
-
     res.status(201).json([newUser]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
@@ -30,7 +48,6 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
 export const loginUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, password } = req.body;
-
     const user = await User.findOne({
       where: {
         [Op.or]: [{ email }, { username: email }],
@@ -54,7 +71,7 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
     }
 
     const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: '1h',
+      expiresIn: '7d',
     });
 
     res.cookie('token', token, {
@@ -88,16 +105,82 @@ export const logoutUser = async (req: Request, res: Response): Promise<void> => 
 
 export const getAllUsers = async (req: Request, res: Response): Promise<void> => {
   try {
-    const data = await User.findAll();
-    const attributes = User.getAttributes();
-    const columns = Object.entries(attributes).map(([key, attribute]) => {
-      return {
-        header: key.charAt(0).toUpperCase() + key.slice(1),
-        accessorKey: key,
-        type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
-      };
-    });
-    res.status(200).json([{ data, columns }]);
+    const format = (req.query.format ?? req.query.view ?? '').toString().toLowerCase();
+    const activeParam = typeof req.query.active === 'string' ? req.query.active.trim().toLowerCase() : undefined;
+    const filterActive = activeParam === 'true';
+
+    if (format === 'compact') {
+      const typeFilter = typeof req.query.types === 'string' ? req.query.types : undefined;
+      const typeSlugs = typeFilter
+        ? typeFilter
+            .split(',')
+            .map((value) => value.trim().toLowerCase())
+            .flatMap((value) => NAME_TO_SLUG[value] ?? [value])
+            .map((slug) => slug.trim().toLowerCase())
+            .filter((slug) => slug.length > 0)
+        : [];
+
+      const normalizedSlugs = Array.from(
+        new Set(
+          typeSlugs.flatMap((slug) => {
+            const lowered = slug.toLowerCase();
+            const hyphenated = lowered.replace(/_/g, '-');
+            const underscored = lowered.replace(/-/g, '_');
+            return [lowered, hyphenated, underscored];
+          }),
+        ),
+      );
+
+      const userWhere: Record<string, unknown> = {};
+      if (filterActive || normalizedSlugs.length > 0) {
+        userWhere.status = true;
+      }
+
+      const users = await User.findAll({
+        where: userWhere,
+        include: [
+          {
+            model: UserType,
+            as: 'role',
+            required: normalizedSlugs.length > 0,
+            where:
+              normalizedSlugs.length > 0
+                ? {
+                    slug: {
+                      [Op.in]: normalizedSlugs,
+                    },
+                  }
+                : undefined,
+          },
+        ],
+        order: [['firstName', 'ASC']],
+      });
+
+      const payload = users.map((user) => {
+        const fullName = `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim();
+        const role = (user as unknown as { role?: UserType }).role;
+        return {
+          id: user.id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          fullName,
+          userTypeId: user.userTypeId,
+          userTypeSlug: role?.slug ?? null,
+          userTypeName: role?.name ?? null,
+        };
+      });
+
+      res.status(200).json(payload);
+      return;
+    }
+
+    const regularWhere: Record<string, unknown> = {};
+    if (filterActive) {
+      regularWhere.status = true;
+    }
+    const regularWhereOptions = Object.keys(regularWhere).length > 0 ? { where: regularWhere } : {};
+    const data = await User.findAll(regularWhereOptions);
+    res.status(200).json([{ data, columns: buildUserColumns() }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);
@@ -106,18 +189,8 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
 
 export const getAllActiveUsers = async (req: Request, res: Response): Promise<void> => {
   try {
-    const data = await User.findAll({
-      where: { status: true },
-    });
-    const attributes = User.getAttributes();
-    const columns = Object.entries(attributes).map(([key, attribute]) => {
-      return {
-        header: key.charAt(0).toUpperCase() + key.slice(1),
-        accessorKey: key,
-        type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
-      };
-    });
-    res.status(200).json([{ data, columns }]);
+    const data = await User.findAll({ where: { status: true } });
+    res.status(200).json([{ data, columns: buildUserColumns() }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);
@@ -128,19 +201,13 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
   try {
     const { id } = req.params;
     const data = await User.findByPk(id);
-    const attributes = User.getAttributes();
-    const columns = Object.entries(attributes).map(([key, attribute]) => {
-      return {
-        header: key.charAt(0).toUpperCase() + key.slice(1),
-        accessorKey: key,
-        type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
-      };
-    });
+
     if (!data) {
       res.status(404).json([{ message: 'User not found' }]);
       return;
     }
-    res.status(200).json([{ data, columns }]);
+
+    res.status(200).json([{ data, columns: buildUserColumns() }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);

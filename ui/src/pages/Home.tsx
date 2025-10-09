@@ -1,5 +1,10 @@
 import { Link } from 'react-router-dom';
-import { Grid, Paper, Typography, ThemeProvider } from '@mui/material';
+import EventAvailableIcon from '@mui/icons-material/EventAvailable';
+import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
+import PersonIcon from '@mui/icons-material/Person';
+import SettingsIcon from '@mui/icons-material/Settings';
+import Grid from '@mui/material/Grid';
+import { Paper, Typography, ThemeProvider } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import { createTheme } from '@mui/material/styles';
 import { GenericPageProps } from '../types/general/GenericPageProps';
@@ -8,11 +13,27 @@ import { navigateToPage } from '../actions/navigationActions';
 import { selectAllowedNavigationPages } from '../selectors/accessControlSelectors';
 import { useEffect } from 'react';
 import { PageAccessGuard } from '../components/access/PageAccessGuard';
+import type { NavigationIconKey } from '../types/general/NavigationState';
 import { PAGE_SLUGS } from '../constants/pageSlugs';
 
 const PAGE_SLUG = PAGE_SLUGS.dashboard;
 
 const theme = createTheme();
+
+const renderNavigationIcon = (icon: NavigationIconKey) => {
+  switch (icon) {
+    case 'eventAvailable':
+      return <EventAvailableIcon fontSize="large" />;
+    case 'assignmentTurnedIn':
+      return <AssignmentTurnedInIcon fontSize="large" />;
+    case 'person':
+      return <PersonIcon fontSize="large" />;
+    case 'settings':
+      return <SettingsIcon fontSize="large" />;
+    default:
+      return <PersonIcon fontSize="large" />;
+  }
+};
 
 const PageWrapper = styled('div')(({ theme }) => ({
   display: 'flex',
@@ -94,17 +115,17 @@ const Home = (props: GenericPageProps) => {
           <TilesContainer>
             <Grid container spacing={{ xs: 3, sm: 4, md: 5 }} justifyContent="center">
               {allowedPages.length === 0 ? (
-                <Grid item>
+                <Grid size={{ xs: 12 }}>
                   <Typography variant="subtitle1" color="textSecondary">
                     You do not have access to any sections yet.
                   </Typography>
                 </Grid>
               ) : (
                 allowedPages.map((page) => (
-                  <Grid item xs={12} sm={6} md={4} lg={3} key={page.name}>
+                  <Grid key={page.name} size={{ xs: 12, sm: 6, md: 4, lg: 3 }}>
                     <TileLink to={page.path} aria-label={`Go to ${page.name}`}>
                       <LogoTile elevation={3}>
-                        {page.icon}
+                        {renderNavigationIcon(page.icon)}
                         <PageName variant="subtitle1">{page.name}</PageName>
                       </LogoTile>
                     </TileLink>
@@ -120,3 +141,7 @@ const Home = (props: GenericPageProps) => {
 };
 
 export default Home;
+
+
+
+

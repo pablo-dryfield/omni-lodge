@@ -6,6 +6,7 @@ import { initializeAccessControl } from "../utils/initializeAccessControl.js";
 async function syncAccessControl() {
   try {
     defineAssociations();
+    await sequelize.sync({ alter: true });
     await initializeAccessControl();
     console.log("Access control data synchronised.");
   } catch (error) {

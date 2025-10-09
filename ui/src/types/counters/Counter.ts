@@ -7,4 +7,12 @@ export type Counter = {
     updatedAt: Date;
     createdBy: number;
     updatedBy: number;
+    manager?: {
+        firstName: string | null;
+        lastName: string | null;
+    } | null;
+    product?: {
+        id: number;
+        name: string;
+    } | null;
 };
