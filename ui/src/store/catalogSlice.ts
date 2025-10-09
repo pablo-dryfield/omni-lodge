@@ -111,7 +111,7 @@ export const loadCatalog = createAsyncThunk<CatalogPayload, void, { rejectValue:
           withCredentials: true,
         }),
         axiosInstance.get<CompactUserResponse[]>('/users', {
-          params: { format: 'compact', types: 'guide,assistant-manager', active: 'true' },
+          params: { format: 'compact', types: 'pub-crawl-guide,assistant-manager', active: 'true' },
           withCredentials: true,
         }),
         axiosInstance.get<CompactProductResponse[]>('/products', {
