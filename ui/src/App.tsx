@@ -1,6 +1,17 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo } from "react";
 import { BrowserRouter } from "react-router-dom";
-import { AppShell, Center, Loader, Alert, Button, Stack, Text } from "@mantine/core";
+import {
+  AppShell,
+  Center,
+  Loader,
+  Alert,
+  Button,
+  Stack,
+  Text,
+  ScrollArea,
+  useMantineTheme,
+} from "@mantine/core";
+import { useDisclosure, useMediaQuery } from "@mantine/hooks";
 import MainTabs from "./components/main/MainTabs";
 import Routes from "./components/main/Routes"; // your route switch
 import Login from "./pages/Login";
@@ -19,6 +30,30 @@ const App = () => {
     error: accessError,
   } = useAppSelector((state) => state.accessControl);
   const dispatch = useAppDispatch();
+  const theme = useMantineTheme();
+  const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
+  const [sidebarOpened, { toggle: toggleSidebar, close: closeSidebar }] = useDisclosure(false);
+
+  const rawNavbarSettings = useMemo(() => getNavbarSettings(currentPage), [currentPage]);
+  const computedNavbarSettings = useMemo(() => {
+    if (!rawNavbarSettings) {
+      return undefined;
+    }
+    const collapsed = {
+      desktop: rawNavbarSettings.collapsed?.desktop ?? false,
+      mobile: !sidebarOpened,
+    };
+    return {
+      ...rawNavbarSettings,
+      collapsed,
+    };
+  }, [rawNavbarSettings, sidebarOpened]);
+
+  useEffect(() => {
+    if (!isMobile) {
+      closeSidebar();
+    }
+  }, [isMobile, closeSidebar]);
 
   useEffect(() => {
     if (!authenticated) {
@@ -48,9 +83,9 @@ const App = () => {
     <BrowserRouter>
       {authenticated ? (
         <AppShell
-          header={{ height: 40 }}
-          navbar={getNavbarSettings(currentPage)}
-          padding="md"
+          header={{ height: isMobile ? 56 : 68 }}
+          navbar={computedNavbarSettings}
+          padding={isMobile ? "sm" : "md"}
           styles={{
             main: {
               backgroundColor: "#f4f4f7",
@@ -59,34 +94,46 @@ const App = () => {
           }}
         >
           <AppShell.Header>
-            <MainTabs />
+            <MainTabs
+              hasSidebar={Boolean(rawNavbarSettings)}
+              onSidebarToggle={toggleSidebar}
+              sidebarOpened={sidebarOpened}
+            />
           </AppShell.Header>
-          <AppShell.Navbar
-            style={{
-              boxShadow: "2px 0 35px -2px rgba(60, 60, 60, 0.07)",
-              zIndex: 12,
-            }}
-          >
-            <NavBarRouter currentPage={currentPage} />
-          </AppShell.Navbar>
+          {rawNavbarSettings && (
+            <AppShell.Navbar
+              p="md"
+              withBorder={false}
+              style={{
+                boxShadow: "2px 0 35px -2px rgba(60, 60, 60, 0.07)",
+                zIndex: 12,
+              }}
+            >
+              <ScrollArea style={{ height: "100%" }} type="hover" offsetScrollbars>
+                <NavBarRouter currentPage={currentPage} />
+              </ScrollArea>
+            </AppShell.Navbar>
+          )}
           <AppShell.Main>
-            {accessError && (
-              <Alert color="red" title="Permission sync failed" mb="md">
-                <Stack gap="xs">
-                  <Text>{accessError}</Text>
-                  <Button
-                    size="xs"
-                    color="red"
-                    variant="light"
-                    onClick={handleRetryAccess}
-                    loading={accessLoading}
-                  >
-                    Retry fetch
-                  </Button>
-                </Stack>
-              </Alert>
-            )}
-            <Routes />
+            <Stack gap="md">
+              {accessError && (
+                <Alert color="red" title="Permission sync failed" mb="md">
+                  <Stack gap="xs">
+                    <Text>{accessError}</Text>
+                    <Button
+                      size="xs"
+                      color="red"
+                      variant="light"
+                      onClick={handleRetryAccess}
+                      loading={accessLoading}
+                    >
+                      Retry fetch
+                    </Button>
+                  </Stack>
+                </Alert>
+              )}
+              <Routes />
+            </Stack>
           </AppShell.Main>
         </AppShell>
       ) : (

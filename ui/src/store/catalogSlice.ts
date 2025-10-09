@@ -13,6 +13,8 @@ type CatalogChannel = {
   name: string;
   description?: string | null;
   lateBookingAllowed: boolean;
+  paymentMethodId?: number;
+  paymentMethodName?: string | null;
 };
 
 type CatalogPayload = {
@@ -55,6 +57,8 @@ type CompactChannelResponse = {
   name: string;
   description?: string | null;
   lateBookingAllowed?: boolean;
+  paymentMethodId?: number;
+  paymentMethodName?: string | null;
 };
 
 type CompactProductResponse = {
@@ -154,6 +158,8 @@ export const loadCatalog = createAsyncThunk<CatalogPayload, void, { rejectValue:
         name: channel.name,
         description: channel.description ?? null,
         lateBookingAllowed: Boolean(channel.lateBookingAllowed),
+        paymentMethodId: channel.paymentMethodId,
+        paymentMethodName: channel.paymentMethodName ?? null,
       }));
 
       const addons: AddonConfig[] = addonResponse.data.map((addon, index) => ({
