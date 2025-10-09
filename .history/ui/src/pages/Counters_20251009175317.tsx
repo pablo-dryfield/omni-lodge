@@ -373,7 +373,7 @@ const loadCounterForDate = useCallback(
   );
 
   const metricsMap = registry.metricsByKey;
-const mergedMetrics = useMemo<MetricCell[]>(() => {
+  const mergedMetrics = useMemo<MetricCell[]>(() => {
     const map = new Map<string, MetricCell>();
     const baseMetrics = registry.counter?.metrics ?? [];
     baseMetrics.forEach((metric) => {
@@ -385,12 +385,7 @@ const mergedMetrics = useMemo<MetricCell[]>(() => {
       map.set(buildMetricKey(normalized), normalized);
     });
     return Array.from(map.values());
-}, [metricsMap, registry.counter]);
-
- const channelHasAnyQty = useCallback(
-   (channelId: number) => mergedMetrics.some((metric) => metric.channelId === channelId && metric.qty > 0),
-   [mergedMetrics],
- );
+  }, [metricsMap, registry.counter]);
 
 
   const allowedAfterCutoffChannelIds = useMemo(
@@ -893,19 +888,12 @@ const mergedMetrics = useMemo<MetricCell[]>(() => {
 
   const dirtyMetricCount = registry.dirtyMetricKeys.length;
   const hasDirtyMetrics = dirtyMetricCount > 0;
-const effectiveSelectedChannelIds = useMemo<number[]>(() => {
+  const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     if (selectedChannelIds.length > 0) {
       return selectedChannelIds;
     }
     return savedPlatformChannelIds;
-}, [savedPlatformChannelIds, selectedChannelIds]);
-
- useEffect(() => {
-   setSelectedChannelIds((prev) => {
-     const filtered = prev.filter((id) => channelHasAnyQty(id));
-     return filtered.length === prev.length ? prev : filtered;
-   });
- }, [channelHasAnyQty]);
+  }, [savedPlatformChannelIds, selectedChannelIds]);
 
   const effectiveAfterCutoffIds = useMemo<number[]>(() => {
     if (selectedAfterCutoffChannelIds.length > 0) {
@@ -913,13 +901,6 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     }
     return savedAfterCutoffChannelIds.filter((id: number) => allowedAfterCutoffChannelIds.includes(id));
   }, [allowedAfterCutoffChannelIds, savedAfterCutoffChannelIds, selectedAfterCutoffChannelIds]);
-
-  useEffect(() => {
-    setSelectedAfterCutoffChannelIds((prev) => {
-      const filtered = prev.filter((id) => channelHasAnyQty(id));
-      return filtered.length === prev.length ? prev : filtered;
-    });
-  }, [channelHasAnyQty]);
   const autoAfterCutoffChannelIds = useMemo(() => {
     const autoIds = new Set<number>();
     channelsWithAfterCutoffMetrics.forEach((id) => {
@@ -929,14 +910,6 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     });
     return autoIds;
   }, [channelsWithAfterCutoffMetrics, effectiveSelectedChannelIds]);
-  const ecwidChannelId = useMemo(() => {
-    const ecwid = registry.channels.find((channel) => channel.name?.toLowerCase() === 'ecwid');
-    return ecwid ? ecwid.id : null;
-  }, [registry.channels]);
-  const isEcwidSelected = useMemo(
-    () => (ecwidChannelId != null ? effectiveSelectedChannelIds.includes(ecwidChannelId) : false),
-    [effectiveSelectedChannelIds, ecwidChannelId],
-  );
   useEffect(() => {
     if (autoAfterCutoffChannelIds.size === 0) {
       return;
@@ -953,19 +926,6 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       return changed ? Array.from(merged) : prev;
     });
   }, [autoAfterCutoffChannelIds]);
-  const shouldHideAfterCutoffChannel = useCallback(
-    (channel: ChannelConfig | undefined) => {
-      if (!channel) {
-        return false;
-      }
-      const normalizedName = channel.name?.toLowerCase() ?? '';
-      if (normalizedName === 'ecwid') {
-        return isEcwidSelected;
-      }
-      return false;
-    },
-    [isEcwidSelected],
-  );
 
 
   const summaryChannelOrder = useMemo<number[]>(() => {
@@ -1555,14 +1515,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
         <Button
           variant="contained"
           onClick={handleProceedToPlatforms}
-          disabled={
-            catalog.loading ||
-            registry.loading ||
-            ensuringCounter ||
-            managerValue == null ||
-            productValue == null ||
-            effectiveStaffIds.length === 0
-          }
+          disabled={catalog.loading || registry.loading || ensuringCounter || managerValue == null}
         >
           Proceed with Platform Check
         </Button>
@@ -1630,16 +1583,10 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
 
   const renderReservationsStep = () => {
     const selectedAfterCutoffChannels = effectiveAfterCutoffIds
-      .map((channelId: number) => {
-        const channel =
-          afterCutoffChannels.find((item) => item.id === channelId) ??
-          registry.channels.find((item) => item.id === channelId);
-        return channel;
-      })
-      .filter(
-        (channel): channel is ChannelConfig =>
-          Boolean(channel) && !shouldHideAfterCutoffChannel(channel),
-      );
+      .map((channelId: number) =>
+        afterCutoffChannels.find((channel: ChannelConfig) => channel.id === channelId),
+      )
+      .filter((channel): channel is ChannelConfig => Boolean(channel));
 
     return (
       <Stack spacing={3}>
@@ -1677,7 +1624,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
             sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 1, rowGap: 1 }}
           >
             {afterCutoffChannels
-              .filter((channel) => !shouldHideAfterCutoffChannel(channel))
+              .filter((channel) => !autoAfterCutoffChannelIds.has(channel.id))
               .map((channel: ChannelConfig) => (
                 <ToggleButton
                   key={channel.id}

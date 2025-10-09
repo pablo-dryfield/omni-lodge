@@ -9,9 +9,6 @@ import type {
   CounterStatus,
   CounterSummary,
   MetricCell,
-  MetricKind,
-  MetricPeriod,
-  MetricTallyType,
   StaffOption,
 } from '../types/counters/CounterRegistry';
 import type { RootState } from './store';

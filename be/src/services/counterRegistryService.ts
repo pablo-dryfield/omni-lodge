@@ -504,6 +504,7 @@ export default class CounterRegistryService {
 
       const rowsToCreate: NormalizedMetric[] = [];
       const rowsToUpdate: Array<{ metric: CounterChannelMetric; row: NormalizedMetric }> = [];
+      const rowsToDelete: CounterChannelMetric[] = [];
 
       incomingByKey.forEach((row: NormalizedMetric, key) => {
         const current = existingByKey.get(key);
@@ -520,9 +521,13 @@ export default class CounterRegistryService {
             : current.period ?? null;
 
         const currentQty = Number(current.qty);
-        const nextQty = Number(row.qty);
+        const nextQty = Math.max(0, Number(row.qty) || 0);
         if (currentPeriod !== row.period || currentQty !== nextQty) {
-          rowsToUpdate.push({ metric: current, row });
+          if (nextQty === 0) {
+            rowsToDelete.push(current);
+          } else {
+            rowsToUpdate.push({ metric: current, row: { ...row, qty: nextQty } });
+          }
         }
       });
 
@@ -545,9 +550,15 @@ export default class CounterRegistryService {
         );
       }
 
+      for (const record of rowsToDelete) {
+        await record.destroy({ transaction });
+      }
+
       for (const { metric, row } of rowsToUpdate) {
-        metric.qty = row.qty;
-        metric.period = row.tallyType === 'attended' ? null : row.period;
+        const nextPeriod = row.tallyType === 'attended' ? null : row.period;
+        const nextQty = Math.max(0, Number(row.qty) || 0);
+        metric.qty = nextQty;
+        metric.period = nextPeriod;
         metric.set('updatedBy', actorUserId);
         await metric.save({ transaction });
       }
