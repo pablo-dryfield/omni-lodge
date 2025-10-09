@@ -12,11 +12,12 @@ const NAME_TO_SLUG: Record<string, string[]> = {
   guide: ['guide', 'pub-crawl-guide'],
   'pub crawl guide': ['pub-crawl-guide'],
   'pub_crawl_guide': ['pub-crawl-guide'],
-  manager: ['manager', 'owner'],
+  manager: ['manager'],
   'assistant manager': ['assistant-manager'],
   'assistant-manager': ['assistant-manager'],
   'assistant_manager': ['assistant-manager'],
   'assistantmanager': ['assistant-manager'],
+  owner: ['owner'],
 };
 
 declare const process: {
