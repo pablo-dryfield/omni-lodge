@@ -1035,7 +1035,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     if (hasDirtyMetrics) {
       return `${dirtyMetricCount} unsaved ${dirtyMetricCount === 1 ? 'change' : 'changes'}`;
     }
-    return 'All metrics saved';
+    return 'Metrics saved';
   }, [confirmingMetrics, dirtyMetricCount, hasDirtyMetrics, registry.savingMetrics]);
   const flushMetrics = useCallback(async (): Promise<boolean> => {
     if (!hasDirtyMetrics) {
