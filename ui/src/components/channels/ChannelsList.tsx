@@ -23,6 +23,7 @@ const ChannelList = () => {
     showGlobalFilter: true,
     columnVisibility: {
       id: false,
+      paymentMethodId: false,
     },
   };
 

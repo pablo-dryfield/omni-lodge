@@ -1,5 +1,18 @@
-import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, DataType, HasMany } from 'sequelize-typescript';
+import {
+  Model,
+  Table,
+  Column,
+  PrimaryKey,
+  AutoIncrement,
+  AllowNull,
+  Default,
+  DataType,
+  HasMany,
+  ForeignKey,
+  BelongsTo,
+} from 'sequelize-typescript';
 import CounterChannelMetric from './CounterChannelMetric.js';
+import PaymentMethod from './PaymentMethod.js';
 
 @Table({
   timestamps: true,
@@ -45,6 +58,14 @@ export default class Channel extends Model {
   @AllowNull(true)
   @Column(DataType.INTEGER)
   declare updatedBy: number;
+
+  @ForeignKey(() => PaymentMethod)
+  @AllowNull(false)
+  @Column(DataType.INTEGER)
+  declare paymentMethodId: number;
+
+  @BelongsTo(() => PaymentMethod, { foreignKey: 'paymentMethodId', as: 'paymentMethod' })
+  declare paymentMethod?: PaymentMethod;
 
   @HasMany(() => CounterChannelMetric, { foreignKey: 'channel_id', as: 'counterMetrics' })
   declare counterMetrics?: CounterChannelMetric[];

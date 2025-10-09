@@ -34,8 +34,9 @@ import {
   Stack,
   TextField,
   Typography,
+  Tooltip,
 } from '@mui/material';
-import { Add, Close, Remove } from '@mui/icons-material';
+import { Add, Close, Delete, Edit, Remove } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
@@ -212,6 +213,9 @@ const Counters = (props: GenericPageProps) => {
   const [pendingProductId, setPendingProductId] = useState<number | null>(null);
   const [pendingStaffIds, setPendingStaffIds] = useState<number[]>([]);
   const [pendingStaffDirty, setPendingStaffDirty] = useState(false);
+  const [selectedCounterId, setSelectedCounterId] = useState<number | null>(
+    registry.counter?.counter.id ?? null,
+  );
   const fetchCounterRequestRef = useRef<string | null>(null);
   const lastPersistedStaffIdsRef = useRef<number[]>([]);
   const lastInitializedCounterRef = useRef<string | null>(null);
@@ -756,14 +760,13 @@ const mergedMetrics = useMemo<MetricCell[]>(() => {
       if (staffDiffers && pendingStaffIds.length > 0) {
         lastPersistedStaffIdsRef.current = normalizeIdList(pendingStaffIds);
       }
-      await loadCountersList();
       return true;
     } catch (_error) {
       return false;
     } finally {
       setEnsuringCounter(false);
     }
-  }, [dispatch, loadCountersList, pendingProductId, pendingStaffDirty, pendingStaffIds, registry.counter, selectedManagerId]);
+  }, [dispatch, pendingProductId, pendingStaffDirty, pendingStaffIds, registry.counter, selectedManagerId]);
 
   useEffect(() => {
     void loadCountersList();
@@ -771,20 +774,35 @@ const mergedMetrics = useMemo<MetricCell[]>(() => {
 
   const handleOpenModal = useCallback(
     (mode: 'create' | 'update') => {
+      if (mode === 'update' && selectedCounterId == null) {
+        return;
+      }
       setModalMode(mode);
       if (mode === 'create') {
         setActiveRegistryStep('details');
+      } else if (mode === 'update') {
+        const formatted = selectedDate.format(COUNTER_DATE_FORMAT);
+        const currentDate = registry.counter?.counter.date ?? null;
+        const currentUserId = registry.counter?.counter.userId ?? null;
+        const shouldFetch =
+          formatted !== currentDate ||
+          (selectedManagerId != null && selectedManagerId !== currentUserId);
+        if (shouldFetch) {
+          fetchCounterRequestRef.current = null;
+          void loadCounterForDate(formatted);
+        }
       }
       setIsModalOpen(true);
     },
-    [],
+    [loadCounterForDate, registry.counter, selectedCounterId, selectedDate, selectedManagerId, setActiveRegistryStep],
   );
 
   const handleCloseModal = useCallback(() => {
     setIsModalOpen(false);
     setModalMode(null);
     setActiveRegistryStep('details');
-  }, [setActiveRegistryStep]);
+    void loadCountersList();
+  }, [loadCountersList, setActiveRegistryStep]);
 
   useEffect(() => {
     if (isModalOpen && !catalog.loaded && !catalog.loading) {
@@ -792,12 +810,12 @@ const mergedMetrics = useMemo<MetricCell[]>(() => {
     }
   }, [catalog.loaded, catalog.loading, dispatch, isModalOpen]);
 
-  const activeCounterDate = registry.counter?.counter.date ?? null;
-  const activeCounterUserId = registry.counter?.counter.userId ?? null;
-
   const handleCounterSelect = useCallback(
     (counterSummary: Partial<Counter>) => {
       setCounterListError(null);
+      fetchCounterRequestRef.current = null;
+      const nextCounterId = counterSummary.id ?? null;
+      setSelectedCounterId(nextCounterId);
       const nextUserId = counterSummary.userId ?? null;
       if (nextUserId) {
         setSelectedManagerId(nextUserId);
@@ -805,40 +823,33 @@ const mergedMetrics = useMemo<MetricCell[]>(() => {
       if (counterSummary.date) {
         const parsed = dayjs(counterSummary.date);
         if (parsed.isValid()) {
-          const formatted = parsed.format(COUNTER_DATE_FORMAT);
           setSelectedDate(parsed);
-          const shouldFetch =
-            formatted !== activeCounterDate ||
-            (nextUserId != null && nextUserId !== activeCounterUserId);
-          if (shouldFetch) {
-            fetchCounterRequestRef.current = null;
-            void loadCounterForDate(formatted);
-          }
         }
       }
     },
-    [activeCounterDate, activeCounterUserId, loadCounterForDate],
+    [],
   );
 
   const handleDeleteCounter = useCallback(() => {
-    if (!counterId) {
+    const targetCounterId = counterId ?? selectedCounterId;
+    if (!targetCounterId) {
       return;
     }
     const confirmed = window.confirm('Delete this counter?');
     if (!confirmed) {
       return;
     }
-    dispatch(deleteCounter(counterId))
+    dispatch(deleteCounter(targetCounterId))
       .unwrap()
       .then(() => {
+        setSelectedCounterId(null);
         handleCloseModal();
-        loadCountersList();
       })
       .catch((error) => {
         const message = typeof error === 'string' ? error : 'Failed to delete counter';
         setCounterListError(message);
       });
-  }, [counterId, dispatch, handleCloseModal, loadCountersList]);
+  }, [counterId, dispatch, handleCloseModal, selectedCounterId]);
 
   const handleAddNewCounter = useCallback(() => {
     const managerId = selectedManagerId ?? session.loggedUserId;
@@ -859,6 +870,7 @@ const mergedMetrics = useMemo<MetricCell[]>(() => {
     setPendingStaffIds([]);
     setSelectedChannelIds([]);
     fetchCounterRequestRef.current = null;
+    setSelectedCounterId(null);
 
     dispatch(clearCounter());
     dispatch(clearDirtyMetrics());
@@ -1442,7 +1454,6 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       const ensuredStaffIds = normalizeIdList(payload.staff.map((member) => member.userId));
 
       fetchCounterRequestRef.current = formatted;
-      await loadCountersList();
 
       if (pendingProductId != null) {
         if (pendingProductId !== ensuredProductId) {
@@ -1486,7 +1497,6 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     currentProductId,
     ensureSetupPersisted,
     pendingProductId,
-    loadCountersList,
     pendingStaffDirty,
     pendingStaffIds,
     updateCounterStatusSafe,
@@ -2026,6 +2036,8 @@ type SummaryRowOptions = {
             {summaryChannels.map((item) => {
               const isAfterCutoffChannel = AFTER_CUTOFF_ALLOWED.has(item.channelName.toLowerCase());
               const addonBuckets = Object.values(item.addons);
+              const showBeforeForChannel =
+                !isAfterCutoffChannel || effectiveSelectedChannelIds.includes(item.channelId);
               return (
                 <Grid size={{ xs: 12, md: 6, lg: 4 }} key={item.channelId}>
                   <Card variant="outlined">
@@ -2034,7 +2046,7 @@ type SummaryRowOptions = {
                         {item.channelName}
                       </Typography>
                       {summaryRow('People', item.people, {
-                        showBefore: !isAfterCutoffChannel,
+                        showBefore: showBeforeForChannel,
                         showAfter: true,
                         showNonShow: !isAfterCutoffChannel,
                       })}
@@ -2042,7 +2054,7 @@ type SummaryRowOptions = {
                       {addonBuckets.map((addon) => (
                         <Box key={addon.key} sx={{ mb: 1 }}>
                           {summaryRow(addon.name, addon, {
-                            showBefore: !isAfterCutoffChannel,
+                            showBefore: showBeforeForChannel,
                             showAfter: true,
                             showNonShow: !isAfterCutoffChannel,
                           })}
@@ -2214,57 +2226,180 @@ type SummaryRowOptions = {
     [setPendingProductId],
   );
 
-  const canModifyCounter = Boolean(counterId);
+  const canModifyCounter = Boolean(selectedCounterId ?? counterId);
   const modalTitle =
     modalMode === 'create' ? 'Create Counter' : modalMode === 'update' ? 'Update Counter' : 'Counter';
+  const pageLayoutStyles = useMemo(() => {
+    const verticalOffset = isMobileScreen ? theme.spacing(12) : theme.spacing(16);
+    return {
+      pb: theme.spacing(isMobileScreen ? 1 : 1.75),
+      pt: theme.spacing(isMobileScreen ? 0.5 : 1),
+      minHeight: `calc(100vh - ${verticalOffset})`,
+      display: 'flex',
+      flex: 1,
+      alignItems: 'stretch',
+      gap: theme.spacing(0.35),
+    };
+  }, [isMobileScreen, theme]);
+  const panelMaxHeight = useMemo(() => {
+    const offset = isMobileScreen ? theme.spacing(12) : theme.spacing(16);
+    return `calc(100vh - ${offset})`;
+  }, [isMobileScreen, theme]);
+
+  const counterActions = isMobileScreen ? (
+    <Stack
+      direction="row"
+      spacing={1.75}
+      alignItems="center"
+      justifyContent="flex-end"
+      sx={{
+        '& .MuiIconButton-root': {
+          border: '1px solid rgba(255,255,255,0.35)',
+          backgroundColor: 'rgba(255,255,255,0.12)',
+          padding: 0.5,
+          transition: 'background-color 120ms ease, transform 120ms ease',
+          '&:active': {
+            transform: 'scale(0.96)',
+          },
+        },
+      }}
+    >
+      <Tooltip title="Add Counter">
+        <IconButton
+          color="primary"
+          size="small"
+          onClick={handleAddNewCounter}
+          aria-label="Add counter"
+        >
+          <Add fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      <Tooltip title={canModifyCounter ? 'Update Counter' : 'Select a counter to update'}>
+        <span style={{ display: 'inline-flex' }}>
+          <IconButton
+            size="small"
+            onClick={() => handleOpenModal('update')}
+            disabled={!canModifyCounter}
+            sx={{ color: 'inherit' }}
+            aria-label="Update counter"
+          >
+            <Edit fontSize="small" />
+          </IconButton>
+        </span>
+      </Tooltip>
+      <Tooltip title={canModifyCounter ? 'Delete Counter' : 'Select a counter to delete'}>
+        <span style={{ display: 'inline-flex' }}>
+          <IconButton
+            size="small"
+            color="error"
+            onClick={handleDeleteCounter}
+            disabled={!canModifyCounter}
+            aria-label="Delete counter"
+          >
+            <Delete fontSize="small" />
+          </IconButton>
+        </span>
+      </Tooltip>
+    </Stack>
+  ) : (
+    <Stack direction="row" spacing={1} alignItems="center">
+      <Button variant="contained" size="small" startIcon={<Add />} onClick={handleAddNewCounter}>
+        Add New
+      </Button>
+      <Button
+        variant="outlined"
+        size="small"
+        startIcon={<Edit />}
+        onClick={() => handleOpenModal('update')}
+        disabled={!canModifyCounter}
+      >
+        Update
+      </Button>
+      <Button
+        variant="outlined"
+        color="error"
+        size="small"
+        startIcon={<Delete />}
+        onClick={handleDeleteCounter}
+        disabled={!canModifyCounter}
+      >
+        Delete
+      </Button>
+    </Stack>
+  );
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
-      <Stack spacing={2} sx={{ pb: 4 }}>
-        <Stack
-          direction={{ xs: 'column', sm: 'row' }}
-          spacing={1}
-          justifyContent={{ xs: 'flex-start', sm: 'flex-end' }}
-          alignItems={{ xs: 'stretch', sm: 'center' }}
+      <Stack spacing={2} sx={pageLayoutStyles}>
+        <Card
+          variant="outlined"
+          sx={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            minHeight: 0,
+            maxHeight: panelMaxHeight,
+            overflow: 'hidden',
+          }}
         >
-          <Button
-            variant="contained"
-            startIcon={<Add />}
-            onClick={handleAddNewCounter}
-          >
-            Add New
-          </Button>
-          <Button variant="outlined" onClick={() => handleOpenModal('update')} disabled={!canModifyCounter}>
-            Update
-          </Button>
-          <Button variant="outlined" color="error" onClick={handleDeleteCounter} disabled={!canModifyCounter}>
-            Delete
-          </Button>
-        </Stack>
-
-        <Card variant="outlined">
           <CardHeader
-            title="Counters"
-            subheader={
-              counterListLoading
-                ? 'Loading counters...'
-                : null
+            title={
+              <Typography variant="h6" component="span">
+                Counters
+              </Typography>
             }
+            action={counterActions}
+            subheader={counterListLoading ? 'Loading counters...' : null}
+            sx={{
+              alignItems: 'center',
+              '& .MuiCardHeader-action': {
+                margin: 0,
+              },
+            }}
           />
-          <CardContent>
+          <CardContent
+            sx={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: 0,
+              gap: 1.5,
+            }}
+          >
             {counterListLoading ? (
-              <Stack spacing={1.5}>
+              <Stack spacing={1.5} sx={{ flex: 1, justifyContent: 'center' }}>
                 {[0, 1, 2].map((index) => (
                   <Skeleton key={'counter-skeleton-' + index} variant="rounded" height={48} />
                 ))}
               </Stack>
             ) : counterListError ? (
-              <Alert severity="error">{counterListError}</Alert>
+              <Box
+                sx={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Alert severity="error" sx={{ width: '100%' }}>
+                  {counterListError}
+                </Alert>
+              </Box>
             ) : counterList.length === 0 ? (
-              <Typography color="text.secondary">No counters found yet.</Typography>
+              <Box
+                sx={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Typography color="text.secondary">No counters found yet.</Typography>
+              </Box>
             ) : (
-              <List dense sx={{ maxHeight: 360, overflowY: 'auto' }}>
+              <List dense sx={{ flex: 1, overflowY: 'auto', pr: 1 }}>
                 {counterList.map((counter) => {
+                  const counterIdValue = counter.id ?? null;
                   const counterDate = counter.date ? dayjs(counter.date) : null;
                   const dateLabel = counterDate?.isValid()
                     ? counterDate.format('dddd, MMM D, YYYY')
@@ -2280,19 +2415,46 @@ type SummaryRowOptions = {
                   const productDisplay =
                     counter.product && counter.product.name ? counter.product.name : '';
                   const productLabel = productDisplay || 'Old Product Version - Pub Crawl';
+                  const isSelected =
+                    selectedCounterId != null && counterIdValue != null && counterIdValue === selectedCounterId;
                   const secondaryContent = (
-                    <Typography component="span" variant="body2" color="text.secondary">
-                      <Box component="span" sx={{ fontWeight: 600 }}>
+                    <Typography
+                      component="span"
+                      variant="body2"
+                      color={isSelected ? 'grey.300' : 'text.secondary'}
+                    >
+                      <Box
+                        component="span"
+                        sx={{
+                          fontWeight: 600,
+                          color: isSelected ? 'grey.100' : undefined,
+                        }}
+                      >
                         Manager:
                       </Box>{' '}
-                      <Box component="span">{managerDisplay || '-'}</Box>
-                      <Box component="span" sx={{ mx: 0.75 }}>
+                      <Box
+                        component="span"
+                        sx={{ color: isSelected ? 'grey.200' : undefined }}
+                      >
+                        {managerDisplay || '-'}
+                      </Box>
+                      <Box
+                        component="span"
+                        sx={{
+                          mx: 0.75,
+                          color: isSelected ? 'grey.400' : undefined,
+                        }}
+                      >
                         |
                       </Box>
-                      <Box component="span">{productLabel}</Box>
+                      <Box
+                        component="span"
+                        sx={{ color: isSelected ? 'grey.200' : undefined }}
+                      >
+                        {productLabel}
+                      </Box>
                     </Typography>
                   );
-                  const isSelected = registry.counter?.counter.id === counter.id;
                   return (
                     <ListItem
                       key={(counter.id ?? 'counter') + '-' + dateLabel}
@@ -2303,12 +2465,43 @@ type SummaryRowOptions = {
                       }}
                     >
                       <ListItemButton
+                        disableRipple
+                        disableTouchRipple
                         onClick={() => handleCounterSelect(counter)}
                         selected={Boolean(isSelected)}
+                        sx={(theme) => ({
+                          ...(isSelected
+                            ? {
+                                backgroundColor: '#000',
+                                color: theme.palette.common.white,
+                                '&:hover': {
+                                  backgroundColor: '#111',
+                                },
+                                '& .MuiTypography-root': {
+                                  color: theme.palette.common.white,
+                                },
+                              }
+                            : {
+                                '&:hover': {
+                                  backgroundColor: theme.palette.action.hover,
+                                },
+                              }),
+                          '&.Mui-selected': {
+                            backgroundColor: '#000',
+                            color: theme.palette.common.white,
+                          },
+                          '&.Mui-selected:hover': {
+                            backgroundColor: '#111',
+                          },
+                        })}
                       >
                         <ListItemText
                           primary={
-                            <Typography variant="body1" fontWeight={600}>
+                            <Typography
+                              variant="body1"
+                              fontWeight={600}
+                              color={isSelected ? 'common.white' : 'text.primary'}
+                            >
                               {dateLabel}
                             </Typography>
                           }

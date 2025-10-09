@@ -59,6 +59,29 @@ export const channelsColumnDef: ResponseModifications<Partial<Channel>>[] = [
     }
   },
   {
+    accessorKey: 'paymentMethodName',
+    modifications: {
+      id: 'paymentMethodName',
+      header: 'Payment Method',
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Cell: ({ cell, row }) => row.original.paymentMethod?.name ?? cell.getValue<string>() ?? '—',
+      Edit: () => null,
+    }
+  },
+  {
+    accessorKey: 'paymentMethodId',
+    modifications: {
+      id: 'paymentMethodId',
+      header: 'Payment Method ID',
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      visibleInShowHideMenu: false,
+      Edit: () => null,
+      enableColumnFilter: false,
+      enableSorting: false,
+      Cell: () => null,
+    }
+  },
+  {
     accessorKey: 'createdAt',
     modifications: {
       id: 'createdAt',

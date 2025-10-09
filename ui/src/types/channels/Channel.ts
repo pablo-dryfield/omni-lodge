@@ -8,4 +8,10 @@ export type Channel = {
     updatedAt: Date;
     createdBy: number;
     updatedBy: number;
+    paymentMethodId: number;
+    paymentMethodName?: string | null;
+    paymentMethod?: {
+        id: number;
+        name: string;
+    } | null;
 };

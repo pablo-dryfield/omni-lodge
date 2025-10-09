@@ -20,6 +20,7 @@ import RoleModulePermission from "../models/RoleModulePermission.js";
 import Addon from "../models/Addon.js";
 import ProductAddon from "../models/ProductAddon.js";
 import CounterChannelMetric from "../models/CounterChannelMetric.js";
+import PaymentMethod from "../models/PaymentMethod.js";
 
 const environment = (process.env.NODE_ENV || "development").trim();
 const envFile = environment === "production" ? ".env.prod" : ".env.dev";
@@ -62,6 +63,7 @@ const sequelize = new Sequelize({
     ProductAddon,
     ProductType,
     Addon,
+    PaymentMethod,
     UserType,
     Page,
     Module,

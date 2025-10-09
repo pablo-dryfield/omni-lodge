@@ -15,6 +15,7 @@ import Action from './Action.js';
 import ModuleAction from './ModuleAction.js';
 import RolePagePermission from './RolePagePermission.js';
 import RoleModulePermission from './RoleModulePermission.js';
+import PaymentMethod from './PaymentMethod.js';
 
 export function defineAssociations() {
   // User Associations
@@ -104,6 +105,10 @@ export function defineAssociations() {
   Channel.hasMany(Booking, { foreignKey: 'channelId' });
   Channel.belongsTo(User, { foreignKey: 'createdBy' });
   Channel.belongsTo(User, { foreignKey: 'updatedBy' });
+  Channel.belongsTo(PaymentMethod, { foreignKey: 'paymentMethodId', as: 'paymentMethod' });
+
+  // Payment Method Associations
+  PaymentMethod.hasMany(Channel, { foreignKey: 'paymentMethodId', as: 'channels' });
 }
 
 
