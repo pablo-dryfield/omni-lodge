@@ -1649,7 +1649,15 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
         {!hideLabel && (
           <Typography sx={{ flexGrow: 1 }}>{displayLabel}</Typography>
         )}
-        <Stack direction="row" spacing={0.5} alignItems="center">
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            width: '100%',
+            maxWidth: 220,
+          }}
+        >
           <IconButton
             aria-label={`Decrease ${ariaLabel}`}
             size="small"
@@ -1658,12 +1666,15 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
             sx={{
               border: '1px solid',
               borderColor: decreaseDisabled ? 'divider' : 'primary.main',
-              borderRadius: 1,
-              width: 40,
-              height: 40,
+              borderRadius: 1.5,
+              width: 36,
+              height: 36,
+              backgroundColor: decreaseDisabled ? 'transparent' : 'primary.main',
+              color: decreaseDisabled ? 'text.disabled' : 'common.white',
+              transition: 'background-color 0.2s ease',
             }}
           >
-            <Remove fontSize="small" />
+            <Remove sx={{ fontSize: 18 }} />
           </IconButton>
           <TextField
             value={qty}
@@ -1675,8 +1686,9 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
             inputProps={{
               min,
               max,
-              style: { width: 64, textAlign: 'center' as const },
+              style: { textAlign: 'center' as const },
             }}
+            sx={{ flexGrow: 1, minWidth: 0 }}
           />
           <IconButton
             aria-label={`Increase ${ariaLabel}`}
@@ -1686,14 +1698,17 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
             sx={{
               border: '1px solid',
               borderColor: increaseDisabled ? 'divider' : 'primary.main',
-              borderRadius: 1,
-              width: 40,
-              height: 40,
+              borderRadius: 1.5,
+              width: 36,
+              height: 36,
+              backgroundColor: increaseDisabled ? 'transparent' : 'primary.main',
+              color: increaseDisabled ? 'text.disabled' : 'common.white',
+              transition: 'background-color 0.2s ease',
             }}
           >
-            <Add fontSize="small" />
+            <Add sx={{ fontSize: 18 }} />
           </IconButton>
-        </Stack>
+        </Box>
       </Stack>
     );
   };
