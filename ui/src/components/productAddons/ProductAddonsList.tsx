@@ -20,6 +20,10 @@ import { MRT_ColumnDef } from "mantine-react-table";
 
 const MODULE_SLUG = "product-addon-management";
 
+type ProductAddonsListProps = {
+  pageTitle?: string;
+};
+
 const coerceProductAddonPayload = (
   payload: Partial<ProductAddon>,
   { forCreate = false }: { forCreate?: boolean } = {},
@@ -78,7 +82,7 @@ const ensureNumber = (value: unknown): number | undefined => {
   return Number.isNaN(numeric) ? undefined : numeric;
 };
 
-const ProductAddonsList = () => {
+const ProductAddonsList = ({ pageTitle }: ProductAddonsListProps) => {
   const dispatch = useAppDispatch();
   const productAddonsState = useAppSelector((state) => state.productAddons)[0];
   const productsState = useAppSelector((state) => state.products)[0];
@@ -228,9 +232,11 @@ const ProductAddonsList = () => {
     [productAddonsState.data, productLabelById, addonLabelById, productOptions, addonOptions],
   );
 
+  const headingTitle = pageTitle ?? currentPage;
+
   return (
     <Table
-      pageTitle={currentPage}
+      pageTitle={headingTitle}
       data={productAddonsState.data[0]?.data || []}
       loading={productAddonsState.loading}
       error={productAddonsState.error}

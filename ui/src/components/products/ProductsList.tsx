@@ -14,6 +14,7 @@ const DEFAULT_MODULE_SLUG = "product-catalog";
 
 type ProductsListProps = {
   moduleSlug?: string;
+  pageTitle?: string;
 };
 
 const coerceProductPayload = (payload: Partial<Product>) => {
@@ -34,7 +35,7 @@ const coerceProductPayload = (payload: Partial<Product>) => {
   return next;
 };
 
-const ProductList = ({ moduleSlug = DEFAULT_MODULE_SLUG }: ProductsListProps) => {
+const ProductList = ({ moduleSlug = DEFAULT_MODULE_SLUG, pageTitle }: ProductsListProps) => {
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.products)[0];
   const productTypesState = useAppSelector((state) => state.productTypes)[0];
@@ -124,9 +125,11 @@ const ProductList = ({ moduleSlug = DEFAULT_MODULE_SLUG }: ProductsListProps) =>
     [data, productTypeLabelById],
   );
 
+  const headingTitle = pageTitle ?? currentPage;
+
   return (
     <Table
-      pageTitle={currentPage}
+      pageTitle={headingTitle}
       data={data[0]?.data || []}
       loading={loading}
       error={error}

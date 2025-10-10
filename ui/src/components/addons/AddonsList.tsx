@@ -42,7 +42,11 @@ const coerceAddonPayload = (payload: Partial<Addon>): Partial<Addon> => {
   return next;
 };
 
-const AddonsList = () => {
+type AddonsListProps = {
+  pageTitle?: string;
+};
+
+const AddonsList = ({ pageTitle }: AddonsListProps) => {
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.addons)[0];
   const { currentPage } = useAppSelector((state) => state.navigation);
@@ -111,9 +115,11 @@ const AddonsList = () => {
     [data],
   );
 
+  const headingTitle = pageTitle ?? currentPage;
+
   return (
     <Table
-      pageTitle={currentPage}
+      pageTitle={headingTitle}
       data={data[0]?.data || []}
       loading={loading}
       error={error}

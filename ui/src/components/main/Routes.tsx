@@ -5,17 +5,11 @@ import Guests from "../../pages/Guests";
 import BookingsPage from "../../pages/BookingsPage";
 import BookingsManifestPage from "../../pages/BookingsManifestPage";
 import AvailabilityCalendar from "../../pages/AvailabilityCalendar";
-import Channels from "../../pages/Channels";
 import Counters from "../../pages/Counters";
-import Products from "../../pages/Products";
 import ProductTypes from "../../pages/ProductTypes";
 import VenueNumbers from "../../pages/VenueNumbers";
 import Pays from "../../pages/Pays";
 import Reports from "../../pages/Reports";
-import Addons from "../../pages/Addons";
-import PaymentMethods from "../../pages/PaymentMethods";
-import ActionsDirectory from "../../pages/ActionsDirectory";
-import ProductAddons from "../../pages/ProductAddons";
 import SettingsLayout from "../../pages/settings/SettingsLayout";
 import SettingsLanding from "../../pages/settings/SettingsLanding";
 import SettingsUsers from "../../pages/settings/SettingsUsers";
@@ -25,6 +19,12 @@ import SettingsModules from "../../pages/settings/SettingsModules";
 import SettingsPermissions from "../../pages/settings/SettingsPermissions";
 import SettingsPagePermissions from "../../pages/settings/SettingsPagePermissions";
 import SettingsModulePermissions from "../../pages/settings/SettingsModulePermissions";
+import SettingsProducts from "../../pages/settings/SettingsProducts";
+import SettingsAddons from "../../pages/settings/SettingsAddons";
+import SettingsProductAddons from "../../pages/settings/SettingsProductAddons";
+import SettingsPaymentMethods from "../../pages/settings/SettingsPaymentMethods";
+import SettingsActions from "../../pages/settings/SettingsActions";
+import SettingsChannels from "../../pages/settings/SettingsChannels";
 
 const Routes = () => {
   return (
@@ -34,14 +34,8 @@ const Routes = () => {
       <Route path="/bookings" element={<BookingsPage title="Bookings" />} />
       <Route path="/bookings/manifest" element={<BookingsManifestPage title="Bookings Manifest" />} />
       <Route path="/calendar" element={<AvailabilityCalendar />} />
-      <Route path="/channels" element={<Channels title="Channels" />} />
       <Route path="/counters" element={<Counters title="Counters" />} />
-      <Route path="/products" element={<Products title="Products" />} />
       <Route path="/productTypes" element={<ProductTypes title="Product Types" />} />
-      <Route path="/addons" element={<Addons title="Add-Ons" />} />
-      <Route path="/product-addons" element={<ProductAddons title="Product Add-Ons" />} />
-      <Route path="/payment-methods" element={<PaymentMethods title="Payment Methods" />} />
-      <Route path="/actions" element={<ActionsDirectory title="Actions" />} />
       <Route path="/venueNumbers" element={<VenueNumbers title="Venue Numbers" />} />
       <Route path="/pays" element={<Pays />} />
       <Route path="/reports" element={<Reports title={"Reports"} />} />
@@ -55,6 +49,12 @@ const Routes = () => {
         <Route path="permissions" element={<SettingsPermissions />} />
         <Route path="permissions/pages" element={<SettingsPagePermissions />} />
         <Route path="permissions/modules" element={<SettingsModulePermissions />} />
+        <Route path="products" element={<SettingsProducts />} />
+        <Route path="addons" element={<SettingsAddons />} />
+        <Route path="product-addons" element={<SettingsProductAddons />} />
+        <Route path="payment-methods" element={<SettingsPaymentMethods />} />
+        <Route path="actions" element={<SettingsActions />} />
+        <Route path="channels" element={<SettingsChannels />} />
       </Route>
     </ReactRoutes>
   );

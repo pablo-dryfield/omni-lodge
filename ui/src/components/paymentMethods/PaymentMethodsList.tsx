@@ -39,7 +39,11 @@ const coercePaymentMethodPayload = (payload: Partial<PaymentMethod>): Partial<Pa
   return next;
 };
 
-const PaymentMethodsList = () => {
+type PaymentMethodsListProps = {
+  pageTitle?: string;
+};
+
+const PaymentMethodsList = ({ pageTitle }: PaymentMethodsListProps) => {
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.paymentMethods)[0];
   const { currentPage } = useAppSelector((state) => state.navigation);
@@ -108,9 +112,11 @@ const PaymentMethodsList = () => {
     [data],
   );
 
+  const headingTitle = pageTitle ?? currentPage;
+
   return (
     <Table
-      pageTitle={currentPage}
+      pageTitle={headingTitle}
       data={data[0]?.data || []}
       loading={loading}
       error={error}
