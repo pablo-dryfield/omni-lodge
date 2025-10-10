@@ -3,20 +3,33 @@ import { check, param, validationResult } from 'express-validator';
 
 import authMiddleware from '../middleware/authMiddleware.js';
 import { requireRoles } from '../middleware/authorizationMiddleware.js';
-import { createAddon, deleteAddon, getAddonById, listAddons, updateAddon } from '../controllers/addonController.js';
+import {
+  createProductAddon,
+  deleteProductAddon,
+  getAllProductAddons,
+  getProductAddonById,
+  updateProductAddon,
+} from '../controllers/productAddonController.js';
 
 const router: Router = express.Router();
 
 const validateId = [param('id').isInt({ gt: 0 }).withMessage('ID must be a positive integer')];
 
 const validateBody = [
-  check('name').isString().trim().notEmpty().withMessage('Name is required'),
-  check('basePrice').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('basePrice must be a positive number'),
-  check('taxRate')
+  check('productId').isInt({ gt: 0 }).withMessage('productId is required'),
+  check('addonId').isInt({ gt: 0 }).withMessage('addonId is required'),
+  check('maxPerAttendee')
+    .optional({ nullable: true })
+    .isInt({ gt: 0 })
+    .withMessage('maxPerAttendee must be a positive integer'),
+  check('priceOverride')
     .optional({ nullable: true })
     .isFloat({ min: 0 })
-    .withMessage('taxRate must be a positive number'),
-  check('isActive').optional({ nullable: true }).isBoolean().withMessage('isActive must be a boolean'),
+    .withMessage('priceOverride must be a positive number'),
+  check('sortOrder')
+    .optional({ nullable: true })
+    .isInt({ min: 0 })
+    .withMessage('sortOrder must be a non-negative integer'),
 ];
 
 const validate = (req: Request, res: Response, next: NextFunction): void => {
@@ -28,8 +41,8 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
   next();
 };
 
-router.get('/', authMiddleware, listAddons);
-router.get('/:id', authMiddleware, validateId, validate, getAddonById);
+router.get('/', authMiddleware, getAllProductAddons);
+router.get('/:id', authMiddleware, validateId, validate, getProductAddonById);
 
 router.post(
   '/',
@@ -37,7 +50,7 @@ router.post(
   requireRoles(['admin']),
   validateBody,
   validate,
-  createAddon,
+  createProductAddon,
 );
 
 router.put(
@@ -46,7 +59,7 @@ router.put(
   requireRoles(['admin']),
   [...validateId, ...validateBody],
   validate,
-  updateAddon,
+  updateProductAddon,
 );
 
 router.delete(
@@ -55,7 +68,8 @@ router.delete(
   requireRoles(['admin']),
   validateId,
   validate,
-  deleteAddon,
+  deleteProductAddon,
 );
 
 export default router;
+

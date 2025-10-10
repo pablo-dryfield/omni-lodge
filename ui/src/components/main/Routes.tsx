@@ -12,6 +12,10 @@ import ProductTypes from "../../pages/ProductTypes";
 import VenueNumbers from "../../pages/VenueNumbers";
 import Pays from "../../pages/Pays";
 import Reports from "../../pages/Reports";
+import Addons from "../../pages/Addons";
+import PaymentMethods from "../../pages/PaymentMethods";
+import ActionsDirectory from "../../pages/ActionsDirectory";
+import ProductAddons from "../../pages/ProductAddons";
 import SettingsLayout from "../../pages/settings/SettingsLayout";
 import SettingsLanding from "../../pages/settings/SettingsLanding";
 import SettingsUsers from "../../pages/settings/SettingsUsers";
@@ -34,6 +38,10 @@ const Routes = () => {
       <Route path="/counters" element={<Counters title="Counters" />} />
       <Route path="/products" element={<Products title="Products" />} />
       <Route path="/productTypes" element={<ProductTypes title="Product Types" />} />
+      <Route path="/addons" element={<Addons title="Add-Ons" />} />
+      <Route path="/product-addons" element={<ProductAddons title="Product Add-Ons" />} />
+      <Route path="/payment-methods" element={<PaymentMethods title="Payment Methods" />} />
+      <Route path="/actions" element={<ActionsDirectory title="Actions" />} />
       <Route path="/venueNumbers" element={<VenueNumbers title="Venue Numbers" />} />
       <Route path="/pays" element={<Pays />} />
       <Route path="/reports" element={<Reports title={"Reports"} />} />

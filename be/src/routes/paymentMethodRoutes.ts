@@ -3,20 +3,17 @@ import { check, param, validationResult } from 'express-validator';
 
 import authMiddleware from '../middleware/authMiddleware.js';
 import { requireRoles } from '../middleware/authorizationMiddleware.js';
-import { createAddon, deleteAddon, getAddonById, listAddons, updateAddon } from '../controllers/addonController.js';
+import * as paymentMethodController from '../controllers/paymentMethodController.js';
 
 const router: Router = express.Router();
 
-const validateId = [param('id').isInt({ gt: 0 }).withMessage('ID must be a positive integer')];
+const validateId = [
+  param('id').isInt({ gt: 0 }).withMessage('ID must be a positive integer'),
+];
 
 const validateBody = [
   check('name').isString().trim().notEmpty().withMessage('Name is required'),
-  check('basePrice').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('basePrice must be a positive number'),
-  check('taxRate')
-    .optional({ nullable: true })
-    .isFloat({ min: 0 })
-    .withMessage('taxRate must be a positive number'),
-  check('isActive').optional({ nullable: true }).isBoolean().withMessage('isActive must be a boolean'),
+  check('description').optional({ nullable: true }).isString().trim(),
 ];
 
 const validate = (req: Request, res: Response, next: NextFunction): void => {
@@ -28,8 +25,8 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
   next();
 };
 
-router.get('/', authMiddleware, listAddons);
-router.get('/:id', authMiddleware, validateId, validate, getAddonById);
+router.get('/', authMiddleware, paymentMethodController.getAllPaymentMethods);
+router.get('/:id', authMiddleware, validateId, validate, paymentMethodController.getPaymentMethodById);
 
 router.post(
   '/',
@@ -37,7 +34,7 @@ router.post(
   requireRoles(['admin']),
   validateBody,
   validate,
-  createAddon,
+  paymentMethodController.createPaymentMethod,
 );
 
 router.put(
@@ -46,7 +43,7 @@ router.put(
   requireRoles(['admin']),
   [...validateId, ...validateBody],
   validate,
-  updateAddon,
+  paymentMethodController.updatePaymentMethod,
 );
 
 router.delete(
@@ -55,7 +52,8 @@ router.delete(
   requireRoles(['admin']),
   validateId,
   validate,
-  deleteAddon,
+  paymentMethodController.deletePaymentMethod,
 );
 
 export default router;
+

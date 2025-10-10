@@ -1,20 +1,17 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import axiosInstance from "../utils/axiosInstance";
 import { ServerResponse } from "../types/general/ServerResponse";
-import { Action } from "../types/actions/Action";
+import { PaymentMethod } from "../types/paymentMethods/PaymentMethod";
 
 const unwrapSingle = <T>(payload: T | T[]): T => (Array.isArray(payload) ? payload[0] : payload);
 
-export const fetchActions = createAsyncThunk(
-  "actions/fetchActions",
+export const fetchPaymentMethods = createAsyncThunk(
+  "paymentMethods/fetchPaymentMethods",
   async (_, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<Action>>>(
-        "/actions",
-        {
-          withCredentials: true,
-        }
-      );
+      const response = await axiosInstance.get<ServerResponse<Partial<PaymentMethod>>>("/paymentMethods", {
+        withCredentials: true,
+      });
       return response.data;
     } catch (error) {
       if (error instanceof Error) {
@@ -22,14 +19,14 @@ export const fetchActions = createAsyncThunk(
       }
       return rejectWithValue("An unknown error occurred");
     }
-  }
+  },
 );
 
-export const createAction = createAsyncThunk(
-  "actions/createAction",
-  async (payload: Partial<Action>, { rejectWithValue }) => {
+export const createPaymentMethod = createAsyncThunk(
+  "paymentMethods/createPaymentMethod",
+  async (payload: Partial<PaymentMethod>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<Action> | Partial<Action>[]>("/actions", payload, {
+      const response = await axiosInstance.post<Partial<PaymentMethod> | Partial<PaymentMethod>[]>("/paymentMethods", payload, {
         withCredentials: true,
       });
       return unwrapSingle(response.data);
@@ -42,14 +39,14 @@ export const createAction = createAsyncThunk(
   },
 );
 
-export const updateAction = createAsyncThunk(
-  "actions/updateAction",
+export const updatePaymentMethod = createAsyncThunk(
+  "paymentMethods/updatePaymentMethod",
   async (
-    { actionId, payload }: { actionId: number; payload: Partial<Action> },
+    { paymentMethodId, payload }: { paymentMethodId: number; payload: Partial<PaymentMethod> },
     { rejectWithValue },
   ) => {
     try {
-      const response = await axiosInstance.put<Partial<Action> | Partial<Action>[]>(`/actions/${actionId}`, payload, {
+      const response = await axiosInstance.put<Partial<PaymentMethod> | Partial<PaymentMethod>[]>(`/paymentMethods/${paymentMethodId}`, payload, {
         withCredentials: true,
       });
       return unwrapSingle(response.data);
@@ -62,14 +59,14 @@ export const updateAction = createAsyncThunk(
   },
 );
 
-export const deleteAction = createAsyncThunk(
-  "actions/deleteAction",
-  async (actionId: number, { rejectWithValue }) => {
+export const deletePaymentMethod = createAsyncThunk(
+  "paymentMethods/deletePaymentMethod",
+  async (paymentMethodId: number, { rejectWithValue }) => {
     try {
-      await axiosInstance.delete(`/actions/${actionId}`, {
+      await axiosInstance.delete(`/paymentMethods/${paymentMethodId}`, {
         withCredentials: true,
       });
-      return actionId;
+      return paymentMethodId;
     } catch (error) {
       if (error instanceof Error) {
         return rejectWithValue(error.message);
