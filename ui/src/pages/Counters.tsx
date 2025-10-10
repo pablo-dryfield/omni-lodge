@@ -327,6 +327,7 @@ const [walkInNoteDirty, setWalkInNoteDirty] = useState(false);
 const [cashOverridesByChannel, setCashOverridesByChannel] = useState<Record<number, string>>({});
 const [cashEditingChannelId, setCashEditingChannelId] = useState<number | null>(null);
 const [cashEditingValue, setCashEditingValue] = useState<string>('');
+const [shouldRefreshCounterList, setShouldRefreshCounterList] = useState(false);
 
 
 const counterId = registry.counter?.counter.id ?? null;
@@ -1527,9 +1528,19 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     setConfirmingMetrics(true);
     try {
       let shouldRefreshCounter = false;
+      let shouldFlagList = false;
+      const dirtyCashMetric =
+        hasDirtyMetrics &&
+        registry.dirtyMetricKeys.some((key) => {
+          const parts = key.split('|');
+          return parts.length > 1 && parts[1] === 'cash_payment';
+        });
       if (hasDirtyMetrics) {
         await dispatch(flushDirtyMetrics()).unwrap();
         shouldRefreshCounter = true;
+        if (dirtyCashMetric) {
+          shouldFlagList = true;
+        }
       }
       if (noteUpdateNeeded) {
         if (computedWalkInNote !== currentCounterNotes) {
@@ -1539,12 +1550,16 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
               notes: computedWalkInNote,
             }),
           ).unwrap();
+          shouldFlagList = true;
         }
         setWalkInNoteDirty(false);
       }
       if (shouldRefreshCounter) {
         const formatted = selectedDate.format(COUNTER_DATE_FORMAT);
         await dispatch(fetchCounterByDate(formatted)).unwrap();
+      }
+      if (shouldFlagList) {
+        setShouldRefreshCounterList(true);
       }
       return true;
     } catch (_error) {
@@ -1558,6 +1573,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     currentCounterNotes,
     dispatch,
     hasDirtyMetrics,
+    registry.dirtyMetricKeys,
     noteNeedsUpdate,
     selectedDate,
     walkInNoteDirty,
@@ -2656,6 +2672,12 @@ type SummaryRowOptions = {
               const addonBuckets = Object.values(item.addons);
               const showBeforeForChannel =
                 !isAfterCutoffChannel || effectiveSelectedChannelIds.includes(item.channelId);
+              const channelCashAmount =
+                cashCollectionSummary.perChannel.get(item.channelId) ?? null;
+              const channelCashLabel =
+                channelCashAmount != null && Number.isFinite(channelCashAmount)
+                  ? formatCashAmount(channelCashAmount)
+                  : null;
               return (
                 <Grid size={{ xs: 12, md: 6, lg: 4 }} key={item.channelId}>
                   <Card variant="outlined">
@@ -2668,6 +2690,15 @@ type SummaryRowOptions = {
                         showAfter: true,
                         showNonShow: !isAfterCutoffChannel,
                       })}
+                      {channelCashLabel && (
+                        <Typography
+                          variant="body2"
+                          sx={{ mt: 0.5, fontWeight: 500 }}
+                          color="text.secondary"
+                        >
+                          Cash collected: PLN {channelCashLabel}
+                        </Typography>
+                      )}
                       <Divider sx={{ my: 1 }} />
                       {addonBuckets.map((addon) => (
                         <Box key={addon.key} sx={{ mb: 1 }}>
@@ -2690,6 +2721,15 @@ type SummaryRowOptions = {
                     Totals
                   </Typography>
                   {summaryRow('People', summaryTotals.people, { showBefore: false, showAfter: false, showNonShow: true })}
+                  {cashCollectionSummary.total > 0 && (
+                    <Typography
+                      variant="body2"
+                      sx={{ mt: 0.5, fontWeight: 500 }}
+                      color="text.secondary"
+                    >
+                      Cash collected: PLN {formattedTotalCash}
+                    </Typography>
+                  )}
                   <Divider sx={{ my: 1 }} />
                   {addonTotalsToShow.map((addon) => (
                     <Box key={addon.key} sx={{ mb: 1 }}>
@@ -3035,7 +3075,10 @@ type SummaryRowOptions = {
                   const productLabel = productDisplay || 'Old Product Version - Pub Crawl';
                   const isSelected =
                     selectedCounterId != null && counterIdValue != null && counterIdValue === selectedCounterId;
-                  const secondaryContent = (
+                  const notePreview =
+                    typeof counter.notes === 'string' ? counter.notes.trim() : '';
+                  const hasNote = notePreview.length > 0;
+                  const managerProductLine = (
                     <Typography
                       component="span"
                       variant="body2"
@@ -3072,6 +3115,23 @@ type SummaryRowOptions = {
                         {productLabel}
                       </Box>
                     </Typography>
+                  );
+                  const secondaryContent = (
+                    <Stack spacing={hasNote ? 0.5 : 0}>
+                      {managerProductLine}
+                      {hasNote && (
+                        <Typography
+                          variant="caption"
+                          color={isSelected ? 'grey.300' : 'text.secondary'}
+                          sx={{
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                          }}
+                        >
+                          Note: {notePreview}
+                        </Typography>
+                      )}
+                    </Stack>
                   );
                   return (
                     <ListItem

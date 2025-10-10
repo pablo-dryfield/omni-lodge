@@ -7,6 +7,7 @@ export type Counter = {
     updatedAt: Date;
     createdBy: number;
     updatedBy: number;
+    notes?: string | null;
     manager?: {
         firstName: string | null;
         lastName: string | null;
