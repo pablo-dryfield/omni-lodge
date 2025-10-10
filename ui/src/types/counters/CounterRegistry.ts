@@ -1,6 +1,6 @@
 export type MetricTallyType = 'booked' | 'attended';
 export type MetricPeriod = 'before_cutoff' | 'after_cutoff' | null;
-export type MetricKind = 'people' | 'addon';
+export type MetricKind = 'people' | 'addon' | 'cash_payment';
 
 export type CounterStatus = 'draft' | 'platforms' | 'reservations' | 'final';
 

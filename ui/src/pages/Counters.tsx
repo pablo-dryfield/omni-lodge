@@ -1,4 +1,4 @@
-﻿import type { KeyboardEvent, MouseEvent, SyntheticEvent } from 'react';
+import type { KeyboardEvent, MouseEvent, SyntheticEvent } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dayjs, { Dayjs } from 'dayjs';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
@@ -22,6 +22,7 @@ import {
   DialogTitle,
   Divider,
   IconButton,
+  InputAdornment,
   LinearProgress,
   List,
   ListItem,
@@ -56,6 +57,7 @@ import {
   updateCounterProduct,
   updateCounterManager,
   updateCounterStatus,
+  updateCounterNotes,
 } from '../store/counterRegistrySlice';
 import {
   AddonConfig,
@@ -67,6 +69,7 @@ import {
   CounterSummaryBucket,
   CounterSummaryChannel,
   MetricCell,
+  MetricKind,
   MetricPeriod,
   MetricTallyType,
   StaffOption,
@@ -75,7 +78,8 @@ import { buildMetricKey } from '../utils/counterMetrics';
 import type { Counter } from '../types/counters/Counter';
 
 const COUNTER_DATE_FORMAT = 'YYYY-MM-DD';
-const AFTER_CUTOFF_ALLOWED = new Set(['ecwid', 'walk-in']);
+const WALK_IN_CHANNEL_SLUG = 'walk-in';
+const AFTER_CUTOFF_ALLOWED = new Set(['ecwid', WALK_IN_CHANNEL_SLUG]);
 const DEFAULT_PRODUCT_NAME = 'Pub Crawl';
 const bucketLabels: Record<string, string> = {
   attended: 'Attended (Tonight)',
@@ -94,6 +98,65 @@ const BUCKETS: BucketDescriptor[] = [
   { tallyType: 'booked', period: 'before_cutoff', label: bucketLabels.before_cutoff },
   { tallyType: 'booked', period: 'after_cutoff', label: bucketLabels.after_cutoff },
 ];
+
+const WALK_IN_DISCOUNT_OPTIONS = ['Second Timers', 'Third Timers', 'Half Price', 'Students', 'Group'];
+const WALK_IN_DISCOUNT_NOTE_PREFIX = 'Walk-In Discounts applied:';
+const WALK_IN_CASH_NOTE_PREFIX = 'Cash Collected:';
+const WALK_IN_DISCOUNT_LOOKUP = new Map(
+  WALK_IN_DISCOUNT_OPTIONS.map((label) => [label.toLowerCase(), label] as const),
+);
+
+const WALK_IN_CASH_FORMATTER = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+const formatCashAmount = (amount: number): string => {
+  if (!Number.isFinite(amount)) {
+    return WALK_IN_CASH_FORMATTER.format(0);
+  }
+  return WALK_IN_CASH_FORMATTER.format(amount);
+};
+
+const normalizeDiscountSelection = (values: string[]): string[] => {
+  const normalized = new Set<string>();
+  values.forEach((value) => {
+    const canonical = WALK_IN_DISCOUNT_LOOKUP.get(value.toLowerCase());
+    if (canonical) {
+      normalized.add(canonical);
+    }
+  });
+  return WALK_IN_DISCOUNT_OPTIONS.filter((option) => normalized.has(option));
+};
+
+const parseDiscountsFromNote = (note: string | null | undefined): string[] => {
+  if (!note) {
+    return [];
+  }
+  const lines = note.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.toLowerCase().startsWith(WALK_IN_DISCOUNT_NOTE_PREFIX.toLowerCase())) {
+      const remainder = trimmed.slice(WALK_IN_DISCOUNT_NOTE_PREFIX.length).trim();
+      if (!remainder) {
+        return [];
+      }
+      const discountSectionRaw = remainder.split('|')[0]?.trim() ?? '';
+      const discountSection = discountSectionRaw
+        .split(WALK_IN_CASH_NOTE_PREFIX)[0]
+        ?.trim() ?? '';
+      if (!discountSection) {
+        return [];
+      }
+      const tokens = discountSection
+        .split(',')
+        .map((token) => token.trim())
+        .filter((token) => token.length > 0);
+      return normalizeDiscountSelection(tokens);
+    }
+  }
+  return [];
+};
 
 type RegistryStep = 'details' | 'platforms' | 'reservations' | 'summary';
 
@@ -219,6 +282,10 @@ const Counters = (props: GenericPageProps) => {
   const fetchCounterRequestRef = useRef<string | null>(null);
   const lastPersistedStaffIdsRef = useRef<number[]>([]);
   const lastInitializedCounterRef = useRef<string | null>(null);
+  const lastWalkInInitRef = useRef<string | null>(null);
+  const [walkInCashByChannel, setWalkInCashByChannel] = useState<Record<number, string>>({});
+  const [walkInDiscountsByChannel, setWalkInDiscountsByChannel] = useState<Record<number, string[]>>({});
+  const [walkInNoteDirty, setWalkInNoteDirty] = useState(false);
 
 
 const counterId = registry.counter?.counter.id ?? null;
@@ -377,7 +444,7 @@ const loadCounterForDate = useCallback(
   );
 
   const metricsMap = registry.metricsByKey;
-const mergedMetrics = useMemo<MetricCell[]>(() => {
+  const mergedMetrics = useMemo<MetricCell[]>(() => {
     const map = new Map<string, MetricCell>();
     const baseMetrics = registry.counter?.metrics ?? [];
     baseMetrics.forEach((metric) => {
@@ -389,7 +456,107 @@ const mergedMetrics = useMemo<MetricCell[]>(() => {
       map.set(buildMetricKey(normalized), normalized);
     });
     return Array.from(map.values());
-}, [metricsMap, registry.counter]);
+  }, [metricsMap, registry.counter]);
+
+  const walkInChannelIds = useMemo(
+    () =>
+      registry.channels
+        .filter((channel) => channel.name?.toLowerCase() === WALK_IN_CHANNEL_SLUG)
+        .map((channel) => channel.id),
+    [registry.channels],
+  );
+
+  useEffect(() => {
+    if (!registry.counter) {
+      setWalkInCashByChannel({});
+      setWalkInDiscountsByChannel({});
+      setWalkInNoteDirty(false);
+      lastWalkInInitRef.current = null;
+      return;
+    }
+
+    const counterRecord = registry.counter.counter;
+    const note = counterRecord.notes ?? null;
+    const initKey = [
+      counterRecord.id,
+      counterRecord.updatedAt,
+      note ?? '',
+      walkInChannelIds.join(','),
+    ].join('|');
+
+    if (lastWalkInInitRef.current === initKey) {
+      return;
+    }
+
+    lastWalkInInitRef.current = initKey;
+
+    const metricsList = registry.counter.metrics ?? [];
+    const nextCash: Record<number, string> = {};
+    const nextDiscounts: Record<number, string[]> = {};
+    const parsedDiscounts = parseDiscountsFromNote(note);
+
+    let cashChanged = false;
+    let discountsChanged = false;
+
+    walkInChannelIds.forEach((channelId) => {
+      const cashMetric =
+        metricsList.find(
+          (metric) =>
+            metric.channelId === channelId &&
+            metric.kind === 'cash_payment' &&
+            metric.tallyType === 'attended',
+        ) ?? null;
+      const numericQty = cashMetric ? Math.max(0, Number(cashMetric.qty) || 0) : 0;
+      const nextCashValue = numericQty > 0 ? String(numericQty) : '';
+      nextCash[channelId] = nextCashValue;
+      if (!cashChanged) {
+        const currentCashValue = walkInCashByChannel[channelId] ?? '';
+        if (currentCashValue !== nextCashValue) {
+          cashChanged = true;
+        }
+      }
+
+      const nextDiscountSelection = [...parsedDiscounts];
+      nextDiscounts[channelId] = nextDiscountSelection;
+      if (!discountsChanged) {
+        const currentSelection = walkInDiscountsByChannel[channelId] ?? [];
+        if (
+          currentSelection.length !== nextDiscountSelection.length ||
+          currentSelection.some((value, index) => value !== nextDiscountSelection[index])
+        ) {
+          discountsChanged = true;
+        }
+      }
+    });
+
+    if (!cashChanged) {
+      const currentKeys = Object.keys(walkInCashByChannel);
+      if (
+        currentKeys.length !== walkInChannelIds.length ||
+        currentKeys.some((key) => !(key in nextCash))
+      ) {
+        cashChanged = true;
+      }
+    }
+
+    if (!discountsChanged) {
+      const currentKeys = Object.keys(walkInDiscountsByChannel);
+      if (
+        currentKeys.length !== walkInChannelIds.length ||
+        currentKeys.some((key) => !(key in nextDiscounts))
+      ) {
+        discountsChanged = true;
+      }
+    }
+
+    if (cashChanged) {
+      setWalkInCashByChannel(nextCash);
+    }
+    if (discountsChanged) {
+      setWalkInDiscountsByChannel(nextDiscounts);
+    }
+    setWalkInNoteDirty(false);
+  }, [registry.counter, walkInChannelIds, walkInCashByChannel, walkInDiscountsByChannel]);
 
  const channelHasAnyQty = useCallback(
    (channelId: number) => mergedMetrics.some((metric) => metric.channelId === channelId && metric.qty > 0),
@@ -511,7 +678,7 @@ const mergedMetrics = useMemo<MetricCell[]>(() => {
       channelId: number,
       tallyType: MetricTallyType,
       period: MetricPeriod,
-      kind: 'people' | 'addon',
+      kind: MetricKind,
       addonId: number | null,
     ): MetricCell | null => {
       if (!counterId) {
@@ -615,7 +782,7 @@ const mergedMetrics = useMemo<MetricCell[]>(() => {
       channelId: number,
       tallyType: MetricTallyType,
       period: MetricPeriod,
-      kind: 'people' | 'addon',
+      kind: MetricKind,
       addonId: number | null,
       qty: number,
     ) => {
@@ -628,6 +795,10 @@ const mergedMetrics = useMemo<MetricCell[]>(() => {
         return;
       }
       dispatch(setMetric({ ...baseMetric, qty: nextQty }));
+
+      if (kind === 'cash_payment') {
+        return;
+      }
 
       const channel = registry.channels.find((item) => item.id === channelId);
       const normalizedChannelName = channel?.name?.toLowerCase() ?? '';
@@ -683,6 +854,116 @@ const mergedMetrics = useMemo<MetricCell[]>(() => {
     },
     [catalog.addons, dispatch, getMetric, registry.addons, registry.channels, syncAfterCutoffAttendance],
   );
+
+  const totalWalkInCash = useMemo(() => {
+    return walkInChannelIds.reduce((sum, channelId) => {
+      const rawValue = walkInCashByChannel[channelId];
+      const numeric = Number(rawValue ?? 0);
+      if (!Number.isFinite(numeric)) {
+        return sum;
+      }
+      return sum + Math.max(0, numeric);
+    }, 0);
+  }, [walkInCashByChannel, walkInChannelIds]);
+
+  const formattedWalkInCash = useMemo(() => formatCashAmount(totalWalkInCash), [totalWalkInCash]);
+
+  const aggregatedWalkInDiscounts = useMemo(() => {
+    const combined = new Set<string>();
+    walkInChannelIds.forEach((channelId) => {
+      const selection = walkInDiscountsByChannel[channelId] ?? [];
+      selection.forEach((label) => combined.add(label));
+    });
+    return WALK_IN_DISCOUNT_OPTIONS.filter((option) => combined.has(option));
+  }, [walkInChannelIds, walkInDiscountsByChannel]);
+
+  const handleWalkInDiscountToggle = useCallback(
+    (channelId: number, option: string) => {
+      let didChange = false;
+      setWalkInDiscountsByChannel((prev) => {
+        const current = prev[channelId] ?? [];
+        const alreadySelected = current.includes(option);
+        const nextSelection = alreadySelected
+          ? current.filter((item) => item !== option)
+          : normalizeDiscountSelection([...current, option]);
+        if (current.length === nextSelection.length && current.every((item, index) => item === nextSelection[index])) {
+          return prev;
+        }
+        didChange = true;
+        return { ...prev, [channelId]: nextSelection };
+      });
+      if (didChange) {
+        setWalkInNoteDirty(true);
+      }
+    },
+    [],
+  );
+
+  const handleWalkInCashChange = useCallback(
+    (channelId: number, rawValue: string) => {
+      const digitsOnly = rawValue.replace(/[^\d]/g, '');
+      const displayValue = digitsOnly === '' ? '' : String(Math.max(0, Number(digitsOnly)));
+      let didChange = false;
+      setWalkInCashByChannel((prev) => {
+        if (prev[channelId] === displayValue) {
+          return prev;
+        }
+        didChange = true;
+        return { ...prev, [channelId]: displayValue };
+      });
+      if (didChange) {
+        setWalkInNoteDirty(true);
+      }
+
+      const metric = getMetric(channelId, 'attended', null, 'cash_payment', null);
+      if (!metric) {
+        return;
+      }
+      const numericQty = displayValue === '' ? 0 : Math.max(0, Number(displayValue));
+      if (metric.qty !== numericQty) {
+        handleMetricChange(channelId, 'attended', null, 'cash_payment', null, numericQty);
+      }
+    },
+    [getMetric, handleMetricChange],
+  );
+
+  const buildWalkInNote = useCallback((): string => {
+    const currentNote = registry.counter?.counter.notes ?? '';
+    const existingLines = currentNote ? currentNote.split(/\r?\n/) : [];
+    const filteredLines = existingLines
+      .map((line) => line.trimEnd())
+      .filter((line) => {
+        const lower = line.trim().toLowerCase();
+        if (!lower) {
+          return false;
+        }
+        if (lower.startsWith(WALK_IN_DISCOUNT_NOTE_PREFIX.toLowerCase())) {
+          return false;
+        }
+        if (lower.startsWith(WALK_IN_CASH_NOTE_PREFIX.toLowerCase())) {
+          return false;
+        }
+        return true;
+      });
+
+    const discountLine =
+      aggregatedWalkInDiscounts.length > 0
+        ? `${WALK_IN_DISCOUNT_NOTE_PREFIX} ${aggregatedWalkInDiscounts.join(', ')}`
+        : '';
+    const cashLine = `${WALK_IN_CASH_NOTE_PREFIX} ${formattedWalkInCash} z\u0142`;
+    const autoLine = discountLine ? `${discountLine} | ${cashLine}` : cashLine;
+
+    if (filteredLines.length === 0) {
+      return autoLine;
+    }
+
+    const manualSection = filteredLines.join('\n');
+    return autoLine ? `${manualSection}\n${autoLine}` : manualSection;
+  }, [aggregatedWalkInDiscounts, formattedWalkInCash, registry.counter]);
+
+  const computedWalkInNote = useMemo(() => buildWalkInNote(), [buildWalkInNote]);
+  const currentCounterNotes = registry.counter?.counter.notes ?? '';
+  const noteNeedsUpdate = registry.counter ? computedWalkInNote !== currentCounterNotes : false;
 
   const handleStaffChange = useCallback(
     (userIds: number[]) => {
@@ -1041,22 +1322,52 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
   }, [effectiveAfterCutoffIds, effectiveSelectedChannelIds, mergedMetrics]);
 
   const metricsStatusMessage = useMemo(() => {
-    if (registry.savingMetrics || confirmingMetrics) {
+    if (registry.savingMetrics || registry.savingNotes || confirmingMetrics) {
       return 'Saving changes...';
     }
-    if (hasDirtyMetrics) {
-      return `${dirtyMetricCount} unsaved ${dirtyMetricCount === 1 ? 'change' : 'changes'}`;
+    const pendingNoteChange = walkInNoteDirty || noteNeedsUpdate;
+    const noteDirtyCount = pendingNoteChange ? 1 : 0;
+    const totalDirty = dirtyMetricCount + noteDirtyCount;
+    if (totalDirty > 0) {
+      return `${totalDirty} unsaved ${totalDirty === 1 ? 'change' : 'changes'}`;
     }
     return 'Metrics saved';
-  }, [confirmingMetrics, dirtyMetricCount, hasDirtyMetrics, registry.savingMetrics]);
+  }, [
+    confirmingMetrics,
+    dirtyMetricCount,
+    noteNeedsUpdate,
+    registry.savingMetrics,
+    registry.savingNotes,
+    walkInNoteDirty,
+  ]);
   const flushMetrics = useCallback(async (): Promise<boolean> => {
-    if (!hasDirtyMetrics) {
+    const activeCounterId = counterId;
+    if (!activeCounterId) {
+      return true;
+    }
+    const noteUpdateNeeded = noteNeedsUpdate || walkInNoteDirty;
+    if (!hasDirtyMetrics && !noteUpdateNeeded) {
       return true;
     }
     setConfirmingMetrics(true);
     try {
-      await dispatch(flushDirtyMetrics()).unwrap();
-      if (counterId) {
+      let shouldRefreshCounter = false;
+      if (hasDirtyMetrics) {
+        await dispatch(flushDirtyMetrics()).unwrap();
+        shouldRefreshCounter = true;
+      }
+      if (noteUpdateNeeded) {
+        if (computedWalkInNote !== currentCounterNotes) {
+          await dispatch(
+            updateCounterNotes({
+              counterId: activeCounterId,
+              notes: computedWalkInNote,
+            }),
+          ).unwrap();
+        }
+        setWalkInNoteDirty(false);
+      }
+      if (shouldRefreshCounter) {
         const formatted = selectedDate.format(COUNTER_DATE_FORMAT);
         await dispatch(fetchCounterByDate(formatted)).unwrap();
       }
@@ -1066,7 +1377,16 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     } finally {
       setConfirmingMetrics(false);
     }
-  }, [counterId, dispatch, hasDirtyMetrics, selectedDate]);
+  }, [
+    computedWalkInNote,
+    counterId,
+    currentCounterNotes,
+    dispatch,
+    hasDirtyMetrics,
+    noteNeedsUpdate,
+    selectedDate,
+    walkInNoteDirty,
+  ]);
 
   const handleSaveAndExit = useCallback(async () => {
     const saved = await flushMetrics();
@@ -1360,6 +1680,12 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     const attendedPeople = getMetric(channel.id, 'attended', null, 'people', null)?.qty ?? 0;
     const disableInputs = registry.savingMetrics || confirmingMetrics;
     const warningActive = bucket.period === 'after_cutoff' && afterCutoffWarnings.has(channel.id);
+    const normalizedChannelName = channel.name?.toLowerCase() ?? '';
+    const isWalkInChannel = normalizedChannelName === WALK_IN_CHANNEL_SLUG;
+    const walkInCashValue = walkInCashByChannel[channel.id] ?? '';
+    const walkInDiscountSelection = walkInDiscountsByChannel[channel.id] ?? [];
+    const showWalkInExtras =
+      isWalkInChannel && (bucket.tallyType === 'attended' || bucket.period === 'after_cutoff');
 
     return (
       <Card key={channel.id + '-' + bucket.label} variant="outlined" sx={{ mb: 2 }}>
@@ -1372,6 +1698,44 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
               {warningActive && <Chip label="After cut-off" color="warning" size="small" />}
             </Stack>
             {renderStepper('People', peopleMetric, disableInputs)}
+            {showWalkInExtras && (
+              <Stack spacing={1}>
+                <Stack spacing={0.5}>
+                  <Typography variant="subtitle2">Total Collected</Typography>
+                  <TextField
+                    value={walkInCashValue}
+                    onChange={(event) => handleWalkInCashChange(channel.id, event.target.value)}
+                    size="small"
+                    disabled={disableInputs}
+                    type="number"
+                    placeholder="0"
+                    InputProps={{
+                      startAdornment: <InputAdornment position="start">PLN</InputAdornment>,
+                    }}
+                    inputProps={{ inputMode: 'numeric', min: 0 }}
+                  />
+                </Stack>
+                <Stack spacing={0.5}>
+                  <Typography variant="subtitle2">Discounts Applied</Typography>
+                  <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+                    {WALK_IN_DISCOUNT_OPTIONS.map((option) => {
+                      const selected = walkInDiscountSelection.includes(option);
+                      return (
+                        <Chip
+                          key={option}
+                          label={option}
+                          size="small"
+                          variant={selected ? 'filled' : 'outlined'}
+                          color={selected ? 'primary' : 'default'}
+                          onClick={() => handleWalkInDiscountToggle(channel.id, option)}
+                          disabled={disableInputs}
+                        />
+                      );
+                    })}
+                  </Stack>
+                </Stack>
+              </Stack>
+            )}
             <Divider flexItem sx={{ mt: 1 }} />
             <Stack spacing={1}>
               {addons.map((addon) => {
@@ -2549,34 +2913,3 @@ type SummaryRowOptions = {
 };
 
 export default Counters;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

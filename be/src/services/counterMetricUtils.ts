@@ -2,7 +2,7 @@ import slugify from '../utils/slugify.js';
 
 export type MetricPeriod = 'before_cutoff' | 'after_cutoff' | null;
 export type MetricTallyType = 'booked' | 'attended';
-export type MetricKind = 'people' | 'addon';
+export type MetricKind = 'people' | 'addon' | 'cash_payment';
 
 export type MetricCell = {
   id?: number;
@@ -79,6 +79,8 @@ const METRIC_BLUEPRINT: MetricBlueprint[] = [
   { tallyType: 'attended', period: null },
 ];
 
+const WALK_IN_CHANNEL_NAME = 'walk-in';
+
 export function buildMetricKey({
   channelId,
   kind,
@@ -120,6 +122,8 @@ export function createMetricGrid(params: CreateMetricGridParams): MetricCell[] {
   const cells: MetricCell[] = [];
 
   for (const channel of sortedChannels) {
+    const normalizedChannelName = channel.name?.toLowerCase() ?? '';
+
     for (const blueprint of METRIC_BLUEPRINT) {
       const key = buildMetricKey({
         channelId: channel.id,
@@ -162,6 +166,27 @@ export function createMetricGrid(params: CreateMetricGridParams): MetricCell[] {
           qty: Number(existing?.qty ?? 0),
         });
       }
+    }
+
+    const cashKey = buildMetricKey({
+      channelId: channel.id,
+      kind: 'cash_payment',
+      addonId: null,
+      tallyType: 'attended',
+      period: null,
+    });
+    const existingCashMetric = existingMap.get(cashKey);
+    if (existingCashMetric || normalizedChannelName === WALK_IN_CHANNEL_NAME) {
+      cells.push({
+        id: existingCashMetric?.id,
+        counterId: existingCashMetric?.counterId ?? counterId,
+        channelId: channel.id,
+        kind: 'cash_payment',
+        addonId: null,
+        tallyType: 'attended',
+        period: null,
+        qty: Number(existingCashMetric?.qty ?? 0),
+      });
     }
   }
 

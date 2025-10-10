@@ -431,6 +431,9 @@ export default class CounterRegistryService {
       const aggregateByKey = new Map<string, Aggregate>();
 
       const applyToAggregate = (metric: NormalizedMetric) => {
+        if (metric.kind === 'cash_payment') {
+          return;
+        }
         const aggregateKey = [metric.channelId, metric.kind, metric.addonId ?? 'null'].join('|');
         let aggregate = aggregateByKey.get(aggregateKey);
         if (!aggregate) {

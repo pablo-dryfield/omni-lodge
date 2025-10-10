@@ -15,7 +15,7 @@ import Addon from './Addon.js';
 import Channel from './Channel.js';
 import Counter from './Counter.js';
 
-export type MetricKind = 'people' | 'addon';
+export type MetricKind = 'people' | 'addon' | 'cash_payment';
 export type MetricTallyType = 'booked' | 'attended';
 export type MetricPeriod = 'before_cutoff' | 'after_cutoff' | null;
 
@@ -41,7 +41,7 @@ export default class CounterChannelMetric extends Model {
   declare channelId: number;
 
   @AllowNull(false)
-  @Column({ type: DataType.ENUM('people', 'addon') })
+  @Column({ type: DataType.ENUM('people', 'addon', 'cash_payment') })
   declare kind: MetricKind;
 
   @ForeignKey(() => Addon)
