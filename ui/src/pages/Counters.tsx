@@ -1507,7 +1507,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     if (totalDirty > 0) {
       return `${totalDirty} unsaved ${totalDirty === 1 ? 'change' : 'changes'}`;
     }
-    return 'Metrics saved';
+    return 'Metrics Saved';
   }, [
     confirmingMetrics,
     dirtyMetricCount,
