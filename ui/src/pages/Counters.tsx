@@ -595,16 +595,9 @@ const loadCounterForDate = useCallback(
   const allowedAfterCutoffChannelIds = useMemo(
     () =>
       registry.channels
-        .filter((channel) => {
-          const normalizedName = channel.name.toLowerCase();
-          if (AFTER_CUTOFF_ALLOWED.has(normalizedName)) {
-            return true;
-          }
-          const catalogChannel = catalog.channels.find((catalogItem) => catalogItem.id === channel.id);
-          return catalogChannel?.lateBookingAllowed ?? false;
-        })
+        .filter((channel) => AFTER_CUTOFF_ALLOWED.has(channel.name?.toLowerCase() ?? ''))
         .map((channel) => channel.id),
-    [catalog.channels, registry.channels],
+    [registry.channels],
   );
 
   const afterCutoffChannels = useMemo(
@@ -651,11 +644,14 @@ const loadCounterForDate = useCallback(
         metric.period === 'after_cutoff' &&
         metric.qty > 0
       ) {
-        results.add(metric.channelId);
+        const channel = registry.channels.find((item) => item.id === metric.channelId);
+        if (channel && allowedAfterCutoffChannelIds.includes(channel.id)) {
+          results.add(metric.channelId);
+        }
       }
     });
     return results;
-  }, [mergedMetrics]);
+  }, [allowedAfterCutoffChannelIds, mergedMetrics, registry.channels]);
 
   const appliedPlatformSelectionRef = useRef<number | null>(null);
   const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([]);
