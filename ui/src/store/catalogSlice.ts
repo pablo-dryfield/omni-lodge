@@ -104,18 +104,17 @@ export const loadCatalog = createAsyncThunk<CatalogPayload, void, { rejectValue:
   async (_, { rejectWithValue }) => {
     try {
       const [
-        managerResponse,
-        staffResponse,
+        userResponse,
         productResponse,
         channelResponse,
         addonResponse,
       ] = await Promise.all([
         axiosInstance.get<CompactUserResponse[]>('/users', {
-          params: { format: 'compact', types: 'manager,assistant-manager', active: 'true' },
-          withCredentials: true,
-        }),
-        axiosInstance.get<CompactUserResponse[]>('/users', {
-          params: { format: 'compact', types: 'pub-crawl-guide,assistant-manager', active: 'true' },
+          params: {
+            format: 'compact',
+            types: 'manager,assistant-manager,pub-crawl-guide',
+            active: 'true',
+          },
           withCredentials: true,
         }),
         axiosInstance.get<CompactProductResponse[]>('/products', {
@@ -132,9 +131,18 @@ export const loadCatalog = createAsyncThunk<CatalogPayload, void, { rejectValue:
         }),
       ]);
 
-      const managers = managerResponse.data.map(mapUserToStaffOption);
+      const allUsers = userResponse.data.map(mapUserToStaffOption);
+      const managers = uniqueById(
+        allUsers.filter((user) => {
+          const slug = user.userTypeSlug?.toLowerCase();
+          return slug === 'manager' || slug === 'assistant-manager';
+        }),
+      );
       const staff = uniqueById(
-        staffResponse.data.map(mapUserToStaffOption).concat(managers),
+        allUsers.filter((user) => {
+          const slug = user.userTypeSlug?.toLowerCase();
+          return slug === 'pub-crawl-guide' || slug === 'assistant-manager';
+        }),
       );
 
       const products: CatalogProduct[] = productResponse.data.map((product) => ({
