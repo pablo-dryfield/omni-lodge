@@ -3,9 +3,7 @@ import { NavigationState, NavigationPage } from "../types/general/NavigationStat
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 
 export const baseNavigationPages: NavigationPage[] = [
-  { name: "Bookings", path: "/bookings", slug: PAGE_SLUGS.bookings, icon: 'eventAvailable' },
-  { name: "Manifest", path: "/bookings/manifest", slug: PAGE_SLUGS.bookingsManifest, icon: 'assignmentTurnedIn' },
-  { name: "Product Types", path: "/productTypes", slug: PAGE_SLUGS.productTypes, icon: 'person' },
+  { name: "Ecwid Bookings", path: "/bookings", slug: PAGE_SLUGS.bookings, icon: 'eventAvailable' },
   { name: "Counters", path: "/counters", slug: PAGE_SLUGS.counters, icon: 'person' },
   { name: "Staff Payment", path: "/pays", slug: PAGE_SLUGS.pays, icon: 'person' },
   { name: "Reports", path: "/reports", slug: PAGE_SLUGS.reports, icon: 'person' },
