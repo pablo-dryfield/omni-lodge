@@ -25,6 +25,9 @@ import counterRegistryReducer from './counterRegistrySlice';
 import addonReducer from '../reducers/addonReducer';
 import paymentMethodReducer from '../reducers/paymentMethodReducer';
 import productAddonReducer from '../reducers/productAddonReducer';
+import productPriceReducer from '../reducers/productPriceReducer';
+import channelCommissionReducer from '../reducers/channelCommissionReducer';
+import channelProductPriceReducer from '../reducers/channelProductPriceReducer';
 
 const reducer = {
   guests: guestReducer,
@@ -38,8 +41,11 @@ const reducer = {
   productTypes: productTypeReducer,
   products: productReducer,
   addons: addonReducer,
+  productPrices: productPriceReducer,
   paymentMethods: paymentMethodReducer,
   productAddons: productAddonReducer,
+  channelCommissions: channelCommissionReducer,
+  channelProductPrices: channelProductPriceReducer,
   modules: moduleReducer,
   rolePagePermissions: rolePagePermissionReducer,
   roleModulePermissions: roleModulePermissionReducer,

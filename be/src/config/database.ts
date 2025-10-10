@@ -21,6 +21,9 @@ import Addon from "../models/Addon.js";
 import ProductAddon from "../models/ProductAddon.js";
 import CounterChannelMetric from "../models/CounterChannelMetric.js";
 import PaymentMethod from "../models/PaymentMethod.js";
+import ProductPrice from "../models/ProductPrice.js";
+import ChannelCommission from "../models/ChannelCommission.js";
+import ChannelProductPrice from "../models/ChannelProductPrice.js";
 
 const environment = (process.env.NODE_ENV || "development").trim();
 const envFile = environment === "production" ? ".env.prod" : ".env.dev";
@@ -52,8 +55,11 @@ const sequelize = new Sequelize({
   models: [
     User,
     PaymentMethod,
+    ProductPrice,
     Booking,
     Channel,
+    ChannelCommission,
+    ChannelProductPrice,
     Guest,
     Review,
     Counter,

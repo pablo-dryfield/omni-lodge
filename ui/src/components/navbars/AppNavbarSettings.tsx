@@ -16,6 +16,9 @@ import {
   IconCreditCard,
   IconBroadcast,
   IconBolt,
+  IconCurrencyDollar,
+  IconCurrencyEuro,
+  IconPercentage,
 } from "@tabler/icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ActiveNavLink } from "./ActiveNavLink";
@@ -77,6 +80,12 @@ const settingsNav: SettingsNavSection[] = [
         icon: <IconCategory2 size={20} />,
       },
       {
+        label: "Product Prices",
+        to: "/settings/product-prices",
+        slug: PAGE_SLUGS.settingsProductPrices,
+        icon: <IconCurrencyDollar size={20} />,
+      },
+      {
         label: "Add-Ons",
         to: "/settings/addons",
         slug: PAGE_SLUGS.settingsAddons,
@@ -104,6 +113,18 @@ const settingsNav: SettingsNavSection[] = [
         to: "/settings/payment-methods",
         slug: PAGE_SLUGS.settingsPaymentMethods,
         icon: <IconCreditCard size={20} />,
+      },
+      {
+        label: "Channel Product Prices",
+        to: "/settings/channel-product-prices",
+        slug: PAGE_SLUGS.settingsChannelProductPrices,
+        icon: <IconCurrencyEuro size={20} />,
+      },
+      {
+        label: "Channel Commissions",
+        to: "/settings/channel-commissions",
+        slug: PAGE_SLUGS.settingsChannelCommissions,
+        icon: <IconPercentage size={20} />,
       },
     ],
   },

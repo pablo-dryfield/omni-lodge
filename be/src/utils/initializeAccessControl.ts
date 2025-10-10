@@ -40,11 +40,14 @@ const defaultPages = [
   { slug: 'pays', name: 'Staff Payment', description: 'Staff commission overview', sortOrder: 5 },
   { slug: 'settings-products', name: 'Products', description: 'Manage saleable products', sortOrder: 6 },
   { slug: 'settings-product-types', name: 'Product Types', description: 'Group products into categories', sortOrder: 7 },
-  { slug: 'settings-addons', name: 'Add-Ons', description: 'Manage catalog add-ons', sortOrder: 8 },
-  { slug: 'settings-product-addons', name: 'Product Add-Ons', description: 'Map add-ons to products', sortOrder: 9 },
-  { slug: 'settings-payment-methods', name: 'Payment Methods', description: 'Manage accepted payment methods', sortOrder: 10 },
-  { slug: 'settings-actions', name: 'Actions', description: 'Manage access control actions', sortOrder: 11 },
-  { slug: 'settings-channels', name: 'Channels', description: 'Manage booking channels and integrations', sortOrder: 12 },
+  { slug: 'settings-product-prices', name: 'Product Prices', description: 'Schedule base product prices', sortOrder: 8 },
+  { slug: 'settings-addons', name: 'Add-Ons', description: 'Manage catalog add-ons', sortOrder: 9 },
+  { slug: 'settings-product-addons', name: 'Product Add-Ons', description: 'Map add-ons to products', sortOrder: 10 },
+  { slug: 'settings-payment-methods', name: 'Payment Methods', description: 'Manage accepted payment methods', sortOrder: 11 },
+  { slug: 'settings-channel-product-prices', name: 'Channel Product Prices', description: 'Override per-channel pricing', sortOrder: 12 },
+  { slug: 'settings-channel-commissions', name: 'Channel Commissions', description: 'Track commission rates by channel', sortOrder: 13 },
+  { slug: 'settings-actions', name: 'Actions', description: 'Manage access control actions', sortOrder: 14 },
+  { slug: 'settings-channels', name: 'Channels', description: 'Manage booking channels and integrations', sortOrder: 15 },
 ];
 
 const defaultModules = [
@@ -57,15 +60,18 @@ const defaultModules = [
   { slug: 'staff-payouts-self', name: 'Staff Payments (Self)', pageSlug: 'pays', description: 'View personal commission data', componentRef: 'StaffPayoutsSelf', sortOrder: 2 },
   { slug: 'product-catalog', name: 'Product Catalog', pageSlug: 'settings-products', description: 'Create and maintain products', componentRef: 'ProductCatalog', sortOrder: 1 },
   { slug: 'product-taxonomy', name: 'Product Types', pageSlug: 'settings-product-types', description: 'Define product categories and metadata', componentRef: 'ProductTypeManagement', sortOrder: 1 },
+  { slug: 'product-price-management', name: 'Product Prices', pageSlug: 'settings-product-prices', description: 'Manage base price history', componentRef: 'ProductPriceManagement', sortOrder: 1 },
   { slug: 'addon-management', name: 'Add-On Management', pageSlug: 'settings-addons', description: 'Create and maintain add-ons', componentRef: 'AddonManagement', sortOrder: 1 },
   { slug: 'product-addon-management', name: 'Product Add-On Mapping', pageSlug: 'settings-product-addons', description: 'Assign add-ons to products', componentRef: 'ProductAddonManagement', sortOrder: 1 },
   { slug: 'payment-method-management', name: 'Payment Method Management', pageSlug: 'settings-payment-methods', description: 'Manage accepted payment methods', componentRef: 'PaymentMethodManagement', sortOrder: 1 },
+  { slug: 'channel-product-price-management', name: 'Channel Product Prices', pageSlug: 'settings-channel-product-prices', description: 'Override per-channel pricing', componentRef: 'ChannelProductPriceManagement', sortOrder: 1 },
+  { slug: 'channel-commission-management', name: 'Channel Commissions', pageSlug: 'settings-channel-commissions', description: 'Maintain commission agreements', componentRef: 'ChannelCommissionManagement', sortOrder: 1 },
   { slug: 'channel-console', name: 'Channel Console', pageSlug: 'settings-channels', description: 'Manage booking channels and integrations', componentRef: 'ChannelConsole', sortOrder: 1 },
   { slug: 'action-registry', name: 'Action Registry', pageSlug: 'settings-actions', description: 'Maintain action catalog', componentRef: 'ActionRegistry', sortOrder: 1 },
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
-  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'pays', 'settings-products', 'settings-product-types', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-actions', 'settings-channels', 'settings',
+  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'pays', 'settings-products', 'settings-product-types', 'settings-product-prices', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-actions', 'settings-channels', 'settings',
 'settings-users',
 'settings-user-types',
 'settings-pages',
@@ -97,10 +103,13 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'staff-payouts-all': ['view'],
     'product-catalog': ['view', 'create', 'update', 'delete'],
     'product-taxonomy': ['view', 'create', 'update', 'delete'],
+    'product-price-management': ['view', 'create', 'update', 'delete'],
     'addon-management': ['view', 'create', 'update', 'delete'],
     'payment-method-management': ['view', 'create', 'update', 'delete'],
     'action-registry': ['view', 'create', 'update', 'delete'],
     'product-addon-management': ['view', 'create', 'update', 'delete'],
+    'channel-product-price-management': ['view', 'create', 'update', 'delete'],
+    'channel-commission-management': ['view', 'create', 'update', 'delete'],
     'channel-console': ['view', 'create', 'update', 'delete'],
   },
   owner: {
