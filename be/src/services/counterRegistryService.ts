@@ -6,9 +6,11 @@ import Counter, { type CounterStatus } from '../models/Counter.js';
 import CounterChannelMetric from '../models/CounterChannelMetric.js';
 import CounterUser, { type CounterStaffRole } from '../models/CounterUser.js';
 import Channel from '../models/Channel.js';
+import PaymentMethod from '../models/PaymentMethod.js';
 import Addon from '../models/Addon.js';
 import Product from '../models/Product.js';
 import ProductAddon from '../models/ProductAddon.js';
+import ChannelProductPrice from '../models/ChannelProductPrice.js';
 import User from '../models/User.js';
 import UserType from '../models/UserType.js';
 import HttpError from '../errors/HttpError.js';
@@ -116,7 +118,10 @@ function buildFullName(firstName?: string | null, lastName?: string | null): str
   return [firstName ?? '', lastName ?? ''].join(' ').trim();
 }
 
-function sortChannels(channels: Channel[]): ChannelConfig[] {
+function buildChannelConfigs(
+  channels: Array<Channel & { paymentMethod?: PaymentMethod | null }>,
+  priceByChannel: Map<number, number | null>,
+): ChannelConfig[] {
   const orderMap = new Map<string, number>();
   DEFAULT_CHANNEL_ORDER.forEach((name, index) => orderMap.set(name.toLowerCase(), index));
 
@@ -124,10 +129,18 @@ function sortChannels(channels: Channel[]): ChannelConfig[] {
     .map((channel) => {
       const lowerName = channel.name.toLowerCase();
       const explicitOrder = orderMap.get(lowerName);
+      const paymentMethodName = channel.paymentMethod?.name ?? null;
+      const isCashPaymentMethod = (paymentMethodName ?? '').toLowerCase() === 'cash';
+      const cashPrice = priceByChannel.get(channel.id) ?? null;
+
       return {
         id: channel.id,
         name: channel.name,
         sortOrder: explicitOrder ?? DEFAULT_CHANNEL_ORDER.length + channel.name.charCodeAt(0),
+        paymentMethodId: channel.paymentMethodId ?? null,
+        paymentMethodName,
+        cashPrice: isCashPaymentMethod ? (cashPrice ?? null) : null,
+        cashPaymentEligible: isCashPaymentMethod,
       };
     })
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
@@ -655,12 +668,50 @@ export default class CounterRegistryService {
 
   static async buildContext(counter: Counter): Promise<CounterContext> {
     const [channels, addons, product] = await Promise.all([
-      Channel.findAll({ order: [['name', 'ASC']] }),
+      Channel.findAll({
+        order: [['name', 'ASC']],
+        include: [{ model: PaymentMethod, as: 'paymentMethod' }],
+      }),
       Addon.findAll({ where: { isActive: true }, order: [['name', 'ASC']] }),
       counter.productId ? Product.findByPk(counter.productId) : Promise.resolve(null),
     ]);
 
-    const channelConfigs = sortChannels(channels);
+    const targetProductId = product?.id ?? counter.productId ?? null;
+    const priceByChannel = new Map<number, number | null>();
+
+    if (targetProductId != null && channels.length > 0) {
+      const channelIds = channels.map((channel) => channel.id);
+      const priceRecords = await ChannelProductPrice.findAll({
+        where: { productId: targetProductId, channelId: channelIds },
+        order: [['validFrom', 'DESC']],
+      });
+
+      const counterDate = dayjs(counter.date);
+
+      for (const record of priceRecords) {
+        if (priceByChannel.has(record.channelId)) {
+          continue;
+        }
+        const validFrom = dayjs(record.validFrom);
+        if (validFrom.isAfter(counterDate, 'day')) {
+          continue;
+        }
+        const validTo = record.validTo ? dayjs(record.validTo) : null;
+        if (validTo && counterDate.isAfter(validTo, 'day')) {
+          continue;
+        }
+        const numericPrice = Number(record.price);
+        if (!Number.isFinite(numericPrice)) {
+          continue;
+        }
+        priceByChannel.set(record.channelId, numericPrice);
+      }
+    }
+
+    const channelConfigs = buildChannelConfigs(
+      channels as Array<Channel & { paymentMethod?: PaymentMethod | null }>,
+      priceByChannel,
+    );
 
     let addonConfigs = addons.map((addon, index) =>
       toAddonConfig({

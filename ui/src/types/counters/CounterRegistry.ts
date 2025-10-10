@@ -35,6 +35,10 @@ export type ChannelConfig = {
   id: number;
   name: string;
   sortOrder: number;
+  paymentMethodId: number | null;
+  paymentMethodName: string | null;
+  cashPrice: number | null;
+  cashPaymentEligible: boolean;
 };
 
 export type MetricCell = {
