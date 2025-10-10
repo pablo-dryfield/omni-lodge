@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent, SyntheticEvent } from 'react';
+﻿import type { KeyboardEvent, MouseEvent, SyntheticEvent } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dayjs, { Dayjs } from 'dayjs';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
@@ -37,7 +37,7 @@ import {
   Typography,
   Tooltip,
 } from '@mui/material';
-import { Add, Close, Delete, Edit, Remove } from '@mui/icons-material';
+import { Add, Check, Close, Delete, Edit, Remove } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
@@ -116,6 +116,44 @@ const formatCashAmount = (amount: number): string => {
     return WALK_IN_CASH_FORMATTER.format(0);
   }
   return WALK_IN_CASH_FORMATTER.format(amount);
+};
+
+const normalizeCashValue = (value: number): string => {
+  if (!Number.isFinite(value)) {
+    return '0.00';
+  }
+  return (Math.round(value * 100) / 100).toFixed(2);
+};
+
+const parseCashInput = (value: string): number | null => {
+  if (value == null) {
+    return null;
+  }
+  const sanitized = value.replace(/[^0-9.,-]/g, '').replace(/,/g, '');
+  if (sanitized.trim() === '') {
+    return null;
+  }
+  const numeric = Number(sanitized);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  return Math.max(0, Math.round(numeric * 100) / 100);
+};
+
+const valuesAreClose = (a: number | null, b: number | null, epsilon = 0.01): boolean => {
+  if (a == null && b == null) {
+    return true;
+  }
+  if (a == null || b == null) {
+    return false;
+  }
+  return Math.abs(a - b) <= epsilon;
+};
+
+const isCashPaymentChannel = (channel: ChannelConfig): boolean => {
+  const explicitFlag = channel.cashPaymentEligible ?? false;
+  const paymentName = channel.paymentMethodName?.toLowerCase() ?? '';
+  return explicitFlag || paymentName === 'cash';
 };
 
 const normalizeDiscountSelection = (values: string[]): string[] => {
@@ -280,12 +318,15 @@ const Counters = (props: GenericPageProps) => {
     registry.counter?.counter.id ?? null,
   );
   const fetchCounterRequestRef = useRef<string | null>(null);
-  const lastPersistedStaffIdsRef = useRef<number[]>([]);
-  const lastInitializedCounterRef = useRef<string | null>(null);
-  const lastWalkInInitRef = useRef<string | null>(null);
-  const [walkInCashByChannel, setWalkInCashByChannel] = useState<Record<number, string>>({});
-  const [walkInDiscountsByChannel, setWalkInDiscountsByChannel] = useState<Record<number, string[]>>({});
-  const [walkInNoteDirty, setWalkInNoteDirty] = useState(false);
+const lastPersistedStaffIdsRef = useRef<number[]>([]);
+const lastInitializedCounterRef = useRef<string | null>(null);
+const lastWalkInInitRef = useRef<string | null>(null);
+const [walkInCashByChannel, setWalkInCashByChannel] = useState<Record<number, string>>({});
+const [walkInDiscountsByChannel, setWalkInDiscountsByChannel] = useState<Record<number, string[]>>({});
+const [walkInNoteDirty, setWalkInNoteDirty] = useState(false);
+const [cashOverridesByChannel, setCashOverridesByChannel] = useState<Record<number, string>>({});
+const [cashEditingChannelId, setCashEditingChannelId] = useState<number | null>(null);
+const [cashEditingValue, setCashEditingValue] = useState<string>('');
 
 
 const counterId = registry.counter?.counter.id ?? null;
@@ -466,10 +507,26 @@ const loadCounterForDate = useCallback(
     [registry.channels],
   );
 
+  const cashEligibleChannelIds = useMemo(
+    () =>
+      registry.channels
+        .filter((channel) => {
+          if (channel.name?.toLowerCase() === WALK_IN_CHANNEL_SLUG) {
+            return false;
+          }
+          return isCashPaymentChannel(channel);
+        })
+        .map((channel) => channel.id),
+    [registry.channels],
+  );
+
   useEffect(() => {
     if (!registry.counter) {
       setWalkInCashByChannel({});
       setWalkInDiscountsByChannel({});
+      setCashOverridesByChannel({});
+      setCashEditingChannelId(null);
+      setCashEditingValue('');
       setWalkInNoteDirty(false);
       lastWalkInInitRef.current = null;
       return;
@@ -482,6 +539,7 @@ const loadCounterForDate = useCallback(
       counterRecord.updatedAt,
       note ?? '',
       walkInChannelIds.join(','),
+      cashEligibleChannelIds.join(','),
     ].join('|');
 
     if (lastWalkInInitRef.current === initKey) {
@@ -491,72 +549,42 @@ const loadCounterForDate = useCallback(
     lastWalkInInitRef.current = initKey;
 
     const metricsList = registry.counter.metrics ?? [];
-    const nextCash: Record<number, string> = {};
-    const nextDiscounts: Record<number, string[]> = {};
+    const nextWalkInCash: Record<number, string> = {};
+    const nextWalkInDiscounts: Record<number, string[]> = {};
+    const nextOverrides: Record<number, string> = {};
     const parsedDiscounts = parseDiscountsFromNote(note);
 
-    let cashChanged = false;
-    let discountsChanged = false;
+    for (const channelId of walkInChannelIds) {
+      nextWalkInDiscounts[channelId] = [...parsedDiscounts];
+    }
 
-    walkInChannelIds.forEach((channelId) => {
-      const cashMetric =
-        metricsList.find(
-          (metric) =>
-            metric.channelId === channelId &&
-            metric.kind === 'cash_payment' &&
-            metric.tallyType === 'attended',
-        ) ?? null;
-      const numericQty = cashMetric ? Math.max(0, Number(cashMetric.qty) || 0) : 0;
-      const nextCashValue = numericQty > 0 ? String(numericQty) : '';
-      nextCash[channelId] = nextCashValue;
-      if (!cashChanged) {
-        const currentCashValue = walkInCashByChannel[channelId] ?? '';
-        if (currentCashValue !== nextCashValue) {
-          cashChanged = true;
-        }
+    metricsList.forEach((metric) => {
+      if (metric.kind !== 'cash_payment' || metric.tallyType !== 'attended') {
+        return;
       }
-
-      const nextDiscountSelection = [...parsedDiscounts];
-      nextDiscounts[channelId] = nextDiscountSelection;
-      if (!discountsChanged) {
-        const currentSelection = walkInDiscountsByChannel[channelId] ?? [];
-        if (
-          currentSelection.length !== nextDiscountSelection.length ||
-          currentSelection.some((value, index) => value !== nextDiscountSelection[index])
-        ) {
-          discountsChanged = true;
-        }
+      const numericQty = Math.max(0, Number(metric.qty) || 0);
+      if (walkInChannelIds.includes(metric.channelId)) {
+        nextWalkInCash[metric.channelId] = numericQty > 0 ? String(numericQty) : '';
+        return;
+      }
+      if (cashEligibleChannelIds.includes(metric.channelId) && numericQty > 0) {
+        nextOverrides[metric.channelId] = normalizeCashValue(numericQty);
       }
     });
 
-    if (!cashChanged) {
-      const currentKeys = Object.keys(walkInCashByChannel);
-      if (
-        currentKeys.length !== walkInChannelIds.length ||
-        currentKeys.some((key) => !(key in nextCash))
-      ) {
-        cashChanged = true;
+    for (const channelId of walkInChannelIds) {
+      if (!(channelId in nextWalkInCash)) {
+        nextWalkInCash[channelId] = '';
       }
     }
 
-    if (!discountsChanged) {
-      const currentKeys = Object.keys(walkInDiscountsByChannel);
-      if (
-        currentKeys.length !== walkInChannelIds.length ||
-        currentKeys.some((key) => !(key in nextDiscounts))
-      ) {
-        discountsChanged = true;
-      }
-    }
-
-    if (cashChanged) {
-      setWalkInCashByChannel(nextCash);
-    }
-    if (discountsChanged) {
-      setWalkInDiscountsByChannel(nextDiscounts);
-    }
+    setWalkInCashByChannel(nextWalkInCash);
+    setWalkInDiscountsByChannel(nextWalkInDiscounts);
+    setCashOverridesByChannel(nextOverrides);
+    setCashEditingChannelId(null);
+    setCashEditingValue('');
     setWalkInNoteDirty(false);
-  }, [registry.counter, walkInChannelIds, walkInCashByChannel, walkInDiscountsByChannel]);
+  }, [cashEligibleChannelIds, registry.counter, walkInChannelIds]);
 
  const channelHasAnyQty = useCallback(
    (channelId: number) => mergedMetrics.some((metric) => metric.channelId === channelId && metric.qty > 0),
@@ -855,18 +883,97 @@ const loadCounterForDate = useCallback(
     [catalog.addons, dispatch, getMetric, registry.addons, registry.channels, syncAfterCutoffAttendance],
   );
 
-  const totalWalkInCash = useMemo(() => {
-    return walkInChannelIds.reduce((sum, channelId) => {
+  const cashDetailsByChannel = useMemo(() => {
+    const details = new Map<
+      number,
+      {
+        defaultAmount: number | null;
+        overrideAmount: number | null;
+        displayAmount: number | null;
+        formattedDisplay: string | null;
+        price: number | null;
+        peopleQty: number;
+      }
+    >();
+
+    registry.channels.forEach((channel) => {
+      if (!isCashPaymentChannel(channel) || channel.name?.toLowerCase() === WALK_IN_CHANNEL_SLUG) {
+        return;
+      }
+
+      const priceRaw =
+        channel.cashPrice != null && Number.isFinite(Number(channel.cashPrice))
+          ? Number(channel.cashPrice)
+          : null;
+      const price = priceRaw != null ? Math.max(0, Math.round(priceRaw * 100) / 100) : null;
+      const peopleMetric = getMetric(channel.id, 'attended', null, 'people', null);
+      const peopleQty = peopleMetric?.qty ?? 0;
+      const defaultAmount =
+        price != null ? Math.max(0, Math.round(price * peopleQty * 100) / 100) : null;
+      const overrideRaw = cashOverridesByChannel[channel.id];
+      const overrideAmount = overrideRaw != null ? parseCashInput(overrideRaw) : null;
+      const displayAmount =
+        overrideAmount != null && Number.isFinite(overrideAmount) ? overrideAmount : defaultAmount;
+      const formattedDisplay =
+        displayAmount != null && Number.isFinite(displayAmount)
+          ? formatCashAmount(displayAmount)
+          : null;
+
+      details.set(channel.id, {
+        defaultAmount,
+        overrideAmount:
+          overrideAmount != null && Number.isFinite(overrideAmount) ? overrideAmount : null,
+        displayAmount: displayAmount != null && Number.isFinite(displayAmount) ? displayAmount : null,
+        formattedDisplay,
+        price,
+        peopleQty,
+      });
+    });
+
+    return details;
+  }, [cashOverridesByChannel, getMetric, registry.channels]);
+
+  const cashCollectionSummary = useMemo(() => {
+    let total = 0;
+    const perChannel = new Map<number, number>();
+
+    walkInChannelIds.forEach((channelId) => {
       const rawValue = walkInCashByChannel[channelId];
       const numeric = Number(rawValue ?? 0);
       if (!Number.isFinite(numeric)) {
-        return sum;
+        return;
       }
-      return sum + Math.max(0, numeric);
-    }, 0);
-  }, [walkInCashByChannel, walkInChannelIds]);
+      const normalized = Math.max(0, Math.round(numeric * 100) / 100);
+      if (normalized > 0) {
+        perChannel.set(channelId, normalized);
+        total += normalized;
+      }
+    });
 
-  const formattedWalkInCash = useMemo(() => formatCashAmount(totalWalkInCash), [totalWalkInCash]);
+    registry.channels.forEach((channel) => {
+      if (!isCashPaymentChannel(channel) || walkInChannelIds.includes(channel.id)) {
+        return;
+      }
+      const details = cashDetailsByChannel.get(channel.id);
+      const amount = details?.displayAmount ?? null;
+      if (amount == null || !Number.isFinite(amount)) {
+        return;
+      }
+      const normalized = Math.max(0, Math.round(amount * 100) / 100);
+      if (normalized > 0) {
+        perChannel.set(channel.id, normalized);
+        total += normalized;
+      }
+    });
+
+    return {
+      perChannel,
+      total,
+      formattedTotal: formatCashAmount(total),
+    };
+  }, [cashDetailsByChannel, registry.channels, walkInCashByChannel, walkInChannelIds]);
+
+  const formattedTotalCash = cashCollectionSummary.formattedTotal;
 
   const aggregatedWalkInDiscounts = useMemo(() => {
     const combined = new Set<string>();
@@ -927,6 +1034,78 @@ const loadCounterForDate = useCallback(
     [getMetric, handleMetricChange],
   );
 
+  const handleCashOverrideEdit = useCallback(
+    (channelId: number) => {
+      const details = cashDetailsByChannel.get(channelId);
+      const currentOverride = cashOverridesByChannel[channelId] ?? '';
+      let initialValue = currentOverride;
+      if (!initialValue) {
+        const defaultAmount = details?.defaultAmount ?? null;
+        if (defaultAmount != null && Number.isFinite(defaultAmount)) {
+          initialValue = normalizeCashValue(defaultAmount);
+        }
+      }
+      setCashEditingChannelId(channelId);
+      setCashEditingValue(initialValue);
+    },
+    [cashDetailsByChannel, cashOverridesByChannel],
+  );
+
+  const handleCashOverrideChange = useCallback((value: string) => {
+    setCashEditingValue(value);
+  }, []);
+
+  const handleCashOverrideCancel = useCallback(() => {
+    setCashEditingChannelId(null);
+    setCashEditingValue('');
+  }, []);
+
+  const handleCashOverrideSave = useCallback(() => {
+    if (cashEditingChannelId == null) {
+      return;
+    }
+    const channelId = cashEditingChannelId;
+    const details = cashDetailsByChannel.get(channelId);
+    const parsedValue = parseCashInput(cashEditingValue);
+    const overrideAmount =
+      parsedValue != null && Number.isFinite(parsedValue) ? Math.max(0, parsedValue) : null;
+    const defaultAmount = details?.defaultAmount ?? null;
+    const baseMetric = getMetric(channelId, 'attended', null, 'cash_payment', null);
+    if (!baseMetric) {
+      handleCashOverrideCancel();
+      return;
+    }
+
+    const hasOverride =
+      overrideAmount != null &&
+      (defaultAmount == null ? overrideAmount > 0 : !valuesAreClose(overrideAmount, defaultAmount));
+
+    setCashOverridesByChannel((prev) => {
+      const next = { ...prev };
+      if (hasOverride && overrideAmount != null) {
+        next[channelId] = normalizeCashValue(overrideAmount);
+      } else {
+        delete next[channelId];
+      }
+      return next;
+    });
+
+    const nextQty = hasOverride && overrideAmount != null ? overrideAmount : 0;
+    if (baseMetric.qty !== nextQty) {
+      handleMetricChange(channelId, 'attended', null, 'cash_payment', null, nextQty);
+    }
+
+    setCashEditingChannelId(null);
+    setCashEditingValue('');
+  }, [
+    cashDetailsByChannel,
+    cashEditingChannelId,
+    cashEditingValue,
+    getMetric,
+    handleCashOverrideCancel,
+    handleMetricChange,
+  ]);
+
   const buildWalkInNote = useCallback((): string => {
     const currentNote = registry.counter?.counter.notes ?? '';
     const existingLines = currentNote ? currentNote.split(/\r?\n/) : [];
@@ -950,7 +1129,7 @@ const loadCounterForDate = useCallback(
       aggregatedWalkInDiscounts.length > 0
         ? `${WALK_IN_DISCOUNT_NOTE_PREFIX} ${aggregatedWalkInDiscounts.join(', ')}`
         : '';
-    const cashLine = `${WALK_IN_CASH_NOTE_PREFIX} ${formattedWalkInCash} z\u0142`;
+    const cashLine = `${WALK_IN_CASH_NOTE_PREFIX} ${formattedTotalCash} z\u0142`;
     const autoLine = discountLine ? `${discountLine} | ${cashLine}` : cashLine;
 
     if (filteredLines.length === 0) {
@@ -959,7 +1138,7 @@ const loadCounterForDate = useCallback(
 
     const manualSection = filteredLines.join('\n');
     return autoLine ? `${manualSection}\n${autoLine}` : manualSection;
-  }, [aggregatedWalkInDiscounts, formattedWalkInCash, registry.counter]);
+  }, [aggregatedWalkInDiscounts, formattedTotalCash, registry.counter]);
 
   const computedWalkInNote = useMemo(() => buildWalkInNote(), [buildWalkInNote]);
   const currentCounterNotes = registry.counter?.counter.notes ?? '';
@@ -1686,6 +1865,18 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     const walkInDiscountSelection = walkInDiscountsByChannel[channel.id] ?? [];
     const showWalkInExtras =
       isWalkInChannel && (bucket.tallyType === 'attended' || bucket.period === 'after_cutoff');
+    const isCashChannel = isCashPaymentChannel(channel);
+    const cashDetails = cashDetailsByChannel.get(channel.id);
+    const hasCashOverride =
+      cashDetails?.overrideAmount != null &&
+      !valuesAreClose(cashDetails.overrideAmount, cashDetails.defaultAmount ?? null);
+    const cashDisplayText = cashDetails?.formattedDisplay ?? null;
+    const showCashSummary =
+      isCashChannel && !isWalkInChannel && bucket.tallyType === 'attended' && bucket.period === null;
+    const defaultCashText =
+      cashDetails?.defaultAmount != null && Number.isFinite(cashDetails.defaultAmount)
+        ? formatCashAmount(cashDetails.defaultAmount)
+        : null;
 
     return (
       <Card key={channel.id + '-' + bucket.label} variant="outlined" sx={{ mb: 2 }}>
@@ -1734,6 +1925,73 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                     })}
                   </Stack>
                 </Stack>
+              </Stack>
+            )}
+            {showCashSummary && (
+              <Stack spacing={0.75}>
+                <Typography variant="subtitle2">Cash To Be Collected</Typography>
+                {cashEditingChannelId === channel.id ? (
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <TextField
+                      value={cashEditingValue}
+                      onChange={(event) => handleCashOverrideChange(event.target.value)}
+                      size="small"
+                      disabled={disableInputs}
+                      placeholder={defaultCashText ?? '0.00'}
+                      InputProps={{
+                        startAdornment: <InputAdornment position="start">PLN</InputAdornment>,
+                        inputMode: 'decimal',
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          if (!disableInputs) {
+                            handleCashOverrideSave();
+                          }
+                        }
+                        if (event.key === 'Escape') {
+                          event.preventDefault();
+                          handleCashOverrideCancel();
+                        }
+                      }}
+                    />
+                    <IconButton
+                      size="small"
+                      color="success"
+                      aria-label="Save cash override"
+                      onClick={handleCashOverrideSave}
+                      disabled={disableInputs}
+                    >
+                      <Check fontSize="small" />
+                    </IconButton>
+                    <IconButton
+                      size="small"
+                      aria-label="Cancel cash override"
+                      onClick={handleCashOverrideCancel}
+                      disabled={disableInputs}
+                    >
+                      <Close fontSize="small" />
+                    </IconButton>
+                  </Stack>
+                ) : (
+                  <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap">
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                      {cashDisplayText ? `PLN ${cashDisplayText}` : 'No price configured'}
+                    </Typography>
+                    <IconButton
+                      size="small"
+                      aria-label="Adjust cash collected"
+                      onClick={() => handleCashOverrideEdit(channel.id)}
+                      disabled={disableInputs}
+                    >
+                      <Edit fontSize="small" />
+                    </IconButton>
+                    {hasCashOverride && <Chip label="Override" size="small" color="info" variant="outlined" />}
+                    {!hasCashOverride && defaultCashText && (
+                      <Typography variant="caption" color="text.secondary">{`Default: PLN ${defaultCashText}`}</Typography>
+                    )}
+                  </Stack>
+                )}
               </Stack>
             )}
             <Divider flexItem sx={{ mt: 1 }} />
