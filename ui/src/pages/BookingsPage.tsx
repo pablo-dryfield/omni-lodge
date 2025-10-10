@@ -65,7 +65,7 @@ const BOOKINGS_MODULE = "booking-management";
 const BookingsPage = ({ title }: GenericPageProps) => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
-  const [viewMode, setViewMode] = useState<ViewMode>("week");
+  const [viewMode, setViewMode] = useState<ViewMode>("month");
   const [rangeAnchor, setRangeAnchor] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [selectedDate, setSelectedDate] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [products, setProducts] = useState<UnifiedProduct[]>([]);

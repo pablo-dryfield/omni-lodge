@@ -10,6 +10,7 @@ import {
   IconLayoutSidebarLeftExpand,
   IconTools,
   IconPackage,
+  IconCategory2,
   IconPuzzle,
   IconHierarchy2,
   IconCreditCard,
@@ -68,6 +69,12 @@ const settingsNav: SettingsNavSection[] = [
         to: "/settings/products",
         slug: PAGE_SLUGS.settingsProducts,
         icon: <IconPackage size={20} />,
+      },
+      {
+        label: "Product Types",
+        to: "/settings/product-types",
+        slug: PAGE_SLUGS.settingsProductTypes,
+        icon: <IconCategory2 size={20} />,
       },
       {
         label: "Add-Ons",

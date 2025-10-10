@@ -39,11 +39,12 @@ const defaultPages = [
   { slug: 'reports', name: 'Reports', description: 'Analytics and reports', sortOrder: 4 },
   { slug: 'pays', name: 'Staff Payment', description: 'Staff commission overview', sortOrder: 5 },
   { slug: 'settings-products', name: 'Products', description: 'Manage saleable products', sortOrder: 6 },
-  { slug: 'settings-addons', name: 'Add-Ons', description: 'Manage catalog add-ons', sortOrder: 7 },
-  { slug: 'settings-product-addons', name: 'Product Add-Ons', description: 'Map add-ons to products', sortOrder: 8 },
-  { slug: 'settings-payment-methods', name: 'Payment Methods', description: 'Manage accepted payment methods', sortOrder: 9 },
-  { slug: 'settings-actions', name: 'Actions', description: 'Manage access control actions', sortOrder: 10 },
-  { slug: 'settings-channels', name: 'Channels', description: 'Manage booking channels and integrations', sortOrder: 11 },
+  { slug: 'settings-product-types', name: 'Product Types', description: 'Group products into categories', sortOrder: 7 },
+  { slug: 'settings-addons', name: 'Add-Ons', description: 'Manage catalog add-ons', sortOrder: 8 },
+  { slug: 'settings-product-addons', name: 'Product Add-Ons', description: 'Map add-ons to products', sortOrder: 9 },
+  { slug: 'settings-payment-methods', name: 'Payment Methods', description: 'Manage accepted payment methods', sortOrder: 10 },
+  { slug: 'settings-actions', name: 'Actions', description: 'Manage access control actions', sortOrder: 11 },
+  { slug: 'settings-channels', name: 'Channels', description: 'Manage booking channels and integrations', sortOrder: 12 },
 ];
 
 const defaultModules = [
@@ -55,6 +56,7 @@ const defaultModules = [
   { slug: 'staff-payouts-all', name: 'Staff Payments (All)', pageSlug: 'pays', description: 'View commission data for all staff', componentRef: 'StaffPayoutsAll', sortOrder: 1 },
   { slug: 'staff-payouts-self', name: 'Staff Payments (Self)', pageSlug: 'pays', description: 'View personal commission data', componentRef: 'StaffPayoutsSelf', sortOrder: 2 },
   { slug: 'product-catalog', name: 'Product Catalog', pageSlug: 'settings-products', description: 'Create and maintain products', componentRef: 'ProductCatalog', sortOrder: 1 },
+  { slug: 'product-taxonomy', name: 'Product Types', pageSlug: 'settings-product-types', description: 'Define product categories and metadata', componentRef: 'ProductTypeManagement', sortOrder: 1 },
   { slug: 'addon-management', name: 'Add-On Management', pageSlug: 'settings-addons', description: 'Create and maintain add-ons', componentRef: 'AddonManagement', sortOrder: 1 },
   { slug: 'product-addon-management', name: 'Product Add-On Mapping', pageSlug: 'settings-product-addons', description: 'Assign add-ons to products', componentRef: 'ProductAddonManagement', sortOrder: 1 },
   { slug: 'payment-method-management', name: 'Payment Method Management', pageSlug: 'settings-payment-methods', description: 'Manage accepted payment methods', componentRef: 'PaymentMethodManagement', sortOrder: 1 },
@@ -63,7 +65,7 @@ const defaultModules = [
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
-  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'pays', 'settings-products', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-actions', 'settings-channels', 'settings',
+  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'pays', 'settings-products', 'settings-product-types', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-actions', 'settings-channels', 'settings',
 'settings-users',
 'settings-user-types',
 'settings-pages',
@@ -94,6 +96,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     reporting: ['view', 'create', 'update', 'delete'],
     'staff-payouts-all': ['view'],
     'product-catalog': ['view', 'create', 'update', 'delete'],
+    'product-taxonomy': ['view', 'create', 'update', 'delete'],
     'addon-management': ['view', 'create', 'update', 'delete'],
     'payment-method-management': ['view', 'create', 'update', 'delete'],
     'action-registry': ['view', 'create', 'update', 'delete'],

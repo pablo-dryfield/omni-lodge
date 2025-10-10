@@ -18,9 +18,10 @@ const DEFAULT_MODULE_SLUG = "product-taxonomy";
 
 type ProductTypeListProps = {
   moduleSlug?: string;
+  pageTitle?: string;
 };
 
-const ProductTypeList = ({ moduleSlug = DEFAULT_MODULE_SLUG }: ProductTypeListProps) => {
+const ProductTypeList = ({ moduleSlug = DEFAULT_MODULE_SLUG, pageTitle }: ProductTypeListProps) => {
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.productTypes)[0];
   const { currentPage } = useAppSelector((state) => state.navigation);
@@ -90,9 +91,11 @@ const ProductTypeList = ({ moduleSlug = DEFAULT_MODULE_SLUG }: ProductTypeListPr
     [data]
   );
 
+  const headingTitle = pageTitle ?? currentPage;
+
   return (
     <Table
-      pageTitle={currentPage}
+      pageTitle={headingTitle}
       data={data[0]?.data || []}
       loading={loading}
       error={error}

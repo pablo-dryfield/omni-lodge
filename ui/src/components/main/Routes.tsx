@@ -6,7 +6,6 @@ import BookingsPage from "../../pages/BookingsPage";
 import BookingsManifestPage from "../../pages/BookingsManifestPage";
 import AvailabilityCalendar from "../../pages/AvailabilityCalendar";
 import Counters from "../../pages/Counters";
-import ProductTypes from "../../pages/ProductTypes";
 import VenueNumbers from "../../pages/VenueNumbers";
 import Pays from "../../pages/Pays";
 import Reports from "../../pages/Reports";
@@ -20,6 +19,7 @@ import SettingsPermissions from "../../pages/settings/SettingsPermissions";
 import SettingsPagePermissions from "../../pages/settings/SettingsPagePermissions";
 import SettingsModulePermissions from "../../pages/settings/SettingsModulePermissions";
 import SettingsProducts from "../../pages/settings/SettingsProducts";
+import SettingsProductTypes from "../../pages/settings/SettingsProductTypes";
 import SettingsAddons from "../../pages/settings/SettingsAddons";
 import SettingsProductAddons from "../../pages/settings/SettingsProductAddons";
 import SettingsPaymentMethods from "../../pages/settings/SettingsPaymentMethods";
@@ -35,7 +35,6 @@ const Routes = () => {
       <Route path="/bookings/manifest" element={<BookingsManifestPage title="Bookings Manifest" />} />
       <Route path="/calendar" element={<AvailabilityCalendar />} />
       <Route path="/counters" element={<Counters title="Counters" />} />
-      <Route path="/productTypes" element={<ProductTypes title="Product Types" />} />
       <Route path="/venueNumbers" element={<VenueNumbers title="Venue Numbers" />} />
       <Route path="/pays" element={<Pays />} />
       <Route path="/reports" element={<Reports title={"Reports"} />} />
@@ -50,6 +49,7 @@ const Routes = () => {
         <Route path="permissions/pages" element={<SettingsPagePermissions />} />
         <Route path="permissions/modules" element={<SettingsModulePermissions />} />
         <Route path="products" element={<SettingsProducts />} />
+        <Route path="product-types" element={<SettingsProductTypes />} />
         <Route path="addons" element={<SettingsAddons />} />
         <Route path="product-addons" element={<SettingsProductAddons />} />
         <Route path="payment-methods" element={<SettingsPaymentMethods />} />
