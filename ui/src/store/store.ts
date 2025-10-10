@@ -22,6 +22,9 @@ import reviewsReducer from '../reducers/reviewsReducer';
 import accessControlReducer from '../reducers/accessControlReducer';
 import catalogReducer from './catalogSlice';
 import counterRegistryReducer from './counterRegistrySlice';
+import addonReducer from '../reducers/addonReducer';
+import paymentMethodReducer from '../reducers/paymentMethodReducer';
+import productAddonReducer from '../reducers/productAddonReducer';
 
 const reducer = {
   guests: guestReducer,
@@ -34,6 +37,9 @@ const reducer = {
   userTypes: userTypeReducer,
   productTypes: productTypeReducer,
   products: productReducer,
+  addons: addonReducer,
+  paymentMethods: paymentMethodReducer,
+  productAddons: productAddonReducer,
   modules: moduleReducer,
   rolePagePermissions: rolePagePermissionReducer,
   roleModulePermissions: roleModulePermissionReducer,

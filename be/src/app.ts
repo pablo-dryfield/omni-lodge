@@ -32,6 +32,8 @@ import rolePagePermissionRoutes from './routes/rolePagePermissionRoutes.js';
 import roleModulePermissionRoutes from './routes/roleModulePermissionRoutes.js';
 import accessControlRoutes from './routes/accessControlRoutes.js';
 import ecwidRoutes from './routes/ecwidRoutes.js';
+import paymentMethodRoutes from './routes/paymentMethodRoutes.js';
+import productAddonRoutes from './routes/productAddonRoutes.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -117,6 +119,7 @@ app.use('/api/counterProducts', counterProductRoutes);
 app.use('/api/counterUsers', counterUserRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/addons', addonRoutes);
+app.use('/api/paymentMethods', paymentMethodRoutes);
 app.use('/api/productTypes', productTypeRoutes);
 app.use('/api/userTypes', userTypeRoutes);
 app.use('/api/reports', reportRoutes);
@@ -124,6 +127,7 @@ app.use('/api/pages', pageRoutes);
 app.use('/api/modules', moduleRoutes);
 app.use('/api/actions', actionRoutes);
 app.use('/api/moduleActions', moduleActionRoutes);
+app.use('/api/productAddons', productAddonRoutes);
 app.use('/api/rolePagePermissions', rolePagePermissionRoutes);
 app.use('/api/roleModulePermissions', roleModulePermissionRoutes);
 app.use('/api/accessControl', accessControlRoutes);
