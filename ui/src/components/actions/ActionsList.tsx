@@ -46,7 +46,11 @@ const coerceActionPayload = (payload: Partial<Action>): Partial<Action> => {
   return next;
 };
 
-const ActionsList = () => {
+type ActionsListProps = {
+  pageTitle?: string;
+};
+
+const ActionsList = ({ pageTitle }: ActionsListProps) => {
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.actions)[0];
   const { currentPage } = useAppSelector((state) => state.navigation);
@@ -115,9 +119,11 @@ const ActionsList = () => {
     [data],
   );
 
+  const headingTitle = pageTitle ?? currentPage;
+
   return (
     <Table
-      pageTitle={currentPage}
+      pageTitle={headingTitle}
       data={data[0]?.data || []}
       loading={loading}
       error={error}

@@ -9,6 +9,12 @@ import {
   IconShieldLock,
   IconLayoutSidebarLeftExpand,
   IconTools,
+  IconPackage,
+  IconPuzzle,
+  IconHierarchy2,
+  IconCreditCard,
+  IconBroadcast,
+  IconBolt,
 } from "@tabler/icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ActiveNavLink } from "./ActiveNavLink";
@@ -55,6 +61,46 @@ const settingsNav: SettingsNavSection[] = [
     ],
   },
   {
+    title: "Catalog",
+    links: [
+      {
+        label: "Products",
+        to: "/settings/products",
+        slug: PAGE_SLUGS.settingsProducts,
+        icon: <IconPackage size={20} />,
+      },
+      {
+        label: "Add-Ons",
+        to: "/settings/addons",
+        slug: PAGE_SLUGS.settingsAddons,
+        icon: <IconPuzzle size={20} />,
+      },
+      {
+        label: "Product Add-Ons",
+        to: "/settings/product-addons",
+        slug: PAGE_SLUGS.settingsProductAddons,
+        icon: <IconHierarchy2 size={20} />,
+      },
+    ],
+  },
+  {
+    title: "Integrations",
+    links: [
+      {
+        label: "Channels",
+        to: "/settings/channels",
+        slug: PAGE_SLUGS.settingsChannels,
+        icon: <IconBroadcast size={20} />,
+      },
+      {
+        label: "Payment Methods",
+        to: "/settings/payment-methods",
+        slug: PAGE_SLUGS.settingsPaymentMethods,
+        icon: <IconCreditCard size={20} />,
+      },
+    ],
+  },
+  {
     title: "Permissions",
     links: [
       { label: "Overview", to: "/settings/permissions", slug: PAGE_SLUGS.settingsPermissions, icon: <IconShieldLock size={20} /> },
@@ -69,6 +115,17 @@ const settingsNav: SettingsNavSection[] = [
         to: "/settings/permissions/modules",
         slug: PAGE_SLUGS.settingsModulePermissions,
         icon: <IconTools size={20} />,
+      },
+    ],
+  },
+  {
+    title: "Access Control",
+    links: [
+      {
+        label: "Actions",
+        to: "/settings/actions",
+        slug: PAGE_SLUGS.settingsActions,
+        icon: <IconBolt size={20} />,
       },
     ],
   },

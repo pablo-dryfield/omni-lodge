@@ -12,7 +12,11 @@ import { getChangedValues } from '../../utils/getChangedValues';
 
 const MODULE_SLUG = 'channel-console';
 
-const ChannelList = () => {
+type ChannelsListProps = {
+  pageTitle?: string;
+};
+
+const ChannelList = ({ pageTitle }: ChannelsListProps) => {
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.channels)[0];
   const { currentPage } = useAppSelector((state) => state.navigation);
@@ -81,9 +85,11 @@ const ChannelList = () => {
     [data]
   );
 
+  const headingTitle = pageTitle ?? currentPage;
+
   return (
     <Table
-      pageTitle={currentPage}
+      pageTitle={headingTitle}
       data={data[0]?.data || []}
       loading={loading}
       error={error}
