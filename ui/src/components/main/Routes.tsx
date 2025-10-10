@@ -20,9 +20,12 @@ import SettingsPagePermissions from "../../pages/settings/SettingsPagePermission
 import SettingsModulePermissions from "../../pages/settings/SettingsModulePermissions";
 import SettingsProducts from "../../pages/settings/SettingsProducts";
 import SettingsProductTypes from "../../pages/settings/SettingsProductTypes";
+import SettingsProductPrices from "../../pages/settings/SettingsProductPrices";
 import SettingsAddons from "../../pages/settings/SettingsAddons";
 import SettingsProductAddons from "../../pages/settings/SettingsProductAddons";
 import SettingsPaymentMethods from "../../pages/settings/SettingsPaymentMethods";
+import SettingsChannelProductPrices from "../../pages/settings/SettingsChannelProductPrices";
+import SettingsChannelCommissions from "../../pages/settings/SettingsChannelCommissions";
 import SettingsActions from "../../pages/settings/SettingsActions";
 import SettingsChannels from "../../pages/settings/SettingsChannels";
 
@@ -49,10 +52,13 @@ const Routes = () => {
         <Route path="permissions/pages" element={<SettingsPagePermissions />} />
         <Route path="permissions/modules" element={<SettingsModulePermissions />} />
         <Route path="products" element={<SettingsProducts />} />
+        <Route path="product-prices" element={<SettingsProductPrices />} />
         <Route path="product-types" element={<SettingsProductTypes />} />
         <Route path="addons" element={<SettingsAddons />} />
         <Route path="product-addons" element={<SettingsProductAddons />} />
         <Route path="payment-methods" element={<SettingsPaymentMethods />} />
+        <Route path="channel-product-prices" element={<SettingsChannelProductPrices />} />
+        <Route path="channel-commissions" element={<SettingsChannelCommissions />} />
         <Route path="actions" element={<SettingsActions />} />
         <Route path="channels" element={<SettingsChannels />} />
       </Route>

@@ -27,9 +27,12 @@ export const PAGE_SLUGS = {
   settingsModulePermissions: "settings-permissions-modules",
   settingsProducts: "settings-products",
   settingsProductTypes: "settings-product-types",
+  settingsProductPrices: "settings-product-prices",
   settingsAddons: "settings-addons",
   settingsProductAddons: "settings-product-addons",
   settingsPaymentMethods: "settings-payment-methods",
+  settingsChannelProductPrices: "settings-channel-product-prices",
+  settingsChannelCommissions: "settings-channel-commissions",
   settingsActions: "settings-actions",
   settingsChannels: "settings-channels",
 };
