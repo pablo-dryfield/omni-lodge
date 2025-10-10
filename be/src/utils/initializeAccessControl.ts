@@ -373,6 +373,13 @@ export async function initializeAccessControl(): Promise<void> {
     roleMap.set(role.slug, record);
   }
 
+  await resetSequence('pages');
+  await resetSequence('actions');
+  await resetSequence('modules');
+  await resetSequence('moduleActions');
+  await resetSequence('rolePagePermissions');
+  await resetSequence('roleModulePermissions');
+
   const actionMap = new Map<string, Action>();
   for (const action of defaultActions) {
     const [record] = await Action.findOrCreate({
@@ -519,3 +526,15 @@ export async function initializeAccessControl(): Promise<void> {
 
 
 
+async function resetSequence(tableName: string, columnName = 'id', transaction?: Transaction): Promise<void> {
+  const escapedTable = `"${tableName.replace(/"/g, '""')}"`;
+  const escapedColumn = `"${columnName.replace(/"/g, '""')}"`;
+  const sequenceSql = `
+    SELECT setval(
+      pg_get_serial_sequence('${escapedTable}', '${columnName}'),
+      COALESCE((SELECT MAX(${escapedColumn}) FROM ${escapedTable}), 0) + 1,
+      false
+    );
+  `;
+  await sequelize.query(sequenceSql, { transaction });
+}
