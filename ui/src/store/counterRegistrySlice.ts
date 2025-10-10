@@ -55,6 +55,11 @@ type UpdateCounterStatusArgs = {
   status: CounterStatus;
 };
 
+type UpdateCounterNotesArgs = {
+  counterId: number;
+  notes: string | null;
+};
+
 type UpdateCounterStaffArgs = {
   counterId: number;
   userIds: number[];
@@ -201,6 +206,26 @@ export const updateCounterStatus = createAsyncThunk<
       return rejectWithValue(error.message);
     }
     return rejectWithValue('Failed to update counter status');
+  }
+});
+
+export const updateCounterNotes = createAsyncThunk<
+  CounterRegistryPayload,
+  UpdateCounterNotesArgs,
+  { rejectValue: string }
+>('counterRegistry/updateNotes', async ({ counterId, notes }, { rejectWithValue }) => {
+  try {
+    const response = await axiosInstance.patch<CounterRegistryPayload>(
+      `/counters/${counterId}?format=registry`,
+      { notes },
+      withCredentialsConfig,
+    );
+    return response.data;
+  } catch (error) {
+    if (error instanceof Error) {
+      return rejectWithValue(error.message);
+    }
+    return rejectWithValue('Failed to update counter notes');
   }
 });
 
@@ -414,6 +439,17 @@ const counterRegistrySlice = createSlice({
       .addCase(updateCounterStatus.rejected, (state, action) => {
         state.savingStatus = false;
         state.error = action.payload ?? action.error.message ?? 'Failed to update status';
+      })
+      .addCase(updateCounterNotes.pending, (state) => {
+        state.savingNotes = true;
+      })
+      .addCase(updateCounterNotes.fulfilled, (state, action) => {
+        state.savingNotes = false;
+        ingestPayload(state, action.payload);
+      })
+      .addCase(updateCounterNotes.rejected, (state, action) => {
+        state.savingNotes = false;
+        state.error = action.payload ?? action.error.message ?? 'Failed to update notes';
       })
       .addCase(updateCounterStaff.pending, (state) => {
         state.savingStaff = true;
