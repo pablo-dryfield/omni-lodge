@@ -1,5 +1,5 @@
 ﻿import type { KeyboardEvent, MouseEvent, SyntheticEvent } from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react';
 import dayjs, { Dayjs } from 'dayjs';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
@@ -111,6 +111,8 @@ const WALK_IN_CASH_FORMATTER = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 2,
 });
 
+type IdleHandle = number | ReturnType<typeof setTimeout>;
+
 const formatCashAmount = (amount: number): string => {
   if (!Number.isFinite(amount)) {
     return WALK_IN_CASH_FORMATTER.format(0);
@@ -123,6 +125,33 @@ const normalizeCashValue = (value: number): string => {
     return '0.00';
   }
   return (Math.round(value * 100) / 100).toFixed(2);
+};
+
+type IdleRequestCallback = (deadline: IdleDeadline) => void;
+interface IdleDeadline {
+  readonly didTimeout: boolean;
+  timeRemaining(): number;
+}
+
+const scheduleIdle = (callback: () => void): IdleHandle => {
+  const g = globalThis as typeof globalThis & {
+    requestIdleCallback?: (cb: IdleRequestCallback) => number;
+  };
+  if (typeof g.requestIdleCallback === 'function') {
+    return g.requestIdleCallback(() => callback());
+  }
+  return setTimeout(callback, 0);
+};
+
+const cancelIdle = (handle: IdleHandle) => {
+  const g = globalThis as typeof globalThis & {
+    cancelIdleCallback?: (id: number) => void;
+  };
+  if (typeof g.cancelIdleCallback === 'function' && typeof handle === 'number') {
+    g.cancelIdleCallback(handle);
+    return;
+  }
+  clearTimeout(handle as ReturnType<typeof setTimeout>);
 };
 
 const parseCashInput = (value: string): number | null => {
@@ -819,63 +848,65 @@ const loadCounterForDate = useCallback(
       if (baseMetric.qty === nextQty) {
         return;
       }
-      dispatch(setMetric({ ...baseMetric, qty: nextQty }));
+      startTransition(() => {
+        dispatch(setMetric({ ...baseMetric, qty: nextQty }));
 
-      if (kind === 'cash_payment') {
-        return;
-      }
+        if (kind === 'cash_payment') {
+          return;
+        }
 
-      const channel = registry.channels.find((item) => item.id === channelId);
-      const normalizedChannelName = channel?.name?.toLowerCase() ?? '';
-      const isAfterCutoffChannel = AFTER_CUTOFF_ALLOWED.has(normalizedChannelName);
-      const normalizedPeriod =
-        tallyType === 'booked'
-          ? period ?? 'before_cutoff'
-          : tallyType === 'attended'
-            ? null
-            : period ?? null;
+        const channel = registry.channels.find((item) => item.id === channelId);
+        const normalizedChannelName = channel?.name?.toLowerCase() ?? '';
+        const isAfterCutoffChannel = AFTER_CUTOFF_ALLOWED.has(normalizedChannelName);
+        const normalizedPeriod =
+          tallyType === 'booked'
+            ? period ?? 'before_cutoff'
+            : tallyType === 'attended'
+              ? null
+              : period ?? null;
 
-      if (
-        isAfterCutoffChannel &&
-        (kind === 'people' || kind === 'addon') &&
-        ((tallyType === 'attended' && normalizedPeriod === null) ||
-          (tallyType === 'booked' && normalizedPeriod === 'before_cutoff'))
-      ) {
-        syncAfterCutoffAttendance(channelId);
-      }
+        if (
+          isAfterCutoffChannel &&
+          (kind === 'people' || kind === 'addon') &&
+          ((tallyType === 'attended' && normalizedPeriod === null) ||
+            (tallyType === 'booked' && normalizedPeriod === 'before_cutoff'))
+        ) {
+          syncAfterCutoffAttendance(channelId);
+        }
 
-      if (kind === 'addon' && addonId != null) {
-        const addonConfig =
-          registry.addons.find((addon) => addon.addonId === addonId) ??
-          catalog.addons.find((addon) => addon.addonId === addonId);
-        const addonKeyLower = addonConfig?.key?.toLowerCase() ?? '';
-        const addonNameLower = addonConfig?.name?.toLowerCase() ?? '';
-        const isCocktails = addonKeyLower.includes('cocktail') || addonNameLower.includes('cocktail');
-        if (isCocktails) {
-          const peopleMetric = getMetric(channelId, tallyType, period, 'people', null);
-          if (peopleMetric) {
-            const delta = nextQty - baseMetric.qty;
-            if (delta !== 0) {
-              const currentQty = peopleMetric.qty ?? 0;
-              const nextPeopleQty = Math.max(0, currentQty + delta);
-              dispatch(setMetric({ ...peopleMetric, qty: nextPeopleQty }));
-              if (normalizedPeriod === 'after_cutoff') {
-                const attendedPeopleMetric = getMetric(channelId, 'attended', null, 'people', null);
-                if (attendedPeopleMetric && attendedPeopleMetric.qty !== nextPeopleQty) {
-                  dispatch(setMetric({ ...attendedPeopleMetric, qty: nextPeopleQty }));
+        if (kind === 'addon' && addonId != null) {
+          const addonConfig =
+            registry.addons.find((addon) => addon.addonId === addonId) ??
+            catalog.addons.find((addon) => addon.addonId === addonId);
+          const addonKeyLower = addonConfig?.key?.toLowerCase() ?? '';
+          const addonNameLower = addonConfig?.name?.toLowerCase() ?? '';
+          const isCocktails = addonKeyLower.includes('cocktail') || addonNameLower.includes('cocktail');
+          if (isCocktails) {
+            const peopleMetric = getMetric(channelId, tallyType, period, 'people', null);
+            if (peopleMetric) {
+              const delta = nextQty - baseMetric.qty;
+              if (delta !== 0) {
+                const currentQty = peopleMetric.qty ?? 0;
+                const nextPeopleQty = Math.max(0, currentQty + delta);
+                dispatch(setMetric({ ...peopleMetric, qty: nextPeopleQty }));
+                if (normalizedPeriod === 'after_cutoff') {
+                  const attendedPeopleMetric = getMetric(channelId, 'attended', null, 'people', null);
+                  if (attendedPeopleMetric && attendedPeopleMetric.qty !== nextPeopleQty) {
+                    dispatch(setMetric({ ...attendedPeopleMetric, qty: nextPeopleQty }));
+                  }
                 }
               }
             }
           }
         }
-      }
 
-      if (normalizedPeriod === 'after_cutoff' && tallyType === 'booked') {
-        const attendedMetric = getMetric(channelId, 'attended', null, kind, addonId);
-        if (attendedMetric && attendedMetric.qty !== nextQty) {
-          dispatch(setMetric({ ...attendedMetric, qty: nextQty }));
+        if (normalizedPeriod === 'after_cutoff' && tallyType === 'booked') {
+          const attendedMetric = getMetric(channelId, 'attended', null, kind, addonId);
+          if (attendedMetric && attendedMetric.qty !== nextQty) {
+            dispatch(setMetric({ ...attendedMetric, qty: nextQty }));
+          }
         }
-      }
+      });
     },
     [catalog.addons, dispatch, getMetric, registry.addons, registry.channels, syncAfterCutoffAttendance],
   );
@@ -1134,7 +1165,13 @@ const loadCounterForDate = useCallback(
     }
 
     const manualSection = filteredLines.join('\n');
-    return autoLine ? `${manualSection}\n${autoLine}` : manualSection;
+    if (!autoLine) {
+      return manualSection;
+    }
+    if (!manualSection) {
+      return autoLine;
+    }
+    return `${manualSection}\n${autoLine}`;
   }, [aggregatedWalkInDiscounts, formattedTotalCash, registry.counter]);
 
   const computedWalkInNote = useMemo(() => buildWalkInNote(), [buildWalkInNote]);
@@ -1226,7 +1263,10 @@ const loadCounterForDate = useCallback(
   }, [dispatch, pendingProductId, pendingStaffDirty, pendingStaffIds, registry.counter, selectedManagerId]);
 
   useEffect(() => {
-    void loadCountersList();
+    const handle = scheduleIdle(() => {
+      void loadCountersList();
+    });
+    return () => cancelIdle(handle);
   }, [loadCountersList]);
 
   const handleOpenModal = useCallback(
@@ -1263,29 +1303,38 @@ const loadCounterForDate = useCallback(
 
   useEffect(() => {
     if (isModalOpen && !catalog.loaded && !catalog.loading) {
-      dispatch(loadCatalog());
+      const handle = scheduleIdle(() => {
+        dispatch(loadCatalog());
+      });
+      return () => cancelIdle(handle);
     }
+    return undefined;
   }, [catalog.loaded, catalog.loading, dispatch, isModalOpen]);
 
-  const handleCounterSelect = useCallback(
-    (counterSummary: Partial<Counter>) => {
-      setCounterListError(null);
-      fetchCounterRequestRef.current = null;
-      const nextCounterId = counterSummary.id ?? null;
-      setSelectedCounterId(nextCounterId);
-      const nextUserId = counterSummary.userId ?? null;
-      if (nextUserId) {
-        setSelectedManagerId(nextUserId);
-      }
-      if (counterSummary.date) {
-        const parsed = dayjs(counterSummary.date);
-        if (parsed.isValid()) {
-          setSelectedDate(parsed);
+  const handleCounterSelect = useCallback((counterSummary: Partial<Counter>) => {
+    const nextCounterId = counterSummary.id ?? null;
+
+    window.setTimeout(() => {
+      startTransition(() => {
+        setCounterListError(null);
+        fetchCounterRequestRef.current = null;
+
+        const nextUserId = counterSummary.userId ?? null;
+        if (nextUserId) {
+          setSelectedManagerId(nextUserId);
         }
-      }
-    },
-    [],
-  );
+
+        if (counterSummary.date) {
+          const parsed = dayjs(counterSummary.date);
+          if (parsed.isValid()) {
+            setSelectedDate(parsed);
+          }
+        }
+
+        setSelectedCounterId(nextCounterId);
+      });
+    }, 0);
+  }, []);
 
   const handleDeleteCounter = useCallback(() => {
     const targetCounterId = counterId ?? selectedCounterId;
@@ -3199,6 +3248,7 @@ type SummaryRowOptions = {
                             </Typography>
                           }
                           secondary={secondaryContent}
+                          secondaryTypographyProps={{ component: 'div' }}
                         />
                       </ListItemButton>
                     </ListItem>
@@ -3242,3 +3292,7 @@ type SummaryRowOptions = {
 };
 
 export default Counters;
+
+
+
+
