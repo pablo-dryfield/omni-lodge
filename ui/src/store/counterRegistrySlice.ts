@@ -351,21 +351,15 @@ const counterRegistrySlice = createSlice({
       const key = buildMetricKey(metric);
       const persisted = state.persistedMetricsByKey[key];
       if (!persisted && metric.qty === 0) {
-        if (state.counter) {
-          const existingIndex = state.counter.metrics.findIndex(
-            (existing) => buildMetricKey(existing) === key,
-          );
-          if (existingIndex >= 0) {
-            state.counter.metrics.splice(existingIndex, 1);
-          }
+        state.metricsByKey[key] = metric;
+        if (!state.dirtyMetricKeys.includes(key)) {
+          state.dirtyMetricKeys.push(key);
         }
-        delete state.metricsByKey[key];
-        state.dirtyMetricKeys = state.dirtyMetricKeys.filter((item) => item !== key);
-        return;
-      }
+      } else {
       state.metricsByKey[key] = metric;
       if (!state.dirtyMetricKeys.includes(key)) {
         state.dirtyMetricKeys.push(key);
+      }
       }
 
       if (state.counter) {
