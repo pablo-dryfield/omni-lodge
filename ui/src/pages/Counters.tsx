@@ -2852,7 +2852,7 @@ type SummaryRowOptions = {
             alignItems: 'center',
             justifyContent: 'center',
             minHeight: '40vh',
-            minWidth: { xs: 'auto', md: '60vw' },
+            width: '100%',
           }}
         >
           <CircularProgress />
@@ -2862,24 +2862,25 @@ type SummaryRowOptions = {
 
     if (!registry.counter && modalMode !== 'create') {
       return (
-        <Box sx={{ textAlign: 'center', py: 4, minWidth: { xs: 'auto', md: '60vw' } }}>
+        <Box sx={{ textAlign: 'center', py: 4, width: '100%' }}>
           <Typography variant="h6">Unable to load counter data.</Typography>
         </Box>
       );
     }
 
-  return (
-    <Box
-      sx={{
-        minWidth: { xs: '100%', md: '70vw' },
-        minHeight: { xs: '100%', md: 'auto' },
-        display: 'flex',
-        flexDirection: 'column',
-        px: { xs: 2, sm: 0 },
-        py: { xs: 2, sm: 0 },
-        boxSizing: 'border-box',
-      }}
-    >
+    return (
+      <Box
+        sx={{
+          width: '100%',
+          minHeight: { xs: '100%', md: 'auto' },
+          display: 'flex',
+          flexDirection: 'column',
+          px: { xs: 2, sm: 0 },
+          py: { xs: 2, sm: 0 },
+          boxSizing: 'border-box',
+          overflowX: 'hidden',
+        }}
+      >
         <Stack spacing={3} sx={{ pb: 2 }}>
           {isSaving && <LinearProgress />}
           {registry.error && <Alert severity="error">{registry.error}</Alert>}
@@ -3282,6 +3283,7 @@ type SummaryRowOptions = {
           dividers
           sx={{
             p: { xs: 2, sm: 3 },
+            overflowX: 'hidden',
           }}
         >
           {renderCounterEditor()}
