@@ -1955,8 +1955,15 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
         : null;
 
     return (
-      <Card key={channel.id + '-' + bucket.label} variant="outlined" sx={{ mb: 2 }}>
-        <CardContent>
+      <Card
+        variant="outlined"
+        sx={{
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <CardContent sx={{ flexGrow: 1 }}>
           <Stack spacing={1.5}>
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Typography variant="subtitle1" fontWeight={600}>
@@ -2305,15 +2312,29 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
           {effectiveSelectedChannelIds.length === 0 ? (
             <Alert severity="info">Select platforms to enter the metrics or skip if not operating the experience.</Alert>
           ) : (
-            <Stack spacing={2}>
+            <Box
+              sx={{
+                display: 'grid',
+                gap: 2,
+                gridTemplateColumns: {
+                  xs: '1fr',
+                  md: 'repeat(2, minmax(0, 1fr))',
+                  lg: 'repeat(3, minmax(0, 1fr))',
+                },
+              }}
+            >
               {effectiveSelectedChannelIds.map((channelId: number) => {
                 const channel = registry.channels.find((item) => item.id === channelId);
                 if (!channel) {
                   return null;
                 }
-                return renderChannelCard(channel, platformBucket, registry.addons);
+                return (
+                  <Box key={`${channel.id}-${platformBucket.label}`} sx={{ height: '100%' }}>
+                    {renderChannelCard(channel, platformBucket, registry.addons)}
+                  </Box>
+                );
               })}
-            </Stack>
+            </Box>
           )}
         </Stack>
         <Stack
@@ -2359,15 +2380,29 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
               <Typography variant="h6" gutterBottom>
                 {bucket.label}
               </Typography>
-              <Stack spacing={2}>
-              {effectiveSelectedChannelIds.map((channelId: number) => {
-                const channel = registry.channels.find((item) => item.id === channelId);
-                if (!channel) {
-                  return null;
-                }
-                return renderChannelCard(channel, bucket, registry.addons);
-              })}
-              </Stack>
+              <Box
+                sx={{
+                  display: 'grid',
+                  gap: 2,
+                  gridTemplateColumns: {
+                    xs: '1fr',
+                    md: 'repeat(2, minmax(0, 1fr))',
+                    lg: 'repeat(3, minmax(0, 1fr))',
+                  },
+                }}
+              >
+                {effectiveSelectedChannelIds.map((channelId: number) => {
+                  const channel = registry.channels.find((item) => item.id === channelId);
+                  if (!channel) {
+                    return null;
+                  }
+                  return (
+                    <Box key={`${channel.id}-${bucket.label}`} sx={{ height: '100%' }}>
+                      {renderChannelCard(channel, bucket, registry.addons)}
+                    </Box>
+                  );
+                })}
+              </Box>
             </Box>
           ))
         )}
@@ -2377,36 +2412,46 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
               Booked After Cut-Off
             </Typography>
             <Stack spacing={2}>
-          <ToggleButtonGroup
-            value={effectiveAfterCutoffIds}
-            onChange={handleAfterCutoffChannelSelection}
-            size="small"
-            aria-label="Channels allowing after cut-off bookings"
-            sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 1, rowGap: 1 }}
-          >
-            {afterCutoffChannels
-              .filter((channel) => !shouldHideAfterCutoffChannel(channel))
-              .map((channel: ChannelConfig) => (
-                <ToggleButton
-                  key={channel.id}
-                  value={channel.id}
-                  sx={{ flex: '0 0 auto' }}
-                  disabled={registry.savingMetrics || confirmingMetrics}
-                >
-                  {channel.name}
-                </ToggleButton>
-              ))}
-          </ToggleButtonGroup>
+              <ToggleButtonGroup
+                value={effectiveAfterCutoffIds}
+                onChange={handleAfterCutoffChannelSelection}
+                size="small"
+                aria-label="Channels allowing after cut-off bookings"
+                sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 1, rowGap: 1 }}
+              >
+                {afterCutoffChannels
+                  .filter((channel) => !shouldHideAfterCutoffChannel(channel))
+                  .map((channel: ChannelConfig) => (
+                    <ToggleButton
+                      key={channel.id}
+                      value={channel.id}
+                      sx={{ flex: '0 0 auto' }}
+                      disabled={registry.savingMetrics || confirmingMetrics}
+                    >
+                      {channel.name}
+                    </ToggleButton>
+                  ))}
+              </ToggleButtonGroup>
               {selectedAfterCutoffChannels.length === 0 ? (
                 <Alert severity="info">Select a channel to record bookings after the cut-off.</Alert>
               ) : (
-                <Stack spacing={2}>
+                <Box
+                  sx={{
+                    display: 'grid',
+                    gap: 2,
+                    gridTemplateColumns: {
+                      xs: '1fr',
+                      md: 'repeat(2, minmax(0, 1fr))',
+                      lg: 'repeat(3, minmax(0, 1fr))',
+                    },
+                  }}
+                >
                   {selectedAfterCutoffChannels.map((channel: ChannelConfig) => (
-                    <Box key={channel.id + '-after-cutoff'}>
+                    <Box key={channel.id + '-after-cutoff'} sx={{ height: '100%' }}>
                       {renderChannelCard(channel, AFTER_CUTOFF_BUCKET, registry.addons)}
                     </Box>
                   ))}
-                </Stack>
+                </Box>
               )}
             </Stack>
           </Box>
