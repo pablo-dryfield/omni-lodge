@@ -1546,25 +1546,6 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     return total;
   }, [effectiveAfterCutoffIds, effectiveSelectedChannelIds, mergedMetrics]);
 
-  const metricsStatusMessage = useMemo(() => {
-    if (registry.savingMetrics || registry.savingNotes || confirmingMetrics) {
-      return 'Saving changes...';
-    }
-    const pendingNoteChange = walkInNoteDirty || noteNeedsUpdate;
-    const noteDirtyCount = pendingNoteChange ? 1 : 0;
-    const totalDirty = dirtyMetricCount + noteDirtyCount;
-    if (totalDirty > 0) {
-      return `${totalDirty} unsaved ${totalDirty === 1 ? 'change' : 'changes'}`;
-    }
-    return 'Metrics Saved';
-  }, [
-    confirmingMetrics,
-    dirtyMetricCount,
-    noteNeedsUpdate,
-    registry.savingMetrics,
-    registry.savingNotes,
-    walkInNoteDirty,
-  ]);
   const flushMetrics = useCallback(async (): Promise<boolean> => {
     const activeCounterId = counterId;
     if (!activeCounterId) {
@@ -1776,6 +1757,14 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     }
     await updateCounterStatusSafe('final');
     setActiveRegistryStep('summary');
+  }, [flushMetrics, updateCounterStatusSafe]);
+  const handleReturnToSetup = useCallback(async () => {
+    const saved = await flushMetrics();
+    if (!saved) {
+      return;
+    }
+    await updateCounterStatusSafe('draft');
+    setActiveRegistryStep('details');
   }, [flushMetrics, updateCounterStatusSafe]);
   const handleReturnToPlatforms = useCallback(async () => {
     const saved = await flushMetrics();
@@ -2337,22 +2326,6 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
             </Box>
           )}
         </Stack>
-        <Stack
-          direction={{ xs: 'column', sm: 'row' }}
-          spacing={1.5}
-          justifyContent={{ xs: 'flex-start', sm: 'space-between' }}
-          alignItems={{ xs: 'flex-start', sm: 'center' }}
-        >
-          <Button
-            variant="contained"
-            onClick={() => {
-              void handleProceedToReservations();
-            }}
-            disabled={registry.savingMetrics || confirmingMetrics}
-          >
-            Go to Reservations Check
-          </Button>
-        </Stack>
       </Stack>
     );
   };
@@ -2456,35 +2429,195 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
             </Stack>
           </Box>
         )}
-        <Stack
-          direction={{ xs: 'column', sm: 'row' }}
-          spacing={1.5}
-          justifyContent={{ xs: 'flex-start', sm: 'space-between' }}
-          alignItems={{ xs: 'flex-start', sm: 'center' }}
-        >
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'flex-start', sm: 'center' }}>
+      </Stack>
+    );
+  };
+
+  const renderModalNavigation = () => {
+    const disableNav = registry.savingMetrics || confirmingMetrics;
+
+    if (activeRegistryStep === 'platforms') {
+      if (isMobileScreen) {
+        return (
+          <Stack direction="row" spacing={1} alignItems="center">
             <Button
               variant="outlined"
+              size="small"
               onClick={() => {
-                void handleReturnToPlatforms();
+                void handleReturnToSetup();
               }}
-              disabled={registry.savingMetrics || confirmingMetrics}
+              disabled={disableNav}
+              sx={{
+                textTransform: 'none',
+                minWidth: 'auto',
+                px: 1,
+              }}
             >
-              Go to Platform Check
+              &lt; Back
             </Button>
             <Button
               variant="contained"
+              size="small"
+              onClick={() => {
+                void handleProceedToReservations();
+              }}
+              disabled={disableNav}
+              sx={{
+                textTransform: 'none',
+                minWidth: 'auto',
+                px: 1,
+              }}
+            >
+              Next &gt;
+            </Button>
+          </Stack>
+        );
+      }
+
+      return (
+        <Stack direction="row" spacing={1}>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => {
+              void handleReturnToSetup();
+            }}
+            disabled={disableNav}
+          >
+            Go to Setup
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={() => {
+              void handleProceedToReservations();
+            }}
+            disabled={disableNav}
+          >
+            Go to Reservations Check
+          </Button>
+        </Stack>
+      );
+    }
+
+    if (activeRegistryStep === 'reservations') {
+      if (isMobileScreen) {
+        return (
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => {
+                void handleReturnToPlatforms();
+              }}
+              disabled={disableNav}
+              sx={{
+                textTransform: 'none',
+                minWidth: 'auto',
+                px: 1,
+              }}
+            >
+              &lt; Back
+            </Button>
+            <Button
+              variant="contained"
+              size="small"
               onClick={() => {
                 void handleProceedToSummary();
               }}
-              disabled={registry.savingMetrics || confirmingMetrics}
+              disabled={disableNav}
+              sx={{
+                textTransform: 'none',
+                minWidth: 'auto',
+                px: 1,
+              }}
             >
-              Proceed to Summary
+              Next &gt;
             </Button>
           </Stack>
+        );
+      }
+
+      return (
+        <Stack direction="row" spacing={1}>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => {
+              void handleReturnToPlatforms();
+            }}
+            disabled={disableNav}
+          >
+            Go to Platform Check
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={() => {
+              void handleProceedToSummary();
+            }}
+            disabled={disableNav}
+          >
+            Proceed to Summary
+          </Button>
         </Stack>
-      </Stack>
-    );
+      );
+    }
+
+    if (activeRegistryStep === 'summary') {
+      const backLabel = isMobileScreen ? '< Back' : 'Back to Reservations';
+      const backButton = (
+        <Button
+          variant="outlined"
+          size="small"
+          onClick={() => setActiveRegistryStep('reservations')}
+          disabled={disableNav}
+          sx={{
+            textTransform: 'none',
+            minWidth: 'auto',
+            px: 1,
+          }}
+        >
+          {backLabel}
+        </Button>
+      );
+
+      const saveButton = (
+        <Button
+          variant="contained"
+          size="small"
+          onClick={() => {
+            void handleSaveAndExit();
+          }}
+          disabled={disableNav}
+          sx={{
+            textTransform: 'none',
+            minWidth: 'auto',
+            px: 1,
+          }}
+        >
+          Save
+        </Button>
+      );
+
+      if (isMobileScreen) {
+        return (
+          <Stack direction="row" spacing={1} alignItems="center">
+            {backButton}
+            {saveButton}
+          </Stack>
+        );
+      }
+
+      return (
+        <Stack direction="row" spacing={1} alignItems="center">
+          {backButton}
+          {saveButton}
+        </Stack>
+      );
+    }
+
+    return null;
   };
 
   const isStepCompleted = useCallback(
@@ -2734,33 +2867,6 @@ type SummaryRowOptions = {
       return (
         <Stack spacing={3} sx={{ mt: 4 }}>
           <Alert severity="info">Select channels in Platform and Reservations to review the summary.</Alert>
-          <Stack
-            direction={{ xs: 'column', sm: 'row' }}
-            spacing={1.5}
-            justifyContent={{ xs: 'flex-start', sm: 'space-between' }}
-            alignItems={{ xs: 'flex-start', sm: 'center' }}
-          >
-            <Typography
-              variant="caption"
-              sx={{ color: registry.savingMetrics || confirmingMetrics ? 'text.secondary' : hasDirtyMetrics ? 'warning.main' : 'text.secondary' }}
-            >
-              {metricsStatusMessage}
-            </Typography>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'flex-start', sm: 'center' }}>
-              <Button variant="outlined" onClick={() => setActiveRegistryStep('reservations')}>
-                Back to Reservations
-              </Button>
-              <Button
-                variant="contained"
-                onClick={() => {
-                  void handleSaveAndExit();
-                }}
-                disabled={registry.savingMetrics || confirmingMetrics}
-              >
-                SAVE & EXIT
-              </Button>
-            </Stack>
-          </Stack>
         </Stack>
       );
     }
@@ -2850,33 +2956,6 @@ type SummaryRowOptions = {
             </Grid>
           </Grid>
         </Box>
-        <Stack
-          direction={{ xs: 'column', sm: 'row' }}
-          spacing={1.5}
-          justifyContent={{ xs: 'flex-start', sm: 'space-between' }}
-          alignItems={{ xs: 'flex-start', sm: 'center' }}
-        >
-          <Typography
-            variant="caption"
-            sx={{ color: registry.savingMetrics || confirmingMetrics ? 'text.secondary' : hasDirtyMetrics ? 'warning.main' : 'text.secondary' }}
-          >
-            {metricsStatusMessage}
-          </Typography>
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'flex-start', sm: 'center' }}>
-            <Button variant="outlined" onClick={() => setActiveRegistryStep('reservations')}>
-              Back to Reservations
-            </Button>
-            <Button
-              variant="contained"
-              onClick={() => {
-                void handleSaveAndExit();
-              }}
-              disabled={registry.savingMetrics || confirmingMetrics}
-            >
-              SAVE & EXIT
-            </Button>
-          </Stack>
-        </Stack>
       </Stack>
     );
   };
@@ -3314,15 +3393,20 @@ type SummaryRowOptions = {
         fullScreen={isMobileScreen}
         aria-labelledby="counter-dialog-title"
       >
-        <DialogTitle id="counter-dialog-title" sx={{ m: 0, p: 2 }}>
-          {modalTitle}
-          <IconButton
-            aria-label="close"
-            onClick={handleCloseModal}
-            sx={{ position: 'absolute', right: 8, top: 8 }}
-          >
-            <Close />
-          </IconButton>
+        <DialogTitle
+          id="counter-dialog-title"
+          sx={{ m: 0, p: 2, pb: 2, display: 'flex', flexDirection: 'column', gap: 1 }}
+        >
+          <Stack direction="row" alignItems="center" spacing={1.5} sx={{ width: '100%', flexWrap: 'wrap' }}>
+            <Typography variant="h6" component="span">
+              {modalTitle}
+            </Typography>
+            <Box sx={{ flexGrow: 1 }} />
+            {renderModalNavigation()}
+            <IconButton aria-label="close" onClick={handleCloseModal} sx={{ ml: isMobileScreen ? 0 : 0.5 }}>
+              <Close />
+            </IconButton>
+          </Stack>
         </DialogTitle>
         <DialogContent
           dividers
