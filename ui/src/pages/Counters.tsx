@@ -92,6 +92,7 @@ type BucketDescriptor = {
   period: MetricPeriod;
   label: string;
 };
+type CashCurrency = 'PLN' | 'EUR';
 
 const BUCKETS: BucketDescriptor[] = [
   { tallyType: 'attended', period: null, label: bucketLabels.attended },
@@ -356,6 +357,7 @@ const [walkInNoteDirty, setWalkInNoteDirty] = useState(false);
 const [cashOverridesByChannel, setCashOverridesByChannel] = useState<Record<number, string>>({});
 const [cashEditingChannelId, setCashEditingChannelId] = useState<number | null>(null);
 const [cashEditingValue, setCashEditingValue] = useState<string>('');
+const [cashCurrencyByChannel, setCashCurrencyByChannel] = useState<Record<number, CashCurrency>>({});
 const [shouldRefreshCounterList, setShouldRefreshCounterList] = useState(false);
 
 
@@ -549,6 +551,14 @@ const loadCounterForDate = useCallback(
         .map((channel) => channel.id),
     [registry.channels],
   );
+  const handleCashCurrencyChange = useCallback((channelId: number, currency: CashCurrency) => {
+    setCashCurrencyByChannel((prev) => {
+      if (prev[channelId] === currency) {
+        return prev;
+      }
+      return { ...prev, [channelId]: currency };
+    });
+  }, []);
 
   useEffect(() => {
     if (!registry.counter) {
@@ -557,6 +567,7 @@ const loadCounterForDate = useCallback(
       setCashOverridesByChannel({});
       setCashEditingChannelId(null);
       setCashEditingValue('');
+      setCashCurrencyByChannel({});
       setWalkInNoteDirty(false);
       lastWalkInInitRef.current = null;
       return;
@@ -1942,6 +1953,15 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       cashDetails?.defaultAmount != null && Number.isFinite(cashDetails.defaultAmount)
         ? formatCashAmount(cashDetails.defaultAmount)
         : null;
+    const cashCurrency = (cashCurrencyByChannel[channel.id] ?? 'PLN') as CashCurrency;
+    const showCurrencyToggle =
+      isCashChannel && bucket.tallyType === 'attended' && bucket.period === null;
+    const handleCurrencySelect = (_event: MouseEvent<HTMLElement>, value: CashCurrency | null) => {
+      if (!value) {
+        return;
+      }
+      handleCashCurrencyChange(channel.id, value);
+    };
 
     return (
       <Card
@@ -1951,15 +1971,30 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
           display: 'flex',
           flexDirection: 'column',
         }}
-      >
-        <CardContent sx={{ flexGrow: 1 }}>
-          <Stack spacing={1.5}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
-              <Typography variant="subtitle1" fontWeight={600}>
-                {channel.name}
-              </Typography>
-              {warningActive && <Chip label="After cut-off" color="warning" size="small" />}
-            </Stack>
+        >
+          <CardContent sx={{ flexGrow: 1 }}>
+            <Stack spacing={1.5}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" rowGap={1}>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={1}>
+                  <Typography variant="subtitle1" fontWeight={600}>
+                    {channel.name}
+                  </Typography>
+                  {showCurrencyToggle && (
+                    <ToggleButtonGroup
+                      size="small"
+                      exclusive
+                      value={cashCurrency}
+                      onChange={handleCurrencySelect}
+                      aria-label={`${channel.name} cash currency`}
+                      disabled={disableInputs}
+                    >
+                      <ToggleButton value="PLN">PLN</ToggleButton>
+                      <ToggleButton value="EUR">EUR</ToggleButton>
+                    </ToggleButtonGroup>
+                  )}
+                </Stack>
+                {warningActive && <Chip label="After cut-off" color="warning" size="small" />}
+              </Stack>
             {renderStepper('People', peopleMetric, disableInputs)}
             {showWalkInExtras && (
               <Stack spacing={1}>
@@ -2010,10 +2045,10 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                       size="small"
                       disabled={disableInputs}
                       placeholder={defaultCashText ?? '0.00'}
-                      InputProps={{
-                        startAdornment: <InputAdornment position="start">PLN</InputAdornment>,
-                        inputMode: 'decimal',
-                      }}
+                    InputProps={{
+                      startAdornment: <InputAdornment position="start">{cashCurrency}</InputAdornment>,
+                      inputMode: 'decimal',
+                    }}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter') {
                           event.preventDefault();
@@ -2048,19 +2083,19 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                 ) : (
                   <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap">
                     <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                      {cashDisplayText ? `PLN ${cashDisplayText}` : 'No price configured'}
+                      {cashDisplayText ? `${cashCurrency} ${cashDisplayText}` : 'No price configured'}
                     </Typography>
                     <IconButton
                       size="small"
                       aria-label="Adjust cash collected"
-                      onClick={() => handleCashOverrideEdit(channel.id)}
+                      onClick={() => handleCashOverrideEdit(channel.id, cashCurrency)}
                       disabled={disableInputs}
                     >
                       <Edit fontSize="small" />
                     </IconButton>
                     {hasCashOverride && <Chip label="Override" size="small" color="info" variant="outlined" />}
                     {!hasCashOverride && defaultCashText && (
-                      <Typography variant="caption" color="text.secondary">{`Default: PLN ${defaultCashText}`}</Typography>
+                      <Typography variant="caption" color="text.secondary">{`Default: ${cashCurrency} ${defaultCashText}`}</Typography>
                     )}
                   </Stack>
                 )}
