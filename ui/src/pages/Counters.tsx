@@ -303,33 +303,45 @@ const getWalkInTicketUnitPrice = (
 const normalizeAddonIdentifier = (addon: AddonConfig | null | undefined): string =>
   normalizeChannelKey(addon?.key ?? addon?.name ?? '');
 
+const normalizeCurrencyValue = (value: unknown): number | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  const normalized = Math.round(numeric * 100) / 100;
+  return Math.max(0, normalized);
+};
+
 const getWalkInAddonUnitPrice = (
   channel: ChannelConfig | undefined,
   addon: AddonConfig | null | undefined,
   currency: CashCurrency,
+  fallbackAddon?: AddonConfig | null,
 ): number | null => {
   if (!addon) {
     return null;
   }
   const normalizedKey = normalizeAddonIdentifier(addon);
-  if (normalizedKey === 'cocktails' && currency === 'PLN') {
-    const override = addon.priceOverride != null ? Number(addon.priceOverride) : null;
-    if (override != null && Number.isFinite(override)) {
-      return Math.max(0, Math.round(Number(override) * 100) / 100);
-    }
-    return null;
-  }
   const mapped = WALK_IN_ADDON_UNIT_PRICES[normalizedKey]?.[currency];
   if (mapped != null && Number.isFinite(mapped)) {
-    return mapped;
+    return Math.max(0, Math.round(Number(mapped) * 100) / 100);
   }
+  const overridePrice = normalizeCurrencyValue(
+    addon.priceOverride ?? fallbackAddon?.priceOverride,
+  );
+  const basePrice = normalizeCurrencyValue(addon.basePrice ?? fallbackAddon?.basePrice);
   if (currency === 'PLN') {
-    const override = addon.priceOverride != null ? Number(addon.priceOverride) : null;
-    if (override != null && Number.isFinite(override)) {
-      return Math.max(0, Math.round(Number(override) * 100) / 100);
+    if (overridePrice != null) {
+      return overridePrice;
+    }
+    if (basePrice != null) {
+      return basePrice;
     }
   }
-  return null;
+  return overridePrice;
 };
 
 const getCashPriceForChannel = (channel: ChannelConfig, currency: CashCurrency): number | null => {
@@ -676,11 +688,17 @@ const Counters = (props: GenericPageProps) => {
               return;
             }
             const addonId = Number(addonIdKey);
-            const addonConfig =
-              registry.addons.find((addon) => addon.addonId === addonId) ??
-              catalog.addons.find((addon) => addon.addonId === addonId) ??
-              null;
-            const addonUnitPrice = getWalkInAddonUnitPrice(channel, addonConfig, currency);
+            const registryAddon =
+              registry.addons.find((addon) => addon.addonId === addonId) ?? null;
+            const catalogAddon =
+              catalog.addons.find((addon) => addon.addonId === addonId) ?? null;
+            const addonConfig = registryAddon ?? catalogAddon;
+            const addonUnitPrice = getWalkInAddonUnitPrice(
+              channel,
+              addonConfig,
+              currency,
+              catalogAddon,
+            );
             if (addonUnitPrice != null) {
               total += addonUnitPrice * qty;
             }

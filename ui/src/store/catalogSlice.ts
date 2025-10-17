@@ -158,6 +158,7 @@ export const loadCatalog = createAsyncThunk<CatalogPayload, void, { rejectValue:
           maxPerAttendee: addon.maxPerAttendee ?? null,
           sortOrder: addon.sortOrder,
           priceOverride: addon.priceOverride ?? null,
+          basePrice: addon.basePrice ?? null,
         })),
       }));
 
@@ -177,6 +178,7 @@ export const loadCatalog = createAsyncThunk<CatalogPayload, void, { rejectValue:
         maxPerAttendee: addon.maxPerAttendee ?? null,
         sortOrder: addon.sortOrder ?? index,
         priceOverride: addon.priceOverride ?? null,
+        basePrice: addon.basePrice ?? null,
       }));
 
       return {

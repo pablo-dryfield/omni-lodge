@@ -20,6 +20,7 @@ export type AddonConfig = {
   maxPerAttendee: number | null;
   sortOrder: number;
   priceOverride?: number | null;
+  basePrice?: number | null;
 };
 
 export type CatalogProduct = {
