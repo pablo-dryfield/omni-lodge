@@ -439,6 +439,7 @@ const Counters = (props: GenericPageProps) => {
   const lastWalkInInitRef = useRef<string | null>(null);
   const [walkInCashByChannel, setWalkInCashByChannel] = useState<Record<number, string>>({});
   const [walkInDiscountsByChannel, setWalkInDiscountsByChannel] = useState<Record<number, string[]>>({});
+  const [walkInCurrencyByChannel, setWalkInCurrencyByChannel] = useState<Record<number, CashCurrency>>({});
   const [walkInNoteDirty, setWalkInNoteDirty] = useState(false);
   const [cashOverridesByChannel, setCashOverridesByChannel] = useState<Record<number, string>>({});
   const [cashEditingChannelId, setCashEditingChannelId] = useState<number | null>(null);
@@ -667,6 +668,7 @@ const loadCounterForDate = useCallback(
     if (!registry.counter) {
       setWalkInCashByChannel({});
       setWalkInDiscountsByChannel({});
+      setWalkInCurrencyByChannel({});
       setCashOverridesByChannel({});
       setCashEditingChannelId(null);
       setCashEditingValue('');
@@ -696,6 +698,7 @@ const loadCounterForDate = useCallback(
     const attendedPeopleMetrics = new Map<number, number>();
     const nextWalkInCash: Record<number, string> = {};
     const nextWalkInDiscounts: Record<number, string[]> = {};
+    const nextWalkInCurrencies: Record<number, CashCurrency> = {};
     const nextOverrides: Record<number, string> = {};
     const nextCurrencyByChannel: Record<number, CashCurrency> = {};
     const parsedDiscounts = parseDiscountsFromNote(note);
@@ -703,6 +706,11 @@ const loadCounterForDate = useCallback(
 
     for (const channelId of walkInChannelIds) {
       nextWalkInDiscounts[channelId] = [...parsedDiscounts];
+      const snapshotEntry = cashSnapshotEntries.get(channelId);
+      const snapshotCurrency = snapshotEntry?.currency as CashCurrency | undefined;
+      if (snapshotCurrency) {
+        nextWalkInCurrencies[channelId] = snapshotCurrency;
+      }
     }
 
     metricsList.forEach((metric) => {
@@ -777,6 +785,22 @@ const loadCounterForDate = useCallback(
       }
     });
 
+    walkInChannelIds.forEach((channelId) => {
+      if (nextWalkInCurrencies[channelId]) {
+        return;
+      }
+      const snapshotEntry = cashSnapshotEntries.get(channelId);
+      const snapshotCurrency = snapshotEntry?.currency as CashCurrency | undefined;
+      if (snapshotCurrency) {
+        nextWalkInCurrencies[channelId] = snapshotCurrency;
+        return;
+      }
+      const cashValue = Number(nextWalkInCash[channelId] ?? 0);
+      if (Number.isFinite(cashValue) && cashValue > 0) {
+        nextWalkInCurrencies[channelId] = 'PLN';
+      }
+    });
+
     for (const channelId of walkInChannelIds) {
       if (!(channelId in nextWalkInCash)) {
         nextWalkInCash[channelId] = '';
@@ -785,6 +809,7 @@ const loadCounterForDate = useCallback(
 
     setWalkInCashByChannel(nextWalkInCash);
     setWalkInDiscountsByChannel(nextWalkInDiscounts);
+    setWalkInCurrencyByChannel(nextWalkInCurrencies);
     setCashOverridesByChannel(nextOverrides);
     setCashCurrencyByChannel(nextCurrencyByChannel);
     setCashEditingChannelId(null);
@@ -1241,7 +1266,8 @@ const loadCounterForDate = useCallback(
         normalizedInput != null && normalizedInput > 0
           ? normalizedInput
           : snapshotEntry?.amount ?? normalizedInput;
-      const currency = snapshotEntry?.currency ?? 'PLN';
+      const selectedCurrency = walkInCurrencyByChannel[channelId];
+      const currency = (selectedCurrency ?? snapshotEntry?.currency ?? 'PLN') as CashCurrency;
       registerAmount(channelId, fallbackAmount, currency);
     });
 
@@ -1273,7 +1299,15 @@ const loadCounterForDate = useCallback(
       totalsByCurrency,
       formattedTotals,
     };
-  }, [cashCurrencyByChannel, cashDetailsByChannel, cashSnapshotEntries, registry.channels, walkInCashByChannel, walkInChannelIds]);
+  }, [
+    cashCurrencyByChannel,
+    cashDetailsByChannel,
+    cashSnapshotEntries,
+    registry.channels,
+    walkInCashByChannel,
+    walkInChannelIds,
+    walkInCurrencyByChannel,
+  ]);
 
   const aggregatedWalkInDiscounts = useMemo(() => {
     const combined = new Set<string>();
@@ -1298,6 +1332,30 @@ const loadCounterForDate = useCallback(
         }
         didChange = true;
         return { ...prev, [channelId]: nextSelection };
+      });
+      if (didChange) {
+        setWalkInNoteDirty(true);
+      }
+    },
+    [],
+  );
+
+  const handleWalkInCurrencyToggle = useCallback(
+    (channelId: number, currency: CashCurrency) => {
+      let didChange = false;
+      setWalkInCurrencyByChannel((prev) => {
+        const current = prev[channelId] ?? null;
+        if (current === currency) {
+          if (!(channelId in prev)) {
+            return prev;
+          }
+          didChange = true;
+          const next = { ...prev };
+          delete next[channelId];
+          return next;
+        }
+        didChange = true;
+        return { ...prev, [channelId]: currency };
       });
       if (didChange) {
         setWalkInNoteDirty(true);
@@ -1824,7 +1882,12 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       }
       const normalizedName = channel.name?.toLowerCase() ?? '';
       const isWalkIn = normalizedName === WALK_IN_CHANNEL_SLUG;
-      const currency = isWalkIn ? 'PLN' : cashCurrencyByChannel[channel.id] ?? 'PLN';
+      let currency: CashCurrency = 'PLN';
+      if (isWalkIn) {
+        currency = walkInCurrencyByChannel[channel.id] ?? 'PLN';
+      } else {
+        currency = cashCurrencyByChannel[channel.id] ?? 'PLN';
+      }
       const peopleQty = attendedPeopleByChannel.get(channel.id) ?? 0;
       const normalizedQty = Math.max(0, Math.round(peopleQty));
       let rawAmount: number | null = null;
@@ -1863,6 +1926,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     walkInCashByChannel,
     walkInChannelIds,
     attendedPeopleByChannel,
+    walkInCurrencyByChannel,
   ]);
 
   const computedCounterNotes = useMemo(() => buildCounterNotes(), [buildCounterNotes]);
@@ -2296,7 +2360,15 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     const walkInDiscountSelection = walkInDiscountsByChannel[channel.id] ?? [];
     const showWalkInExtras =
       isWalkInChannel && (bucket.tallyType === 'attended' || bucket.period === 'after_cutoff');
-    const showWalkInActionButtons = showWalkInExtras && walkInDiscountSelection.length > 0;
+    const walkInCurrencySelection = walkInCurrencyByChannel[channel.id] ?? null;
+    const showWalkInCurrencyButtons = showWalkInExtras && walkInDiscountSelection.length > 0;
+    const canShowWalkInCounters =
+      !isWalkInChannel || (walkInDiscountSelection.length > 0 && walkInCurrencySelection != null);
+    const showWalkInTotalCollected = showWalkInExtras && canShowWalkInCounters;
+    const showPeopleStepper = !isWalkInChannel || canShowWalkInCounters;
+    const showAddonSection = !isWalkInChannel || canShowWalkInCounters;
+    const showWalkInSelectionHint =
+      isWalkInChannel && showWalkInCurrencyButtons && walkInCurrencySelection == null;
     const isCashChannel = isCashPaymentChannel(channel);
     const cashDetails = cashDetailsByChannel.get(channel.id);
     const hasCashOverride = cashDetails?.hasManualOverride ?? false;
@@ -2353,9 +2425,9 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                 </Stack>
                 {warningActive && <Chip label="After cut-off" color="warning" size="small" />}
               </Stack>
-            {showWalkInExtras && (
-              <Stack spacing={0.75}>
-                <Typography variant="subtitle2">Tickets Type</Typography>
+              {showWalkInExtras && (
+                <Stack spacing={0.75}>
+                  <Typography variant="subtitle2">Tickets Type</Typography>
                 <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
                   {WALK_IN_DISCOUNT_OPTIONS.map((option) => {
                     const selected = walkInDiscountSelection.includes(option);
@@ -2372,20 +2444,39 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                     );
                   })}
                 </Stack>
-                {showWalkInActionButtons && (
+                {showWalkInCurrencyButtons && (
                   <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
-                    <Button type="button" variant="outlined" size="small" disabled={disableInputs}>
+                    <Button
+                      type="button"
+                      variant={walkInCurrencySelection === 'PLN' ? 'contained' : 'outlined'}
+                      color="primary"
+                      size="small"
+                      onClick={() => handleWalkInCurrencyToggle(channel.id, 'PLN')}
+                      disabled={disableInputs}
+                    >
                       Add PLN
                     </Button>
-                    <Button type="button" variant="outlined" size="small" disabled={disableInputs}>
+                    <Button
+                      type="button"
+                      variant={walkInCurrencySelection === 'EUR' ? 'contained' : 'outlined'}
+                      color="primary"
+                      size="small"
+                      onClick={() => handleWalkInCurrencyToggle(channel.id, 'EUR')}
+                      disabled={disableInputs}
+                    >
                       Add EUR
                     </Button>
                   </Stack>
                 )}
+                {showWalkInSelectionHint && (
+                  <Typography variant="caption" color="text.secondary">
+                    Select a currency to enable counters.
+                  </Typography>
+                )}
               </Stack>
             )}
-            {renderStepper('People', peopleMetric, disableInputs)}
-            {showWalkInExtras && (
+            {showPeopleStepper && renderStepper('People', peopleMetric, disableInputs)}
+            {showWalkInTotalCollected && (
               <Stack spacing={0.5}>
                 <Typography variant="subtitle2">Total Collected</Typography>
                 <TextField
@@ -2396,7 +2487,9 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                   type="number"
                   placeholder="0"
                   InputProps={{
-                    startAdornment: <InputAdornment position="start">PLN</InputAdornment>,
+                    startAdornment: (
+                      <InputAdornment position="start">{walkInCurrencySelection ?? 'PLN'}</InputAdornment>
+                    ),
                   }}
                   inputProps={{ inputMode: 'numeric', min: 0 }}
                 />
@@ -2469,38 +2562,42 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                 )}
               </Stack>
             )}
-            <Divider flexItem sx={{ mt: 1 }} />
-            <Stack spacing={1}>
-              {addons.map((addon) => {
-                const numericAddonId =
-                  typeof addon.addonId === 'number' ? addon.addonId : Number(addon.addonId);
-                if (!Number.isFinite(numericAddonId)) {
-                  return null;
-                }
-                const normalizedAddonId = numericAddonId;
-                const metric = getMetric(channel.id, bucket.tallyType, bucket.period, 'addon', normalizedAddonId);
-                const isCocktail =
-                  addon.key?.toLowerCase() === 'cocktails' || addon.name?.toLowerCase() === 'cocktails';
-                const availableForAddons =
-                  bucket.tallyType === 'booked' ? (peopleMetric?.qty ?? attendedPeople) : attendedPeople;
-                const calculatedMax =
-                  addon.maxPerAttendee != null && availableForAddons > 0
-                    ? addon.maxPerAttendee * availableForAddons
-                    : undefined;
-                const stepperMax = isCocktail ? undefined : calculatedMax;
-                const addonKey = `${channel.id}-${bucket.label}-addon-${normalizedAddonId}`;
-                return (
-                  <Stack key={addonKey} spacing={0.5}>
-                    {renderStepper(addon.name, metric, disableInputs, 0, stepperMax, 1)}
-                    {addon.maxPerAttendee != null && !isCocktail && (
-                      <Typography variant="caption" color="text.secondary">
-                        Max {addon.maxPerAttendee} per attendee (cap {calculatedMax ?? 0})
-                      </Typography>
-                    )}
-                  </Stack>
-                );
-              })}
-            </Stack>
+            {showAddonSection && (
+              <>
+                <Divider flexItem sx={{ mt: 1 }} />
+                <Stack spacing={1}>
+                  {addons.map((addon) => {
+                    const numericAddonId =
+                      typeof addon.addonId === 'number' ? addon.addonId : Number(addon.addonId);
+                    if (!Number.isFinite(numericAddonId)) {
+                      return null;
+                    }
+                    const normalizedAddonId = numericAddonId;
+                    const metric = getMetric(channel.id, bucket.tallyType, bucket.period, 'addon', normalizedAddonId);
+                    const isCocktail =
+                      addon.key?.toLowerCase() === 'cocktails' || addon.name?.toLowerCase() === 'cocktails';
+                    const availableForAddons =
+                      bucket.tallyType === 'booked' ? (peopleMetric?.qty ?? attendedPeople) : attendedPeople;
+                    const calculatedMax =
+                      addon.maxPerAttendee != null && availableForAddons > 0
+                        ? addon.maxPerAttendee * availableForAddons
+                        : undefined;
+                    const stepperMax = isCocktail ? undefined : calculatedMax;
+                    const addonKey = `${channel.id}-${bucket.label}-addon-${normalizedAddonId}`;
+                    return (
+                      <Stack key={addonKey} spacing={0.5}>
+                        {renderStepper(addon.name, metric, disableInputs, 0, stepperMax, 1)}
+                        {addon.maxPerAttendee != null && !isCocktail && (
+                          <Typography variant="caption" color="text.secondary">
+                            Max {addon.maxPerAttendee} per attendee (cap {calculatedMax ?? 0})
+                          </Typography>
+                        )}
+                      </Stack>
+                    );
+                  })}
+                </Stack>
+              </>
+            )}
           </Stack>
         </CardContent>
       </Card>
