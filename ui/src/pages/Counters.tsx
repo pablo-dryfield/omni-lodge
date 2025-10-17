@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent, SyntheticEvent } from 'react';
+import type { ChangeEvent, KeyboardEvent, MouseEvent, SyntheticEvent } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react';
 import dayjs, { Dayjs } from 'dayjs';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
@@ -540,6 +540,11 @@ const Counters = (props: GenericPageProps) => {
   const [walkInCashByChannel, setWalkInCashByChannel] = useState<Record<number, string>>({});
   const [walkInDiscountsByChannel, setWalkInDiscountsByChannel] = useState<Record<number, string[]>>({});
   const [walkInTicketDataByChannel, setWalkInTicketDataByChannel] = useState<Record<number, WalkInChannelTicketState>>({});
+  const [editingCustomTicket, setEditingCustomTicket] = useState<{
+    channelId: number;
+    ticketLabel: string;
+    value: string;
+  } | null>(null);
   const [walkInNoteDirty, setWalkInNoteDirty] = useState(false);
   const [cashOverridesByChannel, setCashOverridesByChannel] = useState<Record<number, string>>({});
   const [cashEditingChannelId, setCashEditingChannelId] = useState<number | null>(null);
@@ -742,6 +747,15 @@ const loadCounterForDate = useCallback(
     () => extractCashSnapshotMap(counterNotes),
     [counterNotes],
   );
+  useEffect(() => {
+    if (!editingCustomTicket) {
+      return;
+    }
+    const activeTickets = walkInDiscountsByChannel[editingCustomTicket.channelId] ?? [];
+    if (!activeTickets.includes(editingCustomTicket.ticketLabel)) {
+      setEditingCustomTicket(null);
+    }
+  }, [editingCustomTicket, walkInDiscountsByChannel]);
   const handleCashCurrencyChange = useCallback(
     (channelId: number, currency: CashCurrency) => {
       let didChange = false;
@@ -1591,12 +1605,88 @@ const loadCounterForDate = useCallback(
 
   const aggregatedWalkInDiscounts = useMemo(() => {
     const combined = new Set<string>();
+    const customNames: string[] = [];
     walkInChannelIds.forEach((channelId) => {
       const selection = walkInDiscountsByChannel[channelId] ?? [];
-      selection.forEach((label) => combined.add(label));
+      selection.forEach((label) => {
+        if (label === 'Custom') {
+          const ticketState = walkInTicketDataByChannel[channelId];
+          const customEntry = ticketState?.tickets[label];
+          const displayName =
+            customEntry?.name && customEntry.name.trim().length > 0 ? customEntry.name.trim() : 'Custom';
+          if (!customNames.includes(displayName)) {
+            customNames.push(displayName);
+          }
+        } else {
+          combined.add(label);
+        }
+      });
     });
-    return WALK_IN_DISCOUNT_OPTIONS.filter((option) => combined.has(option));
-  }, [walkInChannelIds, walkInDiscountsByChannel]);
+    const ordered = WALK_IN_DISCOUNT_OPTIONS.filter((option) => option !== 'Custom' && combined.has(option));
+    customNames.forEach((name) => ordered.push(name));
+    return ordered;
+  }, [walkInChannelIds, walkInDiscountsByChannel, walkInTicketDataByChannel]);
+
+  const handleCustomTicketEditStart = useCallback(
+    (channelId: number, ticketLabel: string, currentName: string) => {
+      setEditingCustomTicket({
+        channelId,
+        ticketLabel,
+        value: currentName,
+      });
+    },
+    [],
+  );
+
+  const handleCustomTicketEditChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    const nextValue = event.target.value;
+    setEditingCustomTicket((prev) => (prev ? { ...prev, value: nextValue } : prev));
+  }, []);
+
+  const handleCustomTicketEditCancel = useCallback(() => {
+    setEditingCustomTicket(null);
+  }, []);
+
+  const handleCustomTicketEditSave = useCallback(() => {
+    if (!editingCustomTicket) {
+      return;
+    }
+    const { channelId, ticketLabel, value } = editingCustomTicket;
+    const trimmed = value.trim();
+    const nextName = trimmed.length > 0 ? trimmed : 'Custom';
+
+    setWalkInTicketDataByChannel((prev) => {
+      const channelState = prev[channelId];
+      if (!channelState) {
+        return prev;
+      }
+      const ticketEntry = channelState.tickets[ticketLabel];
+      if (!ticketEntry) {
+        return prev;
+      }
+      const currentName =
+        ticketEntry.name && ticketEntry.name.trim().length > 0 ? ticketEntry.name.trim() : ticketLabel;
+      if (currentName === nextName) {
+        return prev;
+      }
+      const nextTickets = {
+        ...channelState.tickets,
+        [ticketLabel]: {
+          ...ticketEntry,
+          name: nextName,
+        },
+      };
+      return {
+        ...prev,
+        [channelId]: {
+          ...channelState,
+          tickets: nextTickets,
+        },
+      };
+    });
+    setWalkInNoteDirty(true);
+    setEditingCustomTicket(null);
+  }, [editingCustomTicket, setWalkInNoteDirty, setWalkInTicketDataByChannel]);
 
   const handleWalkInDiscountToggle = useCallback(
     (channelId: number, option: string) => {
@@ -2525,8 +2615,10 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
               totalAmount += normalizedCash;
             });
             if (currencySnapshots.length > 0) {
+              const ticketDisplayName =
+                ticketEntry?.name && ticketEntry.name.trim().length > 0 ? ticketEntry.name : ticketLabel;
               ticketSnapshots.push({
-                name: ticketLabel,
+                name: ticketDisplayName,
                 currencies: currencySnapshots,
               });
             }
@@ -3204,7 +3296,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
               alignItems: 'center',
               gap: 1,
               width: '100%',
-              maxWidth: 220,
+              maxWidth: 200,
             }}
           >
             <IconButton
@@ -3265,12 +3357,11 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       <Card
         variant="outlined"
         sx={{
-          height: '100%',
           display: 'flex',
           flexDirection: 'column',
         }}
       >
-        <CardContent sx={{ flexGrow: 1 }}>
+        <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
           <Stack spacing={1.5}>
             <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" rowGap={1}>
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={1}>
@@ -3305,7 +3396,19 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                   )}
                 </Stack>
                 {walkInDiscountSelection.length > 0 && (
-                  <Stack spacing={1.5}>
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gap: 1.5,
+                      gridTemplateColumns: {
+                        xs: '1fr',
+                        sm: 'repeat(auto-fit, minmax(240px, 1fr))',
+                        lg: 'repeat(auto-fit, minmax(280px, 1fr))',
+                      },
+                      alignItems: 'stretch',
+                      justifyItems: 'stretch',
+                    }}
+                  >
                     {walkInDiscountSelection.map((ticketLabel) => {
                       const ticketEntry =
                         walkInTicketState.tickets[ticketLabel] ?? {
@@ -3313,16 +3416,84 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                           currencyOrder: [],
                           currencies: {},
                         };
+                      const isCustomTicket = ticketLabel === 'Custom';
+                      const displayName =
+                        ticketEntry.name && ticketEntry.name.trim().length > 0 ? ticketEntry.name : ticketLabel;
+                      const isEditingThisCustom =
+                        editingCustomTicket?.channelId === channel.id &&
+                        editingCustomTicket.ticketLabel === ticketLabel;
                       return (
                         <Box
                           key={`${channel.id}-${ticketLabel}`}
-                          sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.25 }}
+                          sx={{
+                            border: '1px solid',
+                            borderColor: 'divider',
+                            borderRadius: 1,
+                            p: 1.25,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 1,
+                            minWidth: 0,
+                          }}
                         >
                           <Stack spacing={1}>
-                            <Stack direction="row" justifyContent="space-between" alignItems="center">
-                              <Typography variant="subtitle2" fontWeight={600}>
-                                {ticketLabel}
-                              </Typography>
+                            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.75 }}>
+                              {isEditingThisCustom ? (
+                                <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+                                  <TextField
+                                    size="small"
+                                    value={editingCustomTicket?.value ?? ''}
+                                    onChange={handleCustomTicketEditChange}
+                                    autoFocus
+                                    placeholder="Custom ticket name"
+                                    onKeyDown={(event) => {
+                                      if (event.key === 'Enter') {
+                                        event.preventDefault();
+                                        handleCustomTicketEditSave();
+                                      }
+                                      if (event.key === 'Escape') {
+                                        event.preventDefault();
+                                        handleCustomTicketEditCancel();
+                                      }
+                                    }}
+                                  />
+                                  <IconButton
+                                    size="small"
+                                    color="success"
+                                    aria-label="Save ticket name"
+                                    onClick={handleCustomTicketEditSave}
+                                  >
+                                    <Check fontSize="small" />
+                                  </IconButton>
+                                  <IconButton
+                                    size="small"
+                                    aria-label="Cancel ticket name edit"
+                                    onClick={handleCustomTicketEditCancel}
+                                  >
+                                    <Close fontSize="small" />
+                                  </IconButton>
+                                </Stack>
+                              ) : (
+                                <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+                                  <Typography variant="subtitle2" fontWeight={600}>
+                                    {displayName}
+                                  </Typography>
+                                  {isCustomTicket && (
+                                    <Tooltip title="Rename ticket type">
+                                      <span>
+                                        <IconButton
+                                          size="small"
+                                          aria-label="Rename ticket type"
+                                          onClick={() => handleCustomTicketEditStart(channel.id, ticketLabel, displayName)}
+                                          disabled={disableInputs}
+                                        >
+                                          <Edit fontSize="small" />
+                                        </IconButton>
+                                      </span>
+                                    </Tooltip>
+                                  )}
+                                </Stack>
+                              )}
                             </Stack>
                             <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
                               {availableCurrencies.map((currencyOption) => {
@@ -3350,7 +3521,19 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                                 Select a currency to enable counters.
                               </Typography>
                             ) : (
-                              <Stack spacing={1.25}>
+                              <Box
+                                sx={{
+                                  display: 'grid',
+                                  gap: 1.25,
+                                  gridTemplateColumns: {
+                                    xs: '1fr',
+                                    sm: 'repeat(auto-fit, minmax(180px, 1fr))',
+                                    md: 'repeat(auto-fit, minmax(200px, 1fr))',
+                                  },
+                                  alignItems: 'stretch',
+                                  justifyItems: 'stretch',
+                                }}
+                              >
                                 {ticketEntry.currencyOrder.map((currencyOption) => {
                                   const currencyEntry =
                                     ticketEntry.currencies[currencyOption] ?? {
@@ -3360,14 +3543,17 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                                     };
                                   const currencyKey = `${channel.id}-${ticketLabel}-${currencyOption}`;
                                   return (
-                                    <Stack
+                                    <Box
                                       key={currencyKey}
-                                      spacing={1}
                                       sx={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: 1,
                                         border: '1px solid',
                                         borderColor: 'divider',
                                         borderRadius: 1,
                                         p: 1.25,
+                                        minWidth: 0,
                                       }}
                                     >
                                       <Typography variant="subtitle2" fontWeight={500}>
@@ -3459,16 +3645,16 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                                           inputProps={{ inputMode: 'numeric', min: 0 }}
                                         />
                                       </Stack>
-                                    </Stack>
+                                    </Box>
                                   );
                                 })}
-                              </Stack>
+                              </Box>
                             )}
                           </Stack>
                         </Box>
                       );
                     })}
-                  </Stack>
+                  </Box>
                 )}
               </Stack>
             ) : (
