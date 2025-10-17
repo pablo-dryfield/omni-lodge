@@ -693,6 +693,7 @@ const loadCounterForDate = useCallback(
     lastWalkInInitRef.current = initKey;
 
     const metricsList = registry.counter.metrics ?? [];
+    const attendedPeopleMetrics = new Map<number, number>();
     const nextWalkInCash: Record<number, string> = {};
     const nextWalkInDiscounts: Record<number, string[]> = {};
     const nextOverrides: Record<number, string> = {};
@@ -705,6 +706,17 @@ const loadCounterForDate = useCallback(
     }
 
     metricsList.forEach((metric) => {
+      if (
+        metric.kind === 'people' &&
+        metric.tallyType === 'attended' &&
+        (metric.period == null || metric.period === 'before_cutoff')
+      ) {
+        const qty = Math.max(0, Number(metric.qty) || 0);
+        attendedPeopleMetrics.set(metric.channelId, qty);
+      }
+    });
+
+    metricsList.forEach((metric) => {
       if (metric.kind !== 'cash_payment' || metric.tallyType !== 'attended') {
         return;
       }
@@ -713,7 +725,25 @@ const loadCounterForDate = useCallback(
         nextWalkInCash[metric.channelId] = numericQty > 0 ? String(numericQty) : '';
         return;
       }
-      if (cashEligibleChannelIds.includes(metric.channelId) && numericQty > 0) {
+      if (!cashEligibleChannelIds.includes(metric.channelId)) {
+        return;
+      }
+      const channelConfig = registry.channels.find((item) => item.id === metric.channelId);
+      if (!channelConfig) {
+        return;
+      }
+      const snapshotEntry = cashSnapshotEntries.get(metric.channelId);
+      const currency = (snapshotEntry?.currency ?? 'PLN') as CashCurrency;
+      if (currency !== 'PLN') {
+        nextCurrencyByChannel[metric.channelId] = currency;
+      }
+      const peopleQty = attendedPeopleMetrics.get(metric.channelId) ?? 0;
+      const price = getCashPriceForChannel(channelConfig, currency);
+      const expectedAmount =
+        price != null ? Math.max(0, Math.round(price * peopleQty * 100) / 100) : null;
+      const shouldFlagOverride =
+        expectedAmount != null ? !valuesAreClose(expectedAmount, numericQty) : numericQty > 0;
+      if (shouldFlagOverride) {
         nextOverrides[metric.channelId] = normalizeCashValue(numericQty);
       }
     });
@@ -722,14 +752,28 @@ const loadCounterForDate = useCallback(
       if (!eligibleSet.has(channelId)) {
         return;
       }
-      if (entry.currency !== 'PLN') {
-        nextCurrencyByChannel[channelId] = entry.currency;
+      const channelConfig = registry.channels.find((item) => item.id === channelId);
+      if (!channelConfig) {
+        return;
       }
-      if (!(channelId in nextOverrides)) {
-        const amount = entry.amount != null ? Math.max(0, entry.amount) : 0;
-        if (amount > 0) {
-          nextOverrides[channelId] = normalizeCashValue(amount);
-        }
+      const currency = (entry.currency ?? 'PLN') as CashCurrency;
+      if (currency !== 'PLN') {
+        nextCurrencyByChannel[channelId] = currency;
+      }
+      if (channelId in nextOverrides) {
+        return;
+      }
+      const peopleQty = attendedPeopleMetrics.get(channelId) ?? 0;
+      const price = getCashPriceForChannel(channelConfig, currency);
+      const expectedAmount =
+        price != null ? Math.max(0, Math.round(price * peopleQty * 100) / 100) : null;
+      const normalizedAmount = Math.max(0, Math.round((entry.amount ?? 0) * 100) / 100);
+      const shouldFlagOverride =
+        expectedAmount != null
+          ? !valuesAreClose(expectedAmount, normalizedAmount)
+          : normalizedAmount > 0;
+      if (shouldFlagOverride) {
+        nextOverrides[channelId] = normalizeCashValue(normalizedAmount);
       }
     });
 
@@ -746,7 +790,7 @@ const loadCounterForDate = useCallback(
     setCashEditingChannelId(null);
     setCashEditingValue('');
     setWalkInNoteDirty(false);
-  }, [cashEligibleChannelIds, cashSnapshotEntries, registry.counter, walkInChannelIds]);
+  }, [cashEligibleChannelIds, cashSnapshotEntries, registry.channels, registry.counter, walkInChannelIds]);
 
  const channelHasAnyQty = useCallback(
    (channelId: number) => mergedMetrics.some((metric) => metric.channelId === channelId && metric.qty > 0),
@@ -1127,6 +1171,7 @@ const loadCounterForDate = useCallback(
         formattedDisplay: string | null;
         price: number | null;
         peopleQty: number;
+        hasManualOverride: boolean;
       }
     >();
 
@@ -1158,6 +1203,7 @@ const loadCounterForDate = useCallback(
         formattedDisplay,
         price,
         peopleQty,
+        hasManualOverride: overrideAmount != null && Number.isFinite(overrideAmount),
       });
     });
 
@@ -2252,9 +2298,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       isWalkInChannel && (bucket.tallyType === 'attended' || bucket.period === 'after_cutoff');
     const isCashChannel = isCashPaymentChannel(channel);
     const cashDetails = cashDetailsByChannel.get(channel.id);
-    const hasCashOverride =
-      cashDetails?.overrideAmount != null &&
-      !valuesAreClose(cashDetails.overrideAmount, cashDetails.defaultAmount ?? null);
+    const hasCashOverride = cashDetails?.hasManualOverride ?? false;
     const cashDisplayText = cashDetails?.formattedDisplay ?? null;
     const showCashSummary =
       isCashChannel && !isWalkInChannel && bucket.tallyType === 'attended' && bucket.period === null;
