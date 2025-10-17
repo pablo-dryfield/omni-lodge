@@ -106,6 +106,20 @@ const WALK_IN_CASH_NOTE_PREFIX = 'Cash Collected:';
 const CASH_SNAPSHOT_START = '-- CASH-SNAPSHOT START --';
 const CASH_SNAPSHOT_END = '-- CASH-SNAPSHOT END --';
 const CASH_SNAPSHOT_VERSION = 2;
+const CUSTOM_TICKET_LABEL = 'Custom';
+const WALK_IN_TICKET_UNIT_PRICES: Record<string, Partial<Record<CashCurrency, number>>> = {
+  Normal: { EUR: 25 },
+  'Second Timers': { PLN: 85, EUR: 20 },
+  'Third Timers': { PLN: 75, EUR: 17 },
+  'Half Price': { PLN: 50, EUR: 12 },
+  Students: { PLN: 80, EUR: 19 },
+  Group: { PLN: 85, EUR: 20 },
+};
+const WALK_IN_ADDON_UNIT_PRICES: Record<string, Partial<Record<CashCurrency, number>>> = {
+  cocktails: { EUR: 7 },
+  tshirts: { EUR: 10 },
+  photos: { EUR: 3 },
+};
 type WalkInSnapshotCurrency = {
   currency: CashCurrency;
   people: number;
@@ -271,6 +285,52 @@ const parseDiscountsFromNote = (note: string | null | undefined): string[] => {
 
 const normalizeChannelKey = (name: string | null | undefined): string =>
   (name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const getWalkInTicketUnitPrice = (
+  channel: ChannelConfig | undefined,
+  ticketLabel: string,
+  currency: CashCurrency,
+): number | null => {
+  if (ticketLabel === CUSTOM_TICKET_LABEL) {
+    return null;
+  }
+  if (ticketLabel === 'Normal' && currency === 'PLN') {
+    return channel ? getCashPriceForChannel(channel, 'PLN') : null;
+  }
+  const price = WALK_IN_TICKET_UNIT_PRICES[ticketLabel]?.[currency];
+  return price != null && Number.isFinite(price) ? price : null;
+};
+
+const normalizeAddonIdentifier = (addon: AddonConfig | null | undefined): string =>
+  normalizeChannelKey(addon?.key ?? addon?.name ?? '');
+
+const getWalkInAddonUnitPrice = (
+  channel: ChannelConfig | undefined,
+  addon: AddonConfig | null | undefined,
+  currency: CashCurrency,
+): number | null => {
+  if (!addon) {
+    return null;
+  }
+  const normalizedKey = normalizeAddonIdentifier(addon);
+  if (normalizedKey === 'cocktails' && currency === 'PLN') {
+    const override = addon.priceOverride != null ? Number(addon.priceOverride) : null;
+    if (override != null && Number.isFinite(override)) {
+      return Math.max(0, Math.round(Number(override) * 100) / 100);
+    }
+    return null;
+  }
+  const mapped = WALK_IN_ADDON_UNIT_PRICES[normalizedKey]?.[currency];
+  if (mapped != null && Number.isFinite(mapped)) {
+    return mapped;
+  }
+  if (currency === 'PLN') {
+    const override = addon.priceOverride != null ? Number(addon.priceOverride) : null;
+    if (override != null && Number.isFinite(override)) {
+      return Math.max(0, Math.round(Number(override) * 100) / 100);
+    }
+  }
+  return null;
+};
 
 const getCashPriceForChannel = (channel: ChannelConfig, currency: CashCurrency): number | null => {
   const normalizedChannel = normalizeChannelKey(channel.name);
@@ -560,6 +620,133 @@ const Counters = (props: GenericPageProps) => {
   const [cashEditingValue, setCashEditingValue] = useState<string>('');
   const [cashCurrencyByChannel, setCashCurrencyByChannel] = useState<Record<number, CashCurrency>>({});
   const [shouldRefreshCounterList, setShouldRefreshCounterList] = useState(false);
+
+  const formatAutoCashString = useCallback((value: number) => {
+    const normalized = Math.max(0, Math.round(value * 100) / 100);
+    if (!Number.isFinite(normalized) || normalized === 0) {
+      return '0';
+    }
+    return Number.isInteger(normalized) ? String(normalized) : normalized.toFixed(2);
+  }, []);
+
+  const recalcWalkInChannelAutoCash = useCallback(
+    (channelId: number, channelState: WalkInChannelTicketState): WalkInChannelTicketState => {
+      const channel = registry.channels.find((item) => item.id === channelId);
+      if (!channel) {
+        return channelState;
+      }
+
+      let channelMutated = false;
+      const nextTickets: Record<string, WalkInTicketEntryState> = {};
+
+      channelState.ticketOrder.forEach((ticketLabel) => {
+        const ticketEntry = channelState.tickets[ticketLabel];
+        if (!ticketEntry) {
+          return;
+        }
+
+        if (ticketLabel === CUSTOM_TICKET_LABEL) {
+          nextTickets[ticketLabel] = ticketEntry;
+          return;
+        }
+
+        let ticketMutated = false;
+        const nextCurrencies: Partial<Record<CashCurrency, WalkInCurrencyEntryState>> = { ...ticketEntry.currencies };
+
+        ticketEntry.currencyOrder.forEach((currency) => {
+          const currencyEntry = nextCurrencies[currency];
+          if (!currencyEntry) {
+            return;
+          }
+
+          const unitPrice = getWalkInTicketUnitPrice(channel, ticketLabel, currency);
+          if (unitPrice == null) {
+            if (currencyEntry.cash !== '0') {
+              nextCurrencies[currency] = { ...currencyEntry, cash: '0' };
+              ticketMutated = true;
+            }
+            return;
+          }
+
+          let total = unitPrice * (currencyEntry.people ?? 0);
+
+          Object.entries(currencyEntry.addons).forEach(([addonIdKey, qtyValue]) => {
+            const qty = Number(qtyValue);
+            if (!Number.isFinite(qty) || qty <= 0) {
+              return;
+            }
+            const addonId = Number(addonIdKey);
+            const addonConfig =
+              registry.addons.find((addon) => addon.addonId === addonId) ??
+              catalog.addons.find((addon) => addon.addonId === addonId) ??
+              null;
+            const addonUnitPrice = getWalkInAddonUnitPrice(channel, addonConfig, currency);
+            if (addonUnitPrice != null) {
+              total += addonUnitPrice * qty;
+            }
+          });
+
+          const formattedCash = formatAutoCashString(total);
+          if (currencyEntry.cash !== formattedCash) {
+            nextCurrencies[currency] = { ...currencyEntry, cash: formattedCash };
+            ticketMutated = true;
+          }
+        });
+
+        if (ticketMutated) {
+          nextTickets[ticketLabel] = {
+            ...ticketEntry,
+            currencies: nextCurrencies,
+          };
+          channelMutated = true;
+        } else {
+          nextTickets[ticketLabel] = ticketEntry;
+        }
+      });
+
+      if (!channelMutated) {
+        return channelState;
+      }
+
+      return {
+        ticketOrder: channelState.ticketOrder,
+        tickets: nextTickets,
+      };
+    },
+    [catalog.addons, formatAutoCashString, registry.addons, registry.channels],
+  );
+
+  const recalcWalkInTicketDataMap = useCallback(
+    (map: Record<number, WalkInChannelTicketState>): Record<number, WalkInChannelTicketState> => {
+      let mutated = false;
+      const nextMap: Record<number, WalkInChannelTicketState> = {};
+      Object.entries(map).forEach(([id, state]) => {
+        const channelId = Number(id);
+        const recalculated = recalcWalkInChannelAutoCash(channelId, state);
+        if (recalculated !== state) {
+          mutated = true;
+        }
+        nextMap[channelId] = recalculated;
+      });
+      return mutated ? nextMap : map;
+    },
+    [recalcWalkInChannelAutoCash],
+  );
+
+  const applyAutoCashToChannelMap = useCallback(
+    (map: Record<number, WalkInChannelTicketState>, channelId: number) => {
+      const channelState = map[channelId];
+      if (!channelState) {
+        return map;
+      }
+      const recalculated = recalcWalkInChannelAutoCash(channelId, channelState);
+      if (recalculated === channelState) {
+        return map;
+      }
+      return { ...map, [channelId]: recalculated };
+    },
+    [recalcWalkInChannelAutoCash],
+  );
 
   const counterId = registry.counter?.counter.id ?? null;
   const counterStatus = (registry.counter?.counter.status as CounterStatus | undefined) ?? 'draft';
@@ -1074,13 +1261,20 @@ const loadCounterForDate = useCallback(
 
     setWalkInCashByChannel(nextWalkInCash);
     setWalkInDiscountsByChannel(nextWalkInDiscounts);
-    setWalkInTicketDataByChannel(nextWalkInTickets);
+    setWalkInTicketDataByChannel(recalcWalkInTicketDataMap(nextWalkInTickets));
     setCashOverridesByChannel(nextOverrides);
     setCashCurrencyByChannel(nextCurrencyByChannel);
     setCashEditingChannelId(null);
     setCashEditingValue('');
     setWalkInNoteDirty(false);
-  }, [cashEligibleChannelIds, cashSnapshotEntries, registry.channels, registry.counter, walkInChannelIds]);
+  }, [
+    cashEligibleChannelIds,
+    cashSnapshotEntries,
+    recalcWalkInTicketDataMap,
+    registry.channels,
+    registry.counter,
+    walkInChannelIds,
+  ]);
 
  const channelHasAnyQty = useCallback(
    (channelId: number) => mergedMetrics.some((metric) => metric.channelId === channelId && metric.qty > 0),
@@ -1638,7 +1832,7 @@ const loadCounterForDate = useCallback(
     }
     const { channelId, ticketLabel, value } = editingCustomTicket;
     const trimmed = value.trim();
-    const nextName = trimmed.length > 0 ? trimmed : 'Custom';
+    const nextName = trimmed.length > 0 ? trimmed : CUSTOM_TICKET_LABEL;
 
     setWalkInTicketDataByChannel((prev) => {
       const channelState = prev[channelId];
@@ -1715,20 +1909,20 @@ const loadCounterForDate = useCallback(
           tickets: nextTickets,
         };
 
-        const nextMap = { ...prev };
         if (nextSelection!.length === 0) {
-          delete nextMap[channelId];
-        } else {
-          nextMap[channelId] = nextState;
+          const mapWithout = { ...prev };
+          delete mapWithout[channelId];
+          return mapWithout;
         }
-        return nextMap;
+
+        const nextMap = { ...prev, [channelId]: nextState };
+        return applyAutoCashToChannelMap(nextMap, channelId);
       });
 
       setWalkInNoteDirty(true);
     },
-    [],
+    [applyAutoCashToChannelMap],
   );
-
   const handleWalkInTicketCurrencyToggle = useCallback(
     (channelId: number, ticketLabel: string, currency: CashCurrency) => {
       setWalkInTicketDataByChannel((prev) => {
@@ -1747,9 +1941,10 @@ const loadCounterForDate = useCallback(
         if (isSelected) {
           delete nextCurrencies[currency];
         } else {
+          const allowManualCash = ticketLabel === CUSTOM_TICKET_LABEL;
           nextCurrencies[currency] = nextCurrencies[currency] ?? {
             people: 0,
-            cash: '',
+            cash: allowManualCash ? '' : '0',
             addons: {},
           };
         }
@@ -1770,11 +1965,11 @@ const loadCounterForDate = useCallback(
           tickets: nextTickets,
         };
         const nextMap = { ...prev, [channelId]: nextChannelState };
-        return nextMap;
+        return applyAutoCashToChannelMap(nextMap, channelId);
       });
       setWalkInNoteDirty(true);
     },
-    [],
+    [applyAutoCashToChannelMap],
   );
 
   const handleWalkInTicketPeopleChange = useCallback(
@@ -1827,11 +2022,11 @@ const loadCounterForDate = useCallback(
           tickets: nextTickets,
         };
         const nextMap = { ...prev, [channelId]: nextChannelState };
-        return nextMap;
+        return applyAutoCashToChannelMap(nextMap, channelId);
       });
       setWalkInNoteDirty(true);
     },
-    [],
+    [applyAutoCashToChannelMap],
   );
 
   const handleWalkInTicketAddonChange = useCallback(
@@ -1890,17 +2085,28 @@ const loadCounterForDate = useCallback(
           tickets: nextTickets,
         };
         const nextMap = { ...prev, [channelId]: nextChannelState };
-        return nextMap;
+        return applyAutoCashToChannelMap(nextMap, channelId);
       });
       setWalkInNoteDirty(true);
     },
-    [],
+    [applyAutoCashToChannelMap],
   );
 
   const handleWalkInTicketCashChange = useCallback(
     (channelId: number, ticketLabel: string, currency: CashCurrency, rawValue: string) => {
-      const digitsOnly = rawValue.replace(/[^\d]/g, '');
-      const displayValue = digitsOnly === '' ? '' : String(Math.max(0, Number(digitsOnly)));
+      if (ticketLabel !== CUSTOM_TICKET_LABEL) {
+        return;
+      }
+
+      const sanitized = rawValue.replace(/[^0-9.]/g, '');
+      const firstDotIndex = sanitized.indexOf('.');
+      let cleaned = sanitized;
+      if (firstDotIndex !== -1) {
+        const before = sanitized.slice(0, firstDotIndex + 1);
+        const after = sanitized.slice(firstDotIndex + 1).replace(/\./g, '');
+        cleaned = before + after;
+      }
+      const displayValue = cleaned === '' || cleaned === '.' ? '' : cleaned;
       setWalkInTicketDataByChannel((prev) => {
         const currentChannel = prev[channelId] ?? { ticketOrder: [], tickets: {} };
         const ticketEntry =
@@ -1949,7 +2155,7 @@ const loadCounterForDate = useCallback(
       });
       setWalkInNoteDirty(true);
     },
-    [],
+    [setWalkInNoteDirty],
   );
 
   useEffect(() => {
@@ -2018,7 +2224,7 @@ const loadCounterForDate = useCallback(
         handleMetricChange(channelId, 'attended', null, 'cash_payment', null, totalCash);
       }
 
-      aggregatedCash[channelId] = totalCash > 0 ? String(Math.max(0, Math.round(totalCash))) : '';
+      aggregatedCash[channelId] = totalCash > 0 ? formatAutoCashString(totalCash) : '0';
     });
 
     setWalkInCashByChannel((prev) => {
@@ -2038,7 +2244,14 @@ const loadCounterForDate = useCallback(
       });
       return changed ? next : prev;
     });
-  }, [getMetric, handleMetricChange, registry.addons, walkInChannelIds, walkInTicketDataByChannel]);
+  }, [
+    formatAutoCashString,
+    getMetric,
+    handleMetricChange,
+    registry.addons,
+    walkInChannelIds,
+    walkInTicketDataByChannel,
+  ]);
 
   const handleWalkInCashChange = useCallback(
     (channelId: number, rawValue: string) => {
@@ -2523,12 +2736,12 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
 
     const noteDiscountTokens: string[] = [];
     WALK_IN_DISCOUNT_OPTIONS.forEach((option) => {
-      if (option === 'Custom') {
+      if (option === CUSTOM_TICKET_LABEL) {
         const hasCustom = walkInChannelIds.some((channelId) =>
-          (walkInDiscountsByChannel[channelId] ?? []).includes('Custom'),
+          (walkInDiscountsByChannel[channelId] ?? []).includes(CUSTOM_TICKET_LABEL),
         );
         if (hasCustom) {
-          noteDiscountTokens.push('Custom');
+          noteDiscountTokens.push(CUSTOM_TICKET_LABEL);
         }
       } else {
         const hasOption = walkInChannelIds.some((channelId) =>
@@ -3420,7 +3633,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                           currencyOrder: [],
                           currencies: {},
                         };
-                      const isCustomTicket = ticketLabel === 'Custom';
+                      const isCustomTicket = ticketLabel === CUSTOM_TICKET_LABEL;
                       const displayName =
                         ticketEntry.name && ticketEntry.name.trim().length > 0 ? ticketEntry.name : ticketLabel;
                       const isEditingThisCustom =
@@ -3627,26 +3840,30 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                                         <Typography variant="subtitle2">Total Collected</Typography>
                                         <TextField
                                           value={currencyEntry.cash}
-                                          onChange={(event) =>
-                                            handleWalkInTicketCashChange(
-                                              channel.id,
-                                              ticketLabel,
-                                              currencyOption,
-                                              event.target.value,
-                                            )
+                                          onChange={
+                                            isCustomTicket
+                                              ? (event) =>
+                                                  handleWalkInTicketCashChange(
+                                                    channel.id,
+                                                    ticketLabel,
+                                                    currencyOption,
+                                                    event.target.value,
+                                                  )
+                                              : undefined
                                           }
                                           size="small"
                                           disabled={disableInputs}
                                           type="number"
                                           placeholder="0"
                                           InputProps={{
+                                            readOnly: !isCustomTicket,
                                             startAdornment: (
                                               <InputAdornment position="start">
                                                 {currencyOption}
                                               </InputAdornment>
                                             ),
                                           }}
-                                          inputProps={{ inputMode: 'numeric', min: 0 }}
+                                          inputProps={{ inputMode: 'decimal', min: 0 }}
                                         />
                                       </Stack>
                                     </Box>
