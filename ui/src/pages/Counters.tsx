@@ -103,6 +103,15 @@ const BUCKETS: BucketDescriptor[] = [
 const WALK_IN_DISCOUNT_OPTIONS = ['Second Timers', 'Third Timers', 'Half Price', 'Students', 'Group'];
 const WALK_IN_DISCOUNT_NOTE_PREFIX = 'Walk-In Discounts applied:';
 const WALK_IN_CASH_NOTE_PREFIX = 'Cash Collected:';
+const CASH_SNAPSHOT_START = '-- CASH-SNAPSHOT START --';
+const CASH_SNAPSHOT_END = '-- CASH-SNAPSHOT END --';
+const CASH_SNAPSHOT_VERSION = 1;
+type CashSnapshotEntry = { currency: CashCurrency; amount: number; qty: number };
+const CASH_CURRENCY_PRICE_OVERRIDES: Record<string, Partial<Record<CashCurrency, number>>> = {
+  topdeck: {
+    EUR: 17,
+  },
+};
 const WALK_IN_DISCOUNT_LOOKUP = new Map(
   WALK_IN_DISCOUNT_OPTIONS.map((label) => [label.toLowerCase(), label] as const),
 );
@@ -224,6 +233,83 @@ const parseDiscountsFromNote = (note: string | null | undefined): string[] => {
     }
   }
   return [];
+};
+
+const normalizeChannelKey = (name: string | null | undefined): string =>
+  (name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const getCashPriceForChannel = (channel: ChannelConfig, currency: CashCurrency): number | null => {
+  const normalizedChannel = normalizeChannelKey(channel.name);
+  const overrides = CASH_CURRENCY_PRICE_OVERRIDES[normalizedChannel];
+  const overridePrice = overrides?.[currency];
+  const resolved = overridePrice ?? (channel.cashPrice != null ? Number(channel.cashPrice) : null);
+  if (resolved == null || !Number.isFinite(resolved)) {
+    return null;
+  }
+  return Math.max(0, Math.round(Number(resolved) * 100) / 100);
+};
+
+const isCashCurrency = (value: unknown): value is CashCurrency => value === 'PLN' || value === 'EUR';
+
+const extractCashSnapshotMap = (
+  note: string | null | undefined,
+): Map<number, CashSnapshotEntry> => {
+  const entries = new Map<number, CashSnapshotEntry>();
+  if (!note) {
+    return entries;
+  }
+  const startIndex = note.indexOf(CASH_SNAPSHOT_START);
+  if (startIndex === -1) {
+    return entries;
+  }
+  const endIndex = note.indexOf(CASH_SNAPSHOT_END, startIndex + CASH_SNAPSHOT_START.length);
+  if (endIndex === -1) {
+    return entries;
+  }
+  const snapshotRaw = note.slice(startIndex + CASH_SNAPSHOT_START.length, endIndex).trim();
+  if (!snapshotRaw) {
+    return entries;
+  }
+  try {
+    const parsed = JSON.parse(snapshotRaw) as {
+      version?: number;
+      channels?: Record<string, { currency?: unknown; amount?: unknown; qty?: unknown }>;
+    };
+    const channels = parsed && typeof parsed === 'object' ? parsed.channels : null;
+    if (!channels || typeof channels !== 'object') {
+      return entries;
+    }
+    Object.entries(channels).forEach(([channelId, value]) => {
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+      const currency = isCashCurrency(value.currency) ? value.currency : 'PLN';
+      const numericAmount = Number(value.amount);
+      if (!Number.isFinite(numericAmount)) {
+        return;
+      }
+      const normalizedAmount = Math.max(0, Math.round(numericAmount * 100) / 100);
+      const numericQtyRaw = Number(value.qty);
+      const normalizedQty =
+        Number.isFinite(numericQtyRaw) && numericQtyRaw > 0 ? Math.round(numericQtyRaw) : 0;
+      const numericChannelId = Number(channelId);
+      if (!Number.isFinite(numericChannelId)) {
+        return;
+      }
+      entries.set(numericChannelId, { currency, amount: normalizedAmount, qty: normalizedQty });
+    });
+  } catch (_error) {
+    return entries;
+  }
+  return entries;
+};
+
+const serializeCashSnapshot = (channels: Record<string, CashSnapshotEntry>): string => {
+  const payload = {
+    version: CASH_SNAPSHOT_VERSION,
+    channels,
+  };
+  return `${CASH_SNAPSHOT_START}\n${JSON.stringify(payload)}\n${CASH_SNAPSHOT_END}`;
 };
 
 type RegistryStep = 'details' | 'platforms' | 'reservations' | 'summary';
@@ -348,24 +434,24 @@ const Counters = (props: GenericPageProps) => {
     registry.counter?.counter.id ?? null,
   );
   const fetchCounterRequestRef = useRef<string | null>(null);
-const lastPersistedStaffIdsRef = useRef<number[]>([]);
-const lastInitializedCounterRef = useRef<string | null>(null);
-const lastWalkInInitRef = useRef<string | null>(null);
-const [walkInCashByChannel, setWalkInCashByChannel] = useState<Record<number, string>>({});
-const [walkInDiscountsByChannel, setWalkInDiscountsByChannel] = useState<Record<number, string[]>>({});
-const [walkInNoteDirty, setWalkInNoteDirty] = useState(false);
-const [cashOverridesByChannel, setCashOverridesByChannel] = useState<Record<number, string>>({});
-const [cashEditingChannelId, setCashEditingChannelId] = useState<number | null>(null);
-const [cashEditingValue, setCashEditingValue] = useState<string>('');
-const [cashCurrencyByChannel, setCashCurrencyByChannel] = useState<Record<number, CashCurrency>>({});
-const [shouldRefreshCounterList, setShouldRefreshCounterList] = useState(false);
+  const lastPersistedStaffIdsRef = useRef<number[]>([]);
+  const lastInitializedCounterRef = useRef<string | null>(null);
+  const lastWalkInInitRef = useRef<string | null>(null);
+  const [walkInCashByChannel, setWalkInCashByChannel] = useState<Record<number, string>>({});
+  const [walkInDiscountsByChannel, setWalkInDiscountsByChannel] = useState<Record<number, string[]>>({});
+  const [walkInNoteDirty, setWalkInNoteDirty] = useState(false);
+  const [cashOverridesByChannel, setCashOverridesByChannel] = useState<Record<number, string>>({});
+  const [cashEditingChannelId, setCashEditingChannelId] = useState<number | null>(null);
+  const [cashEditingValue, setCashEditingValue] = useState<string>('');
+  const [cashCurrencyByChannel, setCashCurrencyByChannel] = useState<Record<number, CashCurrency>>({});
+  const [shouldRefreshCounterList, setShouldRefreshCounterList] = useState(false);
 
-
-const counterId = registry.counter?.counter.id ?? null;
-const counterStatus = (registry.counter?.counter.status as CounterStatus | undefined) ?? 'draft';
-const counterProductId = registry.counter?.counter.productId ?? null;
-const currentProductId = pendingProductId ?? counterProductId ?? null;
-const defaultProductId = useMemo(() => {
+  const counterId = registry.counter?.counter.id ?? null;
+  const counterStatus = (registry.counter?.counter.status as CounterStatus | undefined) ?? 'draft';
+  const counterProductId = registry.counter?.counter.productId ?? null;
+  const counterNotes = registry.counter?.counter.notes ?? '';
+  const currentProductId = pendingProductId ?? counterProductId ?? null;
+  const defaultProductId = useMemo(() => {
     if (catalog.products.length === 0) {
       return null;
     }
@@ -551,14 +637,31 @@ const loadCounterForDate = useCallback(
         .map((channel) => channel.id),
     [registry.channels],
   );
-  const handleCashCurrencyChange = useCallback((channelId: number, currency: CashCurrency) => {
-    setCashCurrencyByChannel((prev) => {
-      if (prev[channelId] === currency) {
-        return prev;
+  const cashSnapshotEntries = useMemo(
+    () => extractCashSnapshotMap(counterNotes),
+    [counterNotes],
+  );
+  const handleCashCurrencyChange = useCallback(
+    (channelId: number, currency: CashCurrency) => {
+      let didChange = false;
+      setCashCurrencyByChannel((prev) => {
+        const current = prev[channelId] ?? 'PLN';
+        if (current === currency) {
+          return prev;
+        }
+        didChange = true;
+        const next = { ...prev, [channelId]: currency };
+        if (currency === 'PLN') {
+          delete next[channelId];
+        }
+        return next;
+      });
+      if (didChange) {
+        setWalkInNoteDirty(true);
       }
-      return { ...prev, [channelId]: currency };
-    });
-  }, []);
+    },
+    [setWalkInNoteDirty],
+  );
 
   useEffect(() => {
     if (!registry.counter) {
@@ -593,7 +696,9 @@ const loadCounterForDate = useCallback(
     const nextWalkInCash: Record<number, string> = {};
     const nextWalkInDiscounts: Record<number, string[]> = {};
     const nextOverrides: Record<number, string> = {};
+    const nextCurrencyByChannel: Record<number, CashCurrency> = {};
     const parsedDiscounts = parseDiscountsFromNote(note);
+    const eligibleSet = new Set(cashEligibleChannelIds);
 
     for (const channelId of walkInChannelIds) {
       nextWalkInDiscounts[channelId] = [...parsedDiscounts];
@@ -613,6 +718,21 @@ const loadCounterForDate = useCallback(
       }
     });
 
+    cashSnapshotEntries.forEach((entry, channelId) => {
+      if (!eligibleSet.has(channelId)) {
+        return;
+      }
+      if (entry.currency !== 'PLN') {
+        nextCurrencyByChannel[channelId] = entry.currency;
+      }
+      if (!(channelId in nextOverrides)) {
+        const amount = entry.amount != null ? Math.max(0, entry.amount) : 0;
+        if (amount > 0) {
+          nextOverrides[channelId] = normalizeCashValue(amount);
+        }
+      }
+    });
+
     for (const channelId of walkInChannelIds) {
       if (!(channelId in nextWalkInCash)) {
         nextWalkInCash[channelId] = '';
@@ -622,10 +742,11 @@ const loadCounterForDate = useCallback(
     setWalkInCashByChannel(nextWalkInCash);
     setWalkInDiscountsByChannel(nextWalkInDiscounts);
     setCashOverridesByChannel(nextOverrides);
+    setCashCurrencyByChannel(nextCurrencyByChannel);
     setCashEditingChannelId(null);
     setCashEditingValue('');
     setWalkInNoteDirty(false);
-  }, [cashEligibleChannelIds, registry.counter, walkInChannelIds]);
+  }, [cashEligibleChannelIds, cashSnapshotEntries, registry.counter, walkInChannelIds]);
 
  const channelHasAnyQty = useCallback(
    (channelId: number) => mergedMetrics.some((metric) => metric.channelId === channelId && metric.qty > 0),
@@ -940,11 +1061,8 @@ const loadCounterForDate = useCallback(
         return;
       }
 
-      const priceRaw =
-        channel.cashPrice != null && Number.isFinite(Number(channel.cashPrice))
-          ? Number(channel.cashPrice)
-          : null;
-      const price = priceRaw != null ? Math.max(0, Math.round(priceRaw * 100) / 100) : null;
+      const currency = cashCurrencyByChannel[channel.id] ?? 'PLN';
+      const price = getCashPriceForChannel(channel, currency);
       const peopleMetric = getMetric(channel.id, 'attended', null, 'people', null);
       const peopleQty = peopleMetric?.qty ?? 0;
       const defaultAmount =
@@ -970,23 +1088,41 @@ const loadCounterForDate = useCallback(
     });
 
     return details;
-  }, [cashOverridesByChannel, getMetric, registry.channels]);
+  }, [cashCurrencyByChannel, cashOverridesByChannel, getMetric, registry.channels]);
 
   const cashCollectionSummary = useMemo(() => {
+    type CashSummaryEntry = { amount: number; currency: CashCurrency; formatted: string };
     let total = 0;
-    const perChannel = new Map<number, number>();
+    const perChannel = new Map<number, CashSummaryEntry>();
+    const totalsByCurrency = new Map<CashCurrency, number>();
 
-    walkInChannelIds.forEach((channelId) => {
-      const rawValue = walkInCashByChannel[channelId];
-      const numeric = Number(rawValue ?? 0);
-      if (!Number.isFinite(numeric)) {
+    const registerAmount = (channelId: number, rawAmount: number | null | undefined, currency: CashCurrency) => {
+      if (rawAmount == null || !Number.isFinite(rawAmount)) {
         return;
       }
-      const normalized = Math.max(0, Math.round(numeric * 100) / 100);
-      if (normalized > 0) {
-        perChannel.set(channelId, normalized);
-        total += normalized;
+      const normalized = Math.max(0, Math.round(rawAmount * 100) / 100);
+      if (normalized <= 0) {
+        return;
       }
+      total += normalized;
+      totalsByCurrency.set(currency, (totalsByCurrency.get(currency) ?? 0) + normalized);
+      perChannel.set(channelId, {
+        amount: normalized,
+        currency,
+        formatted: formatCashAmount(normalized),
+      });
+    };
+
+    walkInChannelIds.forEach((channelId) => {
+      const inputValue = Number(walkInCashByChannel[channelId] ?? 0);
+      const snapshotEntry = cashSnapshotEntries.get(channelId);
+      const normalizedInput = Number.isFinite(inputValue) ? inputValue : null;
+      const fallbackAmount =
+        normalizedInput != null && normalizedInput > 0
+          ? normalizedInput
+          : snapshotEntry?.amount ?? normalizedInput;
+      const currency = snapshotEntry?.currency ?? 'PLN';
+      registerAmount(channelId, fallbackAmount, currency);
     });
 
     registry.channels.forEach((channel) => {
@@ -994,25 +1130,30 @@ const loadCounterForDate = useCallback(
         return;
       }
       const details = cashDetailsByChannel.get(channel.id);
-      const amount = details?.displayAmount ?? null;
-      if (amount == null || !Number.isFinite(amount)) {
-        return;
-      }
-      const normalized = Math.max(0, Math.round(amount * 100) / 100);
-      if (normalized > 0) {
-        perChannel.set(channel.id, normalized);
-        total += normalized;
-      }
+      const snapshotEntry = cashSnapshotEntries.get(channel.id);
+      const preferredAmount = details?.displayAmount ?? null;
+      const amountToUse =
+        preferredAmount != null && Number.isFinite(preferredAmount) && preferredAmount > 0
+          ? preferredAmount
+          : snapshotEntry?.amount ?? preferredAmount;
+      const currency =
+        cashCurrencyByChannel[channel.id] ?? snapshotEntry?.currency ?? 'PLN';
+      registerAmount(channel.id, amountToUse, currency as CashCurrency);
     });
+
+    const formattedTotals = Array.from(totalsByCurrency.entries()).map(([currency, amount]) => ({
+      currency,
+      amount,
+      formatted: formatCashAmount(amount),
+    }));
 
     return {
       perChannel,
       total,
-      formattedTotal: formatCashAmount(total),
+      totalsByCurrency,
+      formattedTotals,
     };
-  }, [cashDetailsByChannel, registry.channels, walkInCashByChannel, walkInChannelIds]);
-
-  const formattedTotalCash = cashCollectionSummary.formattedTotal;
+  }, [cashCurrencyByChannel, cashDetailsByChannel, cashSnapshotEntries, registry.channels, walkInCashByChannel, walkInChannelIds]);
 
   const aggregatedWalkInDiscounts = useMemo(() => {
     const combined = new Set<string>();
@@ -1119,15 +1260,29 @@ const loadCounterForDate = useCallback(
       overrideAmount != null &&
       (defaultAmount == null ? overrideAmount > 0 : !valuesAreClose(overrideAmount, defaultAmount));
 
+    let overridesChanged = false;
     setCashOverridesByChannel((prev) => {
       const next = { ...prev };
       if (hasOverride && overrideAmount != null) {
-        next[channelId] = normalizeCashValue(overrideAmount);
-      } else {
-        delete next[channelId];
+        const normalizedOverride = normalizeCashValue(overrideAmount);
+        if (prev[channelId] === normalizedOverride) {
+          return prev;
+        }
+        overridesChanged = true;
+        next[channelId] = normalizedOverride;
+        return next;
       }
-      return next;
+      if (prev[channelId] != null) {
+        overridesChanged = true;
+        delete next[channelId];
+        return next;
+      }
+      return prev;
     });
+
+    if (overridesChanged) {
+      setWalkInNoteDirty(true);
+    }
 
     const nextQty = hasOverride && overrideAmount != null ? overrideAmount : 0;
     if (baseMetric.qty !== nextQty) {
@@ -1143,51 +1298,8 @@ const loadCounterForDate = useCallback(
     getMetric,
     handleCashOverrideCancel,
     handleMetricChange,
+    setWalkInNoteDirty,
   ]);
-
-  const buildWalkInNote = useCallback((): string => {
-    const currentNote = registry.counter?.counter.notes ?? '';
-    const existingLines = currentNote ? currentNote.split(/\r?\n/) : [];
-    const filteredLines = existingLines
-      .map((line) => line.trimEnd())
-      .filter((line) => {
-        const lower = line.trim().toLowerCase();
-        if (!lower) {
-          return false;
-        }
-        if (lower.startsWith(WALK_IN_DISCOUNT_NOTE_PREFIX.toLowerCase())) {
-          return false;
-        }
-        if (lower.startsWith(WALK_IN_CASH_NOTE_PREFIX.toLowerCase())) {
-          return false;
-        }
-        return true;
-      });
-
-    const discountLine =
-      aggregatedWalkInDiscounts.length > 0
-        ? `${WALK_IN_DISCOUNT_NOTE_PREFIX} ${aggregatedWalkInDiscounts.join(', ')}`
-        : '';
-    const cashLine = `${WALK_IN_CASH_NOTE_PREFIX} ${formattedTotalCash} z\u0142`;
-    const autoLine = discountLine ? `${discountLine} | ${cashLine}` : cashLine;
-
-    if (filteredLines.length === 0) {
-      return autoLine;
-    }
-
-    const manualSection = filteredLines.join('\n');
-    if (!autoLine) {
-      return manualSection;
-    }
-    if (!manualSection) {
-      return autoLine;
-    }
-    return `${manualSection}\n${autoLine}`;
-  }, [aggregatedWalkInDiscounts, formattedTotalCash, registry.counter]);
-
-  const computedWalkInNote = useMemo(() => buildWalkInNote(), [buildWalkInNote]);
-  const currentCounterNotes = registry.counter?.counter.notes ?? '';
-  const noteNeedsUpdate = registry.counter ? computedWalkInNote !== currentCounterNotes : false;
 
   const handleStaffChange = useCallback(
     (userIds: number[]) => {
@@ -1514,6 +1626,130 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
 
   const summaryChannelIds = useMemo(() => new Set(summaryChannelOrder), [summaryChannelOrder]);
 
+  const attendedPeopleByChannel = useMemo(() => {
+    const map = new Map<number, number>();
+    mergedMetrics.forEach((metric) => {
+      if (metric.kind === 'people' && metric.tallyType === 'attended' && metric.period === null) {
+        map.set(metric.channelId, metric.qty ?? 0);
+      }
+    });
+    return map;
+  }, [mergedMetrics]);
+
+  const buildCounterNotes = useCallback((): string => {
+    const currentNote = counterNotes;
+    const existingLines = currentNote ? currentNote.split(/\r?\n/) : [];
+    const filteredLines: string[] = [];
+    let skippingSnapshot = false;
+
+    existingLines.forEach((line) => {
+      const trimmed = line.trim();
+      if (trimmed === CASH_SNAPSHOT_START) {
+        skippingSnapshot = true;
+        return;
+      }
+      if (trimmed === CASH_SNAPSHOT_END) {
+        skippingSnapshot = false;
+        return;
+      }
+      if (skippingSnapshot) {
+        return;
+      }
+      if (!trimmed) {
+        return;
+      }
+      const lower = trimmed.toLowerCase();
+      if (lower.startsWith(WALK_IN_DISCOUNT_NOTE_PREFIX.toLowerCase())) {
+        return;
+      }
+      if (lower.startsWith(WALK_IN_CASH_NOTE_PREFIX.toLowerCase())) {
+        return;
+      }
+      filteredLines.push(line.trimEnd());
+    });
+
+    const discountLine =
+      aggregatedWalkInDiscounts.length > 0
+        ? `${WALK_IN_DISCOUNT_NOTE_PREFIX} ${aggregatedWalkInDiscounts.join(', ')}`
+        : '';
+    const cashTokens = cashCollectionSummary.formattedTotals.map(
+      (entry) => `${entry.currency} ${entry.formatted}`,
+    );
+    const cashLine =
+      cashTokens.length > 0 ? `${WALK_IN_CASH_NOTE_PREFIX} ${cashTokens.join(', ')}` : '';
+    const autoLineParts: string[] = [];
+    if (discountLine) {
+      autoLineParts.push(discountLine);
+    }
+    if (cashLine) {
+      autoLineParts.push(cashLine);
+    }
+    const autoLine = autoLineParts.join(' | ');
+
+    const sections: string[] = [];
+    if (filteredLines.length > 0) {
+      sections.push(filteredLines.join('\n'));
+    }
+    if (autoLine) {
+      sections.push(autoLine);
+    }
+
+    const snapshotChannels: Record<string, CashSnapshotEntry> = {};
+    const activeCashChannelIds = new Set<number>();
+    summaryChannelIds.forEach((channelId) => activeCashChannelIds.add(channelId));
+    walkInChannelIds.forEach((channelId) => activeCashChannelIds.add(channelId));
+
+    registry.channels.forEach((channel) => {
+      if (!isCashPaymentChannel(channel) || !activeCashChannelIds.has(channel.id)) {
+        return;
+      }
+      const normalizedName = channel.name?.toLowerCase() ?? '';
+      const isWalkIn = normalizedName === WALK_IN_CHANNEL_SLUG;
+      const currency = isWalkIn ? 'PLN' : cashCurrencyByChannel[channel.id] ?? 'PLN';
+      const peopleQty = attendedPeopleByChannel.get(channel.id) ?? 0;
+      const normalizedQty = Math.max(0, Math.round(peopleQty));
+      let rawAmount: number | null = null;
+      if (isWalkIn) {
+        const value = Number(walkInCashByChannel[channel.id] ?? 0);
+        rawAmount = Number.isFinite(value) ? value : null;
+      } else {
+        const details = cashDetailsByChannel.get(channel.id);
+        rawAmount = details?.displayAmount ?? null;
+      }
+      const normalizedAmount =
+        rawAmount != null && Number.isFinite(rawAmount) ? Math.max(0, Math.round(rawAmount * 100) / 100) : 0;
+      if (normalizedAmount <= 0 && normalizedQty <= 0 && currency === 'PLN') {
+        return;
+      }
+      snapshotChannels[channel.id.toString()] = { currency, amount: normalizedAmount, qty: normalizedQty };
+    });
+
+    if (Object.keys(snapshotChannels).length > 0) {
+      const snapshotBlock = serializeCashSnapshot(snapshotChannels);
+      if (sections.length > 0) {
+        sections.push('');
+      }
+      sections.push(snapshotBlock);
+    }
+
+    return sections.join('\n');
+  }, [
+    aggregatedWalkInDiscounts,
+    cashCollectionSummary,
+    cashCurrencyByChannel,
+    cashDetailsByChannel,
+    counterNotes,
+    registry.channels,
+    summaryChannelIds,
+    walkInCashByChannel,
+    walkInChannelIds,
+    attendedPeopleByChannel,
+  ]);
+
+  const computedCounterNotes = useMemo(() => buildCounterNotes(), [buildCounterNotes]);
+  const currentCounterNotes = counterNotes;
+  const noteNeedsUpdate = registry.counter ? computedCounterNotes !== currentCounterNotes : false;
+
   const platformRecordedTotal = useMemo(() => {
     if (effectiveSelectedChannelIds.length === 0) {
       return 0;
@@ -1584,11 +1820,11 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
         }
       }
       if (noteUpdateNeeded) {
-        if (computedWalkInNote !== currentCounterNotes) {
+        if (computedCounterNotes !== currentCounterNotes) {
           await dispatch(
             updateCounterNotes({
               counterId: activeCounterId,
-              notes: computedWalkInNote,
+              notes: computedCounterNotes,
             }),
           ).unwrap();
           shouldFlagList = true;
@@ -1609,7 +1845,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       setConfirmingMetrics(false);
     }
   }, [
-    computedWalkInNote,
+    computedCounterNotes,
     counterId,
     currentCounterNotes,
     dispatch,
@@ -1953,6 +2189,10 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       cashDetails?.defaultAmount != null && Number.isFinite(cashDetails.defaultAmount)
         ? formatCashAmount(cashDetails.defaultAmount)
         : null;
+    const defaultCashPriceText =
+      cashDetails?.price != null && Number.isFinite(cashDetails.price)
+        ? formatCashAmount(cashDetails.price)
+        : null;
     const cashCurrency = (cashCurrencyByChannel[channel.id] ?? 'PLN') as CashCurrency;
     const showCurrencyToggle =
       isCashChannel && bucket.tallyType === 'attended' && bucket.period === null;
@@ -2088,14 +2328,14 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                     <IconButton
                       size="small"
                       aria-label="Adjust cash collected"
-                      onClick={() => handleCashOverrideEdit(channel.id, cashCurrency)}
+                      onClick={() => handleCashOverrideEdit(channel.id)}
                       disabled={disableInputs}
                     >
                       <Edit fontSize="small" />
                     </IconButton>
                     {hasCashOverride && <Chip label="Override" size="small" color="info" variant="outlined" />}
-                    {!hasCashOverride && defaultCashText && (
-                      <Typography variant="caption" color="text.secondary">{`Default: ${cashCurrency} ${defaultCashText}`}</Typography>
+                    {!hasCashOverride && defaultCashPriceText && (
+                      <Typography variant="caption" color="text.secondary">{`Default: ${cashCurrency} ${defaultCashPriceText}`}</Typography>
                     )}
                   </Stack>
                 )}
@@ -2922,12 +3162,7 @@ type SummaryRowOptions = {
               const addonBuckets = Object.values(item.addons);
               const showBeforeForChannel =
                 !isAfterCutoffChannel || effectiveSelectedChannelIds.includes(item.channelId);
-              const channelCashAmount =
-                cashCollectionSummary.perChannel.get(item.channelId) ?? null;
-              const channelCashLabel =
-                channelCashAmount != null && Number.isFinite(channelCashAmount)
-                  ? formatCashAmount(channelCashAmount)
-                  : null;
+              const channelCashEntry = cashCollectionSummary.perChannel.get(item.channelId) ?? null;
               return (
                 <Grid size={{ xs: 12, md: 6, lg: 4 }} key={item.channelId}>
                   <Card variant="outlined">
@@ -2940,13 +3175,13 @@ type SummaryRowOptions = {
                         showAfter: true,
                         showNonShow: !isAfterCutoffChannel,
                       })}
-                      {channelCashLabel && (
+                      {channelCashEntry && (
                         <Typography
                           variant="body2"
                           sx={{ mt: 0.5, fontWeight: 500 }}
                           color="text.secondary"
                         >
-                          Cash collected: PLN {channelCashLabel}
+                          Cash collected: {channelCashEntry.currency} {channelCashEntry.formatted}
                         </Typography>
                       )}
                       <Divider sx={{ my: 1 }} />
@@ -2971,13 +3206,16 @@ type SummaryRowOptions = {
                     Totals
                   </Typography>
                   {summaryRow('People', summaryTotals.people, { showBefore: false, showAfter: false, showNonShow: true })}
-                  {cashCollectionSummary.total > 0 && (
+                  {cashCollectionSummary.formattedTotals.length > 0 && (
                     <Typography
                       variant="body2"
                       sx={{ mt: 0.5, fontWeight: 500 }}
                       color="text.secondary"
                     >
-                      Cash collected: PLN {formattedTotalCash}
+                      Cash collected:{' '}
+                      {cashCollectionSummary.formattedTotals
+                        .map((entry) => `${entry.currency} ${entry.formatted}`)
+                        .join(' | ')}
                     </Typography>
                   )}
                   <Divider sx={{ my: 1 }} />
