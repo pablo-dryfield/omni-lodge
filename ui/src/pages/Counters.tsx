@@ -972,30 +972,80 @@ const loadCounterForDate = useCallback(
       addonId: number | null,
       qty: number,
     ) => {
+      const normalizedPeriod =
+        tallyType === 'booked'
+          ? period ?? 'before_cutoff'
+          : tallyType === 'attended'
+            ? null
+            : period ?? null;
+      const nextQty = Math.max(0, qty);
       const baseMetric = getMetric(channelId, tallyType, period, kind, addonId);
+      const previousQty = baseMetric?.qty ?? 0;
+      const targetCounterId = baseMetric?.counterId ?? counterId ?? null;
       if (!baseMetric) {
+        if (nextQty <= 0 || targetCounterId == null) {
+          return;
+        }
+      }
+      if (baseMetric && baseMetric.qty === nextQty) {
         return;
       }
-      const nextQty = Math.max(0, qty);
-      if (baseMetric.qty === nextQty) {
-        return;
+      let metricToPersist: MetricCell;
+      if (baseMetric != null) {
+        metricToPersist = { ...baseMetric, qty: nextQty };
+      } else {
+        if (targetCounterId == null) {
+          return;
+        }
+        metricToPersist = {
+          counterId: targetCounterId,
+          channelId,
+          kind,
+          addonId,
+          tallyType,
+          period: normalizedPeriod,
+          qty: nextQty,
+        };
       }
       startTransition(() => {
-        dispatch(setMetric({ ...baseMetric, qty: nextQty }));
+        dispatch(setMetric(metricToPersist));
+
+        const channel = registry.channels.find((item) => item.id === channelId) ?? null;
+
+        if (
+          kind === 'people' &&
+          tallyType === 'attended' &&
+          normalizedPeriod === null &&
+          channel &&
+          isCashPaymentChannel(channel) &&
+          channel.name?.toLowerCase() !== WALK_IN_CHANNEL_SLUG
+        ) {
+          const overrideRaw = cashOverridesByChannel[channelId];
+          const overrideAmount = overrideRaw != null ? parseCashInput(overrideRaw) : null;
+          const currency = cashCurrencyByChannel[channelId] ?? 'PLN';
+          const price = getCashPriceForChannel(channel, currency);
+          const defaultAmount =
+            price != null ? Math.max(0, Math.round(price * nextQty * 100) / 100) : 0;
+          const desiredAmount =
+            overrideAmount != null && Number.isFinite(overrideAmount)
+              ? overrideAmount
+              : defaultAmount;
+          const cashMetric = getMetric(channelId, 'attended', null, 'cash_payment', null);
+          const existingAmount = cashMetric?.qty ?? 0;
+          if (desiredAmount > 0 || cashMetric) {
+            const amountsDiffer = !valuesAreClose(existingAmount, desiredAmount);
+            if (amountsDiffer) {
+              handleMetricChange(channelId, 'attended', null, 'cash_payment', null, desiredAmount);
+            }
+          }
+        }
 
         if (kind === 'cash_payment') {
           return;
         }
 
-        const channel = registry.channels.find((item) => item.id === channelId);
         const normalizedChannelName = channel?.name?.toLowerCase() ?? '';
         const isAfterCutoffChannel = AFTER_CUTOFF_ALLOWED.has(normalizedChannelName);
-        const normalizedPeriod =
-          tallyType === 'booked'
-            ? period ?? 'before_cutoff'
-            : tallyType === 'attended'
-              ? null
-              : period ?? null;
 
         if (
           isAfterCutoffChannel &&
@@ -1016,7 +1066,7 @@ const loadCounterForDate = useCallback(
           if (isCocktails) {
             const peopleMetric = getMetric(channelId, tallyType, period, 'people', null);
             if (peopleMetric) {
-              const delta = nextQty - baseMetric.qty;
+              const delta = nextQty - previousQty;
               if (delta !== 0) {
                 const currentQty = peopleMetric.qty ?? 0;
                 const nextPeopleQty = Math.max(0, currentQty + delta);
@@ -1034,13 +1084,37 @@ const loadCounterForDate = useCallback(
 
         if (normalizedPeriod === 'after_cutoff' && tallyType === 'booked') {
           const attendedMetric = getMetric(channelId, 'attended', null, kind, addonId);
-          if (attendedMetric && attendedMetric.qty !== nextQty) {
-            dispatch(setMetric({ ...attendedMetric, qty: nextQty }));
+          if (attendedMetric) {
+            if (attendedMetric.qty !== nextQty) {
+              dispatch(setMetric({ ...attendedMetric, qty: nextQty }));
+            }
+          } else if (counterId && nextQty > 0) {
+            dispatch(
+              setMetric({
+                counterId,
+                channelId,
+                kind,
+                addonId,
+                tallyType: 'attended',
+                period: null,
+                qty: nextQty,
+              }),
+            );
           }
         }
       });
     },
-    [catalog.addons, dispatch, getMetric, registry.addons, registry.channels, syncAfterCutoffAttendance],
+    [
+      cashCurrencyByChannel,
+      cashOverridesByChannel,
+      catalog.addons,
+      counterId,
+      dispatch,
+      getMetric,
+      registry.addons,
+      registry.channels,
+      syncAfterCutoffAttendance,
+    ],
   );
 
   const cashDetailsByChannel = useMemo(() => {
@@ -1202,11 +1276,14 @@ const loadCounterForDate = useCallback(
         setWalkInNoteDirty(true);
       }
 
+      const numericQty = displayValue === '' ? 0 : Math.max(0, Number(displayValue));
       const metric = getMetric(channelId, 'attended', null, 'cash_payment', null);
       if (!metric) {
+        if (numericQty > 0) {
+          handleMetricChange(channelId, 'attended', null, 'cash_payment', null, numericQty);
+        }
         return;
       }
-      const numericQty = displayValue === '' ? 0 : Math.max(0, Number(displayValue));
       if (metric.qty !== numericQty) {
         handleMetricChange(channelId, 'attended', null, 'cash_payment', null, numericQty);
       }
@@ -1251,10 +1328,6 @@ const loadCounterForDate = useCallback(
       parsedValue != null && Number.isFinite(parsedValue) ? Math.max(0, parsedValue) : null;
     const defaultAmount = details?.defaultAmount ?? null;
     const baseMetric = getMetric(channelId, 'attended', null, 'cash_payment', null);
-    if (!baseMetric) {
-      handleCashOverrideCancel();
-      return;
-    }
 
     const hasOverride =
       overrideAmount != null &&
@@ -1285,7 +1358,8 @@ const loadCounterForDate = useCallback(
     }
 
     const nextQty = hasOverride && overrideAmount != null ? overrideAmount : 0;
-    if (baseMetric.qty !== nextQty) {
+    const currentQty = baseMetric?.qty ?? 0;
+    if (currentQty !== nextQty) {
       handleMetricChange(channelId, 'attended', null, 'cash_payment', null, nextQty);
     }
 
@@ -1296,7 +1370,6 @@ const loadCounterForDate = useCallback(
     cashEditingChannelId,
     cashEditingValue,
     getMetric,
-    handleCashOverrideCancel,
     handleMetricChange,
     setWalkInNoteDirty,
   ]);
