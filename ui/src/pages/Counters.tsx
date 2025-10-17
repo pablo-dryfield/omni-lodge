@@ -412,6 +412,15 @@ const serializeCashSnapshot = (channels: Record<string, CashSnapshotEntry>): str
   return `${CASH_SNAPSHOT_START}\n${JSON.stringify(payload)}\n${CASH_SNAPSHOT_END}`;
 };
 
+const stripSnapshotFromNote = (note: string): string => {
+  if (!note) {
+    return '';
+  }
+  const escapedStart = CASH_SNAPSHOT_START.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+  const escapedEnd = CASH_SNAPSHOT_END.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+  const snapshotPattern = new RegExp(`${escapedStart}[\\s\\S]*?${escapedEnd}`, 'g');
+  return note.replace(snapshotPattern, '').trim();
+};
 type RegistryStep = 'details' | 'platforms' | 'reservations' | 'summary';
 
 const STEP_CONFIGS: Array<{ key: RegistryStep; label: string; description: string }> = [
@@ -1603,30 +1612,6 @@ const loadCounterForDate = useCallback(
     walkInTicketDataByChannel,
   ]);
 
-  const aggregatedWalkInDiscounts = useMemo(() => {
-    const combined = new Set<string>();
-    const customNames: string[] = [];
-    walkInChannelIds.forEach((channelId) => {
-      const selection = walkInDiscountsByChannel[channelId] ?? [];
-      selection.forEach((label) => {
-        if (label === 'Custom') {
-          const ticketState = walkInTicketDataByChannel[channelId];
-          const customEntry = ticketState?.tickets[label];
-          const displayName =
-            customEntry?.name && customEntry.name.trim().length > 0 ? customEntry.name.trim() : 'Custom';
-          if (!customNames.includes(displayName)) {
-            customNames.push(displayName);
-          }
-        } else {
-          combined.add(label);
-        }
-      });
-    });
-    const ordered = WALK_IN_DISCOUNT_OPTIONS.filter((option) => option !== 'Custom' && combined.has(option));
-    customNames.forEach((name) => ordered.push(name));
-    return ordered;
-  }, [walkInChannelIds, walkInDiscountsByChannel, walkInTicketDataByChannel]);
-
   const handleCustomTicketEditStart = useCallback(
     (channelId: number, ticketLabel: string, currentName: string) => {
       setEditingCustomTicket({
@@ -2536,9 +2521,28 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       filteredLines.push(line.trimEnd());
     });
 
+    const noteDiscountTokens: string[] = [];
+    WALK_IN_DISCOUNT_OPTIONS.forEach((option) => {
+      if (option === 'Custom') {
+        const hasCustom = walkInChannelIds.some((channelId) =>
+          (walkInDiscountsByChannel[channelId] ?? []).includes('Custom'),
+        );
+        if (hasCustom) {
+          noteDiscountTokens.push('Custom');
+        }
+      } else {
+        const hasOption = walkInChannelIds.some((channelId) =>
+          (walkInDiscountsByChannel[channelId] ?? []).includes(option),
+        );
+        if (hasOption) {
+          noteDiscountTokens.push(option);
+        }
+      }
+    });
+
     const discountLine =
-      aggregatedWalkInDiscounts.length > 0
-        ? `${WALK_IN_DISCOUNT_NOTE_PREFIX} ${aggregatedWalkInDiscounts.join(', ')}`
+      noteDiscountTokens.length > 0
+        ? `${WALK_IN_DISCOUNT_NOTE_PREFIX} ${noteDiscountTokens.join(', ')}`
         : '';
     const cashTokens = cashCollectionSummary.formattedTotals.map(
       (entry) => `${entry.currency} ${entry.formatted}`,
@@ -2668,7 +2672,6 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
 
     return sections.join('\n');
   }, [
-    aggregatedWalkInDiscounts,
     cashCollectionSummary,
     cashCurrencyByChannel,
     cashDetailsByChannel,
@@ -2679,6 +2682,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     walkInChannelIds,
     attendedPeopleByChannel,
     walkInTicketDataByChannel,
+    walkInDiscountsByChannel,
   ]);
 
   const computedCounterNotes = useMemo(() => buildCounterNotes(), [buildCounterNotes]);
@@ -4858,8 +4862,8 @@ type SummaryRowOptions = {
                   const productLabel = productDisplay || 'Old Product Version - Pub Crawl';
                   const isSelected =
                     selectedCounterId != null && counterIdValue != null && counterIdValue === selectedCounterId;
-                  const notePreview =
-                    typeof counter.notes === 'string' ? counter.notes.trim() : '';
+                  const rawNote = typeof counter.notes === 'string' ? counter.notes : '';
+                  const notePreview = stripSnapshotFromNote(rawNote);
                   const hasNote = notePreview.length > 0;
                   const managerProductLine = (
                     <Typography
