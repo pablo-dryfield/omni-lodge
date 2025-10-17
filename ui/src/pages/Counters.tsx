@@ -100,7 +100,7 @@ const BUCKETS: BucketDescriptor[] = [
   { tallyType: 'booked', period: 'after_cutoff', label: bucketLabels.after_cutoff },
 ];
 
-const WALK_IN_DISCOUNT_OPTIONS = ['Second Timers', 'Third Timers', 'Half Price', 'Students', 'Group'];
+const WALK_IN_DISCOUNT_OPTIONS = ['Normal', 'Custom', 'Second Timers', 'Third Timers', 'Half Price', 'Students', 'Group'];
 const WALK_IN_DISCOUNT_NOTE_PREFIX = 'Walk-In Discounts applied:';
 const WALK_IN_CASH_NOTE_PREFIX = 'Cash Collected:';
 const CASH_SNAPSHOT_START = '-- CASH-SNAPSHOT START --';
@@ -2296,6 +2296,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     const walkInDiscountSelection = walkInDiscountsByChannel[channel.id] ?? [];
     const showWalkInExtras =
       isWalkInChannel && (bucket.tallyType === 'attended' || bucket.period === 'after_cutoff');
+    const showWalkInActionButtons = showWalkInExtras && walkInDiscountSelection.length > 0;
     const isCashChannel = isCashPaymentChannel(channel);
     const cashDetails = cashDetailsByChannel.get(channel.id);
     const hasCashOverride = cashDetails?.hasManualOverride ?? false;
@@ -2352,43 +2353,53 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                 </Stack>
                 {warningActive && <Chip label="After cut-off" color="warning" size="small" />}
               </Stack>
+            {showWalkInExtras && (
+              <Stack spacing={0.75}>
+                <Typography variant="subtitle2">Tickets Type</Typography>
+                <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+                  {WALK_IN_DISCOUNT_OPTIONS.map((option) => {
+                    const selected = walkInDiscountSelection.includes(option);
+                    return (
+                      <Chip
+                        key={option}
+                        label={option}
+                        size="small"
+                        variant={selected ? 'filled' : 'outlined'}
+                        color={selected ? 'primary' : 'default'}
+                        onClick={() => handleWalkInDiscountToggle(channel.id, option)}
+                        disabled={disableInputs}
+                      />
+                    );
+                  })}
+                </Stack>
+                {showWalkInActionButtons && (
+                  <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+                    <Button type="button" variant="outlined" size="small" disabled={disableInputs}>
+                      Add PLN
+                    </Button>
+                    <Button type="button" variant="outlined" size="small" disabled={disableInputs}>
+                      Add EUR
+                    </Button>
+                  </Stack>
+                )}
+              </Stack>
+            )}
             {renderStepper('People', peopleMetric, disableInputs)}
             {showWalkInExtras && (
-              <Stack spacing={1}>
-                <Stack spacing={0.5}>
-                  <Typography variant="subtitle2">Total Collected</Typography>
-                  <TextField
-                    value={walkInCashValue}
-                    onChange={(event) => handleWalkInCashChange(channel.id, event.target.value)}
-                    size="small"
-                    disabled={disableInputs}
-                    type="number"
-                    placeholder="0"
-                    InputProps={{
-                      startAdornment: <InputAdornment position="start">PLN</InputAdornment>,
-                    }}
-                    inputProps={{ inputMode: 'numeric', min: 0 }}
-                  />
-                </Stack>
-                <Stack spacing={0.5}>
-                  <Typography variant="subtitle2">Discounts Applied</Typography>
-                  <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
-                    {WALK_IN_DISCOUNT_OPTIONS.map((option) => {
-                      const selected = walkInDiscountSelection.includes(option);
-                      return (
-                        <Chip
-                          key={option}
-                          label={option}
-                          size="small"
-                          variant={selected ? 'filled' : 'outlined'}
-                          color={selected ? 'primary' : 'default'}
-                          onClick={() => handleWalkInDiscountToggle(channel.id, option)}
-                          disabled={disableInputs}
-                        />
-                      );
-                    })}
-                  </Stack>
-                </Stack>
+              <Stack spacing={0.5}>
+                <Typography variant="subtitle2">Total Collected</Typography>
+                <TextField
+                  value={walkInCashValue}
+                  onChange={(event) => handleWalkInCashChange(channel.id, event.target.value)}
+                  size="small"
+                  disabled={disableInputs}
+                  type="number"
+                  placeholder="0"
+                  InputProps={{
+                    startAdornment: <InputAdornment position="start">PLN</InputAdornment>,
+                  }}
+                  inputProps={{ inputMode: 'numeric', min: 0 }}
+                />
               </Stack>
             )}
             {showCashSummary && (
