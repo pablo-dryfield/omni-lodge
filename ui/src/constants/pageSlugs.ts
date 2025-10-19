@@ -29,6 +29,7 @@ export const PAGE_SLUGS = {
   settingsProductTypes: "settings-product-types",
   settingsProductPrices: "settings-product-prices",
   settingsAddons: "settings-addons",
+  settingsVenues: "settings-venues",
   settingsProductAddons: "settings-product-addons",
   settingsPaymentMethods: "settings-payment-methods",
   settingsChannelProductPrices: "settings-channel-product-prices",

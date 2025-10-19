@@ -24,6 +24,10 @@ import PaymentMethod from "../models/PaymentMethod.js";
 import ProductPrice from "../models/ProductPrice.js";
 import ChannelCommission from "../models/ChannelCommission.js";
 import ChannelProductPrice from "../models/ChannelProductPrice.js";
+import NightReport from "../models/NightReport.js";
+import NightReportVenue from "../models/NightReportVenue.js";
+import NightReportPhoto from "../models/NightReportPhoto.js";
+import Venue from "../models/Venue.js";
 
 const environment = (process.env.NODE_ENV || "development").trim();
 const envFile = environment === "production" ? ".env.prod" : ".env.dev";
@@ -70,6 +74,10 @@ const sequelize = new Sequelize({
     ProductAddon,
     ProductType,
     Addon,
+    Venue,
+    NightReport,
+    NightReportVenue,
+    NightReportPhoto,
     UserType,
     Page,
     Module,
