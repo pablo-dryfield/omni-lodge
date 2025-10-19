@@ -1,4 +1,4 @@
-﻿import {
+import {
   Alert,
   Autocomplete,
   Box,
@@ -21,9 +21,9 @@
 } from "@mui/material";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { LocalizationProvider } from "@mui/x-date-pickers";
-import { ArrowBack, Add, Delete, Edit, Send } from "@mui/icons-material";
+import { ArrowBack, Add, Delete, Edit, Notes, Send, UploadFile } from "@mui/icons-material";
 import dayjs from "dayjs";
-import { ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
@@ -34,6 +34,8 @@ import {
   fetchNightReportById,
   submitNightReport,
   updateNightReport,
+  uploadNightReportPhoto,
+  deleteNightReportPhoto,
 } from "../../actions/nightReportActions";
 import { fetchCounters } from "../../actions/counterActions";
 import { fetchUsers } from "../../actions/userActions";
@@ -470,7 +472,7 @@ const VenueNumbersList = () => {
                           secondary={
                             <Stack spacing={0.5}>
                               <Typography variant="body2" color="text.secondary">
-                                Leader: {report.leaderName || "â€”"}
+                                Leader: {report.leaderName || "—"}
                               </Typography>
                               <Typography variant="body2" color="text.secondary">
                                 Venues: {report.venuesCount} {"\u2022"} People: {report.totalPeople}
@@ -495,7 +497,7 @@ const VenueNumbersList = () => {
               ) : (
                 <Stack spacing={3}>
                   {currentStatus === "submitted" && !editMode && (
-                    <Alert severity="info">Submitted Â· This report is locked. Click Edit to make changes.</Alert>
+                    <Alert severity="info">Submitted · This report is locked. Click Edit to make changes.</Alert>
                   )}
                   <Box>
                     <Typography variant="body2" color="text.secondary">
@@ -503,7 +505,7 @@ const VenueNumbersList = () => {
                       <Typography component="span" variant="body1" fontWeight={600}>
                         {formState.activityDate
                           ? dayjs(formState.activityDate).format("MMM D, YYYY")
-                          : "â€”"}
+                          : "—"}
                       </Typography>
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
@@ -808,3 +810,4 @@ const VenueNumbersList = () => {
 };
 
 export default VenueNumbersList;
+

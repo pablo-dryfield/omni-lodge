@@ -80,6 +80,8 @@ export const createVenue = async (req: Request, res: Response): Promise<void> =>
       name: (req.body.name ?? '').toString().trim(),
       isActive: req.body.isActive ?? true,
       sortOrder: parseSortOrder(req.body.sortOrder) ?? 0,
+      allowsOpenBar:
+        typeof req.body.allowsOpenBar === 'boolean' ? req.body.allowsOpenBar : Boolean(req.body.allowsOpenBar),
     };
 
     if (!payload.name) {
@@ -107,6 +109,12 @@ export const updateVenue = async (req: Request, res: Response): Promise<void> =>
           ? undefined
           : Boolean(req.body.isActive),
       sortOrder: parseSortOrder(req.body.sortOrder) ?? undefined,
+      allowsOpenBar:
+        typeof req.body.allowsOpenBar === 'boolean'
+          ? req.body.allowsOpenBar
+          : req.body.allowsOpenBar === undefined
+          ? undefined
+          : Boolean(req.body.allowsOpenBar),
     };
 
     if (payload.name === '') {
@@ -150,4 +158,3 @@ export const deleteVenue = async (req: Request, res: Response): Promise<void> =>
     res.status(500).json([{ message }]);
   }
 };
-

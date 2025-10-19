@@ -36,6 +36,15 @@ export const venuesColumnDef = (): ResponseModifications<Partial<Venue>>[] => [
     },
   },
   {
+    accessorKey: "allowsOpenBar",
+    modifications: {
+      header: "Open Bar Eligible",
+      Cell: ({ cell }) => (cell.getValue<boolean>() ? "Yes" : "No"),
+      editVariant: "checkbox",
+      enableSorting: true,
+    },
+  },
+  {
     accessorKey: "isActive",
     modifications: {
       header: "Active",
