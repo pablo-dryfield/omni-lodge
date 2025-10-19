@@ -212,6 +212,11 @@ const VenueNumbersList = () => {
 
   const counters = useMemo(() => (countersState.data[0]?.data as Counter[] | undefined) ?? [], [countersState.data]);
   const users = useMemo(() => (usersState.data[0]?.data as User[] | undefined) ?? [], [usersState.data]);
+  const selectedLeader = useMemo(
+    () => users.find((user) => user.id === formState.leaderId) ?? null,
+    [users, formState.leaderId],
+  );
+  const selectedLeaderName = selectedLeader ? formatUserFullName(selectedLeader) : "";
   const reports = useMemo(
     () => (nightReportListState.data[0]?.data as NightReportSummary[] | undefined) ?? [],
     [nightReportListState.data],
@@ -533,39 +538,86 @@ const VenueNumbersList = () => {
 
                   <Grid container spacing={2}>
                     <Grid item xs={12}>
-                      <Autocomplete
-                        options={users}
-                        value={users.find((user) => user.id === formState.leaderId) ?? null}
-                        onChange={handleLeaderChange}
-                        getOptionLabel={(option) => formatUserFullName(option)}
-                        isOptionEqualToValue={(option, value) => option.id === value.id}
-                        renderOption={(props, option) => {
-                          const { style, ...rest } = props;
-                          return (
-                            <li
-                              {...rest}
-                              style={{ ...style, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.3 }}
-                              title={formatUserFullName(option)}
-                            >
-                              {formatUserFullName(option)}
-                            </li>
-                          );
-                        }}
-                        renderInput={(params) => <TextField {...params} label="Leader" required fullWidth />}
-                        disabled={readOnly}
-                        fullWidth
-                        PopperComponent={AutoWidthPopper}
-                        componentsProps={{
-                          paper: {
-                            sx: {
-                              width: "100%",
-                              minWidth: "inherit",
-                              maxWidth: "inherit",
+                      <Stack spacing={0.5}>
+                        <Autocomplete
+                          options={users}
+                          value={selectedLeader}
+                          onChange={handleLeaderChange}
+                          getOptionLabel={(option) => formatUserFullName(option)}
+                          isOptionEqualToValue={(option, value) => option.id === value.id}
+                          renderOption={(props, option) => {
+                            const { style, ...rest } = props;
+                            return (
+                              <li
+                                {...rest}
+                                style={{ ...style, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.3 }}
+                                title={formatUserFullName(option)}
+                              >
+                                {formatUserFullName(option)}
+                              </li>
+                            );
+                          }}
+                          renderInput={(params) => (
+                            <TextField
+                              {...params}
+                              label="Leader"
+                              required
+                              fullWidth
+                              sx={{
+                                "& .MuiInputBase-root": {
+                                  alignItems: "flex-start",
+                                },
+                                "& .MuiInputBase-input": {
+                                  whiteSpace: "normal",
+                                  overflow: "visible",
+                                  textOverflow: "unset",
+                                  lineHeight: 1.4,
+                                },
+                              }}
+                            />
+                          )}
+                          disabled={readOnly}
+                          fullWidth
+                          componentsProps={{
+                            popper: {
+                              style: { width: "auto" },
                             },
-                          },
-                        }}
-                        ListboxProps={{ style: { paddingRight: 8, width: "100%" } }}
-                      />
+                            paper: {
+                              sx: {
+                                width: "fit-content",
+                                minWidth: "auto",
+                                maxWidth: "min(440px, calc(100vw - 48px))",
+                              },
+                            },
+                          }}
+                          ListboxProps={{ style: { paddingRight: 8 } }}
+                          sx={{
+                            "& .MuiAutocomplete-inputRoot": {
+                              alignItems: "flex-start",
+                              flexWrap: "wrap",
+                              paddingTop: 1,
+                              paddingBottom: 1,
+                            },
+                            "& .MuiAutocomplete-input": {
+                              display: "block",
+                              height: "auto",
+                              whiteSpace: "normal",
+                              wordBreak: "break-word",
+                              textOverflow: "unset",
+                              width: "100% !important",
+                              lineHeight: 1.4,
+                            },
+                          }}
+                        />
+                        {selectedLeaderName && (
+                          <Typography variant="body2" color="text.secondary">
+                            Selected leader:{" "}
+                            <Typography component="span" variant="body1" fontWeight={600}>
+                              {selectedLeaderName}
+                            </Typography>
+                          </Typography>
+                        )}
+                      </Stack>
                     </Grid>
                   </Grid>
 
