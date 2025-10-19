@@ -21,7 +21,7 @@ import {
 } from "@mui/material";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { LocalizationProvider } from "@mui/x-date-pickers";
-import { ArrowBack, Add, Delete, Edit, Notes, Send, UploadFile } from "@mui/icons-material";
+import { ArrowBack, Add, Delete, Edit, Send, UploadFile } from "@mui/icons-material";
 import dayjs from "dayjs";
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -118,6 +118,21 @@ const normalizeNumber = (value: string, fallback: number | null = null): number 
   return parsed;
 };
 
+const formatFileSize = (bytes: number): string => {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let unitIndex = 0;
+  let value = bytes;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const formatted = value % 1 === 0 ? value.toString() : value.toFixed(1);
+  return `${formatted} ${units[unitIndex]}`;
+};
+
 const buildVenuePayload = (report: EditableReport): NightReportVenueInput[] =>
   report.venues.map((venue, index) => {
     const payload: NightReportVenueInput = {
@@ -176,6 +191,7 @@ const VenueNumbersList = () => {
   const [editMode, setEditMode] = useState<boolean>(true);
   const [pendingChanges, setPendingChanges] = useState<boolean>(false);
   const [notesExpanded, setNotesExpanded] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const venuesOptions = useMemo(() => {
     const venues = (venuesState.data[0]?.data as Venue[] | undefined) ?? [];
@@ -380,6 +396,28 @@ const VenueNumbersList = () => {
     }));
   };
 
+  const handlePhotoUploadClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handlePhotoFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.target;
+    const file = input.files?.[0];
+    if (!file || !selectedReportId) {
+      input.value = "";
+      return;
+    }
+    dispatch(uploadNightReportPhoto({ reportId: selectedReportId, file }));
+    input.value = "";
+  };
+
+  const handleDeletePhoto = (photoId: number) => {
+    if (!selectedReportId) {
+      return;
+    }
+    dispatch(deleteNightReportPhoto({ reportId: selectedReportId, photoId }));
+  };
+
   const handleSubmit = async () => {
     if (!selectedReportId) {
       setValidationError("Select a report to submit.");
@@ -409,7 +447,9 @@ const VenueNumbersList = () => {
   const reportsLoading = nightReportListState.loading;
   const detailLoading = nightReportDetail.loading;
   const submitting = nightReportUi.submitting;
+  const uploadingPhoto = nightReportUi.uploadingPhoto;
   const currentStatus = nightReportDetail.data?.status ?? "draft";
+  const photos = nightReportDetail.data?.photos ?? [];
   const readOnly = !editMode;
   const currentCounter = counters.find((counter) => counter.id === formState.counterId);
 
@@ -759,6 +799,99 @@ const VenueNumbersList = () => {
                         );
                       })}
                     </Stack>
+                  </Stack>
+
+                  <Stack spacing={2}>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Typography variant="h6" flexGrow={1}>
+                        Photos
+                      </Typography>
+                      {!readOnly && (
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          startIcon={<UploadFile />}
+                          onClick={handlePhotoUploadClick}
+                          disabled={!selectedReportId || uploadingPhoto}
+                        >
+                          Upload Photo
+                        </Button>
+                      )}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        ref={fileInputRef}
+                        style={{ display: "none" }}
+                        onChange={handlePhotoFileChange}
+                      />
+                      {uploadingPhoto && <CircularProgress size={20} />}
+                    </Stack>
+                    {photos.length === 0 ? (
+                      <Typography variant="body2" color="text.secondary">
+                        {readOnly
+                          ? "No photos attached to this report."
+                          : "No photos yet. Upload supporting photos for this report."}
+                      </Typography>
+                    ) : (
+                      <Grid container spacing={2}>
+                        {photos.map((photo) => (
+                          <Grid size={{ xs: 12, sm: 6, md: 4 }} key={photo.id}>
+                            <Card variant="outlined">
+                              <CardContent>
+                                <Stack spacing={1}>
+                                  <Box
+                                    component="img"
+                                    src={photo.downloadUrl}
+                                    alt={photo.originalName}
+                                    sx={{
+                                      width: "100%",
+                                      height: 180,
+                                      objectFit: "cover",
+                                      borderRadius: 1,
+                                      bgcolor: "grey.100",
+                                    }}
+                                  />
+                                  <Stack direction="row" spacing={1} alignItems="flex-start">
+                                    <Box flexGrow={1}>
+                                      <Typography variant="body2" fontWeight={600} noWrap title={photo.originalName}>
+                                        {photo.originalName}
+                                      </Typography>
+                                      <Typography variant="caption" color="text.secondary">
+                                        {formatFileSize(photo.fileSize)}
+                                        {photo.capturedAt ? ` • ${dayjs(photo.capturedAt).format("MMM D, YYYY h:mm A")}` : ""}
+                                      </Typography>
+                                    </Box>
+                                    {!readOnly && (
+                                      <Tooltip title="Remove photo">
+                                        <span>
+                                          <IconButton
+                                            size="small"
+                                            onClick={() => handleDeletePhoto(photo.id)}
+                                            disabled={uploadingPhoto}
+                                          >
+                                            <Delete fontSize="small" />
+                                          </IconButton>
+                                        </span>
+                                      </Tooltip>
+                                    )}
+                                  </Stack>
+                                  <Button
+                                    variant="outlined"
+                                    size="small"
+                                    component="a"
+                                    href={photo.downloadUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                  >
+                                    View Full Size
+                                  </Button>
+                                </Stack>
+                              </CardContent>
+                            </Card>
+                          </Grid>
+                        ))}
+                      </Grid>
+                    )}
                   </Stack>
 
                   <Stack spacing={1}>
