@@ -30,6 +30,11 @@ export default class Venue extends Model {
   declare sortOrder: number;
 
   @AllowNull(false)
+  @Default(false)
+  @Column({ field: 'allows_open_bar', type: DataType.BOOLEAN })
+  declare allowsOpenBar: boolean;
+
+  @AllowNull(false)
   @Default(true)
   @Column({ field: 'is_active', type: DataType.BOOLEAN })
   declare isActive: boolean;
@@ -43,4 +48,3 @@ export default class Venue extends Model {
   @Column({ field: 'updated_at', type: DataType.DATE })
   declare updatedAt: Date | null;
 }
-
