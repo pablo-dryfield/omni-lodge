@@ -479,6 +479,8 @@ const VenueNumbersList = () => {
                               </Typography>
                             </Stack>
                           }
+                          primaryTypographyProps={{ component: "div" }}
+                          secondaryTypographyProps={{ component: "div" }}
                         />
                       </ListItemButton>
                     </ListItem>
@@ -517,7 +519,7 @@ const VenueNumbersList = () => {
                   </Box>
 
                   <Grid container spacing={2}>
-                    <Grid item xs={12}>
+                    <Grid size={12}>
                       <Autocomplete
                         options={users}
                         value={selectedLeader}
@@ -635,7 +637,7 @@ const VenueNumbersList = () => {
                                   )}
                                 </Stack>
                                 <Grid container spacing={2}>
-                                  <Grid item xs={12}>
+                                  <Grid size={12}>
                                     <Autocomplete
                                       options={availableOptions}
                                       value={venue.venueName}
@@ -695,7 +697,7 @@ const VenueNumbersList = () => {
                                   </Grid>
                                   {isOpenBar ? (
                                     <>
-                                      <Grid item xs={12} md={4}>
+                                      <Grid size={{ xs: 12, md: 4 }}>
                                         <TextField
                                           label="Normal"
                                           value={venue.normalCount ?? ""}
@@ -708,7 +710,7 @@ const VenueNumbersList = () => {
                                           disabled={readOnly}
                                         />
                                       </Grid>
-                                      <Grid item xs={12} md={4}>
+                                      <Grid size={{ xs: 12, md: 4 }}>
                                         <TextField
                                           label="Cocktails"
                                           value={venue.cocktailsCount ?? ""}
@@ -721,7 +723,7 @@ const VenueNumbersList = () => {
                                           disabled={readOnly}
                                         />
                                       </Grid>
-                                      <Grid item xs={12} md={4}>
+                                      <Grid size={{ xs: 12, md: 4 }}>
                                         <TextField
                                           label="Brunch"
                                           value={venue.brunchCount ?? ""}
@@ -736,7 +738,7 @@ const VenueNumbersList = () => {
                                       </Grid>
                                     </>
                                   ) : (
-                                    <Grid item xs={12} md={6}>
+                                    <Grid size={{ xs: 12, md: 6 }}>
                                       <TextField
                                         label="Total People"
                                         value={venue.totalPeople}
@@ -795,7 +797,7 @@ const VenueNumbersList = () => {
                     startIcon={<Send />}
                     onClick={handleSubmit}
                     disabled={!selectedReportId || submitting || readOnly}
-                    sx={{ alignSelf: "flex-start" }}
+                    sx={{ alignSelf: "center" }}
                   >
                     Submit Report
                   </Button>
