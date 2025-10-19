@@ -19,8 +19,6 @@
   Tooltip,
   Typography,
 } from "@mui/material";
-import Popper from "@mui/material/Popper";
-import type { PopperProps } from "@mui/material/Popper";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { LocalizationProvider } from "@mui/x-date-pickers";
 import { ArrowBack, Add, Delete, Edit, Send } from "@mui/icons-material";
@@ -157,25 +155,6 @@ const getManagerLabel = (counter: Counter | undefined): string => {
   return formatUserFullName(counter.manager as Partial<User>);
 };
 
-const AutoWidthPopper = (props: PopperProps) => {
-  const { anchorEl, style, ...other } = props;
-  const anchorWidth = anchorEl instanceof HTMLElement ? anchorEl.clientWidth : 0;
-  const minWidth = Math.max(anchorWidth, 420);
-  return (
-    <Popper
-      {...other}
-      anchorEl={anchorEl}
-      placement="bottom-start"
-      style={{
-        ...style,
-        width: minWidth,
-        minWidth,
-        maxWidth: "calc(100vw - 32px)",
-      }}
-    />
-  );
-};
-
 const VenueNumbersList = () => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
@@ -216,7 +195,6 @@ const VenueNumbersList = () => {
     () => users.find((user) => user.id === formState.leaderId) ?? null,
     [users, formState.leaderId],
   );
-  const selectedLeaderName = selectedLeader ? formatUserFullName(selectedLeader) : "";
   const reports = useMemo(
     () => (nightReportListState.data[0]?.data as NightReportSummary[] | undefined) ?? [],
     [nightReportListState.data],
@@ -538,86 +516,76 @@ const VenueNumbersList = () => {
 
                   <Grid container spacing={2}>
                     <Grid item xs={12}>
-                      <Stack spacing={0.5}>
-                        <Autocomplete
-                          options={users}
-                          value={selectedLeader}
-                          onChange={handleLeaderChange}
-                          getOptionLabel={(option) => formatUserFullName(option)}
-                          isOptionEqualToValue={(option, value) => option.id === value.id}
-                          renderOption={(props, option) => {
-                            const { style, ...rest } = props;
-                            return (
-                              <li
-                                {...rest}
-                                style={{ ...style, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.3 }}
-                                title={formatUserFullName(option)}
-                              >
-                                {formatUserFullName(option)}
-                              </li>
-                            );
-                          }}
-                          renderInput={(params) => (
-                            <TextField
-                              {...params}
-                              label="Leader"
-                              required
-                              fullWidth
-                              sx={{
-                                "& .MuiInputBase-root": {
-                                  alignItems: "flex-start",
-                                },
-                                "& .MuiInputBase-input": {
-                                  whiteSpace: "normal",
-                                  overflow: "visible",
-                                  textOverflow: "unset",
-                                  lineHeight: 1.4,
-                                },
-                              }}
-                            />
-                          )}
-                          disabled={readOnly}
-                          fullWidth
-                          componentsProps={{
-                            popper: {
-                              style: { width: "auto" },
-                            },
-                            paper: {
-                              sx: {
-                                width: "fit-content",
-                                minWidth: "auto",
-                                maxWidth: "min(440px, calc(100vw - 48px))",
+                      <Autocomplete
+                        options={users}
+                        value={selectedLeader}
+                        onChange={handleLeaderChange}
+                        getOptionLabel={(option) => formatUserFullName(option)}
+                        isOptionEqualToValue={(option, value) => option.id === value.id}
+                        renderOption={(props, option) => {
+                          const { style, ...rest } = props;
+                          return (
+                            <li
+                              {...rest}
+                              style={{ ...style, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.3 }}
+                              title={formatUserFullName(option)}
+                            >
+                              {formatUserFullName(option)}
+                            </li>
+                          );
+                        }}
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            label="Leader"
+                            required
+                            fullWidth
+                            sx={{
+                              "& .MuiInputBase-root": {
+                                alignItems: "flex-start",
                               },
-                            },
-                          }}
-                          ListboxProps={{ style: { paddingRight: 8 } }}
-                          sx={{
-                            "& .MuiAutocomplete-inputRoot": {
-                              alignItems: "flex-start",
-                              flexWrap: "wrap",
-                              paddingTop: 1,
-                              paddingBottom: 1,
-                            },
-                            "& .MuiAutocomplete-input": {
-                              display: "block",
-                              height: "auto",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                              textOverflow: "unset",
-                              width: "100% !important",
-                              lineHeight: 1.4,
-                            },
-                          }}
-                        />
-                        {selectedLeaderName && (
-                          <Typography variant="body2" color="text.secondary">
-                            Selected leader:{" "}
-                            <Typography component="span" variant="body1" fontWeight={600}>
-                              {selectedLeaderName}
-                            </Typography>
-                          </Typography>
+                              "& .MuiInputBase-input": {
+                                whiteSpace: "normal",
+                                overflow: "visible",
+                                textOverflow: "unset",
+                                lineHeight: 1.4,
+                              },
+                            }}
+                          />
                         )}
-                      </Stack>
+                        disabled={readOnly}
+                        fullWidth
+                        componentsProps={{
+                          popper: {
+                            style: { width: "auto" },
+                          },
+                          paper: {
+                            sx: {
+                              width: "fit-content",
+                              minWidth: "auto",
+                              maxWidth: "min(440px, calc(100vw - 48px))",
+                            },
+                          },
+                        }}
+                        ListboxProps={{ style: { paddingRight: 8 } }}
+                        sx={{
+                          "& .MuiAutocomplete-inputRoot": {
+                            alignItems: "flex-start",
+                            flexWrap: "wrap",
+                            paddingTop: 1,
+                            paddingBottom: 1,
+                          },
+                          "& .MuiAutocomplete-input": {
+                            display: "block",
+                            height: "auto",
+                            whiteSpace: "normal",
+                            wordBreak: "break-word",
+                            textOverflow: "unset",
+                            width: "100% !important",
+                            lineHeight: 1.4,
+                          },
+                        }}
+                      />
                     </Grid>
                   </Grid>
 
@@ -671,10 +639,56 @@ const VenueNumbersList = () => {
                                       value={venue.venueName}
                                       onChange={(_, value) => handleVenueChange(index, "venueName", value ?? "")}
                                       renderInput={(params) => (
-                                        <TextField {...params} label="Venue" required fullWidth />
+                                        <TextField
+                                          {...params}
+                                          label="Venue"
+                                          required
+                                          fullWidth
+                                          sx={{
+                                            "& .MuiInputBase-root": {
+                                              alignItems: "flex-start",
+                                            },
+                                            "& .MuiInputBase-input": {
+                                              whiteSpace: "normal",
+                                              overflow: "visible",
+                                              textOverflow: "unset",
+                                              lineHeight: 1.4,
+                                            },
+                                          }}
+                                        />
                                       )}
                                       disabled={readOnly}
                                       fullWidth
+                                      componentsProps={{
+                                        popper: {
+                                          style: { width: "auto" },
+                                        },
+                                        paper: {
+                                          sx: {
+                                            width: "fit-content",
+                                            minWidth: "auto",
+                                            maxWidth: "min(440px, calc(100vw - 48px))",
+                                          },
+                                        },
+                                      }}
+                                      ListboxProps={{ style: { paddingRight: 8 } }}
+                                      sx={{
+                                        "& .MuiAutocomplete-inputRoot": {
+                                          alignItems: "flex-start",
+                                          flexWrap: "wrap",
+                                          paddingTop: 1,
+                                          paddingBottom: 1,
+                                        },
+                                        "& .MuiAutocomplete-input": {
+                                          display: "block",
+                                          height: "auto",
+                                          whiteSpace: "normal",
+                                          wordBreak: "break-word",
+                                          textOverflow: "unset",
+                                          width: "100% !important",
+                                          lineHeight: 1.4,
+                                        },
+                                      }}
                                     />
                                   </Grid>
                                   {isOpenBar ? (
