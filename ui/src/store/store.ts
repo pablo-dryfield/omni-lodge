@@ -19,6 +19,7 @@ import counterUsersReducer from '../reducers/counterUsersReducer';
 import payReducer from '../reducers/payReducer';
 import reportsNavBarActiveKeyReducer from '../reducers/reportsNavBarActiveKeyReducer';
 import reviewsReducer from '../reducers/reviewsReducer';
+import nightReportReducer from '../reducers/nightReportReducer';
 import accessControlReducer from '../reducers/accessControlReducer';
 import catalogReducer from './catalogSlice';
 import counterRegistryReducer from './counterRegistrySlice';
@@ -28,6 +29,7 @@ import productAddonReducer from '../reducers/productAddonReducer';
 import productPriceReducer from '../reducers/productPriceReducer';
 import channelCommissionReducer from '../reducers/channelCommissionReducer';
 import channelProductPriceReducer from '../reducers/channelProductPriceReducer';
+import venueReducer from '../reducers/venueReducer';
 
 const reducer = {
   guests: guestReducer,
@@ -46,6 +48,7 @@ const reducer = {
   productAddons: productAddonReducer,
   channelCommissions: channelCommissionReducer,
   channelProductPrices: channelProductPriceReducer,
+  venues: venueReducer,
   modules: moduleReducer,
   rolePagePermissions: rolePagePermissionReducer,
   roleModulePermissions: roleModulePermissionReducer,
@@ -58,6 +61,7 @@ const reducer = {
   pays: payReducer,
   reportsNavBarActiveKey: reportsNavBarActiveKeyReducer,
   reviews: reviewsReducer,
+  nightReports: nightReportReducer,
   accessControl: accessControlReducer,
 };
 

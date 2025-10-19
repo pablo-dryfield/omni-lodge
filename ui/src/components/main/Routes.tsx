@@ -22,6 +22,7 @@ import SettingsProducts from "../../pages/settings/SettingsProducts";
 import SettingsProductTypes from "../../pages/settings/SettingsProductTypes";
 import SettingsProductPrices from "../../pages/settings/SettingsProductPrices";
 import SettingsAddons from "../../pages/settings/SettingsAddons";
+import SettingsVenues from "../../pages/settings/SettingsVenues";
 import SettingsProductAddons from "../../pages/settings/SettingsProductAddons";
 import SettingsPaymentMethods from "../../pages/settings/SettingsPaymentMethods";
 import SettingsChannelProductPrices from "../../pages/settings/SettingsChannelProductPrices";
@@ -55,6 +56,7 @@ const Routes = () => {
         <Route path="product-prices" element={<SettingsProductPrices />} />
         <Route path="product-types" element={<SettingsProductTypes />} />
         <Route path="addons" element={<SettingsAddons />} />
+        <Route path="venues" element={<SettingsVenues />} />
         <Route path="product-addons" element={<SettingsProductAddons />} />
         <Route path="payment-methods" element={<SettingsPaymentMethods />} />
         <Route path="channel-product-prices" element={<SettingsChannelProductPrices />} />

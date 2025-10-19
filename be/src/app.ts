@@ -37,6 +37,8 @@ import productPriceRoutes from './routes/productPriceRoutes.js';
 import channelProductPriceRoutes from './routes/channelProductPriceRoutes.js';
 import paymentMethodRoutes from './routes/paymentMethodRoutes.js';
 import productAddonRoutes from './routes/productAddonRoutes.js';
+import nightReportRoutes from './routes/nightReportRoutes.js';
+import venueRoutes from './routes/venueRoutes.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -134,6 +136,8 @@ app.use('/api/modules', moduleRoutes);
 app.use('/api/actions', actionRoutes);
 app.use('/api/moduleActions', moduleActionRoutes);
 app.use('/api/productAddons', productAddonRoutes);
+app.use('/api/nightReports', nightReportRoutes);
+app.use('/api/venues', venueRoutes);
 app.use('/api/rolePagePermissions', rolePagePermissionRoutes);
 app.use('/api/roleModulePermissions', roleModulePermissionRoutes);
 app.use('/api/accessControl', accessControlRoutes);

@@ -16,6 +16,9 @@ import ModuleAction from './ModuleAction.js';
 import RolePagePermission from './RolePagePermission.js';
 import RoleModulePermission from './RoleModulePermission.js';
 import PaymentMethod from './PaymentMethod.js';
+import NightReport from './NightReport.js';
+import NightReportVenue from './NightReportVenue.js';
+import NightReportPhoto from './NightReportPhoto.js';
 
 export function defineAssociations() {
   // User Associations
@@ -106,6 +109,11 @@ export function defineAssociations() {
   Channel.belongsTo(User, { foreignKey: 'createdBy' });
   Channel.belongsTo(User, { foreignKey: 'updatedBy' });
   // Payment Method associations are defined via decorators on the models
+
+  // Night Report Associations
+  Counter.hasOne(NightReport, { foreignKey: 'counterId', as: 'nightReport' });
+  NightReportVenue.belongsTo(NightReport, { foreignKey: 'reportId', as: 'report' });
+  NightReportPhoto.belongsTo(NightReport, { foreignKey: 'reportId', as: 'report' });
 }
 
 
