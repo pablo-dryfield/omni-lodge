@@ -516,8 +516,11 @@ export const updateNightReport = async (req: AuthenticatedRequest, res: Response
       updatePayload.reassignedById = report.leaderId !== leaderId ? actorId : report.reassignedById ?? null;
     }
 
-    const venuesInput = normalizeVenueInput(body.venues);
-    const normalizedVenues = venuesInput.length > 0 ? validateAndArrangeVenues(venuesInput) : null;
+    const rawVenuesInput = body.venues;
+    const hasVenuesInput = Array.isArray(rawVenuesInput);
+    const venuesInput = normalizeVenueInput(rawVenuesInput);
+    const normalizedVenues =
+      venuesInput.length > 0 ? validateAndArrangeVenues(venuesInput) : [];
 
     await sequelize.transaction(async (transaction) => {
       if (Object.keys(updatePayload).length > 0) {
@@ -525,19 +528,19 @@ export const updateNightReport = async (req: AuthenticatedRequest, res: Response
         await NightReport.update(updatePayload, { where: { id: reportId }, transaction });
       }
 
-      if (normalizedVenues) {
+      if (hasVenuesInput) {
         await NightReportVenue.destroy({ where: { reportId }, transaction });
-        const venueRows = normalizedVenues.map((venue) => ({
-          reportId,
-          orderIndex: venue.orderIndex,
-          venueName: venue.venueName,
-          totalPeople: venue.totalPeople,
-          isOpenBar: venue.isOpenBar,
-          normalCount: venue.normalCount,
-          cocktailsCount: venue.cocktailsCount,
-          brunchCount: venue.brunchCount,
-        }));
-        if (venueRows.length > 0) {
+        if (normalizedVenues.length > 0) {
+          const venueRows = normalizedVenues.map((venue) => ({
+            reportId,
+            orderIndex: venue.orderIndex,
+            venueName: venue.venueName,
+            totalPeople: venue.totalPeople,
+            isOpenBar: venue.isOpenBar,
+            normalCount: venue.normalCount,
+            cocktailsCount: venue.cocktailsCount,
+            brunchCount: venue.brunchCount,
+          }));
           await NightReportVenue.bulkCreate(venueRows, { transaction });
         }
       }

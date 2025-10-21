@@ -1105,7 +1105,7 @@ const VenueNumbersList = () => {
                                 </CardContent>
                               </Card>
                               {isOpenBar && !readOnly && !didNotOperate ? (
-                                <Box display="flex" justifyContent="flex-end">
+                                <Box display="flex" justifyContent="center">
                                   <Button startIcon={<Add />} variant="outlined" onClick={handleAddVenue}>
                                     Add Venue
                                   </Button>
