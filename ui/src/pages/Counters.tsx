@@ -5477,7 +5477,7 @@ type SummaryRowOptions = {
           sx={{ m: 0, p: 2, pb: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
         >
           <Typography variant="h6" component="span">
-            Counter Summary {summaryPreviewTitle ? `â€” ${summaryPreviewTitle}` : ""}
+            Counter Summary {summaryPreviewTitle ? `- ${summaryPreviewTitle}` : ""}
           </Typography>
           <IconButton onClick={() => setSummaryPreviewOpen(false)}>
             <Close />
