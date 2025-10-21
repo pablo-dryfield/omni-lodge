@@ -82,6 +82,30 @@ const createEmptyVenue = (): EditableVenue => ({
 const DID_NOT_OPERATE_NOTE = "The activity didn't operate.";
 const SELECT_OPEN_BAR_PLACEHOLDER = "Select Open Bar";
 
+type OpenBarMode = "default" | "pubCrawl" | "bottomlessBrunch";
+
+const resolveOpenBarMode = (productName: string | null | undefined): OpenBarMode => {
+  const normalized = productName?.trim().toLowerCase() ?? "";
+  if (normalized.includes("bottomless brunch")) {
+    return "bottomlessBrunch";
+  }
+  if (normalized.includes("pub crawl")) {
+    return "pubCrawl";
+  }
+  return "default";
+};
+
+const computeOpenBarTotal = (normal: number, cocktails: number, brunch: number, mode: OpenBarMode): number => {
+  switch (mode) {
+    case "pubCrawl":
+      return normal + cocktails;
+    case "bottomlessBrunch":
+      return brunch;
+    default:
+      return normal + cocktails + brunch;
+  }
+};
+
 const toEditableReport = (report: NightReport | null): EditableReport => {
   if (!report) {
     return {
@@ -153,7 +177,7 @@ const resolvePhotoDownloadUrl = (downloadUrl: string): string => {
   return downloadUrl;
 };
 
-const buildVenuePayload = (report: EditableReport): NightReportVenueInput[] =>
+const buildVenuePayload = (report: EditableReport, mode: OpenBarMode = "default"): NightReportVenueInput[] =>
   report.venues.map((venue, index) => {
     const payload: NightReportVenueInput = {
       orderIndex: index + 1,
@@ -168,7 +192,7 @@ const buildVenuePayload = (report: EditableReport): NightReportVenueInput[] =>
       payload.normalCount = normalValue;
       payload.cocktailsCount = cocktailsValue;
       payload.brunchCount = brunchValue;
-      payload.totalPeople = normalValue + cocktailsValue + brunchValue;
+      payload.totalPeople = computeOpenBarTotal(normalValue, cocktailsValue, brunchValue, mode);
     } else {
       payload.totalPeople = normalizeNumber(venue.totalPeople, 0) ?? 0;
     }
@@ -218,6 +242,7 @@ const VenueNumbersList = () => {
   const [notesExpanded, setNotesExpanded] = useState<boolean>(false);
   const [didNotOperate, setDidNotOperate] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
+  const [reportDisplayTotals, setReportDisplayTotals] = useState<Record<number, number>>({});
   const [editableVenueKeys, setEditableVenueKeys] = useState<Set<string>>(() => new Set());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [photoPreviews, setPhotoPreviews] = useState<Record<number, string>>({});
@@ -268,6 +293,49 @@ const VenueNumbersList = () => {
     () => (nightReportListState.data[0]?.data as NightReportSummary[] | undefined) ?? [],
     [nightReportListState.data],
   );
+  const detailReportId = nightReportDetail.data?.id ?? null;
+  const currentCounter = useMemo(
+    () => counters.find((counter) => counter.id === formState.counterId),
+    [counters, formState.counterId],
+  );
+  const openBarMode = useMemo(
+    () => resolveOpenBarMode(currentCounter?.product?.name),
+    [currentCounter?.product?.name],
+  );
+  const isBottomlessBrunchProduct = openBarMode === "bottomlessBrunch";
+
+  useEffect(() => {
+    if (selectedReportId == null) {
+      return;
+    }
+    if (detailReportId !== selectedReportId) {
+      return;
+    }
+    if (didNotOperate) {
+      setReportDisplayTotals((prev) => {
+        if (prev[selectedReportId] === 0) {
+          return prev;
+        }
+        return { ...prev, [selectedReportId]: 0 };
+      });
+      return;
+    }
+
+    const openBar = formState.venues[OPEN_BAR_INDEX];
+    if (!openBar) {
+      return;
+    }
+    const normalValue = normalizeNumber(openBar.normalCount, 0) ?? 0;
+    const cocktailsValue = normalizeNumber(openBar.cocktailsCount, 0) ?? 0;
+    const brunchValue = normalizeNumber(openBar.brunchCount, 0) ?? 0;
+    const totalForMode = computeOpenBarTotal(normalValue, cocktailsValue, brunchValue, openBarMode);
+    setReportDisplayTotals((prev) => {
+      if (prev[selectedReportId] === totalForMode) {
+        return prev;
+      }
+      return { ...prev, [selectedReportId]: totalForMode };
+    });
+  }, [formState.venues, openBarMode, selectedReportId, didNotOperate, detailReportId]);
   const photos = useMemo(() => nightReportDetail.data?.photos ?? [], [nightReportDetail.data?.photos]);
   const photoLimitReached = photos.length >= 1;
   const limitedPhotos = useMemo(() => photos.slice(0, 1), [photos]);
@@ -402,14 +470,33 @@ const VenueNumbersList = () => {
       previousNotesRef.current = null;
     }
 
-    setFormState(normalizedForm);
+    const counterForForm = counters.find((counter) => counter.id === normalizedForm.counterId);
+    const modeForForm = resolveOpenBarMode(counterForForm?.product?.name);
+    const adjustedForm: EditableReport = {
+      ...normalizedForm,
+      venues: normalizedForm.venues.map((venue, idx) => {
+        if (idx !== OPEN_BAR_INDEX) {
+          return venue;
+        }
+        const normalValue = normalizeNumber(venue.normalCount, 0) ?? 0;
+        const cocktailsValue = normalizeNumber(venue.cocktailsCount, 0) ?? 0;
+        const brunchValue = normalizeNumber(venue.brunchCount, 0) ?? 0;
+        const totalForMode = computeOpenBarTotal(normalValue, cocktailsValue, brunchValue, modeForForm);
+        return {
+          ...venue,
+          totalPeople: String(totalForMode),
+        };
+      }),
+    };
+
+    setFormState(adjustedForm);
     setDidNotOperate(initialDidNotOperate);
     setPendingChanges(false);
-    const initialEditableKeys = computeInitialEditableKeys(normalizedForm.venues);
+    const initialEditableKeys = computeInitialEditableKeys(adjustedForm.venues);
     setEditableVenueKeys(initialEditableKeys);
     previousEditableVenueKeysRef.current = null;
     setValidationError(null);
-    setNotesExpanded(Boolean(normalizedForm.notes) || initialDidNotOperate);
+    setNotesExpanded(Boolean(adjustedForm.notes) || initialDidNotOperate);
 
     const status = nightReportDetail.data?.status ?? "draft";
     const requestedMode = modeRequestRef.current;
@@ -431,7 +518,7 @@ const VenueNumbersList = () => {
       }
       return prev;
     });
-  }, [nightReportDetail.data, selectedReportId, computeInitialEditableKeys]);
+  }, [nightReportDetail.data, selectedReportId, computeInitialEditableKeys, counters]);
 
   useEffect(() => {
     if (selectedReportId === null) {
@@ -643,7 +730,18 @@ const VenueNumbersList = () => {
         const normal = normalizeNumber(venue.normalCount);
         const cocktails = normalizeNumber(venue.cocktailsCount);
         const brunch = normalizeNumber(venue.brunchCount);
-        if (normal == null || cocktails == null || brunch == null) {
+        if (openBarMode === "bottomlessBrunch") {
+          if (brunch == null) {
+            return "Provide Brunch count for the open-bar venue.";
+          }
+        } else if (openBarMode === "pubCrawl") {
+          if (normal == null || cocktails == null) {
+            return "Provide Normal and Cocktails counts for the open-bar venue.";
+          }
+          if (brunch == null) {
+            return "Provide Brunch count for the open-bar venue.";
+          }
+        } else if (normal == null || cocktails == null || brunch == null) {
           return "Provide Normal, Cocktails, and Brunch counts for the open-bar venue.";
         }
       } else {
@@ -674,9 +772,10 @@ const VenueNumbersList = () => {
         const normalValue = normalizeNumber(openBar.normalCount, 0) ?? 0;
         const cocktailsValue = normalizeNumber(openBar.cocktailsCount, 0) ?? 0;
         const brunchValue = normalizeNumber(openBar.brunchCount, 0) ?? 0;
+        const totalForMode = computeOpenBarTotal(normalValue, cocktailsValue, brunchValue, openBarMode);
         nextVenues[OPEN_BAR_INDEX] = {
           ...openBar,
-          totalPeople: String(normalValue + cocktailsValue + brunchValue),
+          totalPeople: String(totalForMode),
         };
       }
       return {
@@ -828,9 +927,9 @@ const VenueNumbersList = () => {
       activityDate: formState.activityDate,
       leaderId: formState.leaderId ?? undefined,
       notes: formState.notes || undefined,
-      venues: buildVenuePayload(formState),
+      venues: buildVenuePayload(formState, openBarMode),
     }),
-    [formState],
+    [formState, openBarMode],
   );
 
   const handleSaveVenues = async () => {
@@ -915,7 +1014,6 @@ const VenueNumbersList = () => {
   const inEditMode = activeReportMode === "edit";
   const showNoReportDetails = readOnly && didNotOperate;
   const showDetails = selectedReportId != null && activeReportMode != null;
-  const currentCounter = counters.find((counter) => counter.id === formState.counterId);
   const formHasFieldErrors = useMemo(() => {
     if (readOnly || didNotOperate) {
       return false;
@@ -945,6 +1043,12 @@ const VenueNumbersList = () => {
         const normal = normalizeNumber(venue.normalCount);
         const cocktails = normalizeNumber(venue.cocktailsCount);
         const brunch = normalizeNumber(venue.brunchCount);
+        if (openBarMode === "bottomlessBrunch") {
+          return brunch == null;
+        }
+        if (openBarMode === "pubCrawl") {
+          return normal == null || cocktails == null || brunch == null;
+        }
         return normal == null || cocktails == null || brunch == null;
       }
       if (!venueSet.has(trimmed.toLowerCase())) {
@@ -953,7 +1057,7 @@ const VenueNumbersList = () => {
       const total = normalizeNumber(venue.totalPeople);
       return total == null;
     });
-  }, [readOnly, didNotOperate, formState.venues, venuesOptions, openBarVenueOptions]);
+  }, [readOnly, didNotOperate, formState.venues, venuesOptions, openBarVenueOptions, openBarMode]);
 
   const leaderHasError = useMemo(
     () => !readOnly && !didNotOperate && (!formState.leaderId || !selectedLeaderOption),
@@ -961,6 +1065,11 @@ const VenueNumbersList = () => {
   );
 
   const renderReportDetails = () => {
+    const showOpenBarNormalField = !isBottomlessBrunchProduct;
+    const showOpenBarCocktailsField = !isBottomlessBrunchProduct;
+    const openBarFieldMdSpan = showOpenBarNormalField && showOpenBarCocktailsField ? 4 : 12;
+    const openBarBrunchMdSpan = showOpenBarNormalField || showOpenBarCocktailsField ? 4 : 12;
+
     const notesSection = (
       <Stack spacing={1}>
         <Button variant="outlined" size="small" onClick={() => setNotesExpanded((prev) => !prev)}>
@@ -1135,29 +1244,33 @@ const VenueNumbersList = () => {
                         </Grid>
                         {isOpenBar ? (
                           <>
-                            <Grid size={4}>
-                              <TextField
-                                label="Normal"
-                                value={venue.normalCount ?? ""}
-                                onChange={(event) => handleVenueChange(index, "normalCount", event.target.value)}
-                                type="number"
-                                inputProps={{ min: 0 }}
-                                fullWidth
-                                disabled={fieldsDisabled}
-                              />
-                            </Grid>
-                            <Grid size={4}>
-                              <TextField
-                                label="Cocktails"
-                                value={venue.cocktailsCount ?? ""}
-                                onChange={(event) => handleVenueChange(index, "cocktailsCount", event.target.value)}
-                                type="number"
-                                inputProps={{ min: 0 }}
-                                fullWidth
-                                disabled={fieldsDisabled}
-                              />
-                            </Grid>
-                            <Grid size={4}>
+                            {showOpenBarNormalField && (
+                              <Grid size={{ xs: 12, md: openBarFieldMdSpan }}>
+                                <TextField
+                                  label="Normal"
+                                  value={venue.normalCount ?? ""}
+                                  onChange={(event) => handleVenueChange(index, "normalCount", event.target.value)}
+                                  type="number"
+                                  inputProps={{ min: 0 }}
+                                  fullWidth
+                                  disabled={fieldsDisabled}
+                                />
+                              </Grid>
+                            )}
+                            {showOpenBarCocktailsField && (
+                              <Grid size={{ xs: 12, md: openBarFieldMdSpan }}>
+                                <TextField
+                                  label="Cocktails"
+                                  value={venue.cocktailsCount ?? ""}
+                                  onChange={(event) => handleVenueChange(index, "cocktailsCount", event.target.value)}
+                                  type="number"
+                                  inputProps={{ min: 0 }}
+                                  fullWidth
+                                  disabled={fieldsDisabled}
+                                />
+                              </Grid>
+                            )}
+                            <Grid size={{ xs: 12, md: openBarBrunchMdSpan }}>
                               <TextField
                                 label="Brunch"
                                 value={venue.brunchCount ?? ""}
@@ -1407,6 +1520,13 @@ const VenueNumbersList = () => {
                     const disableActions = pendingChanges && selectedReportId !== report.id;
                     const isDraftReport = (report.status ?? "").toLowerCase() === "draft";
                     const updateLabel = isDraftReport ? "Fill" : "Update";
+                    const counterForReport = counters.find((counter) => counter.id === report.counterId);
+                    const modeForReport = resolveOpenBarMode(counterForReport?.product?.name);
+                    const overriddenTotal = reportDisplayTotals[report.id];
+                    const displayPeopleCount =
+                      overriddenTotal != null && (modeForReport === "pubCrawl" || modeForReport === "bottomlessBrunch")
+                        ? overriddenTotal
+                        : report.totalPeople;
 
                     return (
                       <ListItem
@@ -1468,7 +1588,7 @@ const VenueNumbersList = () => {
                               Leader: {report.leaderName || "—"}
                             </Typography>
                             <Typography variant="body2" color="text.secondary">
-                              Venues: {report.venuesCount} {"\u2022"} People: {report.totalPeople}
+                              Venues: {report.venuesCount} {"\u2022"} People: {displayPeopleCount}
                             </Typography>
                           </Stack>
                         </Stack>
@@ -1614,6 +1734,7 @@ const VenueNumbersList = () => {
 };
 
 export default VenueNumbersList;
+
 
 
 
