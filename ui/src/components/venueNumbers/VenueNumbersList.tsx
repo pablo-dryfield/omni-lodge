@@ -228,9 +228,9 @@ const VenueNumbersList = () => {
     return parsed;
   }, [searchParams]);
 
-  const venuesOptions = useMemo(() => {
+  const { venuesOptions, openBarVenueOptions } = useMemo(() => {
     const venues = (venuesState.data[0]?.data as Venue[] | undefined) ?? [];
-    return venues
+    const activeVenues = venues
       .filter((venue) => venue.isActive !== false)
       .sort((a, b) => {
         const orderDiff = (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
@@ -238,8 +238,15 @@ const VenueNumbersList = () => {
           return orderDiff;
         }
         return (a.name ?? "").localeCompare(b.name ?? "", undefined, { sensitivity: "base" });
-      })
-      .map((venue) => venue.name);
+      });
+
+    const allVenueNames = activeVenues.map((venue) => venue.name);
+    const openBarNames = activeVenues.filter((venue) => venue.allowsOpenBar === true).map((venue) => venue.name);
+
+    return {
+      venuesOptions: allVenueNames,
+      openBarVenueOptions: openBarNames,
+    };
   }, [venuesState.data]);
 
   const counters = useMemo(() => (countersState.data[0]?.data as Counter[] | undefined) ?? [], [countersState.data]);
@@ -375,7 +382,7 @@ const VenueNumbersList = () => {
   }, [selectedReportId]);
 
   useEffect(() => {
-    if (venuesOptions.length === 0 || didNotOperate) {
+    if (openBarVenueOptions.length === 0 || didNotOperate) {
       return;
     }
     setFormState((prev) => {
@@ -387,10 +394,10 @@ const VenueNumbersList = () => {
         return prev;
       }
       const updated = [...prev.venues];
-      updated[OPEN_BAR_INDEX] = { ...first, venueName: venuesOptions[0] };
+      updated[OPEN_BAR_INDEX] = { ...first, venueName: openBarVenueOptions[0] };
       return { ...prev, venues: updated };
     });
-  }, [venuesOptions, didNotOperate]);
+  }, [openBarVenueOptions, didNotOperate]);
 
   useEffect(() => {
     const currentIds = new Set(photos.map((photo) => photo.id));
@@ -542,6 +549,7 @@ const VenueNumbersList = () => {
       return "Add at least one venue.";
     }
     const venueSet = new Set(venuesOptions.map((name) => name.toLowerCase()));
+    const openBarAllowedSet = new Set(openBarVenueOptions.map((name) => name.toLowerCase()));
     for (const [index, venue] of report.venues.entries()) {
       const trimmed = venue.venueName.trim();
       if (!trimmed) {
@@ -551,6 +559,9 @@ const VenueNumbersList = () => {
         return `"${venue.venueName}" is not part of the venues directory.`;
       }
       if (index === OPEN_BAR_INDEX) {
+        if (openBarAllowedSet.size > 0 && !openBarAllowedSet.has(trimmed.toLowerCase())) {
+          return `"${venue.venueName}" cannot be used for the open bar.`;
+        }
         const normal = normalizeNumber(venue.normalCount);
         const cocktails = normalizeNumber(venue.cocktailsCount);
         const brunch = normalizeNumber(venue.brunchCount);
@@ -747,6 +758,375 @@ const VenueNumbersList = () => {
   const showDetails = selectedReportId != null && activeReportMode != null;
   const currentCounter = counters.find((counter) => counter.id === formState.counterId);
 
+  const renderReportDetails = () => {
+    const notesSection = (
+      <Stack spacing={1}>
+        <Button variant="outlined" size="small" onClick={() => setNotesExpanded((prev) => !prev)}>
+          {notesExpanded || formState.notes
+            ? notesExpanded
+              ? "Hide Notes"
+              : "View Notes"
+            : "Add Notes"}
+        </Button>
+        {(notesExpanded || formState.notes) &&
+          (readOnly ? (
+            <TextField
+              label="Notes"
+              value={formState.notes}
+              multiline
+              minRows={3}
+              fullWidth
+              InputProps={{ readOnly: true }}
+            />
+          ) : (
+            <TextField
+              label="Notes"
+              value={formState.notes}
+              onChange={handleNotesChange}
+              multiline
+              minRows={3}
+              fullWidth
+            />
+          ))}
+      </Stack>
+    );
+
+    if (showNoReportDetails) {
+      return (
+        <>
+          <Typography variant="body2" color="text.secondary">
+            No report information.
+          </Typography>
+          {notesSection}
+        </>
+      );
+    }
+
+    const venuesSection = (
+      <Stack spacing={2}>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Typography variant="h6" flexGrow={1}>
+            Venues
+          </Typography>
+          {!readOnly && (
+            <Button
+              variant={didNotOperate ? "contained" : "outlined"}
+              color={didNotOperate ? "warning" : "inherit"}
+              onClick={handleDidNotOperateToggle}
+            >
+              DIDN'T OPERATE
+            </Button>
+          )}
+        </Stack>
+        <Divider />
+        <Stack spacing={2}>
+          {formState.venues.map((venue, index) => {
+            const isOpenBar = index === OPEN_BAR_INDEX;
+            const availableOptions = (() => {
+              const baseOptions = isOpenBar ? openBarVenueOptions : venuesOptions;
+              if (!venue.venueName) {
+                return baseOptions;
+              }
+              const set = new Set(baseOptions.map((name) => name.toLowerCase()));
+              if (!set.has(venue.venueName.toLowerCase())) {
+                return [...baseOptions, venue.venueName];
+              }
+              return baseOptions;
+            })();
+
+            return (
+              <Stack key={venue.id ?? `venue-${index}`} spacing={1}>
+                <Card variant="outlined">
+                  <CardContent>
+                    <Stack spacing={2}>
+                      <Stack direction="row" alignItems="center" spacing={1}>
+                        <Typography fontWeight={600}>
+                          {isOpenBar ? "Open Bar (Venue 1)" : `Venue ${index + 1}`}
+                        </Typography>
+                        <Box flexGrow={1} />
+                        {!readOnly && !isOpenBar && (
+                          <Tooltip title="Remove venue">
+                            <IconButton size="small" onClick={() => handleRemoveVenue(index)}>
+                              <Delete fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                      </Stack>
+                      <Grid container spacing={2}>
+                        <Grid size={12}>
+                          <Autocomplete
+                            options={availableOptions}
+                            value={venue.venueName}
+                            onChange={(_, value) => handleVenueChange(index, "venueName", value ?? "")}
+                            renderInput={(params) => (
+                              <TextField
+                                {...params}
+                                label="Venue"
+                                required
+                                fullWidth
+                                sx={{
+                                  "& .MuiInputBase-root": {
+                                    alignItems: "flex-start",
+                                  },
+                                  "& .MuiInputBase-input": {
+                                    whiteSpace: "normal",
+                                    overflow: "visible",
+                                    textOverflow: "unset",
+                                    lineHeight: 1.4,
+                                  },
+                                }}
+                              />
+                            )}
+                            disabled={readOnly}
+                            fullWidth
+                            componentsProps={{
+                              popper: {
+                                style: { width: "auto" },
+                              },
+                              paper: {
+                                sx: {
+                                  width: "fit-content",
+                                  minWidth: "auto",
+                                  maxWidth: "min(440px, calc(100vw - 48px))",
+                                },
+                              },
+                            }}
+                            ListboxProps={{ style: { paddingRight: 8 } }}
+                            sx={{
+                              "& .MuiAutocomplete-inputRoot": {
+                                alignItems: "flex-start",
+                                flexWrap: "wrap",
+                                paddingTop: 1,
+                                paddingBottom: 1,
+                              },
+                              "& .MuiAutocomplete-input": {
+                                display: "block",
+                                height: "auto",
+                                whiteSpace: "normal",
+                                wordBreak: "break-word",
+                                textOverflow: "unset",
+                                width: "100% !important",
+                                lineHeight: 1.4,
+                              },
+                            }}
+                          />
+                        </Grid>
+                        {isOpenBar ? (
+                          <>
+                            <Grid size={{ xs: 12, md: 4 }}>
+                              <TextField
+                                label="Normal"
+                                value={venue.normalCount ?? ""}
+                                onChange={(event) => handleVenueChange(index, "normalCount", event.target.value)}
+                                type="number"
+                                inputProps={{ min: 0 }}
+                                fullWidth
+                                disabled={readOnly}
+                              />
+                            </Grid>
+                            <Grid size={{ xs: 12, md: 4 }}>
+                              <TextField
+                                label="Cocktails"
+                                value={venue.cocktailsCount ?? ""}
+                                onChange={(event) => handleVenueChange(index, "cocktailsCount", event.target.value)}
+                                type="number"
+                                inputProps={{ min: 0 }}
+                                fullWidth
+                                disabled={readOnly}
+                              />
+                            </Grid>
+                            <Grid size={{ xs: 12, md: 4 }}>
+                              <TextField
+                                label="Brunch"
+                                value={venue.brunchCount ?? ""}
+                                onChange={(event) => handleVenueChange(index, "brunchCount", event.target.value)}
+                                type="number"
+                                inputProps={{ min: 0 }}
+                                fullWidth
+                                disabled={readOnly}
+                              />
+                            </Grid>
+                          </>
+                        ) : (
+                          <Grid size={{ xs: 12, md: 6 }}>
+                            <TextField
+                              label="Total People"
+                              value={venue.totalPeople}
+                              onChange={(event) => handleVenueChange(index, "totalPeople", event.target.value)}
+                              type="number"
+                              inputProps={{ min: 0 }}
+                              fullWidth
+                              disabled={readOnly}
+                            />
+                          </Grid>
+                        )}
+                      </Grid>
+                    </Stack>
+                  </CardContent>
+                </Card>
+                {isOpenBar && !readOnly && !didNotOperate ? (
+                  <Box display="flex" justifyContent="center">
+                    <Button startIcon={<Add />} variant="outlined" onClick={handleAddVenue}>
+                      Add Venue
+                    </Button>
+                  </Box>
+                ) : null}
+              </Stack>
+            );
+          })}
+        </Stack>
+      </Stack>
+    );
+
+    const photosSection = (
+      <Stack spacing={2}>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Typography variant="h6" flexGrow={1}>
+            Photos
+          </Typography>
+          {!readOnly && (
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<UploadFile />}
+              onClick={handlePhotoUploadClick}
+              disabled={!selectedReportId || uploadingPhoto || photoLimitReached}
+            >
+              Upload Photo
+            </Button>
+          )}
+        </Stack>
+        {!readOnly && (
+          <Typography variant="caption" color="text.secondary">
+            Only one photo can be attached.
+          </Typography>
+        )}
+        <input
+          type="file"
+          accept="image/*"
+          ref={fileInputRef}
+          style={{ display: "none" }}
+          onChange={handlePhotoFileChange}
+        />
+        {uploadingPhoto && <CircularProgress size={20} />}
+        {photos.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">
+            {readOnly
+              ? "No photos attached to this report."
+              : "No photos yet. Upload supporting photos for this report."}
+          </Typography>
+        ) : (
+          <Grid container spacing={2}>
+            {limitedPhotos.map((photo) => {
+              const previewUrl = photoPreviews[photo.id];
+              const previewError = photoPreviewErrors[photo.id];
+              const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl);
+              return (
+                <Grid size={{ xs: 12, sm: 6, md: 4 }} key={photo.id}>
+                  <Card variant="outlined">
+                    <CardContent>
+                      <Stack spacing={1}>
+                        <Box
+                          sx={{
+                            width: "100%",
+                            height: 180,
+                            borderRadius: 1,
+                            bgcolor: "grey.100",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            overflow: "hidden",
+                            border: "1px solid",
+                            borderColor: "divider",
+                            position: "relative",
+                          }}
+                        >
+                          {previewUrl ? (
+                            <Box
+                              component="img"
+                              src={previewUrl}
+                              alt={photo.originalName}
+                              sx={{ width: "100%", height: "100%", objectFit: "cover" }}
+                            />
+                          ) : previewError ? (
+                            <Typography variant="caption" color="text.secondary" align="center" px={2}>
+                              Preview unavailable
+                            </Typography>
+                          ) : (
+                            <CircularProgress size={24} />
+                          )}
+                          {!readOnly && (
+                            <Tooltip title="Delete photo">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  aria-label="Delete photo"
+                                  onClick={() => handleDeletePhoto(photo.id)}
+                                  disabled={uploadingPhoto}
+                                  sx={{
+                                    position: "absolute",
+                                    top: 8,
+                                    right: 8,
+                                    bgcolor: "rgba(0, 0, 0, 0.6)",
+                                    color: "common.white",
+                                    "&:hover": {
+                                      bgcolor: "error.main",
+                                      color: "common.white",
+                                    },
+                                  }}
+                                >
+                                  <Delete fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          )}
+                        </Box>
+                        <Stack direction="row" spacing={1} alignItems="flex-start">
+                          <Box flexGrow={1}>
+                            <Typography variant="body2" fontWeight={600} noWrap title={photo.originalName}>
+                              {photo.originalName}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {formatFileSize(photo.fileSize)}
+                              {photo.capturedAt ? (
+                                <>
+                                  {" \u2022 "}
+                                  {dayjs(photo.capturedAt).format("MMM D, YYYY h:mm A")}
+                                </>
+                              ) : null}
+                            </Typography>
+                          </Box>
+                        </Stack>
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          component="a"
+                          href={downloadHref}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          View Full Size
+                        </Button>
+                      </Stack>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              );
+            })}
+          </Grid>
+        )}
+      </Stack>
+    );
+
+    return (
+      <>
+        {venuesSection}
+        {photosSection}
+        {notesSection}
+      </>
+    );
+  };
+
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <Stack spacing={2}>
@@ -874,9 +1254,7 @@ const VenueNumbersList = () => {
                       <Typography variant="body2" color="text.secondary">
                         Date:{" "}
                         <Typography component="span" variant="body1" fontWeight={600}>
-                          {formState.activityDate
-                            ? dayjs(formState.activityDate).format("MMM D, YYYY")
-                            : "—"}
+                          {formState.activityDate ? dayjs(formState.activityDate).format("MMM D, YYYY") : "—"}
                         </Typography>
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
@@ -962,354 +1340,7 @@ const VenueNumbersList = () => {
                       </Grid>
                     </Grid>
 
-                    {showNoReportDetails ? (
-                      <Typography variant="body2" color="text.secondary">
-                        No report information.
-                      </Typography>
-                    ) : (
-                      <>
-                        <Stack spacing={2}>
-                          <Stack direction="row" spacing={1} alignItems="center">
-                            <Typography variant="h6" flexGrow={1}>
-                              Venues
-                            </Typography>
-                            {!readOnly && (
-                              <Button
-                                variant={didNotOperate ? "contained" : "outlined"}
-                                color={didNotOperate ? "warning" : "inherit"}
-                                onClick={handleDidNotOperateToggle}
-                              >
-                                DIDN'T OPERATE
-                              </Button>
-                            )}
-                          </Stack>
-                          <Divider />
-                          <Stack spacing={2}>
-                        {formState.venues.map((venue, index) => {
-                          const isOpenBar = index === OPEN_BAR_INDEX;
-                          const availableOptions = (() => {
-                            if (!venue.venueName) {
-                              return venuesOptions;
-                            }
-                            const set = new Set(venuesOptions.map((name) => name.toLowerCase()));
-                            if (!set.has(venue.venueName.toLowerCase())) {
-                              return [...venuesOptions, venue.venueName];
-                            }
-                            return venuesOptions;
-                          })();
-
-                          return (
-                            <Stack key={venue.id ?? `venue-${index}`} spacing={1}>
-                              <Card variant="outlined">
-                                <CardContent>
-                                  <Stack spacing={2}>
-                                    <Stack direction="row" alignItems="center" spacing={1}>
-                                      <Typography fontWeight={600}>
-                                        {isOpenBar ? "Open Bar (Venue 1)" : `Venue ${index + 1}`}
-                                      </Typography>
-                                      <Box flexGrow={1} />
-                                      {!readOnly && !isOpenBar && (
-                                        <Tooltip title="Remove venue">
-                                          <IconButton size="small" onClick={() => handleRemoveVenue(index)}>
-                                            <Delete fontSize="small" />
-                                          </IconButton>
-                                        </Tooltip>
-                                      )}
-                                    </Stack>
-                                    <Grid container spacing={2}>
-                                      <Grid size={12}>
-                                        <Autocomplete
-                                          options={availableOptions}
-                                          value={venue.venueName}
-                                          onChange={(_, value) => handleVenueChange(index, "venueName", value ?? "")}
-                                          renderInput={(params) => (
-                                            <TextField
-                                              {...params}
-                                              label="Venue"
-                                              required
-                                              fullWidth
-                                              sx={{
-                                                "& .MuiInputBase-root": {
-                                                  alignItems: "flex-start",
-                                                },
-                                                "& .MuiInputBase-input": {
-                                                  whiteSpace: "normal",
-                                                  overflow: "visible",
-                                                  textOverflow: "unset",
-                                                  lineHeight: 1.4,
-                                                },
-                                              }}
-                                            />
-                                          )}
-                                          disabled={readOnly}
-                                          fullWidth
-                                          componentsProps={{
-                                            popper: {
-                                              style: { width: "auto" },
-                                            },
-                                            paper: {
-                                              sx: {
-                                                width: "fit-content",
-                                                minWidth: "auto",
-                                                maxWidth: "min(440px, calc(100vw - 48px))",
-                                              },
-                                            },
-                                          }}
-                                          ListboxProps={{ style: { paddingRight: 8 } }}
-                                          sx={{
-                                            "& .MuiAutocomplete-inputRoot": {
-                                              alignItems: "flex-start",
-                                              flexWrap: "wrap",
-                                              paddingTop: 1,
-                                              paddingBottom: 1,
-                                            },
-                                            "& .MuiAutocomplete-input": {
-                                              display: "block",
-                                              height: "auto",
-                                              whiteSpace: "normal",
-                                              wordBreak: "break-word",
-                                              textOverflow: "unset",
-                                              width: "100% !important",
-                                              lineHeight: 1.4,
-                                            },
-                                          }}
-                                        />
-                                      </Grid>
-                                      {isOpenBar ? (
-                                        <>
-                                          <Grid size={{ xs: 12, md: 4 }}>
-                                            <TextField
-                                              label="Normal"
-                                              value={venue.normalCount ?? ""}
-                                              onChange={(event) => handleVenueChange(index, "normalCount", event.target.value)}
-                                              type="number"
-                                              inputProps={{ min: 0 }}
-                                              fullWidth
-                                              disabled={readOnly}
-                                            />
-                                          </Grid>
-                                          <Grid size={{ xs: 12, md: 4 }}>
-                                            <TextField
-                                              label="Cocktails"
-                                              value={venue.cocktailsCount ?? ""}
-                                              onChange={(event) => handleVenueChange(index, "cocktailsCount", event.target.value)}
-                                              type="number"
-                                              inputProps={{ min: 0 }}
-                                              fullWidth
-                                              disabled={readOnly}
-                                            />
-                                          </Grid>
-                                          <Grid size={{ xs: 12, md: 4 }}>
-                                            <TextField
-                                              label="Brunch"
-                                              value={venue.brunchCount ?? ""}
-                                              onChange={(event) => handleVenueChange(index, "brunchCount", event.target.value)}
-                                              type="number"
-                                              inputProps={{ min: 0 }}
-                                              fullWidth
-                                              disabled={readOnly}
-                                            />
-                                          </Grid>
-                                        </>
-                                      ) : (
-                                        <Grid size={{ xs: 12, md: 6 }}>
-                                          <TextField
-                                            label="Total People"
-                                            value={venue.totalPeople}
-                                            onChange={(event) => handleVenueChange(index, "totalPeople", event.target.value)}
-                                            type="number"
-                                            inputProps={{ min: 0 }}
-                                            fullWidth
-                                            disabled={readOnly}
-                                          />
-                                        </Grid>
-                                      )}
-                                    </Grid>
-                                  </Stack>
-                                </CardContent>
-                              </Card>
-                              {isOpenBar && !readOnly && !didNotOperate ? (
-                                <Box display="flex" justifyContent="center">
-                                  <Button startIcon={<Add />} variant="outlined" onClick={handleAddVenue}>
-                                    Add Venue
-                                  </Button>
-                                </Box>
-                              ) : null}
-                            </Stack>
-                          );
-                        })}
-                      </Stack>
-                    </Stack>
-
-                    <Stack spacing={2}>
-                      <Stack direction="row" spacing={1} alignItems="center">
-                        <Typography variant="h6" flexGrow={1}>
-                          Photos
-                        </Typography>
-                        {!readOnly && (
-                          <Button
-                            variant="outlined"
-                            size="small"
-                            startIcon={<UploadFile />}
-                            onClick={handlePhotoUploadClick}
-                            disabled={!selectedReportId || uploadingPhoto || photoLimitReached}
-                          >
-                            Upload Photo
-                          </Button>
-                        )}
-                      </Stack>
-                      {!readOnly && (
-                        <Typography variant="caption" color="text.secondary">
-                          Only one photo can be attached.
-                        </Typography>
-                      )}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        ref={fileInputRef}
-                        style={{ display: "none" }}
-                        onChange={handlePhotoFileChange}
-                      />
-                      {uploadingPhoto && <CircularProgress size={20} />}
-                      {photos.length === 0 ? (
-                        <Typography variant="body2" color="text.secondary">
-                          {readOnly
-                            ? "No photos attached to this report."
-                            : "No photos yet. Upload supporting photos for this report."}
-                        </Typography>
-                      ) : (
-                        <Grid container spacing={2}>
-                          {limitedPhotos.map((photo) => {
-                            const previewUrl = photoPreviews[photo.id];
-                            const previewError = photoPreviewErrors[photo.id];
-                            const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl);
-                            return (
-                              <Grid size={{ xs: 12, sm: 6, md: 4 }} key={photo.id}>
-                                <Card variant="outlined">
-                                  <CardContent>
-                                    <Stack spacing={1}>
-                                      <Box
-                                        sx={{
-                                          width: "100%",
-                                          height: 180,
-                                          borderRadius: 1,
-                                          bgcolor: "grey.100",
-                                          display: "flex",
-                                          alignItems: "center",
-                                          justifyContent: "center",
-                                          overflow: "hidden",
-                                          border: "1px solid",
-                                          borderColor: "divider",
-                                          position: "relative",
-                                        }}
-                                      >
-                                        {previewUrl ? (
-                                          <Box
-                                            component="img"
-                                            src={previewUrl}
-                                            alt={photo.originalName}
-                                            sx={{ width: "100%", height: "100%", objectFit: "cover" }}
-                                          />
-                                        ) : previewError ? (
-                                          <Typography variant="caption" color="text.secondary" align="center" px={2}>
-                                            Preview unavailable
-                                          </Typography>
-                                        ) : (
-                                          <CircularProgress size={24} />
-                                        )}
-                                        {!readOnly && (
-                                          <Tooltip title="Delete photo">
-                                            <span>
-                                              <IconButton
-                                                size="small"
-                                                aria-label="Delete photo"
-                                                onClick={() => handleDeletePhoto(photo.id)}
-                                                disabled={uploadingPhoto}
-                                                sx={{
-                                                  position: "absolute",
-                                                  top: 8,
-                                                  right: 8,
-                                                  bgcolor: "rgba(0, 0, 0, 0.6)",
-                                                  color: "common.white",
-                                                  "&:hover": {
-                                                    bgcolor: "error.main",
-                                                    color: "common.white",
-                                                  },
-                                                }}
-                                              >
-                                                <Delete fontSize="small" />
-                                              </IconButton>
-                                            </span>
-                                          </Tooltip>
-                                        )}
-                                      </Box>
-                                      <Stack direction="row" spacing={1} alignItems="flex-start">
-                                        <Box flexGrow={1}>
-                                          <Typography variant="body2" fontWeight={600} noWrap title={photo.originalName}>
-                                            {photo.originalName}
-                                          </Typography>
-                                          <Typography variant="caption" color="text.secondary">
-                                            {formatFileSize(photo.fileSize)}
-                                            {photo.capturedAt ? (
-                                              <>
-                                                {" \u2022 "}
-                                                {dayjs(photo.capturedAt).format("MMM D, YYYY h:mm A")}
-                                              </>
-                                            ) : null}
-                                          </Typography>
-                                        </Box>
-                                      </Stack>
-                                      <Button
-                                        variant="outlined"
-                                        size="small"
-                                        component="a"
-                                        href={downloadHref}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                      >
-                                        View Full Size
-                                      </Button>
-                                    </Stack>
-                                  </CardContent>
-                                </Card>
-                              </Grid>
-                            );
-                          })}
-                        </Grid>
-                      )}
-                    </Stack>
-
-                    <Stack spacing={1}>
-                      <Button variant="outlined" size="small" onClick={() => setNotesExpanded((prev) => !prev)}>
-                        {notesExpanded || formState.notes
-                          ? notesExpanded
-                            ? "Hide Notes"
-                            : "View Notes"
-                          : "Add Notes"}
-                      </Button>
-                      {(notesExpanded || formState.notes) &&
-                        (readOnly ? (
-                          <TextField
-                            label="Notes"
-                            value={formState.notes}
-                            multiline
-                            minRows={3}
-                            fullWidth
-                            InputProps={{ readOnly: true }}
-                          />
-                        ) : (
-                          <TextField
-                            label="Notes"
-                            value={formState.notes}
-                            onChange={handleNotesChange}
-                            multiline
-                            minRows={3}
-                            fullWidth
-                          />
-                        ))}
-                    </Stack>
-                      </>
-                    )}
+                    {renderReportDetails()}
 
                     {inEditMode ? (
                       <Button
@@ -1339,4 +1370,5 @@ const VenueNumbersList = () => {
 };
 
 export default VenueNumbersList;
+
 
