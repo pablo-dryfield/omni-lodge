@@ -302,6 +302,7 @@ const VenueNumbersList = () => {
     () => resolveOpenBarMode(currentCounter?.product?.name),
     [currentCounter?.product?.name],
   );
+  const isPubCrawlProduct = openBarMode === "pubCrawl";
   const isBottomlessBrunchProduct = openBarMode === "bottomlessBrunch";
 
   useEffect(() => {
@@ -738,9 +739,6 @@ const VenueNumbersList = () => {
           if (normal == null || cocktails == null) {
             return "Provide Normal and Cocktails counts for the open-bar venue.";
           }
-          if (brunch == null) {
-            return "Provide Brunch count for the open-bar venue.";
-          }
         } else if (normal == null || cocktails == null || brunch == null) {
           return "Provide Normal, Cocktails, and Brunch counts for the open-bar venue.";
         }
@@ -1047,7 +1045,7 @@ const VenueNumbersList = () => {
           return brunch == null;
         }
         if (openBarMode === "pubCrawl") {
-          return normal == null || cocktails == null || brunch == null;
+          return normal == null || cocktails == null;
         }
         return normal == null || cocktails == null || brunch == null;
       }
@@ -1067,8 +1065,14 @@ const VenueNumbersList = () => {
   const renderReportDetails = () => {
     const showOpenBarNormalField = !isBottomlessBrunchProduct;
     const showOpenBarCocktailsField = !isBottomlessBrunchProduct;
-    const openBarFieldMdSpan = showOpenBarNormalField && showOpenBarCocktailsField ? 4 : 12;
-    const openBarBrunchMdSpan = showOpenBarNormalField || showOpenBarCocktailsField ? 4 : 12;
+    const showOpenBarBrunchField = !isPubCrawlProduct;
+    const visibleOpenBarFields = [
+      showOpenBarNormalField,
+      showOpenBarCocktailsField,
+      showOpenBarBrunchField,
+    ].filter(Boolean).length;
+    const openBarMdSpan =
+      visibleOpenBarFields >= 3 ? 4 : visibleOpenBarFields === 2 ? 6 : 12;
 
     const notesSection = (
       <Stack spacing={1}>
@@ -1161,7 +1165,7 @@ const VenueNumbersList = () => {
                   <CardContent>
                     <Stack spacing={2}>
                       <Stack direction="row" alignItems="center" spacing={1}>
-                        <Typography fontWeight={600}>
+                        <Typography fontWeight={600} sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
                           {isOpenBar ? "Open Bar" : `Venue ${index}`}
                         </Typography>
                         <Box flexGrow={1} />
@@ -1245,7 +1249,7 @@ const VenueNumbersList = () => {
                         {isOpenBar ? (
                           <>
                             {showOpenBarNormalField && (
-                              <Grid size={{ xs: 12, md: openBarFieldMdSpan }}>
+                              <Grid size={{ xs: 12, md: openBarMdSpan }}>
                                 <TextField
                                   label="Normal"
                                   value={venue.normalCount ?? ""}
@@ -1258,7 +1262,7 @@ const VenueNumbersList = () => {
                               </Grid>
                             )}
                             {showOpenBarCocktailsField && (
-                              <Grid size={{ xs: 12, md: openBarFieldMdSpan }}>
+                              <Grid size={{ xs: 12, md: openBarMdSpan }}>
                                 <TextField
                                   label="Cocktails"
                                   value={venue.cocktailsCount ?? ""}
@@ -1270,17 +1274,19 @@ const VenueNumbersList = () => {
                                 />
                               </Grid>
                             )}
-                            <Grid size={{ xs: 12, md: openBarBrunchMdSpan }}>
-                              <TextField
-                                label="Brunch"
-                                value={venue.brunchCount ?? ""}
-                                onChange={(event) => handleVenueChange(index, "brunchCount", event.target.value)}
-                                type="number"
-                                inputProps={{ min: 0 }}
-                                fullWidth
-                                disabled={fieldsDisabled}
-                              />
-                            </Grid>
+                            {showOpenBarBrunchField && (
+                              <Grid size={{ xs: 12, md: openBarMdSpan }}>
+                                <TextField
+                                  label="Brunch"
+                                  value={venue.brunchCount ?? ""}
+                                  onChange={(event) => handleVenueChange(index, "brunchCount", event.target.value)}
+                                  type="number"
+                                  inputProps={{ min: 0 }}
+                                  fullWidth
+                                  disabled={fieldsDisabled}
+                                />
+                              </Grid>
+                            )}
                           </>
                         ) : (
                           <Grid size={{ xs: 12, md: 6 }}>
@@ -1551,8 +1557,8 @@ const VenueNumbersList = () => {
                             alignItems={{ xs: "flex-start", sm: "center" }}
                           >
                             <Stack direction="row" spacing={1} alignItems="center" sx={{ flexGrow: 1 }}>
-                              <Typography fontWeight={600}>
-                                {dayjs(report.activityDate).format("MMM D, YYYY")}
+                              <Typography fontWeight={600} sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                                {`${dayjs(report.activityDate).format("MMM D, YYYY")}${counterForReport?.product?.name ? " \u2022 " + counterForReport.product.name : ""}`}
                               </Typography>
                               <Chip
                                 size="small"
@@ -1622,12 +1628,14 @@ const VenueNumbersList = () => {
                         <Typography component="span" variant="body1" fontWeight={600}>
                           {formState.activityDate ? dayjs(formState.activityDate).format("MMM D, YYYY") : "—"}
                         </Typography>
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        Manager:{" "}
-                        <Typography component="span" variant="body1" fontWeight={600}>
-                          {getManagerLabel(currentCounter)}
-                        </Typography>
+                        {currentCounter?.product?.name ? (
+                          <>
+                            {" \u2022 "}
+                            <Typography component="span" variant="body1" fontWeight={600}>
+                              {currentCounter.product.name}
+                            </Typography>
+                          </>
+                        ) : null}
                       </Typography>
                     </Box>
 
