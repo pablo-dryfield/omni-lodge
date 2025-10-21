@@ -19,9 +19,9 @@ import {
 } from "@mui/material";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { LocalizationProvider } from "@mui/x-date-pickers";
-import { ArrowBack, Add, Delete, Edit, Send, UploadFile, Visibility } from "@mui/icons-material";
+import { ArrowBack, Add, Delete, Edit, Save, Send, UploadFile, Visibility } from "@mui/icons-material";
 import dayjs from "dayjs";
-import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
@@ -36,12 +36,13 @@ import {
   deleteNightReportPhoto,
 } from "../../actions/nightReportActions";
 import { fetchCounters } from "../../actions/counterActions";
-import { fetchUsers } from "../../actions/userActions";
 import { fetchVenues } from "../../actions/venueActions";
+import { loadCatalog, selectCatalog } from "../../store/catalogSlice";
 import axiosInstance from "../../utils/axiosInstance";
 
 import type { NightReport, NightReportSummary, NightReportVenueInput } from "../../types/nightReports/NightReport";
 import type { Counter } from "../../types/counters/Counter";
+import type { StaffOption } from "../../types/counters/CounterRegistry";
 import type { User } from "../../types/users/User";
 import type { Venue } from "../../types/venues/Venue";
 
@@ -169,13 +170,17 @@ const buildVenuePayload = (report: EditableReport): NightReportVenueInput[] =>
     return payload;
   });
 
-const formatUserFullName = (user: Partial<User> | undefined): string => {
+const formatUserFullName = (user: Partial<User> | StaffOption | undefined): string => {
   if (!user) {
     return "";
   }
-  const first = user.firstName ?? "";
-  const last = user.lastName ?? "";
-  const fallback = user.username ?? "";
+  const full = (user as { fullName?: string }).fullName ?? "";
+  if (full.trim()) {
+    return full.trim();
+  }
+  const first = (user as { firstName?: string | null }).firstName ?? "";
+  const last = (user as { lastName?: string | null }).lastName ?? "";
+  const fallback = (user as Partial<User>).username ?? "";
   return `${first} ${last}`.trim() || fallback;
 };
 
@@ -197,8 +202,8 @@ const VenueNumbersList = () => {
   const nightReportDetail = useAppSelector((state) => state.nightReports.detail);
   const nightReportUi = useAppSelector((state) => state.nightReports.ui);
   const countersState = useAppSelector((state) => state.counters[0]);
-  const usersState = useAppSelector((state) => state.users[0]);
   const venuesState = useAppSelector((state) => state.venues[0]);
+  const catalog = useAppSelector(selectCatalog);
 
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
   const [formState, setFormState] = useState<EditableReport>(() => toEditableReport(null));
@@ -207,6 +212,7 @@ const VenueNumbersList = () => {
   const [pendingChanges, setPendingChanges] = useState<boolean>(false);
   const [notesExpanded, setNotesExpanded] = useState<boolean>(false);
   const [didNotOperate, setDidNotOperate] = useState<boolean>(false);
+  const [saving, setSaving] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [photoPreviews, setPhotoPreviews] = useState<Record<number, string>>({});
   const [photoPreviewErrors, setPhotoPreviewErrors] = useState<Record<number, boolean>>({});
@@ -251,11 +257,6 @@ const VenueNumbersList = () => {
   }, [venuesState.data]);
 
   const counters = useMemo(() => (countersState.data[0]?.data as Counter[] | undefined) ?? [], [countersState.data]);
-  const users = useMemo(() => (usersState.data[0]?.data as User[] | undefined) ?? [], [usersState.data]);
-  const selectedLeader = useMemo(
-    () => users.find((user) => user.id === formState.leaderId) ?? null,
-    [users, formState.leaderId],
-  );
   const reports = useMemo(
     () => (nightReportListState.data[0]?.data as NightReportSummary[] | undefined) ?? [],
     [nightReportListState.data],
@@ -263,6 +264,7 @@ const VenueNumbersList = () => {
   const photos = useMemo(() => nightReportDetail.data?.photos ?? [], [nightReportDetail.data?.photos]);
   const photoLimitReached = photos.length >= 1;
   const limitedPhotos = useMemo(() => photos.slice(0, 1), [photos]);
+  const leaderOptions = useMemo(() => (catalog.managers ?? []).filter((item): item is StaffOption => item != null), [catalog.managers]);
 
   useEffect(() => {
     photoPreviewUrlsRef.current = photoPreviews;
@@ -271,9 +273,14 @@ const VenueNumbersList = () => {
   useEffect(() => {
     dispatch(fetchNightReports());
     dispatch(fetchCounters());
-    dispatch(fetchUsers());
     dispatch(fetchVenues());
   }, [dispatch]);
+
+  useEffect(() => {
+    if (!catalog.loaded && !catalog.loading) {
+      dispatch(loadCatalog());
+    }
+  }, [catalog.loaded, catalog.loading, dispatch]);
 
   useEffect(() => {
     if (!reports.length) {
@@ -634,7 +641,7 @@ const VenueNumbersList = () => {
     }));
   };
 
-  const handleLeaderChange = (_: unknown, value: Partial<User> | null) => {
+  const handleLeaderChange = (_: SyntheticEvent, value: StaffOption | null) => {
     setValidationError(null);
     setPendingChanges(true);
     setFormState((prev) => ({
@@ -706,6 +713,47 @@ const VenueNumbersList = () => {
     dispatch(deleteNightReportPhoto({ reportId: selectedReportId, photoId }));
   };
 
+  const createUpdatePayload = useCallback(
+    () => ({
+      activityDate: formState.activityDate,
+      leaderId: formState.leaderId ?? undefined,
+      notes: formState.notes || undefined,
+      venues: buildVenuePayload(formState),
+    }),
+    [formState],
+  );
+
+  const handleSaveVenues = async () => {
+    if (!selectedReportId) {
+      setValidationError("Select a report to save.");
+      return;
+    }
+    const error = validateForm(formState);
+    if (error) {
+      setValidationError(error);
+      return;
+    }
+    setValidationError(null);
+    const payload = createUpdatePayload();
+    try {
+      setSaving(true);
+      await dispatch(updateNightReport({ reportId: selectedReportId, payload })).unwrap();
+      await dispatch(fetchNightReportById(selectedReportId));
+      await dispatch(fetchNightReports());
+      setPendingChanges(false);
+    } catch (saveError) {
+      const message =
+        typeof saveError === "string"
+          ? saveError
+          : saveError instanceof Error
+            ? saveError.message
+            : "Failed to save venues.";
+      setValidationError(message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSubmit = async () => {
     if (!selectedReportId) {
       setValidationError("Select a report to submit.");
@@ -718,12 +766,7 @@ const VenueNumbersList = () => {
     }
     setValidationError(null);
 
-    const payload = {
-      activityDate: formState.activityDate,
-      leaderId: formState.leaderId ?? undefined,
-      notes: formState.notes || undefined,
-      venues: buildVenuePayload(formState),
-    };
+    const payload = createUpdatePayload();
 
     const isAlreadySubmitted = currentStatus === "submitted";
 
@@ -798,11 +841,10 @@ const VenueNumbersList = () => {
     });
   }, [readOnly, didNotOperate, formState.venues, venuesOptions, openBarVenueOptions]);
 
-  const leaderHasError = useMemo(() => !readOnly && !didNotOperate && !formState.leaderId, [
-    readOnly,
-    didNotOperate,
-    formState.leaderId,
-  ]);
+  const leaderHasError = useMemo(
+    () => !readOnly && !didNotOperate && !formState.leaderId,
+    [readOnly, didNotOperate, formState.leaderId],
+  );
 
   const renderReportDetails = () => {
     const notesSection = (
@@ -907,7 +949,7 @@ const VenueNumbersList = () => {
                       </Stack>
                       <Grid container spacing={2}>
                         <Grid size={12}>
-                          <Autocomplete
+                          <Autocomplete<string>
                             options={availableOptions}
                             value={venue.venueName}
                             onChange={(_, value) => handleVenueChange(index, "venueName", value ?? "")}
@@ -1027,11 +1069,28 @@ const VenueNumbersList = () => {
             );
           })}
           {!readOnly && !didNotOperate ? (
-            <Box display="flex" justifyContent="center">
-              <Button startIcon={<Add />} variant="outlined" onClick={handleAddVenue}>
+            <Stack direction="row" spacing={1} justifyContent="center" alignItems="center">
+              <Button startIcon={<Add />} variant="outlined" onClick={handleAddVenue} sx={{ minWidth: 160 }}>
                 Add Venue
               </Button>
-            </Box>
+              <Button
+                startIcon={<Save />}
+                variant="contained"
+                color="primary"
+                onClick={handleSaveVenues}
+                disabled={
+                  !selectedReportId ||
+                  readOnly ||
+                  submitting ||
+                  saving ||
+                  formHasFieldErrors ||
+                  leaderHasError ||
+                  !pendingChanges
+                }
+              >
+                Save
+              </Button>
+            </Stack>
           ) : null}
         </Stack>
       </Stack>
@@ -1041,7 +1100,7 @@ const VenueNumbersList = () => {
       <Stack spacing={2}>
         <Stack direction="row" spacing={1} alignItems="center">
           <Typography variant="h6" flexGrow={1}>
-            Photos
+            Report Evidence
           </Typography>
           {!readOnly && (
             <Button
@@ -1326,9 +1385,9 @@ const VenueNumbersList = () => {
 
                     <Grid container spacing={2}>
                       <Grid size={12}>
-                        <Autocomplete
-                          options={users}
-                          value={selectedLeader}
+                        <Autocomplete<StaffOption>
+                          options={leaderOptions}
+                          value={leaderOptions.find((leader) => leader.id === formState.leaderId) ?? null}
                           onChange={handleLeaderChange}
                           getOptionLabel={(option) => formatUserFullName(option)}
                           isOptionEqualToValue={(option, value) => option.id === value.id}
