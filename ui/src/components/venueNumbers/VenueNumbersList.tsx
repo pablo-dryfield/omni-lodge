@@ -47,6 +47,7 @@ import type { User } from "../../types/users/User";
 import type { Venue } from "../../types/venues/Venue";
 
 type EditableVenue = {
+  tempKey: string;
   id?: number;
   venueName: string;
   totalPeople: string;
@@ -66,7 +67,10 @@ type EditableReport = {
 const OPEN_BAR_INDEX = 0;
 const DATE_FORMAT = "YYYY-MM-DD";
 
+const generateTempKey = (): string => `tmp-${Math.random().toString(36).slice(2, 10)}-${Date.now()}`;
+
 const createEmptyVenue = (): EditableVenue => ({
+  tempKey: generateTempKey(),
   id: undefined,
   venueName: "",
   totalPeople: "",
@@ -93,6 +97,7 @@ const toEditableReport = (report: NightReport | null): EditableReport => {
     .slice()
     .sort((a, b) => a.orderIndex - b.orderIndex)
     .map((venue, index) => ({
+      tempKey: generateTempKey(),
       id: venue.id,
       venueName: venue.venueName ?? "",
       totalPeople: venue.totalPeople != null ? String(venue.totalPeople) : "",
@@ -213,6 +218,7 @@ const VenueNumbersList = () => {
   const [notesExpanded, setNotesExpanded] = useState<boolean>(false);
   const [didNotOperate, setDidNotOperate] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
+  const [editableVenueKeys, setEditableVenueKeys] = useState<Set<string>>(() => new Set());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [photoPreviews, setPhotoPreviews] = useState<Record<number, string>>({});
   const [photoPreviewErrors, setPhotoPreviewErrors] = useState<Record<number, boolean>>({});
@@ -222,6 +228,7 @@ const VenueNumbersList = () => {
   const lastLoadedReportIdRef = useRef<number | null>(null);
   const previousVenuesRef = useRef<EditableVenue[] | null>(null);
   const previousNotesRef = useRef<string | null>(null);
+  const previousEditableVenueKeysRef = useRef<Set<string> | null>(null);
 
   const requestedCounterId = useMemo(() => {
     const raw = searchParams.get("counterId");
@@ -264,7 +271,35 @@ const VenueNumbersList = () => {
   const photos = useMemo(() => nightReportDetail.data?.photos ?? [], [nightReportDetail.data?.photos]);
   const photoLimitReached = photos.length >= 1;
   const limitedPhotos = useMemo(() => photos.slice(0, 1), [photos]);
-  const leaderOptions = useMemo(() => (catalog.managers ?? []).filter((item): item is StaffOption => item != null), [catalog.managers]);
+  const leaderOptions = useMemo(() => {
+    const base = (catalog.managers ?? []).filter((item): item is StaffOption => item != null);
+    if (formState.leaderId == null) {
+      return base;
+    }
+    if (base.some((manager) => manager.id === formState.leaderId)) {
+      return base;
+    }
+    const reportLeader = nightReportDetail.data?.leader;
+    if (reportLeader && reportLeader.id === formState.leaderId) {
+      const nameParts = reportLeader.fullName?.trim().split(/\s+/).filter(Boolean) ?? [];
+      const firstName = nameParts[0] ?? "";
+      const lastName = nameParts.slice(1).join(" ");
+      const fallbackOption: StaffOption = {
+        id: reportLeader.id,
+        firstName,
+        lastName,
+        fullName: reportLeader.fullName,
+        userTypeSlug: null,
+        userTypeName: null,
+      };
+      return [...base, fallbackOption];
+    }
+    return base;
+  }, [catalog.managers, formState.leaderId, nightReportDetail.data?.leader]);
+  const selectedLeaderOption = useMemo(
+    () => leaderOptions.find((leader) => leader.id === formState.leaderId) ?? null,
+    [leaderOptions, formState.leaderId],
+  );
 
   useEffect(() => {
     photoPreviewUrlsRef.current = photoPreviews;
@@ -350,6 +385,10 @@ const VenueNumbersList = () => {
     setFormState(normalizedForm);
     setDidNotOperate(initialDidNotOperate);
     setPendingChanges(false);
+      previousEditableVenueKeysRef.current = null;
+    const initialEditableKeys = computeInitialEditableKeys(normalizedForm.venues);
+    setEditableVenueKeys(initialEditableKeys);
+    previousEditableVenueKeysRef.current = null;
     setValidationError(null);
     setNotesExpanded(Boolean(normalizedForm.notes) || initialDidNotOperate);
 
@@ -381,6 +420,10 @@ const VenueNumbersList = () => {
       modeRequestRef.current = null;
       lastLoadedReportIdRef.current = null;
       setPendingChanges(false);
+      previousEditableVenueKeysRef.current = null;
+      setEditableVenueKeys(new Set());
+      previousEditableVenueKeysRef.current = null;
+      previousEditableVenueKeysRef.current = null;
       setValidationError(null);
       setNotesExpanded(false);
       setDidNotOperate(false);
@@ -582,7 +625,7 @@ const VenueNumbersList = () => {
       } else {
         const total = normalizeNumber(venue.totalPeople);
         if (total == null) {
-          return `Provide total people for ${venue.venueName || `venue ${index + 1}`}.`;
+          return `Provide total people for ${venue.venueName || `Venue ${index}`}.`;
         }
       }
     }
@@ -621,11 +664,18 @@ const VenueNumbersList = () => {
   const handleAddVenue = () => {
     setValidationError(null);
     setPendingChanges(true);
+    const newVenue = { ...createEmptyVenue(), venueName: "" };
+    const newKey = getVenueKey(newVenue, formState.venues.length);
     setFormState((prev) => {
       return {
         ...prev,
-        venues: [...prev.venues, { ...createEmptyVenue(), venueName: "" }],
+        venues: [...prev.venues, newVenue],
       };
+    });
+    setEditableVenueKeys((prev) => {
+      const next = new Set(prev);
+      next.add(newKey);
+      return next;
     });
   };
 
@@ -633,12 +683,39 @@ const VenueNumbersList = () => {
     if (index === OPEN_BAR_INDEX) {
       return;
     }
+    const venueToRemove = formState.venues[index];
     setValidationError(null);
     setPendingChanges(true);
     setFormState((prev) => ({
       ...prev,
       venues: prev.venues.filter((_, idx) => idx !== index),
     }));
+    if (venueToRemove) {
+      const keyToRemove = getVenueKey(venueToRemove, index);
+      setEditableVenueKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(keyToRemove);
+        return next;
+      });
+    }
+  };
+
+  const handleVenueEditToggle = (index: number) => {
+    setValidationError(null);
+    const venue = formState.venues[index];
+    if (!venue) {
+      return;
+    }
+    const key = getVenueKey(venue, index);
+    setEditableVenueKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
   };
 
   const handleLeaderChange = (_: SyntheticEvent, value: StaffOption | null) => {
@@ -683,6 +760,9 @@ const VenueNumbersList = () => {
           ? previousVenuesRef.current.map((venue) => ({ ...venue }))
           : [createEmptyVenue()];
       const restoredNotes = previousNotesRef.current ?? "";
+      const restoredEditableKeys =
+        previousEditableVenueKeysRef.current ??
+        computeInitialEditableKeys(restoredVenues);
       setFormState((prev) => ({
         ...prev,
         venues: restoredVenues,
@@ -690,6 +770,7 @@ const VenueNumbersList = () => {
       }));
       setDidNotOperate(false);
       setNotesExpanded(Boolean(restoredNotes));
+      setEditableVenueKeys(restoredEditableKeys);
       previousVenuesRef.current = null;
       previousNotesRef.current = null;
       return;
@@ -697,6 +778,7 @@ const VenueNumbersList = () => {
 
     previousVenuesRef.current = formState.venues.map((venue) => ({ ...venue }));
     previousNotesRef.current = formState.notes;
+    previousEditableVenueKeysRef.current = new Set(editableVenueKeys);
     setFormState((prev) => ({
       ...prev,
       venues: [],
@@ -704,6 +786,9 @@ const VenueNumbersList = () => {
     }));
     setNotesExpanded(true);
     setDidNotOperate(true);
+    setEditableVenueKeys(new Set());
+      previousEditableVenueKeysRef.current = null;
+      previousEditableVenueKeysRef.current = null;
   };
 
   const handleDeletePhoto = (photoId: number) => {
@@ -741,6 +826,8 @@ const VenueNumbersList = () => {
       await dispatch(fetchNightReportById(selectedReportId));
       await dispatch(fetchNightReports());
       setPendingChanges(false);
+      setEditableVenueKeys(new Set());
+      previousEditableVenueKeysRef.current = null;
     } catch (saveError) {
       const message =
         typeof saveError === "string"
@@ -776,6 +863,8 @@ const VenueNumbersList = () => {
         await dispatch(submitNightReport(selectedReportId)).unwrap();
       }
       await dispatch(fetchNightReports());
+      setEditableVenueKeys(new Set());
+      previousEditableVenueKeysRef.current = null;
       setActiveReportMode("view");
       setPendingChanges(false);
     } catch (submissionError) {
@@ -842,8 +931,24 @@ const VenueNumbersList = () => {
   }, [readOnly, didNotOperate, formState.venues, venuesOptions, openBarVenueOptions]);
 
   const leaderHasError = useMemo(
-    () => !readOnly && !didNotOperate && !formState.leaderId,
-    [readOnly, didNotOperate, formState.leaderId],
+    () => !readOnly && !didNotOperate && (!formState.leaderId || !selectedLeaderOption),
+    [readOnly, didNotOperate, formState.leaderId, selectedLeaderOption],
+  );
+
+  const getVenueKey = useCallback((venue: EditableVenue, index: number) => (venue.id != null ? `id-${venue.id}` : venue.tempKey ?? `temp-${index}`), []);
+
+  const computeInitialEditableKeys = useCallback(
+    (venues: EditableVenue[]) => {
+      const initial = new Set<string>();
+      venues.forEach((venue, idx) => {
+        const trimmed = venue.venueName.trim().toLowerCase();
+        if (!trimmed || trimmed === SELECT_OPEN_BAR_PLACEHOLDER.toLowerCase()) {
+          initial.add(getVenueKey(venue, idx));
+        }
+      });
+      return initial;
+    },
+    [getVenueKey],
   );
 
   const renderReportDetails = () => {
@@ -921,24 +1026,34 @@ const VenueNumbersList = () => {
               }
               return baseOptions;
             })();
+            const venueKey = getVenueKey(venue, index);
+            const isEditableVenue = editableVenueKeys.has(venueKey);
+            const fieldsDisabled = readOnly || !isEditableVenue;
             const normalizedVenueName = venue.venueName.trim();
             const showVenueError =
-              !readOnly &&
+              !fieldsDisabled &&
               (!normalizedVenueName ||
                 (isOpenBar && normalizedVenueName.toLowerCase() === SELECT_OPEN_BAR_PLACEHOLDER.toLowerCase()));
             const showTotalError =
-              !readOnly && !isOpenBar && (venue.totalPeople == null || venue.totalPeople.trim().length === 0);
+              !fieldsDisabled && !isOpenBar && (venue.totalPeople == null || venue.totalPeople.trim().length === 0);
 
             return (
-              <Stack key={venue.id ?? `venue-${index}`} spacing={1}>
+              <Stack key={getVenueKey(venue, index)} spacing={1}>
                 <Card variant="outlined">
                   <CardContent>
                     <Stack spacing={2}>
                       <Stack direction="row" alignItems="center" spacing={1}>
                         <Typography fontWeight={600}>
-                          {isOpenBar ? "Open Bar (Venue 1)" : `Venue ${index + 1}`}
+                          {isOpenBar ? "Open Bar" : `Venue ${index}`}
                         </Typography>
                         <Box flexGrow={1} />
+                        {!readOnly && (
+                          <Tooltip title={isEditableVenue ? "Lock venue" : "Edit venue"}>
+                            <IconButton size="small" onClick={() => handleVenueEditToggle(index)}>
+                              <Edit fontSize="small" color={isEditableVenue ? "primary" : "inherit"} />
+                            </IconButton>
+                          </Tooltip>
+                        )}
                         {!readOnly && !isOpenBar && (
                           <Tooltip title="Remove venue">
                             <IconButton size="small" onClick={() => handleRemoveVenue(index)}>
@@ -975,7 +1090,7 @@ const VenueNumbersList = () => {
                                 }}
                               />
                             )}
-                            disabled={readOnly}
+                            disabled={fieldsDisabled}
                             fullWidth
                             componentsProps={{
                               popper: {
@@ -1019,7 +1134,7 @@ const VenueNumbersList = () => {
                                 type="number"
                                 inputProps={{ min: 0 }}
                                 fullWidth
-                                disabled={readOnly}
+                                disabled={fieldsDisabled}
                               />
                             </Grid>
                             <Grid size={4}>
@@ -1030,7 +1145,7 @@ const VenueNumbersList = () => {
                                 type="number"
                                 inputProps={{ min: 0 }}
                                 fullWidth
-                                disabled={readOnly}
+                                disabled={fieldsDisabled}
                               />
                             </Grid>
                             <Grid size={4}>
@@ -1041,7 +1156,7 @@ const VenueNumbersList = () => {
                                 type="number"
                                 inputProps={{ min: 0 }}
                                 fullWidth
-                                disabled={readOnly}
+                                disabled={fieldsDisabled}
                               />
                             </Grid>
                           </>
@@ -1051,14 +1166,14 @@ const VenueNumbersList = () => {
                               label="Total People"
                               value={venue.totalPeople}
                               onChange={(event) => handleVenueChange(index, "totalPeople", event.target.value)}
-                              type="number"
-                              inputProps={{ min: 0 }}
-                              fullWidth
-                              disabled={readOnly}
-                              required
-                              error={showTotalError}
-                              helperText={showTotalError ? "Total people is required." : undefined}
-                            />
+                                type="number"
+                                inputProps={{ min: 0 }}
+                                fullWidth
+                                disabled={fieldsDisabled}
+                                required
+                                error={showTotalError}
+                                helperText={showTotalError ? "Total people is required." : undefined}
+                              />
                           </Grid>
                         )}
                       </Grid>
@@ -1387,7 +1502,7 @@ const VenueNumbersList = () => {
                       <Grid size={12}>
                         <Autocomplete<StaffOption>
                           options={leaderOptions}
-                          value={leaderOptions.find((leader) => leader.id === formState.leaderId) ?? null}
+                          value={selectedLeaderOption}
                           onChange={handleLeaderChange}
                           getOptionLabel={(option) => formatUserFullName(option)}
                           isOptionEqualToValue={(option, value) => option.id === value.id}
