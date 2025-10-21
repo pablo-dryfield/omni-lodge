@@ -488,10 +488,6 @@ export const updateNightReport = async (req: AuthenticatedRequest, res: Response
       throw new HttpError(403, 'You do not have permission to edit this report');
     }
 
-    if (report.status === 'submitted') {
-      throw new HttpError(400, 'Submitted reports cannot be edited');
-    }
-
     const body = req.body ?? {};
     const updatePayload: Partial<NightReport> = {};
 
@@ -591,25 +587,24 @@ export const submitNightReport = async (req: AuthenticatedRequest, res: Response
     }
 
     const venues = report.venues ?? [];
-    if (venues.length === 0) {
-      throw new HttpError(400, 'At least one venue must be recorded before submission');
-    }
+    const hasRecordedVenues = venues.length > 0;
+    if (hasRecordedVenues) {
+      const openBarVenues = venues.filter((venue) => venue.isOpenBar);
+      if (openBarVenues.length !== 1 || venues[0].isOpenBar !== true) {
+        throw new HttpError(400, 'Ensure the first venue is marked as the open bar with required counts');
+      }
 
-    const openBarVenues = venues.filter((venue) => venue.isOpenBar);
-    if (openBarVenues.length !== 1 || venues[0].isOpenBar !== true) {
-      throw new HttpError(400, 'Ensure the first venue is marked as the open bar with required counts');
-    }
-
-    const [openBar] = openBarVenues;
-    if (
-      openBar.normalCount == null ||
-      openBar.cocktailsCount == null ||
-      openBar.brunchCount == null ||
-      openBar.normalCount < 0 ||
-      openBar.cocktailsCount < 0 ||
-      openBar.brunchCount < 0
-    ) {
-      throw new HttpError(400, 'Open bar counts must be provided before submission');
+      const [openBar] = openBarVenues;
+      if (
+        openBar.normalCount == null ||
+        openBar.cocktailsCount == null ||
+        openBar.brunchCount == null ||
+        openBar.normalCount < 0 ||
+        openBar.cocktailsCount < 0 ||
+        openBar.brunchCount < 0
+      ) {
+        throw new HttpError(400, 'Open bar counts must be provided before submission');
+      }
     }
 
     const photoCount = await NightReportPhoto.count({ where: { reportId } });

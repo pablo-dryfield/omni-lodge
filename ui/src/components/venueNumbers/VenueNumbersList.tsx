@@ -712,11 +712,26 @@ const VenueNumbersList = () => {
       venues: buildVenuePayload(formState),
     };
 
-    await dispatch(updateNightReport({ reportId: selectedReportId, payload })).unwrap();
-    await dispatch(submitNightReport(selectedReportId)).unwrap();
-    await dispatch(fetchNightReports());
-    setActiveReportMode("view");
-    setPendingChanges(false);
+    const isAlreadySubmitted = currentStatus === "submitted";
+
+    try {
+      await dispatch(updateNightReport({ reportId: selectedReportId, payload })).unwrap();
+      if (!isAlreadySubmitted) {
+        await dispatch(submitNightReport(selectedReportId)).unwrap();
+      }
+      await dispatch(fetchNightReports());
+      setActiveReportMode("view");
+      setPendingChanges(false);
+    } catch (submissionError) {
+      const fallbackMessage = isAlreadySubmitted ? "Failed to save report." : "Failed to submit report.";
+      const message =
+        typeof submissionError === "string"
+          ? submissionError
+          : submissionError instanceof Error
+            ? submissionError.message
+            : fallbackMessage;
+      setValidationError(message);
+    }
   };
 
   const reportsLoading = nightReportListState.loading;
@@ -724,8 +739,11 @@ const VenueNumbersList = () => {
   const submitting = nightReportUi.submitting;
   const uploadingPhoto = nightReportUi.uploadingPhoto;
   const currentStatus = nightReportDetail.data?.status ?? "draft";
+  const isSubmittedReport = currentStatus === "submitted";
+  const submitButtonLabel = isSubmittedReport ? "Save Changes" : "Submit Report";
   const readOnly = activeReportMode !== "edit";
   const inEditMode = activeReportMode === "edit";
+  const showNoReportDetails = readOnly && didNotOperate;
   const showDetails = selectedReportId != null && activeReportMode != null;
   const currentCounter = counters.find((counter) => counter.id === formState.counterId);
 
@@ -850,7 +868,7 @@ const VenueNumbersList = () => {
                 ) : (
                   <Stack spacing={3}>
                     {currentStatus === "submitted" && !inEditMode && (
-                      <Alert severity="info">Submitted - This report is locked. Click Update to make changes.</Alert>
+                      <Alert severity="info">Submitted - Click Update to make changes.</Alert>
                     )}
                     <Box>
                       <Typography variant="body2" color="text.secondary">
@@ -944,23 +962,29 @@ const VenueNumbersList = () => {
                       </Grid>
                     </Grid>
 
-                    <Stack spacing={2}>
-                      <Stack direction="row" spacing={1} alignItems="center">
-                        <Typography variant="h6" flexGrow={1}>
-                          Venues
-                        </Typography>
-                        {!readOnly && (
-                          <Button
-                            variant={didNotOperate ? "contained" : "outlined"}
-                            color={didNotOperate ? "warning" : "inherit"}
-                            onClick={handleDidNotOperateToggle}
-                          >
-                            DIDN'T OPERATE
-                          </Button>
-                        )}
-                      </Stack>
-                      <Divider />
-                      <Stack spacing={2}>
+                    {showNoReportDetails ? (
+                      <Typography variant="body2" color="text.secondary">
+                        No report information.
+                      </Typography>
+                    ) : (
+                      <>
+                        <Stack spacing={2}>
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            <Typography variant="h6" flexGrow={1}>
+                              Venues
+                            </Typography>
+                            {!readOnly && (
+                              <Button
+                                variant={didNotOperate ? "contained" : "outlined"}
+                                color={didNotOperate ? "warning" : "inherit"}
+                                onClick={handleDidNotOperateToggle}
+                              >
+                                DIDN'T OPERATE
+                              </Button>
+                            )}
+                          </Stack>
+                          <Divider />
+                          <Stack spacing={2}>
                         {formState.venues.map((venue, index) => {
                           const isOpenBar = index === OPEN_BAR_INDEX;
                           const availableOptions = (() => {
@@ -1284,6 +1308,8 @@ const VenueNumbersList = () => {
                           />
                         ))}
                     </Stack>
+                      </>
+                    )}
 
                     {inEditMode ? (
                       <Button
@@ -1294,7 +1320,7 @@ const VenueNumbersList = () => {
                         disabled={!selectedReportId || submitting || readOnly}
                         sx={{ alignSelf: "center" }}
                       >
-                        Submit Report
+                        {submitButtonLabel}
                       </Button>
                     ) : (
                       <Button variant="outlined" onClick={handleCloseDetails} sx={{ alignSelf: "center" }}>
