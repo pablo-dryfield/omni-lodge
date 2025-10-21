@@ -12,8 +12,6 @@ import {
   IconButton,
   List,
   ListItem,
-  ListItemButton,
-  ListItemText,
   Stack,
   TextField,
   Tooltip,
@@ -21,7 +19,7 @@ import {
 } from "@mui/material";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { LocalizationProvider } from "@mui/x-date-pickers";
-import { ArrowBack, Add, Delete, Edit, Send, UploadFile } from "@mui/icons-material";
+import { ArrowBack, Add, Delete, Edit, Send, UploadFile, Visibility } from "@mui/icons-material";
 import dayjs from "dayjs";
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -202,14 +200,19 @@ const VenueNumbersList = () => {
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
   const [formState, setFormState] = useState<EditableReport>(() => toEditableReport(null));
   const [validationError, setValidationError] = useState<string | null>(null);
-  const [editMode, setEditMode] = useState<boolean>(true);
+  const [activeReportMode, setActiveReportMode] = useState<"view" | "edit" | null>(null);
   const [pendingChanges, setPendingChanges] = useState<boolean>(false);
   const [notesExpanded, setNotesExpanded] = useState<boolean>(false);
+  const [didNotOperate, setDidNotOperate] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [photoPreviews, setPhotoPreviews] = useState<Record<number, string>>({});
   const [photoPreviewErrors, setPhotoPreviewErrors] = useState<Record<number, boolean>>({});
   const requestedPhotoIds = useRef<Set<number>>(new Set());
   const photoPreviewUrlsRef = useRef<Record<number, string>>({});
+  const modeRequestRef = useRef<"view" | "edit" | null>(null);
+  const lastLoadedReportIdRef = useRef<number | null>(null);
+  const previousVenuesRef = useRef<EditableVenue[] | null>(null);
+  const previousNotesRef = useRef<string | null>(null);
 
   const requestedCounterId = useMemo(() => {
     const raw = searchParams.get("counterId");
@@ -248,6 +251,8 @@ const VenueNumbersList = () => {
     [nightReportListState.data],
   );
   const photos = useMemo(() => nightReportDetail.data?.photos ?? [], [nightReportDetail.data?.photos]);
+  const photoLimitReached = photos.length >= 1;
+  const limitedPhotos = useMemo(() => photos.slice(0, 1), [photos]);
 
   useEffect(() => {
     photoPreviewUrlsRef.current = photoPreviews;
@@ -297,13 +302,52 @@ const VenueNumbersList = () => {
   }, [dispatch, selectedReportId]);
 
   useEffect(() => {
+    if (selectedReportId == null) {
+      return;
+    }
+    const detailId = nightReportDetail.data?.id ?? null;
+    if (detailId !== selectedReportId) {
+      return;
+    }
+
     const next = toEditableReport(nightReportDetail.data);
     setFormState(next);
-    setEditMode((nightReportDetail.data?.status ?? "draft") !== "submitted");
     setPendingChanges(false);
     setValidationError(null);
     setNotesExpanded(Boolean(next.notes));
-  }, [nightReportDetail.data]);
+
+    const status = nightReportDetail.data?.status ?? "draft";
+    const requestedMode = modeRequestRef.current;
+    modeRequestRef.current = null;
+
+    setActiveReportMode((prev) => {
+      const lastLoadedId = lastLoadedReportIdRef.current;
+      const isNewReport = lastLoadedId == null || lastLoadedId !== selectedReportId;
+      lastLoadedReportIdRef.current = selectedReportId;
+
+      if (requestedMode) {
+        return requestedMode;
+      }
+      if (prev === "edit" && status === "submitted") {
+        return "view";
+      }
+      if (isNewReport) {
+        return prev;
+      }
+      return prev;
+    });
+  }, [nightReportDetail.data, selectedReportId]);
+
+  useEffect(() => {
+    if (selectedReportId === null) {
+      setActiveReportMode(null);
+      modeRequestRef.current = null;
+      lastLoadedReportIdRef.current = null;
+      setPendingChanges(false);
+      setValidationError(null);
+      setNotesExpanded(false);
+    }
+  }, [selectedReportId]);
 
   useEffect(() => {
     if (venuesOptions.length === 0) {
@@ -417,24 +461,44 @@ const VenueNumbersList = () => {
     [],
   );
 
-  const handleReportSelect = useCallback(
-    (report: NightReportSummary) => {
+  const handleOpenReport = useCallback(
+    (report: NightReportSummary, mode: "view" | "edit") => {
       if (pendingChanges && selectedReportId && report.id !== selectedReportId) {
         setValidationError("Submit or discard your edits before switching reports.");
         return;
       }
+
       setValidationError(null);
-      setSelectedReportId(report.id);
       setSearchParams({ counterId: String(report.counterId) });
+
+      if (report.id === selectedReportId) {
+        setActiveReportMode(mode);
+        modeRequestRef.current = null;
+        return;
+      }
+
+      modeRequestRef.current = mode;
+      setActiveReportMode(mode);
+      setSelectedReportId(report.id);
     },
     [pendingChanges, selectedReportId, setSearchParams],
   );
 
-  const handleEnableEdit = () => {
-    setEditMode(true);
-    setPendingChanges(false);
+  const handleCloseDetails = useCallback(() => {
+    if (pendingChanges) {
+      setValidationError("Submit or discard your edits before closing.");
+      return;
+    }
+
     setValidationError(null);
-  };
+    setSelectedReportId(null);
+    setActiveReportMode(null);
+    modeRequestRef.current = null;
+    lastLoadedReportIdRef.current = null;
+    setFormState(toEditableReport(null));
+    setNotesExpanded(false);
+    setSearchParams({});
+  }, [pendingChanges, setSearchParams]);
 
   const validateForm = (report: EditableReport): string | null => {
     if (!report.counterId) {
@@ -554,7 +618,7 @@ const VenueNumbersList = () => {
   const handlePhotoFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.target;
     const file = input.files?.[0];
-    if (!file || !selectedReportId) {
+    if (!file || !selectedReportId || photoLimitReached) {
       input.value = "";
       return;
     }
@@ -591,7 +655,7 @@ const VenueNumbersList = () => {
     await dispatch(updateNightReport({ reportId: selectedReportId, payload })).unwrap();
     await dispatch(submitNightReport(selectedReportId)).unwrap();
     await dispatch(fetchNightReports());
-    setEditMode(false);
+    setActiveReportMode("view");
     setPendingChanges(false);
   };
 
@@ -600,7 +664,9 @@ const VenueNumbersList = () => {
   const submitting = nightReportUi.submitting;
   const uploadingPhoto = nightReportUi.uploadingPhoto;
   const currentStatus = nightReportDetail.data?.status ?? "draft";
-  const readOnly = !editMode;
+  const readOnly = activeReportMode !== "edit";
+  const inEditMode = activeReportMode === "edit";
+  const showDetails = selectedReportId != null && activeReportMode != null;
   const currentCounter = counters.find((counter) => counter.id === formState.counterId);
 
   return (
@@ -611,11 +677,6 @@ const VenueNumbersList = () => {
             Back
           </Button>
           <Box flexGrow={1} />
-          {currentStatus === "submitted" && !editMode && (
-            <Button variant="contained" startIcon={<Edit />} onClick={handleEnableEdit}>
-              Edit Report
-            </Button>
-          )}
         </Stack>
 
         {validationError && (
@@ -639,16 +700,33 @@ const VenueNumbersList = () => {
                 </Box>
               ) : (
                 <List disablePadding>
-                  {reports.map((report) => (
-                    <ListItem key={report.id} disablePadding>
-                      <ListItemButton
-                        onClick={() => handleReportSelect(report)}
-                        selected={selectedReportId === report.id}
-                        disabled={pendingChanges && selectedReportId !== report.id}
+                  {reports.map((report) => {
+                    const isActive = selectedReportId === report.id && activeReportMode != null;
+                    const isViewing = isActive && activeReportMode === "view";
+                    const isEditing = isActive && activeReportMode === "edit";
+                    const disableActions = pendingChanges && selectedReportId !== report.id;
+                    const isDraftReport = (report.status ?? "").toLowerCase() === "draft";
+                    const updateLabel = isDraftReport ? "Fill" : "Update";
+
+                    return (
+                      <ListItem
+                        key={report.id}
+                        disablePadding
+                        sx={{
+                          px: 2,
+                          py: 1.5,
+                          display: "block",
+                          bgcolor: isActive ? "action.selected" : "inherit",
+                          "&:not(:last-of-type)": { borderBottom: "1px solid", borderColor: "divider" },
+                        }}
                       >
-                        <ListItemText
-                          primary={
-                            <Stack direction="row" spacing={1} alignItems="center">
+                        <Stack spacing={1}>
+                          <Stack
+                            direction={{ xs: "column", sm: "row" }}
+                            spacing={1}
+                            alignItems={{ xs: "flex-start", sm: "center" }}
+                          >
+                            <Stack direction="row" spacing={1} alignItems="center" sx={{ flexGrow: 1 }}>
                               <Typography fontWeight={600}>
                                 {dayjs(report.activityDate).format("MMM D, YYYY")}
                               </Typography>
@@ -658,321 +736,335 @@ const VenueNumbersList = () => {
                                 color={report.status === "submitted" ? "success" : "default"}
                               />
                             </Stack>
-                          }
-                          secondary={
-                            <Stack spacing={0.5}>
-                              <Typography variant="body2" color="text.secondary">
-                                Leader: {report.leaderName || "—"}
-                              </Typography>
-                              <Typography variant="body2" color="text.secondary">
-                                Venues: {report.venuesCount} {"\u2022"} People: {report.totalPeople}
-                              </Typography>
+                            <Stack
+                              direction="row"
+                              spacing={1}
+                              flexWrap="wrap"
+                              justifyContent={{ xs: "flex-start", sm: "flex-end" }}
+                              sx={{ width: { xs: "100%", sm: "auto" } }}
+                            >
+                              <Button
+                                size="small"
+                                variant={isViewing ? "contained" : "outlined"}
+                                startIcon={<Visibility fontSize="small" />}
+                                onClick={() => handleOpenReport(report, "view")}
+                                disabled={disableActions}
+                              >
+                                View
+                              </Button>
+                              <Button
+                                size="small"
+                                variant={isEditing ? "contained" : "outlined"}
+                                startIcon={<Edit fontSize="small" />}
+                                onClick={() => handleOpenReport(report, "edit")}
+                                disabled={disableActions}
+                              >
+                                {updateLabel}
+                              </Button>
                             </Stack>
-                          }
-                          primaryTypographyProps={{ component: "div" }}
-                          secondaryTypographyProps={{ component: "div" }}
-                        />
-                      </ListItemButton>
-                    </ListItem>
-                  ))}
+                          </Stack>
+                          <Stack spacing={0.5}>
+                            <Typography variant="body2" color="text.secondary">
+                              Leader: {report.leaderName || "—"}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              Venues: {report.venuesCount} {"\u2022"} People: {report.totalPeople}
+                            </Typography>
+                          </Stack>
+                        </Stack>
+                      </ListItem>
+                    );
+                  })}
                 </List>
               )}
             </CardContent>
           </Card>
 
-          <Card sx={{ flex: 1, minHeight: 420 }}>
-            <CardContent>
-              {detailLoading ? (
-                <Stack alignItems="center" justifyContent="center" minHeight={220}>
-                  <CircularProgress size={36} />
-                </Stack>
-              ) : selectedReportId === null ? (
-                <Stack alignItems="center" justifyContent="center" minHeight={220} spacing={1}>
-                  <Typography variant="h6">Select a night report</Typography>
-                  <Typography variant="body2" color="text.secondary" align="center" maxWidth={320}>
-                    Choose a report from the list to review or edit its details.
-                  </Typography>
-                </Stack>
-              ) : (
-                <Stack spacing={3}>
-                  {currentStatus === "submitted" && !editMode && (
-                    <Alert severity="info">Submitted · This report is locked. Click Edit to make changes.</Alert>
-                  )}
-                  <Box>
-                    <Typography variant="body2" color="text.secondary">
-                      Date:{" "}
-                      <Typography component="span" variant="body1" fontWeight={600}>
-                        {formState.activityDate
-                          ? dayjs(formState.activityDate).format("MMM D, YYYY")
-                          : "—"}
+          {showDetails ? (
+            <Card sx={{ flex: 1, minHeight: 420 }}>
+              <CardContent>
+                {detailLoading ? (
+                  <Stack alignItems="center" justifyContent="center" minHeight={220}>
+                    <CircularProgress size={36} />
+                  </Stack>
+                ) : (
+                  <Stack spacing={3}>
+                    {currentStatus === "submitted" && !inEditMode && (
+                      <Alert severity="info">Submitted - This report is locked. Click Update to make changes.</Alert>
+                    )}
+                    <Box>
+                      <Typography variant="body2" color="text.secondary">
+                        Date:{" "}
+                        <Typography component="span" variant="body1" fontWeight={600}>
+                          {formState.activityDate
+                            ? dayjs(formState.activityDate).format("MMM D, YYYY")
+                            : "—"}
+                        </Typography>
                       </Typography>
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      Manager:{" "}
-                      <Typography component="span" variant="body1" fontWeight={600}>
-                        {getManagerLabel(currentCounter)}
+                      <Typography variant="body2" color="text.secondary">
+                        Manager:{" "}
+                        <Typography component="span" variant="body1" fontWeight={600}>
+                          {getManagerLabel(currentCounter)}
+                        </Typography>
                       </Typography>
-                    </Typography>
-                  </Box>
+                    </Box>
 
-                  <Grid container spacing={2}>
-                    <Grid size={12}>
-                      <Autocomplete
-                        options={users}
-                        value={selectedLeader}
-                        onChange={handleLeaderChange}
-                        getOptionLabel={(option) => formatUserFullName(option)}
-                        isOptionEqualToValue={(option, value) => option.id === value.id}
-                        renderOption={(props, option) => {
-                          const { style, ...rest } = props;
-                          return (
-                            <li
-                              {...rest}
-                              style={{ ...style, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.3 }}
-                              title={formatUserFullName(option)}
-                            >
-                              {formatUserFullName(option)}
-                            </li>
-                          );
-                        }}
-                        renderInput={(params) => (
-                          <TextField
-                            {...params}
-                            label="Leader"
-                            required
-                            fullWidth
-                            sx={{
-                              "& .MuiInputBase-root": {
-                                alignItems: "flex-start",
-                              },
-                              "& .MuiInputBase-input": {
-                                whiteSpace: "normal",
-                                overflow: "visible",
-                                textOverflow: "unset",
-                                lineHeight: 1.4,
-                              },
-                            }}
-                          />
-                        )}
-                        disabled={readOnly}
-                        fullWidth
-                        componentsProps={{
-                          popper: {
-                            style: { width: "auto" },
-                          },
-                          paper: {
-                            sx: {
-                              width: "fit-content",
-                              minWidth: "auto",
-                              maxWidth: "min(440px, calc(100vw - 48px))",
+                    <Grid container spacing={2}>
+                      <Grid size={12}>
+                        <Autocomplete
+                          options={users}
+                          value={selectedLeader}
+                          onChange={handleLeaderChange}
+                          getOptionLabel={(option) => formatUserFullName(option)}
+                          isOptionEqualToValue={(option, value) => option.id === value.id}
+                          renderOption={(props, option) => {
+                            const { style, ...rest } = props;
+                            return (
+                              <li
+                                {...rest}
+                                style={{ ...style, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.3 }}
+                                title={formatUserFullName(option)}
+                              >
+                                {formatUserFullName(option)}
+                              </li>
+                            );
+                          }}
+                          renderInput={(params) => (
+                            <TextField
+                              {...params}
+                              label="Leader"
+                              required
+                              fullWidth
+                              sx={{
+                                "& .MuiInputBase-root": {
+                                  alignItems: "flex-start",
+                                },
+                                "& .MuiInputBase-input": {
+                                  whiteSpace: "normal",
+                                  overflow: "visible",
+                                  textOverflow: "unset",
+                                  lineHeight: 1.4,
+                                },
+                              }}
+                            />
+                          )}
+                          disabled={readOnly}
+                          fullWidth
+                          componentsProps={{
+                            popper: {
+                              style: { width: "auto" },
                             },
-                          },
-                        }}
-                        ListboxProps={{ style: { paddingRight: 8 } }}
-                        sx={{
-                          "& .MuiAutocomplete-inputRoot": {
-                            alignItems: "flex-start",
-                            flexWrap: "wrap",
-                            paddingTop: 1,
-                            paddingBottom: 1,
-                          },
-                          "& .MuiAutocomplete-input": {
-                            display: "block",
-                            height: "auto",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            textOverflow: "unset",
-                            width: "100% !important",
-                            lineHeight: 1.4,
-                          },
-                        }}
-                      />
+                            paper: {
+                              sx: {
+                                width: "fit-content",
+                                minWidth: "auto",
+                                maxWidth: "min(440px, calc(100vw - 48px))",
+                              },
+                            },
+                          }}
+                          ListboxProps={{ style: { paddingRight: 8 } }}
+                          sx={{
+                            "& .MuiAutocomplete-inputRoot": {
+                              alignItems: "flex-start",
+                              flexWrap: "wrap",
+                              paddingTop: 1,
+                              paddingBottom: 1,
+                            },
+                            "& .MuiAutocomplete-input": {
+                              display: "block",
+                              height: "auto",
+                              whiteSpace: "normal",
+                              wordBreak: "break-word",
+                              textOverflow: "unset",
+                              width: "100% !important",
+                              lineHeight: 1.4,
+                            },
+                          }}
+                        />
+                      </Grid>
                     </Grid>
-                  </Grid>
 
-                  <Stack spacing={2}>
-                    <Stack direction="row" spacing={1} alignItems="center">
-                      <Typography variant="h6" flexGrow={1}>
-                        Venues
-                      </Typography>
-                      {!readOnly && (
-                        <Button startIcon={<Add />} variant="outlined" onClick={handleAddVenue}>
-                          Add Venue
-                        </Button>
-                      )}
-                    </Stack>
-                    <Divider />
                     <Stack spacing={2}>
-                      {formState.venues.map((venue, index) => {
-                        const isOpenBar = index === OPEN_BAR_INDEX;
-                        const availableOptions = (() => {
-                          if (!venue.venueName) {
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <Typography variant="h6" flexGrow={1}>
+                          Venues
+                        </Typography>
+                        {!readOnly && (
+                          <Button startIcon={<Add />} variant="outlined" onClick={handleAddVenue}>
+                            Add Venue
+                          </Button>
+                        )}
+                      </Stack>
+                      <Divider />
+                      <Stack spacing={2}>
+                        {formState.venues.map((venue, index) => {
+                          const isOpenBar = index === OPEN_BAR_INDEX;
+                          const availableOptions = (() => {
+                            if (!venue.venueName) {
+                              return venuesOptions;
+                            }
+                            const set = new Set(venuesOptions.map((name) => name.toLowerCase()));
+                            if (!set.has(venue.venueName.toLowerCase())) {
+                              return [...venuesOptions, venue.venueName];
+                            }
                             return venuesOptions;
-                          }
-                          const set = new Set(venuesOptions.map((name) => name.toLowerCase()));
-                          if (!set.has(venue.venueName.toLowerCase())) {
-                            return [...venuesOptions, venue.venueName];
-                          }
-                          return venuesOptions;
-                        })();
+                          })();
 
-                        return (
-                          <Card variant="outlined" key={venue.id ?? `venue-${index}`}>
-                            <CardContent>
-                              <Stack spacing={2}>
-                                <Stack direction="row" alignItems="center" spacing={1}>
-                                  <Typography fontWeight={600}>
-                                    {isOpenBar ? "Open Bar (Venue 1)" : `Venue ${index + 1}`}
-                                  </Typography>
-                                  <Box flexGrow={1} />
-                                  {!readOnly && !isOpenBar && (
-                                    <Tooltip title="Remove venue">
-                                      <IconButton size="small" onClick={() => handleRemoveVenue(index)}>
-                                        <Delete fontSize="small" />
-                                      </IconButton>
-                                    </Tooltip>
-                                  )}
-                                </Stack>
-                                <Grid container spacing={2}>
-                                  <Grid size={12}>
-                                    <Autocomplete
-                                      options={availableOptions}
-                                      value={venue.venueName}
-                                      onChange={(_, value) => handleVenueChange(index, "venueName", value ?? "")}
-                                      renderInput={(params) => (
-                                        <TextField
-                                          {...params}
-                                          label="Venue"
-                                          required
-                                          fullWidth
-                                          sx={{
-                                            "& .MuiInputBase-root": {
-                                              alignItems: "flex-start",
-                                            },
-                                            "& .MuiInputBase-input": {
-                                              whiteSpace: "normal",
-                                              overflow: "visible",
-                                              textOverflow: "unset",
-                                              lineHeight: 1.4,
-                                            },
-                                          }}
-                                        />
-                                      )}
-                                      disabled={readOnly}
-                                      fullWidth
-                                      componentsProps={{
-                                        popper: {
-                                          style: { width: "auto" },
-                                        },
-                                        paper: {
-                                          sx: {
-                                            width: "fit-content",
-                                            minWidth: "auto",
-                                            maxWidth: "min(440px, calc(100vw - 48px))",
-                                          },
-                                        },
-                                      }}
-                                      ListboxProps={{ style: { paddingRight: 8 } }}
-                                      sx={{
-                                        "& .MuiAutocomplete-inputRoot": {
-                                          alignItems: "flex-start",
-                                          flexWrap: "wrap",
-                                          paddingTop: 1,
-                                          paddingBottom: 1,
-                                        },
-                                        "& .MuiAutocomplete-input": {
-                                          display: "block",
-                                          height: "auto",
-                                          whiteSpace: "normal",
-                                          wordBreak: "break-word",
-                                          textOverflow: "unset",
-                                          width: "100% !important",
-                                          lineHeight: 1.4,
-                                        },
-                                      }}
-                                    />
-                                  </Grid>
-                                  {isOpenBar ? (
-                                    <>
-                                      <Grid size={{ xs: 12, md: 4 }}>
-                                        <TextField
-                                          label="Normal"
-                                          value={venue.normalCount ?? ""}
-                                          onChange={(event) =>
-                                            handleVenueChange(index, "normalCount", event.target.value)
-                                          }
-                                          type="number"
-                                          inputProps={{ min: 0 }}
-                                          fullWidth
-                                          disabled={readOnly}
-                                        />
-                                      </Grid>
-                                      <Grid size={{ xs: 12, md: 4 }}>
-                                        <TextField
-                                          label="Cocktails"
-                                          value={venue.cocktailsCount ?? ""}
-                                          onChange={(event) =>
-                                            handleVenueChange(index, "cocktailsCount", event.target.value)
-                                          }
-                                          type="number"
-                                          inputProps={{ min: 0 }}
-                                          fullWidth
-                                          disabled={readOnly}
-                                        />
-                                      </Grid>
-                                      <Grid size={{ xs: 12, md: 4 }}>
-                                        <TextField
-                                          label="Brunch"
-                                          value={venue.brunchCount ?? ""}
-                                          onChange={(event) =>
-                                            handleVenueChange(index, "brunchCount", event.target.value)
-                                          }
-                                          type="number"
-                                          inputProps={{ min: 0 }}
-                                          fullWidth
-                                          disabled={readOnly}
-                                        />
-                                      </Grid>
-                                    </>
-                                  ) : (
-                                    <Grid size={{ xs: 12, md: 6 }}>
-                                      <TextField
-                                        label="Total People"
-                                        value={venue.totalPeople}
-                                        onChange={(event) =>
-                                          handleVenueChange(index, "totalPeople", event.target.value)
-                                        }
-                                        type="number"
-                                        inputProps={{ min: 0 }}
-                                        fullWidth
+                          return (
+                            <Card variant="outlined" key={venue.id ?? `venue-${index}`}>
+                              <CardContent>
+                                <Stack spacing={2}>
+                                  <Stack direction="row" alignItems="center" spacing={1}>
+                                    <Typography fontWeight={600}>
+                                      {isOpenBar ? "Open Bar (Venue 1)" : `Venue ${index + 1}`}
+                                    </Typography>
+                                    <Box flexGrow={1} />
+                                    {!readOnly && !isOpenBar && (
+                                      <Tooltip title="Remove venue">
+                                        <IconButton size="small" onClick={() => handleRemoveVenue(index)}>
+                                          <Delete fontSize="small" />
+                                        </IconButton>
+                                      </Tooltip>
+                                    )}
+                                  </Stack>
+                                  <Grid container spacing={2}>
+                                    <Grid size={12}>
+                                      <Autocomplete
+                                        options={availableOptions}
+                                        value={venue.venueName}
+                                        onChange={(_, value) => handleVenueChange(index, "venueName", value ?? "")}
+                                        renderInput={(params) => (
+                                          <TextField
+                                            {...params}
+                                            label="Venue"
+                                            required
+                                            fullWidth
+                                            sx={{
+                                              "& .MuiInputBase-root": {
+                                                alignItems: "flex-start",
+                                              },
+                                              "& .MuiInputBase-input": {
+                                                whiteSpace: "normal",
+                                                overflow: "visible",
+                                                textOverflow: "unset",
+                                                lineHeight: 1.4,
+                                              },
+                                            }}
+                                          />
+                                        )}
                                         disabled={readOnly}
+                                        fullWidth
+                                        componentsProps={{
+                                          popper: {
+                                            style: { width: "auto" },
+                                          },
+                                          paper: {
+                                            sx: {
+                                              width: "fit-content",
+                                              minWidth: "auto",
+                                              maxWidth: "min(440px, calc(100vw - 48px))",
+                                            },
+                                          },
+                                        }}
+                                        ListboxProps={{ style: { paddingRight: 8 } }}
+                                        sx={{
+                                          "& .MuiAutocomplete-inputRoot": {
+                                            alignItems: "flex-start",
+                                            flexWrap: "wrap",
+                                            paddingTop: 1,
+                                            paddingBottom: 1,
+                                          },
+                                          "& .MuiAutocomplete-input": {
+                                            display: "block",
+                                            height: "auto",
+                                            whiteSpace: "normal",
+                                            wordBreak: "break-word",
+                                            textOverflow: "unset",
+                                            width: "100% !important",
+                                            lineHeight: 1.4,
+                                          },
+                                        }}
                                       />
                                     </Grid>
-                                  )}
-                                </Grid>
-                              </Stack>
-                            </CardContent>
-                          </Card>
-                        );
-                      })}
+                                    {isOpenBar ? (
+                                      <>
+                                        <Grid size={{ xs: 12, md: 4 }}>
+                                          <TextField
+                                            label="Normal"
+                                            value={venue.normalCount ?? ""}
+                                            onChange={(event) => handleVenueChange(index, "normalCount", event.target.value)}
+                                            type="number"
+                                            inputProps={{ min: 0 }}
+                                            fullWidth
+                                            disabled={readOnly}
+                                          />
+                                        </Grid>
+                                        <Grid size={{ xs: 12, md: 4 }}>
+                                          <TextField
+                                            label="Cocktails"
+                                            value={venue.cocktailsCount ?? ""}
+                                            onChange={(event) => handleVenueChange(index, "cocktailsCount", event.target.value)}
+                                            type="number"
+                                            inputProps={{ min: 0 }}
+                                            fullWidth
+                                            disabled={readOnly}
+                                          />
+                                        </Grid>
+                                        <Grid size={{ xs: 12, md: 4 }}>
+                                          <TextField
+                                            label="Brunch"
+                                            value={venue.brunchCount ?? ""}
+                                            onChange={(event) => handleVenueChange(index, "brunchCount", event.target.value)}
+                                            type="number"
+                                            inputProps={{ min: 0 }}
+                                            fullWidth
+                                            disabled={readOnly}
+                                          />
+                                        </Grid>
+                                      </>
+                                    ) : (
+                                      <Grid size={{ xs: 12, md: 6 }}>
+                                        <TextField
+                                          label="Total People"
+                                          value={venue.totalPeople}
+                                          onChange={(event) => handleVenueChange(index, "totalPeople", event.target.value)}
+                                          type="number"
+                                          inputProps={{ min: 0 }}
+                                          fullWidth
+                                          disabled={readOnly}
+                                        />
+                                      </Grid>
+                                    )}
+                                  </Grid>
+                                </Stack>
+                              </CardContent>
+                            </Card>
+                          );
+                        })}
+                      </Stack>
                     </Stack>
-                  </Stack>
 
-                  <Stack spacing={2}>
-                    <Stack direction="row" spacing={1} alignItems="center">
-                      <Typography variant="h6" flexGrow={1}>
-                        Photos
-                      </Typography>
+                    <Stack spacing={2}>
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <Typography variant="h6" flexGrow={1}>
+                          Photos
+                        </Typography>
+                        {!readOnly && (
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            startIcon={<UploadFile />}
+                            onClick={handlePhotoUploadClick}
+                            disabled={!selectedReportId || uploadingPhoto || photoLimitReached}
+                          >
+                            Upload Photo
+                          </Button>
+                        )}
+                      </Stack>
                       {!readOnly && (
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          startIcon={<UploadFile />}
-                          onClick={handlePhotoUploadClick}
-                          disabled={!selectedReportId || uploadingPhoto}
-                        >
-                          Upload Photo
-                        </Button>
+                        <Typography variant="caption" color="text.secondary">
+                          Only one photo can be attached.
+                        </Typography>
                       )}
                       <input
                         type="file"
@@ -982,146 +1074,165 @@ const VenueNumbersList = () => {
                         onChange={handlePhotoFileChange}
                       />
                       {uploadingPhoto && <CircularProgress size={20} />}
-                    </Stack>
-                    {photos.length === 0 ? (
-                      <Typography variant="body2" color="text.secondary">
-                        {readOnly
-                          ? "No photos attached to this report."
-                          : "No photos yet. Upload supporting photos for this report."}
-                      </Typography>
-                    ) : (
-                      <Grid container spacing={2}>
-                        {photos.map((photo) => {
-                          const previewUrl = photoPreviews[photo.id];
-                          const previewError = photoPreviewErrors[photo.id];
-                          const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl);
-                          return (
-                            <Grid size={{ xs: 12, sm: 6, md: 4 }} key={photo.id}>
-                              <Card variant="outlined">
-                                <CardContent>
-                                  <Stack spacing={1}>
-                                    <Box
-                                      sx={{
-                                        width: "100%",
-                                        height: 180,
-                                        borderRadius: 1,
-                                        bgcolor: "grey.100",
-                                        display: "flex",
-                                        alignItems: "center",
-                                        justifyContent: "center",
-                                        overflow: "hidden",
-                                        border: "1px solid",
-                                        borderColor: "divider",
-                                      }}
-                                    >
-                                      {previewUrl ? (
-                                        <Box
-                                          component="img"
-                                          src={previewUrl}
-                                          alt={photo.originalName}
-                                          sx={{ width: "100%", height: "100%", objectFit: "cover" }}
-                                        />
-                                      ) : previewError ? (
-                                        <Typography variant="caption" color="text.secondary" align="center" px={2}>
-                                          Preview unavailable
-                                        </Typography>
-                                      ) : (
-                                        <CircularProgress size={24} />
-                                      )}
-                                    </Box>
-                                    <Stack direction="row" spacing={1} alignItems="flex-start">
-                                      <Box flexGrow={1}>
-                                        <Typography variant="body2" fontWeight={600} noWrap title={photo.originalName}>
-                                          {photo.originalName}
-                                        </Typography>
-                                        <Typography variant="caption" color="text.secondary">
-                                          {formatFileSize(photo.fileSize)}
-                                          {photo.capturedAt ? (
-                                            <>
-                                              {" \u2022 "}
-                                              {dayjs(photo.capturedAt).format("MMM D, YYYY h:mm A")}
-                                            </>
-                                          ) : null}
-                                        </Typography>
+                      {photos.length === 0 ? (
+                        <Typography variant="body2" color="text.secondary">
+                          {readOnly
+                            ? "No photos attached to this report."
+                            : "No photos yet. Upload supporting photos for this report."}
+                        </Typography>
+                      ) : (
+                        <Grid container spacing={2}>
+                          {limitedPhotos.map((photo) => {
+                            const previewUrl = photoPreviews[photo.id];
+                            const previewError = photoPreviewErrors[photo.id];
+                            const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl);
+                            return (
+                              <Grid size={{ xs: 12, sm: 6, md: 4 }} key={photo.id}>
+                                <Card variant="outlined">
+                                  <CardContent>
+                                    <Stack spacing={1}>
+                                      <Box
+                                        sx={{
+                                          width: "100%",
+                                          height: 180,
+                                          borderRadius: 1,
+                                          bgcolor: "grey.100",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          overflow: "hidden",
+                                          border: "1px solid",
+                                          borderColor: "divider",
+                                          position: "relative",
+                                        }}
+                                      >
+                                        {previewUrl ? (
+                                          <Box
+                                            component="img"
+                                            src={previewUrl}
+                                            alt={photo.originalName}
+                                            sx={{ width: "100%", height: "100%", objectFit: "cover" }}
+                                          />
+                                        ) : previewError ? (
+                                          <Typography variant="caption" color="text.secondary" align="center" px={2}>
+                                            Preview unavailable
+                                          </Typography>
+                                        ) : (
+                                          <CircularProgress size={24} />
+                                        )}
+                                        {!readOnly && (
+                                          <Tooltip title="Delete photo">
+                                            <span>
+                                              <IconButton
+                                                size="small"
+                                                aria-label="Delete photo"
+                                                onClick={() => handleDeletePhoto(photo.id)}
+                                                disabled={uploadingPhoto}
+                                                sx={{
+                                                  position: "absolute",
+                                                  top: 8,
+                                                  right: 8,
+                                                  bgcolor: "rgba(0, 0, 0, 0.6)",
+                                                  color: "common.white",
+                                                  "&:hover": {
+                                                    bgcolor: "error.main",
+                                                    color: "common.white",
+                                                  },
+                                                }}
+                                              >
+                                                <Delete fontSize="small" />
+                                              </IconButton>
+                                            </span>
+                                          </Tooltip>
+                                        )}
                                       </Box>
-                                      {!readOnly && (
-                                        <Tooltip title="Remove photo">
-                                          <span>
-                                            <IconButton
-                                              size="small"
-                                              onClick={() => handleDeletePhoto(photo.id)}
-                                              disabled={uploadingPhoto}
-                                            >
-                                              <Delete fontSize="small" />
-                                            </IconButton>
-                                          </span>
-                                        </Tooltip>
-                                      )}
+                                      <Stack direction="row" spacing={1} alignItems="flex-start">
+                                        <Box flexGrow={1}>
+                                          <Typography variant="body2" fontWeight={600} noWrap title={photo.originalName}>
+                                            {photo.originalName}
+                                          </Typography>
+                                          <Typography variant="caption" color="text.secondary">
+                                            {formatFileSize(photo.fileSize)}
+                                            {photo.capturedAt ? (
+                                              <>
+                                                {" \u2022 "}
+                                                {dayjs(photo.capturedAt).format("MMM D, YYYY h:mm A")}
+                                              </>
+                                            ) : null}
+                                          </Typography>
+                                        </Box>
+                                      </Stack>
+                                      <Button
+                                        variant="outlined"
+                                        size="small"
+                                        component="a"
+                                        href={downloadHref}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                      >
+                                        View Full Size
+                                      </Button>
                                     </Stack>
-                                    <Button
-                                      variant="outlined"
-                                      size="small"
-                                      component="a"
-                                      href={downloadHref}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                    >
-                                      View Full Size
-                                    </Button>
-                                  </Stack>
-                                </CardContent>
-                              </Card>
-                            </Grid>
-                          );
-                        })}
-                      </Grid>
+                                  </CardContent>
+                                </Card>
+                              </Grid>
+                            );
+                          })}
+                        </Grid>
+                      )}
+                    </Stack>
+
+                    <Stack spacing={1}>
+                      <Button variant="outlined" size="small" onClick={() => setNotesExpanded((prev) => !prev)}>
+                        {notesExpanded || formState.notes
+                          ? notesExpanded
+                            ? "Hide Notes"
+                            : "View Notes"
+                          : "Add Notes"}
+                      </Button>
+                      {(notesExpanded || formState.notes) &&
+                        (readOnly ? (
+                          <TextField
+                            label="Notes"
+                            value={formState.notes}
+                            multiline
+                            minRows={3}
+                            fullWidth
+                            InputProps={{ readOnly: true }}
+                          />
+                        ) : (
+                          <TextField
+                            label="Notes"
+                            value={formState.notes}
+                            onChange={handleNotesChange}
+                            multiline
+                            minRows={3}
+                            fullWidth
+                          />
+                        ))}
+                    </Stack>
+
+                    {inEditMode ? (
+                      <Button
+                        variant="contained"
+                        color="success"
+                        startIcon={<Send />}
+                        onClick={handleSubmit}
+                        disabled={!selectedReportId || submitting || readOnly}
+                        sx={{ alignSelf: "center" }}
+                      >
+                        Submit Report
+                      </Button>
+                    ) : (
+                      <Button variant="outlined" onClick={handleCloseDetails} sx={{ alignSelf: "center" }}>
+                        Close
+                      </Button>
                     )}
                   </Stack>
-
-                  <Stack spacing={1}>
-                    <Button variant="outlined" size="small" onClick={() => setNotesExpanded((prev) => !prev)}>
-                      {notesExpanded || formState.notes
-                        ? notesExpanded
-                          ? "Hide Notes"
-                          : "View Notes"
-                        : "Add Notes"}
-                    </Button>
-                    {(notesExpanded || formState.notes) &&
-                      (readOnly ? (
-                        <TextField
-                          label="Notes"
-                          value={formState.notes}
-                          multiline
-                          minRows={3}
-                          fullWidth
-                          InputProps={{ readOnly: true }}
-                        />
-                      ) : (
-                        <TextField
-                          label="Notes"
-                          value={formState.notes}
-                          onChange={handleNotesChange}
-                          multiline
-                          minRows={3}
-                          fullWidth
-                        />
-                      ))}
-                  </Stack>
-
-                  <Button
-                    variant="contained"
-                    color="success"
-                    startIcon={<Send />}
-                    onClick={handleSubmit}
-                    disabled={!selectedReportId || submitting || readOnly}
-                    sx={{ alignSelf: "center" }}
-                  >
-                    Submit Report
-                  </Button>
-                </Stack>
-              )}
-            </CardContent>
-          </Card>
+                )}
+              </CardContent>
+            </Card>
+          ) : null}
         </Stack>
       </Stack>
     </LocalizationProvider>
