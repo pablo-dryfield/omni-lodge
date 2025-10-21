@@ -10,6 +10,10 @@ import CounterUser from '../models/CounterUser.js';
 import User from '../models/User.js';
 import Product from '../models/Product.js';
 import CounterChannelMetric from '../models/CounterChannelMetric.js';
+import NightReport from '../models/NightReport.js';
+import NightReportPhoto from '../models/NightReportPhoto.js';
+import NightReportVenue from '../models/NightReportVenue.js';
+import { deleteNightReportPhoto as removeNightReportFile } from '../services/nightReportStorageService.js';
 
 const REGISTRY_FORMAT = 'registry';
 
@@ -256,8 +260,22 @@ export const deleteCounter = async (req: AuthenticatedRequest, res: Response): P
       throw new HttpError(500, 'Database connection is not available');
     }
 
+    const reports = await NightReport.findAll({
+      where: { counterId },
+      include: [{ model: NightReportPhoto, as: 'photos', attributes: ['id', 'storagePath'] }],
+    });
+    const reportIds = reports.map((report) => report.id);
+    const photoStoragePaths = reports.flatMap((report) =>
+      (report.photos ?? []).map((photo) => photo.storagePath),
+    );
+
     let deleted = 0;
     await sequelize.transaction(async (transaction) => {
+      if (reportIds.length > 0) {
+        await NightReportVenue.destroy({ where: { reportId: reportIds }, transaction });
+        await NightReportPhoto.destroy({ where: { reportId: reportIds }, transaction });
+        await NightReport.destroy({ where: { id: reportIds }, transaction });
+      }
       await CounterChannelMetric.destroy({ where: { counterId }, transaction });
       await CounterUser.destroy({ where: { counterId }, transaction });
       await CounterProduct.destroy({ where: { counterId }, transaction });
@@ -268,6 +286,14 @@ export const deleteCounter = async (req: AuthenticatedRequest, res: Response): P
       res.status(404).json([{ message: 'Counter not found' }]);
       return;
     }
+
+    await Promise.all(
+      photoStoragePaths.map((storagePath) =>
+        removeNightReportFile(storagePath).catch((error) => {
+          logger.warn(`Failed to remove night report photo at ${storagePath}`, error);
+        }),
+      ),
+    );
 
     res.status(204).send();
   } catch (error) {

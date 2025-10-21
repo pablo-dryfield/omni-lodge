@@ -111,9 +111,9 @@ export function defineAssociations() {
   // Payment Method associations are defined via decorators on the models
 
   // Night Report Associations
-  Counter.hasOne(NightReport, { foreignKey: 'counterId', as: 'nightReport' });
-  NightReportVenue.belongsTo(NightReport, { foreignKey: 'reportId', as: 'report' });
-  NightReportPhoto.belongsTo(NightReport, { foreignKey: 'reportId', as: 'report' });
+  Counter.hasOne(NightReport, { foreignKey: 'counterId', as: 'nightReport', onDelete: 'CASCADE', hooks: true });
+  NightReportVenue.belongsTo(NightReport, { foreignKey: 'reportId', as: 'report', onDelete: 'CASCADE' });
+  NightReportPhoto.belongsTo(NightReport, { foreignKey: 'reportId', as: 'report', onDelete: 'CASCADE' });
 }
 
 

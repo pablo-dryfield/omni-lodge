@@ -40,8 +40,10 @@ import {
 import { Add, Check, Close, Delete, Edit, Remove } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
+import { Link } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { deleteCounter, fetchCounters } from '../actions/counterActions';
+import { createNightReport, updateNightReport } from '../actions/nightReportActions';
 import { navigateToPage } from '../actions/navigationActions';
 import { GenericPageProps } from '../types/general/GenericPageProps';
 import { loadCatalog, selectCatalog } from '../store/catalogSlice';
@@ -76,6 +78,9 @@ import {
 } from '../types/counters/CounterRegistry';
 import { buildMetricKey } from '../utils/counterMetrics';
 import type { Counter } from '../types/counters/Counter';
+import axiosInstance from '../utils/axiosInstance';
+import type { ServerResponse } from '../types/general/ServerResponse';
+import type { NightReport, NightReportSummary } from '../types/nightReports/NightReport';
 
 const COUNTER_DATE_FORMAT = 'YYYY-MM-DD';
 const WALK_IN_CHANNEL_SLUG = 'walk-in';
@@ -3026,12 +3031,135 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     walkInNoteDirty,
   ]);
 
+  const ensureNightReportFromSummary = useCallback(async () => {
+    if (activeRegistryStep !== 'summary') {
+      return;
+    }
+    const counterRecord = registry.counter?.counter;
+    const summary = registry.summary;
+    if (!counterRecord || !summary) {
+      return;
+    }
+    const leaderId = counterRecord.userId;
+    if (!leaderId) {
+      return;
+    }
+
+    const peopleAttended = Math.max(0, Math.round(summary.totals?.people?.attended ?? 0));
+    const cocktailsAddonKey =
+      registry.addons.find((addon) => addon.name.toLowerCase().includes('cocktail'))?.key ?? 'cocktails';
+    const cocktailsAttended = Math.max(
+      0,
+      Math.round(summary.totals?.addons?.[cocktailsAddonKey]?.attended ?? 0),
+    );
+    const normalCount = Math.max(0, peopleAttended - cocktailsAttended);
+    const brunchDefault = 0;
+    const totalPeople = normalCount + cocktailsAttended + brunchDefault;
+
+    if (totalPeople === 0 && summary.totals?.people?.bookedBefore === 0 && summary.totals?.people?.bookedAfter === 0) {
+      return;
+    }
+
+    const baseVenue = {
+      orderIndex: 1,
+      venueName: 'Open Bar',
+      totalPeople,
+      isOpenBar: true,
+      normalCount,
+      cocktailsCount: cocktailsAttended,
+      brunchCount: brunchDefault,
+    };
+
+    const creationPayload = {
+      counterId: counterRecord.id,
+      leaderId,
+      activityDate: counterRecord.date,
+      venues: [baseVenue],
+    };
+
+    let creationErrorMessage: string | null = null;
+    try {
+      await dispatch(createNightReport(creationPayload)).unwrap();
+      return;
+    } catch (error) {
+      creationErrorMessage = typeof error === 'string' ? error : (error as Error)?.message ?? '';
+      if (!creationErrorMessage.toLowerCase().includes('night report already exists')) {
+        // eslint-disable-next-line no-console
+        console.warn('Failed to auto-create night report from counter summary:', creationErrorMessage || error);
+        return;
+      }
+    }
+
+    try {
+      const summariesResponse = await axiosInstance.get<ServerResponse<NightReportSummary>>('/nightReports', {
+        params: { counterId: counterRecord.id },
+        withCredentials: true,
+      });
+      const reportId = summariesResponse.data?.[0]?.data?.[0]?.id ?? null;
+      if (!reportId) {
+        return;
+      }
+
+      const detailResponse = await axiosInstance.get<NightReport[]>(`/nightReports/${reportId}`, {
+        withCredentials: true,
+      });
+      const reportDetail = detailResponse.data?.[0];
+      if (!reportDetail) {
+        return;
+      }
+
+      const existingVenues = [...(reportDetail.venues ?? [])].sort(
+        (a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0),
+      );
+      const existingOpenBar = existingVenues.find((venue) => venue.isOpenBar) ?? existingVenues[0];
+      const brunchCount = existingOpenBar?.brunchCount ?? brunchDefault;
+
+      const openBarVenue = {
+        orderIndex: 1,
+        venueName: existingOpenBar?.venueName ?? baseVenue.venueName,
+        totalPeople,
+        isOpenBar: true,
+        normalCount,
+        cocktailsCount: cocktailsAttended,
+        brunchCount,
+      };
+
+      const otherVenues = existingVenues
+        .filter((venue) => !venue.isOpenBar)
+        .map((venue, index) => ({
+          orderIndex: index + 2,
+          venueName: venue.venueName ?? '',
+          totalPeople: Math.max(0, venue.totalPeople ?? 0),
+          isOpenBar: false,
+          normalCount: venue.normalCount ?? null,
+          cocktailsCount: venue.cocktailsCount ?? null,
+          brunchCount: venue.brunchCount ?? null,
+        }));
+
+      await dispatch(
+        updateNightReport({
+          reportId,
+          payload: {
+            leaderId,
+            activityDate: counterRecord.date,
+            venues: [openBarVenue, ...otherVenues],
+          },
+        }),
+      ).unwrap();
+    } catch (error) {
+      const message = typeof error === 'string' ? error : (error as Error)?.message ?? '';
+      // eslint-disable-next-line no-console
+      console.warn('Failed to upsert night report from counter summary:', message || creationErrorMessage || error);
+    }
+  }, [activeRegistryStep, dispatch, registry.addons, registry.counter, registry.summary]);
+
   const handleSaveAndExit = useCallback(async () => {
     const saved = await flushMetrics();
     if (saved) {
+      await ensureNightReportFromSummary();
       handleCloseModal();
     }
-  }, [flushMetrics, handleCloseModal]);
+  }, [ensureNightReportFromSummary, flushMetrics, handleCloseModal]);
   const renderStepper = (
     label: string,
     metric: MetricCell | null,
@@ -5155,6 +5283,8 @@ type SummaryRowOptions = {
                       )}
                     </Stack>
                   );
+                  const venueNumbersLink =
+                    counterIdValue != null ? `/venueNumbers?counterId=${counterIdValue}` : '/venueNumbers';
                   return (
                     <ListItem
                       key={(counter.id ?? 'counter') + '-' + dateLabel}
@@ -5195,19 +5325,32 @@ type SummaryRowOptions = {
                           },
                         })}
                       >
-                        <ListItemText
-                          primary={
-                            <Typography
-                              variant="body1"
-                              fontWeight={600}
-                              color={isSelected ? 'common.white' : 'text.primary'}
-                            >
-                              {dateLabel}
-                            </Typography>
-                          }
-                          secondary={secondaryContent}
-                          secondaryTypographyProps={{ component: 'div' }}
-                        />
+                        <Stack direction="row" alignItems="center" spacing={1} sx={{ width: '100%' }}>
+                          <ListItemText
+                            primary={
+                              <Typography
+                                variant="body1"
+                                fontWeight={600}
+                                color={isSelected ? 'common.white' : 'text.primary'}
+                              >
+                                {dateLabel}
+                              </Typography>
+                            }
+                            secondary={secondaryContent}
+                            secondaryTypographyProps={{ component: 'div' }}
+                            sx={{ flexGrow: 1, pr: 1, minWidth: 0 }}
+                          />
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            component={Link}
+                            to={venueNumbersLink}
+                            onClick={(event) => event.stopPropagation()}
+                            disabled={counterIdValue == null}
+                          >
+                            Venue Numbers
+                          </Button>
+                        </Stack>
                       </ListItemButton>
                     </ListItem>
                   );
