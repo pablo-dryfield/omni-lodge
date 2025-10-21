@@ -4388,11 +4388,13 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
             size="small"
             sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 1, rowGap: 1 }}
           >
-            {registry.channels.map((channel) => (
-              <ToggleButton key={channel.id} value={channel.id} sx={{ flex: '0 0 auto' }}>
-                {channel.name}
-              </ToggleButton>
-            ))}
+            {registry.channels
+              .filter((channel) => (channel.name ?? '').toLowerCase() !== 'walk-in')
+              .map((channel) => (
+                <ToggleButton key={channel.id} value={channel.id} sx={{ flex: '0 0 auto' }}>
+                  {channel.name}
+                </ToggleButton>
+              ))}
           </ToggleButtonGroup>
           {effectiveSelectedChannelIds.length === 0 ? (
             <Alert severity="info">
