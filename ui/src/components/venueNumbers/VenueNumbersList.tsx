@@ -1468,7 +1468,7 @@ const VenueNumbersList = () => {
                               Leader: {report.leaderName || "—"}
                             </Typography>
                             <Typography variant="body2" color="text.secondary">
-                              Venues: {report.venuesCount}
+                              Venues: {report.venuesCount} {"\u2022"} People: {report.totalPeople}
                             </Typography>
                           </Stack>
                         </Stack>
