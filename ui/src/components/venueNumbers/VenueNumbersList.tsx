@@ -1531,12 +1531,6 @@ const VenueNumbersList = () => {
             </>
           ) : null}
         </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Manager:{" "}
-          <Typography component="span" variant="body1" fontWeight={600}>
-            {getManagerLabel(currentCounter)}
-          </Typography>
-        </Typography>
       </Box>
 
       <Grid container spacing={2}>
