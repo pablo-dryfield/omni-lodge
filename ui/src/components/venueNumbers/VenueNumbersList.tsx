@@ -1521,10 +1521,14 @@ const VenueNumbersList = () => {
                     const isDraftReport = (report.status ?? "").toLowerCase() === "draft";
                     const updateLabel = isDraftReport ? "Fill" : "Update";
                     const counterForReport = counters.find((counter) => counter.id === report.counterId);
-                    const modeForReport = resolveOpenBarMode(counterForReport?.product?.name);
+                    const modeForReport =
+                      report.id === selectedReportId
+                        ? openBarMode
+                        : resolveOpenBarMode(counterForReport?.product?.name);
                     const overriddenTotal = reportDisplayTotals[report.id];
                     const displayPeopleCount =
-                      overriddenTotal != null && (modeForReport === "pubCrawl" || modeForReport === "bottomlessBrunch")
+                      overriddenTotal != null &&
+                      (modeForReport === "pubCrawl" || modeForReport === "bottomlessBrunch" || report.id === selectedReportId)
                         ? overriddenTotal
                         : report.totalPeople;
 
@@ -1585,7 +1589,7 @@ const VenueNumbersList = () => {
                           </Stack>
                           <Stack spacing={0.5}>
                             <Typography variant="body2" color="text.secondary">
-                              Leader: {report.leaderName || "—"}
+                              Leader: {report.leaderName || "-"}
                             </Typography>
                             <Typography variant="body2" color="text.secondary">
                               Venues: {report.venuesCount} {"\u2022"} People: {displayPeopleCount}
@@ -1734,8 +1738,3 @@ const VenueNumbersList = () => {
 };
 
 export default VenueNumbersList;
-
-
-
-
-
