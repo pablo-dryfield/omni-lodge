@@ -24,7 +24,7 @@ import { LocalizationProvider } from "@mui/x-date-pickers";
 import { ArrowBack, Add, Delete, Edit, Send, UploadFile } from "@mui/icons-material";
 import dayjs from "dayjs";
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
 
@@ -40,6 +40,7 @@ import {
 import { fetchCounters } from "../../actions/counterActions";
 import { fetchUsers } from "../../actions/userActions";
 import { fetchVenues } from "../../actions/venueActions";
+import axiosInstance from "../../utils/axiosInstance";
 
 import type { NightReport, NightReportSummary, NightReportVenueInput } from "../../types/nightReports/NightReport";
 import type { Counter } from "../../types/counters/Counter";
@@ -133,6 +134,18 @@ const formatFileSize = (bytes: number): string => {
   return `${formatted} ${units[unitIndex]}`;
 };
 
+const resolvePhotoDownloadUrl = (downloadUrl: string): string => {
+  const base = axiosInstance.defaults.baseURL || (typeof window !== "undefined" ? window.location.origin : "");
+  if (base) {
+    try {
+      return new URL(downloadUrl, base).toString();
+    } catch {
+      // fall through to return raw value
+    }
+  }
+  return downloadUrl;
+};
+
 const buildVenuePayload = (report: EditableReport): NightReportVenueInput[] =>
   report.venues.map((venue, index) => {
     const payload: NightReportVenueInput = {
@@ -175,6 +188,7 @@ const getManagerLabel = (counter: Counter | undefined): string => {
 const VenueNumbersList = () => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
 
@@ -192,6 +206,22 @@ const VenueNumbersList = () => {
   const [pendingChanges, setPendingChanges] = useState<boolean>(false);
   const [notesExpanded, setNotesExpanded] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [photoPreviews, setPhotoPreviews] = useState<Record<number, string>>({});
+  const [photoPreviewErrors, setPhotoPreviewErrors] = useState<Record<number, boolean>>({});
+  const requestedPhotoIds = useRef<Set<number>>(new Set());
+  const photoPreviewUrlsRef = useRef<Record<number, string>>({});
+
+  const requestedCounterId = useMemo(() => {
+    const raw = searchParams.get("counterId");
+    if (!raw) {
+      return null;
+    }
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return null;
+    }
+    return parsed;
+  }, [searchParams]);
 
   const venuesOptions = useMemo(() => {
     const venues = (venuesState.data[0]?.data as Venue[] | undefined) ?? [];
@@ -217,6 +247,11 @@ const VenueNumbersList = () => {
     () => (nightReportListState.data[0]?.data as NightReportSummary[] | undefined) ?? [],
     [nightReportListState.data],
   );
+  const photos = useMemo(() => nightReportDetail.data?.photos ?? [], [nightReportDetail.data?.photos]);
+
+  useEffect(() => {
+    photoPreviewUrlsRef.current = photoPreviews;
+  }, [photoPreviews]);
 
   useEffect(() => {
     dispatch(fetchNightReports());
@@ -227,12 +262,33 @@ const VenueNumbersList = () => {
 
   useEffect(() => {
     if (!reports.length) {
+      if (selectedReportId !== null) {
+        setSelectedReportId(null);
+        setSearchParams({});
+      }
       return;
     }
-    if (selectedReportId === null || !reports.some((report) => report.id === selectedReportId)) {
-      setSelectedReportId(reports[0].id);
+    if (selectedReportId !== null && !reports.some((report) => report.id === selectedReportId)) {
+      setSelectedReportId(null);
+      setSearchParams({});
     }
-  }, [reports, selectedReportId]);
+  }, [reports, selectedReportId, setSearchParams]);
+
+  useEffect(() => {
+    if (requestedCounterId == null) {
+      return;
+    }
+    if (!reports.length) {
+      return;
+    }
+    if (pendingChanges) {
+      return;
+    }
+    const matching = reports.find((report) => report.counterId === requestedCounterId);
+    if (matching && matching.id !== selectedReportId) {
+      setSelectedReportId(matching.id);
+    }
+  }, [pendingChanges, requestedCounterId, reports, selectedReportId]);
 
   useEffect(() => {
     if (selectedReportId != null) {
@@ -267,6 +323,100 @@ const VenueNumbersList = () => {
     });
   }, [venuesOptions]);
 
+  useEffect(() => {
+    const currentIds = new Set(photos.map((photo) => photo.id));
+    setPhotoPreviews((prev) => {
+      let changed = false;
+      const next: Record<number, string> = {};
+      Object.entries(prev).forEach(([key, url]) => {
+        const id = Number(key);
+        if (currentIds.has(id)) {
+          next[id] = url;
+        } else {
+          if (url) {
+            URL.revokeObjectURL(url);
+          }
+          requestedPhotoIds.current.delete(id);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+    setPhotoPreviewErrors((prev) => {
+      let changed = false;
+      const next: Record<number, boolean> = {};
+      Object.entries(prev).forEach(([key, hasError]) => {
+        const id = Number(key);
+        if (currentIds.has(id)) {
+          next[id] = hasError;
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [photos]);
+
+  useEffect(() => {
+    let isActive = true;
+    const previews = photoPreviewUrlsRef.current;
+    const pending = photos.filter(
+      (photo) => photo.downloadUrl && !requestedPhotoIds.current.has(photo.id) && !previews[photo.id],
+    );
+    if (pending.length === 0) {
+      return () => {
+        isActive = false;
+      };
+    }
+    pending.forEach((photo) => {
+      requestedPhotoIds.current.add(photo.id);
+      const downloadUrl = resolvePhotoDownloadUrl(photo.downloadUrl);
+      axiosInstance
+        .get(downloadUrl, { responseType: "blob", withCredentials: true, baseURL: undefined })
+        .then((response) => {
+          if (!isActive) {
+            return;
+          }
+          const objectUrl = URL.createObjectURL(response.data);
+          setPhotoPreviewErrors((prev) => {
+            if (!prev[photo.id]) {
+              return prev;
+            }
+            const next = { ...prev };
+            delete next[photo.id];
+            return next;
+          });
+          setPhotoPreviews((prev) => {
+            const previousUrl = prev[photo.id];
+            if (previousUrl) {
+              URL.revokeObjectURL(previousUrl);
+            }
+            return { ...prev, [photo.id]: objectUrl };
+          });
+        })
+        .catch(() => {
+          if (!isActive) {
+            return;
+          }
+          setPhotoPreviewErrors((prev) => ({ ...prev, [photo.id]: true }));
+        });
+    });
+    return () => {
+      isActive = false;
+    };
+  }, [photos]);
+
+  useEffect(
+    () => () => {
+      Object.values(photoPreviewUrlsRef.current).forEach((url) => {
+        if (url) {
+          URL.revokeObjectURL(url);
+        }
+      });
+    },
+    [],
+  );
+
   const handleReportSelect = useCallback(
     (report: NightReportSummary) => {
       if (pendingChanges && selectedReportId && report.id !== selectedReportId) {
@@ -275,8 +425,9 @@ const VenueNumbersList = () => {
       }
       setValidationError(null);
       setSelectedReportId(report.id);
+      setSearchParams({ counterId: String(report.counterId) });
     },
-    [pendingChanges, selectedReportId],
+    [pendingChanges, selectedReportId, setSearchParams],
   );
 
   const handleEnableEdit = () => {
@@ -449,7 +600,6 @@ const VenueNumbersList = () => {
   const submitting = nightReportUi.submitting;
   const uploadingPhoto = nightReportUi.uploadingPhoto;
   const currentStatus = nightReportDetail.data?.status ?? "draft";
-  const photos = nightReportDetail.data?.photos ?? [];
   const readOnly = !editMode;
   const currentCounter = counters.find((counter) => counter.id === formState.counterId);
 
@@ -535,6 +685,13 @@ const VenueNumbersList = () => {
               {detailLoading ? (
                 <Stack alignItems="center" justifyContent="center" minHeight={220}>
                   <CircularProgress size={36} />
+                </Stack>
+              ) : selectedReportId === null ? (
+                <Stack alignItems="center" justifyContent="center" minHeight={220} spacing={1}>
+                  <Typography variant="h6">Select a night report</Typography>
+                  <Typography variant="body2" color="text.secondary" align="center" maxWidth={320}>
+                    Choose a report from the list to review or edit its details.
+                  </Typography>
                 </Stack>
               ) : (
                 <Stack spacing={3}>
@@ -834,62 +991,89 @@ const VenueNumbersList = () => {
                       </Typography>
                     ) : (
                       <Grid container spacing={2}>
-                        {photos.map((photo) => (
-                          <Grid size={{ xs: 12, sm: 6, md: 4 }} key={photo.id}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Stack spacing={1}>
-                                  <Box
-                                    component="img"
-                                    src={photo.downloadUrl}
-                                    alt={photo.originalName}
-                                    sx={{
-                                      width: "100%",
-                                      height: 180,
-                                      objectFit: "cover",
-                                      borderRadius: 1,
-                                      bgcolor: "grey.100",
-                                    }}
-                                  />
-                                  <Stack direction="row" spacing={1} alignItems="flex-start">
-                                    <Box flexGrow={1}>
-                                      <Typography variant="body2" fontWeight={600} noWrap title={photo.originalName}>
-                                        {photo.originalName}
-                                      </Typography>
-                                      <Typography variant="caption" color="text.secondary">
-                                        {formatFileSize(photo.fileSize)}
-                                        {photo.capturedAt ? ` • ${dayjs(photo.capturedAt).format("MMM D, YYYY h:mm A")}` : ""}
-                                      </Typography>
+                        {photos.map((photo) => {
+                          const previewUrl = photoPreviews[photo.id];
+                          const previewError = photoPreviewErrors[photo.id];
+                          const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl);
+                          return (
+                            <Grid size={{ xs: 12, sm: 6, md: 4 }} key={photo.id}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Stack spacing={1}>
+                                    <Box
+                                      sx={{
+                                        width: "100%",
+                                        height: 180,
+                                        borderRadius: 1,
+                                        bgcolor: "grey.100",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        overflow: "hidden",
+                                        border: "1px solid",
+                                        borderColor: "divider",
+                                      }}
+                                    >
+                                      {previewUrl ? (
+                                        <Box
+                                          component="img"
+                                          src={previewUrl}
+                                          alt={photo.originalName}
+                                          sx={{ width: "100%", height: "100%", objectFit: "cover" }}
+                                        />
+                                      ) : previewError ? (
+                                        <Typography variant="caption" color="text.secondary" align="center" px={2}>
+                                          Preview unavailable
+                                        </Typography>
+                                      ) : (
+                                        <CircularProgress size={24} />
+                                      )}
                                     </Box>
-                                    {!readOnly && (
-                                      <Tooltip title="Remove photo">
-                                        <span>
-                                          <IconButton
-                                            size="small"
-                                            onClick={() => handleDeletePhoto(photo.id)}
-                                            disabled={uploadingPhoto}
-                                          >
-                                            <Delete fontSize="small" />
-                                          </IconButton>
-                                        </span>
-                                      </Tooltip>
-                                    )}
+                                    <Stack direction="row" spacing={1} alignItems="flex-start">
+                                      <Box flexGrow={1}>
+                                        <Typography variant="body2" fontWeight={600} noWrap title={photo.originalName}>
+                                          {photo.originalName}
+                                        </Typography>
+                                        <Typography variant="caption" color="text.secondary">
+                                          {formatFileSize(photo.fileSize)}
+                                          {photo.capturedAt ? (
+                                            <>
+                                              {" \u2022 "}
+                                              {dayjs(photo.capturedAt).format("MMM D, YYYY h:mm A")}
+                                            </>
+                                          ) : null}
+                                        </Typography>
+                                      </Box>
+                                      {!readOnly && (
+                                        <Tooltip title="Remove photo">
+                                          <span>
+                                            <IconButton
+                                              size="small"
+                                              onClick={() => handleDeletePhoto(photo.id)}
+                                              disabled={uploadingPhoto}
+                                            >
+                                              <Delete fontSize="small" />
+                                            </IconButton>
+                                          </span>
+                                        </Tooltip>
+                                      )}
+                                    </Stack>
+                                    <Button
+                                      variant="outlined"
+                                      size="small"
+                                      component="a"
+                                      href={downloadHref}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                    >
+                                      View Full Size
+                                    </Button>
                                   </Stack>
-                                  <Button
-                                    variant="outlined"
-                                    size="small"
-                                    component="a"
-                                    href={photo.downloadUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                  >
-                                    View Full Size
-                                  </Button>
-                                </Stack>
-                              </CardContent>
-                            </Card>
-                          </Grid>
-                        ))}
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          );
+                        })}
                       </Grid>
                     )}
                   </Stack>

@@ -102,6 +102,19 @@ function canManageReport(report: NightReport, actorId: number, roleSlug: string 
   return false;
 }
 
+const buildPhotoDownloadUrl = (req: AuthenticatedRequest, reportId: number, photoId: number): string => {
+  const basePath = `${req.baseUrl ?? ''}`.replace(/\/+$/, '');
+  let normalizedBase = basePath;
+  if (!normalizedBase) {
+    normalizedBase = '/api/nightReports';
+  } else if (!normalizedBase.startsWith('/api')) {
+    normalizedBase = normalizedBase.startsWith('/')
+      ? `/api${normalizedBase}`
+      : `/api/${normalizedBase}`;
+  }
+  return `${normalizedBase}/${reportId}/photos/${photoId}/download`;
+};
+
 function serializeNightReport(report: NightReport, req: AuthenticatedRequest): NightReportPayload {
   const leader = report.leader
     ? {
@@ -137,7 +150,7 @@ function serializeNightReport(report: NightReport, req: AuthenticatedRequest): N
     mimeType: photo.mimeType,
     fileSize: photo.fileSize,
     capturedAt: photo.capturedAt ? photo.capturedAt.toISOString() : null,
-    downloadUrl: `/api/nightReports/${report.id}/photos/${photo.id}/download`,
+    downloadUrl: buildPhotoDownloadUrl(req, report.id, photo.id),
   }));
 
   return {
@@ -732,7 +745,7 @@ export const uploadNightReportPhoto = async (req: AuthenticatedRequest, res: Res
         mimeType: photo.mimeType,
         fileSize: photo.fileSize,
         capturedAt: photo.capturedAt ? photo.capturedAt.toISOString() : null,
-        downloadUrl: `/api/nightReports/${reportId}/photos/${photo.id}/download`,
+        downloadUrl: buildPhotoDownloadUrl(req, reportId, photo.id),
       },
     ]);
   } catch (error) {

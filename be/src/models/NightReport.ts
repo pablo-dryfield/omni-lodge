@@ -78,7 +78,7 @@ export default class NightReport extends Model {
   @Column({ field: 'updated_at', type: DataType.DATE })
   declare updatedAt: Date | null;
 
-  @BelongsTo(() => Counter, { foreignKey: 'counterId', as: 'counter' })
+  @BelongsTo(() => Counter, { foreignKey: 'counterId', as: 'counter', onDelete: 'CASCADE' })
   declare counter?: Counter;
 
   @BelongsTo(() => User, { foreignKey: 'leaderId', as: 'leader' })
