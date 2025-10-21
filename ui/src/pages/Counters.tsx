@@ -1332,10 +1332,45 @@ const loadCounterForDate = useCallback(
     walkInChannelIds,
   ]);
 
- const channelHasAnyQty = useCallback(
-   (channelId: number) => mergedMetrics.some((metric) => metric.channelId === channelId && metric.qty > 0),
-   [mergedMetrics],
- );
+  const channelHasAnyQty = useCallback(
+    (channelId: number) => mergedMetrics.some((metric) => metric.channelId === channelId && metric.qty > 0),
+    [mergedMetrics],
+  );
+
+  const [editingChannelIds, setEditingChannelIds] = useState<Set<number>>(() => new Set());
+
+  const markChannelEditing = useCallback((channelId: number) => {
+    setEditingChannelIds((prev) => {
+      if (prev.has(channelId)) {
+        return prev;
+      }
+      const next = new Set(prev);
+      next.add(channelId);
+      return next;
+    });
+  }, []);
+
+  const unmarkChannelEditing = useCallback((channelId: number) => {
+    setEditingChannelIds((prev) => {
+      if (!prev.has(channelId)) {
+        return prev;
+      }
+      const next = new Set(prev);
+      next.delete(channelId);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isModalOpen) {
+      setEditingChannelIds((prev) => {
+        if (prev.size === 0) {
+          return prev;
+        }
+        return new Set<number>();
+      });
+    }
+  }, [isModalOpen]);
 
 
   const allowedAfterCutoffChannelIds = useMemo(
@@ -2689,12 +2724,12 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     return savedPlatformChannelIds;
 }, [savedPlatformChannelIds, selectedChannelIds]);
 
- useEffect(() => {
-   setSelectedChannelIds((prev) => {
-     const filtered = prev.filter((id) => channelHasAnyQty(id));
-     return filtered.length === prev.length ? prev : filtered;
-   });
- }, [channelHasAnyQty]);
+  useEffect(() => {
+    setSelectedChannelIds((prev) => {
+      const filtered = prev.filter((id) => channelHasAnyQty(id) || editingChannelIds.has(id));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [channelHasAnyQty, editingChannelIds]);
 
   const effectiveAfterCutoffIds = useMemo<number[]>(() => {
     if (selectedAfterCutoffChannelIds.length > 0) {
@@ -2705,10 +2740,10 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
 
   useEffect(() => {
     setSelectedAfterCutoffChannelIds((prev) => {
-      const filtered = prev.filter((id) => channelHasAnyQty(id));
+      const filtered = prev.filter((id) => channelHasAnyQty(id) || editingChannelIds.has(id));
       return filtered.length === prev.length ? prev : filtered;
     });
-  }, [channelHasAnyQty]);
+  }, [channelHasAnyQty, editingChannelIds]);
   const autoAfterCutoffChannelIds = useMemo(() => {
     const autoIds = new Set<number>();
     channelsWithAfterCutoffMetrics.forEach((id) => {
@@ -3121,7 +3156,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
 
     const baseVenue = {
       orderIndex: 1,
-      venueName: 'Open Bar',
+      venueName: 'Select Open Bar',
       totalPeople,
       isOpenBar: true,
       normalCount,
@@ -3270,6 +3305,18 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       }
     };
 
+    const handleFocus = () => {
+      if (metric) {
+        markChannelEditing(metric.channelId);
+      }
+    };
+
+    const handleBlur = () => {
+      if (metric) {
+        unmarkChannelEditing(metric.channelId);
+      }
+    };
+
     const displayLabel = label ?? '';
     const hideLabel = Boolean(options.hideLabel);
     const ariaLabel = displayLabel.trim().length > 0 ? displayLabel : 'value';
@@ -3317,6 +3364,8 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
             disabled={disabled}
             onChange={(event) => handleInputChange(event.target.value)}
             onKeyDown={onKeyDown}
+            onFocus={handleFocus}
+            onBlur={handleBlur}
             inputProps={{
               min,
               max,
