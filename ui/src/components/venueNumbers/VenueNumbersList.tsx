@@ -950,23 +950,13 @@ const VenueNumbersList = () => {
                           Venues
                         </Typography>
                         {!readOnly && (
-                          <Stack direction="row" spacing={1}>
-                            <Button
-                              variant={didNotOperate ? "contained" : "outlined"}
-                              color={didNotOperate ? "warning" : "inherit"}
-                              onClick={handleDidNotOperateToggle}
-                            >
-                              DIDN'T OPERATE
-                            </Button>
-                            <Button
-                              startIcon={<Add />}
-                              variant="outlined"
-                              onClick={handleAddVenue}
-                              disabled={didNotOperate}
-                            >
-                              Add Venue
-                            </Button>
-                          </Stack>
+                          <Button
+                            variant={didNotOperate ? "contained" : "outlined"}
+                            color={didNotOperate ? "warning" : "inherit"}
+                            onClick={handleDidNotOperateToggle}
+                          >
+                            DIDN'T OPERATE
+                          </Button>
                         )}
                       </Stack>
                       <Divider />
@@ -985,134 +975,143 @@ const VenueNumbersList = () => {
                           })();
 
                           return (
-                            <Card variant="outlined" key={venue.id ?? `venue-${index}`}>
-                              <CardContent>
-                                <Stack spacing={2}>
-                                  <Stack direction="row" alignItems="center" spacing={1}>
-                                    <Typography fontWeight={600}>
-                                      {isOpenBar ? "Open Bar (Venue 1)" : `Venue ${index + 1}`}
-                                    </Typography>
-                                    <Box flexGrow={1} />
-                                    {!readOnly && !isOpenBar && (
-                                      <Tooltip title="Remove venue">
-                                        <IconButton size="small" onClick={() => handleRemoveVenue(index)}>
-                                          <Delete fontSize="small" />
-                                        </IconButton>
-                                      </Tooltip>
-                                    )}
-                                  </Stack>
-                                  <Grid container spacing={2}>
-                                    <Grid size={12}>
-                                      <Autocomplete
-                                        options={availableOptions}
-                                        value={venue.venueName}
-                                        onChange={(_, value) => handleVenueChange(index, "venueName", value ?? "")}
-                                        renderInput={(params) => (
-                                          <TextField
-                                            {...params}
-                                            label="Venue"
-                                            required
-                                            fullWidth
-                                            sx={{
-                                              "& .MuiInputBase-root": {
-                                                alignItems: "flex-start",
-                                              },
-                                              "& .MuiInputBase-input": {
-                                                whiteSpace: "normal",
-                                                overflow: "visible",
-                                                textOverflow: "unset",
-                                                lineHeight: 1.4,
-                                              },
-                                            }}
-                                          />
-                                        )}
-                                        disabled={readOnly}
-                                        fullWidth
-                                        componentsProps={{
-                                          popper: {
-                                            style: { width: "auto" },
-                                          },
-                                          paper: {
-                                            sx: {
-                                              width: "fit-content",
-                                              minWidth: "auto",
-                                              maxWidth: "min(440px, calc(100vw - 48px))",
-                                            },
-                                          },
-                                        }}
-                                        ListboxProps={{ style: { paddingRight: 8 } }}
-                                        sx={{
-                                          "& .MuiAutocomplete-inputRoot": {
-                                            alignItems: "flex-start",
-                                            flexWrap: "wrap",
-                                            paddingTop: 1,
-                                            paddingBottom: 1,
-                                          },
-                                          "& .MuiAutocomplete-input": {
-                                            display: "block",
-                                            height: "auto",
-                                            whiteSpace: "normal",
-                                            wordBreak: "break-word",
-                                            textOverflow: "unset",
-                                            width: "100% !important",
-                                            lineHeight: 1.4,
-                                          },
-                                        }}
-                                      />
-                                    </Grid>
-                                    {isOpenBar ? (
-                                      <>
-                                        <Grid size={{ xs: 12, md: 4 }}>
-                                          <TextField
-                                            label="Normal"
-                                            value={venue.normalCount ?? ""}
-                                            onChange={(event) => handleVenueChange(index, "normalCount", event.target.value)}
-                                            type="number"
-                                            inputProps={{ min: 0 }}
-                                            fullWidth
-                                            disabled={readOnly}
-                                          />
-                                        </Grid>
-                                        <Grid size={{ xs: 12, md: 4 }}>
-                                          <TextField
-                                            label="Cocktails"
-                                            value={venue.cocktailsCount ?? ""}
-                                            onChange={(event) => handleVenueChange(index, "cocktailsCount", event.target.value)}
-                                            type="number"
-                                            inputProps={{ min: 0 }}
-                                            fullWidth
-                                            disabled={readOnly}
-                                          />
-                                        </Grid>
-                                        <Grid size={{ xs: 12, md: 4 }}>
-                                          <TextField
-                                            label="Brunch"
-                                            value={venue.brunchCount ?? ""}
-                                            onChange={(event) => handleVenueChange(index, "brunchCount", event.target.value)}
-                                            type="number"
-                                            inputProps={{ min: 0 }}
-                                            fullWidth
-                                            disabled={readOnly}
-                                          />
-                                        </Grid>
-                                      </>
-                                    ) : (
-                                      <Grid size={{ xs: 12, md: 6 }}>
-                                        <TextField
-                                          label="Total People"
-                                          value={venue.totalPeople}
-                                          onChange={(event) => handleVenueChange(index, "totalPeople", event.target.value)}
-                                          type="number"
-                                          inputProps={{ min: 0 }}
-                                          fullWidth
+                            <Stack key={venue.id ?? `venue-${index}`} spacing={1}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Stack spacing={2}>
+                                    <Stack direction="row" alignItems="center" spacing={1}>
+                                      <Typography fontWeight={600}>
+                                        {isOpenBar ? "Open Bar (Venue 1)" : `Venue ${index + 1}`}
+                                      </Typography>
+                                      <Box flexGrow={1} />
+                                      {!readOnly && !isOpenBar && (
+                                        <Tooltip title="Remove venue">
+                                          <IconButton size="small" onClick={() => handleRemoveVenue(index)}>
+                                            <Delete fontSize="small" />
+                                          </IconButton>
+                                        </Tooltip>
+                                      )}
+                                    </Stack>
+                                    <Grid container spacing={2}>
+                                      <Grid size={12}>
+                                        <Autocomplete
+                                          options={availableOptions}
+                                          value={venue.venueName}
+                                          onChange={(_, value) => handleVenueChange(index, "venueName", value ?? "")}
+                                          renderInput={(params) => (
+                                            <TextField
+                                              {...params}
+                                              label="Venue"
+                                              required
+                                              fullWidth
+                                              sx={{
+                                                "& .MuiInputBase-root": {
+                                                  alignItems: "flex-start",
+                                                },
+                                                "& .MuiInputBase-input": {
+                                                  whiteSpace: "normal",
+                                                  overflow: "visible",
+                                                  textOverflow: "unset",
+                                                  lineHeight: 1.4,
+                                                },
+                                              }}
+                                            />
+                                          )}
                                           disabled={readOnly}
+                                          fullWidth
+                                          componentsProps={{
+                                            popper: {
+                                              style: { width: "auto" },
+                                            },
+                                            paper: {
+                                              sx: {
+                                                width: "fit-content",
+                                                minWidth: "auto",
+                                                maxWidth: "min(440px, calc(100vw - 48px))",
+                                              },
+                                            },
+                                          }}
+                                          ListboxProps={{ style: { paddingRight: 8 } }}
+                                          sx={{
+                                            "& .MuiAutocomplete-inputRoot": {
+                                              alignItems: "flex-start",
+                                              flexWrap: "wrap",
+                                              paddingTop: 1,
+                                              paddingBottom: 1,
+                                            },
+                                            "& .MuiAutocomplete-input": {
+                                              display: "block",
+                                              height: "auto",
+                                              whiteSpace: "normal",
+                                              wordBreak: "break-word",
+                                              textOverflow: "unset",
+                                              width: "100% !important",
+                                              lineHeight: 1.4,
+                                            },
+                                          }}
                                         />
                                       </Grid>
-                                    )}
-                                  </Grid>
-                                </Stack>
-                              </CardContent>
-                            </Card>
+                                      {isOpenBar ? (
+                                        <>
+                                          <Grid size={{ xs: 12, md: 4 }}>
+                                            <TextField
+                                              label="Normal"
+                                              value={venue.normalCount ?? ""}
+                                              onChange={(event) => handleVenueChange(index, "normalCount", event.target.value)}
+                                              type="number"
+                                              inputProps={{ min: 0 }}
+                                              fullWidth
+                                              disabled={readOnly}
+                                            />
+                                          </Grid>
+                                          <Grid size={{ xs: 12, md: 4 }}>
+                                            <TextField
+                                              label="Cocktails"
+                                              value={venue.cocktailsCount ?? ""}
+                                              onChange={(event) => handleVenueChange(index, "cocktailsCount", event.target.value)}
+                                              type="number"
+                                              inputProps={{ min: 0 }}
+                                              fullWidth
+                                              disabled={readOnly}
+                                            />
+                                          </Grid>
+                                          <Grid size={{ xs: 12, md: 4 }}>
+                                            <TextField
+                                              label="Brunch"
+                                              value={venue.brunchCount ?? ""}
+                                              onChange={(event) => handleVenueChange(index, "brunchCount", event.target.value)}
+                                              type="number"
+                                              inputProps={{ min: 0 }}
+                                              fullWidth
+                                              disabled={readOnly}
+                                            />
+                                          </Grid>
+                                        </>
+                                      ) : (
+                                        <Grid size={{ xs: 12, md: 6 }}>
+                                          <TextField
+                                            label="Total People"
+                                            value={venue.totalPeople}
+                                            onChange={(event) => handleVenueChange(index, "totalPeople", event.target.value)}
+                                            type="number"
+                                            inputProps={{ min: 0 }}
+                                            fullWidth
+                                            disabled={readOnly}
+                                          />
+                                        </Grid>
+                                      )}
+                                    </Grid>
+                                  </Stack>
+                                </CardContent>
+                              </Card>
+                              {isOpenBar && !readOnly && !didNotOperate ? (
+                                <Box display="flex" justifyContent="flex-end">
+                                  <Button startIcon={<Add />} variant="outlined" onClick={handleAddVenue}>
+                                    Add Venue
+                                  </Button>
+                                </Box>
+                              ) : null}
+                            </Stack>
                           );
                         })}
                       </Stack>
