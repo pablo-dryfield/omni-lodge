@@ -75,6 +75,7 @@ const createEmptyVenue = (): EditableVenue => ({
 });
 
 const DID_NOT_OPERATE_NOTE = "The activity didn't operate.";
+const SELECT_OPEN_BAR_PLACEHOLDER = "Select Open Bar";
 
 const toEditableReport = (report: NightReport | null): EditableReport => {
   if (!report) {
@@ -559,6 +560,9 @@ const VenueNumbersList = () => {
         return `"${venue.venueName}" is not part of the venues directory.`;
       }
       if (index === OPEN_BAR_INDEX) {
+        if (trimmed.toLowerCase() === SELECT_OPEN_BAR_PLACEHOLDER.toLowerCase()) {
+          return "Select the open-bar venue.";
+        }
         if (openBarAllowedSet.size > 0 && !openBarAllowedSet.has(trimmed.toLowerCase())) {
           return `"${venue.venueName}" cannot be used for the open bar.`;
         }
@@ -755,6 +759,50 @@ const VenueNumbersList = () => {
   const showNoReportDetails = readOnly && didNotOperate;
   const showDetails = selectedReportId != null && activeReportMode != null;
   const currentCounter = counters.find((counter) => counter.id === formState.counterId);
+  const formHasFieldErrors = useMemo(() => {
+    if (readOnly || didNotOperate) {
+      return false;
+    }
+    if (formState.venues.length === 0) {
+      return true;
+    }
+    const venueSet = new Set(venuesOptions.map((name) => name.toLowerCase()));
+    const openBarAllowedSet = new Set(openBarVenueOptions.map((name) => name.toLowerCase()));
+
+    return formState.venues.some((venue, index) => {
+      const trimmed = venue.venueName.trim();
+      if (!trimmed) {
+        return true;
+      }
+      if (index === OPEN_BAR_INDEX) {
+        const lowerTrimmed = trimmed.toLowerCase();
+        if (
+          lowerTrimmed === SELECT_OPEN_BAR_PLACEHOLDER.toLowerCase() ||
+          (openBarAllowedSet.size > 0 && !openBarAllowedSet.has(lowerTrimmed))
+        ) {
+          return true;
+        }
+        if (!venueSet.has(lowerTrimmed)) {
+          return true;
+        }
+        const normal = normalizeNumber(venue.normalCount);
+        const cocktails = normalizeNumber(venue.cocktailsCount);
+        const brunch = normalizeNumber(venue.brunchCount);
+        return normal == null || cocktails == null || brunch == null;
+      }
+      if (!venueSet.has(trimmed.toLowerCase())) {
+        return true;
+      }
+      const total = normalizeNumber(venue.totalPeople);
+      return total == null;
+    });
+  }, [readOnly, didNotOperate, formState.venues, venuesOptions, openBarVenueOptions]);
+
+  const leaderHasError = useMemo(() => !readOnly && !didNotOperate && !formState.leaderId, [
+    readOnly,
+    didNotOperate,
+    formState.leaderId,
+  ]);
 
   const renderReportDetails = () => {
     const notesSection = (
@@ -831,7 +879,11 @@ const VenueNumbersList = () => {
               }
               return baseOptions;
             })();
-            const showVenueError = !readOnly && !venue.venueName.trim();
+            const normalizedVenueName = venue.venueName.trim();
+            const showVenueError =
+              !readOnly &&
+              (!normalizedVenueName ||
+                (isOpenBar && normalizedVenueName.toLowerCase() === SELECT_OPEN_BAR_PLACEHOLDER.toLowerCase()));
             const showTotalError =
               !readOnly && !isOpenBar && (venue.totalPeople == null || venue.totalPeople.trim().length === 0);
 
@@ -1297,6 +1349,8 @@ const VenueNumbersList = () => {
                               {...params}
                               label="Leader"
                               required
+                              error={leaderHasError}
+                              helperText={leaderHasError ? "Select a leader." : undefined}
                               fullWidth
                               sx={{
                                 "& .MuiInputBase-root": {
@@ -1355,7 +1409,7 @@ const VenueNumbersList = () => {
                         color="success"
                         startIcon={<Send />}
                         onClick={handleSubmit}
-                        disabled={!selectedReportId || submitting || readOnly}
+                        disabled={!selectedReportId || submitting || readOnly || formHasFieldErrors || leaderHasError}
                         sx={{ alignSelf: "center" }}
                       >
                         {submitButtonLabel}
@@ -1377,5 +1431,7 @@ const VenueNumbersList = () => {
 };
 
 export default VenueNumbersList;
+
+
 
 

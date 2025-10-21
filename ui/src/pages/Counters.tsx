@@ -788,7 +788,7 @@ const Counters = (props: GenericPageProps) => {
   const venueStatusForCounter = useCallback(
     (counterIdValue: number | null) => {
       if (counterIdValue == null) {
-        return { label: 'Venue Numbers (No Report)', color: 'primary' as const };
+        return { label: 'Numbers (No Report)', color: 'primary' as const };
       }
       const summary = nightReportSummaries.find((report) => report.counterId === counterIdValue);
       if (!summary) {
@@ -5325,10 +5325,15 @@ type SummaryRowOptions = {
                     counterIdValue != null ? `/venueNumbers?counterId=${counterIdValue}` : '/venueNumbers';
                   const { label: venueButtonLabel, color: venueButtonColor } = venueStatusForCounter(counterIdValue);
                   const isExpanded = counterIdValue != null && counterIdValue === expandedCounterId;
+                  const handleRowClick = () => {
+                    handleCounterSelect(counter);
+                    if (counterIdValue != null) {
+                      toggleCounterExpansion(counterIdValue);
+                    }
+                  };
                   const handleExpandClick = (event: MouseEvent<HTMLButtonElement>) => {
                     event.stopPropagation();
-                    handleCounterSelect(counter);
-                    toggleCounterExpansion(counterIdValue);
+                    handleRowClick();
                   };
 
                   return (
@@ -5345,7 +5350,7 @@ type SummaryRowOptions = {
                       <ListItemButton
                         disableRipple
                         disableTouchRipple
-                        onClick={() => handleCounterSelect(counter)}
+                        onClick={handleRowClick}
                         selected={Boolean(isSelected)}
                         sx={(theme) => ({
                           width: '100%',
@@ -5375,19 +5380,6 @@ type SummaryRowOptions = {
                         })}
                       >
                         <Stack direction="row" alignItems="center" spacing={1} sx={{ width: '100%' }}>
-                          <IconButton
-                            size="small"
-                            edge="start"
-                            onClick={handleExpandClick}
-                            disabled={counterIdValue == null}
-                            sx={{
-                              transition: 'transform 150ms ease',
-                              transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                              color: isSelected ? 'inherit' : 'text.secondary',
-                            }}
-                          >
-                            <KeyboardArrowRight fontSize="small" />
-                          </IconButton>
                           <ListItemText
                             primary={
                               <Typography
@@ -5402,6 +5394,20 @@ type SummaryRowOptions = {
                             secondaryTypographyProps={{ component: 'div' }}
                             sx={{ flexGrow: 1, minWidth: 0 }}
                           />
+                          <IconButton
+                            size="small"
+                            edge="end"
+                            onClick={handleExpandClick}
+                            disabled={counterIdValue == null}
+                            sx={{
+                              transition: 'transform 150ms ease',
+                              transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                              color: isSelected ? 'inherit' : 'text.secondary',
+                              ml: 0.5,
+                            }}
+                          >
+                            <KeyboardArrowRight fontSize="small" />
+                          </IconButton>
                         </Stack>
                       </ListItemButton>
                       <Collapse in={isExpanded} timeout="auto" unmountOnExit>
@@ -5434,30 +5440,18 @@ type SummaryRowOptions = {
                                 void handleViewSummary(counter);
                               }}
                               disabled={counterIdValue == null}
-                            >
-                              <Visibility fontSize="small" sx={{ mr: 0.5 }} />
-                              View
-                            </Button>
-                            <Button
-                              variant="outlined"
-                              size="small"
-                              component={Link}
-                              to={venueNumbersLink}
-                              onClick={(event) => event.stopPropagation()}
-                              color={venueButtonColor}
-                              disabled={counterIdValue == null}
-                            >
-                              <MapIcon fontSize="small" sx={{ mr: 0.5 }} />
-                              {venueButtonLabel}
-                            </Button>
-                            <Button
-                              variant="outlined"
-                              size="small"
-                              startIcon={<Edit />}
-                              onClick={() => handleOpenModal('update')}
+                          >
+                            <Visibility fontSize="small" sx={{ mr: 0.5 }} />
+                            View
+                          </Button>
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            startIcon={<Edit />}
+                            onClick={() => handleOpenModal('update')}
                               disabled={!canModifyCounter}
                             >
-                              Update
+                              Edit
                             </Button>
                             <Button
                               variant="outlined"
@@ -5465,13 +5459,25 @@ type SummaryRowOptions = {
                               size="small"
                               startIcon={<Delete />}
                               onClick={handleDeleteCounter}
-                              disabled={!canModifyCounter}
-                            >
-                              Delete
-                            </Button>
-                          </Stack>
-                        </Box>
-                      </Collapse>
+                            disabled={!canModifyCounter}
+                          >
+                            DEL
+                          </Button>
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            component={Link}
+                            to={venueNumbersLink}
+                            onClick={(event) => event.stopPropagation()}
+                            color={venueButtonColor}
+                            disabled={counterIdValue == null}
+                          >
+                            <MapIcon fontSize="small" sx={{ mr: 0.5 }} />
+                            {venueButtonLabel}
+                          </Button>
+                        </Stack>
+                      </Box>
+                    </Collapse>
                     </ListItem>
                   );
                 })}
