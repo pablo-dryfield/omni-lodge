@@ -611,11 +611,9 @@ const VenueNumbersList = () => {
     setValidationError(null);
     setPendingChanges(true);
     setFormState((prev) => {
-      const used = new Set(prev.venues.map((venue) => venue.venueName.trim().toLowerCase()).filter(Boolean));
-      const available = venuesOptions.find((name) => !used.has(name.toLowerCase())) ?? "";
       return {
         ...prev,
-        venues: [...prev.venues, { ...createEmptyVenue(), venueName: available }],
+        venues: [...prev.venues, { ...createEmptyVenue(), venueName: "" }],
       };
     });
   };
@@ -833,6 +831,9 @@ const VenueNumbersList = () => {
               }
               return baseOptions;
             })();
+            const showVenueError = !readOnly && !venue.venueName.trim();
+            const showTotalError =
+              !readOnly && !isOpenBar && (venue.totalPeople == null || venue.totalPeople.trim().length === 0);
 
             return (
               <Stack key={venue.id ?? `venue-${index}`} spacing={1}>
@@ -862,7 +863,10 @@ const VenueNumbersList = () => {
                               <TextField
                                 {...params}
                                 label="Venue"
+                                placeholder="Select venue"
                                 required
+                                error={showVenueError}
+                                helperText={showVenueError ? "Select a venue." : undefined}
                                 fullWidth
                                 sx={{
                                   "& .MuiInputBase-root": {
@@ -913,7 +917,7 @@ const VenueNumbersList = () => {
                         </Grid>
                         {isOpenBar ? (
                           <>
-                            <Grid size={{ xs: 12, md: 4 }}>
+                            <Grid size={4}>
                               <TextField
                                 label="Normal"
                                 value={venue.normalCount ?? ""}
@@ -924,7 +928,7 @@ const VenueNumbersList = () => {
                                 disabled={readOnly}
                               />
                             </Grid>
-                            <Grid size={{ xs: 12, md: 4 }}>
+                            <Grid size={4}>
                               <TextField
                                 label="Cocktails"
                                 value={venue.cocktailsCount ?? ""}
@@ -935,7 +939,7 @@ const VenueNumbersList = () => {
                                 disabled={readOnly}
                               />
                             </Grid>
-                            <Grid size={{ xs: 12, md: 4 }}>
+                            <Grid size={4}>
                               <TextField
                                 label="Brunch"
                                 value={venue.brunchCount ?? ""}
@@ -957,6 +961,9 @@ const VenueNumbersList = () => {
                               inputProps={{ min: 0 }}
                               fullWidth
                               disabled={readOnly}
+                              required
+                              error={showTotalError}
+                              helperText={showTotalError ? "Total people is required." : undefined}
                             />
                           </Grid>
                         )}
@@ -964,16 +971,16 @@ const VenueNumbersList = () => {
                     </Stack>
                   </CardContent>
                 </Card>
-                {isOpenBar && !readOnly && !didNotOperate ? (
-                  <Box display="flex" justifyContent="center">
-                    <Button startIcon={<Add />} variant="outlined" onClick={handleAddVenue}>
-                      Add Venue
-                    </Button>
-                  </Box>
-                ) : null}
               </Stack>
             );
           })}
+          {!readOnly && !didNotOperate ? (
+            <Box display="flex" justifyContent="center">
+              <Button startIcon={<Add />} variant="outlined" onClick={handleAddVenue}>
+                Add Venue
+              </Button>
+            </Box>
+          ) : null}
         </Stack>
       </Stack>
     );
