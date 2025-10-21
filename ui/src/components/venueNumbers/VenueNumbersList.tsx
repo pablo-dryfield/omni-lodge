@@ -353,6 +353,26 @@ const VenueNumbersList = () => {
     }
   }, [dispatch, selectedReportId]);
 
+  const getVenueKey = useCallback(
+    (venue: EditableVenue, index: number) =>
+      venue.id != null ? `id-${venue.id}` : venue.tempKey ?? `temp-${index}`,
+    [],
+  );
+
+  const computeInitialEditableKeys = useCallback(
+    (venues: EditableVenue[]) => {
+      const initial = new Set<string>();
+      venues.forEach((venue, idx) => {
+        const trimmed = venue.venueName.trim().toLowerCase();
+        if (!trimmed || trimmed === SELECT_OPEN_BAR_PLACEHOLDER.toLowerCase()) {
+          initial.add(getVenueKey(venue, idx));
+        }
+      });
+      return initial;
+    },
+    [getVenueKey],
+  );
+
   useEffect(() => {
     if (selectedReportId == null) {
       return;
@@ -385,7 +405,6 @@ const VenueNumbersList = () => {
     setFormState(normalizedForm);
     setDidNotOperate(initialDidNotOperate);
     setPendingChanges(false);
-      previousEditableVenueKeysRef.current = null;
     const initialEditableKeys = computeInitialEditableKeys(normalizedForm.venues);
     setEditableVenueKeys(initialEditableKeys);
     previousEditableVenueKeysRef.current = null;
@@ -412,7 +431,7 @@ const VenueNumbersList = () => {
       }
       return prev;
     });
-  }, [nightReportDetail.data, selectedReportId]);
+  }, [nightReportDetail.data, selectedReportId, computeInitialEditableKeys]);
 
   useEffect(() => {
     if (selectedReportId === null) {
@@ -599,16 +618,20 @@ const VenueNumbersList = () => {
     if (report.venues.length === 0) {
       return "Add at least one venue.";
     }
+
     const venueSet = new Set(venuesOptions.map((name) => name.toLowerCase()));
     const openBarAllowedSet = new Set(openBarVenueOptions.map((name) => name.toLowerCase()));
+
     for (const [index, venue] of report.venues.entries()) {
       const trimmed = venue.venueName.trim();
       if (!trimmed) {
         return "Select a venue from the list.";
       }
+
       if (!venueSet.has(trimmed.toLowerCase())) {
         return `"${venue.venueName}" is not part of the venues directory.`;
       }
+
       if (index === OPEN_BAR_INDEX) {
         if (trimmed.toLowerCase() === SELECT_OPEN_BAR_PLACEHOLDER.toLowerCase()) {
           return "Select the open-bar venue.";
@@ -616,6 +639,7 @@ const VenueNumbersList = () => {
         if (openBarAllowedSet.size > 0 && !openBarAllowedSet.has(trimmed.toLowerCase())) {
           return `"${venue.venueName}" cannot be used for the open bar.`;
         }
+
         const normal = normalizeNumber(venue.normalCount);
         const cocktails = normalizeNumber(venue.cocktailsCount);
         const brunch = normalizeNumber(venue.brunchCount);
@@ -625,13 +649,14 @@ const VenueNumbersList = () => {
       } else {
         const total = normalizeNumber(venue.totalPeople);
         if (total == null) {
-          return `Provide total people for ${venue.venueName || `Venue ${index}`}.`;
+          const fallbackVenueName = `Venue ${index}`;
+          return `Provide total people for ${venue.venueName || fallbackVenueName}.`;
         }
       }
     }
+
     return null;
   };
-
   const handleVenueChange = (index: number, field: keyof EditableVenue, value: string) => {
     setValidationError(null);
     setPendingChanges(true);
@@ -933,22 +958,6 @@ const VenueNumbersList = () => {
   const leaderHasError = useMemo(
     () => !readOnly && !didNotOperate && (!formState.leaderId || !selectedLeaderOption),
     [readOnly, didNotOperate, formState.leaderId, selectedLeaderOption],
-  );
-
-  const getVenueKey = useCallback((venue: EditableVenue, index: number) => (venue.id != null ? `id-${venue.id}` : venue.tempKey ?? `temp-${index}`), []);
-
-  const computeInitialEditableKeys = useCallback(
-    (venues: EditableVenue[]) => {
-      const initial = new Set<string>();
-      venues.forEach((venue, idx) => {
-        const trimmed = venue.venueName.trim().toLowerCase();
-        if (!trimmed || trimmed === SELECT_OPEN_BAR_PLACEHOLDER.toLowerCase()) {
-          initial.add(getVenueKey(venue, idx));
-        }
-      });
-      return initial;
-    },
-    [getVenueKey],
   );
 
   const renderReportDetails = () => {
