@@ -17,6 +17,7 @@ import {
   CardHeader,
   Chip,
   CircularProgress,
+  Collapse,
   Dialog,
   DialogContent,
   DialogTitle,
@@ -37,13 +38,13 @@ import {
   Typography,
   Tooltip,
 } from '@mui/material';
-import { Add, Check, Close, Delete, Edit, Remove } from '@mui/icons-material';
+import { Add, Check, Close, Delete, Edit, Visibility, Map as MapIcon, KeyboardArrowRight, Remove } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { Link } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { deleteCounter, fetchCounters } from '../actions/counterActions';
-import { createNightReport, updateNightReport } from '../actions/nightReportActions';
+import { createNightReport, fetchNightReports, updateNightReport } from '../actions/nightReportActions';
 import { navigateToPage } from '../actions/navigationActions';
 import { GenericPageProps } from '../types/general/GenericPageProps';
 import { loadCatalog, selectCatalog } from '../store/catalogSlice';
@@ -602,6 +603,7 @@ const Counters = (props: GenericPageProps) => {
   const isMobileScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const catalog = useAppSelector(selectCatalog);
   const registry = useAppSelector(selectCounterRegistry);
+  const nightReportListState = useAppSelector((state) => state.nightReports.list[0]);
   const session = useAppSelector((state) => state.session);
   const [selectedDate, setSelectedDate] = useState<Dayjs>(dayjs());
   const [selectedManagerId, setSelectedManagerId] = useState<number | null>(session.loggedUserId ?? null);
@@ -637,6 +639,10 @@ const Counters = (props: GenericPageProps) => {
   const [cashEditingValue, setCashEditingValue] = useState<string>('');
   const [cashCurrencyByChannel, setCashCurrencyByChannel] = useState<Record<number, CashCurrency>>({});
   const [shouldRefreshCounterList, setShouldRefreshCounterList] = useState(false);
+  const [expandedCounterId, setExpandedCounterId] = useState<number | null>(null);
+  const [summaryPreviewOpen, setSummaryPreviewOpen] = useState(false);
+  const [summaryPreviewLoading, setSummaryPreviewLoading] = useState(false);
+  const [summaryPreviewTitle, setSummaryPreviewTitle] = useState<string>('');
 
   const formatAutoCashString = useCallback((value: number) => {
     const normalized = Math.max(0, Math.round(value * 100) / 100);
@@ -775,6 +781,33 @@ const Counters = (props: GenericPageProps) => {
   const counterStatus = (registry.counter?.counter.status as CounterStatus | undefined) ?? 'draft';
   const counterProductId = registry.counter?.counter.productId ?? null;
   const counterNotes = registry.counter?.counter.notes ?? '';
+  const nightReportSummaries = useMemo(
+    () => (nightReportListState.data[0]?.data as NightReportSummary[] | undefined) ?? [],
+    [nightReportListState.data],
+  );
+  const venueStatusForCounter = useCallback(
+    (counterIdValue: number | null) => {
+      if (counterIdValue == null) {
+        return { label: 'Venue Numbers (No Report)', color: 'primary' as const };
+      }
+      const summary = nightReportSummaries.find((report) => report.counterId === counterIdValue);
+      if (!summary) {
+        return { label: 'Venue Numbers (No Report)', color: 'primary' as const };
+      }
+      if (summary.status === 'submitted') {
+        return { label: 'Venue Numbers (Submitted)', color: 'success' as const };
+      }
+      if (summary.status === 'draft') {
+        return { label: 'Venue Numbers (Draft)', color: 'warning' as const };
+      }
+      return { label: 'Venue Numbers (No Report)', color: 'primary' as const };
+    },
+    [nightReportSummaries],
+  );
+  const toggleCounterExpansion = useCallback((counterIdValue: number | null) => {
+    setExpandedCounterId((prev) => (counterIdValue == null ? null : prev === counterIdValue ? null : counterIdValue));
+  }, []);
+
   const currentProductId = pendingProductId ?? counterProductId ?? null;
   const defaultProductId = useMemo(() => {
     if (catalog.products.length === 0) {
@@ -2523,30 +2556,56 @@ const loadCounterForDate = useCallback(
     return undefined;
   }, [catalog.loaded, catalog.loading, dispatch, isModalOpen]);
 
-  const handleCounterSelect = useCallback((counterSummary: Partial<Counter>) => {
-    const nextCounterId = counterSummary.id ?? null;
+const handleCounterSelect = useCallback((counterSummary: Partial<Counter>) => {
+  const nextCounterId = counterSummary.id ?? null;
 
-    window.setTimeout(() => {
-      startTransition(() => {
-        setCounterListError(null);
-        fetchCounterRequestRef.current = null;
+  window.setTimeout(() => {
+    startTransition(() => {
+      setCounterListError(null);
+      fetchCounterRequestRef.current = null;
 
-        const nextUserId = counterSummary.userId ?? null;
-        if (nextUserId) {
-          setSelectedManagerId(nextUserId);
+      const nextUserId = counterSummary.userId ?? null;
+      if (nextUserId) {
+        setSelectedManagerId(nextUserId);
+      }
+
+      if (counterSummary.date) {
+        const parsed = dayjs(counterSummary.date);
+        if (parsed.isValid()) {
+          setSelectedDate(parsed);
         }
+      }
 
-        if (counterSummary.date) {
-          const parsed = dayjs(counterSummary.date);
-          if (parsed.isValid()) {
-            setSelectedDate(parsed);
-          }
-        }
+      setSelectedCounterId(nextCounterId);
+    });
+  }, 0);
+}, []);
 
-        setSelectedCounterId(nextCounterId);
-      });
-    }, 0);
-  }, []);
+const handleViewSummary = useCallback(
+  async (counterSummary: Partial<Counter>) => {
+    const counterIdValue = counterSummary.id ?? null;
+    const counterDateValue = counterSummary.date ? dayjs(counterSummary.date) : null;
+    if (!counterIdValue || !counterDateValue || !counterDateValue.isValid()) {
+      return;
+    }
+    handleCounterSelect(counterSummary);
+    setSummaryPreviewTitle(counterDateValue.format('MMM D, YYYY'));
+    setSummaryPreviewOpen(true);
+    setSummaryPreviewLoading(true);
+    try {
+      await loadCounterForDate(counterDateValue.format(COUNTER_DATE_FORMAT));
+    } catch (error) {
+      console.warn('Failed to load counter summary', error);
+    } finally {
+      setSummaryPreviewLoading(false);
+    }
+  },
+  [handleCounterSelect, loadCounterForDate],
+);
+
+useEffect(() => {
+  dispatch(fetchNightReports());
+}, [dispatch]);
 
   const handleDeleteCounter = useCallback(() => {
     const targetCounterId = counterId ?? selectedCounterId;
@@ -5055,85 +5114,15 @@ type SummaryRowOptions = {
   }, [isMobileScreen, theme]);
 
   const counterActions = isMobileScreen ? (
-    <Stack
-      direction="row"
-      spacing={1.75}
-      alignItems="center"
-      justifyContent="flex-end"
-      sx={{
-        '& .MuiIconButton-root': {
-          border: '1px solid rgba(255,255,255,0.35)',
-          backgroundColor: 'rgba(255,255,255,0.12)',
-          padding: 0.5,
-          transition: 'background-color 120ms ease, transform 120ms ease',
-          '&:active': {
-            transform: 'scale(0.96)',
-          },
-        },
-      }}
-    >
-      <Tooltip title="Add Counter">
-        <IconButton
-          color="primary"
-          size="small"
-          onClick={handleAddNewCounter}
-          aria-label="Add counter"
-        >
-          <Add fontSize="small" />
-        </IconButton>
-      </Tooltip>
-      <Tooltip title={canModifyCounter ? 'Update Counter' : 'Select a counter to update'}>
-        <span style={{ display: 'inline-flex' }}>
-          <IconButton
-            size="small"
-            onClick={() => handleOpenModal('update')}
-            disabled={!canModifyCounter}
-            sx={{ color: 'inherit' }}
-            aria-label="Update counter"
-          >
-            <Edit fontSize="small" />
-          </IconButton>
-        </span>
-      </Tooltip>
-      <Tooltip title={canModifyCounter ? 'Delete Counter' : 'Select a counter to delete'}>
-        <span style={{ display: 'inline-flex' }}>
-          <IconButton
-            size="small"
-            color="error"
-            onClick={handleDeleteCounter}
-            disabled={!canModifyCounter}
-            aria-label="Delete counter"
-          >
-            <Delete fontSize="small" />
-          </IconButton>
-        </span>
-      </Tooltip>
-    </Stack>
+    <Tooltip title="Add Counter">
+      <IconButton color="primary" size="small" onClick={handleAddNewCounter} aria-label="Add counter">
+        <Add fontSize="small" />
+      </IconButton>
+    </Tooltip>
   ) : (
-    <Stack direction="row" spacing={1} alignItems="center">
-      <Button variant="contained" size="small" startIcon={<Add />} onClick={handleAddNewCounter}>
-        Add New
-      </Button>
-      <Button
-        variant="outlined"
-        size="small"
-        startIcon={<Edit />}
-        onClick={() => handleOpenModal('update')}
-        disabled={!canModifyCounter}
-      >
-        Update
-      </Button>
-      <Button
-        variant="outlined"
-        color="error"
-        size="small"
-        startIcon={<Delete />}
-        onClick={handleDeleteCounter}
-        disabled={!canModifyCounter}
-      >
-        Delete
-      </Button>
-    </Stack>
+    <Button variant="contained" size="small" startIcon={<Add />} onClick={handleAddNewCounter}>
+      Add New
+    </Button>
   );
 
   return (
@@ -5285,6 +5274,14 @@ type SummaryRowOptions = {
                   );
                   const venueNumbersLink =
                     counterIdValue != null ? `/venueNumbers?counterId=${counterIdValue}` : '/venueNumbers';
+                  const { label: venueButtonLabel, color: venueButtonColor } = venueStatusForCounter(counterIdValue);
+                  const isExpanded = counterIdValue != null && counterIdValue === expandedCounterId;
+                  const handleExpandClick = (event: MouseEvent<HTMLButtonElement>) => {
+                    event.stopPropagation();
+                    handleCounterSelect(counter);
+                    toggleCounterExpansion(counterIdValue);
+                  };
+
                   return (
                     <ListItem
                       key={(counter.id ?? 'counter') + '-' + dateLabel}
@@ -5292,6 +5289,8 @@ type SummaryRowOptions = {
                       sx={{
                         borderBottom: (theme) => `1px dashed ${theme.palette.divider}`,
                         '&:last-of-type': { borderBottom: 'none' },
+                        flexDirection: 'column',
+                        alignItems: 'stretch',
                       }}
                     >
                       <ListItemButton
@@ -5300,6 +5299,7 @@ type SummaryRowOptions = {
                         onClick={() => handleCounterSelect(counter)}
                         selected={Boolean(isSelected)}
                         sx={(theme) => ({
+                          width: '100%',
                           ...(isSelected
                             ? {
                                 backgroundColor: '#000',
@@ -5326,6 +5326,19 @@ type SummaryRowOptions = {
                         })}
                       >
                         <Stack direction="row" alignItems="center" spacing={1} sx={{ width: '100%' }}>
+                          <IconButton
+                            size="small"
+                            edge="start"
+                            onClick={handleExpandClick}
+                            disabled={counterIdValue == null}
+                            sx={{
+                              transition: 'transform 150ms ease',
+                              transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                              color: isSelected ? 'inherit' : 'text.secondary',
+                            }}
+                          >
+                            <KeyboardArrowRight fontSize="small" />
+                          </IconButton>
                           <ListItemText
                             primary={
                               <Typography
@@ -5338,20 +5351,78 @@ type SummaryRowOptions = {
                             }
                             secondary={secondaryContent}
                             secondaryTypographyProps={{ component: 'div' }}
-                            sx={{ flexGrow: 1, pr: 1, minWidth: 0 }}
+                            sx={{ flexGrow: 1, minWidth: 0 }}
                           />
-                          <Button
-                            variant="outlined"
-                            size="small"
-                            component={Link}
-                            to={venueNumbersLink}
-                            onClick={(event) => event.stopPropagation()}
-                            disabled={counterIdValue == null}
-                          >
-                            Venue Numbers
-                          </Button>
                         </Stack>
                       </ListItemButton>
+                      <Collapse in={isExpanded} timeout="auto" unmountOnExit>
+                        <Box
+                          sx={{
+                            px: { xs: 2, sm: 3 },
+                            py: 1.5,
+                            bgcolor: (theme) =>
+                              theme.palette.mode === 'dark'
+                                ? 'rgba(255,255,255,0.04)'
+                                : 'rgba(0,0,0,0.02)',
+                          }}
+                        >
+                          <Stack
+                            direction="row"
+                            spacing={1}
+                            alignItems="center"
+                            sx={{
+                              flexWrap: 'wrap',
+                              rowGap: 1,
+                              columnGap: 1,
+                              '& > *': { flexShrink: 0 },
+                            }}
+                          >
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleViewSummary(counter);
+                              }}
+                              disabled={counterIdValue == null}
+                            >
+                              <Visibility fontSize="small" sx={{ mr: 0.5 }} />
+                              View
+                            </Button>
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              component={Link}
+                              to={venueNumbersLink}
+                              onClick={(event) => event.stopPropagation()}
+                              color={venueButtonColor}
+                              disabled={counterIdValue == null}
+                            >
+                              <MapIcon fontSize="small" sx={{ mr: 0.5 }} />
+                              {venueButtonLabel}
+                            </Button>
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              startIcon={<Edit />}
+                              onClick={() => handleOpenModal('update')}
+                              disabled={!canModifyCounter}
+                            >
+                              Update
+                            </Button>
+                            <Button
+                              variant="outlined"
+                              color="error"
+                              size="small"
+                              startIcon={<Delete />}
+                              onClick={handleDeleteCounter}
+                              disabled={!canModifyCounter}
+                            >
+                              Delete
+                            </Button>
+                          </Stack>
+                        </Box>
+                      </Collapse>
                     </ListItem>
                   );
                 })}
@@ -5392,6 +5463,34 @@ type SummaryRowOptions = {
           }}
         >
           {renderCounterEditor()}
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={summaryPreviewOpen}
+        onClose={() => setSummaryPreviewOpen(false)}
+        fullWidth
+        maxWidth="lg"
+        aria-labelledby="counter-summary-preview"
+      >
+        <DialogTitle
+          id="counter-summary-preview"
+          sx={{ m: 0, p: 2, pb: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+        >
+          <Typography variant="h6" component="span">
+            Counter Summary {summaryPreviewTitle ? `â€” ${summaryPreviewTitle}` : ""}
+          </Typography>
+          <IconButton onClick={() => setSummaryPreviewOpen(false)}>
+            <Close />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers sx={{ p: { xs: 2, sm: 3 } }}>
+          {summaryPreviewLoading ? (
+            <Stack alignItems="center" justifyContent="center" minHeight={240}>
+              <CircularProgress />
+            </Stack>
+          ) : (
+            renderSummaryStep()
+          )}
         </DialogContent>
       </Dialog>
     </LocalizationProvider>
