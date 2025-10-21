@@ -7,6 +7,8 @@ import {
   CardContent,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogContent,
   Divider,
   Grid,
   IconButton,
@@ -19,7 +21,7 @@ import {
 } from "@mui/material";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { LocalizationProvider } from "@mui/x-date-pickers";
-import { ArrowBack, Add, Delete, Edit, Save, Send, UploadFile, Visibility } from "@mui/icons-material";
+import { ArrowBack, Add, Close, Delete, Edit, Save, Send, UploadFile, Visibility } from "@mui/icons-material";
 import dayjs from "dayjs";
 import { ChangeEvent, SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -849,6 +851,15 @@ const VenueNumbersList = () => {
     }));
   };
 
+  const handleDateChange = (event: ChangeEvent<HTMLInputElement>) => {
+    setValidationError(null);
+    setPendingChanges(true);
+    setFormState((prev) => ({
+      ...prev,
+      activityDate: event.target.value,
+    }));
+  };
+
   const handleNotesChange = (event: ChangeEvent<HTMLInputElement>) => {
     setValidationError(null);
     setPendingChanges(true);
@@ -1074,7 +1085,25 @@ const VenueNumbersList = () => {
     const openBarMdSpan =
       visibleOpenBarFields >= 3 ? 4 : visibleOpenBarFields === 2 ? 6 : 12;
 
-    const notesSection = (
+    const notesSection = readOnly ? (
+      <Stack spacing={1}>
+        <Typography variant="subtitle2">Notes</Typography>
+        {formState.notes ? (
+          <TextField
+            label="Notes"
+            value={formState.notes}
+            multiline
+            minRows={3}
+            fullWidth
+            InputProps={{ readOnly: true }}
+          />
+        ) : (
+          <Typography variant="body2" color="text.secondary">
+            No notes available.
+          </Typography>
+        )}
+      </Stack>
+    ) : (
       <Stack spacing={1}>
         <Button variant="outlined" size="small" onClick={() => setNotesExpanded((prev) => !prev)}>
           {notesExpanded || formState.notes
@@ -1083,26 +1112,16 @@ const VenueNumbersList = () => {
               : "View Notes"
             : "Add Notes"}
         </Button>
-        {(notesExpanded || formState.notes) &&
-          (readOnly ? (
-            <TextField
-              label="Notes"
-              value={formState.notes}
-              multiline
-              minRows={3}
-              fullWidth
-              InputProps={{ readOnly: true }}
-            />
-          ) : (
-            <TextField
-              label="Notes"
-              value={formState.notes}
-              onChange={handleNotesChange}
-              multiline
-              minRows={3}
-              fullWidth
-            />
-          ))}
+        {(notesExpanded || formState.notes) && (
+          <TextField
+            label="Notes"
+            value={formState.notes}
+            onChange={handleNotesChange}
+            multiline
+            minRows={3}
+            fullWidth
+          />
+        )}
       </Stack>
     );
 
@@ -1488,6 +1507,147 @@ const VenueNumbersList = () => {
     );
   };
 
+  const detailContent = detailLoading ? (
+    <Stack alignItems="center" justifyContent="center" minHeight={220}>
+      <CircularProgress size={36} />
+    </Stack>
+  ) : (
+    <Stack spacing={3}>
+      {currentStatus === "submitted" && !inEditMode && (
+        <Alert severity="info">Submitted - Click Update to make changes.</Alert>
+      )}
+      <Box>
+        <Typography variant="body2" color="text.secondary">
+          Date:{" "}
+          <Typography component="span" variant="body1" fontWeight={600}>
+            {formState.activityDate ? dayjs(formState.activityDate).format("MMM D, YYYY") : "—"}
+          </Typography>
+          {currentCounter?.product?.name ? (
+            <>
+              {" \u2022 "}
+              <Typography component="span" variant="body1" fontWeight={600}>
+                {currentCounter.product.name}
+              </Typography>
+            </>
+          ) : null}
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          Manager:{" "}
+          <Typography component="span" variant="body1" fontWeight={600}>
+            {getManagerLabel(currentCounter)}
+          </Typography>
+        </Typography>
+      </Box>
+
+      <Grid container spacing={2}>
+        <Grid size={12}>
+          <Autocomplete<StaffOption>
+            options={leaderOptions}
+            value={selectedLeaderOption}
+            onChange={handleLeaderChange}
+            getOptionLabel={(option) => formatUserFullName(option)}
+            isOptionEqualToValue={(option, value) => option.id === value.id}
+            renderOption={(props, option) => {
+              const { style, ...rest } = props;
+              return (
+                <li
+                  {...rest}
+                  style={{ ...style, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.3 }}
+                  title={formatUserFullName(option)}
+                >
+                  {formatUserFullName(option)}
+                </li>
+              );
+            }}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                label="Leader"
+                placeholder="Select leader"
+                required
+                error={leaderHasError}
+                helperText={leaderHasError ? "Leader is required." : undefined}
+                fullWidth
+                sx={{
+                  "& .MuiInputBase-root": {
+                    alignItems: "flex-start",
+                  },
+                  "& .MuiInputBase-input": {
+                    whiteSpace: "normal",
+                    overflow: "visible",
+                    textOverflow: "unset",
+                    lineHeight: 1.4,
+                  },
+                }}
+              />
+            )}
+            disabled={readOnly}
+            fullWidth
+            componentsProps={{
+              popper: {
+                style: { width: "auto" },
+              },
+              paper: {
+                sx: {
+                  width: "fit-content",
+                  minWidth: "auto",
+                  maxWidth: "min(440px, calc(100vw - 48px))",
+                },
+              },
+            }}
+            ListboxProps={{ style: { paddingRight: 8 } }}
+            sx={{
+              "& .MuiAutocomplete-inputRoot": {
+                alignItems: "flex-start",
+                flexWrap: "wrap",
+                paddingTop: 1,
+                paddingBottom: 1,
+              },
+              "& .MuiAutocomplete-input": {
+                display: "block",
+                height: "auto",
+                whiteSpace: "normal",
+                wordBreak: "break-word",
+                textOverflow: "unset",
+                width: "100% !important",
+                lineHeight: 1.4,
+              },
+            }}
+          />
+        </Grid>
+        <Grid size={{ xs: 12, md: 6 }}>
+          <TextField
+            label="Date"
+            type="date"
+            value={formState.activityDate}
+            onChange={handleDateChange}
+            InputLabelProps={{ shrink: true }}
+            fullWidth
+            required
+            disabled={readOnly}
+          />
+        </Grid>
+      </Grid>
+
+      <Divider />
+
+      {renderReportDetails()}
+
+      {inEditMode ? (
+        <Button
+          variant="contained"
+          color="success"
+          startIcon={<Send />}
+          onClick={handleSubmit}
+          disabled={!selectedReportId || submitting || readOnly || formHasFieldErrors || leaderHasError}
+          sx={{ alignSelf: "center" }}
+        >
+          {submitButtonLabel}
+        </Button>
+      ) : null}
+    </Stack>
+  );
+
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <Stack spacing={2}>
@@ -1610,137 +1770,44 @@ const VenueNumbersList = () => {
             </CardContent>
           </Card>
 
-          {showDetails ? (
-            <Card sx={{ flex: 1, minHeight: 420 }}>
-              <CardContent>
-                {detailLoading ? (
-                  <Stack alignItems="center" justifyContent="center" minHeight={220}>
-                    <CircularProgress size={36} />
-                  </Stack>
-                ) : (
-                  <Stack spacing={3}>
-                    {currentStatus === "submitted" && !inEditMode && (
-                      <Alert severity="info">Submitted - Click Update to make changes.</Alert>
-                    )}
-                    <Box>
-                      <Typography variant="body2" color="text.secondary">
-                        Date:{" "}
-                        <Typography component="span" variant="body1" fontWeight={600}>
-                          {formState.activityDate ? dayjs(formState.activityDate).format("MMM D, YYYY") : "—"}
-                        </Typography>
-                        {currentCounter?.product?.name ? (
-                          <>
-                            {" \u2022 "}
-                            <Typography component="span" variant="body1" fontWeight={600}>
-                              {currentCounter.product.name}
-                            </Typography>
-                          </>
-                        ) : null}
-                      </Typography>
-                    </Box>
-
-                    <Grid container spacing={2}>
-                      <Grid size={12}>
-                        <Autocomplete<StaffOption>
-                          options={leaderOptions}
-                          value={selectedLeaderOption}
-                          onChange={handleLeaderChange}
-                          getOptionLabel={(option) => formatUserFullName(option)}
-                          isOptionEqualToValue={(option, value) => option.id === value.id}
-                          renderOption={(props, option) => {
-                            const { style, ...rest } = props;
-                            return (
-                              <li
-                                {...rest}
-                                style={{ ...style, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.3 }}
-                                title={formatUserFullName(option)}
-                              >
-                                {formatUserFullName(option)}
-                              </li>
-                            );
-                          }}
-                          renderInput={(params) => (
-                            <TextField
-                              {...params}
-                              label="Leader"
-                              required
-                              error={leaderHasError}
-                              helperText={leaderHasError ? "Select a leader." : undefined}
-                              fullWidth
-                              sx={{
-                                "& .MuiInputBase-root": {
-                                  alignItems: "flex-start",
-                                },
-                                "& .MuiInputBase-input": {
-                                  whiteSpace: "normal",
-                                  overflow: "visible",
-                                  textOverflow: "unset",
-                                  lineHeight: 1.4,
-                                },
-                              }}
-                            />
-                          )}
-                          disabled={readOnly}
-                          fullWidth
-                          componentsProps={{
-                            popper: {
-                              style: { width: "auto" },
-                            },
-                            paper: {
-                              sx: {
-                                width: "fit-content",
-                                minWidth: "auto",
-                                maxWidth: "min(440px, calc(100vw - 48px))",
-                              },
-                            },
-                          }}
-                          ListboxProps={{ style: { paddingRight: 8 } }}
-                          sx={{
-                            "& .MuiAutocomplete-inputRoot": {
-                              alignItems: "flex-start",
-                              flexWrap: "wrap",
-                              paddingTop: 1,
-                              paddingBottom: 1,
-                            },
-                            "& .MuiAutocomplete-input": {
-                              display: "block",
-                              height: "auto",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                              textOverflow: "unset",
-                              width: "100% !important",
-                              lineHeight: 1.4,
-                            },
-                          }}
-                        />
-                      </Grid>
-                    </Grid>
-
-                    {renderReportDetails()}
-
-                    {inEditMode ? (
-                      <Button
-                        variant="contained"
-                        color="success"
-                        startIcon={<Send />}
-                        onClick={handleSubmit}
-                        disabled={!selectedReportId || submitting || readOnly || formHasFieldErrors || leaderHasError}
-                        sx={{ alignSelf: "center" }}
-                      >
-                        {submitButtonLabel}
-                      </Button>
-                    ) : (
-                      <Button variant="outlined" onClick={handleCloseDetails} sx={{ alignSelf: "center" }}>
-                        Close
-                      </Button>
-                    )}
-                  </Stack>
-                )}
-              </CardContent>
-            </Card>
-          ) : null}
+          {!isMobile &&
+            (showDetails ? (
+              <Card sx={{ flex: 1, minHeight: 420 }}>
+                <CardContent sx={{ p: { xs: 2, sm: 3 } }}>{detailContent}</CardContent>
+              </Card>
+            ) : (
+              <Stack
+                flex={1}
+                minHeight={420}
+                alignItems="center"
+                justifyContent="center"
+                spacing={1}
+                sx={{ border: "1px dashed", borderColor: "divider", borderRadius: 1, p: 3 }}
+              >
+                <Typography variant="body2" color="text.secondary">
+                  Select a report to view details.
+                </Typography>
+              </Stack>
+            ))}
         </Stack>
       </Stack>
+      <Dialog
+        open={isMobile && showDetails}
+        onClose={() => handleCloseDetails()}
+        fullScreen
+        fullWidth
+        scroll="body"
+      >
+        <Stack direction="row" alignItems="center" justifyContent="space-between" px={2} py={1}>
+          <Typography variant="h6" component="h2">
+            Night Report Details
+          </Typography>
+          <IconButton onClick={handleCloseDetails}>
+            <Close />
+          </IconButton>
+        </Stack>
+        <DialogContent dividers sx={{ p: { xs: 2, sm: 3 } }}>{detailContent}</DialogContent>
+      </Dialog>
     </LocalizationProvider>
   );
 };
