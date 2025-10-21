@@ -3126,9 +3126,6 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
   ]);
 
   const ensureNightReportFromSummary = useCallback(async () => {
-    if (activeRegistryStep !== 'summary') {
-      return;
-    }
     const counterRecord = registry.counter?.counter;
     const summary = registry.summary;
     if (!counterRecord || !summary) {
@@ -3140,28 +3137,58 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     }
 
     const peopleAttended = Math.max(0, Math.round(summary.totals?.people?.attended ?? 0));
-    const cocktailsAddonKey =
-      registry.addons.find((addon) => addon.name.toLowerCase().includes('cocktail'))?.key ?? 'cocktails';
-    const cocktailsAttended = Math.max(
-      0,
-      Math.round(summary.totals?.addons?.[cocktailsAddonKey]?.attended ?? 0),
-    );
-    const normalCount = Math.max(0, peopleAttended - cocktailsAttended);
-    const brunchDefault = 0;
-    const totalPeople = normalCount + cocktailsAttended + brunchDefault;
+    const productNameNormalized = (counterRecord.product?.name ?? DEFAULT_PRODUCT_NAME).trim().toLowerCase();
+    const isBottomlessBrunchProduct = productNameNormalized.includes('bottomless brunch');
 
-    if (totalPeople === 0 && summary.totals?.people?.bookedBefore === 0 && summary.totals?.people?.bookedAfter === 0) {
+    let cocktailsAttended = 0;
+    let brunchAttended = 0;
+    let hasBrunchData = false;
+
+    if (isBottomlessBrunchProduct) {
+      brunchAttended = peopleAttended;
+      hasBrunchData = true;
+    } else {
+      const cocktailsAddonKey =
+        registry.addons.find((addon) => {
+          const nameLower = addon.name?.toLowerCase() ?? '';
+          const keyLower = addon.key?.toLowerCase() ?? '';
+          return nameLower.includes('cocktail') || keyLower.includes('cocktail');
+        })?.key ?? 'cocktails';
+      cocktailsAttended = Math.max(
+        0,
+        Math.round(summary.totals?.addons?.[cocktailsAddonKey]?.attended ?? 0),
+      );
+
+      const brunchAddonLookup = registry.addons.find((addon) => {
+        const nameLower = addon.name?.toLowerCase() ?? '';
+        const keyLower = addon.key?.toLowerCase() ?? '';
+        return nameLower.includes('brunch') || keyLower.includes('brunch');
+      });
+      const brunchAddonKey = brunchAddonLookup?.key ?? 'brunch';
+      const brunchBucket = summary.totals?.addons?.[brunchAddonKey];
+      hasBrunchData = brunchBucket != null;
+      brunchAttended = hasBrunchData ? Math.max(0, Math.round(brunchBucket.attended ?? 0)) : 0;
+    }
+
+    const normalCount = Math.max(0, peopleAttended - cocktailsAttended - brunchAttended);
+    const computedTotalPeople = normalCount + cocktailsAttended + brunchAttended;
+
+    if (
+      computedTotalPeople === 0 &&
+      summary.totals?.people?.bookedBefore === 0 &&
+      summary.totals?.people?.bookedAfter === 0
+    ) {
       return;
     }
 
     const baseVenue = {
       orderIndex: 1,
       venueName: 'Select Open Bar',
-      totalPeople,
+      totalPeople: computedTotalPeople,
       isOpenBar: true,
       normalCount,
       cocktailsCount: cocktailsAttended,
-      brunchCount: brunchDefault,
+      brunchCount: hasBrunchData ? brunchAttended : 0,
     };
 
     const creationPayload = {
@@ -3206,7 +3233,9 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
         (a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0),
       );
       const existingOpenBar = existingVenues.find((venue) => venue.isOpenBar) ?? existingVenues[0];
-      const brunchCount = existingOpenBar?.brunchCount ?? brunchDefault;
+      const existingBrunch = Math.max(existingOpenBar?.brunchCount ?? 0, 0);
+      const brunchCount = hasBrunchData ? brunchAttended : existingBrunch;
+      const totalPeople = normalCount + cocktailsAttended + brunchCount;
 
       const openBarVenue = {
         orderIndex: 1,
@@ -3245,7 +3274,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       // eslint-disable-next-line no-console
       console.warn('Failed to upsert night report from counter summary:', message || creationErrorMessage || error);
     }
-  }, [activeRegistryStep, dispatch, registry.addons, registry.counter, registry.summary]);
+  }, [dispatch, registry.addons, registry.counter, registry.summary]);
 
   const handleSaveAndExit = useCallback(async () => {
     const saved = await flushMetrics();
