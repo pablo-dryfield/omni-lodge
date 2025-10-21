@@ -74,6 +74,8 @@ const createEmptyVenue = (): EditableVenue => ({
   brunchCount: "",
 });
 
+const DID_NOT_OPERATE_NOTE = "The activity didn't operate.";
+
 const toEditableReport = (report: NightReport | null): EditableReport => {
   if (!report) {
     return {
@@ -311,10 +313,30 @@ const VenueNumbersList = () => {
     }
 
     const next = toEditableReport(nightReportDetail.data);
-    setFormState(next);
+    const serverVenues = nightReportDetail.data?.venues ?? [];
+    const initialDidNotOperate = Array.isArray(serverVenues) && serverVenues.length === 0;
+
+    const normalizedForm: EditableReport = initialDidNotOperate
+      ? {
+          ...next,
+          venues: [],
+          notes: next.notes?.trim().length ? next.notes : DID_NOT_OPERATE_NOTE,
+        }
+      : next;
+
+    if (initialDidNotOperate) {
+      previousVenuesRef.current = next.venues.map((venue) => ({ ...venue }));
+      previousNotesRef.current = next.notes ?? "";
+    } else {
+      previousVenuesRef.current = null;
+      previousNotesRef.current = null;
+    }
+
+    setFormState(normalizedForm);
+    setDidNotOperate(initialDidNotOperate);
     setPendingChanges(false);
     setValidationError(null);
-    setNotesExpanded(Boolean(next.notes));
+    setNotesExpanded(Boolean(normalizedForm.notes) || initialDidNotOperate);
 
     const status = nightReportDetail.data?.status ?? "draft";
     const requestedMode = modeRequestRef.current;
@@ -332,7 +354,7 @@ const VenueNumbersList = () => {
         return "view";
       }
       if (isNewReport) {
-        return prev;
+        return initialDidNotOperate ? "view" : prev;
       }
       return prev;
     });
@@ -346,11 +368,14 @@ const VenueNumbersList = () => {
       setPendingChanges(false);
       setValidationError(null);
       setNotesExpanded(false);
+      setDidNotOperate(false);
+      previousVenuesRef.current = null;
+      previousNotesRef.current = null;
     }
   }, [selectedReportId]);
 
   useEffect(() => {
-    if (venuesOptions.length === 0) {
+    if (venuesOptions.length === 0 || didNotOperate) {
       return;
     }
     setFormState((prev) => {
@@ -365,7 +390,7 @@ const VenueNumbersList = () => {
       updated[OPEN_BAR_INDEX] = { ...first, venueName: venuesOptions[0] };
       return { ...prev, venues: updated };
     });
-  }, [venuesOptions]);
+  }, [venuesOptions, didNotOperate]);
 
   useEffect(() => {
     const currentIds = new Set(photos.map((photo) => photo.id));
@@ -510,6 +535,9 @@ const VenueNumbersList = () => {
     if (!report.activityDate) {
       return "Date is missing.";
     }
+    if (didNotOperate) {
+      return null;
+    }
     if (report.venues.length === 0) {
       return "Add at least one venue.";
     }
@@ -624,6 +652,38 @@ const VenueNumbersList = () => {
     }
     dispatch(uploadNightReportPhoto({ reportId: selectedReportId, file }));
     input.value = "";
+  };
+
+  const handleDidNotOperateToggle = () => {
+    setValidationError(null);
+    setPendingChanges(true);
+    if (didNotOperate) {
+      const restoredVenues =
+        previousVenuesRef.current && previousVenuesRef.current.length > 0
+          ? previousVenuesRef.current.map((venue) => ({ ...venue }))
+          : [createEmptyVenue()];
+      const restoredNotes = previousNotesRef.current ?? "";
+      setFormState((prev) => ({
+        ...prev,
+        venues: restoredVenues,
+        notes: restoredNotes,
+      }));
+      setDidNotOperate(false);
+      setNotesExpanded(Boolean(restoredNotes));
+      previousVenuesRef.current = null;
+      previousNotesRef.current = null;
+      return;
+    }
+
+    previousVenuesRef.current = formState.venues.map((venue) => ({ ...venue }));
+    previousNotesRef.current = formState.notes;
+    setFormState((prev) => ({
+      ...prev,
+      venues: [],
+      notes: DID_NOT_OPERATE_NOTE,
+    }));
+    setNotesExpanded(true);
+    setDidNotOperate(true);
   };
 
   const handleDeletePhoto = (photoId: number) => {
@@ -890,9 +950,23 @@ const VenueNumbersList = () => {
                           Venues
                         </Typography>
                         {!readOnly && (
-                          <Button startIcon={<Add />} variant="outlined" onClick={handleAddVenue}>
-                            Add Venue
-                          </Button>
+                          <Stack direction="row" spacing={1}>
+                            <Button
+                              variant={didNotOperate ? "contained" : "outlined"}
+                              color={didNotOperate ? "warning" : "inherit"}
+                              onClick={handleDidNotOperateToggle}
+                            >
+                              DIDN'T OPERATE
+                            </Button>
+                            <Button
+                              startIcon={<Add />}
+                              variant="outlined"
+                              onClick={handleAddVenue}
+                              disabled={didNotOperate}
+                            >
+                              Add Venue
+                            </Button>
+                          </Stack>
                         )}
                       </Stack>
                       <Divider />
