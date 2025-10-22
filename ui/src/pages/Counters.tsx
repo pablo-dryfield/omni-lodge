@@ -680,17 +680,36 @@ const formatWalkInSnapshotSummary = (
   if (!note) {
     return '';
   }
-  const walkInChannel = channels.find((channel) => channel.name?.toLowerCase() === WALK_IN_CHANNEL_SLUG);
-  if (!walkInChannel) {
-    return '';
-  }
-
-  const walkInId = walkInChannel.id;
   const cashMap = extractCashSnapshotMap(note);
   const freeMap = extractFreeSnapshotMap(note);
 
-  const cashEntry = cashMap.get(walkInId);
-  const freeEntry = freeMap.get(walkInId);
+  const walkInChannel = channels.find((channel) => channel.name?.toLowerCase() === WALK_IN_CHANNEL_SLUG);
+  let targetChannelId: number | null = walkInChannel?.id ?? null;
+
+  if (targetChannelId == null) {
+    for (const [channelId, entry] of cashMap.entries()) {
+      if (entry.tickets && entry.tickets.length > 0) {
+        targetChannelId = channelId;
+        break;
+      }
+    }
+  }
+
+  if (targetChannelId == null && cashMap.size === 1) {
+    const first = cashMap.keys().next();
+    if (!first.done) {
+      targetChannelId = first.value;
+    }
+  }
+
+  if (targetChannelId == null && freeMap.size === 1) {
+    const first = freeMap.keys().next();
+    if (!first.done) {
+      targetChannelId = first.value;
+    }
+  }
+
+  const cashEntry = targetChannelId != null ? cashMap.get(targetChannelId) : undefined;
 
   const ticketNames = new Set<string>();
 
@@ -712,27 +731,29 @@ const formatWalkInSnapshotSummary = (
   });
 
   let hasFreeSnapshot = false;
-  if (freeEntry?.people) {
-    const qty = Math.max(0, Math.round(Number(freeEntry.people.qty) || 0));
-    const noteText = (freeEntry.people.note ?? '').toString().trim();
-    if (qty > 0 || noteText.length > 0) {
-      hasFreeSnapshot = true;
+  freeMap.forEach((entry) => {
+    if (entry.people) {
+      const qty = Math.max(0, Math.round(Number(entry.people.qty) || 0));
+      const noteText = (entry.people.note ?? '').toString().trim();
+      if (qty > 0 || noteText.length > 0) {
+        hasFreeSnapshot = true;
+      }
     }
-  }
-  if (freeEntry?.addons) {
-    Object.entries(freeEntry.addons).forEach(([addonIdKey, info]) => {
-      const addonId = Number(addonIdKey);
-      if (!Number.isFinite(addonId)) {
-        return;
-      }
-      const qty = Math.max(0, Math.round(Number(info.qty) || 0));
-      const noteText = (info.note ?? '').toString().trim();
-      if (qty <= 0 && noteText.length === 0) {
-        return;
-      }
-      hasFreeSnapshot = true;
-    });
-  }
+    if (entry.addons) {
+      Object.entries(entry.addons).forEach(([addonIdKey, info]) => {
+        const addonId = Number(addonIdKey);
+        if (!Number.isFinite(addonId)) {
+          return;
+        }
+        const qty = Math.max(0, Math.round(Number(info.qty) || 0));
+        const noteText = (info.note ?? '').toString().trim();
+        if (qty <= 0 && noteText.length === 0) {
+          return;
+        }
+        hasFreeSnapshot = true;
+      });
+    }
+  });
 
   if (hasFreeSnapshot) {
     ticketNames.add('Free');
