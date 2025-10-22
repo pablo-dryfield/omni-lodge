@@ -693,28 +693,23 @@ const formatWalkInSnapshotSummary = (
   const freeEntry = freeMap.get(walkInId);
 
   const ticketNames = new Set<string>();
-  const currencyTotals = new Map<string, number>();
 
-  if (cashEntry) {
-    if (cashEntry.tickets && cashEntry.tickets.length > 0) {
-      cashEntry.tickets.forEach((ticket) => {
-        const ticketName = (ticket.name ?? '').toString().trim();
-        if (ticketName.length > 0) {
-          ticketNames.add(ticketName);
-        }
-        ticket.currencies.forEach((currency) => {
-          const amount = Number(currency.cash);
-          if (Number.isFinite(amount) && amount > 0) {
-            currencyTotals.set(currency.currency, (currencyTotals.get(currency.currency) ?? 0) + amount);
-          }
-        });
-      });
-    }
-    const fallbackTotals = aggregateCashTotals(cashEntry);
-    fallbackTotals.forEach((amount, currency) => {
-      currencyTotals.set(currency, (currencyTotals.get(currency) ?? 0) + amount);
+  if (cashEntry?.tickets && cashEntry.tickets.length > 0) {
+    cashEntry.tickets.forEach((ticket) => {
+      const ticketName = (ticket.name ?? '').toString().trim();
+      if (ticketName.length > 0) {
+        ticketNames.add(ticketName);
+      }
     });
   }
+
+  const currencyTotals = new Map<string, number>();
+  cashMap.forEach((entry) => {
+    const totals = aggregateCashTotals(entry);
+    totals.forEach((amount, currency) => {
+      currencyTotals.set(currency, (currencyTotals.get(currency) ?? 0) + amount);
+    });
+  });
 
   let hasFreeSnapshot = false;
   if (freeEntry?.people) {
@@ -5041,79 +5036,99 @@ useEffect(() => {
                         </Box>
                       );
                     })}
-                  </Box>
-                )}
-                {freePeopleActive && (
-                  <Stack spacing={0.75}>
-                    <Typography variant="subtitle2">Free Guests</Typography>
-                    {renderLocalStepper(
-                      `${channel.id}-after-cutoff-free`,
-                      'Free guests',
-                      freePeopleQty,
-                      (nextValue) => setFreePeopleQty(channel.id, nextValue),
-                      disableInputs,
-                      0,
-                    )}
-                    <TextField
-                      value={freePeopleNote}
-                      onChange={(event) => setFreePeopleNote(channel.id, event.target.value)}
-                      size="small"
-                      disabled={disableInputs}
-                      required={freePeopleQty > 0}
-                      error={freePeopleNoteError}
-                      helperText={freePeopleNoteError ? 'Add a short reason for the free entry' : ' '}
-                      label="Free guest reason"
-                      placeholder="e.g., Birthday guest"
-                      multiline
-                      minRows={1}
-                    />
-                  </Stack>
-                )}
-                {freePeopleActive && addons.length > 0 && (
-                  <Stack spacing={0.75}>
-                    <Typography variant="subtitle2">Free Add-ons</Typography>
-                    {addons.map((addon) => {
-                      const numericAddonId =
-                        typeof addon.addonId === 'number' ? addon.addonId : Number(addon.addonId);
-                      if (!Number.isFinite(numericAddonId)) {
-                        return null;
-                      }
-                      const normalizedAddonId = numericAddonId;
-                      const freeAddonEntry = freeAddonEntries[normalizedAddonId] ?? { qty: 0, note: '' };
-                      const freeAddonQty = Math.max(0, Math.round(freeAddonEntry.qty ?? 0));
-                      const freeAddonNote = freeAddonEntry.note ?? '';
-                      const freeAddonNoteError = freeAddonQty > 0 && freeAddonNote.trim().length === 0;
-                      return (
-                        <Stack key={`${channel.id}-after-free-addon-${normalizedAddonId}`} spacing={0.5}>
+                    {freePeopleActive && (
+                      <Box
+                        key={`${channel.id}-after-cutoff-free-section`}
+                        sx={{
+                          border: '1px solid',
+                          borderColor: 'divider',
+                          borderRadius: 1,
+                          p: 1.25,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          minWidth: 0,
+                        }}
+                      >
+                        <Stack spacing={2}>
+                          <Typography variant="subtitle2" fontWeight={600}>
+                            Free Guests
+                          </Typography>
                           {renderLocalStepper(
-                            `${channel.id}-after-free-addon-${normalizedAddonId}`,
-                            `Free ${addon.name}`,
-                            freeAddonQty,
-                            (nextValue) => setFreeAddonQty(channel.id, normalizedAddonId, nextValue),
+                            `${channel.id}-after-cutoff-free`,
+                            'People',
+                            freePeopleQty,
+                            (nextValue) => setFreePeopleQty(channel.id, nextValue),
                             disableInputs,
                             0,
                           )}
                           <TextField
-                            value={freeAddonNote}
-                            onChange={(event) =>
-                              setFreeAddonNote(channel.id, normalizedAddonId, event.target.value)
-                            }
+                            value={freePeopleNote}
+                            onChange={(event) => setFreePeopleNote(channel.id, event.target.value)}
                             size="small"
                             disabled={disableInputs}
-                            required={freeAddonQty > 0}
-                            error={freeAddonNoteError}
-                            helperText={
-                              freeAddonNoteError ? `Add a reason for the free ${addon.name.toLowerCase()}` : ' '
-                            }
-                            label={`Free ${addon.name} reason`}
-                            placeholder="e.g., Staff friend"
+                            required={freePeopleQty > 0}
+                            error={freePeopleNoteError}
+                            helperText={freePeopleNoteError ? 'Add a short reason for the free entry' : ' '}
+                            label="Free ticket reason"
+                            placeholder="e.g., Birthday"
                             multiline
                             minRows={1}
                           />
                         </Stack>
-                      );
-                    })}
-                  </Stack>
+                        {addons.length > 0 && (
+                          <Stack>
+                            {addons.map((addon) => {
+                              const numericAddonId =
+                                typeof addon.addonId === 'number' ? addon.addonId : Number(addon.addonId);
+                              if (!Number.isFinite(numericAddonId)) {
+                                return null;
+                              }
+                              const normalizedAddonId = numericAddonId;
+                              const freeAddonEntry = freeAddonEntries[normalizedAddonId] ?? { qty: 0, note: '' };
+                              const freeAddonQty = Math.max(0, Math.round(freeAddonEntry.qty ?? 0));
+                              const freeAddonNote = freeAddonEntry.note ?? '';
+                              const freeAddonNoteError =
+                                freeAddonQty > 0 && freeAddonNote.trim().length === 0;
+                              return (
+                                <Stack
+                                  key={`${channel.id}-after-free-addon-${normalizedAddonId}`}
+                                  spacing={2}
+                                >
+                                  {renderLocalStepper(
+                                    `${channel.id}-after-free-addon-${normalizedAddonId}`,
+                                    `${addon.name}`,
+                                    freeAddonQty,
+                                    (nextValue) => setFreeAddonQty(channel.id, normalizedAddonId, nextValue),
+                                    disableInputs,
+                                    0,
+                                  )}
+                                  <TextField
+                                    value={freeAddonNote}
+                                    onChange={(event) =>
+                                      setFreeAddonNote(channel.id, normalizedAddonId, event.target.value)
+                                    }
+                                    size="small"
+                                    disabled={disableInputs}
+                                    required={freeAddonQty > 0}
+                                    error={freeAddonNoteError}
+                                    helperText={
+                                      freeAddonNoteError
+                                        ? `Add a reason for the free ${addon.name.toLowerCase()}`
+                                        : ' '
+                                    }
+                                    label={`Free ${addon.name} reason`}
+                                    placeholder="e.g., Staff friend"
+                                    multiline
+                                    minRows={1}
+                                  />
+                                </Stack>
+                              );
+                            })}
+                          </Stack>
+                        )}
+                      </Box>
+                    )}
+                  </Box>
                 )}
               </Stack>
             ) : (
