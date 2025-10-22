@@ -132,6 +132,21 @@ const WALK_IN_TICKET_UNIT_PRICES: Record<string, Partial<Record<CashCurrency, nu
   Students: { PLN: 80, EUR: 19 },
   Group: { PLN: 85, EUR: 20 },
 };
+const formatListWithAmpersand = (items: string[]): string => {
+  if (items.length === 0) {
+    return '';
+  }
+  if (items.length === 1) {
+    return items[0];
+  }
+  if (items.length === 2) {
+    return `${items[0]} & ${items[1]}`;
+  }
+
+  const head = items.slice(0, -1).join(', ');
+  const tail = items[items.length - 1];
+  return `${head} & ${tail}`;
+};
 const WALK_IN_ADDON_UNIT_PRICES: Record<string, Partial<Record<CashCurrency, number>>> = {
   cocktails: { EUR: 7 },
   tshirts: { EUR: 10 },
@@ -644,7 +659,7 @@ const aggregateCashTotals = (entry: CashSnapshotEntry): Map<string, number> => {
 const formatWalkInSnapshotSummary = (
   note: string,
   channels: ChannelConfig[],
-  addons: AddonConfig[],
+  _addons: AddonConfig[],
 ): string => {
   if (!note) {
     return '';
@@ -667,8 +682,9 @@ const formatWalkInSnapshotSummary = (
   if (cashEntry) {
     if (cashEntry.tickets && cashEntry.tickets.length > 0) {
       cashEntry.tickets.forEach((ticket) => {
-        if (ticket.name) {
-          ticketNames.add(ticket.name);
+        const ticketName = (ticket.name ?? '').toString().trim();
+        if (ticketName.length > 0) {
+          ticketNames.add(ticketName);
         }
         ticket.currencies.forEach((currency) => {
           const amount = Number(currency.cash);
@@ -684,16 +700,12 @@ const formatWalkInSnapshotSummary = (
     });
   }
 
-  const addonNameById = new Map<number, string>();
-  addons.forEach((addon) => addonNameById.set(addon.addonId, addon.name));
-
-  const freeParts: string[] = [];
+  let hasFreeSnapshot = false;
   if (freeEntry?.people) {
     const qty = Math.max(0, Math.round(Number(freeEntry.people.qty) || 0));
     const noteText = (freeEntry.people.note ?? '').toString().trim();
     if (qty > 0 || noteText.length > 0) {
-      const detail = `${qty}${noteText ? ` - ${noteText}` : ''}`;
-      freeParts.push(`People: ${detail}`);
+      hasFreeSnapshot = true;
     }
   }
   if (freeEntry?.addons) {
@@ -707,35 +719,36 @@ const formatWalkInSnapshotSummary = (
       if (qty <= 0 && noteText.length === 0) {
         return;
       }
-      const addonName = addonNameById.get(addonId) ?? `Addon ${addonId}`;
-      const detail = `${qty}${noteText ? ` - ${noteText}` : ''}`;
-      freeParts.push(`${addonName}: ${detail}`);
+      hasFreeSnapshot = true;
     });
   }
 
-  if (ticketNames.size === 0 && freeParts.length === 0 && currencyTotals.size === 0) {
+  if (hasFreeSnapshot) {
+    ticketNames.add('Free');
+  }
+
+  if (ticketNames.size === 0 && currencyTotals.size === 0) {
     return '';
   }
 
   const segments: string[] = [];
-  if (ticketNames.size > 0) {
-    segments.push(`Walk-In Tickets: ${Array.from(ticketNames).join(', ')}`);
-  } else {
-    segments.push('Walk-In Tickets');
-  }
-
-  if (freeParts.length > 0) {
-    segments.push(`Free (${freeParts.join(', ')})`);
-  }
+  const formattedTicketNames = formatListWithAmpersand(
+    Array.from(ticketNames)
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0),
+  );
+  segments.push(`Walk-In Tickets: ${formattedTicketNames || '-'}`);
 
   if (currencyTotals.size > 0) {
     const cashSummary = Array.from(currencyTotals.entries())
       .map(([currency, amount]) => `${currency} ${amount.toFixed(2)}`)
       .join(', ');
     segments.push(`Cash Collected: ${cashSummary}`);
+  } else {
+    segments.push('Cash Collected: -');
   }
 
-  return segments.join(' | ');
+  return segments.join(' || ');
 };
 
 const formatCounterSnapshotDetails = (
