@@ -3633,7 +3633,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
   const productOptions = useMemo(() => {
     const map = new Map<number, CatalogProduct>();
     catalog.products
-      .filter((product) => product.status)
+      .filter((product) => product.status !== false)
       .forEach((product) => map.set(product.id, product));
 
     const counterProduct = registry.counter?.counter.product;
@@ -3648,27 +3648,27 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       });
     }
 
-    return Array.from(map.values());
+    return Array.from(map.values()).sort((a, b) =>
+      (a.name ?? '').localeCompare(b.name ?? '', undefined, { sensitivity: 'base' }),
+    );
   }, [catalog.products, registry.counter]);
 
   useEffect(() => {
-    if (!counterId) {
+    if (!counterId || counterProductId) {
       return;
     }
-    if (counterProductId) {
-      return;
-    }
-    if (catalog.products.length === 0) {
+    if (productOptions.length === 0) {
       return;
     }
     const defaultProduct =
-      catalog.products.find((product) => product.name?.toLowerCase() === DEFAULT_PRODUCT_NAME.toLowerCase()) ??
-      catalog.products[0] ?? null;
+      productOptions.find((product) => product.name?.toLowerCase() === DEFAULT_PRODUCT_NAME.toLowerCase()) ??
+      productOptions[0] ??
+      null;
     if (!defaultProduct) {
       return;
     }
     dispatch(updateCounterProduct({ counterId, productId: defaultProduct.id }));
-  }, [catalog.products, counterId, counterProductId, dispatch]);
+  }, [counterId, counterProductId, dispatch, productOptions]);
 
   const productValue = useMemo(
     () => productOptions.find((product) => product.id === currentProductId) ?? null,
@@ -4983,11 +4983,8 @@ type SummaryRowOptions = {
     );
 
     return (
-      <Stack spacing={3} sx={{ mt: 4 }}>
+      <Stack spacing={3}>
         <Box>
-          <Typography variant="h6" gutterBottom>
-            Summary
-          </Typography>
           <Grid container spacing={2}>
             {summaryChannels.map((item) => {
               const isAfterCutoffChannel = AFTER_CUTOFF_ALLOWED.has(item.channelName.toLowerCase());
