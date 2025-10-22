@@ -617,7 +617,8 @@ const VenueNumbersList = () => {
     }
     pending.forEach((photo) => {
       requestedPhotoIds.current.add(photo.id);
-      const downloadUrl = resolvePhotoDownloadUrl(photo.downloadUrl);
+      const downloadUrl = resolvePhotoDownloadUrl(photo.downloadUrl).replace("/api/api/", "/api/");;
+      
       axiosInstance
         .get(downloadUrl, { responseType: "blob", withCredentials: true, baseURL: undefined })
         .then((response) => {
@@ -1473,7 +1474,7 @@ const VenueNumbersList = () => {
                 {limitedPhotos.map((photo) => {
                   const previewUrl = photoPreviews[photo.id];
                   const previewError = photoPreviewErrors[photo.id];
-                  const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl);
+                  const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl).replace("/api/api/", "/api/");;
                   return (
                     <Grid size={{ xs: 12, sm: 6, md: 4 }} key={photo.id}>
                       <Card variant="outlined">
@@ -1886,7 +1887,7 @@ const VenueNumbersList = () => {
               {limitedPhotos.map((photo) => {
                 const previewUrl = photoPreviews[photo.id];
                 const previewError = photoPreviewErrors[photo.id];
-                const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl);
+                const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl).replace("/api/api/", "/api/");;
                 return (
                   <Grid size={{ xs: 12, sm: 6, md: 4 }} key={photo.id}>
                     <Card variant="outlined">
