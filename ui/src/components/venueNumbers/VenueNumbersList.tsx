@@ -1337,6 +1337,11 @@ const VenueNumbersList = () => {
                               theme.palette[palette].main,
                               theme.palette.mode === "dark" ? 0.2 : 0.08,
                             ),
+                            width: "100%",
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: "center",
+                            textAlign: "center",
                           })}
                         >
                           <Typography
@@ -1358,6 +1363,7 @@ const VenueNumbersList = () => {
                             sx={{
                               display: "grid",
                               gap: 1.5,
+                              width: "100%",
                               gridTemplateColumns:
                                 openBarTiles.length === 1
                                   ? "1fr"
@@ -1365,10 +1371,13 @@ const VenueNumbersList = () => {
                                       xs: "repeat(2, minmax(0, 1fr))",
                                       sm: `repeat(${openBarTiles.length}, minmax(0, 1fr))`,
                                     },
+                              justifyItems: "stretch",
                             }}
                           >
                             {openBarTiles.map((tile) => (
-                              <Box key={`${venue.key}-${tile.label}`}>{metricCard(tile.label, tile.value ?? null, tile.palette)}</Box>
+                              <Box key={`${venue.key}-${tile.label}`} sx={{ width: "100%" }}>
+                                {metricCard(tile.label, tile.value ?? null, tile.palette)}
+                              </Box>
                             ))}
                           </Box>
                         ) : (
@@ -1378,7 +1387,9 @@ const VenueNumbersList = () => {
                         )
                       ) : (
                         <Grid container spacing={1.5}>
-                          <Grid size={{ xs: 12, sm: 6, md: 4 }}>{metricCard("Guests", venueTotalRaw, "primary")}</Grid>
+                          <Grid size={{ xs: 12, sm: 6, md: 4 }} sx={{ width: "100%" }}>
+                            {metricCard("Guests", venueTotalRaw, "primary")}
+                          </Grid>
                         </Grid>
                       );
 
@@ -1398,35 +1409,27 @@ const VenueNumbersList = () => {
                             py: { xs: 1.5, sm: 2 },
                             display: "flex",
                             flexDirection: "column",
-                            gap: 1.5,
+                            gap: 1,
                           })}
                         >
-                          <Stack
-                            direction={{ xs: "column", sm: "row" }}
-                            spacing={{ xs: 1, sm: 1.5 }}
-                            alignItems={{ xs: "flex-start", sm: "center" }}
-                            justifyContent="space-between"
-                          >
-                            <Stack spacing={0.25}>
-                              <Typography variant="subtitle1" fontWeight={700}>
-                                {`${index + 1}. ${venue.name}`}
+                          <Stack spacing={0.5} alignItems="center" textAlign="center">
+                            <Typography variant="subtitle1" fontWeight={700}>
+                              {`${index + 1}. ${venue.name}`}
+                            </Typography>
+                            {venue.isOpenBar && (
+                              <Typography
+                                variant="caption"
+                                color="info.main"
+                                sx={{
+                                  fontWeight: 600,
+                                  letterSpacing: 0.5,
+                                  textTransform: "uppercase",
+                                }}
+                              >
+                                Open Bar
                               </Typography>
-                              {venue.isOpenBar && (
-                                <Typography
-                                  variant="caption"
-                                  color="info.main"
-                                  sx={{
-                                    fontWeight: 600,
-                                    letterSpacing: 0.5,
-                                    textTransform: "uppercase",
-                                  }}
-                                >
-                                  Open Bar
-                                </Typography>
-                              )}
-                            </Stack>
+                            )}
                           </Stack>
-                          <Divider />
                           {detailContent}
                         </Box>
                       );
