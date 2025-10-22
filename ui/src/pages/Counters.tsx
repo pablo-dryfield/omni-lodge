@@ -106,12 +106,23 @@ const BUCKETS: BucketDescriptor[] = [
   { tallyType: 'booked', period: 'after_cutoff', label: bucketLabels.after_cutoff },
 ];
 
-const WALK_IN_DISCOUNT_OPTIONS = ['Normal', 'Custom', 'Second Timers', 'Third Timers', 'Half Price', 'Students', 'Group'];
+const WALK_IN_DISCOUNT_OPTIONS = [
+  'Normal',
+  'Custom',
+  'Second Timers',
+  'Third Timers',
+  'Half Price',
+  'Students',
+  'Group',
+];
 const WALK_IN_DISCOUNT_NOTE_PREFIX = 'Walk-In Tickets:';
 const WALK_IN_CASH_NOTE_PREFIX = 'Cash Collected:';
 const CASH_SNAPSHOT_START = '-- CASH-SNAPSHOT START --';
 const CASH_SNAPSHOT_END = '-- CASH-SNAPSHOT END --';
 const CASH_SNAPSHOT_VERSION = 2;
+const FREE_SNAPSHOT_START = '-- FREE-SNAPSHOT START --';
+const FREE_SNAPSHOT_END = '-- FREE-SNAPSHOT END --';
+const FREE_SNAPSHOT_VERSION = 1;
 const CUSTOM_TICKET_LABEL = 'Custom';
 const WALK_IN_TICKET_UNIT_PRICES: Record<string, Partial<Record<CashCurrency, number>>> = {
   Normal: { EUR: 25 },
@@ -143,6 +154,26 @@ type CashSnapshotEntry = {
   amount: number;
   qty: number;
   tickets?: WalkInSnapshotTicket[];
+};
+
+type FreeSnapshotAddonEntry = {
+  qty: number;
+  note: string;
+};
+
+type FreeSnapshotPeopleEntry = {
+  qty: number;
+  note: string;
+};
+
+type FreeSnapshotChannelEntry = {
+  people?: FreeSnapshotPeopleEntry;
+  addons?: Record<string, FreeSnapshotAddonEntry>;
+};
+
+type FreeSnapshotPayload = {
+  version: number;
+  channels: Record<string, FreeSnapshotChannelEntry>;
 };
 
 type WalkInCurrencyEntryState = {
@@ -490,14 +521,105 @@ const serializeCashSnapshot = (channels: Record<string, CashSnapshotEntry>): str
   return `${CASH_SNAPSHOT_START}\n${JSON.stringify(payload)}\n${CASH_SNAPSHOT_END}`;
 };
 
+const extractFreeSnapshotMap = (
+  note: string | null | undefined,
+): Map<number, FreeSnapshotChannelEntry> => {
+  const entries = new Map<number, FreeSnapshotChannelEntry>();
+  if (!note) {
+    return entries;
+  }
+  const startIndex = note.indexOf(FREE_SNAPSHOT_START);
+  if (startIndex === -1) {
+    return entries;
+  }
+  const endIndex = note.indexOf(FREE_SNAPSHOT_END, startIndex + FREE_SNAPSHOT_START.length);
+  if (endIndex === -1) {
+    return entries;
+  }
+  const snapshotRaw = note.slice(startIndex + FREE_SNAPSHOT_START.length, endIndex).trim();
+  if (!snapshotRaw) {
+    return entries;
+  }
+  try {
+    const parsed = JSON.parse(snapshotRaw) as FreeSnapshotPayload | undefined;
+    if (!parsed || typeof parsed !== 'object') {
+      return entries;
+    }
+    const channels = parsed.channels ?? {};
+    Object.entries(channels).forEach(([channelId, value]) => {
+      const numericChannelId = Number(channelId);
+      if (!Number.isFinite(numericChannelId) || !value || typeof value !== 'object') {
+        return;
+      }
+      const peopleRaw = (value as FreeSnapshotChannelEntry).people;
+      const addonsRaw = (value as FreeSnapshotChannelEntry).addons;
+      const entry: FreeSnapshotChannelEntry = {};
+      if (peopleRaw && typeof peopleRaw === 'object') {
+        const qty = Math.max(0, Math.round(Number(peopleRaw.qty) || 0));
+        const noteValue =
+          typeof peopleRaw.note === 'string' ? peopleRaw.note.trim() : String(peopleRaw.note ?? '');
+        if (qty > 0 || noteValue.length > 0) {
+          entry.people = {
+            qty,
+            note: noteValue,
+          };
+        }
+      }
+      if (addonsRaw && typeof addonsRaw === 'object') {
+        const normalizedAddons: Record<string, FreeSnapshotAddonEntry> = {};
+        Object.entries(addonsRaw).forEach(([addonId, addonValue]) => {
+          if (!addonValue || typeof addonValue !== 'object') {
+            return;
+          }
+          const qty = Math.max(0, Math.round(Number((addonValue as FreeSnapshotAddonEntry).qty) || 0));
+          const noteValue =
+            typeof (addonValue as FreeSnapshotAddonEntry).note === 'string'
+              ? (addonValue as FreeSnapshotAddonEntry).note.trim()
+              : String((addonValue as FreeSnapshotAddonEntry).note ?? '');
+          if (qty > 0 || noteValue.length > 0) {
+            normalizedAddons[addonId] = {
+              qty,
+              note: noteValue,
+            };
+          }
+        });
+        if (Object.keys(normalizedAddons).length > 0) {
+          entry.addons = normalizedAddons;
+        }
+      }
+      if (entry.people || entry.addons) {
+        entries.set(numericChannelId, entry);
+      }
+    });
+  } catch (_error) {
+    return entries;
+  }
+  return entries;
+};
+
+const serializeFreeSnapshot = (channels: Record<string, FreeSnapshotChannelEntry>): string => {
+  const payload: FreeSnapshotPayload = {
+    version: FREE_SNAPSHOT_VERSION,
+    channels,
+  };
+  return `${FREE_SNAPSHOT_START}\n${JSON.stringify(payload)}\n${FREE_SNAPSHOT_END}`;
+};
+
 const stripSnapshotFromNote = (note: string): string => {
   if (!note) {
     return '';
   }
   const escapedStart = CASH_SNAPSHOT_START.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
   const escapedEnd = CASH_SNAPSHOT_END.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
-  const snapshotPattern = new RegExp(`${escapedStart}[\\s\\S]*?${escapedEnd}`, 'g');
-  return note.replace(snapshotPattern, '').trim();
+  const escapedFreeStart = FREE_SNAPSHOT_START.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+  const escapedFreeEnd = FREE_SNAPSHOT_END.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+  const stripBlock = (input: string, start: string, end: string) => {
+    const pattern = new RegExp(`${start}[\\s\\S]*?${end}`, 'g');
+    return input.replace(pattern, '');
+  };
+  let sanitized = stripBlock(note, escapedStart, escapedEnd);
+  sanitized = stripBlock(sanitized, escapedFreeStart, escapedFreeEnd);
+  return sanitized.trim();
 };
 type RegistryStep = 'details' | 'platforms' | 'reservations' | 'summary';
 
@@ -634,6 +756,10 @@ const Counters = (props: GenericPageProps) => {
     value: string;
   } | null>(null);
   const [walkInNoteDirty, setWalkInNoteDirty] = useState(false);
+  const [freePeopleByChannel, setFreePeopleByChannel] = useState<Record<number, FreeSnapshotPeopleEntry>>({});
+  const [freeAddonsByChannel, setFreeAddonsByChannel] = useState<
+    Record<number, Record<number, FreeSnapshotAddonEntry>>
+  >({});
   const [cashOverridesByChannel, setCashOverridesByChannel] = useState<Record<number, string>>({});
   const [cashEditingChannelId, setCashEditingChannelId] = useState<number | null>(null);
   const [cashEditingValue, setCashEditingValue] = useState<string>('');
@@ -986,6 +1112,10 @@ const loadCounterForDate = useCallback(
     () => extractCashSnapshotMap(counterNotes),
     [counterNotes],
   );
+  const freeSnapshotEntries = useMemo(
+    () => extractFreeSnapshotMap(counterNotes),
+    [counterNotes],
+  );
   useEffect(() => {
     if (!editingCustomTicket) {
       return;
@@ -1017,6 +1147,179 @@ const loadCounterForDate = useCallback(
     [setWalkInNoteDirty],
   );
 
+  const setFreePeopleQty = useCallback(
+    (channelId: number, qty: number) => {
+      const normalizedQty = Math.max(0, Math.round(qty));
+      let mutated = false;
+      setFreePeopleByChannel((prev) => {
+        const existing = prev[channelId];
+        const existingNote = existing?.note ?? '';
+        if (existing && existing.qty === normalizedQty) {
+          return prev;
+        }
+        if (normalizedQty === 0 && existingNote.trim().length === 0) {
+          if (!existing) {
+            return prev;
+          }
+          const { [channelId]: _removed, ...rest } = prev;
+          mutated = true;
+          return rest;
+        }
+        mutated = true;
+        return { ...prev, [channelId]: { qty: normalizedQty, note: existingNote } };
+      });
+      if (mutated) {
+        setWalkInNoteDirty(true);
+      }
+    },
+    [setWalkInNoteDirty],
+  );
+
+  const setFreePeopleNote = useCallback(
+    (channelId: number, note: string) => {
+      const sanitizedNote = note.trim();
+      let mutated = false;
+      setFreePeopleByChannel((prev) => {
+        const existing = prev[channelId];
+        const currentQty = existing?.qty ?? 0;
+        if (existing && existing.note === sanitizedNote) {
+          return prev;
+        }
+        if (currentQty === 0 && sanitizedNote.length === 0) {
+          if (!existing) {
+            return prev;
+          }
+          const { [channelId]: _removed, ...rest } = prev;
+          mutated = true;
+          return rest;
+        }
+        mutated = true;
+        return { ...prev, [channelId]: { qty: currentQty, note: sanitizedNote } };
+      });
+      if (mutated) {
+        setWalkInNoteDirty(true);
+      }
+    },
+    [setWalkInNoteDirty],
+  );
+
+  const ensureFreePeopleEntry = useCallback(
+    (channelId: number) => {
+      let mutated = false;
+      setFreePeopleByChannel((prev) => {
+        if (prev[channelId]) {
+          return prev;
+        }
+        mutated = true;
+        return { ...prev, [channelId]: { qty: 0, note: '' } };
+      });
+      if (mutated) {
+        setWalkInNoteDirty(true);
+      }
+    },
+    [setWalkInNoteDirty],
+  );
+
+  const setFreeAddonQty = useCallback(
+    (channelId: number, addonId: number, qty: number) => {
+      const normalizedQty = Math.max(0, Math.round(qty));
+      let mutated = false;
+      setFreeAddonsByChannel((prev) => {
+        const currentForChannel = prev[channelId] ?? {};
+        const existing = currentForChannel[addonId];
+        const existingNote = existing?.note ?? '';
+        if (existing && existing.qty === normalizedQty) {
+          return prev;
+        }
+        const nextChannelEntries = { ...currentForChannel };
+        if (normalizedQty === 0 && existingNote.trim().length === 0) {
+          if (!existing) {
+            return prev;
+          }
+          delete nextChannelEntries[addonId];
+          mutated = true;
+        } else {
+          nextChannelEntries[addonId] = { qty: normalizedQty, note: existingNote };
+          mutated = true;
+        }
+        if (Object.keys(nextChannelEntries).length === 0) {
+          if (!(channelId in prev)) {
+            return prev;
+          }
+          const { [channelId]: _removed, ...rest } = prev;
+          return mutated ? rest : prev;
+        }
+        return { ...prev, [channelId]: nextChannelEntries };
+      });
+      if (mutated) {
+        setWalkInNoteDirty(true);
+      }
+    },
+    [setWalkInNoteDirty],
+  );
+
+  const ensureFreeAddonEntry = useCallback(
+    (channelId: number, addonId: number) => {
+      let mutated = false;
+      setFreeAddonsByChannel((prev) => {
+        const currentForChannel = prev[channelId] ?? {};
+        if (currentForChannel[addonId]) {
+          return prev;
+        }
+        mutated = true;
+        return {
+          ...prev,
+          [channelId]: {
+            ...currentForChannel,
+            [addonId]: { qty: 0, note: '' },
+          },
+        };
+      });
+      if (mutated) {
+        setWalkInNoteDirty(true);
+      }
+    },
+    [setWalkInNoteDirty],
+  );
+
+  const setFreeAddonNote = useCallback(
+    (channelId: number, addonId: number, note: string) => {
+      const sanitizedNote = note.trim();
+      let mutated = false;
+      setFreeAddonsByChannel((prev) => {
+        const currentForChannel = prev[channelId] ?? {};
+        const existing = currentForChannel[addonId];
+        const currentQty = existing?.qty ?? 0;
+        if (existing && existing.note === sanitizedNote) {
+          return prev;
+        }
+        const nextChannelEntries = { ...currentForChannel };
+        if (currentQty === 0 && sanitizedNote.length === 0) {
+          if (!existing) {
+            return prev;
+          }
+          delete nextChannelEntries[addonId];
+          mutated = true;
+        } else {
+          nextChannelEntries[addonId] = { qty: currentQty, note: sanitizedNote };
+          mutated = true;
+        }
+        if (Object.keys(nextChannelEntries).length === 0) {
+          if (!(channelId in prev)) {
+            return prev;
+          }
+          const { [channelId]: _removed, ...rest } = prev;
+          return mutated ? rest : prev;
+        }
+        return { ...prev, [channelId]: nextChannelEntries };
+      });
+      if (mutated) {
+        setWalkInNoteDirty(true);
+      }
+    },
+    [setWalkInNoteDirty],
+  );
+
   useEffect(() => {
     if (!registry.counter) {
       setWalkInCashByChannel({});
@@ -1027,6 +1330,8 @@ const loadCounterForDate = useCallback(
       setCashEditingValue('');
       setCashCurrencyByChannel({});
       setWalkInNoteDirty(false);
+      setFreePeopleByChannel({});
+      setFreeAddonsByChannel({});
       lastWalkInInitRef.current = null;
       return;
     }
@@ -1302,6 +1607,37 @@ const loadCounterForDate = useCallback(
       }
     }
 
+    const nextFreePeople: Record<number, FreeSnapshotPeopleEntry> = {};
+    const nextFreeAddons: Record<number, Record<number, FreeSnapshotAddonEntry>> = {};
+    freeSnapshotEntries.forEach((entry, channelId) => {
+      if (entry.people) {
+        const qty = Math.max(0, Math.round(Number(entry.people.qty) || 0));
+        const note = (entry.people.note ?? '').toString().trim();
+        if (qty > 0 || note.length > 0) {
+          nextFreePeople[channelId] = { qty, note };
+        }
+      }
+      if (entry.addons) {
+        Object.entries(entry.addons).forEach(([addonIdKey, addonEntry]) => {
+          const addonId = Number(addonIdKey);
+          if (!Number.isFinite(addonId) || !addonEntry) {
+            return;
+          }
+          const qty = Math.max(0, Math.round(Number(addonEntry.qty) || 0));
+          const note = (addonEntry.note ?? '').toString().trim();
+          if (qty <= 0 && note.length === 0) {
+            return;
+          }
+          if (!nextFreeAddons[channelId]) {
+            nextFreeAddons[channelId] = {};
+          }
+          nextFreeAddons[channelId][addonId] = { qty, note };
+        });
+      }
+    });
+
+    setFreePeopleByChannel(nextFreePeople);
+    setFreeAddonsByChannel(nextFreeAddons);
     setWalkInCashByChannel(nextWalkInCash);
     setWalkInDiscountsByChannel(nextWalkInDiscounts);
     setWalkInTicketDataByChannel(recalcWalkInTicketDataMap(nextWalkInTickets));
@@ -1313,6 +1649,7 @@ const loadCounterForDate = useCallback(
   }, [
     cashEligibleChannelIds,
     cashSnapshotEntries,
+    freeSnapshotEntries,
     recalcWalkInTicketDataMap,
     registry.channels,
     registry.counter,
@@ -1320,9 +1657,65 @@ const loadCounterForDate = useCallback(
   ]);
 
   const channelHasAnyQty = useCallback(
-    (channelId: number) => mergedMetrics.some((metric) => metric.channelId === channelId && metric.qty > 0),
-    [mergedMetrics],
+    (channelId: number) => {
+      const hasMetricQty = mergedMetrics.some((metric) => metric.channelId === channelId && metric.qty > 0);
+      if (hasMetricQty) {
+        return true;
+      }
+
+      const ticketState = walkInTicketDataByChannel[channelId];
+      if (ticketState) {
+        for (const ticket of Object.values(ticketState.tickets)) {
+          if (!ticket) {
+            continue;
+          }
+          for (const currency of Object.values(ticket.currencies)) {
+            if (!currency) {
+              continue;
+            }
+            if (currency.people > 0) {
+              return true;
+            }
+            if (currency.cash && Number(currency.cash) > 0) {
+              return true;
+            }
+            if (Object.values(currency.addons).some((qty) => Number(qty) > 0)) {
+              return true;
+            }
+          }
+        }
+      }
+
+      const rawWalkInCash = walkInCashByChannel[channelId];
+      if (rawWalkInCash != null && rawWalkInCash !== '' && Number(rawWalkInCash) > 0) {
+        return true;
+      }
+
+      const freePeopleEntry = freePeopleByChannel[channelId];
+      if (freePeopleEntry && Math.max(0, Math.round(freePeopleEntry.qty ?? 0)) > 0) {
+        return true;
+      }
+
+      const freeAddonEntries = freeAddonsByChannel[channelId];
+      if (freeAddonEntries) {
+        const hasFreeAddonQty = Object.values(freeAddonEntries).some(
+          (entry) => entry && Math.max(0, Math.round(entry.qty ?? 0)) > 0,
+        );
+        if (hasFreeAddonQty) {
+          return true;
+        }
+      }
+
+      return false;
+    },
+    [freeAddonsByChannel, freePeopleByChannel, mergedMetrics, walkInCashByChannel, walkInTicketDataByChannel],
   );
+
+  const channelIdsWithAnyData = useMemo(() => {
+    return registry.channels
+      .filter((channel) => channelHasAnyQty(channel.id))
+      .map((channel) => channel.id);
+  }, [channelHasAnyQty, registry.channels]);
 
   const [editingChannelIds, setEditingChannelIds] = useState<Set<number>>(() => new Set());
 
@@ -2715,12 +3108,19 @@ useEffect(() => {
 
   const dirtyMetricCount = registry.dirtyMetricKeys.length;
   const hasDirtyMetrics = dirtyMetricCount > 0;
-const effectiveSelectedChannelIds = useMemo<number[]>(() => {
-    if (selectedChannelIds.length > 0) {
-      return selectedChannelIds;
-    }
-    return savedPlatformChannelIds;
-}, [savedPlatformChannelIds, selectedChannelIds]);
+  const walkInChannelIdSet = useMemo(() => new Set(walkInChannelIds), [walkInChannelIds]);
+
+  const effectiveSelectedChannelIds = useMemo<number[]>(() => {
+    const base =
+      selectedChannelIds.length > 0 ? selectedChannelIds : savedPlatformChannelIds;
+    const combined = new Set<number>(base);
+    channelIdsWithAnyData.forEach((id) => {
+      if (!walkInChannelIdSet.has(id)) {
+        combined.add(id);
+      }
+    });
+    return Array.from(combined);
+  }, [channelIdsWithAnyData, savedPlatformChannelIds, selectedChannelIds, walkInChannelIdSet]);
 
   useEffect(() => {
     setSelectedChannelIds((prev) => {
@@ -2730,11 +3130,23 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
   }, [channelHasAnyQty, editingChannelIds]);
 
   const effectiveAfterCutoffIds = useMemo<number[]>(() => {
-    if (selectedAfterCutoffChannelIds.length > 0) {
-      return selectedAfterCutoffChannelIds;
-    }
-    return savedAfterCutoffChannelIds.filter((id: number) => allowedAfterCutoffChannelIds.includes(id));
-  }, [allowedAfterCutoffChannelIds, savedAfterCutoffChannelIds, selectedAfterCutoffChannelIds]);
+    const base =
+      selectedAfterCutoffChannelIds.length > 0
+        ? selectedAfterCutoffChannelIds
+        : savedAfterCutoffChannelIds.filter((id: number) => allowedAfterCutoffChannelIds.includes(id));
+    const combined = new Set<number>(base);
+    channelIdsWithAnyData.forEach((id) => {
+      if (allowedAfterCutoffChannelIds.includes(id)) {
+        combined.add(id);
+      }
+    });
+    return Array.from(combined);
+  }, [
+    allowedAfterCutoffChannelIds,
+    channelIdsWithAnyData,
+    savedAfterCutoffChannelIds,
+    selectedAfterCutoffChannelIds,
+  ]);
 
   useEffect(() => {
     setSelectedAfterCutoffChannelIds((prev) => {
@@ -2825,11 +3237,11 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
 
     existingLines.forEach((line) => {
       const trimmed = line.trim();
-      if (trimmed === CASH_SNAPSHOT_START) {
+      if (trimmed === CASH_SNAPSHOT_START || trimmed === FREE_SNAPSHOT_START) {
         skippingSnapshot = true;
         return;
       }
-      if (trimmed === CASH_SNAPSHOT_END) {
+      if (trimmed === CASH_SNAPSHOT_END || trimmed === FREE_SNAPSHOT_END) {
         skippingSnapshot = false;
         return;
       }
@@ -2990,12 +3402,66 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       snapshotChannels[channel.id.toString()] = { currency, amount: normalizedAmount, qty: normalizedQty };
     });
 
-    if (Object.keys(snapshotChannels).length > 0) {
-      const snapshotBlock = serializeCashSnapshot(snapshotChannels);
-      if (sections.length > 0) {
+    const freeChannels: Record<string, FreeSnapshotChannelEntry> = {};
+    Object.entries(freePeopleByChannel).forEach(([channelIdKey, entry]) => {
+      const channelId = Number(channelIdKey);
+      if (!Number.isFinite(channelId) || !entry) {
+        return;
+      }
+      const qty = Math.max(0, Math.round(entry.qty ?? 0));
+      const note = (entry.note ?? '').trim();
+      if (qty <= 0 && note.length === 0) {
+        return;
+      }
+      const key = channelId.toString();
+      if (!freeChannels[key]) {
+        freeChannels[key] = {};
+      }
+      freeChannels[key].people = { qty, note };
+    });
+    Object.entries(freeAddonsByChannel).forEach(([channelIdKey, addons]) => {
+      const channelId = Number(channelIdKey);
+      if (!Number.isFinite(channelId) || !addons) {
+        return;
+      }
+      const addonEntries: Record<string, FreeSnapshotAddonEntry> = {};
+      Object.entries(addons).forEach(([addonIdKey, addonEntry]) => {
+        if (!addonEntry) {
+          return;
+        }
+        const qty = Math.max(0, Math.round(addonEntry.qty ?? 0));
+        const note = (addonEntry.note ?? '').trim();
+        if (qty <= 0 && note.length === 0) {
+          return;
+        }
+        addonEntries[addonIdKey] = { qty, note };
+      });
+      if (Object.keys(addonEntries).length === 0) {
+        return;
+      }
+      const key = channelId.toString();
+      if (!freeChannels[key]) {
+        freeChannels[key] = {};
+      }
+      freeChannels[key].addons = {
+        ...(freeChannels[key].addons ?? {}),
+        ...addonEntries,
+      };
+    });
+
+    const appendSnapshot = (block: string) => {
+      if (sections.length > 0 && sections[sections.length - 1] !== '') {
         sections.push('');
       }
-      sections.push(snapshotBlock);
+      sections.push(block);
+    };
+
+    if (Object.keys(snapshotChannels).length > 0) {
+      appendSnapshot(serializeCashSnapshot(snapshotChannels));
+    }
+
+    if (Object.keys(freeChannels).length > 0) {
+      appendSnapshot(serializeFreeSnapshot(freeChannels));
     }
 
     return sections.join('\n');
@@ -3011,6 +3477,8 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     attendedPeopleByChannel,
     walkInTicketDataByChannel,
     walkInDiscountsByChannel,
+    freePeopleByChannel,
+    freeAddonsByChannel,
   ]);
 
   const computedCounterNotes = useMemo(() => buildCounterNotes(), [buildCounterNotes]);
@@ -3059,6 +3527,141 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     });
     return total;
   }, [effectiveAfterCutoffIds, effectiveSelectedChannelIds, mergedMetrics]);
+
+  const freePeopleTotalsByChannel = useMemo(() => {
+    const map = new Map<number, number>();
+    Object.entries(freePeopleByChannel).forEach(([channelIdKey, entry]) => {
+      const channelId = Number(channelIdKey);
+      if (!Number.isFinite(channelId) || !entry) {
+        return;
+      }
+      const qty = Math.max(0, Math.round(entry.qty ?? 0));
+      if (qty > 0) {
+        map.set(channelId, qty);
+      }
+    });
+    return map;
+  }, [freePeopleByChannel]);
+
+  const totalFreePeople = useMemo(() => {
+    let total = 0;
+    Object.values(freePeopleByChannel).forEach((entry) => {
+      if (!entry) {
+        return;
+      }
+      total += Math.max(0, Math.round(entry.qty ?? 0));
+    });
+    return total;
+  }, [freePeopleByChannel]);
+
+  const freeAddonsTotalsByChannel = useMemo(() => {
+    const channelMap = new Map<number, Map<number, number>>();
+    Object.entries(freeAddonsByChannel).forEach(([channelIdKey, addonMap]) => {
+      const channelId = Number(channelIdKey);
+      if (!Number.isFinite(channelId) || !addonMap) {
+        return;
+      }
+      const perAddon = new Map<number, number>();
+      Object.entries(addonMap).forEach(([addonIdKey, entry]) => {
+        const addonId = Number(addonIdKey);
+        if (!Number.isFinite(addonId) || !entry) {
+          return;
+        }
+        const qty = Math.max(0, Math.round(entry.qty ?? 0));
+        if (qty > 0) {
+          perAddon.set(addonId, qty);
+        }
+      });
+      if (perAddon.size > 0) {
+        channelMap.set(channelId, perAddon);
+      }
+    });
+    return channelMap;
+  }, [freeAddonsByChannel]);
+
+  const freeAddonTotalsByKey = useMemo(() => {
+    const totals = new Map<string, number>();
+    Object.entries(freeAddonsByChannel).forEach(([_, addonMap]) => {
+      Object.entries(addonMap).forEach(([addonIdKey, entry]) => {
+        const addonId = Number(addonIdKey);
+        if (!Number.isFinite(addonId) || !entry) {
+          return;
+        }
+        const qty = Math.max(0, Math.round(entry.qty ?? 0));
+        if (qty <= 0) {
+          return;
+        }
+        const addonConfig =
+          registry.addons.find((addon) => addon.addonId === addonId) ??
+          catalog.addons.find((addon) => addon.addonId === addonId);
+        const key = addonConfig?.key ?? `addon-${addonId}`;
+        totals.set(key, (totals.get(key) ?? 0) + qty);
+      });
+    });
+    return totals;
+  }, [catalog.addons, freeAddonsByChannel, registry.addons]);
+
+  const freeCocktailTotal = useMemo(() => {
+    let total = 0;
+    Object.entries(freeAddonsByChannel).forEach(([_, addonMap]) => {
+      Object.entries(addonMap).forEach(([addonIdKey, entry]) => {
+        const addonId = Number(addonIdKey);
+        if (!Number.isFinite(addonId) || !entry) {
+          return;
+        }
+        const qty = Math.max(0, Math.round(entry.qty ?? 0));
+        if (qty <= 0) {
+          return;
+        }
+        const addonConfig =
+          registry.addons.find((addon) => addon.addonId === addonId) ??
+          catalog.addons.find((addon) => addon.addonId === addonId);
+        const keyLower = addonConfig?.key?.toLowerCase() ?? '';
+        const nameLower = addonConfig?.name?.toLowerCase() ?? '';
+        if (keyLower.includes('cocktail') || nameLower.includes('cocktail')) {
+          total += qty;
+        }
+      });
+    });
+    return total;
+  }, [catalog.addons, freeAddonsByChannel, registry.addons]);
+
+  const freeBrunchTotal = useMemo(() => {
+    let total = 0;
+    Object.entries(freeAddonsByChannel).forEach(([_, addonMap]) => {
+      Object.entries(addonMap).forEach(([addonIdKey, entry]) => {
+        const addonId = Number(addonIdKey);
+        if (!Number.isFinite(addonId) || !entry) {
+          return;
+        }
+        const qty = Math.max(0, Math.round(entry.qty ?? 0));
+        if (qty <= 0) {
+          return;
+        }
+        const addonConfig =
+          registry.addons.find((addon) => addon.addonId === addonId) ??
+          catalog.addons.find((addon) => addon.addonId === addonId);
+        const keyLower = addonConfig?.key?.toLowerCase() ?? '';
+        const nameLower = addonConfig?.name?.toLowerCase() ?? '';
+        if (keyLower.includes('brunch') || nameLower.includes('brunch')) {
+          total += qty;
+        }
+      });
+    });
+    return total;
+  }, [catalog.addons, freeAddonsByChannel, registry.addons]);
+
+  const hasFreeNoteValidationError = useMemo(() => {
+    const peopleInvalid = Object.values(freePeopleByChannel).some(
+      (entry) => entry && entry.qty > 0 && entry.note.trim().length === 0,
+    );
+    if (peopleInvalid) {
+      return true;
+    }
+    return Object.values(freeAddonsByChannel).some((addonMap) =>
+      Object.values(addonMap).some((entry) => entry && entry.qty > 0 && entry.note.trim().length === 0),
+    );
+  }, [freeAddonsByChannel, freePeopleByChannel]);
 
   const flushMetrics = useCallback(async (): Promise<boolean> => {
     const activeCounterId = counterId;
@@ -3169,8 +3772,14 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       brunchAttended = hasBrunchData ? Math.max(0, Math.round(brunchBucket.attended ?? 0)) : 0;
     }
 
-    const normalCount = Math.max(0, peopleAttended - cocktailsAttended - brunchAttended);
-    const computedTotalPeople = normalCount + cocktailsAttended + brunchAttended;
+    const cocktailsCountWithFree = Math.max(0, Math.round(cocktailsAttended + freeCocktailTotal));
+    const brunchCountWithFree = Math.max(
+      0,
+      Math.round((hasBrunchData ? brunchAttended : 0) + freeBrunchTotal),
+    );
+    const totalPeopleWithFree = Math.max(0, Math.round(peopleAttended + totalFreePeople));
+    const normalCount = Math.max(0, totalPeopleWithFree - cocktailsCountWithFree - brunchCountWithFree);
+    const computedTotalPeople = normalCount + cocktailsCountWithFree + brunchCountWithFree;
 
     if (
       computedTotalPeople === 0 &&
@@ -3186,8 +3795,8 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       totalPeople: computedTotalPeople,
       isOpenBar: true,
       normalCount,
-      cocktailsCount: cocktailsAttended,
-      brunchCount: hasBrunchData ? brunchAttended : 0,
+      cocktailsCount: cocktailsCountWithFree,
+      brunchCount: brunchCountWithFree,
     };
 
     const creationPayload = {
@@ -3241,8 +3850,8 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       );
       const existingOpenBar = existingVenues.find((venue) => venue.isOpenBar) ?? existingVenues[0];
       const existingBrunch = Math.max(existingOpenBar?.brunchCount ?? 0, 0);
-      const brunchCount = hasBrunchData ? brunchAttended : existingBrunch;
-      const totalPeople = normalCount + cocktailsAttended + brunchCount;
+      const brunchCount = brunchCountWithFree > 0 ? brunchCountWithFree : existingBrunch;
+      const totalPeople = normalCount + cocktailsCountWithFree + brunchCount;
 
       const openBarVenue = {
         orderIndex: 1,
@@ -3250,7 +3859,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
         totalPeople,
         isOpenBar: true,
         normalCount,
-        cocktailsCount: cocktailsAttended,
+        cocktailsCount: cocktailsCountWithFree,
         brunchCount,
       };
 
@@ -3281,7 +3890,16 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       // eslint-disable-next-line no-console
       console.warn('Failed to upsert night report from counter summary:', message || creationErrorMessage || error);
     }
-  }, [dispatch, nightReportSummaries, registry.addons, registry.counter, registry.summary]);
+  }, [
+    dispatch,
+    freeBrunchTotal,
+    freeCocktailTotal,
+    nightReportSummaries,
+    registry.addons,
+    registry.counter,
+    registry.summary,
+    totalFreePeople,
+  ]);
 
   const handleSaveAndExit = useCallback(async () => {
     const saved = await flushMetrics();
@@ -3759,7 +4377,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     };
     const availableCurrencies: CashCurrency[] = ['PLN', 'EUR'];
 
-    const renderTicketChips = () => (
+    const renderTicketChips = (extra?: JSX.Element | JSX.Element[]) => (
       <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
         {WALK_IN_DISCOUNT_OPTIONS.map((option) => {
           const selected = walkInDiscountSelection.includes(option);
@@ -3775,6 +4393,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
             />
           );
         })}
+        {extra}
       </Stack>
     );
 
@@ -3878,6 +4497,38 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       );
     };
 
+    const freePeopleEntry = freePeopleByChannel[channel.id];
+    const freePeopleActive = freePeopleEntry != null;
+    const freePeopleQty = Math.max(0, Math.round(freePeopleEntry?.qty ?? 0));
+    const freePeopleNote = freePeopleEntry?.note ?? '';
+    const freePeopleNoteError =
+      freePeopleActive && freePeopleQty > 0 && freePeopleNote.trim().length === 0;
+    const freeAddonEntries = freeAddonsByChannel[channel.id] ?? {};
+
+    const handleFreePeopleToggle = () => {
+      if (disableInputs) {
+        return;
+      }
+    if (freePeopleActive) {
+      setFreePeopleQty(channel.id, 0);
+      setFreePeopleNote(channel.id, '');
+    } else {
+      ensureFreePeopleEntry(channel.id);
+    }
+  };
+
+  const freePeopleChip = (
+    <Chip
+      key="free-walk-in"
+      label="Free"
+      size="small"
+      variant={freePeopleActive ? 'filled' : 'outlined'}
+      color={freePeopleActive ? 'info' : 'default'}
+      onClick={handleFreePeopleToggle}
+      disabled={disableInputs}
+      />
+    );
+
     return (
       <Card
         variant="outlined"
@@ -3913,7 +4564,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
               <Stack spacing={1.5}>
                 <Stack spacing={0.75}>
                   <Typography variant="subtitle2">Tickets Type</Typography>
-                  {renderTicketChips()}
+                  {renderTicketChips(freePeopleChip)}
                   {walkInDiscountSelection.length === 0 && (
                     <Typography variant="caption" color="text.secondary">
                       Select a ticket type to start recording.
@@ -4185,16 +4836,114 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                     })}
                   </Box>
                 )}
+                {freePeopleActive && (
+                  <Stack spacing={0.75}>
+                    <Typography variant="subtitle2">Free Guests</Typography>
+                    {renderLocalStepper(
+                      `${channel.id}-after-cutoff-free`,
+                      'Free guests',
+                      freePeopleQty,
+                      (nextValue) => setFreePeopleQty(channel.id, nextValue),
+                      disableInputs,
+                      0,
+                    )}
+                    <TextField
+                      value={freePeopleNote}
+                      onChange={(event) => setFreePeopleNote(channel.id, event.target.value)}
+                      size="small"
+                      disabled={disableInputs}
+                      required={freePeopleQty > 0}
+                      error={freePeopleNoteError}
+                      helperText={freePeopleNoteError ? 'Add a short reason for the free entry' : ' '}
+                      label="Free guest reason"
+                      placeholder="e.g., Birthday guest"
+                      multiline
+                      minRows={1}
+                    />
+                  </Stack>
+                )}
+                {freePeopleActive && addons.length > 0 && (
+                  <Stack spacing={0.75}>
+                    <Typography variant="subtitle2">Free Add-ons</Typography>
+                    {addons.map((addon) => {
+                      const numericAddonId =
+                        typeof addon.addonId === 'number' ? addon.addonId : Number(addon.addonId);
+                      if (!Number.isFinite(numericAddonId)) {
+                        return null;
+                      }
+                      const normalizedAddonId = numericAddonId;
+                      const freeAddonEntry = freeAddonEntries[normalizedAddonId] ?? { qty: 0, note: '' };
+                      const freeAddonQty = Math.max(0, Math.round(freeAddonEntry.qty ?? 0));
+                      const freeAddonNote = freeAddonEntry.note ?? '';
+                      const freeAddonNoteError = freeAddonQty > 0 && freeAddonNote.trim().length === 0;
+                      return (
+                        <Stack key={`${channel.id}-after-free-addon-${normalizedAddonId}`} spacing={0.5}>
+                          {renderLocalStepper(
+                            `${channel.id}-after-free-addon-${normalizedAddonId}`,
+                            `Free ${addon.name}`,
+                            freeAddonQty,
+                            (nextValue) => setFreeAddonQty(channel.id, normalizedAddonId, nextValue),
+                            disableInputs,
+                            0,
+                          )}
+                          <TextField
+                            value={freeAddonNote}
+                            onChange={(event) =>
+                              setFreeAddonNote(channel.id, normalizedAddonId, event.target.value)
+                            }
+                            size="small"
+                            disabled={disableInputs}
+                            required={freeAddonQty > 0}
+                            error={freeAddonNoteError}
+                            helperText={
+                              freeAddonNoteError ? `Add a reason for the free ${addon.name.toLowerCase()}` : ' '
+                            }
+                            label={`Free ${addon.name} reason`}
+                            placeholder="e.g., Staff friend"
+                            multiline
+                            minRows={1}
+                          />
+                        </Stack>
+                      );
+                    })}
+                  </Stack>
+                )}
               </Stack>
             ) : (
               <>
                 {isWalkInAttended && (
                   <Stack spacing={0.75}>
                     <Typography variant="subtitle2">Tickets Type</Typography>
-                    {renderTicketChips()}
+                    {renderTicketChips(freePeopleChip)}
                   </Stack>
                 )}
                 {renderStepper('People', peopleMetric, disableInputs)}
+                {isWalkInAttended && freePeopleActive && (
+                  <Stack spacing={0.75}>
+                    <Typography variant="subtitle2">Free Guests</Typography>
+                    {renderLocalStepper(
+                      `${channel.id}-free-people`,
+                      'Free guests',
+                      freePeopleQty,
+                      (nextValue) => setFreePeopleQty(channel.id, nextValue),
+                      disableInputs,
+                      0,
+                    )}
+                    <TextField
+                      value={freePeopleNote}
+                      onChange={(event) => setFreePeopleNote(channel.id, event.target.value)}
+                      size="small"
+                      disabled={disableInputs}
+                      required={freePeopleQty > 0}
+                      error={freePeopleNoteError}
+                      helperText={freePeopleNoteError ? 'Add a short reason for the free entry' : ' '}
+                      label="Free guest reason"
+                      placeholder="e.g., Birthday guest"
+                      multiline
+                      minRows={1}
+                    />
+                  </Stack>
+                )}
                 {isWalkInAttended && (
                   <Stack spacing={0.5}>
                     <Typography variant="subtitle2">Total Collected</Typography>
@@ -4299,13 +5048,72 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
                         : undefined;
                     const stepperMax = isCocktail ? undefined : calculatedMax;
                     const addonKey = `${channel.id}-${bucket.label}-addon-${normalizedAddonId}`;
+                    const freeAddonEntry = freeAddonEntries[normalizedAddonId] ?? { qty: 0, note: '' };
+                    const freeAddonQty = Math.max(0, Math.round(freeAddonEntry.qty ?? 0));
+                    const freeAddonNote = freeAddonEntry.note ?? '';
+                    const freeAddonActive = freeAddonQty > 0 || freeAddonNote.length > 0;
+                    const freeAddonNoteError = freeAddonQty > 0 && freeAddonNote.trim().length === 0;
+                    const handleFreeAddonToggle = () => {
+                      if (disableInputs) {
+                        return;
+                      }
+                      if (freeAddonActive) {
+                        setFreeAddonQty(channel.id, normalizedAddonId, 0);
+                        setFreeAddonNote(channel.id, normalizedAddonId, '');
+                      } else {
+                        ensureFreeAddonEntry(channel.id, normalizedAddonId);
+                      }
+                    };
                     return (
-                      <Stack key={addonKey} spacing={0.5}>
-                        {renderStepper(addon.name, metric, disableInputs, 0, stepperMax, 1)}
+                      <Stack key={addonKey} spacing={0.75}>
+                        <Stack direction="row" spacing={0.75} alignItems="flex-start">
+                          <Box sx={{ flexGrow: 1 }}>
+                            {renderStepper(addon.name, metric, disableInputs, 0, stepperMax, 1)}
+                          </Box>
+                          {isWalkInAttended && (
+                            <Chip
+                              label="Free"
+                              size="small"
+                              color={freeAddonActive ? 'info' : 'default'}
+                              variant={freeAddonActive ? 'filled' : 'outlined'}
+                              onClick={handleFreeAddonToggle}
+                              disabled={disableInputs}
+                            />
+                          )}
+                        </Stack>
                         {addon.maxPerAttendee != null && !isCocktail && (
                           <Typography variant="caption" color="text.secondary">
                             Max {addon.maxPerAttendee} per attendee (cap {calculatedMax ?? 0})
                           </Typography>
+                        )}
+                        {isWalkInAttended && freeAddonActive && (
+                          <Stack spacing={0.5}>
+                            {renderLocalStepper(
+                              `${channel.id}-${normalizedAddonId}-free`,
+                              `Free ${addon.name}`,
+                              freeAddonQty,
+                              (nextValue) => setFreeAddonQty(channel.id, normalizedAddonId, nextValue),
+                              disableInputs,
+                              0,
+                            )}
+                            <TextField
+                              value={freeAddonNote}
+                              onChange={(event) =>
+                                setFreeAddonNote(channel.id, normalizedAddonId, event.target.value)
+                              }
+                              size="small"
+                              disabled={disableInputs}
+                              required={freeAddonQty > 0}
+                              error={freeAddonNoteError}
+                              helperText={
+                                freeAddonNoteError ? `Add a reason for the free ${addon.name.toLowerCase()}` : ' '
+                              }
+                              label={`Free ${addon.name} reason`}
+                              placeholder="e.g., Staff friend"
+                              multiline
+                              minRows={1}
+                            />
+                          </Stack>
                         )}
                       </Stack>
                     );
@@ -4713,7 +5521,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
           onClick={() => {
             void handleSaveAndExit();
           }}
-          disabled={disableNav}
+          disabled={disableNav || hasFreeNoteValidationError}
           sx={{
             textTransform: 'none',
             minWidth: 'auto',
@@ -4724,11 +5532,22 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
         </Button>
       );
 
+      const saveControl = (
+        <Stack spacing={0.5} alignItems="flex-start">
+          {saveButton}
+          {hasFreeNoteValidationError && (
+            <Typography variant="caption" color="error">
+              Add a reason for each free entry before saving.
+            </Typography>
+          )}
+        </Stack>
+      );
+
       if (isMobileScreen) {
         return (
           <Stack direction="row" spacing={1} alignItems="center">
             {backButton}
-            {saveButton}
+            {saveControl}
           </Stack>
         );
       }
@@ -4736,7 +5555,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       return (
         <Stack direction="row" spacing={1} alignItems="center">
           {backButton}
-          {saveButton}
+          {saveControl}
         </Stack>
       );
     }
@@ -4781,7 +5600,12 @@ type SummaryRowOptions = {
   showNonShow?: boolean;
 };
 
-  const summaryRow = (label: string, bucket: CounterSummaryBucket, options: SummaryRowOptions = {}) => {
+  const summaryRow = (
+    label: string,
+    bucket: CounterSummaryBucket,
+    options: SummaryRowOptions = {},
+    extras: { freeQty?: number; freeKey?: string } = {},
+  ) => {
     const { showBefore = true, showAfter = true, showNonShow = true } = options;
 
     const chips: JSX.Element[] = [];
@@ -4807,6 +5631,10 @@ type SummaryRowOptions = {
 
     if (chips.length === 0) {
       chips.push(<Chip key="no-bookings" label="No Bookings" size="small" variant="outlined" />);
+    }
+    if ((extras.freeQty ?? 0) > 0) {
+      const freeKey = extras.freeKey ?? `free-${label}`;
+      chips.push(<Chip key={freeKey} label={`Free: ${extras.freeQty}`} size="small" color="info" />);
     }
 
     return (
@@ -5016,11 +5844,19 @@ type SummaryRowOptions = {
                       <Typography variant="subtitle1" fontWeight={600} gutterBottom>
                         {item.channelName}
                       </Typography>
-                      {summaryRow('People', item.people, {
-                        showBefore: showBeforeForChannel,
-                        showAfter: true,
-                        showNonShow: !isAfterCutoffChannel,
-                      })}
+                      {summaryRow(
+                        'People',
+                        item.people,
+                        {
+                          showBefore: showBeforeForChannel,
+                          showAfter: true,
+                          showNonShow: !isAfterCutoffChannel,
+                        },
+                        {
+                          freeQty: freePeopleTotalsByChannel.get(item.channelId) ?? 0,
+                          freeKey: `channel-${item.channelId}-people-free`,
+                        },
+                      )}
                       {channelCashEntries && channelCashEntries.length > 0 && (
                         <Typography
                           variant="body2"
@@ -5036,11 +5872,20 @@ type SummaryRowOptions = {
                       <Divider sx={{ my: 1 }} />
                       {addonBuckets.map((addon) => (
                         <Box key={addon.key} sx={{ mb: 1 }}>
-                          {summaryRow(addon.name, addon, {
-                            showBefore: showBeforeForChannel,
-                            showAfter: true,
-                            showNonShow: !isAfterCutoffChannel,
-                          })}
+                          {summaryRow(
+                            addon.name,
+                            addon,
+                            {
+                              showBefore: showBeforeForChannel,
+                              showAfter: true,
+                              showNonShow: !isAfterCutoffChannel,
+                            },
+                            {
+                              freeQty:
+                                freeAddonsTotalsByChannel.get(item.channelId)?.get(addon.addonId) ?? 0,
+                              freeKey: `channel-${item.channelId}-addon-${addon.addonId}-free`,
+                            },
+                          )}
                         </Box>
                       ))}
                     </CardContent>
@@ -5054,7 +5899,12 @@ type SummaryRowOptions = {
                   <Typography variant="subtitle1" fontWeight={600} gutterBottom>
                     Totals
                   </Typography>
-                  {summaryRow('People', summaryTotals.people, { showBefore: false, showAfter: false, showNonShow: true })}
+                  {summaryRow(
+                    'People',
+                    summaryTotals.people,
+                    { showBefore: false, showAfter: false, showNonShow: true },
+                    { freeQty: totalFreePeople, freeKey: 'totals-people-free' },
+                  )}
                   {cashCollectionSummary.formattedTotals.length > 0 && (
                     <Typography
                       variant="body2"
@@ -5070,7 +5920,15 @@ type SummaryRowOptions = {
                   <Divider sx={{ my: 1 }} />
                   {addonTotalsToShow.map((addon) => (
                     <Box key={addon.key} sx={{ mb: 1 }}>
-                      {summaryRow(addon.name, addon, { showBefore: false, showAfter: false, showNonShow: true })}
+                      {summaryRow(
+                        addon.name,
+                        addon,
+                        { showBefore: false, showAfter: false, showNonShow: true },
+                        {
+                          freeQty: freeAddonTotalsByKey.get(addon.key) ?? 0,
+                          freeKey: `totals-addon-${addon.key}-free`,
+                        },
+                      )}
                     </Box>
                   ))}
                 </CardContent>
