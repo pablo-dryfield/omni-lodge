@@ -1388,7 +1388,7 @@ const VenueNumbersList = () => {
                   ) : (
                     <Grid container spacing={1.5}>
                       <Grid size={{ xs: 12, sm: 6, md: 4 }} sx={{ width: "100%" }}>
-                        {metricCard("Guests", venueTotalRaw, "primary")}
+                        {metricCard("People", venueTotalRaw, "primary")}
                       </Grid>
                     </Grid>
                   );
