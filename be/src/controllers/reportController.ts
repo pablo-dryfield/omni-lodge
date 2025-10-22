@@ -3,6 +3,7 @@ import { Op } from "sequelize";
 import { Sequelize } from "sequelize-typescript";
 import dayjs from "dayjs";
 import Counter from "../models/Counter.js";
+import CounterChannelMetric from "../models/CounterChannelMetric.js";
 import CounterProduct from "../models/CounterProduct.js";
 import CounterUser from "../models/CounterUser.js";
 import User from "../models/User.js";
@@ -41,6 +42,9 @@ const FULL_ACCESS_ROLE_SLUGS = new Set([
   "assistantmanager",
 ]);
 
+const COMMISSION_RATE_PER_ATTENDEE = 6;
+const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-09");
+
 export const getCommissionByDateRange = async (req: Request, res: Response): Promise<void> => {
   try {
     const { startDate, endDate, scope } = req.query;
@@ -50,44 +54,97 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       return;
     }
 
-    const start = dayjs(startDate as string).startOf("day").toDate();
-    const end = dayjs(endDate as string).endOf("day").toDate();
+    const start = dayjs(startDate as string).startOf("day");
+    const end = dayjs(endDate as string).endOf("day");
 
-    const commissionReport = await Counter.findAll({
-      attributes: [
-        "id",
-        "date",
-        [Sequelize.fn("SUM", Sequelize.col("products.quantity")), "totalQuantity"],
-      ],
-      include: [
-        {
-          model: CounterProduct,
-          as: "products",
-          attributes: [],
-        },
-      ],
+    const counters = await Counter.findAll({
+      attributes: ["id", "date"],
       where: {
         date: {
-          [Op.between]: [start, end],
+          [Op.between]: [start.toDate(), end.toDate()],
         },
       },
-      group: ["Counters.id"],
       order: [["date", "ASC"]],
     });
 
-    if (!commissionReport || commissionReport.length === 0) {
+    if (counters.length === 0) {
       res.status(404).json([{ message: "No data found for the specified date range" }]);
       return;
     }
 
-    const totalStaffCount = await CounterUser.findAll({
-      attributes: ["userId"],
-      include: [
-        {
-          model: Counter,
-          as: "counter",
-          attributes: ["date"],
+    const counterMetaById = new Map<number, { dateKey: string; isNewSystem: boolean }>();
+    const legacyCounterIds: number[] = [];
+    const newSystemCounterIds: number[] = [];
+
+    counters.forEach((counter) => {
+      const rawDate = counter.getDataValue("date");
+      if (!rawDate) {
+        return;
+      }
+
+      const counterDate = dayjs(rawDate);
+      const dateKey = counterDate.format("YYYY-MM-DD");
+      const isNewSystem = !counterDate.isBefore(NEW_COUNTER_SYSTEM_START, "day");
+
+      counterMetaById.set(counter.id, { dateKey, isNewSystem });
+
+      if (isNewSystem) {
+        newSystemCounterIds.push(counter.id);
+      } else {
+        legacyCounterIds.push(counter.id);
+      }
+    });
+
+    const legacyTotalsByCounter = new Map<number, number>();
+    if (legacyCounterIds.length > 0) {
+      const legacyRows = await CounterProduct.findAll({
+        attributes: [
+          "counterId",
+          [Sequelize.fn("SUM", Sequelize.col("quantity")), "totalQuantity"],
+        ],
+        where: {
+          counterId: {
+            [Op.in]: legacyCounterIds,
+          },
         },
+        group: ["counterId"],
+      });
+
+      legacyRows.forEach((row) => {
+        const counterId = row.getDataValue("counterId");
+        const totalQuantity = Number(row.get("totalQuantity") ?? 0);
+        legacyTotalsByCounter.set(counterId, totalQuantity);
+      });
+    }
+
+    const newSystemTotalsByCounter = new Map<number, number>();
+    if (newSystemCounterIds.length > 0) {
+      const metricRows = await CounterChannelMetric.findAll({
+        attributes: [
+          "counterId",
+          [Sequelize.fn("SUM", Sequelize.col("qty")), "attendedQty"],
+        ],
+        where: {
+          counterId: {
+            [Op.in]: newSystemCounterIds,
+          },
+          kind: "people",
+          tallyType: "attended",
+        },
+        group: ["counterId"],
+      });
+
+      metricRows.forEach((row) => {
+        const counterId = row.getDataValue("counterId");
+        const attendedQty = Number(row.get("attendedQty") ?? 0);
+        newSystemTotalsByCounter.set(counterId, attendedQty);
+      });
+    }
+
+    const counterIds = counters.map((counter) => counter.id);
+    const staffRecords = await CounterUser.findAll({
+      attributes: ["counterId", "userId", "role"],
+      include: [
         {
           model: User,
           as: "counterUser",
@@ -95,23 +152,29 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         },
       ],
       where: {
-        "$counter.date$": {
-          [Op.between]: [start, end],
+        counterId: {
+          [Op.in]: counterIds,
         },
       },
     });
 
-    if (totalStaffCount.length === 0) {
+    if (staffRecords.length === 0) {
       res.status(404).json([{ message: "No staff members found for the specified date range" }]);
       return;
     }
 
     const commissionDataByUser = new Map<number, CommissionSummary>();
-    const staffByDate = new Map<string, typeof totalStaffCount>();
+    const staffByCounter = new Map<number, CounterUser[]>();
 
-    totalStaffCount.forEach((staff) => {
-      const userId = staff.dataValues.userId;
-      const firstName = staff.dataValues.counterUser?.dataValues?.firstName ?? `User ${userId}`;
+    staffRecords.forEach((staff) => {
+      const counterId = staff.counterId;
+      if (!staffByCounter.has(counterId)) {
+        staffByCounter.set(counterId, []);
+      }
+      staffByCounter.get(counterId)!.push(staff);
+
+      const userId = staff.userId;
+      const firstName = staff.counterUser?.firstName ?? `User ${userId}`;
 
       if (!commissionDataByUser.has(userId)) {
         commissionDataByUser.set(userId, {
@@ -121,17 +184,6 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           breakdown: [],
         });
       }
-
-      const counterDate: Date | undefined = staff.dataValues.counter?.date;
-      if (!counterDate) {
-        return;
-      }
-
-      const dateKey = dayjs(counterDate).format("YYYY-MM-DD");
-      if (!staffByDate.has(dateKey)) {
-        staffByDate.set(dateKey, []);
-      }
-      staffByDate.get(dateKey)!.push(staff);
     });
 
     const dailyAggregates = new Map<string, DailyAggregate>();
@@ -148,28 +200,29 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       return aggregate;
     };
 
-    commissionReport.forEach((report) => {
-      const reportDate: Date | undefined = report.dataValues.date;
-      if (!reportDate) {
+    counters.forEach((counter) => {
+      const meta = counterMetaById.get(counter.id);
+      if (!meta) {
         return;
       }
 
-      const dateKey = dayjs(reportDate).format("YYYY-MM-DD");
-      const totalQuantity = Number(report.get("totalQuantity") ?? 0);
+      const customers = meta.isNewSystem
+        ? newSystemTotalsByCounter.get(counter.id) ?? 0
+        : legacyTotalsByCounter.get(counter.id) ?? 0;
 
-      const aggregate = getOrCreateDailyAggregate(dateKey);
-      aggregate.totalCustomers += totalQuantity;
+      const aggregate = getOrCreateDailyAggregate(meta.dateKey);
+      aggregate.totalCustomers += customers;
 
-      const staffForDay = staffByDate.get(dateKey) ?? [];
-      if (staffForDay.length === 0 || totalQuantity === 0) {
+      const staffForCounter = staffByCounter.get(counter.id) ?? [];
+      if (staffForCounter.length === 0 || customers === 0) {
         return;
       }
 
-      const totalCommissionForDay = totalQuantity * 6;
-      const commissionPerStaff = totalCommissionForDay / staffForDay.length;
+      const totalCommissionForCounter = customers * COMMISSION_RATE_PER_ATTENDEE;
+      const commissionPerStaff = totalCommissionForCounter / staffForCounter.length;
 
-      staffForDay.forEach((staff) => {
-        const userId = staff.dataValues.userId;
+      staffForCounter.forEach((staff) => {
+        const userId = staff.userId;
         const commissionSummary = commissionDataByUser.get(userId);
         if (!commissionSummary) {
           return;
@@ -185,7 +238,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         };
 
         guideBreakdown.commission += commissionPerStaff;
-        guideBreakdown.customers += totalQuantity;
+        guideBreakdown.customers += customers;
 
         aggregate.guides.set(userId, guideBreakdown);
       });
