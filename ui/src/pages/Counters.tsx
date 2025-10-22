@@ -3198,25 +3198,33 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       venues: [baseVenue],
     };
 
+    const existingSummary =
+      nightReportSummaries.find((report) => report.counterId === counterRecord.id) ?? null;
+    let reportId = existingSummary?.id ?? null;
     let creationErrorMessage: string | null = null;
-    try {
-      await dispatch(createNightReport(creationPayload)).unwrap();
-      return;
-    } catch (error) {
-      creationErrorMessage = typeof error === 'string' ? error : (error as Error)?.message ?? '';
-      if (!creationErrorMessage.toLowerCase().includes('night report already exists')) {
-        // eslint-disable-next-line no-console
-        console.warn('Failed to auto-create night report from counter summary:', creationErrorMessage || error);
+
+    if (!reportId) {
+      try {
+        await dispatch(createNightReport(creationPayload)).unwrap();
         return;
+      } catch (error) {
+        creationErrorMessage = typeof error === 'string' ? error : (error as Error)?.message ?? '';
+        if (!(creationErrorMessage ?? '').toLowerCase().includes('night report already exists')) {
+          // eslint-disable-next-line no-console
+          console.warn('Failed to auto-create night report from counter summary:', creationErrorMessage || error);
+          return;
+        }
       }
     }
 
     try {
-      const summariesResponse = await axiosInstance.get<ServerResponse<NightReportSummary>>('/nightReports', {
-        params: { counterId: counterRecord.id },
-        withCredentials: true,
-      });
-      const reportId = summariesResponse.data?.[0]?.data?.[0]?.id ?? null;
+      if (!reportId) {
+        const summariesResponse = await axiosInstance.get<ServerResponse<NightReportSummary>>('/nightReports', {
+          params: { counterId: counterRecord.id },
+          withCredentials: true,
+        });
+        reportId = summariesResponse.data?.[0]?.data?.[0]?.id ?? null;
+      }
       if (!reportId) {
         return;
       }
@@ -3274,7 +3282,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       // eslint-disable-next-line no-console
       console.warn('Failed to upsert night report from counter summary:', message || creationErrorMessage || error);
     }
-  }, [dispatch, registry.addons, registry.counter, registry.summary]);
+  }, [dispatch, nightReportSummaries, registry.addons, registry.counter, registry.summary]);
 
   const handleSaveAndExit = useCallback(async () => {
     const saved = await flushMetrics();
