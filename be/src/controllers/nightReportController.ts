@@ -104,14 +104,25 @@ function canManageReport(report: NightReport, actorId: number, roleSlug: string 
 
 const buildPhotoDownloadUrl = (req: AuthenticatedRequest, reportId: number, photoId: number): string => {
   const basePath = `${req.baseUrl ?? ''}`.replace(/\/+$/, '');
+  const isProduction = (process.env.NODE_ENV ?? '').trim() === 'production';
+
   let normalizedBase = basePath;
   if (!normalizedBase) {
-    normalizedBase = '/api/nightReports';
+    normalizedBase = isProduction ? '/nightReports' : '/api/nightReports';
+  } else if (isProduction) {
+    normalizedBase = normalizedBase.replace(/^\/?api(\/|$)/i, '/');
   } else if (!normalizedBase.startsWith('/api')) {
     normalizedBase = normalizedBase.startsWith('/')
       ? `/api${normalizedBase}`
       : `/api/${normalizedBase}`;
   }
+
+  if (!normalizedBase.startsWith('/')) {
+    normalizedBase = `/${normalizedBase}`;
+  }
+
+  normalizedBase = normalizedBase.replace(/\/+$/, '') || (isProduction ? '/nightReports' : '/api/nightReports');
+
   return `${normalizedBase}/${reportId}/photos/${photoId}/download`;
 };
 
