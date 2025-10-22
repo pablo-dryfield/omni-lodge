@@ -113,8 +113,8 @@ const LoginPage: React.FC = () => {
 
         <form onSubmit={isSignup ? handleSignUp : handleLogin} style={{ textAlign: 'left' }}>
           <TextInput
-            label="Username or Email"
-            placeholder="Username or Email"
+            label="Username"
+            placeholder="Username"
             value={user}
             onChange={(event: ChangeEvent<HTMLInputElement>) => dispatch(setUserState(event.target.value))}
             leftSection={<IconUser />}
