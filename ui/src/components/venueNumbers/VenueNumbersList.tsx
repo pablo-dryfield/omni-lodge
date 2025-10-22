@@ -1413,22 +1413,39 @@ const VenueNumbersList = () => {
                           })}
                         >
                           <Stack spacing={0.5} alignItems="center" textAlign="center">
+                            {venue.isOpenBar && (
+                              <Stack
+                                direction="row"
+                                alignItems="center"
+                                spacing={0.75}
+                                sx={{
+                                  px: 1.5,
+                                  py: 0.6,
+                                  borderRadius: 999,
+                                  bgcolor: (theme) =>
+                                    theme.palette.mode === "dark"
+                                      ? alpha(theme.palette.info.main, 0.2)
+                                      : alpha(theme.palette.info.main, 0.1),
+                                  border: (theme) => `1px solid ${alpha(theme.palette.info.main, 0.25)}`,
+                                }}
+                              >
+                                <Typography
+                                  component="span"
+                                  variant="subtitle2"
+                                  sx={{
+                                    fontWeight: 700,
+                                    letterSpacing: 0.8,
+                                    color: (theme) => theme.palette.info.main,
+                                    textTransform: "uppercase",
+                                  }}
+                                >
+                                  Open Bar
+                                </Typography>
+                              </Stack>
+                            )}
                             <Typography variant="subtitle1" fontWeight={700}>
                               {`${index + 1}. ${venue.name}`}
                             </Typography>
-                            {venue.isOpenBar && (
-                              <Typography
-                                variant="caption"
-                                color="info.main"
-                                sx={{
-                                  fontWeight: 600,
-                                  letterSpacing: 0.5,
-                                  textTransform: "uppercase",
-                                }}
-                              >
-                                Open Bar
-                              </Typography>
-                            )}
                           </Stack>
                           {detailContent}
                         </Box>
