@@ -29,6 +29,7 @@ import {
 } from './counterMetricUtils.js';
 
 const COUNTER_DATE_FORMAT = 'YYYY-MM-DD';
+const DEFAULT_PRODUCT_NAME = 'Pub Crawl';
 
 const DEFAULT_CHANNEL_ORDER = [
   'Fareharbor',
@@ -159,8 +160,13 @@ export default class CounterRegistryService {
 
     const resolvedProductId = await this.resolveProductId(params.productId);
 
+    const where: WhereOptions<Counter> = {
+      date: normalizedDate,
+      productId: resolvedProductId ?? null,
+    };
+
     const [counter] = await Counter.findOrCreate({
-      where: { date: normalizedDate },
+      where,
       defaults: {
         userId: params.userId,
         productId: resolvedProductId,
@@ -198,9 +204,13 @@ export default class CounterRegistryService {
     return this.buildPayload(context);
   }
 
-  static async getCounterByDate(date: string): Promise<CounterRegistryPayload> {
+  static async getCounterByDate(date: string, productId?: number | null): Promise<CounterRegistryPayload> {
     const normalized = this.normalizeDate(date);
-    const counter = await this.loadCounter({ date: normalized });
+    const where: WhereOptions<Counter> = { date: normalized };
+    if (productId !== undefined) {
+      where.productId = productId ?? null;
+    }
+    const counter = await this.loadCounter(where);
     if (!counter) {
       throw new HttpError(404, 'Counter not found');
     }
@@ -638,8 +648,17 @@ export default class CounterRegistryService {
       }
       return product.id;
     }
-    const fallback = await Product.findOne({ where: { status: true }, order: [['id', 'ASC']] });
-    return fallback ? fallback.id : null;
+    const defaultProduct = await Product.findOne({
+      where: {
+        name: DEFAULT_PRODUCT_NAME,
+        status: { [Op.ne]: false },
+      },
+      order: [['id', 'ASC']],
+    });
+    if (defaultProduct) {
+      return defaultProduct.id;
+    }
+    return null;
   }
 
   static async loadCounter(where: WhereOptions<Counter>) {
@@ -835,3 +854,5 @@ export default class CounterRegistryService {
     };
   }
 }
+
+

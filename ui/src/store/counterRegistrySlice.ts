@@ -70,6 +70,12 @@ type FlushMetricsResult = {
   derivedSummary: CounterSummary | null;
 };
 
+type CounterRegistryError = {
+  message: string;
+  notFound?: boolean;
+};
+
+
 const initialState: CounterRegistryState = {
   loading: false,
   error: null,
@@ -113,7 +119,7 @@ const ingestPayload = (state: CounterRegistryState, payload: CounterRegistryPayl
 export const ensureCounterForDate = createAsyncThunk<
   CounterRegistryPayload,
   EnsureCounterPayload,
-  { rejectValue: string }
+  { rejectValue: CounterRegistryError }
 >('counterRegistry/ensureCounterForDate', async (params, { rejectWithValue }) => {
   try {
     const response = await axiosInstance.post<CounterRegistryPayload>(
@@ -132,12 +138,16 @@ export const ensureCounterForDate = createAsyncThunk<
 
 export const fetchCounterByDate = createAsyncThunk<
   CounterRegistryPayload,
-  string,
-  { rejectValue: string }
->('counterRegistry/fetchCounterByDate', async (date, { rejectWithValue }) => {
+  { date: string; productId?: number | null },
+  { rejectValue: CounterRegistryError }
+>('counterRegistry/fetchCounterByDate', async ({ date, productId }, { rejectWithValue }) => {
   try {
     const response = await axiosInstance.get<CounterRegistryPayload>('/counters', {
-      params: { format: 'registry', date },
+      params: {
+        format: 'registry',
+        date,
+        productId: productId !== undefined ? productId : undefined,
+      },
       withCredentials: true,
     });
     return response.data;
@@ -152,7 +162,7 @@ export const fetchCounterByDate = createAsyncThunk<
 export const updateCounterProduct = createAsyncThunk<
   CounterRegistryPayload,
   UpdateCounterProductArgs,
-  { rejectValue: string }
+  { rejectValue: CounterRegistryError }
 >('counterRegistry/updateProduct', async ({ counterId, productId }, { rejectWithValue }) => {
   try {
     const response = await axiosInstance.patch<CounterRegistryPayload>(
@@ -172,7 +182,7 @@ export const updateCounterProduct = createAsyncThunk<
 export const updateCounterManager = createAsyncThunk<
   CounterRegistryPayload,
   UpdateCounterManagerArgs,
-  { rejectValue: string }
+  { rejectValue: CounterRegistryError }
 >('counterRegistry/updateManager', async ({ counterId, userId }, { rejectWithValue }) => {
   try {
     const response = await axiosInstance.patch<CounterRegistryPayload>(
@@ -192,7 +202,7 @@ export const updateCounterManager = createAsyncThunk<
 export const updateCounterStatus = createAsyncThunk<
   CounterRegistryPayload,
   UpdateCounterStatusArgs,
-  { rejectValue: string }
+  { rejectValue: CounterRegistryError }
 >('counterRegistry/updateStatus', async ({ counterId, status }, { rejectWithValue }) => {
   try {
     const response = await axiosInstance.patch<CounterRegistryPayload>(
@@ -212,7 +222,7 @@ export const updateCounterStatus = createAsyncThunk<
 export const updateCounterNotes = createAsyncThunk<
   CounterRegistryPayload,
   UpdateCounterNotesArgs,
-  { rejectValue: string }
+  { rejectValue: CounterRegistryError }
 >('counterRegistry/updateNotes', async ({ counterId, notes }, { rejectWithValue }) => {
   try {
     const response = await axiosInstance.patch<CounterRegistryPayload>(
@@ -232,7 +242,7 @@ export const updateCounterNotes = createAsyncThunk<
 export const updateCounterStaff = createAsyncThunk<
   CounterRegistryPayload,
   UpdateCounterStaffArgs,
-  { rejectValue: string }
+  { rejectValue: CounterRegistryError }
 >('counterRegistry/updateStaff', async ({ counterId, userIds }, { rejectWithValue }) => {
   try {
     const response = await axiosInstance.patch<CounterRegistryPayload>(
@@ -491,3 +501,9 @@ export const { clearCounter, clearDirtyMetrics, setMetric } = counterRegistrySli
 export const selectCounterRegistry = (state: RootState) => state.counterRegistry;
 
 export default counterRegistrySlice.reducer;
+
+
+
+
+
+

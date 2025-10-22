@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { Op, type WhereOptions } from 'sequelize';
 import { DataType } from 'sequelize-typescript';
 import Product from '../models/Product.js';
 import ProductAddon from '../models/ProductAddon.js';
@@ -20,9 +21,9 @@ export const getAllProducts = async (req: Request, res: Response): Promise<void>
     const format = (req.query.format ?? req.query.view ?? '').toString().toLowerCase();
 
     if (format === 'compact') {
-      const where: Partial<Record<string, unknown>> = {};
+      const where: WhereOptions = {};
       if ((req.query.active ?? '').toString().toLowerCase() === 'true') {
-        where.status = true;
+        where.status = { [Op.ne]: false };
       }
 
       const products = await Product.findAll({

@@ -107,7 +107,7 @@ const BUCKETS: BucketDescriptor[] = [
 ];
 
 const WALK_IN_DISCOUNT_OPTIONS = ['Normal', 'Custom', 'Second Timers', 'Third Timers', 'Half Price', 'Students', 'Group'];
-const WALK_IN_DISCOUNT_NOTE_PREFIX = 'Walk-In Discounts applied:';
+const WALK_IN_DISCOUNT_NOTE_PREFIX = 'Walk-In Tickets:';
 const WALK_IN_CASH_NOTE_PREFIX = 'Cash Collected:';
 const CASH_SNAPSHOT_START = '-- CASH-SNAPSHOT START --';
 const CASH_SNAPSHOT_END = '-- CASH-SNAPSHOT END --';
@@ -809,15 +809,6 @@ const Counters = (props: GenericPageProps) => {
   }, []);
 
   const currentProductId = pendingProductId ?? counterProductId ?? null;
-  const defaultProductId = useMemo(() => {
-    if (catalog.products.length === 0) {
-      return null;
-    }
-    const normalizedDefault =
-      catalog.products.find((product) => product.name?.toLowerCase() === DEFAULT_PRODUCT_NAME.toLowerCase()) ??
-      catalog.products[0] ?? null;
-    return normalizedDefault ? normalizedDefault.id : null;
-  }, [catalog.products]);
 
   const isFinal = counterStatus === 'final';
   const updateCounterStatusSafe = useCallback(
@@ -860,12 +851,6 @@ const Counters = (props: GenericPageProps) => {
     () => (registry.counter ? registry.counter.staff.map((member) => member.userId) : []),
     [registry.counter],
   );
-
-  useEffect(() => {
-    if (!registry.counter && pendingProductId === null && defaultProductId != null) {
-      setPendingProductId(defaultProductId);
-    }
-  }, [registry.counter, pendingProductId, defaultProductId]);
 
   const lastCounterSyncRef = useRef<string | null>(null);
 
@@ -927,38 +912,40 @@ const Counters = (props: GenericPageProps) => {
   }, [isModalOpen]);
 
 const loadCounterForDate = useCallback(
-  async (formattedDate: string) => {
+  async (formattedDate: string, productId: number | null | undefined) => {
     if (!formattedDate) {
-        return;
+      return;
+    }
+    const resolvedProductId = productId ?? null;
+    const requestKey = `${formattedDate}|${resolvedProductId ?? 'null'}`;
+    if (fetchCounterRequestRef.current === requestKey) {
+      return;
+    }
+    fetchCounterRequestRef.current = requestKey;
+    try {
+      await dispatch(fetchCounterByDate({ date: formattedDate, productId: resolvedProductId })).unwrap();
+    } catch (error) {
+      const notFound =
+        error != null &&
+        typeof error === 'object' &&
+        'notFound' in error &&
+        Boolean((error as { notFound?: boolean }).notFound);
+      if (!notFound) {
+        const message =
+          typeof error === 'string'
+            ? error
+            : error instanceof Error
+              ? error.message
+              : 'Failed to load counter';
+        setCounterListError(message);
+      } else {
+        setCounterListError(null);
       }
-      if (fetchCounterRequestRef.current === formattedDate) {
-        return;
-      }
-      fetchCounterRequestRef.current = formattedDate;
-      try {
-        await dispatch(fetchCounterByDate(formattedDate)).unwrap();
-      } catch (error) {
-        const notFound =
-          error != null &&
-          typeof error === 'object' &&
-          'notFound' in error &&
-          Boolean((error as { notFound?: boolean }).notFound);
-        if (!notFound) {
-          const message =
-            typeof error === 'string'
-              ? error
-              : error instanceof Error
-                ? error.message
-                : 'Failed to load counter';
-          setCounterListError(message);
-        } else {
-          setCounterListError(null);
-        }
-        fetchCounterRequestRef.current = null;
-      }
-    },
-    [dispatch],
-  );
+      fetchCounterRequestRef.current = null;
+    }
+  },
+  [dispatch],
+);
 
   const metricsMap = registry.metricsByKey;
   const mergedMetrics = useMemo<MetricCell[]>(() => {
@@ -2561,17 +2548,27 @@ const loadCounterForDate = useCallback(
         const formatted = selectedDate.format(COUNTER_DATE_FORMAT);
         const currentDate = registry.counter?.counter.date ?? null;
         const currentUserId = registry.counter?.counter.userId ?? null;
+        const currentCounterProductId = registry.counter?.counter.productId ?? null;
         const shouldFetch =
           formatted !== currentDate ||
-          (selectedManagerId != null && selectedManagerId !== currentUserId);
+          (selectedManagerId != null && selectedManagerId !== currentUserId) ||
+          (currentProductId ?? null) !== currentCounterProductId;
         if (shouldFetch) {
           fetchCounterRequestRef.current = null;
-          void loadCounterForDate(formatted);
+          void loadCounterForDate(formatted, currentProductId ?? null);
         }
       }
       setIsModalOpen(true);
     },
-    [loadCounterForDate, registry.counter, selectedCounterId, selectedDate, selectedManagerId, setActiveRegistryStep],
+    [
+      currentProductId,
+      loadCounterForDate,
+      registry.counter,
+      selectedCounterId,
+      selectedDate,
+      selectedManagerId,
+      setActiveRegistryStep,
+    ],
   );
 
   const handleCloseModal = useCallback(() => {
@@ -2628,14 +2625,15 @@ const handleViewSummary = useCallback(
     setSummaryPreviewOpen(true);
     setSummaryPreviewLoading(true);
     try {
-      await loadCounterForDate(counterDateValue.format(COUNTER_DATE_FORMAT));
+      const productIdForSummary = counterSummary.product?.id ?? counterProductId ?? null;
+      await loadCounterForDate(counterDateValue.format(COUNTER_DATE_FORMAT), productIdForSummary);
     } catch (error) {
       console.warn('Failed to load counter summary', error);
     } finally {
       setSummaryPreviewLoading(false);
     }
   },
-  [handleCounterSelect, loadCounterForDate],
+  [counterProductId, handleCounterSelect, loadCounterForDate],
 );
 
 useEffect(() => {
@@ -3102,7 +3100,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       }
       if (shouldRefreshCounter) {
         const formatted = selectedDate.format(COUNTER_DATE_FORMAT);
-        await dispatch(fetchCounterByDate(formatted)).unwrap();
+        await dispatch(fetchCounterByDate({ date: formatted, productId: currentProductId ?? null })).unwrap();
       }
       if (shouldFlagList) {
         setShouldRefreshCounterList(true);
@@ -3117,6 +3115,7 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
     computedCounterNotes,
     counterId,
     currentCounterNotes,
+    currentProductId,
     dispatch,
     hasDirtyMetrics,
     registry.dirtyMetricKeys,
@@ -3479,7 +3478,8 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       const ensuredProductId = payload.counter.productId ?? null;
       const ensuredStaffIds = normalizeIdList(payload.staff.map((member) => member.userId));
 
-      fetchCounterRequestRef.current = formatted;
+      const requestKey = `${formatted}|${(pendingProductId ?? ensuredProductId ?? null) ?? 'null'}`;
+      fetchCounterRequestRef.current = requestKey;
 
       if (pendingProductId != null) {
         if (pendingProductId !== ensuredProductId) {
@@ -3652,6 +3652,23 @@ const effectiveSelectedChannelIds = useMemo<number[]>(() => {
       (a.name ?? '').localeCompare(b.name ?? '', undefined, { sensitivity: 'base' }),
     );
   }, [catalog.products, registry.counter]);
+
+  const defaultProductId = useMemo(() => {
+    if (productOptions.length === 0) {
+      return null;
+    }
+    const normalizedDefault =
+      productOptions.find((product) => product.name?.toLowerCase() === DEFAULT_PRODUCT_NAME.toLowerCase()) ??
+      productOptions[0] ??
+      null;
+    return normalizedDefault ? normalizedDefault.id : null;
+  }, [productOptions]);
+
+  useEffect(() => {
+    if (!registry.counter && pendingProductId === null && defaultProductId != null) {
+      setPendingProductId(defaultProductId);
+    }
+  }, [registry.counter, pendingProductId, defaultProductId]);
 
   useEffect(() => {
     if (!counterId || counterProductId) {
@@ -4769,13 +4786,13 @@ type SummaryRowOptions = {
 
     const chips: JSX.Element[] = [];
     if (showBefore && bucket.bookedBefore > 0) {
-      chips.push(<Chip key="before" label={'Before: ' + bucket.bookedBefore} size="small" />);
+      chips.push(<Chip key="before" label={'Booked: ' + bucket.bookedBefore} size="small" />);
     }
     if (showAfter && bucket.bookedAfter > 0) {
       chips.push(
         <Chip
           key="after"
-          label={'After: ' + bucket.bookedAfter}
+          label={'After Cut-Off: ' + bucket.bookedAfter}
           size="small"
           color="info"
         />,
@@ -4785,7 +4802,7 @@ type SummaryRowOptions = {
       chips.push(<Chip key="attended" label={'Attended: ' + bucket.attended} size="small" color="success" />);
     }
     if (showNonShow && bucket.nonShow > 0) {
-      chips.push(<Chip key="non-show" label={'Non-show: ' + bucket.nonShow} size="small" color="warning" />);
+      chips.push(<Chip key="non-show" label={'No-show: ' + bucket.nonShow} size="small" color="warning" />);
     }
 
     if (chips.length === 0) {
@@ -5589,7 +5606,4 @@ type SummaryRowOptions = {
 };
 
 export default Counters;
-
-
-
 
