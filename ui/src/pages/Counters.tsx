@@ -1653,8 +1653,13 @@ const loadCounterForDate = useCallback(
     recalcWalkInTicketDataMap,
     registry.channels,
     registry.counter,
-    walkInChannelIds,
-  ]);
+  walkInChannelIds,
+]);
+
+  const appliedPlatformSelectionRef = useRef<number | null>(null);
+  const appliedAfterCutoffSelectionRef = useRef<number | null>(null);
+  const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([]);
+  const [selectedAfterCutoffChannelIds, setSelectedAfterCutoffChannelIds] = useState<number[]>([]);
 
   const channelHasAnyQty = useCallback(
     (channelId: number) => {
@@ -1701,14 +1706,26 @@ const loadCounterForDate = useCallback(
         const hasFreeAddonQty = Object.values(freeAddonEntries).some(
           (entry) => entry && Math.max(0, Math.round(entry.qty ?? 0)) > 0,
         );
-        if (hasFreeAddonQty) {
-          return true;
-        }
+      if (hasFreeAddonQty) {
+        return true;
+      }
+    }
+
+      if (selectedChannelIds.includes(channelId) || selectedAfterCutoffChannelIds.includes(channelId)) {
+        return true;
       }
 
       return false;
     },
-    [freeAddonsByChannel, freePeopleByChannel, mergedMetrics, walkInCashByChannel, walkInTicketDataByChannel],
+    [
+      freeAddonsByChannel,
+      freePeopleByChannel,
+      mergedMetrics,
+      selectedAfterCutoffChannelIds,
+      selectedChannelIds,
+      walkInCashByChannel,
+      walkInTicketDataByChannel,
+    ],
   );
 
   const channelIdsWithAnyData = useMemo(() => {
@@ -1813,11 +1830,6 @@ const loadCounterForDate = useCallback(
     });
     return results;
   }, [allowedAfterCutoffChannelIds, mergedMetrics, registry.channels]);
-
-  const appliedPlatformSelectionRef = useRef<number | null>(null);
-  const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([]);
-  const [selectedAfterCutoffChannelIds, setSelectedAfterCutoffChannelIds] = useState<number[]>([]);
-  const appliedAfterCutoffSelectionRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!counterId) {
