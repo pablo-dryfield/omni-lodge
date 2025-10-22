@@ -621,6 +621,215 @@ const stripSnapshotFromNote = (note: string): string => {
   sanitized = stripBlock(sanitized, escapedFreeStart, escapedFreeEnd);
   return sanitized.trim();
 };
+
+const aggregateCashTotals = (entry: CashSnapshotEntry): Map<string, number> => {
+  const totals = new Map<string, number>();
+  if (entry.tickets && entry.tickets.length > 0) {
+    entry.tickets.forEach((ticket) => {
+      ticket.currencies.forEach((currency) => {
+        const amount = Number(currency.cash);
+        if (Number.isFinite(amount) && amount > 0) {
+          totals.set(currency.currency, (totals.get(currency.currency) ?? 0) + amount);
+        }
+      });
+    });
+  }
+  const amount = Number(entry.amount);
+  if ((!entry.tickets || entry.tickets.length === 0) && entry.currency && Number.isFinite(amount) && amount > 0) {
+    totals.set(entry.currency, (totals.get(entry.currency) ?? 0) + amount);
+  }
+  return totals;
+};
+
+const formatWalkInSnapshotSummary = (
+  note: string,
+  channels: ChannelConfig[],
+  addons: AddonConfig[],
+): string => {
+  if (!note) {
+    return '';
+  }
+  const walkInChannel = channels.find((channel) => channel.name?.toLowerCase() === WALK_IN_CHANNEL_SLUG);
+  if (!walkInChannel) {
+    return '';
+  }
+
+  const walkInId = walkInChannel.id;
+  const cashMap = extractCashSnapshotMap(note);
+  const freeMap = extractFreeSnapshotMap(note);
+
+  const cashEntry = cashMap.get(walkInId);
+  const freeEntry = freeMap.get(walkInId);
+
+  const ticketNames = new Set<string>();
+  const currencyTotals = new Map<string, number>();
+
+  if (cashEntry) {
+    if (cashEntry.tickets && cashEntry.tickets.length > 0) {
+      cashEntry.tickets.forEach((ticket) => {
+        if (ticket.name) {
+          ticketNames.add(ticket.name);
+        }
+        ticket.currencies.forEach((currency) => {
+          const amount = Number(currency.cash);
+          if (Number.isFinite(amount) && amount > 0) {
+            currencyTotals.set(currency.currency, (currencyTotals.get(currency.currency) ?? 0) + amount);
+          }
+        });
+      });
+    }
+    const fallbackTotals = aggregateCashTotals(cashEntry);
+    fallbackTotals.forEach((amount, currency) => {
+      currencyTotals.set(currency, (currencyTotals.get(currency) ?? 0) + amount);
+    });
+  }
+
+  const addonNameById = new Map<number, string>();
+  addons.forEach((addon) => addonNameById.set(addon.addonId, addon.name));
+
+  const freeParts: string[] = [];
+  if (freeEntry?.people) {
+    const qty = Math.max(0, Math.round(Number(freeEntry.people.qty) || 0));
+    const noteText = (freeEntry.people.note ?? '').toString().trim();
+    if (qty > 0 || noteText.length > 0) {
+      const detail = `${qty}${noteText ? ` - ${noteText}` : ''}`;
+      freeParts.push(`People: ${detail}`);
+    }
+  }
+  if (freeEntry?.addons) {
+    Object.entries(freeEntry.addons).forEach(([addonIdKey, info]) => {
+      const addonId = Number(addonIdKey);
+      if (!Number.isFinite(addonId)) {
+        return;
+      }
+      const qty = Math.max(0, Math.round(Number(info.qty) || 0));
+      const noteText = (info.note ?? '').toString().trim();
+      if (qty <= 0 && noteText.length === 0) {
+        return;
+      }
+      const addonName = addonNameById.get(addonId) ?? `Addon ${addonId}`;
+      const detail = `${qty}${noteText ? ` - ${noteText}` : ''}`;
+      freeParts.push(`${addonName}: ${detail}`);
+    });
+  }
+
+  if (ticketNames.size === 0 && freeParts.length === 0 && currencyTotals.size === 0) {
+    return '';
+  }
+
+  const segments: string[] = [];
+  if (ticketNames.size > 0) {
+    segments.push(`Walk-In Tickets: ${Array.from(ticketNames).join(', ')}`);
+  } else {
+    segments.push('Walk-In Tickets');
+  }
+
+  if (freeParts.length > 0) {
+    segments.push(`Free (${freeParts.join(', ')})`);
+  }
+
+  if (currencyTotals.size > 0) {
+    const cashSummary = Array.from(currencyTotals.entries())
+      .map(([currency, amount]) => `${currency} ${amount.toFixed(2)}`)
+      .join(', ');
+    segments.push(`Cash Collected: ${cashSummary}`);
+  }
+
+  return segments.join(' | ');
+};
+
+const formatCounterSnapshotDetails = (
+  note: string,
+  channels: ChannelConfig[],
+  addons: AddonConfig[],
+): string => {
+  if (!note) {
+    return '';
+  }
+
+  const lines: string[] = [];
+  const walkInSummary = formatWalkInSnapshotSummary(note, channels, addons);
+  if (walkInSummary) {
+    lines.push(walkInSummary);
+  }
+
+  const manual = stripSnapshotFromNote(note);
+  if (manual) {
+    lines.push(manual);
+  }
+
+  const cashMap = extractCashSnapshotMap(note);
+  const freeMap = extractFreeSnapshotMap(note);
+  const addonNameById = new Map<number, string>();
+  addons.forEach((addon) => addonNameById.set(addon.addonId, addon.name));
+  const channelNameById = new Map<number, string>();
+  channels.forEach((channel) => channelNameById.set(channel.id, channel.name ?? `Channel ${channel.id}`));
+
+  cashMap.forEach((entry, channelId) => {
+    const channelName = channelNameById.get(channelId) ?? `Channel ${channelId}`;
+    const totals = aggregateCashTotals(entry);
+    if (totals.size > 0) {
+      const cashSummary = Array.from(totals.entries())
+        .map(([currency, amount]) => `${currency} ${amount.toFixed(2)}`)
+        .join(', ');
+      lines.push(`Cash Collected (${channelName}): ${cashSummary}`);
+    }
+    if (entry.tickets && entry.tickets.length > 0) {
+      const ticketNames = new Set<string>();
+      entry.tickets.forEach((ticket) => {
+        if (ticket.name) {
+          ticketNames.add(ticket.name);
+        }
+      });
+      if (ticketNames.size > 0) {
+        lines.push(`Tickets (${channelName}): ${Array.from(ticketNames).join(', ')}`);
+      }
+    }
+  });
+
+  freeMap.forEach((entry, channelId) => {
+    const channelName = channelNameById.get(channelId) ?? `Channel ${channelId}`;
+    if (entry.people) {
+      const qty = Math.max(0, Math.round(Number(entry.people.qty) || 0));
+      const noteText = (entry.people.note ?? '').toString().trim();
+      if (qty > 0 || noteText.length > 0) {
+        const detail = `${qty}${noteText ? ` - ${noteText}` : ''}`;
+        lines.push(`Free People (${channelName}): ${detail}`);
+      }
+    }
+    if (entry.addons) {
+      Object.entries(entry.addons).forEach(([addonIdKey, info]) => {
+        const addonId = Number(addonIdKey);
+        if (!Number.isFinite(addonId)) {
+          return;
+        }
+        const qty = Math.max(0, Math.round(Number(info.qty) || 0));
+        const noteText = (info.note ?? '').toString().trim();
+        if (qty <= 0 && noteText.length === 0) {
+          return;
+        }
+        const addonName = addonNameById.get(addonId) ?? `Addon ${addonId}`;
+        const detail = `${qty}${noteText ? ` - ${noteText}` : ''}`;
+        lines.push(`Free ${addonName} (${channelName}): ${detail}`);
+      });
+    }
+  });
+
+  return lines.join('\n').trim();
+};
+
+const formatCounterNotePreview = (
+  note: string,
+  channels: ChannelConfig[],
+  addons: AddonConfig[],
+): string => {
+  const summary = formatWalkInSnapshotSummary(note, channels, addons);
+  const manual = stripSnapshotFromNote(note);
+  if (summary && manual) {
+    return `${summary}\n${manual}`;
+  }
+  return summary || manual;
+};
 type RegistryStep = 'details' | 'platforms' | 'reservations' | 'summary';
 
 const STEP_CONFIGS: Array<{ key: RegistryStep; label: string; description: string }> = [
@@ -725,6 +934,16 @@ const Counters = (props: GenericPageProps) => {
   const isMobileScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const catalog = useAppSelector(selectCatalog);
   const registry = useAppSelector(selectCounterRegistry);
+  const combinedAddonList = useMemo(() => {
+    const map = new Map<number, AddonConfig>();
+    registry.addons.forEach((addon) => map.set(addon.addonId, addon));
+    catalog.addons.forEach((addon) => {
+      if (!map.has(addon.addonId)) {
+        map.set(addon.addonId, addon);
+      }
+    });
+    return Array.from(map.values());
+  }, [catalog.addons, registry.addons]);
   const nightReportListState = useAppSelector((state) => state.nightReports.list[0]);
   const session = useAppSelector((state) => state.session);
   const [selectedDate, setSelectedDate] = useState<Dayjs>(dayjs());
@@ -3273,49 +3492,9 @@ useEffect(() => {
       filteredLines.push(line.trimEnd());
     });
 
-    const noteDiscountTokens: string[] = [];
-    WALK_IN_DISCOUNT_OPTIONS.forEach((option) => {
-      if (option === CUSTOM_TICKET_LABEL) {
-        const hasCustom = walkInChannelIds.some((channelId) =>
-          (walkInDiscountsByChannel[channelId] ?? []).includes(CUSTOM_TICKET_LABEL),
-        );
-        if (hasCustom) {
-          noteDiscountTokens.push(CUSTOM_TICKET_LABEL);
-        }
-      } else {
-        const hasOption = walkInChannelIds.some((channelId) =>
-          (walkInDiscountsByChannel[channelId] ?? []).includes(option),
-        );
-        if (hasOption) {
-          noteDiscountTokens.push(option);
-        }
-      }
-    });
-
-    const discountLine =
-      noteDiscountTokens.length > 0
-        ? `${WALK_IN_DISCOUNT_NOTE_PREFIX} ${noteDiscountTokens.join(', ')}`
-        : '';
-    const cashTokens = cashCollectionSummary.formattedTotals.map(
-      (entry) => `${entry.currency} ${entry.formatted}`,
-    );
-    const cashLine =
-      cashTokens.length > 0 ? `${WALK_IN_CASH_NOTE_PREFIX} ${cashTokens.join(', ')}` : '';
-    const autoLineParts: string[] = [];
-    if (discountLine) {
-      autoLineParts.push(discountLine);
-    }
-    if (cashLine) {
-      autoLineParts.push(cashLine);
-    }
-    const autoLine = autoLineParts.join(' | ');
-
     const sections: string[] = [];
     if (filteredLines.length > 0) {
       sections.push(filteredLines.join('\n'));
-    }
-    if (autoLine) {
-      sections.push(autoLine);
     }
 
     const snapshotChannels: Record<string, CashSnapshotEntry> = {};
@@ -3478,7 +3657,6 @@ useEffect(() => {
 
     return sections.join('\n');
   }, [
-    cashCollectionSummary,
     cashCurrencyByChannel,
     cashDetailsByChannel,
     counterNotes,
@@ -3488,7 +3666,6 @@ useEffect(() => {
     walkInChannelIds,
     attendedPeopleByChannel,
     walkInTicketDataByChannel,
-    walkInDiscountsByChannel,
     freePeopleByChannel,
     freeAddonsByChannel,
   ]);
@@ -5826,6 +6003,7 @@ type SummaryRowOptions = {
 
   const renderSummaryStep = () => {
     const { byChannel: summaryChannels, totals: summaryTotals } = summaryData;
+  const beautifiedNotes = formatCounterSnapshotDetails(counterNotes, registry.channels, combinedAddonList);
 
     if (summaryChannels.length === 0) {
       return (
@@ -5841,6 +6019,21 @@ type SummaryRowOptions = {
 
     return (
       <Stack spacing={3}>
+        {beautifiedNotes && (
+          <Box>
+            <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+              Notes
+            </Typography>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+            >
+              {beautifiedNotes}
+            </Typography>
+            <Divider sx={{ my: 1.5 }} />
+          </Box>
+        )}
         <Box>
           <Grid container spacing={2}>
             {summaryChannels.map((item) => {
@@ -6187,8 +6380,8 @@ type SummaryRowOptions = {
                   const isSelected =
                     selectedCounterId != null && counterIdValue != null && counterIdValue === selectedCounterId;
                   const rawNote = typeof counter.notes === 'string' ? counter.notes : '';
-                  const notePreview = stripSnapshotFromNote(rawNote);
-                  const hasNote = notePreview.length > 0;
+                  const notePreview = formatCounterNotePreview(rawNote, registry.channels, combinedAddonList);
+                  const hasNote = notePreview.trim().length > 0;
                   const managerProductLine = (
                     <Typography
                       component="span"
