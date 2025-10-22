@@ -191,6 +191,22 @@ type FreeSnapshotPayload = {
   channels: Record<string, FreeSnapshotChannelEntry>;
 };
 
+type CounterSnapshotFreeEntry = {
+  label: string;
+  quantity: number | null;
+  reason: string | null;
+};
+
+type CounterSnapshotFreeSection = {
+  channelLabel: string | null;
+  entries: CounterSnapshotFreeEntry[];
+};
+
+type CounterSnapshotDetails = {
+  freeSections: CounterSnapshotFreeSection[];
+  manualNote: string;
+};
+
 type WalkInCurrencyEntryState = {
   people: number;
   cash: string;
@@ -755,9 +771,9 @@ const formatCounterSnapshotDetails = (
   note: string,
   channels: ChannelConfig[],
   addons: AddonConfig[],
-): string => {
+): CounterSnapshotDetails => {
   if (!note) {
-    return '';
+    return { freeSections: [], manualNote: '' };
   }
 
   const freeMap = extractFreeSnapshotMap(note);
@@ -766,25 +782,21 @@ const formatCounterSnapshotDetails = (
   const channelNameById = new Map<number, string>();
   channels.forEach((channel) => channelNameById.set(channel.id, channel.name ?? `Channel ${channel.id}`));
 
-  const freeDetailsByChannel: Array<{ channelLabel: string; entries: string[] }> = [];
+  const freeSections: CounterSnapshotFreeSection[] = [];
 
   freeMap.forEach((entry, channelId) => {
     const channelName = channelNameById.get(channelId) ?? `Channel ${channelId}`;
-    const entries: string[] = [];
+    const sectionEntries: CounterSnapshotFreeEntry[] = [];
 
     if (entry.people) {
       const qty = Math.max(0, Math.round(Number(entry.people.qty) || 0));
       const noteText = (entry.people.note ?? '').toString().trim();
       if (qty > 0 || noteText.length > 0) {
-        const detailParts: string[] = [];
-        if (qty > 0) {
-          detailParts.push(String(qty));
-        }
-        if (noteText.length > 0) {
-          detailParts.push(`Reason: ${noteText}`);
-        }
-        const detail = detailParts.join(detailParts.length > 1 ? ' - ' : '');
-        entries.push(`People: ${detail || '-'}`);
+        sectionEntries.push({
+          label: 'People',
+          quantity: qty > 0 ? qty : null,
+          reason: noteText.length > 0 ? noteText : null,
+        });
       }
     }
 
@@ -800,44 +812,28 @@ const formatCounterSnapshotDetails = (
           return;
         }
         const addonName = addonNameById.get(addonId) ?? `Addon ${addonId}`;
-        const detailParts: string[] = [];
-        if (qty > 0) {
-          detailParts.push(String(qty));
-        }
-        if (noteText.length > 0) {
-          detailParts.push(`Reason: ${noteText}`);
-        }
-        const detail = detailParts.join(detailParts.length > 1 ? ' - ' : '');
-        entries.push(`${addonName}: ${detail || '-'}`);
+        sectionEntries.push({
+          label: addonName,
+          quantity: qty > 0 ? qty : null,
+          reason: noteText.length > 0 ? noteText : null,
+        });
       });
     }
 
-    if (entries.length > 0) {
-      freeDetailsByChannel.push({ channelLabel: channelName, entries });
+    if (sectionEntries.length > 0) {
+      freeSections.push({
+        channelLabel: channelName,
+        entries: sectionEntries,
+      });
     }
   });
 
-  const sections: string[] = [];
-  if (freeDetailsByChannel.length > 0) {
-    const multipleChannels = freeDetailsByChannel.length > 1;
-    const freeLines: string[] = ['Free Tickets:'];
-    freeDetailsByChannel.forEach(({ channelLabel, entries }) => {
-      if (multipleChannels) {
-        freeLines.push(`${channelLabel}:`);
-      }
-      entries.forEach((entry) => {
-        freeLines.push(multipleChannels ? `  ${entry}` : entry);
-      });
-    });
-    sections.push(freeLines.join('\n'));
-  }
-
   const manual = stripSnapshotFromNote(note);
-  if (manual) {
-    sections.push(manual);
-  }
 
-  return sections.join('\n\n').trim();
+  return {
+    freeSections,
+    manualNote: manual,
+  };
 };
 
 const formatCounterNotePreview = (
@@ -6025,7 +6021,11 @@ type SummaryRowOptions = {
 
   const renderSummaryStep = () => {
     const { byChannel: summaryChannels, totals: summaryTotals } = summaryData;
-    const beautifiedNotes = formatCounterSnapshotDetails(counterNotes, registry.channels, combinedAddonList);
+    const snapshotDetails = formatCounterSnapshotDetails(counterNotes, registry.channels, combinedAddonList);
+    const hasFreeTicketNotes = snapshotDetails.freeSections.length > 0;
+    const multipleFreeTicketChannels = snapshotDetails.freeSections.length > 1;
+    const hasManualNotes = snapshotDetails.manualNote.length > 0;
+    const hasNotes = hasFreeTicketNotes || hasManualNotes;
 
     if (summaryChannels.length === 0) {
       return (
@@ -6148,19 +6148,77 @@ type SummaryRowOptions = {
             </Grid>
           </Grid>
         </Box>
-        {beautifiedNotes && (
+        {hasNotes && (
           <Box>
             <Divider sx={{ mb: 1.5 }} />
             <Typography variant="subtitle1" fontWeight={600} gutterBottom>
               Notes
             </Typography>
-            <Typography
-              variant="body2"
-              color="text.secondary"
-              sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-            >
-              {beautifiedNotes}
-            </Typography>
+            <Stack spacing={1.25}>
+              {hasFreeTicketNotes && (
+                <Stack spacing={0.75}>
+                  <Typography variant="body2" color="text.secondary">
+                    <Box component="span" sx={{ fontWeight: 600, textDecoration: 'underline' }}>
+                      Free Tickets:
+                    </Box>
+                  </Typography>
+                  {snapshotDetails.freeSections.map((section, sectionIndex) => {
+                    return (
+                      <Stack
+                        key={`${section.channelLabel ?? 'channel'}-${sectionIndex}`}
+                        spacing={0.25}
+                        sx={{ pl: multipleFreeTicketChannels ? 1.5 : 0 }}
+                      >
+                        {multipleFreeTicketChannels && (
+                          <Typography
+                            variant="body2"
+                            color="text.secondary"
+                            sx={{ fontWeight: 600 }}
+                          >
+                            {section.channelLabel ?? 'Channel'}
+                          </Typography>
+                        )}
+                        {section.entries.map((entry, entryIndex) => (
+                          <Typography
+                            key={`${entry.label}-${entryIndex}`}
+                            variant="body2"
+                            color="text.secondary"
+                          >
+                            <Box component="span" sx={{ fontWeight: 600 }}>
+                              {entry.label}:
+                            </Box>
+                            {entry.quantity != null && (
+                              <>
+                                {' '}
+                                {entry.quantity}
+                              </>
+                            )}
+                            {entry.reason && (
+                              <>
+                                {entry.quantity != null ? ' - ' : ' '}
+                                <Box component="span" sx={{ fontWeight: 600, textDecoration: 'underline' }}>
+                                  Reason:
+                                </Box>{' '}
+                                {entry.reason}
+                              </>
+                            )}
+                          </Typography>
+                        ))}
+                      </Stack>
+                    );
+                  })}
+                </Stack>
+              )}
+              {hasManualNotes && (
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                >
+                  {snapshotDetails.manualNote}
+                </Typography>
+              )}
+            </Stack>
           </Box>
         )}
       </Stack>
