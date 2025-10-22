@@ -162,7 +162,28 @@ export const getCounterByDate = async (req: AuthenticatedRequest, res: Response)
       throw new HttpError(400, 'date query parameter is required');
     }
 
-    const payload = await CounterRegistryService.getCounterByDate(date);
+    const productIdParam = req.query.productId;
+    let productId: number | null | undefined = undefined;
+    if (productIdParam !== undefined) {
+      if (Array.isArray(productIdParam)) {
+        throw new HttpError(400, 'productId query parameter must be a single value');
+      }
+      if (typeof productIdParam !== 'string') {
+        throw new HttpError(400, 'productId query parameter must be a single value');
+      }
+      const trimmed = productIdParam.trim();
+      if (trimmed === '' || trimmed.toLowerCase() === 'null') {
+        productId = null;
+      } else {
+        const parsed = Number(trimmed);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          throw new HttpError(400, 'Invalid productId');
+        }
+        productId = parsed;
+      }
+    }
+
+    const payload = await CounterRegistryService.getCounterByDate(date, productId);
     res.status(200).json(payload);
   } catch (error) {
     handleError(res, error);
@@ -348,3 +369,5 @@ export const upsertCounterMetrics = async (req: AuthenticatedRequest, res: Respo
     handleError(res, error);
   }
 };
+
+
