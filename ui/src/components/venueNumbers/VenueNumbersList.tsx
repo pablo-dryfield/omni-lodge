@@ -25,7 +25,7 @@ import { ArrowBack, Add, Close, Delete, Edit, Save, Send, UploadFile, Visibility
 import dayjs from "dayjs";
 import { ChangeEvent, SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useTheme } from "@mui/material/styles";
+import { alpha, useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
 
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
@@ -686,6 +686,16 @@ const VenueNumbersList = () => {
     },
     [pendingChanges, selectedReportId, setSearchParams],
   );
+  const handleOpenReportById = useCallback(
+    (reportId: number, mode: "view" | "edit") => {
+      const target = reports.find((report) => report.id === reportId);
+      if (!target) {
+        return;
+      }
+      handleOpenReport(target, mode);
+    },
+    [handleOpenReport, reports],
+  );
 
   const handleCloseDetails = useCallback(() => {
     if (pendingChanges) {
@@ -1032,7 +1042,6 @@ const VenueNumbersList = () => {
   const submitButtonLabel = isSubmittedReport ? "Save Changes" : "Submit Report";
   const readOnly = activeReportMode !== "edit";
   const inEditMode = activeReportMode === "edit";
-  const showNoReportDetails = readOnly && didNotOperate;
   const showDetails = selectedReportId != null && activeReportMode != null;
   const formHasFieldErrors = useMemo(() => {
     if (readOnly || didNotOperate) {
@@ -1085,6 +1094,355 @@ const VenueNumbersList = () => {
   );
 
   const renderReportDetails = () => {
+    if (readOnly) {
+      type DisplayVenue = {
+        key: string;
+        name: string;
+        totalPeople: number | null;
+        isOpenBar: boolean;
+        normalCount: number | null;
+        cocktailsCount: number | null;
+        brunchCount: number | null;
+      };
+
+      const detailVenues = nightReportDetail.data?.venues ?? [];
+      const detailVenuesForDisplay: DisplayVenue[] = detailVenues.map((venue, index) => ({
+        key: `detail-${venue.id ?? index}`,
+        name: venue.venueName || (venue.isOpenBar ? "Open Bar" : `Venue ${index + 1}`),
+        totalPeople: typeof venue.totalPeople === "number" ? venue.totalPeople : null,
+        isOpenBar: Boolean(venue.isOpenBar),
+        normalCount: typeof venue.normalCount === "number" ? venue.normalCount : null,
+        cocktailsCount: typeof venue.cocktailsCount === "number" ? venue.cocktailsCount : null,
+        brunchCount: typeof venue.brunchCount === "number" ? venue.brunchCount : null,
+      }));
+
+      const fallbackVenues: DisplayVenue[] = formState.venues.map((venue, index) => {
+        const isOpenBar = index === OPEN_BAR_INDEX;
+        const venueName = venue.venueName?.trim() || (isOpenBar ? "Open Bar" : `Venue ${index + 1}`);
+        const totalValue = normalizeNumber(venue.totalPeople, isOpenBar ? 0 : null);
+        const normalValue = normalizeNumber(venue.normalCount);
+        const cocktailsValue = normalizeNumber(venue.cocktailsCount);
+        const brunchValue = normalizeNumber(venue.brunchCount);
+        return {
+          key: `fallback-${index}`,
+          name: venueName,
+          totalPeople: typeof totalValue === "number" ? totalValue : null,
+          isOpenBar,
+          normalCount: typeof normalValue === "number" ? normalValue : null,
+          cocktailsCount: typeof cocktailsValue === "number" ? cocktailsValue : null,
+          brunchCount: typeof brunchValue === "number" ? brunchValue : null,
+        };
+      });
+
+      const venuesForDisplay =
+        detailVenuesForDisplay.length > 0 ? detailVenuesForDisplay : fallbackVenues;
+
+      const defaultTotalGuests = venuesForDisplay.reduce(
+        (sum, venue) => sum + (typeof venue.totalPeople === "number" ? venue.totalPeople : 0),
+        0,
+      );
+      const openBarSummary = venuesForDisplay.find((venue) => venue.isOpenBar) ?? null;
+      const totalGuests = (() => {
+        if (!openBarSummary) {
+          return defaultTotalGuests;
+        }
+        const normalValue =
+          typeof openBarSummary.normalCount === "number" && Number.isFinite(openBarSummary.normalCount)
+            ? openBarSummary.normalCount
+            : null;
+        const cocktailsValue =
+          typeof openBarSummary.cocktailsCount === "number" && Number.isFinite(openBarSummary.cocktailsCount)
+            ? openBarSummary.cocktailsCount
+            : null;
+        const brunchValue =
+          typeof openBarSummary.brunchCount === "number" && Number.isFinite(openBarSummary.brunchCount)
+            ? openBarSummary.brunchCount
+            : null;
+        const hasBreakdown =
+          normalValue != null || cocktailsValue != null || brunchValue != null;
+        if (hasBreakdown) {
+          return computeOpenBarTotal(normalValue ?? 0, cocktailsValue ?? 0, brunchValue ?? 0, openBarMode);
+        }
+        if (typeof openBarSummary.totalPeople === "number" && Number.isFinite(openBarSummary.totalPeople)) {
+          return openBarSummary.totalPeople;
+        }
+        return defaultTotalGuests;
+      })();
+
+      const formatNumberValue = (value: number | null | undefined): string =>
+        typeof value === "number" && Number.isFinite(value) ? value.toLocaleString() : "—";
+
+      const renderSummaryItem = (label: string, value: string) => (
+        <Stack key={label} spacing={0.4} sx={{ minWidth: { xs: "auto", sm: 160 } }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ textTransform: "uppercase", letterSpacing: 0.3 }}
+          >
+            {label}
+          </Typography>
+          <Typography variant="body1" fontWeight={600}>
+            {value}
+          </Typography>
+        </Stack>
+      );
+
+      const activityDateRaw = nightReportDetail.data?.activityDate ?? formState.activityDate;
+      const formattedActivityDate = activityDateRaw ? dayjs(activityDateRaw).format("dddd, MMM D, YYYY") : "—";
+      const counterDateRaw = currentCounter?.date ?? null;
+      const formattedCounterDate = counterDateRaw ? dayjs(counterDateRaw).format("dddd, MMM D, YYYY") : null;
+      const leaderName =
+        selectedLeaderOption?.fullName?.trim() ||
+        nightReportDetail.data?.leader?.fullName?.trim() ||
+        "—";
+      const statusLabel = currentStatus === "submitted" ? "Submitted" : "Draft";
+      const statusChipColor: "success" | "warning" = currentStatus === "submitted" ? "success" : "warning";
+      const submittedTimestamp =
+        nightReportDetail.data?.submittedAt ??
+        nightReportDetail.data?.updatedAt ??
+        nightReportDetail.data?.createdAt ??
+        null;
+      const submittedLabel = nightReportDetail.data?.submittedAt ? "Submitted At" : "Last Updated";
+      const submittedDisplay = submittedTimestamp ? dayjs(submittedTimestamp).format("MMM D, YYYY HH:mm") : null;
+      const productName = currentCounter?.product?.name ?? "—";
+      const openBarModeLabel =
+        openBarMode === "pubCrawl"
+          ? "Pub Crawl"
+          : openBarMode === "bottomlessBrunch"
+            ? "Bottomless Brunch"
+            : null;
+
+      const summaryItems: Array<{ label: string; value: string }> = [
+        { label: "Activity Date", value: formattedActivityDate },
+        { label: "Product", value: productName },
+        { label: "Leader", value: leaderName },
+        { label: "Total Guests", value: formatNumberValue(totalGuests) },
+      ];
+      if (formattedCounterDate) {
+        summaryItems.push({ label: "Counter Date", value: formattedCounterDate });
+      }
+      if (openBarModeLabel) {
+        summaryItems.push({ label: "Open Bar Mode", value: openBarModeLabel });
+      }
+      if (submittedDisplay) {
+        summaryItems.push({ label: submittedLabel, value: submittedDisplay });
+      }
+
+      const trimmedNotes = (formState.notes ?? "").trim();
+      const hasStandaloneNotes = !didNotOperate && trimmedNotes.length > 0;
+      const totalVenuesLabel = venuesForDisplay.length
+        ? `${venuesForDisplay.length} venue${venuesForDisplay.length === 1 ? "" : "s"}`
+        : "No venues";
+
+      return (
+        <Stack spacing={3}>
+          <Card variant="outlined">
+            <CardContent sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={0.5}>
+                <Typography variant="h6">Report Overview</Typography>
+                <Chip label={statusLabel} color={statusChipColor} size="small" />
+              </Stack>
+              <Stack direction={{ xs: "column", md: "row" }} spacing={{ xs: 1.5, md: 3 }} flexWrap="wrap">
+                {summaryItems.map((item) => renderSummaryItem(item.label, item.value))}
+              </Stack>
+            </CardContent>
+          </Card>
+
+          {didNotOperate ? (
+            <Card variant="outlined">
+              <CardContent>
+                <Stack spacing={1}>
+                  <Typography variant="subtitle1" fontWeight={600}>
+                    Activity Not Operated
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    The activity did not operate on this date.
+                  </Typography>
+                  {trimmedNotes.length > 0 && (
+                    <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
+                      {trimmedNotes}
+                    </Typography>
+                  )}
+                </Stack>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card variant="outlined">
+              <CardContent sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={0.5}>
+                  <Typography variant="h6" flexGrow={1}>
+                    Venue Breakdown
+                  </Typography>
+                  <Chip label={totalVenuesLabel} size="small" variant="outlined" />
+                </Stack>
+                {venuesForDisplay.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    No venue data recorded.
+                  </Typography>
+                ) : (
+                  <Stack spacing={1.25}>
+                    {venuesForDisplay.map((venue, index) => {
+                      const normalValue =
+                        typeof venue.normalCount === "number" && Number.isFinite(venue.normalCount)
+                          ? venue.normalCount
+                          : null;
+                      const cocktailsValue =
+                        typeof venue.cocktailsCount === "number" && Number.isFinite(venue.cocktailsCount)
+                          ? venue.cocktailsCount
+                          : null;
+                      const brunchValue =
+                        typeof venue.brunchCount === "number" && Number.isFinite(venue.brunchCount)
+                          ? venue.brunchCount
+                          : null;
+
+                      const openBarTiles = venue.isOpenBar
+                        ? openBarMode === "bottomlessBrunch"
+                          ? [{ label: "Brunch", value: brunchValue, palette: "secondary" as const }].filter(
+                              (tile) => tile.value != null && Number.isFinite(tile.value),
+                            )
+                          : [
+                              { label: "Normal", value: normalValue, palette: "primary" as const },
+                              { label: "Cocktails", value: cocktailsValue, palette: "info" as const },
+                            ].filter((tile) => tile.value != null && Number.isFinite(tile.value))
+                        : [];
+
+                      const venueTotalRaw =
+                        typeof venue.totalPeople === "number" && Number.isFinite(venue.totalPeople)
+                          ? venue.totalPeople
+                          : null;
+                      const computedOpenBarTotal =
+                        venue.isOpenBar && openBarTiles.length > 0
+                          ? computeOpenBarTotal(normalValue ?? 0, cocktailsValue ?? 0, brunchValue ?? 0, openBarMode)
+                          : null;
+                      const displayTotalValue =
+                        venue.isOpenBar && computedOpenBarTotal != null
+                          ? computedOpenBarTotal
+                          : venueTotalRaw;
+                      const totalDisplay = formatNumberValue(displayTotalValue);
+
+                      const metricCard = (
+                        label: string,
+                        value: number | null,
+                        palette: "primary" | "info" | "secondary",
+                      ) => (
+                        <Box
+                          key={`${venue.key}-${label}`}
+                          sx={(theme) => ({
+                            borderRadius: 1.5,
+                            px: 1.5,
+                            py: 1.25,
+                            border: "1px solid",
+                            borderColor: alpha(theme.palette[palette].main, theme.palette.mode === "dark" ? 0.45 : 0.3),
+                            backgroundColor: alpha(
+                              theme.palette[palette].main,
+                              theme.palette.mode === "dark" ? 0.2 : 0.08,
+                            ),
+                          })}
+                        >
+                          <Typography
+                            variant="caption"
+                            color={palette === "secondary" ? "secondary.main" : `${palette}.main`}
+                            sx={{ letterSpacing: 0.4, fontWeight: 600 }}
+                          >
+                            {label.toUpperCase()}
+                          </Typography>
+                          <Typography variant="h6" fontWeight={700}>
+                            {formatNumberValue(value)}
+                          </Typography>
+                        </Box>
+                      );
+
+                      const detailContent = venue.isOpenBar ? (
+                        openBarTiles.length > 0 ? (
+                          <Grid container spacing={1.5}>
+                            {openBarTiles.map((tile) => (
+                              <Grid size={{ xs: 12, sm: openBarTiles.length === 1 ? 12 : 6 }} key={`${venue.key}-${tile.label}`}>
+                                {metricCard(tile.label, tile.value ?? null, tile.palette)}
+                              </Grid>
+                            ))}
+                          </Grid>
+                        ) : (
+                          <Typography variant="body2" color="text.secondary">
+                            No open bar breakdown recorded.
+                          </Typography>
+                        )
+                      ) : (
+                        <Grid container spacing={1.5}>
+                          <Grid size={{ xs: 12, sm: 6, md: 4 }}>{metricCard("Guests", venueTotalRaw, "primary")}</Grid>
+                        </Grid>
+                      );
+
+                      return (
+                        <Box
+                          key={venue.key}
+                          sx={(theme) => ({
+                            borderRadius: 2,
+                            border: "1px solid",
+                            borderColor: alpha(theme.palette.divider, 0.8),
+                            boxShadow: theme.shadows[1],
+                            backgroundImage:
+                              theme.palette.mode === "dark"
+                                ? "linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%)"
+                                : "linear-gradient(135deg, #ffffff 0%, #f5f7fb 100%)",
+                            px: { xs: 1.5, sm: 2 },
+                            py: { xs: 1.5, sm: 2 },
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 1.5,
+                          })}
+                        >
+                          <Stack
+                            direction={{ xs: "column", sm: "row" }}
+                            spacing={{ xs: 1, sm: 1.5 }}
+                            alignItems={{ xs: "flex-start", sm: "center" }}
+                            justifyContent="space-between"
+                          >
+                            <Stack spacing={0.25}>
+                              <Typography variant="subtitle1" fontWeight={700}>
+                                {`${index + 1}. ${venue.name}`}
+                              </Typography>
+                              {venue.isOpenBar && (
+                                <Typography
+                                  variant="caption"
+                                  color="info.main"
+                                  sx={{
+                                    fontWeight: 600,
+                                    letterSpacing: 0.5,
+                                    textTransform: "uppercase",
+                                  }}
+                                >
+                                  Open Bar
+                                </Typography>
+                              )}
+                            </Stack>
+                          </Stack>
+                          <Divider />
+                          {detailContent}
+                        </Box>
+                      );
+                    })}
+                  </Stack>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {hasStandaloneNotes && (
+            <Card variant="outlined">
+              <CardContent>
+                <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+                  Notes
+                </Typography>
+                <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
+                  {trimmedNotes}
+                </Typography>
+              </CardContent>
+            </Card>
+          )}
+        </Stack>
+      );
+    }
+
     const showOpenBarNormalField = !isBottomlessBrunchProduct;
     const showOpenBarCocktailsField = !isBottomlessBrunchProduct;
     const showOpenBarBrunchField = !isPubCrawlProduct;
@@ -1096,25 +1454,7 @@ const VenueNumbersList = () => {
     const openBarMdSpan =
       visibleOpenBarFields >= 3 ? 4 : visibleOpenBarFields === 2 ? 6 : 12;
 
-    const notesSection = readOnly ? (
-      <Stack spacing={1}>
-        <Typography variant="subtitle2">Notes</Typography>
-        {formState.notes ? (
-          <TextField
-            label="Notes"
-            value={formState.notes}
-            multiline
-            minRows={3}
-            fullWidth
-            InputProps={{ readOnly: true }}
-          />
-        ) : (
-          <Typography variant="body2" color="text.secondary">
-            No notes available.
-          </Typography>
-        )}
-      </Stack>
-    ) : (
+    const notesSection = (
       <Stack spacing={1}>
         <Button variant="outlined" size="small" onClick={() => setNotesExpanded((prev) => !prev)}>
           {notesExpanded || formState.notes
@@ -1135,17 +1475,6 @@ const VenueNumbersList = () => {
         )}
       </Stack>
     );
-
-    if (showNoReportDetails) {
-      return (
-        <>
-          <Typography variant="body2" color="text.secondary">
-            No report information.
-          </Typography>
-          {notesSection}
-        </>
-      );
-    }
 
     const venuesSection = (
       <Stack spacing={2}>
@@ -1524,117 +1853,117 @@ const VenueNumbersList = () => {
     </Stack>
   ) : (
     <Stack spacing={3}>
-      {currentStatus === "submitted" && !inEditMode && (
-        <Alert severity="info">Submitted - Click Update to make changes.</Alert>
-      )}
-      <Box>
-        <Typography variant="body2" color="text.secondary">
-          Date:{" "}
-          <Typography component="span" variant="body1" fontWeight={600}>
-            {formState.activityDate ? dayjs(formState.activityDate).format("MMM D, YYYY") : "—"}
+      {inEditMode ? (
+        <Box>
+          <Typography variant="body2" color="text.secondary">
+            Date:{" "}
+            <Typography component="span" variant="body1" fontWeight={600}>
+              {formState.activityDate ? dayjs(formState.activityDate).format("MMM D, YYYY") : "—"}
+            </Typography>
+            {currentCounter?.product?.name ? (
+              <>
+                {" \u2022 "}
+                <Typography component="span" variant="body1" fontWeight={600}>
+                  {currentCounter.product.name}
+                </Typography>
+              </>
+            ) : null}
           </Typography>
-          {currentCounter?.product?.name ? (
-            <>
-              {" \u2022 "}
-              <Typography component="span" variant="body1" fontWeight={600}>
-                {currentCounter.product.name}
-              </Typography>
-            </>
-          ) : null}
-        </Typography>
-      </Box>
+        </Box>
+      ) : null}
 
-      <Grid container spacing={2}>
-        <Grid size={12}>
-          <Autocomplete<StaffOption>
-            options={leaderOptions}
-            value={selectedLeaderOption}
-            onChange={handleLeaderChange}
-            getOptionLabel={(option) => formatUserFullName(option)}
-            isOptionEqualToValue={(option, value) => option.id === value.id}
-            renderOption={(props, option) => {
-              const { style, ...rest } = props;
-              return (
-                <li
-                  {...rest}
-                  style={{ ...style, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.3 }}
-                  title={formatUserFullName(option)}
-                >
-                  {formatUserFullName(option)}
-                </li>
-              );
-            }}
-            renderInput={(params) => (
-              <TextField
-                {...params}
-                label="Leader"
-                placeholder="Select leader"
-                required
-                error={leaderHasError}
-                helperText={leaderHasError ? "Leader is required." : undefined}
+      {inEditMode ? (
+        <>
+          <Grid container spacing={2}>
+            <Grid size={12}>
+              <Autocomplete<StaffOption>
+                options={leaderOptions}
+                value={selectedLeaderOption}
+                onChange={handleLeaderChange}
+                getOptionLabel={(option) => formatUserFullName(option)}
+                isOptionEqualToValue={(option, value) => option.id === value.id}
+                renderOption={(props, option) => {
+                  const { style, ...rest } = props;
+                  return (
+                    <li
+                      {...rest}
+                      style={{ ...style, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.3 }}
+                      title={formatUserFullName(option)}
+                    >
+                      {formatUserFullName(option)}
+                    </li>
+                  );
+                }}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Leader"
+                    placeholder="Select leader"
+                    required
+                    error={leaderHasError}
+                    helperText={leaderHasError ? "Leader is required." : undefined}
+                    fullWidth
+                    sx={{
+                      "& .MuiInputBase-root": {
+                        alignItems: "flex-start",
+                      },
+                      "& .MuiInputBase-input": {
+                        whiteSpace: "normal",
+                        overflow: "visible",
+                        textOverflow: "unset",
+                        lineHeight: 1.4,
+                      },
+                    }}
+                  />
+                )}
                 fullWidth
-                sx={{
-                  "& .MuiInputBase-root": {
-                    alignItems: "flex-start",
+                componentsProps={{
+                  popper: {
+                    style: { width: "auto" },
                   },
-                  "& .MuiInputBase-input": {
+                  paper: {
+                    sx: {
+                      width: "fit-content",
+                      minWidth: "auto",
+                      maxWidth: "min(440px, calc(100vw - 48px))",
+                    },
+                  },
+                }}
+                ListboxProps={{ style: { paddingRight: 8 } }}
+                sx={{
+                  "& .MuiAutocomplete-inputRoot": {
+                    alignItems: "flex-start",
+                    flexWrap: "wrap",
+                    paddingTop: 1,
+                    paddingBottom: 1,
+                  },
+                  "& .MuiAutocomplete-input": {
+                    display: "block",
+                    height: "auto",
                     whiteSpace: "normal",
-                    overflow: "visible",
+                    wordBreak: "break-word",
                     textOverflow: "unset",
+                    width: "100% !important",
                     lineHeight: 1.4,
                   },
                 }}
               />
-            )}
-            disabled={readOnly}
-            fullWidth
-            componentsProps={{
-              popper: {
-                style: { width: "auto" },
-              },
-              paper: {
-                sx: {
-                  width: "fit-content",
-                  minWidth: "auto",
-                  maxWidth: "min(440px, calc(100vw - 48px))",
-                },
-              },
-            }}
-            ListboxProps={{ style: { paddingRight: 8 } }}
-            sx={{
-              "& .MuiAutocomplete-inputRoot": {
-                alignItems: "flex-start",
-                flexWrap: "wrap",
-                paddingTop: 1,
-                paddingBottom: 1,
-              },
-              "& .MuiAutocomplete-input": {
-                display: "block",
-                height: "auto",
-                whiteSpace: "normal",
-                wordBreak: "break-word",
-                textOverflow: "unset",
-                width: "100% !important",
-                lineHeight: 1.4,
-              },
-            }}
-          />
-        </Grid>
-        <Grid size={{ xs: 12, md: 6 }}>
-          <TextField
-            label="Date"
-            type="date"
-            value={formState.activityDate}
-            onChange={handleDateChange}
-            InputLabelProps={{ shrink: true }}
-            fullWidth
-            required
-            disabled={readOnly}
-          />
-        </Grid>
-      </Grid>
-
-      <Divider />
+            </Grid>
+            <Grid size={{ xs: 12, md: 6 }}>
+              <TextField
+                label="Date"
+                type="date"
+                value={formState.activityDate}
+                onChange={handleDateChange}
+                InputLabelProps={{ shrink: true }}
+                fullWidth
+                required
+              />
+            </Grid>
+          </Grid>
+          <Divider />
+        </>
+      ) : null}
 
       {renderReportDetails()}
 
@@ -1807,9 +2136,21 @@ const VenueNumbersList = () => {
           <Typography variant="h6" component="h2">
             Night Report Details
           </Typography>
-          <IconButton onClick={handleCloseDetails}>
-            <Close />
-          </IconButton>
+          <Stack direction="row" spacing={1} alignItems="center">
+            {!inEditMode && selectedReportId != null && (
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<Edit fontSize="small" />}
+                onClick={() => handleOpenReportById(selectedReportId, "edit")}
+              >
+                Edit
+              </Button>
+            )}
+            <IconButton onClick={handleCloseDetails}>
+              <Close />
+            </IconButton>
+          </Stack>
         </Stack>
         <DialogContent dividers sx={{ p: { xs: 2, sm: 3 } }}>{detailContent}</DialogContent>
       </Dialog>
