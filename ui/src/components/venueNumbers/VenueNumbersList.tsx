@@ -23,7 +23,7 @@ import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { LocalizationProvider } from "@mui/x-date-pickers";
 import { ArrowBack, Add, Close, Delete, Edit, Save, Send, UploadFile, Visibility } from "@mui/icons-material";
 import dayjs from "dayjs";
-import { ChangeEvent, SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, Fragment, SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { alpha, useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
@@ -1216,7 +1216,7 @@ const VenueNumbersList = () => {
         { label: "Activity Date", value: formattedActivityDate },
         { label: "Product", value: productName },
         { label: "Leader", value: leaderName },
-        { label: "Total Guests", value: formatNumberValue(totalGuests) },
+        { label: "Total People", value: formatNumberValue(totalGuests) },
       ];
       if (formattedCounterDate) {
         summaryItems.push({ label: "Counter Date", value: formattedCounterDate });
@@ -1234,241 +1234,341 @@ const VenueNumbersList = () => {
         ? `${venuesForDisplay.length} venue${venuesForDisplay.length === 1 ? "" : "s"}`
         : "No venues";
 
-      return (
-        <Stack spacing={3}>
-          <Card variant="outlined">
-            <CardContent sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={0.5}>
-                <Typography variant="h6">Report Overview</Typography>
-                <Chip label={statusLabel} color={statusChipColor} size="small" />
-              </Stack>
-              <Stack direction={{ xs: "column", md: "row" }} spacing={{ xs: 1.5, md: 3 }} flexWrap="wrap">
-                {summaryItems.map((item) => renderSummaryItem(item.label, item.value))}
-              </Stack>
-            </CardContent>
-          </Card>
+      const overviewCard = (
+        <Card variant="outlined" key="overview">
+          <CardContent sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={0.5}>
+              <Typography variant="h6">Report Overview</Typography>
+              <Chip label={statusLabel} color={statusChipColor} size="small" />
+            </Stack>
+            <Stack direction={{ xs: "column", md: "row" }} spacing={{ xs: 1.5, md: 3 }} flexWrap="wrap">
+              {summaryItems.map((item) => renderSummaryItem(item.label, item.value))}
+            </Stack>
+          </CardContent>
+        </Card>
+      );
 
-          {didNotOperate ? (
-            <Card variant="outlined">
-              <CardContent>
-                <Stack spacing={1}>
-                  <Typography variant="subtitle1" fontWeight={600}>
-                    Activity Not Operated
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    The activity did not operate on this date.
-                  </Typography>
-                  {trimmedNotes.length > 0 && (
-                    <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
-                      {trimmedNotes}
-                    </Typography>
-                  )}
-                </Stack>
-              </CardContent>
-            </Card>
-          ) : (
-            <Card variant="outlined">
-              <CardContent sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
-                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={0.5}>
-                  <Typography variant="h6" flexGrow={1}>
-                    Venue Breakdown
-                  </Typography>
-                  <Chip label={totalVenuesLabel} size="small" variant="outlined" />
-                </Stack>
-                {venuesForDisplay.length === 0 ? (
-                  <Typography variant="body2" color="text.secondary">
-                    No venue data recorded.
-                  </Typography>
-                ) : (
-                  <Stack spacing={1.25}>
-                    {venuesForDisplay.map((venue, index) => {
-                      const normalValue =
-                        typeof venue.normalCount === "number" && Number.isFinite(venue.normalCount)
-                          ? venue.normalCount
-                          : null;
-                      const cocktailsValue =
-                        typeof venue.cocktailsCount === "number" && Number.isFinite(venue.cocktailsCount)
-                          ? venue.cocktailsCount
-                          : null;
-                      const brunchValue =
-                        typeof venue.brunchCount === "number" && Number.isFinite(venue.brunchCount)
-                          ? venue.brunchCount
-                          : null;
-
-                      const openBarTiles = venue.isOpenBar
-                        ? openBarMode === "bottomlessBrunch"
-                          ? [{ label: "Brunch", value: brunchValue, palette: "secondary" as const }].filter(
-                              (tile) => tile.value != null && Number.isFinite(tile.value),
-                            )
-                          : [
-                              { label: "Normal", value: normalValue, palette: "primary" as const },
-                              { label: "Cocktails", value: cocktailsValue, palette: "info" as const },
-                            ].filter((tile) => tile.value != null && Number.isFinite(tile.value))
-                        : [];
-
-                      const venueTotalRaw =
-                        typeof venue.totalPeople === "number" && Number.isFinite(venue.totalPeople)
-                          ? venue.totalPeople
-                          : null;
-                      const computedOpenBarTotal =
-                        venue.isOpenBar && openBarTiles.length > 0
-                          ? computeOpenBarTotal(normalValue ?? 0, cocktailsValue ?? 0, brunchValue ?? 0, openBarMode)
-                          : null;
-                      const displayTotalValue =
-                        venue.isOpenBar && computedOpenBarTotal != null
-                          ? computedOpenBarTotal
-                          : venueTotalRaw;
-                      const totalDisplay = formatNumberValue(displayTotalValue);
-
-                      const metricCard = (
-                        label: string,
-                        value: number | null,
-                        palette: "primary" | "info" | "secondary",
-                      ) => (
-                        <Box
-                          key={`${venue.key}-${label}`}
-                          sx={(theme) => ({
-                            borderRadius: 1.5,
-                            px: 1.5,
-                            py: 1.25,
-                            border: "1px solid",
-                            borderColor: alpha(theme.palette[palette].main, theme.palette.mode === "dark" ? 0.45 : 0.3),
-                            backgroundColor: alpha(
-                              theme.palette[palette].main,
-                              theme.palette.mode === "dark" ? 0.2 : 0.08,
-                            ),
-                            width: "100%",
-                            display: "flex",
-                            flexDirection: "column",
-                            alignItems: "center",
-                            textAlign: "center",
-                          })}
-                        >
-                          <Typography
-                            variant="caption"
-                            color={palette === "secondary" ? "secondary.main" : `${palette}.main`}
-                            sx={{ letterSpacing: 0.4, fontWeight: 600 }}
-                          >
-                            {label.toUpperCase()}
-                          </Typography>
-                          <Typography variant="h6" fontWeight={700}>
-                            {formatNumberValue(value)}
-                          </Typography>
-                        </Box>
-                      );
-
-                      const detailContent = venue.isOpenBar ? (
-                        openBarTiles.length > 0 ? (
-                          <Box
-                            sx={{
-                              display: "grid",
-                              gap: 1.5,
-                              width: "100%",
-                              gridTemplateColumns:
-                                openBarTiles.length === 1
-                                  ? "1fr"
-                                  : {
-                                      xs: "repeat(2, minmax(0, 1fr))",
-                                      sm: `repeat(${openBarTiles.length}, minmax(0, 1fr))`,
-                                    },
-                              justifyItems: "stretch",
-                            }}
-                          >
-                            {openBarTiles.map((tile) => (
-                              <Box key={`${venue.key}-${tile.label}`} sx={{ width: "100%" }}>
-                                {metricCard(tile.label, tile.value ?? null, tile.palette)}
-                              </Box>
-                            ))}
-                          </Box>
-                        ) : (
-                          <Typography variant="body2" color="text.secondary">
-                            No open bar breakdown recorded.
-                          </Typography>
-                        )
-                      ) : (
-                        <Grid container spacing={1.5}>
-                          <Grid size={{ xs: 12, sm: 6, md: 4 }} sx={{ width: "100%" }}>
-                            {metricCard("Guests", venueTotalRaw, "primary")}
-                          </Grid>
-                        </Grid>
-                      );
-
-                      return (
-                        <Box
-                          key={venue.key}
-                          sx={(theme) => ({
-                            borderRadius: 2,
-                            border: "1px solid",
-                            borderColor: alpha(theme.palette.divider, 0.8),
-                            boxShadow: theme.shadows[1],
-                            backgroundImage:
-                              theme.palette.mode === "dark"
-                                ? "linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%)"
-                                : "linear-gradient(135deg, #ffffff 0%, #f5f7fb 100%)",
-                            px: { xs: 1.5, sm: 2 },
-                            py: { xs: 1.5, sm: 2 },
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 1,
-                          })}
-                        >
-                          <Stack spacing={0.5} alignItems="center" textAlign="center">
-                            {venue.isOpenBar && (
-                              <Stack
-                                direction="row"
-                                alignItems="center"
-                                spacing={0.75}
-                                sx={{
-                                  px: 1.5,
-                                  py: 0.6,
-                                  borderRadius: 999,
-                                  bgcolor: (theme) =>
-                                    theme.palette.mode === "dark"
-                                      ? alpha(theme.palette.info.main, 0.2)
-                                      : alpha(theme.palette.info.main, 0.1),
-                                  border: (theme) => `1px solid ${alpha(theme.palette.info.main, 0.25)}`,
-                                }}
-                              >
-                                <Typography
-                                  component="span"
-                                  variant="subtitle2"
-                                  sx={{
-                                    fontWeight: 700,
-                                    letterSpacing: 0.8,
-                                    color: (theme) => theme.palette.info.main,
-                                    textTransform: "uppercase",
-                                  }}
-                                >
-                                  Open Bar
-                                </Typography>
-                              </Stack>
-                            )}
-                            <Typography variant="subtitle1" fontWeight={700}>
-                              {`${index + 1}. ${venue.name}`}
-                            </Typography>
-                          </Stack>
-                          {detailContent}
-                        </Box>
-                      );
-                    })}
-                  </Stack>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {hasStandaloneNotes && (
-            <Card variant="outlined">
-              <CardContent>
-                <Typography variant="subtitle1" fontWeight={600} gutterBottom>
-                  Notes
-                </Typography>
+      const readOnlyVenuesSection = didNotOperate ? (
+        <Card variant="outlined" key="not-operated">
+          <CardContent>
+            <Stack spacing={1}>
+              <Typography variant="subtitle1" fontWeight={600}>
+                Activity Not Operated
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                The activity did not operate on this date.
+              </Typography>
+              {trimmedNotes.length > 0 && (
                 <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
                   {trimmedNotes}
                 </Typography>
-              </CardContent>
-            </Card>
-          )}
+              )}
+            </Stack>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card variant="outlined" key="venues-summary">
+          <CardContent sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={0.5}>
+              <Typography variant="h6" flexGrow={1}>
+                Venue Breakdown
+              </Typography>
+              <Chip label={totalVenuesLabel} size="small" variant="outlined" />
+            </Stack>
+            {venuesForDisplay.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                No venue data recorded.
+              </Typography>
+            ) : (
+              <Stack spacing={1.25}>
+                {venuesForDisplay.map((venue, index) => {
+                  const normalValue =
+                    typeof venue.normalCount === "number" && Number.isFinite(venue.normalCount)
+                      ? venue.normalCount
+                      : null;
+                  const cocktailsValue =
+                    typeof venue.cocktailsCount === "number" && Number.isFinite(venue.cocktailsCount)
+                      ? venue.cocktailsCount
+                      : null;
+                  const brunchValue =
+                    typeof venue.brunchCount === "number" && Number.isFinite(venue.brunchCount)
+                      ? venue.brunchCount
+                      : null;
+
+                  const openBarTiles = venue.isOpenBar
+                    ? openBarMode === "bottomlessBrunch"
+                      ? [{ label: "Brunch", value: brunchValue, palette: "secondary" as const }].filter(
+                          (tile) => tile.value != null && Number.isFinite(tile.value),
+                        )
+                      : [
+                          { label: "Normal", value: normalValue, palette: "primary" as const },
+                          { label: "Cocktails", value: cocktailsValue, palette: "info" as const },
+                        ].filter((tile) => tile.value != null && Number.isFinite(tile.value))
+                    : [];
+
+                  const venueTotalRaw =
+                    typeof venue.totalPeople === "number" && Number.isFinite(venue.totalPeople)
+                      ? venue.totalPeople
+                      : null;
+                  const computedOpenBarTotal =
+                    venue.isOpenBar && openBarTiles.length > 0
+                      ? computeOpenBarTotal(normalValue ?? 0, cocktailsValue ?? 0, brunchValue ?? 0, openBarMode)
+                      : null;
+                  const displayTotalValue =
+                    venue.isOpenBar && computedOpenBarTotal != null
+                      ? computedOpenBarTotal
+                      : venueTotalRaw;
+
+                  const metricCard = (
+                    label: string,
+                    value: number | null,
+                    palette: "primary" | "info" | "secondary",
+                  ) => (
+                    <Box
+                      key={`${venue.key}-${label}`}
+                      sx={(theme) => ({
+                        borderRadius: 1.5,
+                        px: 1.5,
+                        py: 1.25,
+                        border: "1px solid",
+                        borderColor: alpha(theme.palette[palette].main, theme.palette.mode === "dark" ? 0.45 : 0.3),
+                        backgroundColor: alpha(
+                          theme.palette[palette].main,
+                          theme.palette.mode === "dark" ? 0.2 : 0.08,
+                        ),
+                        width: "100%",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        textAlign: "center",
+                      })}
+                    >
+                      <Typography
+                        variant="caption"
+                        color={palette === "secondary" ? "secondary.main" : `${palette}.main`}
+                        sx={{ letterSpacing: 0.4, fontWeight: 600 }}
+                      >
+                        {label.toUpperCase()}
+                      </Typography>
+                      <Typography variant="h6" fontWeight={700}>
+                        {formatNumberValue(value)}
+                      </Typography>
+                    </Box>
+                  );
+
+                  const detailContent = venue.isOpenBar ? (
+                    openBarTiles.length > 0 ? (
+                      <Box
+                        sx={{
+                          display: "grid",
+                          gap: 1.5,
+                          width: "100%",
+                          gridTemplateColumns:
+                            openBarTiles.length === 1
+                              ? "1fr"
+                              : {
+                                  xs: "repeat(2, minmax(0, 1fr))",
+                                  sm: `repeat(${openBarTiles.length}, minmax(0, 1fr))`,
+                                },
+                          justifyItems: "stretch",
+                        }}
+                      >
+                        {openBarTiles.map((tile) => (
+                          <Box key={`${venue.key}-${tile.label}`} sx={{ width: "100%" }}>
+                            {metricCard(tile.label, tile.value ?? null, tile.palette)}
+                          </Box>
+                        ))}
+                      </Box>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        No open bar breakdown recorded.
+                      </Typography>
+                    )
+                  ) : (
+                    <Grid container spacing={1.5}>
+                      <Grid size={{ xs: 12, sm: 6, md: 4 }} sx={{ width: "100%" }}>
+                        {metricCard("Guests", venueTotalRaw, "primary")}
+                      </Grid>
+                    </Grid>
+                  );
+
+                  return (
+                    <Box
+                      key={venue.key}
+                      sx={(theme) => ({
+                        borderRadius: 2,
+                        border: "1px solid",
+                        borderColor: alpha(theme.palette.divider, 0.8),
+                        boxShadow: theme.shadows[1],
+                        backgroundImage:
+                          theme.palette.mode === "dark"
+                            ? "linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%)"
+                            : "linear-gradient(135deg, #ffffff 0%, #f5f7fb 100%)",
+                        px: { xs: 1.5, sm: 2 },
+                        py: { xs: 1.5, sm: 2 },
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 1,
+                      })}
+                    >
+                      <Stack spacing={0.5} alignItems="center" textAlign="center">
+                        {venue.isOpenBar && (
+                          <Stack
+                            direction="row"
+                            alignItems="center"
+                            spacing={0.75}
+                            sx={{
+                              px: 1.5,
+                              py: 0.6,
+                              borderRadius: 999,
+                              bgcolor: (theme) =>
+                                theme.palette.mode === "dark"
+                                  ? alpha(theme.palette.info.main, 0.2)
+                                  : alpha(theme.palette.info.main, 0.1),
+                              border: (theme) => `1px solid ${alpha(theme.palette.info.main, 0.25)}`,
+                            }}
+                          >
+                            <Typography
+                              component="span"
+                              variant="subtitle2"
+                              sx={{
+                                fontWeight: 700,
+                                letterSpacing: 0.8,
+                                color: (theme) => theme.palette.info.main,
+                                textTransform: "uppercase",
+                              }}
+                            >
+                              Open Bar
+                            </Typography>
+                          </Stack>
+                        )}
+                        <Typography variant="subtitle1" fontWeight={700}>
+                          {`${index + 1}. ${venue.name}`}
+                        </Typography>
+                      </Stack>
+                      {detailContent}
+                    </Box>
+                  );
+                })}
+              </Stack>
+            )}
+          </CardContent>
+        </Card>
+      );
+
+      const readOnlyPhotosSection = (
+        <Card variant="outlined" key="photos-summary">
+          <CardContent sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Typography variant="h6" flexGrow={1}>
+                Report Evidence
+              </Typography>
+            </Stack>
+            {photos.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                No photos attached to this report.
+              </Typography>
+            ) : (
+              <Grid container spacing={2}>
+                {limitedPhotos.map((photo) => {
+                  const previewUrl = photoPreviews[photo.id];
+                  const previewError = photoPreviewErrors[photo.id];
+                  const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl);
+                  return (
+                    <Grid size={{ xs: 12, sm: 6, md: 4 }} key={photo.id}>
+                      <Card variant="outlined">
+                        <CardContent>
+                          <Stack spacing={1}>
+                            <Box
+                              sx={{
+                                width: "100%",
+                                height: 180,
+                                borderRadius: 1,
+                                bgcolor: "grey.100",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                overflow: "hidden",
+                                border: "1px solid",
+                                borderColor: "divider",
+                                position: "relative",
+                              }}
+                            >
+                              {previewUrl ? (
+                                <Box
+                                  component="img"
+                                  src={previewUrl}
+                                  alt={photo.originalName}
+                                  sx={{ width: "100%", height: "100%", objectFit: "cover" }}
+                                />
+                              ) : previewError ? (
+                                <Typography variant="caption" color="text.secondary" align="center" px={2}>
+                                  Preview unavailable
+                                </Typography>
+                              ) : (
+                                <CircularProgress size={24} />
+                              )}
+                            </Box>
+                            <Stack direction="row" spacing={1} alignItems="flex-start">
+                              <Box flexGrow={1}>
+                                <Typography variant="body2" fontWeight={600} noWrap title={photo.originalName}>
+                                  {photo.originalName}
+                                </Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                  {formatFileSize(photo.fileSize)}
+                                  {photo.capturedAt ? (
+                                    <>
+                                      {" \u2022 "}
+                                      {dayjs(photo.capturedAt).format("MMM D, YYYY h:mm A")}
+                                    </>
+                                  ) : null}
+                                </Typography>
+                              </Box>
+                            </Stack>
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              component="a"
+                              href={downloadHref}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              View Full Size
+                            </Button>
+                          </Stack>
+                        </CardContent>
+                      </Card>
+                    </Grid>
+                  );
+                })}
+              </Grid>
+            )}
+          </CardContent>
+        </Card>
+      );
+
+      const sections: JSX.Element[] = [overviewCard, readOnlyVenuesSection, readOnlyPhotosSection];
+
+      if (hasStandaloneNotes) {
+        sections.push(
+          <Card variant="outlined" key="notes">
+            <CardContent>
+              <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+                Notes
+              </Typography>
+              <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
+                {trimmedNotes}
+              </Typography>
+            </CardContent>
+          </Card>,
+        );
+      }
+
+      return (
+        <Stack spacing={3}>
+          {sections.map((element) => (
+            <Fragment key={element.key as string}>{element}</Fragment>
+          ))}
         </Stack>
       );
     }
@@ -1729,151 +1829,168 @@ const VenueNumbersList = () => {
     );
 
     const photosSection = (
-      <Stack spacing={2}>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Typography variant="h6" flexGrow={1}>
-            Report Evidence
-          </Typography>
+      <Card variant="outlined">
+        <CardContent sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Typography variant="h6" flexGrow={1}>
+              Report Evidence
+            </Typography>
+            {!readOnly && (
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<UploadFile />}
+                onClick={handlePhotoUploadClick}
+                disabled={!selectedReportId || uploadingPhoto || photoLimitReached}
+              >
+                Upload Photo
+              </Button>
+            )}
+          </Stack>
           {!readOnly && (
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<UploadFile />}
-              onClick={handlePhotoUploadClick}
-              disabled={!selectedReportId || uploadingPhoto || photoLimitReached}
-            >
-              Upload Photo
-            </Button>
+            <Typography variant="caption" color="text.secondary">
+              Only one photo can be attached.
+            </Typography>
           )}
-        </Stack>
-        {!readOnly && (
-          <Typography variant="caption" color="text.secondary">
-            Only one photo can be attached.
-          </Typography>
-        )}
-        <input
-          type="file"
-          accept="image/*"
-          ref={fileInputRef}
-          style={{ display: "none" }}
-          onChange={handlePhotoFileChange}
-        />
-        {uploadingPhoto && <CircularProgress size={20} />}
-        {photos.length === 0 ? (
-          <Typography variant="body2" color="text.secondary">
-            {readOnly
-              ? "No photos attached to this report."
-              : "No photos yet. Upload supporting photos for this report."}
-          </Typography>
-        ) : (
-          <Grid container spacing={2}>
-            {limitedPhotos.map((photo) => {
-              const previewUrl = photoPreviews[photo.id];
-              const previewError = photoPreviewErrors[photo.id];
-              const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl);
-              return (
-                <Grid size={{ xs: 12, sm: 6, md: 4 }} key={photo.id}>
-                  <Card variant="outlined">
-                    <CardContent>
-                      <Stack spacing={1}>
-                        <Box
-                          sx={{
-                            width: "100%",
-                            height: 180,
-                            borderRadius: 1,
-                            bgcolor: "grey.100",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            overflow: "hidden",
-                            border: "1px solid",
-                            borderColor: "divider",
-                            position: "relative",
-                          }}
-                        >
-                          {previewUrl ? (
-                            <Box
-                              component="img"
-                              src={previewUrl}
-                              alt={photo.originalName}
-                              sx={{ width: "100%", height: "100%", objectFit: "cover" }}
-                            />
-                          ) : previewError ? (
-                            <Typography variant="caption" color="text.secondary" align="center" px={2}>
-                              Preview unavailable
-                            </Typography>
-                          ) : (
-                            <CircularProgress size={24} />
-                          )}
-                          {!readOnly && (
-                            <Tooltip title="Delete photo">
-                              <span>
-                                <IconButton
-                                  size="small"
-                                  aria-label="Delete photo"
-                                  onClick={() => handleDeletePhoto(photo.id)}
-                                  disabled={uploadingPhoto}
-                                  sx={{
-                                    position: "absolute",
-                                    top: 8,
-                                    right: 8,
-                                    bgcolor: "rgba(0, 0, 0, 0.6)",
-                                    color: "common.white",
-                                    "&:hover": {
-                                      bgcolor: "error.main",
+          <input
+            type="file"
+            accept="image/*"
+            ref={fileInputRef}
+            style={{ display: "none" }}
+            onChange={handlePhotoFileChange}
+          />
+          {uploadingPhoto && <CircularProgress size={20} />}
+          {photos.length === 0 ? (
+            <Box
+              sx={{
+                borderRadius: 1.5,
+                border: "1px dashed",
+                borderColor: (theme) => alpha(theme.palette.info.main, 0.4),
+                px: 2,
+                py: 3,
+                textAlign: "center",
+                bgcolor: (theme) =>
+                  theme.palette.mode === "dark"
+                    ? alpha(theme.palette.info.main, 0.08)
+                    : alpha(theme.palette.info.main, 0.05),
+              }}
+            >
+              <Typography variant="body2" color="text.secondary">
+                {readOnly
+                  ? "No photos attached to this report."
+                  : "No photos yet. Upload supporting photos for this report."}
+              </Typography>
+            </Box>
+          ) : (
+            <Grid container spacing={2}>
+              {limitedPhotos.map((photo) => {
+                const previewUrl = photoPreviews[photo.id];
+                const previewError = photoPreviewErrors[photo.id];
+                const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl);
+                return (
+                  <Grid size={{ xs: 12, sm: 6, md: 4 }} key={photo.id}>
+                    <Card variant="outlined">
+                      <CardContent>
+                        <Stack spacing={1}>
+                          <Box
+                            sx={{
+                              width: "100%",
+                              height: 180,
+                              borderRadius: 1,
+                              bgcolor: "grey.100",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              overflow: "hidden",
+                              border: "1px solid",
+                              borderColor: "divider",
+                              position: "relative",
+                            }}
+                          >
+                            {previewUrl ? (
+                              <Box
+                                component="img"
+                                src={previewUrl}
+                                alt={photo.originalName}
+                                sx={{ width: "100%", height: "100%", objectFit: "cover" }}
+                              />
+                            ) : previewError ? (
+                              <Typography variant="caption" color="text.secondary" align="center" px={2}>
+                                Preview unavailable
+                              </Typography>
+                            ) : (
+                              <CircularProgress size={24} />
+                            )}
+                            {!readOnly && (
+                              <Tooltip title="Delete photo">
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    aria-label="Delete photo"
+                                    onClick={() => handleDeletePhoto(photo.id)}
+                                    disabled={uploadingPhoto}
+                                    sx={{
+                                      position: "absolute",
+                                      top: 8,
+                                      right: 8,
+                                      bgcolor: "rgba(0, 0, 0, 0.6)",
                                       color: "common.white",
-                                    },
-                                  }}
-                                >
-                                  <Delete fontSize="small" />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                          )}
-                        </Box>
-                        <Stack direction="row" spacing={1} alignItems="flex-start">
-                          <Box flexGrow={1}>
-                            <Typography variant="body2" fontWeight={600} noWrap title={photo.originalName}>
-                              {photo.originalName}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              {formatFileSize(photo.fileSize)}
-                              {photo.capturedAt ? (
-                                <>
-                                  {" \u2022 "}
-                                  {dayjs(photo.capturedAt).format("MMM D, YYYY h:mm A")}
-                                </>
-                              ) : null}
-                            </Typography>
+                                      "&:hover": {
+                                        bgcolor: "error.main",
+                                        color: "common.white",
+                                      },
+                                    }}
+                                  >
+                                    <Delete fontSize="small" />
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                            )}
                           </Box>
+                          <Stack direction="row" spacing={1} alignItems="flex-start">
+                            <Box flexGrow={1}>
+                              <Typography variant="body2" fontWeight={600} noWrap title={photo.originalName}>
+                                {photo.originalName}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {formatFileSize(photo.fileSize)}
+                                {photo.capturedAt ? (
+                                  <>
+                                    {" \u2022 "}
+                                    {dayjs(photo.capturedAt).format("MMM D, YYYY h:mm A")}
+                                  </>
+                                ) : null}
+                              </Typography>
+                            </Box>
+                          </Stack>
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            component="a"
+                            href={downloadHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            View Full Size
+                          </Button>
                         </Stack>
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          component="a"
-                          href={downloadHref}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          View Full Size
-                        </Button>
-                      </Stack>
-                    </CardContent>
-                  </Card>
-                </Grid>
-              );
-            })}
-          </Grid>
-        )}
-      </Stack>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                );
+              })}
+            </Grid>
+          )}
+        </CardContent>
+      </Card>
     );
 
     return (
-      <>
+      <Stack spacing={3}>
         {venuesSection}
         {photosSection}
         {notesSection}
-      </>
+      </Stack>
     );
   };
 
