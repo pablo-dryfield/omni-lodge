@@ -269,6 +269,14 @@ const VenueNumbersList = () => {
     return parsed;
   }, [searchParams]);
 
+  const requestedMode = useMemo(() => {
+    const raw = searchParams.get("mode");
+    if (raw === "view" || raw === "edit") {
+      return raw;
+    }
+    return null;
+  }, [searchParams]);
+
   const { venuesOptions, openBarVenueOptions } = useMemo(() => {
     const venues = (venuesState.data[0]?.data as Venue[] | undefined) ?? [];
     const activeVenues = venues
@@ -502,7 +510,10 @@ const VenueNumbersList = () => {
     setNotesExpanded(Boolean(adjustedForm.notes) || initialDidNotOperate);
 
     const status = nightReportDetail.data?.status ?? "draft";
-    const requestedMode = modeRequestRef.current;
+    if (!modeRequestRef.current && requestedMode) {
+      modeRequestRef.current = requestedMode;
+    }
+    const requestedModeFromRef = modeRequestRef.current;
     modeRequestRef.current = null;
 
     setActiveReportMode((prev) => {
@@ -510,8 +521,8 @@ const VenueNumbersList = () => {
       const isNewReport = lastLoadedId == null || lastLoadedId !== selectedReportId;
       lastLoadedReportIdRef.current = selectedReportId;
 
-      if (requestedMode) {
-        return requestedMode;
+      if (requestedModeFromRef) {
+        return requestedModeFromRef;
       }
       if (prev === "edit" && status === "submitted") {
         return "view";
@@ -521,7 +532,7 @@ const VenueNumbersList = () => {
       }
       return prev;
     });
-  }, [nightReportDetail.data, selectedReportId, computeInitialEditableKeys, counters]);
+  }, [nightReportDetail.data, selectedReportId, computeInitialEditableKeys, counters, requestedMode]);
 
   useEffect(() => {
     if (selectedReportId === null) {
@@ -661,7 +672,7 @@ const VenueNumbersList = () => {
       }
 
       setValidationError(null);
-      setSearchParams({ counterId: String(report.counterId) });
+      setSearchParams({ counterId: String(report.counterId), mode });
 
       if (report.id === selectedReportId) {
         setActiveReportMode(mode);

@@ -1167,19 +1167,27 @@ const Counters = (props: GenericPageProps) => {
   const venueStatusForCounter = useCallback(
     (counterIdValue: number | null) => {
       if (counterIdValue == null) {
-        return { label: 'Numbers (No Report)', color: 'primary' as const };
+        return { label: 'Numbers (No Report)', color: 'primary' as const, mode: 'edit' as const };
       }
       const summary = nightReportSummaries.find((report) => report.counterId === counterIdValue);
       if (!summary) {
-        return { label: 'Venue Numbers (No Report)', color: 'primary' as const };
+        return { label: 'Venue Numbers (No Report)', color: 'primary' as const, mode: 'edit' as const };
       }
       if (summary.status === 'submitted') {
-        return { label: 'Venue Numbers (Submitted)', color: 'success' as const };
+        return {
+          label: 'Venue Numbers (Submitted)',
+          color: 'success' as const,
+          mode: 'view' as const,
+        };
       }
       if (summary.status === 'draft') {
-        return { label: 'Venue Numbers (Draft)', color: 'warning' as const };
+        return {
+          label: 'Venue Numbers (Draft)',
+          color: 'warning' as const,
+          mode: 'edit' as const,
+        };
       }
-      return { label: 'Venue Numbers (No Report)', color: 'primary' as const };
+      return { label: 'Venue Numbers (No Report)', color: 'primary' as const, mode: 'edit' as const };
     },
     [nightReportSummaries],
   );
@@ -6553,9 +6561,20 @@ type SummaryRowOptions = {
                       )}
                     </Stack>
                   );
-                  const venueNumbersLink =
-                    counterIdValue != null ? `/venueNumbers?counterId=${counterIdValue}` : '/venueNumbers';
-                  const { label: venueButtonLabel, color: venueButtonColor } = venueStatusForCounter(counterIdValue);
+                  const venueStatus = venueStatusForCounter(counterIdValue);
+                  const { label: venueButtonLabel, color: venueButtonColor, mode: venueButtonMode } = venueStatus;
+                  const venueNumbersLink = (() => {
+                    if (counterIdValue == null) {
+                      return '/venueNumbers';
+                    }
+                    const params = new URLSearchParams();
+                    params.set('counterId', String(counterIdValue));
+                    if (venueButtonMode) {
+                      params.set('mode', venueButtonMode);
+                    }
+                    const query = params.toString();
+                    return `/venueNumbers${query ? `?${query}` : ''}`;
+                  })();
                   const isExpanded = counterIdValue != null && counterIdValue === expandedCounterId;
                   const handleRowClick = () => {
                     handleCounterSelect(counter);
