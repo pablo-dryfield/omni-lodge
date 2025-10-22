@@ -1354,13 +1354,23 @@ const VenueNumbersList = () => {
 
                       const detailContent = venue.isOpenBar ? (
                         openBarTiles.length > 0 ? (
-                          <Grid container spacing={1.5}>
+                          <Box
+                            sx={{
+                              display: "grid",
+                              gap: 1.5,
+                              gridTemplateColumns:
+                                openBarTiles.length === 1
+                                  ? "1fr"
+                                  : {
+                                      xs: "repeat(2, minmax(0, 1fr))",
+                                      sm: `repeat(${openBarTiles.length}, minmax(0, 1fr))`,
+                                    },
+                            }}
+                          >
                             {openBarTiles.map((tile) => (
-                              <Grid size={{ xs: 12, sm: openBarTiles.length === 1 ? 12 : 6 }} key={`${venue.key}-${tile.label}`}>
-                                {metricCard(tile.label, tile.value ?? null, tile.palette)}
-                              </Grid>
+                              <Box key={`${venue.key}-${tile.label}`}>{metricCard(tile.label, tile.value ?? null, tile.palette)}</Box>
                             ))}
-                          </Grid>
+                          </Box>
                         ) : (
                           <Typography variant="body2" color="text.secondary">
                             No open bar breakdown recorded.
