@@ -760,56 +760,34 @@ const formatCounterSnapshotDetails = (
     return '';
   }
 
-  const lines: string[] = [];
-  const walkInSummary = formatWalkInSnapshotSummary(note, channels, addons);
-  if (walkInSummary) {
-    lines.push(walkInSummary);
-  }
-
-  const manual = stripSnapshotFromNote(note);
-  if (manual) {
-    lines.push(manual);
-  }
-
-  const cashMap = extractCashSnapshotMap(note);
   const freeMap = extractFreeSnapshotMap(note);
   const addonNameById = new Map<number, string>();
   addons.forEach((addon) => addonNameById.set(addon.addonId, addon.name));
   const channelNameById = new Map<number, string>();
   channels.forEach((channel) => channelNameById.set(channel.id, channel.name ?? `Channel ${channel.id}`));
 
-  cashMap.forEach((entry, channelId) => {
-    const channelName = channelNameById.get(channelId) ?? `Channel ${channelId}`;
-    const totals = aggregateCashTotals(entry);
-    if (totals.size > 0) {
-      const cashSummary = Array.from(totals.entries())
-        .map(([currency, amount]) => `${currency} ${amount.toFixed(2)}`)
-        .join(', ');
-      lines.push(`Cash Collected (${channelName}): ${cashSummary}`);
-    }
-    if (entry.tickets && entry.tickets.length > 0) {
-      const ticketNames = new Set<string>();
-      entry.tickets.forEach((ticket) => {
-        if (ticket.name) {
-          ticketNames.add(ticket.name);
-        }
-      });
-      if (ticketNames.size > 0) {
-        lines.push(`Tickets (${channelName}): ${Array.from(ticketNames).join(', ')}`);
-      }
-    }
-  });
+  const freeDetailsByChannel: Array<{ channelLabel: string; entries: string[] }> = [];
 
   freeMap.forEach((entry, channelId) => {
     const channelName = channelNameById.get(channelId) ?? `Channel ${channelId}`;
+    const entries: string[] = [];
+
     if (entry.people) {
       const qty = Math.max(0, Math.round(Number(entry.people.qty) || 0));
       const noteText = (entry.people.note ?? '').toString().trim();
       if (qty > 0 || noteText.length > 0) {
-        const detail = `${qty}${noteText ? ` - ${noteText}` : ''}`;
-        lines.push(`Free People (${channelName}): ${detail}`);
+        const detailParts: string[] = [];
+        if (qty > 0) {
+          detailParts.push(String(qty));
+        }
+        if (noteText.length > 0) {
+          detailParts.push(`Reason: ${noteText}`);
+        }
+        const detail = detailParts.join(detailParts.length > 1 ? ' - ' : '');
+        entries.push(`People: ${detail || '-'}`);
       }
     }
+
     if (entry.addons) {
       Object.entries(entry.addons).forEach(([addonIdKey, info]) => {
         const addonId = Number(addonIdKey);
@@ -822,13 +800,44 @@ const formatCounterSnapshotDetails = (
           return;
         }
         const addonName = addonNameById.get(addonId) ?? `Addon ${addonId}`;
-        const detail = `${qty}${noteText ? ` - ${noteText}` : ''}`;
-        lines.push(`Free ${addonName} (${channelName}): ${detail}`);
+        const detailParts: string[] = [];
+        if (qty > 0) {
+          detailParts.push(String(qty));
+        }
+        if (noteText.length > 0) {
+          detailParts.push(`Reason: ${noteText}`);
+        }
+        const detail = detailParts.join(detailParts.length > 1 ? ' - ' : '');
+        entries.push(`${addonName}: ${detail || '-'}`);
       });
+    }
+
+    if (entries.length > 0) {
+      freeDetailsByChannel.push({ channelLabel: channelName, entries });
     }
   });
 
-  return lines.join('\n').trim();
+  const sections: string[] = [];
+  if (freeDetailsByChannel.length > 0) {
+    const multipleChannels = freeDetailsByChannel.length > 1;
+    const freeLines: string[] = ['Free Tickets:'];
+    freeDetailsByChannel.forEach(({ channelLabel, entries }) => {
+      if (multipleChannels) {
+        freeLines.push(`${channelLabel}:`);
+      }
+      entries.forEach((entry) => {
+        freeLines.push(multipleChannels ? `  ${entry}` : entry);
+      });
+    });
+    sections.push(freeLines.join('\n'));
+  }
+
+  const manual = stripSnapshotFromNote(note);
+  if (manual) {
+    sections.push(manual);
+  }
+
+  return sections.join('\n\n').trim();
 };
 
 const formatCounterNotePreview = (
@@ -6016,7 +6025,7 @@ type SummaryRowOptions = {
 
   const renderSummaryStep = () => {
     const { byChannel: summaryChannels, totals: summaryTotals } = summaryData;
-  const beautifiedNotes = formatCounterSnapshotDetails(counterNotes, registry.channels, combinedAddonList);
+    const beautifiedNotes = formatCounterSnapshotDetails(counterNotes, registry.channels, combinedAddonList);
 
     if (summaryChannels.length === 0) {
       return (
@@ -6032,21 +6041,6 @@ type SummaryRowOptions = {
 
     return (
       <Stack spacing={3}>
-        {beautifiedNotes && (
-          <Box>
-            <Typography variant="subtitle1" fontWeight={600} gutterBottom>
-              Notes
-            </Typography>
-            <Typography
-              variant="body2"
-              color="text.secondary"
-              sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-            >
-              {beautifiedNotes}
-            </Typography>
-            <Divider sx={{ my: 1.5 }} />
-          </Box>
-        )}
         <Box>
           <Grid container spacing={2}>
             {summaryChannels.map((item) => {
@@ -6154,6 +6148,21 @@ type SummaryRowOptions = {
             </Grid>
           </Grid>
         </Box>
+        {beautifiedNotes && (
+          <Box>
+            <Divider sx={{ mb: 1.5 }} />
+            <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+              Notes
+            </Typography>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+            >
+              {beautifiedNotes}
+            </Typography>
+          </Box>
+        )}
       </Stack>
     );
   };
