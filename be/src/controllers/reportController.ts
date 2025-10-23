@@ -43,7 +43,7 @@ const FULL_ACCESS_ROLE_SLUGS = new Set([
 ]);
 
 const COMMISSION_RATE_PER_ATTENDEE = 6;
-const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-09");
+const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-08");
 
 export const getCommissionByDateRange = async (req: Request, res: Response): Promise<void> => {
   try {
