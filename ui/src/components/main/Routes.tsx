@@ -29,6 +29,12 @@ import SettingsChannelProductPrices from "../../pages/settings/SettingsChannelPr
 import SettingsChannelCommissions from "../../pages/settings/SettingsChannelCommissions";
 import SettingsActions from "../../pages/settings/SettingsActions";
 import SettingsChannels from "../../pages/settings/SettingsChannels";
+import SchedulingLayout from "../../pages/scheduling/SchedulingLayout";
+import AvailabilityPage from "../../pages/scheduling/AvailabilityPage";
+import BuilderPage from "../../pages/scheduling/BuilderPage";
+import MyShiftsPage from "../../pages/scheduling/MyShiftsPage";
+import SwapsPage from "../../pages/scheduling/SwapsPage";
+import HistoryPage from "../../pages/scheduling/HistoryPage";
 import FinanceLayout from "../../pages/Finance/FinanceLayout";
 import FinanceDashboard from "../../pages/Finance/FinanceDashboard";
 import FinanceTransactions from "../../pages/Finance/FinanceTransactions";
@@ -55,6 +61,14 @@ const Routes = () => {
       <Route path="/venueNumbers" element={<VenueNumbers title="Venue Numbers" />} />
       <Route path="/pays" element={<Pays />} />
       <Route path="/reports" element={<Reports title={"Reports"} />} />
+      <Route path="/scheduling" element={<SchedulingLayout />}>
+        <Route index element={<AvailabilityPage />} />
+        <Route path="availability" element={<AvailabilityPage />} />
+        <Route path="builder" element={<BuilderPage />} />
+        <Route path="my-shifts" element={<MyShiftsPage />} />
+        <Route path="swaps" element={<SwapsPage />} />
+        <Route path="history" element={<HistoryPage />} />
+      </Route>
       <Route path="/finance" element={<FinanceLayout />}>
         <Route index element={<FinanceDashboard />} />
         <Route path="transactions" element={<FinanceTransactions />} />

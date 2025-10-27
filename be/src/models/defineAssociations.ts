@@ -31,10 +31,23 @@ import {
   FinanceTransaction,
   FinanceVendor,
 } from '../finance/models/index.js';
+import StaffProfile from './StaffProfile.js';
+import ShiftType from './ShiftType.js';
+import ShiftTemplate from './ShiftTemplate.js';
+import ScheduleWeek from './ScheduleWeek.js';
+import ShiftInstance from './ShiftInstance.js';
+import Availability from './Availability.js';
+import ShiftAssignment from './ShiftAssignment.js';
+import SwapRequest from './SwapRequest.js';
+import Export from './Export.js';
+import Notification from './Notification.js';
+import AuditLog from './AuditLog.js';
 
 export function defineAssociations() {
   // User Associations
   User.belongsTo(UserType, { foreignKey: 'userTypeId', as: 'role' });
+  User.hasOne(StaffProfile, { foreignKey: 'user_id', as: 'staffProfile' });
+  StaffProfile.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
   // UserType Associations
   UserType.hasMany(User, { foreignKey: 'userTypeId', as: 'users' });
@@ -133,6 +146,33 @@ export function defineAssociations() {
   FinanceCategory.hasMany(FinanceVendor, { foreignKey: 'defaultCategoryId', as: 'vendors' });
   FinanceCategory.hasMany(FinanceClient, { foreignKey: 'defaultCategoryId', as: 'clients' });
 
+  // Scheduling associations
+  ShiftType.hasMany(ShiftTemplate, { foreignKey: 'shift_type_id', as: 'templates' });
+  ShiftType.hasMany(ShiftInstance, { foreignKey: 'shift_type_id', as: 'instances' });
+  ShiftTemplate.belongsTo(ShiftType, { foreignKey: 'shift_type_id', as: 'shiftType' });
+  ShiftTemplate.hasMany(ShiftInstance, { foreignKey: 'shift_template_id', as: 'instances' });
+  ScheduleWeek.hasMany(ShiftInstance, { foreignKey: 'schedule_week_id', as: 'shiftInstances' });
+  ScheduleWeek.hasMany(Availability, { foreignKey: 'schedule_week_id', as: 'availabilities' });
+  ScheduleWeek.hasMany(Export, { foreignKey: 'schedule_week_id', as: 'exports' });
+  ShiftInstance.belongsTo(ScheduleWeek, { foreignKey: 'schedule_week_id', as: 'scheduleWeek' });
+  ShiftInstance.belongsTo(ShiftType, { foreignKey: 'shift_type_id', as: 'shiftType' });
+  ShiftInstance.belongsTo(ShiftTemplate, { foreignKey: 'shift_template_id', as: 'template' });
+  ShiftInstance.hasMany(ShiftAssignment, { foreignKey: 'shift_instance_id', as: 'assignments' });
+  ShiftAssignment.belongsTo(ShiftInstance, { foreignKey: 'shift_instance_id', as: 'shiftInstance' });
+  ShiftAssignment.belongsTo(User, { foreignKey: 'user_id', as: 'assignee' });
+  ShiftAssignment.hasMany(SwapRequest, { foreignKey: 'from_assignment_id', as: 'outgoingSwapRequests' });
+  ShiftAssignment.hasMany(SwapRequest, { foreignKey: 'to_assignment_id', as: 'incomingSwapRequests' });
+  SwapRequest.belongsTo(ShiftAssignment, { foreignKey: 'from_assignment_id', as: 'fromAssignment' });
+  SwapRequest.belongsTo(ShiftAssignment, { foreignKey: 'to_assignment_id', as: 'toAssignment' });
+  SwapRequest.belongsTo(User, { foreignKey: 'requester_id', as: 'requester' });
+  SwapRequest.belongsTo(User, { foreignKey: 'partner_id', as: 'partner' });
+  SwapRequest.belongsTo(User, { foreignKey: 'manager_id', as: 'manager' });
+  Availability.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+  Availability.belongsTo(ScheduleWeek, { foreignKey: 'schedule_week_id', as: 'scheduleWeek' });
+  Availability.belongsTo(ShiftType, { foreignKey: 'shift_type_id', as: 'preferredShiftType' });
+  Export.belongsTo(ScheduleWeek, { foreignKey: 'schedule_week_id', as: 'scheduleWeek' });
+  Notification.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+  AuditLog.belongsTo(User, { foreignKey: 'actor_id', as: 'actor' });
 }
 
 

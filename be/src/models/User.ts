@@ -1,5 +1,7 @@
 import { Model, Table, Column, PrimaryKey, AutoIncrement, Unique, AllowNull, Default, DataType } from 'sequelize-typescript';
 
+export type UserRole = 'owner' | 'admin' | 'assistant_manager' | 'guide';
+
 @Table({
   timestamps: true,
   modelName: 'User',
@@ -36,6 +38,11 @@ export default class User extends Model {
   @AllowNull(true)
   @Column(DataType.INTEGER)
   declare userTypeId: number;
+
+  @AllowNull(false)
+  @Default('guide')
+  @Column({ field: 'role', type: DataType.ENUM('owner', 'admin', 'assistant_manager', 'guide') })
+  declare roleKey: UserRole;
 
   @AllowNull(false)
   @Default(DataType.NOW)
