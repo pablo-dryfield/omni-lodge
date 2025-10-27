@@ -28,6 +28,18 @@ import NightReport from "../models/NightReport.js";
 import NightReportVenue from "../models/NightReportVenue.js";
 import NightReportPhoto from "../models/NightReportPhoto.js";
 import Venue from "../models/Venue.js";
+import {
+  FinanceAccount,
+  FinanceAuditLog,
+  FinanceBudget,
+  FinanceCategory,
+  FinanceClient,
+  FinanceFile,
+  FinanceManagementRequest,
+  FinanceRecurringRule,
+  FinanceTransaction,
+  FinanceVendor,
+} from "../finance/models/index.js";
 
 const environment = (process.env.NODE_ENV || "development").trim();
 const envFile = environment === "production" ? ".env.prod" : ".env.dev";
@@ -85,6 +97,16 @@ const sequelize = new Sequelize({
     ModuleAction,
     RolePagePermission,
     RoleModulePermission,
+    FinanceAccount,
+    FinanceCategory,
+    FinanceVendor,
+    FinanceClient,
+    FinanceFile,
+    FinanceTransaction,
+    FinanceRecurringRule,
+    FinanceManagementRequest,
+    FinanceBudget,
+    FinanceAuditLog,
   ],
 });
 

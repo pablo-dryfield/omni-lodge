@@ -19,6 +19,18 @@ import PaymentMethod from './PaymentMethod.js';
 import NightReport from './NightReport.js';
 import NightReportVenue from './NightReportVenue.js';
 import NightReportPhoto from './NightReportPhoto.js';
+import {
+  FinanceAccount,
+  FinanceAuditLog,
+  FinanceBudget,
+  FinanceCategory,
+  FinanceClient,
+  FinanceFile,
+  FinanceManagementRequest,
+  FinanceRecurringRule,
+  FinanceTransaction,
+  FinanceVendor,
+} from '../finance/models/index.js';
 
 export function defineAssociations() {
   // User Associations
@@ -114,6 +126,37 @@ export function defineAssociations() {
   Counter.hasOne(NightReport, { foreignKey: 'counterId', as: 'nightReport', onDelete: 'CASCADE', hooks: true });
   NightReportVenue.belongsTo(NightReport, { foreignKey: 'reportId', as: 'report', onDelete: 'CASCADE' });
   NightReportPhoto.belongsTo(NightReport, { foreignKey: 'reportId', as: 'report', onDelete: 'CASCADE' });
+
+  // Finance associations
+  FinanceAccount.hasMany(FinanceTransaction, { foreignKey: 'accountId', as: 'transactions' });
+  FinanceTransaction.belongsTo(FinanceAccount, { foreignKey: 'accountId', as: 'account' });
+
+  FinanceCategory.hasMany(FinanceTransaction, { foreignKey: 'categoryId', as: 'transactions' });
+  FinanceTransaction.belongsTo(FinanceCategory, { foreignKey: 'categoryId', as: 'category' });
+
+  FinanceCategory.hasMany(FinanceVendor, { foreignKey: 'defaultCategoryId', as: 'vendors' });
+  FinanceCategory.hasMany(FinanceClient, { foreignKey: 'defaultCategoryId', as: 'clients' });
+
+  FinanceVendor.belongsTo(FinanceCategory, { foreignKey: 'defaultCategoryId', as: 'defaultCategory' });
+  FinanceClient.belongsTo(FinanceCategory, { foreignKey: 'defaultCategoryId', as: 'defaultCategory' });
+
+  FinanceTransaction.belongsTo(FinanceVendor, { foreignKey: 'counterpartyId', as: 'vendor', constraints: false });
+  FinanceTransaction.belongsTo(FinanceClient, { foreignKey: 'counterpartyId', as: 'client', constraints: false });
+
+  FinanceTransaction.belongsTo(User, { foreignKey: 'createdBy', as: 'creator' });
+  FinanceTransaction.belongsTo(User, { foreignKey: 'approvedBy', as: 'approver' });
+  FinanceTransaction.belongsTo(FinanceFile, { foreignKey: 'invoiceFileId', as: 'invoiceFile' });
+  FinanceFile.belongsTo(User, { foreignKey: 'uploadedBy', as: 'uploader' });
+
+  FinanceRecurringRule.belongsTo(User, { foreignKey: 'createdBy', as: 'creator' });
+  FinanceRecurringRule.belongsTo(User, { foreignKey: 'updatedBy', as: 'updater' });
+
+  FinanceManagementRequest.belongsTo(User, { foreignKey: 'requestedBy', as: 'requester' });
+  FinanceManagementRequest.belongsTo(User, { foreignKey: 'managerId', as: 'manager' });
+
+  FinanceBudget.belongsTo(FinanceCategory, { foreignKey: 'categoryId', as: 'category' });
+
+  FinanceAuditLog.belongsTo(User, { foreignKey: 'performedBy', as: 'actor' });
 }
 
 

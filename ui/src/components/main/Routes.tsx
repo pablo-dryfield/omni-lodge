@@ -29,6 +29,19 @@ import SettingsChannelProductPrices from "../../pages/settings/SettingsChannelPr
 import SettingsChannelCommissions from "../../pages/settings/SettingsChannelCommissions";
 import SettingsActions from "../../pages/settings/SettingsActions";
 import SettingsChannels from "../../pages/settings/SettingsChannels";
+import FinanceLayout from "../../pages/Finance/FinanceLayout";
+import FinanceDashboard from "../../pages/Finance/FinanceDashboard";
+import FinanceTransactions from "../../pages/Finance/FinanceTransactions";
+import FinanceAccounts from "../../pages/Finance/FinanceAccounts";
+import FinanceVendors from "../../pages/Finance/FinanceVendors";
+import FinanceClients from "../../pages/Finance/FinanceClients";
+import FinanceCategories from "../../pages/Finance/FinanceCategories";
+import FinanceRecurring from "../../pages/Finance/FinanceRecurring";
+import FinanceBudgets from "../../pages/Finance/FinanceBudgets";
+import FinanceManagementRequests from "../../pages/Finance/FinanceManagementRequests";
+import FinanceReports from "../../pages/Finance/FinanceReports";
+import FinanceFiles from "../../pages/Finance/FinanceFiles";
+import FinanceSettings from "../../pages/Finance/FinanceSettings";
 
 const Routes = () => {
   return (
@@ -42,6 +55,20 @@ const Routes = () => {
       <Route path="/venueNumbers" element={<VenueNumbers title="Venue Numbers" />} />
       <Route path="/pays" element={<Pays />} />
       <Route path="/reports" element={<Reports title={"Reports"} />} />
+      <Route path="/finance" element={<FinanceLayout />}>
+        <Route index element={<FinanceDashboard />} />
+        <Route path="transactions" element={<FinanceTransactions />} />
+        <Route path="accounts" element={<FinanceAccounts />} />
+        <Route path="vendors" element={<FinanceVendors />} />
+        <Route path="clients" element={<FinanceClients />} />
+        <Route path="categories" element={<FinanceCategories />} />
+        <Route path="recurring" element={<FinanceRecurring />} />
+        <Route path="budgets" element={<FinanceBudgets />} />
+        <Route path="management-requests" element={<FinanceManagementRequests />} />
+        <Route path="files" element={<FinanceFiles />} />
+        <Route path="reports" element={<FinanceReports />} />
+        <Route path="settings" element={<FinanceSettings />} />
+      </Route>
 
       <Route path="/settings" element={<SettingsLayout />}>
         <Route index element={<SettingsLanding />} />
