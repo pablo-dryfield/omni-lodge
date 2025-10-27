@@ -83,7 +83,7 @@ const FinanceAccounts = () => {
   };
 
   return (
-    <PageAccessGuard pageSlug={PAGE_SLUGS.financeAccounts}>
+    <PageAccessGuard pageSlug={PAGE_SLUGS.finance}>
       <Stack gap="lg">
         <Group justify="space-between">
           <Title order={3}>Accounts</Title>
