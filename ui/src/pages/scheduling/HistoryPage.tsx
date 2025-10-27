@@ -41,7 +41,7 @@ const HistoryPage = () => {
     const fetchUsers = async () => {
       const response = await axiosInstance.get<ServerResponse<{ id: number; firstName: string; lastName: string }>>("/users/active");
       const items = response.data?.[0]?.data ?? [];
-      setUserOptions(items.map((item) => ({ value: item.id.toString(), label: ${item.firstName}  })));
+      setUserOptions(items.map((item) => ({ value: item.id.toString(), label: `${item.firstName} ${item.lastName}` })));
     };
     void fetchUsers();
   }, []);
@@ -133,3 +133,4 @@ const HistoryPage = () => {
 };
 
 export default HistoryPage;
+

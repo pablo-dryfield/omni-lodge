@@ -1,6 +1,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Group, Stack, Switch, Text, TimeInput, Title } from "@mantine/core";
+import { Alert, Button, Card, Group, Stack, Switch, Text, Title } from "@mantine/core";
+import { TimeInput } from "@mantine/dates";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
 import weekday from "dayjs/plugin/weekday";
