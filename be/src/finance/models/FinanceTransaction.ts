@@ -34,41 +34,41 @@ export default class FinanceTransaction extends Model {
   declare id: number;
 
   @AllowNull(false)
-  @Column(DataType.ENUM('income', 'expense', 'transfer', 'refund'))
+  @Column({ field: 'kind', type: DataType.ENUM('income', 'expense', 'transfer', 'refund') })
   declare kind: FinanceTransactionKind;
 
   @AllowNull(false)
-  @Column(DataType.DATEONLY)
+  @Column({ field: 'date', type: DataType.DATEONLY })
   declare date: string;
 
   @ForeignKey(() => FinanceAccount)
   @AllowNull(false)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'account_id', type: DataType.INTEGER })
   declare accountId: number;
 
   @BelongsTo(() => FinanceAccount, 'accountId')
   declare account?: FinanceAccount;
 
   @AllowNull(false)
-  @Column(DataType.STRING(3))
+  @Column({ field: 'currency', type: DataType.STRING(3) })
   declare currency: string;
 
   @AllowNull(false)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'amount_minor', type: DataType.INTEGER })
   declare amountMinor: number;
 
   @AllowNull(false)
   @Default(1)
-  @Column(DataType.DECIMAL(18, 6))
+  @Column({ field: 'fx_rate', type: DataType.DECIMAL(18, 6) })
   declare fxRate: string;
 
   @AllowNull(false)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'base_amount_minor', type: DataType.INTEGER })
   declare baseAmountMinor: number;
 
   @ForeignKey(() => FinanceCategory)
   @AllowNull(true)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'category_id', type: DataType.INTEGER })
   declare categoryId: number | null;
 
   @BelongsTo(() => FinanceCategory, 'categoryId')
@@ -76,11 +76,11 @@ export default class FinanceTransaction extends Model {
 
   @AllowNull(false)
   @Default('none')
-  @Column(DataType.ENUM('vendor', 'client', 'none'))
+  @Column({ field: 'counterparty_type', type: DataType.ENUM('vendor', 'client', 'none') })
   declare counterpartyType: FinanceTransactionCounterpartyType;
 
   @AllowNull(true)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'counterparty_id', type: DataType.INTEGER })
   declare counterpartyId: number | null;
 
   @BelongsTo(() => FinanceVendor, {
@@ -96,29 +96,29 @@ export default class FinanceTransaction extends Model {
   declare client?: FinanceClient | null;
 
   @AllowNull(true)
-  @Column(DataType.STRING(60))
+  @Column({ field: 'payment_method', type: DataType.STRING(60) })
   declare paymentMethod: string | null;
 
   @AllowNull(false)
   @Default('planned')
-  @Column(DataType.ENUM('planned', 'approved', 'paid', 'reimbursed', 'void'))
+  @Column({ field: 'status', type: DataType.ENUM('planned', 'approved', 'paid', 'reimbursed', 'void') })
   declare status: FinanceTransactionStatus;
 
   @AllowNull(true)
-  @Column(DataType.TEXT)
+  @Column({ field: 'description', type: DataType.TEXT })
   declare description: string | null;
 
   @AllowNull(true)
-  @Column(DataType.JSONB)
+  @Column({ field: 'tags', type: DataType.JSONB })
   declare tags: Record<string, unknown> | null;
 
   @AllowNull(true)
-  @Column(DataType.JSONB)
+  @Column({ field: 'meta', type: DataType.JSONB })
   declare meta: Record<string, unknown> | null;
 
   @ForeignKey(() => FinanceFile)
   @AllowNull(true)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'invoice_file_id', type: DataType.INTEGER })
   declare invoiceFileId: number | null;
 
   @BelongsTo(() => FinanceFile, 'invoiceFileId')
@@ -126,7 +126,7 @@ export default class FinanceTransaction extends Model {
 
   @ForeignKey(() => User)
   @AllowNull(false)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'created_by', type: DataType.INTEGER })
   declare createdBy: number;
 
   @BelongsTo(() => User, 'createdBy')
@@ -134,7 +134,7 @@ export default class FinanceTransaction extends Model {
 
   @ForeignKey(() => User)
   @AllowNull(true)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'approved_by', type: DataType.INTEGER })
   declare approvedBy: number | null;
 
   @BelongsTo(() => User, 'approvedBy')
@@ -142,11 +142,12 @@ export default class FinanceTransaction extends Model {
 
   @AllowNull(false)
   @Default(DataType.NOW)
-  @Column(DataType.DATE)
+  @Column({ field: 'created_at', type: DataType.DATE })
   declare createdAt: Date;
 
   @AllowNull(true)
-  @Column(DataType.DATE)
+  @Column({ field: 'updated_at', type: DataType.DATE })
   declare updatedAt: Date | null;
 
 }
+

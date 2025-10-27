@@ -11,7 +11,7 @@ import {
   BelongsTo,
   HasMany,
 } from 'sequelize-typescript';
-import FinanceTransaction from './FinanceTransaction.js';
+import type FinanceTransaction from './FinanceTransaction.js';
 
 export type FinanceCategoryKind = 'income' | 'expense';
 
@@ -36,7 +36,7 @@ export default class FinanceCategory extends Model {
 
   @ForeignKey(() => FinanceCategory)
   @AllowNull(true)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'parent_id', type: DataType.INTEGER })
   declare parentId: number | null;
 
   @BelongsTo(() => FinanceCategory, 'parentId')
@@ -47,10 +47,17 @@ export default class FinanceCategory extends Model {
 
   @AllowNull(false)
   @Default(true)
-  @Column(DataType.BOOLEAN)
+  @Column({ field: 'is_active', type: DataType.BOOLEAN })
   declare isActive: boolean;
 
-  @HasMany(() => FinanceTransaction, 'categoryId')
   declare transactions?: FinanceTransaction[];
-}
 
+  @AllowNull(false)
+  @Default(DataType.NOW)
+  @Column({ field: 'created_at', type: DataType.DATE })
+  declare createdAt: Date;
+
+  @AllowNull(true)
+  @Column({ field: 'updated_at', type: DataType.DATE })
+  declare updatedAt: Date | null;
+}

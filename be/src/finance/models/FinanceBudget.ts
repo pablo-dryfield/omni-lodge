@@ -6,6 +6,7 @@ import {
   PrimaryKey,
   AutoIncrement,
   AllowNull,
+  Default,
   ForeignKey,
   BelongsTo,
   Unique,
@@ -25,24 +26,32 @@ export default class FinanceBudget extends Model {
 
   @AllowNull(false)
   @Unique('finance_budgets_period_category_unique')
-  @Column(DataType.STRING(7))
+  @Column({ field: 'period', type: DataType.STRING(7) })
   declare period: string;
 
   @ForeignKey(() => FinanceCategory)
   @AllowNull(false)
   @Unique('finance_budgets_period_category_unique')
-  @Column(DataType.INTEGER)
+  @Column({ field: 'category_id', type: DataType.INTEGER })
   declare categoryId: number;
 
   @BelongsTo(() => FinanceCategory, 'categoryId')
   declare category?: FinanceCategory;
 
   @AllowNull(false)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'amount_minor', type: DataType.INTEGER })
   declare amountMinor: number;
 
   @AllowNull(false)
-  @Column(DataType.STRING(3))
+  @Column({ field: 'currency', type: DataType.STRING(3) })
   declare currency: string;
-}
 
+  @AllowNull(false)
+  @Default(DataType.NOW)
+  @Column({ field: 'created_at', type: DataType.DATE })
+  declare createdAt: Date;
+
+  @AllowNull(true)
+  @Column({ field: 'updated_at', type: DataType.DATE })
+  declare updatedAt: Date | null;
+}

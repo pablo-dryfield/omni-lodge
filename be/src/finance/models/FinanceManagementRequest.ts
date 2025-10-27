@@ -31,20 +31,20 @@ export default class FinanceManagementRequest extends Model {
   declare type: string;
 
   @AllowNull(false)
-  @Column(DataType.STRING(80))
+  @Column({ field: 'target_entity', type: DataType.STRING(80) })
   declare targetEntity: string;
 
   @AllowNull(true)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'target_id', type: DataType.INTEGER })
   declare targetId: number | null;
 
   @AllowNull(false)
-  @Column(DataType.JSONB)
+  @Column({ field: 'payload', type: DataType.JSONB })
   declare payload: Record<string, unknown>;
 
   @ForeignKey(() => User)
   @AllowNull(false)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'requested_by', type: DataType.INTEGER })
   declare requestedBy: number;
 
   @BelongsTo(() => User, 'requestedBy')
@@ -52,28 +52,36 @@ export default class FinanceManagementRequest extends Model {
 
   @AllowNull(false)
   @Default('open')
-  @Column(DataType.ENUM('open', 'approved', 'returned', 'rejected'))
+  @Column({ field: 'status', type: DataType.ENUM('open', 'approved', 'returned', 'rejected') })
   declare status: FinanceManagementRequestStatus;
 
   @ForeignKey(() => User)
   @AllowNull(true)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'manager_id', type: DataType.INTEGER })
   declare managerId: number | null;
 
   @BelongsTo(() => User, 'managerId')
   declare manager?: User | null;
 
   @AllowNull(true)
-  @Column(DataType.TEXT)
+  @Column({ field: 'decision_note', type: DataType.TEXT })
   declare decisionNote: string | null;
 
   @AllowNull(false)
   @Default('normal')
-  @Column(DataType.ENUM('low', 'normal', 'high'))
+  @Column({ field: 'priority', type: DataType.ENUM('low', 'normal', 'high') })
   declare priority: FinanceManagementRequestPriority;
 
   @AllowNull(true)
-  @Column(DataType.DATE)
+  @Column({ field: 'due_at', type: DataType.DATE })
   declare dueAt: Date | null;
-}
 
+  @AllowNull(false)
+  @Default(DataType.NOW)
+  @Column({ field: 'created_at', type: DataType.DATE })
+  declare createdAt: Date;
+
+  @AllowNull(true)
+  @Column({ field: 'updated_at', type: DataType.DATE })
+  declare updatedAt: Date | null;
+}

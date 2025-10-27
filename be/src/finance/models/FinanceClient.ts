@@ -9,10 +9,9 @@ import {
   Default,
   ForeignKey,
   BelongsTo,
-  HasMany,
 } from 'sequelize-typescript';
 import FinanceCategory from './FinanceCategory.js';
-import FinanceTransaction from './FinanceTransaction.js';
+import type FinanceTransaction from './FinanceTransaction.js';
 
 @Table({
   tableName: 'finance_clients',
@@ -30,7 +29,7 @@ export default class FinanceClient extends Model {
   declare name: string;
 
   @AllowNull(true)
-  @Column(DataType.STRING(64))
+  @Column({ field: 'tax_id', type: DataType.STRING(64) })
   declare taxId: string | null;
 
   @AllowNull(true)
@@ -43,7 +42,7 @@ export default class FinanceClient extends Model {
 
   @ForeignKey(() => FinanceCategory)
   @AllowNull(true)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'default_category_id', type: DataType.INTEGER })
   declare defaultCategoryId: number | null;
 
   @BelongsTo(() => FinanceCategory, 'defaultCategoryId')
@@ -55,10 +54,17 @@ export default class FinanceClient extends Model {
 
   @AllowNull(false)
   @Default(true)
-  @Column(DataType.BOOLEAN)
+  @Column({ field: 'is_active', type: DataType.BOOLEAN })
   declare isActive: boolean;
 
-  @HasMany(() => FinanceTransaction, 'counterpartyId')
   declare transactions?: FinanceTransaction[];
-}
 
+  @AllowNull(false)
+  @Default(DataType.NOW)
+  @Column({ field: 'created_at', type: DataType.DATE })
+  declare createdAt: Date;
+
+  @AllowNull(true)
+  @Column({ field: 'updated_at', type: DataType.DATE })
+  declare updatedAt: Date | null;
+}

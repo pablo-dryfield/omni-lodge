@@ -6,7 +6,6 @@ import {
   PrimaryKey,
   AutoIncrement,
   AllowNull,
-  Index,
   Default,
   ForeignKey,
   BelongsTo,
@@ -25,34 +24,32 @@ export default class FinanceFile extends Model {
   declare id: number;
 
   @AllowNull(false)
-  @Column(DataType.STRING(255))
+  @Column({ field: 'original_name', type: DataType.STRING(255) })
   declare originalName: string;
 
   @AllowNull(false)
-  @Column(DataType.STRING(120))
+  @Column({ field: 'mime_type', type: DataType.STRING(120) })
   declare mimeType: string;
 
   @AllowNull(false)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'size_bytes', type: DataType.INTEGER })
   declare sizeBytes: number;
 
   @AllowNull(false)
-  @Index('finance_files_drive_file_unique')
-  @Column(DataType.STRING(128))
+  @Column({ field: 'drive_file_id', type: DataType.STRING(128) })
   declare driveFileId: string;
 
   @AllowNull(false)
-  @Column(DataType.STRING(512))
+  @Column({ field: 'drive_web_view_link', type: DataType.STRING(512) })
   declare driveWebViewLink: string;
 
   @AllowNull(false)
-  @Index('finance_files_sha256_unique')
-  @Column(DataType.STRING(64))
+  @Column({ field: 'sha256', type: DataType.STRING(64) })
   declare sha256: string;
 
   @ForeignKey(() => User)
   @AllowNull(false)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'uploaded_by', type: DataType.INTEGER })
   declare uploadedBy: number;
 
   @BelongsTo(() => User, 'uploadedBy')
@@ -60,7 +57,6 @@ export default class FinanceFile extends Model {
 
   @AllowNull(false)
   @Default(DataType.NOW)
-  @Column(DataType.DATE)
+  @Column({ field: 'uploaded_at', type: DataType.DATE })
   declare uploadedAt: Date;
 }
-
