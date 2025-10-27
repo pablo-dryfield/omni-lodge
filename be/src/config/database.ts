@@ -28,6 +28,17 @@ import NightReport from "../models/NightReport.js";
 import NightReportVenue from "../models/NightReportVenue.js";
 import NightReportPhoto from "../models/NightReportPhoto.js";
 import Venue from "../models/Venue.js";
+import StaffProfile from "../models/StaffProfile.js";
+import ShiftType from "../models/ShiftType.js";
+import ShiftTemplate from "../models/ShiftTemplate.js";
+import ScheduleWeek from "../models/ScheduleWeek.js";
+import ShiftInstance from "../models/ShiftInstance.js";
+import Availability from "../models/Availability.js";
+import ShiftAssignment from "../models/ShiftAssignment.js";
+import SwapRequest from "../models/SwapRequest.js";
+import Export from "../models/Export.js";
+import Notification from "../models/Notification.js";
+import AuditLog from "../models/AuditLog.js";
 import {
   FinanceAccount,
   FinanceAuditLog,
@@ -90,6 +101,17 @@ const sequelize = new Sequelize({
     NightReport,
     NightReportVenue,
     NightReportPhoto,
+    StaffProfile,
+    ShiftType,
+    ShiftTemplate,
+    ScheduleWeek,
+    ShiftInstance,
+    Availability,
+    ShiftAssignment,
+    SwapRequest,
+    Export,
+    Notification,
+    AuditLog,
     UserType,
     Page,
     Module,

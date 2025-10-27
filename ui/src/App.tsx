@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router-dom";
 import {
   AppShell,
@@ -20,6 +21,8 @@ import { fetchSession } from "./actions/sessionActions";
 import { fetchAccessSnapshot } from "./actions/accessControlActions";
 import { getNavbarSettings } from "./utils/getNavbarSettings";
 import { NavBarRouter } from "./components/main/NavBarRouter";
+
+const queryClient = new QueryClient();
 
 const App = () => {
   const { authenticated, checkingSession } = useAppSelector((state) => state.session);
@@ -84,8 +87,9 @@ const App = () => {
   };
 
   return (
-    <BrowserRouter>
-      {authenticated ? (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        {authenticated ? (
         <AppShell
           header={{ height: isMobile ? 56 : 68 }}
           navbar={computedNavbarSettings}
@@ -140,10 +144,11 @@ const App = () => {
             </Stack>
           </AppShell.Main>
         </AppShell>
-      ) : (
-        <Login />
-      )}
-    </BrowserRouter>
+        ) : (
+          <Login />
+        )}
+      </BrowserRouter>
+    </QueryClientProvider>
   );
 };
 
