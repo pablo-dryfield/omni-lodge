@@ -7,6 +7,14 @@ export const getNavbarSettings = (currentPage: string) => {
     };
   }
 
+  if (currentPage.startsWith("Finance")) {
+    return {
+      width: 260,
+      breakpoint: "md",
+      collapsed: { mobile: true, desktop: false },
+    };
+  }
+
   if (currentPage === "Settings") {
     return {
       width: 260,

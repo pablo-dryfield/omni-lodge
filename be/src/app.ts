@@ -39,6 +39,8 @@ import paymentMethodRoutes from './routes/paymentMethodRoutes.js';
 import productAddonRoutes from './routes/productAddonRoutes.js';
 import nightReportRoutes from './routes/nightReportRoutes.js';
 import venueRoutes from './routes/venueRoutes.js';
+import { financeRouter } from './finance/index.js';
+import { startFinanceRecurringJob } from './finance/jobs/recurringJob.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -142,6 +144,7 @@ app.use('/api/rolePagePermissions', rolePagePermissionRoutes);
 app.use('/api/roleModulePermissions', roleModulePermissionRoutes);
 app.use('/api/accessControl', accessControlRoutes);
 app.use('/api/ecwid', ecwidRoutes);
+app.use('/api/finance', financeRouter);
 
 app.use(errorMiddleware);
 
@@ -174,10 +177,12 @@ async function bootstrap(): Promise<void> {
       app.set('trust proxy', 1);
       app.listen(PORT, '127.0.0.1', () => {
         logger.info(`backend listening on http://127.0.0.1:${PORT}`);
+        startFinanceRecurringJob();
       });
     } else {
       app.listen(PORT, '0.0.0.0', () => {
         logger.info(`Server is running on port ${PORT}`);
+        startFinanceRecurringJob();
       });
     }
   } catch (err) {
