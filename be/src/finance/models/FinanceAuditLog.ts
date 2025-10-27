@@ -9,7 +9,6 @@ import {
   Default,
   ForeignKey,
   BelongsTo,
-  Index,
 } from 'sequelize-typescript';
 import User from '../../models/User.js';
 
@@ -25,13 +24,11 @@ export default class FinanceAuditLog extends Model {
   declare id: number;
 
   @AllowNull(false)
-  @Index('finance_audit_logs_entity_idx')
-  @Column(DataType.STRING(80))
+  @Column({ field: 'entity', type: DataType.STRING(80) })
   declare entity: string;
 
   @AllowNull(false)
-  @Index('finance_audit_logs_entity_idx')
-  @Column(DataType.INTEGER)
+  @Column({ field: 'entity_id', type: DataType.INTEGER })
   declare entityId: number;
 
   @AllowNull(false)
@@ -48,7 +45,7 @@ export default class FinanceAuditLog extends Model {
 
   @ForeignKey(() => User)
   @AllowNull(true)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'performed_by', type: DataType.INTEGER })
   declare performedBy: number | null;
 
   @BelongsTo(() => User, 'performedBy')
@@ -56,7 +53,6 @@ export default class FinanceAuditLog extends Model {
 
   @AllowNull(false)
   @Default(DataType.NOW)
-  @Column(DataType.DATE)
+  @Column({ field: 'occurred_at', type: DataType.DATE })
   declare occurredAt: Date;
 }
-

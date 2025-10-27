@@ -1,7 +1,7 @@
 import logger from '../../utils/logger.js';
 import { executeRecurringRules } from '../services/recurringRuleService.js';
 
-let timerHandle: NodeJS.Timer | null = null;
+let timerHandle: ReturnType<typeof setInterval> | null = null;
 
 function resolveAutomationUserId(): number {
   const raw = process.env.FINANCE_AUTOMATION_USER_ID;
@@ -38,4 +38,3 @@ export function startFinanceRecurringJob(): void {
     void runner();
   }, pollIntervalMs);
 }
-

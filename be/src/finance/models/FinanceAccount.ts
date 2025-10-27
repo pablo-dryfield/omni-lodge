@@ -7,10 +7,9 @@ import {
   AutoIncrement,
   AllowNull,
   Default,
-  HasMany,
   Index,
 } from 'sequelize-typescript';
-import FinanceTransaction from './FinanceTransaction.js';
+import type FinanceTransaction from './FinanceTransaction.js';
 
 export type FinanceAccountType = 'cash' | 'bank' | 'stripe' | 'revolut' | 'other';
 
@@ -42,15 +41,22 @@ export default class FinanceAccount extends Model {
 
   @AllowNull(false)
   @Default(0)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'opening_balance_minor', type: DataType.INTEGER })
   declare openingBalanceMinor: number;
 
   @AllowNull(false)
   @Default(true)
-  @Column(DataType.BOOLEAN)
+  @Column({ field: 'is_active', type: DataType.BOOLEAN })
   declare isActive: boolean;
 
-  @HasMany(() => FinanceTransaction, 'accountId')
   declare transactions?: FinanceTransaction[];
-}
 
+  @AllowNull(false)
+  @Default(DataType.NOW)
+  @Column({ field: 'created_at', type: DataType.DATE })
+  declare createdAt: Date;
+
+  @AllowNull(true)
+  @Column({ field: 'updated_at', type: DataType.DATE })
+  declare updatedAt: Date | null;
+}

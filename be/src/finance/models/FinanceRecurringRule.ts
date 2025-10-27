@@ -31,50 +31,50 @@ export default class FinanceRecurringRule extends Model {
   declare kind: 'income' | 'expense';
 
   @AllowNull(false)
-  @Column(DataType.JSONB)
+  @Column({ field: 'template_json', type: DataType.JSONB })
   declare templateJson: Record<string, unknown>;
 
   @AllowNull(false)
-  @Column(DataType.ENUM('daily', 'weekly', 'monthly', 'quarterly', 'yearly'))
+  @Column({ field: 'frequency', type: DataType.ENUM('daily', 'weekly', 'monthly', 'quarterly', 'yearly') })
   declare frequency: FinanceRecurringFrequency;
 
   @AllowNull(false)
   @Default(1)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'interval', type: DataType.INTEGER })
   declare interval: number;
 
   @AllowNull(true)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'by_month_day', type: DataType.INTEGER })
   declare byMonthDay: number | null;
 
   @AllowNull(false)
-  @Column(DataType.DATEONLY)
+  @Column({ field: 'start_date', type: DataType.DATEONLY })
   declare startDate: string;
 
   @AllowNull(true)
-  @Column(DataType.DATEONLY)
+  @Column({ field: 'end_date', type: DataType.DATEONLY })
   declare endDate: string | null;
 
   @AllowNull(false)
-  @Column(DataType.STRING(64))
+  @Column({ field: 'timezone', type: DataType.STRING(64) })
   declare timezone: string;
 
   @AllowNull(true)
-  @Column(DataType.DATE)
+  @Column({ field: 'next_run_date', type: DataType.DATE })
   declare nextRunDate: Date | null;
 
   @AllowNull(true)
-  @Column(DataType.DATE)
+  @Column({ field: 'last_run_at', type: DataType.DATE })
   declare lastRunAt: Date | null;
 
   @AllowNull(false)
   @Default('active')
-  @Column(DataType.ENUM('active', 'paused'))
+  @Column({ field: 'status', type: DataType.ENUM('active', 'paused') })
   declare status: FinanceRecurringStatus;
 
   @ForeignKey(() => User)
   @AllowNull(false)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'created_by', type: DataType.INTEGER })
   declare createdBy: number;
 
   @BelongsTo(() => User, 'createdBy')
@@ -82,10 +82,18 @@ export default class FinanceRecurringRule extends Model {
 
   @ForeignKey(() => User)
   @AllowNull(true)
-  @Column(DataType.INTEGER)
+  @Column({ field: 'updated_by', type: DataType.INTEGER })
   declare updatedBy: number | null;
 
   @BelongsTo(() => User, 'updatedBy')
   declare updater?: User | null;
-}
 
+  @AllowNull(false)
+  @Default(DataType.NOW)
+  @Column({ field: 'created_at', type: DataType.DATE })
+  declare createdAt: Date;
+
+  @AllowNull(true)
+  @Column({ field: 'updated_at', type: DataType.DATE })
+  declare updatedAt: Date | null;
+}
