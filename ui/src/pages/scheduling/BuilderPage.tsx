@@ -80,6 +80,16 @@ const BuilderPage = () => {
   const lockWeekMutation = useLockWeek();
   const publishWeekMutation = usePublishWeek();
 
+  const weekStart = useMemo(() => {
+    if (!selectedWeek) {
+      return null;
+    }
+    const [year, weekPart] = selectedWeek.split("-W");
+    return dayjs().year(Number(year)).isoWeek(Number(weekPart)).startOf("isoWeek");
+  }, [selectedWeek]);
+
+  const weekStartLabel = weekStart ? `${weekStart.format("MMM D")} - ${weekStart.add(6, "day").format("MMM D")}` : "";
+
   useEffect(() => {
     if (!canAccessBuilder) {
       setStaff([]);
@@ -171,16 +181,6 @@ const BuilderPage = () => {
     if (!weekId) return;
     await publishWeekMutation.mutateAsync(weekId);
   };
-
-  const weekStart = useMemo(() => {
-    if (!selectedWeek) {
-      return null;
-    }
-    const [year, weekPart] = selectedWeek.split("-W");
-    return dayjs().year(Number(year)).isoWeek(Number(weekPart)).startOf("isoWeek");
-  }, [selectedWeek]);
-
-  const weekStartLabel = weekStart ? `${weekStart.format("MMM D")} - ${weekStart.add(6, "day").format("MMM D")}` : "";
 
   return (
     <Stack mt="lg" gap="lg">
