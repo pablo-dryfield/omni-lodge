@@ -41,7 +41,7 @@ const SwapsPage = () => {
                 <Group justify="space-between">
                   <Text fw={600}>Request #{swap.id}</Text>
                   <Text size="xs" c="dimmed">
-                    {swap.createdAt ? Created  : null}
+                    {swap.createdAt ? dayjs(swap.createdAt).format("MMM D, YYYY HH:mm") : null}
                   </Text>
                 </Group>
                 <Text size="sm">
@@ -68,3 +68,5 @@ const SwapsPage = () => {
 };
 
 export default SwapsPage;
+
+

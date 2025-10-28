@@ -5,6 +5,7 @@ import isoWeek from "dayjs/plugin/isoWeek";
 import type { AxiosError } from "axios";
 import axiosInstance from "../../utils/axiosInstance";
 import { getUpcomingWeeks, useEnsureWeek, useScheduleExports, useScheduleReports } from "../../api/scheduling";
+import { useAppSelector } from "../../store/hooks";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import type { ServerResponse } from "../../types/general/ServerResponse";
 import type { ShiftAssignment } from "../../types/scheduling";
@@ -19,10 +20,13 @@ const HistoryPage = () => {
   const [userOptions, setUserOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
 
-  const ensureExportWeekQuery = useEnsureWeek(exportWeek, { allowGenerate: false });
-  const exportWeekId = ensureExportWeekQuery.data?.week.id ?? null;
+  const authenticated = useAppSelector((state) => state.session.authenticated);
+
+  const ensureExportWeekQuery = useEnsureWeek(exportWeek, { allowGenerate: false, enabled: authenticated });
+  const exportWeekId = ensureExportWeekQuery.data?.week?.id ?? null;
   const exportsQuery = useScheduleExports(exportWeekId);
-  const reportsQuery = useScheduleReports({ from: fromWeek, to: toWeek, userId: selectedUser ? Number(selectedUser) : undefined });
+  const reportParams = authenticated ? { from: fromWeek, to: toWeek, userId: selectedUser ? Number(selectedUser) : undefined } : null;
+  const reportsQuery = useScheduleReports(reportParams);
 
 
   useEffect(() => {
@@ -49,7 +53,7 @@ const HistoryPage = () => {
 
   return (
     <Stack mt="lg" gap="lg">
-      {ensureExportWeekQuery.isError ? (
+      {authenticated && ensureExportWeekQuery.isError ? (
         <Alert color="red" title="Unable to load scheduling week">
           <Text size="sm">
             {((ensureExportWeekQuery.error as AxiosError)?.response?.status === 401
@@ -131,6 +135,13 @@ const HistoryPage = () => {
 };
 
 export default HistoryPage;
+
+
+
+
+
+
+
 
 
 

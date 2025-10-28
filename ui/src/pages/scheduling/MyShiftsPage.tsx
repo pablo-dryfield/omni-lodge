@@ -15,9 +15,10 @@ const MyShiftsPage = () => {
   const weekOptions = useMemo(() => getUpcomingWeeks(6), []);
   const [selectedWeek, setSelectedWeek] = useState<string>(weekOptions[0]?.value ?? "");
   const loggedUserId = useAppSelector((state) => state.session.loggedUserId);
+  const isAuthenticated = loggedUserId > 0;
 
-  const ensureWeekQuery = useEnsureWeek(selectedWeek, { allowGenerate: false });
-  const weekId = ensureWeekQuery.data?.week.id ?? null;
+  const ensureWeekQuery = useEnsureWeek(selectedWeek, { allowGenerate: false, enabled: isAuthenticated });
+  const weekId = ensureWeekQuery.data?.week?.id ?? null;
   const instancesQuery = useShiftInstances(weekId);
   const createSwap = useCreateSwap();
   const mySwaps = useMySwaps();
@@ -92,7 +93,7 @@ const MyShiftsPage = () => {
 
   return (
     <Stack mt="lg" gap="lg">
-      {ensureWeekQuery.isError ? (
+      {isAuthenticated && ensureWeekQuery.isError ? (
         <Alert color="red" title="Unable to load scheduling week">
           <Text size="sm">
             {((ensureWeekQuery.error as AxiosError)?.response?.status === 401
@@ -173,4 +174,6 @@ const MyShiftsPage = () => {
 };
 
 export default MyShiftsPage;
+
+
 
