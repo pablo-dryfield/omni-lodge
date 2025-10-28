@@ -37,7 +37,8 @@ const PUBLISHED_STATES: ScheduleWeekState[] = ['published'];
 const PUB_CRAWL_KEYS = new Set(['PUB_CRAWL', 'PRIVATE_PUB_CRAWL']);
 
 function getWeekStart(year: number, week: number): dayjs.Dayjs {
-  return dayjs().tz(SCHED_TZ).isoWeekYear(year).isoWeek(week).startOf('isoWeek');
+  const weekLabel = `${year}-W${week.toString().padStart(2, '0')}-1`; // ISO week starts on Monday (E=1)
+  return dayjs.tz(weekLabel, 'YYYY-[W]WW-E', SCHED_TZ).startOf('day');
 }
 
 function formatWeekLabel(year: number, week: number): string {

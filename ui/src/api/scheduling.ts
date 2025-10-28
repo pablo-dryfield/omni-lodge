@@ -91,19 +91,31 @@ export const useEnsureWeek = (
       let result: EnsureWeekResult;
 
       if (allowGenerate) {
-        try {
-          const response = await axiosInstance.post("/schedules/weeks/generate", null, {
-            params: { week: weekValue },
-          });
-          result = response.data as EnsureWeekResult;
-        } catch (error) {
-          const axiosError = error as AxiosError;
-          if (axiosError.response?.status === 401 || axiosError.response?.status === 404) {
-            result = await fetchExisting();
-          } else {
-            throw error;
+        const tryGenerate = async (): Promise<EnsureWeekResult> => {
+          try {
+            const response = await axiosInstance.post("/schedules/weeks/generate", null, {
+              params: { week: weekValue },
+            });
+            return response.data as EnsureWeekResult;
+          } catch (error) {
+            const axiosError = error as AxiosError<{ error?: string; message?: string }>;
+            const status = axiosError.response?.status;
+            const backendMessage = axiosError.response?.data?.error ?? axiosError.response?.data?.message;
+
+            if (status === 401 || status === 403 || status === 404) {
+              const existing = await fetchExisting();
+              if (!existing.week && status === 403) {
+                throw new Error(
+                  backendMessage ??
+                    "You do not have permission to generate schedule weeks. Please contact an administrator.",
+                );
+              }
+              return existing;
+            }
+            throw new Error(backendMessage ?? axiosError.message);
           }
-        }
+        };
+        result = await tryGenerate();
       } else {
         result = await fetchExisting();
       }
