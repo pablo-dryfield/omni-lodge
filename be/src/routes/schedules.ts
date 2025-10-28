@@ -32,7 +32,7 @@ import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 
 const router = Router();
 
-const MANAGER_ROLES = ['owner', 'admin', 'assistant_manager'];
+const MANAGER_ROLES = ['owner', 'admin', 'administrator', 'manager', 'assistant-manager', 'assistant_manager'];
 
 function getActorId(req: AuthenticatedRequest): number | null {
   return req.authContext?.id ?? null;
