@@ -6,6 +6,7 @@ const config = process.env.NODE_ENV === 'production' ? prodConfig : devConfig;
 
 const instance = axios.create({
   baseURL: config.baseURL, // Replace with the actual URL of your server
+  withCredentials: true,
 });
 
 // Add a request interceptor

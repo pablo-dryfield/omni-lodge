@@ -9,6 +9,7 @@ import type { AxiosError } from "axios";
 import { useEnsureWeek, useAvailability, useSaveAvailability, getUpcomingWeeks } from "../../api/scheduling";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import type { AvailabilityPayload } from "../../types/scheduling";
+import { useAppSelector } from "../../store/hooks";
 
 dayjs.extend(isoWeek);
 dayjs.extend(weekday);
@@ -20,8 +21,10 @@ const AvailabilityPage = () => {
   const [selectedWeek, setSelectedWeek] = useState<string>(weekOptions[0]?.value ?? "");
   const [entries, setEntries] = useState<Record<string, { status: "available" | "unavailable"; startTime?: string | null; endTime?: string | null }>>({});
 
-  const ensureWeekQuery = useEnsureWeek(selectedWeek, { allowGenerate: false });
-  const weekId = ensureWeekQuery.data?.week.id ?? null;
+  const authenticated = useAppSelector((state) => state.session.authenticated);
+
+  const ensureWeekQuery = useEnsureWeek(selectedWeek, { allowGenerate: false, enabled: authenticated });
+  const weekId = ensureWeekQuery.data?.week?.id ?? null;
   const availabilityQuery = useAvailability(weekId);
   const saveAvailability = useSaveAvailability();
 
@@ -121,7 +124,7 @@ const AvailabilityPage = () => {
 
   return (
     <Stack mt="lg" gap="lg">
-      {ensureWeekQuery.isError ? (
+      {authenticated && ensureWeekQuery.isError ? (
         <Alert color="red" title="Unable to load scheduling week">
           <Text size="sm">
             {((ensureWeekQuery.error as AxiosError)?.response?.status === 401
@@ -167,14 +170,14 @@ const AvailabilityPage = () => {
                 <Group gap="sm">
                   <TimeInput
                     label="From"
-                    value={entry.startTime ? dayjs(entry.startTime, "HH:mm").toDate() : undefined}
-                    onChange={(value) => handleTimeChange(dayKey, "startTime", value ? dayjs(value).format("HH:mm") : null)}
+                    value={entry.startTime ?? ""}
+                    onChange={(event) => handleTimeChange(dayKey, "startTime", event.currentTarget.value || null)}
                     disabled={!isAvailable}
                   />
                   <TimeInput
                     label="To"
-                    value={entry.endTime ? dayjs(entry.endTime, "HH:mm").toDate() : undefined}
-                    onChange={(value) => handleTimeChange(dayKey, "endTime", value ? dayjs(value).format("HH:mm") : null)}
+                    value={entry.endTime ?? ""}
+                    onChange={(event) => handleTimeChange(dayKey, "endTime", event.currentTarget.value || null)}
                     disabled={!isAvailable}
                   />
                 </Group>
@@ -204,6 +207,8 @@ const AvailabilityPage = () => {
 };
 
 export default AvailabilityPage;
+
+
 
 
 

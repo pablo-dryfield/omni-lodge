@@ -21,6 +21,8 @@ import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
 import type { AxiosError } from "axios";
 import axiosInstance from "../../utils/axiosInstance";
+import { useAppSelector } from "../../store/hooks";
+import { makeSelectIsModuleActionAllowed } from "../../selectors/accessControlSelectors";
 import {
   useAssignShifts,
   useCreateShiftInstance,
@@ -59,11 +61,18 @@ const BuilderPage = () => {
   const [assignmentRole, setAssignmentRole] = useState<string>("");
   const [assignmentUserId, setAssignmentUserId] = useState<string | null>(null);
 
-  const ensureWeekQuery = useEnsureWeek(selectedWeek, { allowGenerate: true });
-  const weekId = ensureWeekQuery.data?.week.id ?? null;
-  const summaryQuery = useWeekSummary(weekId);
-  const templatesQuery = useShiftTemplates();
-  const instancesQuery = useShiftInstances(weekId);
+  const selectCanAccessBuilder = useMemo(
+    () => makeSelectIsModuleActionAllowed("scheduling-builder", "view"),
+    [],
+  );
+  const canAccessBuilder = useAppSelector(selectCanAccessBuilder);
+  const { loaded: accessLoaded, loading: accessLoading } = useAppSelector((state) => state.accessControl);
+
+  const ensureWeekQuery = useEnsureWeek(selectedWeek, { allowGenerate: canAccessBuilder, enabled: canAccessBuilder });
+  const weekId = canAccessBuilder ? ensureWeekQuery.data?.week?.id ?? null : null;
+  const summaryQuery = useWeekSummary(canAccessBuilder ? weekId : null);
+  const templatesQuery = useShiftTemplates({ enabled: canAccessBuilder });
+  const instancesQuery = useShiftInstances(canAccessBuilder ? weekId : null);
   const assignMutation = useAssignShifts();
   const deleteAssignmentMutation = useDeleteAssignment();
   const createInstanceMutation = useCreateShiftInstance();
@@ -72,6 +81,11 @@ const BuilderPage = () => {
   const publishWeekMutation = usePublishWeek();
 
   useEffect(() => {
+    if (!canAccessBuilder) {
+      setStaff([]);
+      return;
+    }
+
     const fetchStaff = async () => {
       const response = await axiosInstance.get<ServerResponse<{ id: number; firstName: string; lastName: string }>>(
         "/users/active",
@@ -85,7 +99,31 @@ const BuilderPage = () => {
       );
     };
     void fetchStaff();
-  }, []);
+  }, [canAccessBuilder]);
+
+  if (!accessLoaded) {
+    return (
+      <Stack mt="lg" gap="lg" align="center">
+        {accessLoading ? (
+          <Loader />
+        ) : (
+          <Alert color="yellow" title="Permissions not available">
+            <Text size="sm">Scheduling permissions could not be loaded yet.</Text>
+          </Alert>
+        )}
+      </Stack>
+    );
+  }
+
+  if (!canAccessBuilder) {
+    return (
+      <Stack mt="lg" gap="lg">
+        <Alert color="red" title="Insufficient permissions">
+          <Text size="sm">You do not have permission to manage schedules.</Text>
+        </Alert>
+      </Stack>
+    );
+  }
 
   const handleOpenAssignment = (shift: ShiftInstance) => {
     setAssignmentModal({ opened: true, shift });
@@ -307,4 +345,9 @@ const BuilderPage = () => {
 };
 
 export default BuilderPage;
+
+
+
+
+
 

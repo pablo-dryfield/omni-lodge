@@ -1,5 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import dayjs from "dayjs";\r\nimport isoWeek from "dayjs/plugin/isoWeek";\r\nimport type { AxiosError } from "axios";
+import { useMutation, useQuery, useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
+import dayjs from "dayjs";
+import isoWeek from "dayjs/plugin/isoWeek";
+import type { AxiosError } from "axios";
 import axiosInstance from "../utils/axiosInstance";
 import type {
   AssignmentInput,
@@ -17,6 +19,14 @@ import type {
 dayjs.extend(isoWeek);
 
 const schedulingBaseKey = ["scheduling"] as const;
+
+const disabledKey = (key: string) => [...schedulingBaseKey, "disabled", key] as const;
+
+const invalidateQuery = (client: QueryClient, key: QueryKey) => {
+  client.invalidateQueries({ queryKey: key });
+};
+
+type EnsureWeekResult = { week: ScheduleWeekSummary["week"] | null; created: boolean };
 
 const schedulingKeys = {
   base: schedulingBaseKey,
@@ -43,37 +53,49 @@ export const useGenerateWeek = () => {
       return response.data as { week: ScheduleWeekSummary["week"]; created: boolean };
     },
     onSuccess: (result) => {
-      queryClient.invalidateQueries(schedulingKeys.weekSummary(result.week.id));
+      invalidateQuery(queryClient, schedulingKeys.weekSummary(result.week.id));
     },
   });
 };
 
-export const useEnsureWeek = (weekValue: string | null, options?: { allowGenerate?: boolean }) => {
+export const useEnsureWeek = (
+  weekValue: string | null,
+  options?: { allowGenerate?: boolean; enabled?: boolean },
+) => {
   const queryClient = useQueryClient();
   const allowGenerate = options?.allowGenerate ?? false;
+  const enabled = Boolean(weekValue) && (options?.enabled ?? true);
 
-  return useQuery({
-    queryKey: schedulingKeys.ensureWeek(weekValue),
+  return useQuery<EnsureWeekResult>({
+    queryKey: weekValue && enabled ? schedulingKeys.ensureWeek(weekValue) : disabledKey("ensure-week"),
     queryFn: async () => {
       if (!weekValue) {
-        throw new Error("Week value is required");
+        return { week: null, created: false };
       }
 
-      const fetchExisting = async () => {
-        const response = await axiosInstance.get("/schedules/weeks/lookup", {
-          params: { week: weekValue },
-        });
-        return response.data as { week: ScheduleWeekSummary["week"]; created: boolean };
+      const fetchExisting = async (): Promise<EnsureWeekResult> => {
+        try {
+          const response = await axiosInstance.get("/schedules/weeks/lookup", {
+            params: { week: weekValue },
+          });
+          return response.data as EnsureWeekResult;
+        } catch (error) {
+          const axiosError = error as AxiosError;
+          if (axiosError.response?.status === 404) {
+            return { week: null, created: false };
+          }
+          throw error;
+        }
       };
 
-      let result: { week: ScheduleWeekSummary["week"]; created: boolean };
+      let result: EnsureWeekResult;
 
       if (allowGenerate) {
         try {
           const response = await axiosInstance.post("/schedules/weeks/generate", null, {
             params: { week: weekValue },
           });
-          result = response.data as { week: ScheduleWeekSummary["week"]; created: boolean };
+          result = response.data as EnsureWeekResult;
         } catch (error) {
           const axiosError = error as AxiosError;
           if (axiosError.response?.status === 401 || axiosError.response?.status === 404) {
@@ -86,10 +108,12 @@ export const useEnsureWeek = (weekValue: string | null, options?: { allowGenerat
         result = await fetchExisting();
       }
 
-      queryClient.invalidateQueries(schedulingKeys.weekSummary(result.week.id));
+      if (result.week) {
+        invalidateQuery(queryClient, schedulingKeys.weekSummary(result.week.id));
+      }
       return result;
     },
-    enabled: Boolean(weekValue),
+    enabled,
     retry: false,
     staleTime: 1000 * 60 * 5,
   });
@@ -97,12 +121,12 @@ export const useEnsureWeek = (weekValue: string | null, options?: { allowGenerat
 
 export const useWeekSummary = (weekId: number | null) =>
   useQuery({
-    queryKey: weekId ? schedulingKeys.weekSummary(weekId) : undefined,
+    queryKey: weekId !== null ? schedulingKeys.weekSummary(weekId) : disabledKey("week"),
     queryFn: async () => {
       const response = await axiosInstance.get(`/schedules/weeks/${weekId}`);
       return response.data as ScheduleWeekSummary;
     },
-    enabled: Boolean(weekId),
+    enabled: weekId !== null,
   });
 
 export const useLockWeek = () => {
@@ -113,7 +137,7 @@ export const useLockWeek = () => {
       return response.data as ScheduleWeekSummary;
     },
     onSuccess: (summary) => {
-      queryClient.invalidateQueries(schedulingKeys.weekSummary(summary.week.id));
+      invalidateQuery(queryClient, schedulingKeys.weekSummary(summary.week.id));
     },
   });
 };
@@ -126,19 +150,29 @@ export const usePublishWeek = () => {
       return response.data as { exports: ScheduleExport[]; summary: ScheduleWeekSummary };
     },
     onSuccess: ({ summary }) => {
-      queryClient.invalidateQueries(schedulingKeys.weekSummary(summary.week.id));
-      queryClient.invalidateQueries(schedulingKeys.exports(summary.week.id));
+      invalidateQuery(queryClient, schedulingKeys.weekSummary(summary.week.id));
+      invalidateQuery(queryClient, schedulingKeys.exports(summary.week.id));
     },
   });
 };
 
-export const useShiftTemplates = () =>
+export const useShiftTemplates = (options?: { enabled?: boolean }) =>
   useQuery({
     queryKey: schedulingKeys.shiftTemplates,
     queryFn: async () => {
-      const response = await axiosInstance.get("/schedules/shift-templates");
-      return response.data as ShiftTemplate[];
+      try {
+        const response = await axiosInstance.get("/schedules/shift-templates");
+        return response.data as ShiftTemplate[];
+      } catch (error) {
+        const axiosError = error as AxiosError;
+        if (axiosError.response?.status === 403) {
+          return [];
+        }
+        throw error;
+      }
     },
+    enabled: options?.enabled ?? true,
+    retry: false,
   });
 
 export const useUpsertShiftTemplate = () => {
@@ -149,7 +183,7 @@ export const useUpsertShiftTemplate = () => {
       return response.data as ShiftTemplate;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(schedulingKeys.shiftTemplates);
+      invalidateQuery(queryClient, schedulingKeys.shiftTemplates);
     },
   });
 };
@@ -161,19 +195,19 @@ export const useDeleteShiftTemplate = () => {
       await axiosInstance.delete(`/schedules/shift-templates/${templateId}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(schedulingKeys.shiftTemplates);
+      invalidateQuery(queryClient, schedulingKeys.shiftTemplates);
     },
   });
 };
 
 export const useShiftInstances = (weekId: number | null) =>
   useQuery({
-    queryKey: weekId ? schedulingKeys.shiftInstances(weekId) : undefined,
+    queryKey: weekId !== null ? schedulingKeys.shiftInstances(weekId) : disabledKey("instances"),
     queryFn: async () => {
       const response = await axiosInstance.get("/schedules/shift-instances", { params: { weekId } });
       return response.data as ShiftInstance[];
     },
-    enabled: Boolean(weekId),
+    enabled: weekId !== null,
   });
 
 export const useCreateShiftInstance = () => {
@@ -184,8 +218,8 @@ export const useCreateShiftInstance = () => {
       return response.data as ShiftInstance;
     },
     onSuccess: (instance) => {
-      queryClient.invalidateQueries(schedulingKeys.shiftInstances(instance.scheduleWeekId));
-      queryClient.invalidateQueries(schedulingKeys.weekSummary(instance.scheduleWeekId));
+      invalidateQuery(queryClient, schedulingKeys.shiftInstances(instance.scheduleWeekId));
+      invalidateQuery(queryClient, schedulingKeys.weekSummary(instance.scheduleWeekId));
     },
   });
 };
@@ -198,8 +232,8 @@ export const useUpdateShiftInstance = () => {
       return response.data as ShiftInstance;
     },
     onSuccess: (instance) => {
-      queryClient.invalidateQueries(schedulingKeys.shiftInstances(instance.scheduleWeekId));
-      queryClient.invalidateQueries(schedulingKeys.weekSummary(instance.scheduleWeekId));
+      invalidateQuery(queryClient, schedulingKeys.shiftInstances(instance.scheduleWeekId));
+      invalidateQuery(queryClient, schedulingKeys.weekSummary(instance.scheduleWeekId));
     },
   });
 };
@@ -212,20 +246,20 @@ export const useDeleteShiftInstance = () => {
       return weekId;
     },
     onSuccess: (weekId) => {
-      queryClient.invalidateQueries(schedulingKeys.shiftInstances(weekId));
-      queryClient.invalidateQueries(schedulingKeys.weekSummary(weekId));
+      invalidateQuery(queryClient, schedulingKeys.shiftInstances(weekId));
+      invalidateQuery(queryClient, schedulingKeys.weekSummary(weekId));
     },
   });
 };
 
 export const useAvailability = (weekId: number | null) =>
   useQuery({
-    queryKey: weekId ? schedulingKeys.availability(weekId) : undefined,
+    queryKey: weekId !== null ? schedulingKeys.availability(weekId) : disabledKey("availability"),
     queryFn: async () => {
       const response = await axiosInstance.get("/schedules/availability/me", { params: { weekId } });
       return response.data as AvailabilityPayload["entries"];
     },
-    enabled: Boolean(weekId),
+    enabled: weekId !== null,
   });
 
 export const useSaveAvailability = () => {
@@ -236,7 +270,7 @@ export const useSaveAvailability = () => {
       return response.data as AvailabilityPayload["entries"];
     },
     onSuccess: (_, payload) => {
-      queryClient.invalidateQueries(schedulingKeys.availability(payload.scheduleWeekId));
+      invalidateQuery(queryClient, schedulingKeys.availability(payload.scheduleWeekId));
     },
   });
 };
@@ -251,8 +285,8 @@ export const useAssignShifts = () => {
       return { assignments: response.data as ShiftAssignment[], weekId: payload.weekId };
     },
     onSuccess: ({ weekId }) => {
-      queryClient.invalidateQueries(schedulingKeys.shiftInstances(weekId));
-      queryClient.invalidateQueries(schedulingKeys.weekSummary(weekId));
+      invalidateQuery(queryClient, schedulingKeys.shiftInstances(weekId));
+      invalidateQuery(queryClient, schedulingKeys.weekSummary(weekId));
     },
   });
 };
@@ -265,8 +299,8 @@ export const useDeleteAssignment = () => {
       return weekId;
     },
     onSuccess: (weekId) => {
-      queryClient.invalidateQueries(schedulingKeys.shiftInstances(weekId));
-      queryClient.invalidateQueries(schedulingKeys.weekSummary(weekId));
+      invalidateQuery(queryClient, schedulingKeys.shiftInstances(weekId));
+      invalidateQuery(queryClient, schedulingKeys.weekSummary(weekId));
     },
   });
 };
@@ -297,7 +331,7 @@ export const useCreateSwap = () => {
       return response.data as SwapRequest;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: schedulingKeys.mySwaps });
+      invalidateQuery(queryClient, schedulingKeys.mySwaps);
     },
   });
 };
@@ -310,7 +344,7 @@ export const usePartnerSwapResponse = () => {
       return response.data as SwapRequest;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: schedulingKeys.mySwaps });
+      invalidateQuery(queryClient, schedulingKeys.mySwaps);
     },
   });
 };
@@ -323,24 +357,24 @@ export const useManagerSwapDecision = () => {
       return response.data as SwapRequest;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: schedulingKeys.base });
+      invalidateQuery(queryClient, schedulingKeys.base);
     },
   });
 };
 
 export const useScheduleExports = (weekId: number | null) =>
   useQuery({
-    queryKey: weekId ? schedulingKeys.exports(weekId) : undefined,
+    queryKey: weekId !== null ? schedulingKeys.exports(weekId) : disabledKey("exports"),
     queryFn: async () => {
       const response = await axiosInstance.get("/schedules/exports", { params: { weekId } });
       return response.data as ScheduleExport[];
     },
-    enabled: Boolean(weekId),
+    enabled: weekId !== null,
   });
 
 export const useScheduleReports = (params: ReportsQuery | null) =>
   useQuery({
-    queryKey: params ? schedulingKeys.reports(params) : undefined,
+    queryKey: params ? schedulingKeys.reports(params) : disabledKey("reports"),
     queryFn: async () => {
       const response = await axiosInstance.get("/schedules/reports/schedules", { params });
       return response.data as ShiftAssignment[];
