@@ -1,11 +1,12 @@
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Card, Group, Stack, Switch, Text, Title } from "@mantine/core";
 import { TimeInput } from "@mantine/dates";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
 import weekday from "dayjs/plugin/weekday";
-import { useGenerateWeek, useAvailability, useSaveAvailability, getUpcomingWeeks } from "../../api/scheduling";
+import type { AxiosError } from "axios";
+import { useEnsureWeek, useAvailability, useSaveAvailability, getUpcomingWeeks } from "../../api/scheduling";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import type { AvailabilityPayload } from "../../types/scheduling";
 
@@ -17,26 +18,12 @@ const LOCK_HOUR = Number(process.env.REACT_APP_SCHED_LOCK_HOUR ?? 18);
 const AvailabilityPage = () => {
   const weekOptions = useMemo(() => getUpcomingWeeks(6), []);
   const [selectedWeek, setSelectedWeek] = useState<string>(weekOptions[0]?.value ?? "");
-  const [weekId, setWeekId] = useState<number | null>(null);
   const [entries, setEntries] = useState<Record<string, { status: "available" | "unavailable"; startTime?: string | null; endTime?: string | null }>>({});
 
-  const generateWeek = useGenerateWeek();
+  const ensureWeekQuery = useEnsureWeek(selectedWeek, { allowGenerate: false });
+  const weekId = ensureWeekQuery.data?.week.id ?? null;
   const availabilityQuery = useAvailability(weekId);
   const saveAvailability = useSaveAvailability();
-
-  const ensureWeek = useCallback(
-    async (weekValue: string) => {
-      const result = await generateWeek.mutateAsync({ week: weekValue });
-      setWeekId(result.week.id);
-    },
-    [generateWeek],
-  );
-
-  useEffect(() => {
-    if (selectedWeek) {
-      void ensureWeek(selectedWeek);
-    }
-  }, [selectedWeek, ensureWeek]);
 
   useEffect(() => {
     if (availabilityQuery.data) {
@@ -52,13 +39,17 @@ const AvailabilityPage = () => {
     }
   }, [availabilityQuery.data]);
 
+  useEffect(() => {
+    setEntries({});
+  }, [selectedWeek]);
+
   const weekStart = useMemo(() => {
     if (!selectedWeek) {
       return null;
     }
     const [year, weekPart] = selectedWeek.split("-W");
     return dayjs()
-      .isoWeekYear(Number(year))
+      .year(Number(year))
       .isoWeek(Number(weekPart))
       .startOf("isoWeek");
   }, [selectedWeek]);
@@ -130,6 +121,16 @@ const AvailabilityPage = () => {
 
   return (
     <Stack mt="lg" gap="lg">
+      {ensureWeekQuery.isError ? (
+        <Alert color="red" title="Unable to load scheduling week">
+          <Text size="sm">
+            {((ensureWeekQuery.error as AxiosError)?.response?.status === 401
+              ? "You do not have permission to generate the schedule week. Please contact a manager."
+              : (ensureWeekQuery.error as Error).message) ?? "Failed to load scheduling week."}
+          </Text>
+        </Alert>
+      ) : null}
+
       <Group justify="space-between" align="flex-end">
         <Stack gap={4}>
           <Title order={3}>Availability</Title>
@@ -166,13 +167,13 @@ const AvailabilityPage = () => {
                 <Group gap="sm">
                   <TimeInput
                     label="From"
-                    value={entry.startTime ? dayjs(entry.startTime, "HH:mm").toDate() : null}
+                    value={entry.startTime ? dayjs(entry.startTime, "HH:mm").toDate() : undefined}
                     onChange={(value) => handleTimeChange(dayKey, "startTime", value ? dayjs(value).format("HH:mm") : null)}
                     disabled={!isAvailable}
                   />
                   <TimeInput
                     label="To"
-                    value={entry.endTime ? dayjs(entry.endTime, "HH:mm").toDate() : null}
+                    value={entry.endTime ? dayjs(entry.endTime, "HH:mm").toDate() : undefined}
                     onChange={(value) => handleTimeChange(dayKey, "endTime", value ? dayjs(value).format("HH:mm") : null)}
                     disabled={!isAvailable}
                   />
@@ -191,10 +192,10 @@ const AvailabilityPage = () => {
 
       <Button
         onClick={handleSave}
-        loading={saveAvailability.isPending || generateWeek.isPending}
+        loading={saveAvailability.isPending || ensureWeekQuery.isFetching}
         disabled={!weekId}
         size="md"
-        alignSelf="flex-end"
+        style={{ alignSelf: "flex-end" }}
       >
         Save availability
       </Button>
@@ -203,3 +204,7 @@ const AvailabilityPage = () => {
 };
 
 export default AvailabilityPage;
+
+
+
+

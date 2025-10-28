@@ -49,7 +49,7 @@ export type WeekIdentifier = {
   isoWeek: number;
 };
 
-function parseWeekParam(weekParam?: string | null): WeekIdentifier {
+export function parseWeekParam(weekParam?: string | null): WeekIdentifier {
   if (weekParam && dayjs(weekParam, 'YYYY-[W]WW', true).isValid()) {
     const [year, week] = weekParam.split('-W');
     return { year: Number(year), isoWeek: Number(week) };

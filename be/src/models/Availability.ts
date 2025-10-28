@@ -10,6 +10,7 @@ import {
   Default,
   BelongsTo,
 } from 'sequelize-typescript';
+import type { NonAttribute } from 'sequelize';
 import User from './User.js';
 import ScheduleWeek from './ScheduleWeek.js';
 import ShiftType from './ShiftType.js';
@@ -64,11 +65,11 @@ export default class Availability extends Model {
   declare notes: string | null;
 
   @BelongsTo(() => User, { foreignKey: 'user_id', as: 'user' })
-  declare user?: User | null;
+  declare user?: NonAttribute<User | null>;
 
   @BelongsTo(() => ScheduleWeek, { foreignKey: 'schedule_week_id', as: 'scheduleWeek' })
-  declare scheduleWeek?: ScheduleWeek | null;
+  declare scheduleWeek?: NonAttribute<ScheduleWeek | null>;
 
   @BelongsTo(() => ShiftType, { foreignKey: 'shift_type_id', as: 'preferredShiftType' })
-  declare preferredShiftType?: ShiftType | null;
+  declare preferredShiftType?: NonAttribute<ShiftType | null>;
 }

@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import dayjs from "dayjs";
-import isoWeek from "dayjs/plugin/isoWeek";
+import dayjs from "dayjs";\r\nimport isoWeek from "dayjs/plugin/isoWeek";\r\nimport type { AxiosError } from "axios";
 import axiosInstance from "../utils/axiosInstance";
 import type {
   AssignmentInput,
@@ -29,6 +28,7 @@ const schedulingKeys = {
   mySwaps: [...schedulingBaseKey, "swaps", "mine"] as const,
   exports: (weekId: number) => [...schedulingBaseKey, "exports", weekId] as const,
   reports: (params: ReportsQuery) => [...schedulingBaseKey, "reports", params.from, params.to, params.userId ?? "all"] as const,
+  ensureWeek: (weekValue: string | null) => [...schedulingBaseKey, "ensure-week", weekValue ?? "current"] as const,
 };
 
 type WeekQueryParams = { week?: string | null };
@@ -45,6 +45,53 @@ export const useGenerateWeek = () => {
     onSuccess: (result) => {
       queryClient.invalidateQueries(schedulingKeys.weekSummary(result.week.id));
     },
+  });
+};
+
+export const useEnsureWeek = (weekValue: string | null, options?: { allowGenerate?: boolean }) => {
+  const queryClient = useQueryClient();
+  const allowGenerate = options?.allowGenerate ?? false;
+
+  return useQuery({
+    queryKey: schedulingKeys.ensureWeek(weekValue),
+    queryFn: async () => {
+      if (!weekValue) {
+        throw new Error("Week value is required");
+      }
+
+      const fetchExisting = async () => {
+        const response = await axiosInstance.get("/schedules/weeks/lookup", {
+          params: { week: weekValue },
+        });
+        return response.data as { week: ScheduleWeekSummary["week"]; created: boolean };
+      };
+
+      let result: { week: ScheduleWeekSummary["week"]; created: boolean };
+
+      if (allowGenerate) {
+        try {
+          const response = await axiosInstance.post("/schedules/weeks/generate", null, {
+            params: { week: weekValue },
+          });
+          result = response.data as { week: ScheduleWeekSummary["week"]; created: boolean };
+        } catch (error) {
+          const axiosError = error as AxiosError;
+          if (axiosError.response?.status === 401 || axiosError.response?.status === 404) {
+            result = await fetchExisting();
+          } else {
+            throw error;
+          }
+        }
+      } else {
+        result = await fetchExisting();
+      }
+
+      queryClient.invalidateQueries(schedulingKeys.weekSummary(result.week.id));
+      return result;
+    },
+    enabled: Boolean(weekValue),
+    retry: false,
+    staleTime: 1000 * 60 * 5,
   });
 };
 
@@ -318,3 +365,4 @@ export const getUpcomingWeeks = (count = 4) => {
     };
   });
 };
+

@@ -10,6 +10,7 @@ import {
   BelongsTo,
   HasMany,
 } from 'sequelize-typescript';
+import type { NonAttribute } from 'sequelize';
 import ShiftInstance from './ShiftInstance.js';
 import User from './User.js';
 import SwapRequest from './SwapRequest.js';
@@ -40,10 +41,10 @@ export default class ShiftAssignment extends Model {
   declare roleInShift: string;
 
   @BelongsTo(() => ShiftInstance)
-  declare shiftInstance?: ShiftInstance | null;
+  declare shiftInstance?: NonAttribute<ShiftInstance | null>;
 
   @BelongsTo(() => User, { foreignKey: 'user_id', as: 'assignee' })
-  declare assignee?: User | null;
+  declare assignee?: NonAttribute<User | null>;
 
   @HasMany(() => SwapRequest, { foreignKey: 'from_assignment_id', as: 'outgoingSwapRequests' })
   declare outgoingSwapRequests?: SwapRequest[];
