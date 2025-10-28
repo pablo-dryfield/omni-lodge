@@ -32,14 +32,15 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
       return;
     }
 
-    const role = (user as unknown as { role?: UserType }).role;
-    const explicitRole = (user as unknown as { roleKey?: string }).roleKey;
+    const role = (user as unknown as { role?: UserType | null }).role ?? null;
+    const explicitRole = (user as unknown as { roleKey?: string | null }).roleKey ?? null;
+    const roleSlug = role?.slug ?? explicitRole ?? null;
 
     req.user = decoded;
     req.authContext = {
       id: user.id,
       userTypeId: user.userTypeId ?? null,
-      roleSlug: explicitRole ?? role?.slug ?? null,
+      roleSlug,
     };
     req.permissionCache = new Map();
 
