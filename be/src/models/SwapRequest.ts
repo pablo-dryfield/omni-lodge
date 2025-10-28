@@ -10,6 +10,7 @@ import {
   BelongsTo,
   Default,
 } from 'sequelize-typescript';
+import type { NonAttribute } from 'sequelize';
 import ShiftAssignment from './ShiftAssignment.js';
 import User from './User.js';
 
@@ -61,17 +62,17 @@ export default class SwapRequest extends Model {
   declare decisionReason: string | null;
 
   @BelongsTo(() => ShiftAssignment, { foreignKey: 'from_assignment_id', as: 'fromAssignment' })
-  declare fromAssignment?: ShiftAssignment | null;
+  declare fromAssignment?: NonAttribute<ShiftAssignment | null>;
 
   @BelongsTo(() => ShiftAssignment, { foreignKey: 'to_assignment_id', as: 'toAssignment' })
-  declare toAssignment?: ShiftAssignment | null;
+  declare toAssignment?: NonAttribute<ShiftAssignment | null>;
 
   @BelongsTo(() => User, { foreignKey: 'requester_id', as: 'requester' })
-  declare requester?: User | null;
+  declare requester?: NonAttribute<User | null>;
 
   @BelongsTo(() => User, { foreignKey: 'partner_id', as: 'partner' })
-  declare partner?: User | null;
+  declare partner?: NonAttribute<User | null>;
 
   @BelongsTo(() => User, { foreignKey: 'manager_id', as: 'manager' })
-  declare manager?: User | null;
+  declare manager?: NonAttribute<User | null>;
 }

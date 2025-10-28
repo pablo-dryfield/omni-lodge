@@ -1,15 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Alert, Badge, Button, Card, Group, Stack, Text, Title } from "@mantine/core";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
+import type { AxiosError } from "axios";
 import { useAppSelector } from "../../store/hooks";
-import {
-  getUpcomingWeeks,
-  useCreateSwap,
-  useGenerateWeek,
-  useMySwaps,
-  useShiftInstances,
-} from "../../api/scheduling";
+import { getUpcomingWeeks, useCreateSwap, useEnsureWeek, useMySwaps, useShiftInstances } from "../../api/scheduling";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import SwapRequestModal from "../../components/scheduling/SwapRequestModal";
 import type { ShiftAssignment, ShiftInstance } from "../../types/scheduling";
@@ -19,10 +14,10 @@ dayjs.extend(isoWeek);
 const MyShiftsPage = () => {
   const weekOptions = useMemo(() => getUpcomingWeeks(6), []);
   const [selectedWeek, setSelectedWeek] = useState<string>(weekOptions[0]?.value ?? "");
-  const [weekId, setWeekId] = useState<number | null>(null);
   const loggedUserId = useAppSelector((state) => state.session.loggedUserId);
 
-  const generateWeek = useGenerateWeek();
+  const ensureWeekQuery = useEnsureWeek(selectedWeek, { allowGenerate: false });
+  const weekId = ensureWeekQuery.data?.week.id ?? null;
   const instancesQuery = useShiftInstances(weekId);
   const createSwap = useCreateSwap();
   const mySwaps = useMySwaps();
@@ -33,26 +28,12 @@ const MyShiftsPage = () => {
     shift: ShiftInstance | null;
   }>({ opened: false, assignment: null, shift: null });
 
-  const ensureWeek = useCallback(
-    async (weekValue: string) => {
-      const result = await generateWeek.mutateAsync({ week: weekValue });
-      setWeekId(result.week.id);
-    },
-    [generateWeek],
-  );
-
-  useEffect(() => {
-    if (selectedWeek) {
-      void ensureWeek(selectedWeek);
-    }
-  }, [selectedWeek, ensureWeek]);
-
   const weekStartLabel = useMemo(() => {
     if (!selectedWeek) {
       return "";
     }
     const [year, weekPart] = selectedWeek.split("-W");
-    const start = dayjs().isoWeekYear(Number(year)).isoWeek(Number(weekPart)).startOf("isoWeek");
+    const start = dayjs().year(Number(year)).isoWeek(Number(weekPart)).startOf("isoWeek");
     return `${start.format("MMM D")} - ${start.add(6, "day").format("MMM D")}`;
   }, [selectedWeek]);
 
@@ -111,6 +92,16 @@ const MyShiftsPage = () => {
 
   return (
     <Stack mt="lg" gap="lg">
+      {ensureWeekQuery.isError ? (
+        <Alert color="red" title="Unable to load scheduling week">
+          <Text size="sm">
+            {((ensureWeekQuery.error as AxiosError)?.response?.status === 401
+              ? "You do not have permission to generate the schedule week. Please contact a manager."
+              : (ensureWeekQuery.error as Error).message) ?? "Failed to load scheduling week."}
+          </Text>
+        </Alert>
+      ) : null}
+
       <Group justify="space-between" align="flex-end">
         <Stack gap={4}>
           <Title order={3}>My shifts</Title>
@@ -182,3 +173,4 @@ const MyShiftsPage = () => {
 };
 
 export default MyShiftsPage;
+

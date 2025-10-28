@@ -10,6 +10,7 @@ import {
   BelongsTo,
   Default,
 } from 'sequelize-typescript';
+import type { NonAttribute } from 'sequelize';
 import ScheduleWeek from './ScheduleWeek.js';
 
 @Table({
@@ -42,5 +43,5 @@ export default class Export extends Model {
   declare createdAt: Date;
 
   @BelongsTo(() => ScheduleWeek, { foreignKey: 'schedule_week_id', as: 'scheduleWeek' })
-  declare scheduleWeek?: ScheduleWeek | null;
+  declare scheduleWeek?: NonAttribute<ScheduleWeek | null>;
 }

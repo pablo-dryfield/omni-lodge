@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActionIcon,
   Alert,
@@ -19,13 +19,14 @@ import {
 import { IconPlus, IconTrash } from "@tabler/icons-react";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
+import type { AxiosError } from "axios";
 import axiosInstance from "../../utils/axiosInstance";
 import {
   useAssignShifts,
   useCreateShiftInstance,
   useDeleteAssignment,
   useDeleteShiftInstance,
-  useGenerateWeek,
+  useEnsureWeek,
   useLockWeek,
   usePublishWeek,
   useShiftInstances,
@@ -49,7 +50,6 @@ type StaffOption = {
 const BuilderPage = () => {
   const weekOptions = useMemo(() => getUpcomingWeeks(6), []);
   const [selectedWeek, setSelectedWeek] = useState<string>(weekOptions[0]?.value ?? "");
-  const [weekId, setWeekId] = useState<number | null>(null);
   const [showAddInstance, setShowAddInstance] = useState(false);
   const [staff, setStaff] = useState<StaffOption[]>([]);
   const [assignmentModal, setAssignmentModal] = useState<{
@@ -59,7 +59,8 @@ const BuilderPage = () => {
   const [assignmentRole, setAssignmentRole] = useState<string>("");
   const [assignmentUserId, setAssignmentUserId] = useState<string | null>(null);
 
-  const generateWeek = useGenerateWeek();
+  const ensureWeekQuery = useEnsureWeek(selectedWeek, { allowGenerate: true });
+  const weekId = ensureWeekQuery.data?.week.id ?? null;
   const summaryQuery = useWeekSummary(weekId);
   const templatesQuery = useShiftTemplates();
   const instancesQuery = useShiftInstances(weekId);
@@ -69,20 +70,6 @@ const BuilderPage = () => {
   const deleteInstanceMutation = useDeleteShiftInstance();
   const lockWeekMutation = useLockWeek();
   const publishWeekMutation = usePublishWeek();
-
-  const ensureWeek = useCallback(
-    async (weekValue: string) => {
-      const result = await generateWeek.mutateAsync({ week: weekValue });
-      setWeekId(result.week.id);
-    },
-    [generateWeek],
-  );
-
-  useEffect(() => {
-    if (selectedWeek) {
-      void ensureWeek(selectedWeek);
-    }
-  }, [selectedWeek, ensureWeek]);
 
   useEffect(() => {
     const fetchStaff = async () => {
@@ -152,13 +139,23 @@ const BuilderPage = () => {
       return null;
     }
     const [year, weekPart] = selectedWeek.split("-W");
-    return dayjs().isoWeekYear(Number(year)).isoWeek(Number(weekPart)).startOf("isoWeek");
+    return dayjs().year(Number(year)).isoWeek(Number(weekPart)).startOf("isoWeek");
   }, [selectedWeek]);
 
   const weekStartLabel = weekStart ? `${weekStart.format("MMM D")} - ${weekStart.add(6, "day").format("MMM D")}` : "";
 
   return (
     <Stack mt="lg" gap="lg">
+      {ensureWeekQuery.isError ? (
+        <Alert color="red" title="Unable to load scheduling week">
+          <Text size="sm">
+            {((ensureWeekQuery.error as AxiosError)?.response?.status === 401
+              ? "You do not have permission to generate the schedule week. Please contact a manager."
+              : (ensureWeekQuery.error as Error).message) ?? "Failed to load scheduling week."}
+          </Text>
+        </Alert>
+      ) : null}
+
       <Group justify="space-between" align="flex-end">
         <Stack gap={4}>
           <Title order={3}>Schedule builder</Title>
@@ -310,3 +307,4 @@ const BuilderPage = () => {
 };
 
 export default BuilderPage;
+

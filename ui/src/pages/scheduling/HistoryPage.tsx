@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Anchor, Card, Group, Select, SimpleGrid, Stack, Text, Title } from "@mantine/core";
+import { useEffect, useMemo, useState } from "react";
+import { Alert, Anchor, Card, Group, Select, SimpleGrid, Stack, Text, Title } from "@mantine/core";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
+import type { AxiosError } from "axios";
 import axiosInstance from "../../utils/axiosInstance";
-import { getUpcomingWeeks, useGenerateWeek, useScheduleExports, useScheduleReports } from "../../api/scheduling";
+import { getUpcomingWeeks, useEnsureWeek, useScheduleExports, useScheduleReports } from "../../api/scheduling";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import type { ServerResponse } from "../../types/general/ServerResponse";
 import type { ShiftAssignment } from "../../types/scheduling";
@@ -13,29 +14,16 @@ dayjs.extend(isoWeek);
 const HistoryPage = () => {
   const weeks = useMemo(() => getUpcomingWeeks(8), []);
   const [exportWeek, setExportWeek] = useState(weeks[0]?.value ?? "");
-  const [exportWeekId, setExportWeekId] = useState<number | null>(null);
   const [fromWeek, setFromWeek] = useState(weeks[0]?.value ?? "");
   const [toWeek, setToWeek] = useState(weeks[0]?.value ?? "");
   const [userOptions, setUserOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
 
-  const ensureWeekMutation = useGenerateWeek();
+  const ensureExportWeekQuery = useEnsureWeek(exportWeek, { allowGenerate: false });
+  const exportWeekId = ensureExportWeekQuery.data?.week.id ?? null;
   const exportsQuery = useScheduleExports(exportWeekId);
   const reportsQuery = useScheduleReports({ from: fromWeek, to: toWeek, userId: selectedUser ? Number(selectedUser) : undefined });
 
-  const ensureWeek = useCallback(
-    async (weekValue: string, setter: (id: number) => void) => {
-      const result = await ensureWeekMutation.mutateAsync({ week: weekValue });
-      setter(result.week.id);
-    },
-    [ensureWeekMutation],
-  );
-
-  useEffect(() => {
-    if (exportWeek) {
-      void ensureWeek(exportWeek, setExportWeekId);
-    }
-  }, [exportWeek, ensureWeek]);
 
   useEffect(() => {
     const fetchUsers = async () => {
@@ -61,6 +49,16 @@ const HistoryPage = () => {
 
   return (
     <Stack mt="lg" gap="lg">
+      {ensureExportWeekQuery.isError ? (
+        <Alert color="red" title="Unable to load scheduling week">
+          <Text size="sm">
+            {((ensureExportWeekQuery.error as AxiosError)?.response?.status === 401
+              ? "You do not have permission to generate the schedule week. Please contact a manager."
+              : (ensureExportWeekQuery.error as Error).message) ?? "Failed to load scheduling week."}
+          </Text>
+        </Alert>
+      ) : null}
+
       <Title order={3}>History & exports</Title>
 
       <Group justify="space-between" align="flex-end">
@@ -133,4 +131,14 @@ const HistoryPage = () => {
 };
 
 export default HistoryPage;
+
+
+
+
+
+
+
+
+
+
 

@@ -11,6 +11,7 @@ import {
   Default,
   HasMany,
 } from 'sequelize-typescript';
+import type { NonAttribute } from 'sequelize';
 import ScheduleWeek from './ScheduleWeek.js';
 import ShiftType from './ShiftType.js';
 import ShiftTemplate from './ShiftTemplate.js';
@@ -70,13 +71,13 @@ export default class ShiftInstance extends Model {
   declare meta: Record<string, unknown> | null;
 
   @BelongsTo(() => ScheduleWeek, { foreignKey: 'schedule_week_id', as: 'scheduleWeek' })
-  declare scheduleWeek?: ScheduleWeek | null;
+  declare scheduleWeek?: NonAttribute<ScheduleWeek | null>;
 
   @BelongsTo(() => ShiftType, { foreignKey: 'shift_type_id', as: 'shiftType' })
-  declare shiftType?: ShiftType | null;
+  declare shiftType?: NonAttribute<ShiftType | null>;
 
   @BelongsTo(() => ShiftTemplate, { foreignKey: 'shift_template_id', as: 'template' })
-  declare template?: ShiftTemplate | null;
+  declare template?: NonAttribute<ShiftTemplate | null>;
 
   @HasMany(() => ShiftAssignment, { foreignKey: 'shift_instance_id', as: 'assignments' })
   declare assignments?: ShiftAssignment[];

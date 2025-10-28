@@ -24,7 +24,9 @@ import {
   listSwapsForUser,
   listExports,
   listHistoricalAssignments,
+  parseWeekParam,
 } from '../services/scheduleService.js';
+import ScheduleWeek from '../models/ScheduleWeek.js';
 import type { SwapRequestStatus } from '../models/SwapRequest.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 
@@ -41,6 +43,25 @@ router.post('/weeks/generate', authMiddleware, requireRoles(MANAGER_ROLES), asyn
     const weekParam = typeof req.query.week === 'string' ? req.query.week : null;
     const result = await generateWeek({ week: weekParam, actorId: getActorId(req), autoSpawn: true });
     res.json(result);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.get('/weeks/lookup', authMiddleware, async (req, res) => {
+  try {
+    const weekParam = typeof req.query.week === 'string' ? req.query.week : null;
+    const identifier = parseWeekParam(weekParam);
+    const week = await ScheduleWeek.findOne({
+      where: { year: identifier.year, isoWeek: identifier.isoWeek },
+    });
+
+    if (!week) {
+      res.status(404).json({ error: 'Schedule week not found' });
+      return;
+    }
+
+    res.json({ week, created: false });
   } catch (error) {
     res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
   }

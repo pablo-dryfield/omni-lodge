@@ -9,6 +9,7 @@ import {
   Default,
   BelongsTo,
 } from 'sequelize-typescript';
+import type { NonAttribute } from 'sequelize';
 import User from './User.js';
 
 export type StaffType = 'volunteer' | 'long_term';
@@ -39,5 +40,5 @@ export default class StaffProfile extends Model {
   declare active: boolean;
 
   @BelongsTo(() => User, { foreignKey: 'user_id', as: 'user' })
-  declare user?: User | null;
+  declare user?: NonAttribute<User | null>;
 }
