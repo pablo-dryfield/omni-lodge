@@ -25,6 +25,7 @@ const defaultActions = [
 
 const defaultRoles = [
   { slug: 'admin', name: 'Administrator', description: 'Full platform access', isDefault: false },
+  { slug: 'administrator', name: 'Administrator (Legacy)', description: 'Alias for full platform access', isDefault: false },
   { slug: 'owner', name: 'Owner', description: 'Business owner', isDefault: false },
   { slug: 'manager', name: 'Manager', description: 'Manage day-to-day operations', isDefault: false },
   { slug: 'assistant-manager', name: 'Assistant Manager', description: 'Assist managers with operations', isDefault: false },
@@ -106,6 +107,8 @@ const rolePageMatrix: Record<string, string[]> = {
   'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling'],
   guide: ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'pays', 'scheduling'],
 };
+
+rolePageMatrix['administrator'] = [...rolePageMatrix.admin];
 
 const roleModuleMatrix: Record<string, Record<string, string[]>> = {
   admin: {
@@ -233,6 +236,10 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'staff-payouts-self': ['view'],
   },
 };
+
+roleModuleMatrix['administrator'] = Object.fromEntries(
+  Object.entries(roleModuleMatrix.admin).map(([moduleSlug, actions]) => [moduleSlug, [...actions]])
+);
 
 export const PAYMENT_METHOD_SEED = [
   { name: 'Online/Card', description: 'Online or card-based payments' },

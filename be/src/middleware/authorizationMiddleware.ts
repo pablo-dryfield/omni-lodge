@@ -61,10 +61,40 @@ export const authorizeModuleAction = (moduleSlug: string, actionKey: string) => 
   };
 };
 
-export const requireRoles = (roleSlugs: string[]) => {
+const normalizeRole = (value: string): string => {
+  const trimmed = value.trim().toLowerCase();
+  const withHyphens = trimmed.replace(/[\s_]+/g, '-');
+  const collapsed = withHyphens.replace(/-/g, '');
+
+  if (collapsed === 'administrator') {
+    return 'admin';
+  }
+  if (collapsed === 'assistantmanager') {
+    return 'assistant-manager';
+  }
+  if (collapsed === 'assistmanager') {
+    return 'assistant-manager';
+  }
+  if (collapsed === 'mgr' || collapsed === 'manager') {
+    return 'manager';
+  }
+
+  return withHyphens;
+};
+
+export const requireRoles = (roleSlugs: readonly string[]) => {
+  const allowedRoles = new Set(roleSlugs.map((role) => normalizeRole(role)));
+
   return (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
     const context = req.authContext;
-    if (!context || !context.roleSlug || !roleSlugs.includes(context.roleSlug)) {
+    if (!context || !context.roleSlug) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    const normalizedRole = normalizeRole(context.roleSlug);
+
+    if (!allowedRoles.has(normalizedRole)) {
       res.status(403).json([{ message: 'Forbidden' }]);
       return;
     }

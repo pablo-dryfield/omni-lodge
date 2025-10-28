@@ -12,6 +12,8 @@ const NAME_TO_SLUG: Record<string, string[]> = {
   guide: ['guide', 'pub-crawl-guide'],
   'pub crawl guide': ['pub-crawl-guide'],
   'pub_crawl_guide': ['pub-crawl-guide'],
+  admin: ['admin', 'administrator'],
+  administrator: ['administrator', 'admin'],
   manager: ['manager'],
   'assistant manager': ['assistant-manager'],
   'assistant-manager': ['assistant-manager'],
