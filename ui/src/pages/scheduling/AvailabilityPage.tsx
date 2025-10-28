@@ -1,6 +1,6 @@
 
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Group, Stack, Switch, Text, Title } from "@mantine/core";
+import { ActionIcon, Alert, Button, Card, Group, Stack, Switch, Text, Title } from "@mantine/core";
 import { TimeInput } from "@mantine/dates";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
@@ -10,6 +10,7 @@ import { useEnsureWeek, useAvailability, useSaveAvailability, getUpcomingWeeks }
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import type { AvailabilityPayload } from "../../types/scheduling";
 import { useAppSelector } from "../../store/hooks";
+import { IconX } from "@tabler/icons-react";
 
 dayjs.extend(isoWeek);
 dayjs.extend(weekday);
@@ -166,6 +167,9 @@ const AvailabilityPage = () => {
                     label={isAvailable ? "Available" : "Unavailable"}
                     onChange={(event) => handleToggle(dayKey, event.currentTarget.checked ? "available" : "unavailable")}
                   />
+                  <Text size="xs" c="dimmed">
+                    Leave times blank to mark yourself available all day.
+                  </Text>
                 </Stack>
                 <Group gap="sm">
                   <TimeInput
@@ -173,12 +177,40 @@ const AvailabilityPage = () => {
                     value={entry.startTime ?? ""}
                     onChange={(event) => handleTimeChange(dayKey, "startTime", event.currentTarget.value || null)}
                     disabled={!isAvailable}
+                    rightSection={
+                      entry.startTime ? (
+                        <ActionIcon
+                          size="sm"
+                          variant="subtle"
+                          color="gray"
+                          onClick={() => handleTimeChange(dayKey, "startTime", null)}
+                          aria-label="Clear start time"
+                        >
+                          <IconX size={12} />
+                        </ActionIcon>
+                      ) : undefined
+                    }
+                    rightSectionPointerEvents={entry.startTime ? "auto" : "none"}
                   />
                   <TimeInput
                     label="To"
                     value={entry.endTime ?? ""}
                     onChange={(event) => handleTimeChange(dayKey, "endTime", event.currentTarget.value || null)}
                     disabled={!isAvailable}
+                    rightSection={
+                      entry.endTime ? (
+                        <ActionIcon
+                          size="sm"
+                          variant="subtle"
+                          color="gray"
+                          onClick={() => handleTimeChange(dayKey, "endTime", null)}
+                          aria-label="Clear end time"
+                        >
+                          <IconX size={12} />
+                        </ActionIcon>
+                      ) : undefined
+                    }
+                    rightSectionPointerEvents={entry.endTime ? "auto" : "none"}
                   />
                 </Group>
               </Group>
