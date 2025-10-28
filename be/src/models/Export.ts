@@ -42,5 +42,5 @@ export default class Export extends Model {
   declare createdAt: Date;
 
   @BelongsTo(() => ScheduleWeek, { foreignKey: 'schedule_week_id', as: 'scheduleWeek' })
-  declare scheduleWeek?: ScheduleWeek;
+  declare scheduleWeek?: ScheduleWeek | null;
 }

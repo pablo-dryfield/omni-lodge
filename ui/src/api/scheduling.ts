@@ -17,16 +17,18 @@ import type {
 
 dayjs.extend(isoWeek);
 
+const schedulingBaseKey = ["scheduling"] as const;
+
 const schedulingKeys = {
-  base: ["scheduling"] as const,
-  weekSummary: (weekId: number) => [...schedulingKeys.base, "week", weekId] as const,
-  shiftTemplates: [...schedulingKeys.base, "templates"] as const,
-  shiftInstances: (weekId: number) => [...schedulingKeys.base, "instances", weekId] as const,
-  availability: (weekId: number) => [...schedulingKeys.base, "availability", weekId] as const,
-  swaps: (status: string) => [...schedulingKeys.base, "swaps", status] as const,
-  mySwaps: [...schedulingKeys.base, "swaps", "mine"] as const,
-  exports: (weekId: number) => [...schedulingKeys.base, "exports", weekId] as const,
-  reports: (params: ReportsQuery) => [...schedulingKeys.base, "reports", params.from, params.to, params.userId ?? "all"] as const,
+  base: schedulingBaseKey,
+  weekSummary: (weekId: number) => [...schedulingBaseKey, "week", weekId] as const,
+  shiftTemplates: [...schedulingBaseKey, "templates"] as const,
+  shiftInstances: (weekId: number) => [...schedulingBaseKey, "instances", weekId] as const,
+  availability: (weekId: number) => [...schedulingBaseKey, "availability", weekId] as const,
+  swaps: (status: string) => [...schedulingBaseKey, "swaps", status] as const,
+  mySwaps: [...schedulingBaseKey, "swaps", "mine"] as const,
+  exports: (weekId: number) => [...schedulingBaseKey, "exports", weekId] as const,
+  reports: (params: ReportsQuery) => [...schedulingBaseKey, "reports", params.from, params.to, params.userId ?? "all"] as const,
 };
 
 type WeekQueryParams = { week?: string | null };

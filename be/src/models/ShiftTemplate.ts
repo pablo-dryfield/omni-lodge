@@ -66,7 +66,7 @@ export default class ShiftTemplate extends Model {
   declare defaultMeta: Record<string, unknown> | null;
 
   @BelongsTo(() => ShiftType, { foreignKey: 'shift_type_id', as: 'shiftType' })
-  declare shiftType?: ShiftType;
+  declare shiftType?: ShiftType | null;
 
   @HasMany(() => ShiftInstance, { foreignKey: 'shift_template_id', as: 'instances' })
   declare instances?: ShiftInstance[];

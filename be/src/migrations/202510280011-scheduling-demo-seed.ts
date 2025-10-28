@@ -1,4 +1,4 @@
-import type { QueryInterface } from 'sequelize';
+import type { QueryInterface, Transaction } from 'sequelize';
 import { QueryTypes } from 'sequelize';
 import bcrypt from 'bcryptjs';
 import dayjs from 'dayjs';
@@ -17,7 +17,7 @@ type SeedUser = {
   username: string;
   firstName: string;
   lastName: string;
-  role: 'owner' | 'admin' | 'assistant_manager' | 'guide';
+  roleKey: 'owner' | 'admin' | 'assistant_manager' | 'guide';
   staffProfile?: {
     staffType: 'volunteer' | 'long_term';
     livesInAccom: boolean;
@@ -33,21 +33,21 @@ const seedUsers: SeedUser[] = [
     username: 'owner.demo',
     firstName: 'Olivia',
     lastName: 'Owner',
-    role: 'owner',
+    roleKey: 'owner',
   },
   {
     email: 'gm.demo@omni-lodge.test',
     username: 'gm.demo',
     firstName: 'Gavin',
     lastName: 'Manager',
-    role: 'admin',
+    roleKey: 'admin',
   },
   {
     email: 'assistant.demo@omni-lodge.test',
     username: 'assistant.demo',
     firstName: 'Avery',
     lastName: 'Assistant',
-    role: 'assistant_manager',
+    roleKey: 'assistant_manager',
     staffProfile: {
       staffType: 'long_term',
       livesInAccom: true,
@@ -58,7 +58,7 @@ const seedUsers: SeedUser[] = [
     username: 'guide.longterm',
     firstName: 'Liam',
     lastName: 'Guide',
-    role: 'guide',
+    roleKey: 'guide',
     staffProfile: {
       staffType: 'long_term',
       livesInAccom: false,
@@ -69,7 +69,7 @@ const seedUsers: SeedUser[] = [
     username: 'guide.volunteer',
     firstName: 'Vera',
     lastName: 'Volunteer',
-    role: 'guide',
+    roleKey: 'guide',
     staffProfile: {
       staffType: 'volunteer',
       livesInAccom: true,
@@ -77,7 +77,7 @@ const seedUsers: SeedUser[] = [
   },
 ];
 
-async function upsertUsers(qi: QueryInterface, transaction: unknown): Promise<number[]> {
+async function upsertUsers(qi: QueryInterface, transaction: Transaction): Promise<number[]> {
   const hashed = await bcrypt.hash(DEFAULT_PASSWORD, 10);
   const insertedIds: number[] = [];
 
@@ -112,7 +112,8 @@ async function upsertUsers(qi: QueryInterface, transaction: unknown): Promise<nu
         },
       );
 
-      userId = (insertedRows as Array<{ id: number }>)[0]?.id;
+      const insertedRow = insertedRows[0];
+      userId = insertedRow?.id;
     }
 
     if (!userId) {
@@ -145,7 +146,7 @@ async function upsertUsers(qi: QueryInterface, transaction: unknown): Promise<nu
   return insertedIds;
 }
 
-async function getOrCreateScheduleWeek(qi: QueryInterface, transaction: unknown): Promise<{ id: number; year: number; week: number; weekStart: dayjs.Dayjs }> {
+async function getOrCreateScheduleWeek(qi: QueryInterface, transaction: Transaction): Promise<{ id: number; year: number; week: number; weekStart: dayjs.Dayjs }> {
   const base = dayjs().tz(tz).add(1, 'week');
   const year = base.isoWeekYear();
   const week = base.isoWeek();
@@ -175,7 +176,8 @@ async function getOrCreateScheduleWeek(qi: QueryInterface, transaction: unknown)
     },
   );
 
-  const weekId = (inserted as Array<{ id: number }>)[0]?.id;
+  const insertedRow = inserted[0];
+  const weekId = insertedRow?.id;
 
   if (!weekId) {
     throw new Error('Failed to create demo schedule_week');
@@ -184,7 +186,7 @@ async function getOrCreateScheduleWeek(qi: QueryInterface, transaction: unknown)
   return { id: weekId, year, week, weekStart };
 }
 
-async function resolveTemplate(qi: QueryInterface, name: string, transaction: unknown): Promise<{ templateId: number; shiftTypeId: number }> {
+async function resolveTemplate(qi: QueryInterface, name: string, transaction: Transaction): Promise<{ templateId: number; shiftTypeId: number }> {
   const rows = await qi.sequelize.query<{ id: number; shift_type_id: number }>(
     `SELECT id, shift_type_id FROM shift_templates WHERE name = :name LIMIT 1`,
     {
@@ -194,7 +196,7 @@ async function resolveTemplate(qi: QueryInterface, name: string, transaction: un
     },
   );
 
-  const [row] = rows as Array<{ id: number; shift_type_id: number }>;
+  const [row] = rows;
 
   if (!row?.id || !row.shift_type_id) {
     throw new Error(`Missing shift template seed "${name}"`);
@@ -285,9 +287,9 @@ export async function up({ context }: MigrationParams): Promise<void> {
       },
     );
 
-    const pubCrawlId = (pubCrawlRows as Array<{ id: number }>)[0]?.id;
-    const cleaningId = (cleaningRows as Array<{ id: number }>)[0]?.id;
-    const promotionId = (promotionRows as Array<{ id: number }>)[0]?.id;
+    const pubCrawlId = pubCrawlRows[0]?.id;
+    const cleaningId = cleaningRows[0]?.id;
+    const promotionId = promotionRows[0]?.id;
 
     if (pubCrawlId) {
       await qi.sequelize.query(
