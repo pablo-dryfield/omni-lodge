@@ -1,6 +1,9 @@
 import { Link } from 'react-router-dom';
 import EventAvailableIcon from '@mui/icons-material/EventAvailable';
 import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
+import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
+import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
+import FormatListNumberedIcon from '@mui/icons-material/FormatListNumbered';
 import PersonIcon from '@mui/icons-material/Person';
 import SettingsIcon from '@mui/icons-material/Settings';
 import Grid from '@mui/material/Grid';
@@ -26,6 +29,12 @@ const renderNavigationIcon = (icon: NavigationIconKey) => {
       return <EventAvailableIcon fontSize="large" />;
     case 'assignmentTurnedIn':
       return <AssignmentTurnedInIcon fontSize="large" />;
+    case 'calendarMonth':
+      return <CalendarMonthIcon fontSize="large" />;
+    case 'accountBalance':
+      return <AccountBalanceIcon fontSize="large" />;
+    case 'formatListNumbered':
+      return <FormatListNumberedIcon fontSize="large" />;
     case 'person':
       return <PersonIcon fontSize="large" />;
     case 'settings':

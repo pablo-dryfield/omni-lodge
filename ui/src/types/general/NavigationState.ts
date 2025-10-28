@@ -1,4 +1,11 @@
-export type NavigationIconKey = 'eventAvailable' | 'assignmentTurnedIn' | 'person' | 'settings';
+export type NavigationIconKey =
+  | 'eventAvailable'
+  | 'assignmentTurnedIn'
+  | 'person'
+  | 'settings'
+  | 'calendarMonth'
+  | 'accountBalance'
+  | 'formatListNumbered';
 
 export type NavigationPage = {
   name: string;
