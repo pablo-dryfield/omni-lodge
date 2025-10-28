@@ -1,4 +1,4 @@
-import type { QueryInterface } from 'sequelize';
+import type { QueryInterface, Transaction } from 'sequelize';
 import { DataTypes, QueryTypes } from 'sequelize';
 
 type MigrationParams = { context: QueryInterface };
@@ -129,7 +129,7 @@ const templateSeeds: TemplateSeed[] = [
   },
 ];
 
-async function upsertShiftTemplates(qi: QueryInterface, transaction: unknown): Promise<void> {
+async function upsertShiftTemplates(qi: QueryInterface, transaction: Transaction): Promise<void> {
   for (const template of templateSeeds) {
     const [shiftType] = await qi.sequelize.query<{ id: number }>(
       `SELECT id FROM shift_types WHERE key = :key LIMIT 1`,
@@ -175,7 +175,7 @@ async function upsertShiftTemplates(qi: QueryInterface, transaction: unknown): P
   }
 }
 
-async function upsertShiftTypes(qi: QueryInterface, transaction: unknown): Promise<void> {
+async function upsertShiftTypes(qi: QueryInterface, transaction: Transaction): Promise<void> {
   for (const seed of shiftTypeSeeds) {
     await qi.sequelize.query(
       `INSERT INTO shift_types (key, name, description, created_at, updated_at)

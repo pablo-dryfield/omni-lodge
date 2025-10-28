@@ -39,5 +39,5 @@ export default class StaffProfile extends Model {
   declare active: boolean;
 
   @BelongsTo(() => User, { foreignKey: 'user_id', as: 'user' })
-  declare user: User;
+  declare user?: User | null;
 }

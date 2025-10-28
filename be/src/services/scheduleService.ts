@@ -58,11 +58,6 @@ function parseWeekParam(weekParam?: string | null): WeekIdentifier {
   return { year: target.isoWeekYear(), isoWeek: target.isoWeek() };
 }
 
-export type WeekIdentifier = {
-  year: number;
-  isoWeek: number;
-};
-
 export type ScheduleViolation = {
   code: string;
   message: string;
@@ -500,8 +495,11 @@ function assertWeekMutable(week: ScheduleWeek): void {
 
 async function renderAndUploadWeek(week: ScheduleWeek, actorId: number | null): Promise<Export[]> {
   const { html } = await renderScheduleHTML(week.id);
+  const headlessEnv = process.env.PUPPETEER_HEADLESS?.toLowerCase();
+  const headlessMode: boolean | 'shell' | undefined =
+    headlessEnv === 'shell' ? 'shell' : headlessEnv === 'false' ? false : true;
   const browser = await puppeteer.launch({
-    headless: 'new',
+    headless: headlessMode,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
 

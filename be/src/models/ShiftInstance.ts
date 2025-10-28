@@ -70,10 +70,10 @@ export default class ShiftInstance extends Model {
   declare meta: Record<string, unknown> | null;
 
   @BelongsTo(() => ScheduleWeek, { foreignKey: 'schedule_week_id', as: 'scheduleWeek' })
-  declare scheduleWeek?: ScheduleWeek;
+  declare scheduleWeek?: ScheduleWeek | null;
 
   @BelongsTo(() => ShiftType, { foreignKey: 'shift_type_id', as: 'shiftType' })
-  declare shiftType?: ShiftType;
+  declare shiftType?: ShiftType | null;
 
   @BelongsTo(() => ShiftTemplate, { foreignKey: 'shift_template_id', as: 'template' })
   declare template?: ShiftTemplate | null;

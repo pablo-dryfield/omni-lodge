@@ -61,16 +61,16 @@ export default class SwapRequest extends Model {
   declare decisionReason: string | null;
 
   @BelongsTo(() => ShiftAssignment, { foreignKey: 'from_assignment_id', as: 'fromAssignment' })
-  declare fromAssignment?: ShiftAssignment;
+  declare fromAssignment?: ShiftAssignment | null;
 
   @BelongsTo(() => ShiftAssignment, { foreignKey: 'to_assignment_id', as: 'toAssignment' })
-  declare toAssignment?: ShiftAssignment;
+  declare toAssignment?: ShiftAssignment | null;
 
   @BelongsTo(() => User, { foreignKey: 'requester_id', as: 'requester' })
-  declare requester?: User;
+  declare requester?: User | null;
 
   @BelongsTo(() => User, { foreignKey: 'partner_id', as: 'partner' })
-  declare partner?: User;
+  declare partner?: User | null;
 
   @BelongsTo(() => User, { foreignKey: 'manager_id', as: 'manager' })
   declare manager?: User | null;

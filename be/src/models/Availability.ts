@@ -64,10 +64,10 @@ export default class Availability extends Model {
   declare notes: string | null;
 
   @BelongsTo(() => User, { foreignKey: 'user_id', as: 'user' })
-  declare user?: User;
+  declare user?: User | null;
 
   @BelongsTo(() => ScheduleWeek, { foreignKey: 'schedule_week_id', as: 'scheduleWeek' })
-  declare scheduleWeek?: ScheduleWeek;
+  declare scheduleWeek?: ScheduleWeek | null;
 
   @BelongsTo(() => ShiftType, { foreignKey: 'shift_type_id', as: 'preferredShiftType' })
   declare preferredShiftType?: ShiftType | null;

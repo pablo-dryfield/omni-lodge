@@ -40,10 +40,10 @@ export default class ShiftAssignment extends Model {
   declare roleInShift: string;
 
   @BelongsTo(() => ShiftInstance)
-  declare shiftInstance?: ShiftInstance;
+  declare shiftInstance?: ShiftInstance | null;
 
   @BelongsTo(() => User, { foreignKey: 'user_id', as: 'assignee' })
-  declare assignee?: User;
+  declare assignee?: User | null;
 
   @HasMany(() => SwapRequest, { foreignKey: 'from_assignment_id', as: 'outgoingSwapRequests' })
   declare outgoingSwapRequests?: SwapRequest[];
