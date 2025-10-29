@@ -29,10 +29,13 @@ export interface ScheduleWeekSummary {
   violations: ScheduleViolation[];
 }
 
-export interface ShiftTemplateRoleRequirement {
+export interface ShiftRoleRequirement {
+  shiftRoleId?: number | null;
   role: string;
   required: number | null;
 }
+
+export interface ShiftTemplateRoleRequirement extends ShiftRoleRequirement {}
 
 export interface ShiftTemplate {
   id: number;
@@ -58,11 +61,16 @@ export interface ShiftAssignment {
   shiftInstanceId: number;
   userId: number;
   roleInShift: string;
+  shiftRoleId?: number | null;
   assignee?: {
     id: number;
     firstName: string;
     lastName: string;
   };
+  shiftRole?: {
+    id: number;
+    name: string;
+  } | null;
   shiftInstance?: ShiftInstance;
 }
 
@@ -75,7 +83,7 @@ export interface ShiftInstance {
   timeStart: string;
   timeEnd?: string | null;
   capacity?: number | null;
-  requiredRoles?: ShiftTemplateRoleRequirement[] | null;
+  requiredRoles?: ShiftRoleRequirement[] | null;
   meta?: Record<string, unknown> | null;
   shiftType?: ShiftType;
   template?: ShiftTemplate | null;
@@ -117,6 +125,7 @@ export interface AssignmentInput {
   shiftInstanceId: number;
   userId: number;
   roleInShift: string;
+  shiftRoleId?: number | null;
   overrideReason?: string;
 }
 
@@ -139,7 +148,7 @@ export interface ShiftInstancePayload {
   timeEnd?: string | null;
   capacity?: number | null;
   meta?: Record<string, unknown> | null;
-  requiredRoles?: ShiftTemplateRoleRequirement[] | null;
+  requiredRoles?: ShiftRoleRequirement[] | null;
   shiftTemplateId?: number | null;
 }
 

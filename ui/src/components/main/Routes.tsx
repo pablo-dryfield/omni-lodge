@@ -30,6 +30,8 @@ import SettingsChannelCommissions from "../../pages/settings/SettingsChannelComm
 import SettingsActions from "../../pages/settings/SettingsActions";
 import SettingsChannels from "../../pages/settings/SettingsChannels";
 import SettingsStaffProfiles from "../../pages/settings/SettingsStaffProfiles";
+import SettingsShiftRoles from "../../pages/settings/SettingsShiftRoles";
+import SettingsUserShiftRoles from "../../pages/settings/SettingsUserShiftRoles";
 import SchedulingLayout from "../../pages/scheduling/SchedulingLayout";
 import AvailabilityPage from "../../pages/scheduling/AvailabilityPage";
 import BuilderPage from "../../pages/scheduling/BuilderPage";
@@ -108,6 +110,8 @@ const Routes = () => {
         <Route path="actions" element={<SettingsActions />} />
         <Route path="channels" element={<SettingsChannels />} />
         <Route path="staff-profiles" element={<SettingsStaffProfiles />} />
+        <Route path="shift-roles" element={<SettingsShiftRoles />} />
+        <Route path="user-shift-roles" element={<SettingsUserShiftRoles />} />
       </Route>
     </ReactRoutes>
   );

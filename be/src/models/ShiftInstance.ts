@@ -17,7 +17,7 @@ import ShiftType from './ShiftType.js';
 import ShiftTemplate from './ShiftTemplate.js';
 import ShiftAssignment from './ShiftAssignment.js';
 
-export type RequiredRoleDefinition = Array<{ role: string; required: number | null }>;
+export type RequiredRoleDefinition = Array<{ shiftRoleId: number | null; role: string; required: number | null }>;
 
 @Table({
   tableName: 'shift_instances',

@@ -4,7 +4,6 @@ import {
   Alert,
   Button,
   Group,
-  Loader,
   Modal,
   NumberInput,
   Select,
@@ -17,9 +16,18 @@ import {
 } from "@mantine/core";
 import { IconEdit, IconPlus, IconTrash } from "@tabler/icons-react";
 import { useShiftTemplates, useShiftTypes, useUpsertShiftTemplate, useDeleteShiftTemplate } from "../../api/scheduling";
+import { useShiftRoles } from "../../api/shiftRoles";
 import { useAppSelector } from "../../store/hooks";
 import { makeSelectIsModuleActionAllowed } from "../../selectors/accessControlSelectors";
-import type { ShiftTemplate } from "../../types/scheduling";
+import type { ShiftTemplate, ShiftTemplateRoleRequirement } from "../../types/scheduling";
+import type { ShiftRole } from "../../types/shiftRoles/ShiftRole";
+
+type RoleEntry = {
+  id: string;
+  roleId: string | null;
+  customName: string;
+  required: number;
+};
 
 type TemplateFormState = {
   id?: number;
@@ -29,7 +37,7 @@ type TemplateFormState = {
   defaultEndTime: string;
   defaultCapacity?: number;
   requiresLeader: boolean;
-  defaultRoles: string;
+  roleEntries: RoleEntry[];
   defaultMeta: string;
 };
 
@@ -40,9 +48,12 @@ const emptyForm: TemplateFormState = {
   defaultEndTime: "",
   defaultCapacity: undefined,
   requiresLeader: false,
-  defaultRoles: "",
+  roleEntries: [],
   defaultMeta: "",
 };
+
+let roleEntryCounter = 0;
+const createRoleEntryId = () => `role-${roleEntryCounter++}`;
 
 const TemplatesPage = () => {
   const selectCanManage = useMemo(
@@ -52,6 +63,7 @@ const TemplatesPage = () => {
   const canManageTemplates = useAppSelector(selectCanManage);
 
   const shiftTypesQuery = useShiftTypes({ enabled: canManageTemplates });
+  const shiftRolesQuery = useShiftRoles();
   const templatesQuery = useShiftTemplates({ enabled: canManageTemplates });
   const upsertTemplate = useUpsertShiftTemplate();
   const deleteTemplate = useDeleteShiftTemplate();
@@ -60,14 +72,36 @@ const TemplatesPage = () => {
   const [formState, setFormState] = useState<TemplateFormState>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const shiftTypes = shiftTypesQuery.data ?? [];
+  const shiftTypes = useMemo(() => shiftTypesQuery.data ?? [], [shiftTypesQuery.data]);
+  const shiftRoleRecords = useMemo(() => (shiftRolesQuery.data?.[0]?.data ?? []) as ShiftRole[], [shiftRolesQuery.data]);
+  const shiftRoleOptions = useMemo(
+    () => shiftRoleRecords.map((role) => ({ value: role.id.toString(), label: role.name })),
+    [shiftRoleRecords],
+  );
+  const roleSelectOptions = useMemo(
+    () => [{ value: "__custom__", label: "Custom role" }, ...shiftRoleOptions],
+    [shiftRoleOptions],
+  );
   const templates = templatesQuery.data ?? [];
+
+  const shiftTypeOptions = useMemo(
+    () => shiftTypes.map((type) => ({ value: type.id.toString(), label: type.name })),
+    [shiftTypes],
+  );
 
   const handleOpenCreate = () => {
     setFormState(emptyForm);
     setFormError(null);
     setModalOpen(true);
   };
+
+  const mapTemplateRolesToEntries = (template: ShiftTemplate): RoleEntry[] =>
+    (template.defaultRoles ?? []).map((definition) => ({
+      id: createRoleEntryId(),
+      roleId: definition.shiftRoleId != null ? definition.shiftRoleId.toString() : null,
+      customName: definition.role ?? "",
+      required: Math.max(1, definition.required ?? 1),
+    }));
 
   const handleOpenEdit = (template: ShiftTemplate) => {
     setFormState({
@@ -78,7 +112,7 @@ const TemplatesPage = () => {
       defaultEndTime: template.defaultEndTime ?? "",
       defaultCapacity: template.defaultCapacity ?? undefined,
       requiresLeader: template.requiresLeader ?? false,
-      defaultRoles: template.defaultRoles ? JSON.stringify(template.defaultRoles, null, 2) : "",
+      roleEntries: mapTemplateRolesToEntries(template),
       defaultMeta: template.defaultMeta ? JSON.stringify(template.defaultMeta, null, 2) : "",
     });
     setFormError(null);
@@ -92,23 +126,69 @@ const TemplatesPage = () => {
     setFormError(null);
   };
 
+  const handleAddRoleEntry = () => {
+    const defaultOption = shiftRoleOptions[0];
+    setFormState((state) => ({
+      ...state,
+      roleEntries: [
+        ...state.roleEntries,
+        {
+          id: createRoleEntryId(),
+          roleId: defaultOption ? defaultOption.value : null,
+          customName: defaultOption ? defaultOption.label : "",
+          required: 1,
+        },
+      ],
+    }));
+  };
+
+  const handleRoleSelectionChange = (entryId: string, value: string | null) => {
+    setFormState((state) => ({
+      ...state,
+      roleEntries: state.roleEntries.map((entry) => {
+        if (entry.id !== entryId) {
+          return entry;
+        }
+        if (!value || value === "__custom__") {
+          return { ...entry, roleId: null };
+        }
+        const numericId = Number(value);
+        const reference = shiftRoleRecords.find((role) => role.id === numericId);
+        return { ...entry, roleId: value, customName: reference?.name ?? entry.customName };
+      }),
+    }));
+  };
+
+  const handleRoleCustomNameChange = (entryId: string, value: string) => {
+    setFormState((state) => ({
+      ...state,
+      roleEntries: state.roleEntries.map((entry) =>
+        entry.id === entryId ? { ...entry, customName: value } : entry,
+      ),
+    }));
+  };
+
+  const handleRoleRequiredChange = (entryId: string, value: string | number) => {
+    const numeric = typeof value === "number" ? value : Number(value);
+    setFormState((state) => ({
+      ...state,
+      roleEntries: state.roleEntries.map((entry) =>
+        entry.id === entryId ? { ...entry, required: Number.isFinite(numeric) ? Math.max(1, Math.floor(numeric)) : 1 } : entry,
+      ),
+    }));
+  };
+
+  const handleRemoveRoleEntry = (entryId: string) => {
+    setFormState((state) => ({
+      ...state,
+      roleEntries: state.roleEntries.filter((entry) => entry.id !== entryId),
+    }));
+  };
+
   const handleSubmit = async () => {
     if (!formState.name.trim() || !formState.shiftTypeId) {
       setFormError("Name and shift type are required.");
       return;
-    }
-
-    let parsedRoles: unknown = null;
-    if (formState.defaultRoles.trim().length > 0) {
-      try {
-        parsedRoles = JSON.parse(formState.defaultRoles);
-        if (!Array.isArray(parsedRoles)) {
-          throw new Error("Default roles must be an array.");
-        }
-      } catch (error) {
-        setFormError((error as Error).message);
-        return;
-      }
     }
 
     let parsedMeta: unknown = null;
@@ -121,17 +201,48 @@ const TemplatesPage = () => {
       }
     }
 
+    let hasInvalidCustomName = false;
+    const defaultRoles: ShiftTemplateRoleRequirement[] = formState.roleEntries
+      .map((entry) => {
+        const required = Number.isFinite(entry.required) ? Math.max(1, entry.required) : 1;
+        if (entry.roleId) {
+          const numericId = Number(entry.roleId);
+          const reference = shiftRoleRecords.find((role) => role.id === numericId);
+          return {
+            shiftRoleId: Number.isInteger(numericId) ? numericId : null,
+            role: reference?.name ?? entry.customName ?? "",
+            required,
+          };
+        }
+        const customName = entry.customName.trim();
+        if (customName.length === 0) {
+          hasInvalidCustomName = true;
+          return null;
+        }
+        return {
+          shiftRoleId: null,
+          role: customName,
+          required,
+        };
+      })
+      .filter(Boolean) as ShiftTemplateRoleRequirement[];
+
+    if (hasInvalidCustomName) {
+      setFormError("Please provide a role name for each custom role entry.");
+      return;
+    }
+
     try {
       await upsertTemplate.mutateAsync({
         id: formState.id,
         name: formState.name.trim(),
         shiftTypeId: Number(formState.shiftTypeId),
-        defaultStartTime: formState.defaultStartTime || null,
-        defaultEndTime: formState.defaultEndTime || null,
+        defaultStartTime: formState.defaultStartTime ? formState.defaultStartTime.trim() : null,
+        defaultEndTime: formState.defaultEndTime ? formState.defaultEndTime.trim() : null,
         defaultCapacity: formState.defaultCapacity ?? null,
         requiresLeader: formState.requiresLeader,
-        defaultRoles: (parsedRoles as ShiftTemplate["defaultRoles"]) ?? null,
-        defaultMeta: (parsedMeta as ShiftTemplate["defaultMeta"]) ?? null,
+        defaultRoles: defaultRoles.length ? defaultRoles : null,
+        defaultMeta: parsedMeta ? (parsedMeta as Record<string, unknown>) : null,
       });
       handleCloseModal();
     } catch (error) {
@@ -139,84 +250,27 @@ const TemplatesPage = () => {
     }
   };
 
-  const handleDelete = async (template: ShiftTemplate) => {
-    const confirmed = window.confirm(`Delete template "${template.name}"? This cannot be undone.`);
-    if (!confirmed) return;
-
-    try {
-      await deleteTemplate.mutateAsync(template.id);
-    } catch (error) {
-      // eslint-disable-next-line no-alert
-      window.alert((error as Error).message);
-    }
-  };
-
-  if (!canManageTemplates) {
-    return (
-      <Stack mt="lg" gap="md">
-        <Alert color="yellow" title="Insufficient permissions">
-          <Text size="sm">You do not have permission to manage scheduling templates.</Text>
-        </Alert>
-      </Stack>
-    );
-  }
-
-  if (templatesQuery.isLoading || shiftTypesQuery.isLoading) {
-    return (
-      <Group justify="center" mt="xl">
-        <Loader />
-      </Group>
-    );
-  }
-
-  if (templatesQuery.isError) {
-    return (
-      <Alert color="red" title="Unable to load templates">
-        {(templatesQuery.error as Error).message}
-      </Alert>
-    );
-  }
-
-  if (shiftTypesQuery.isError) {
-    return (
-      <Alert color="red" title="Unable to load shift types">
-        {(shiftTypesQuery.error as Error).message}
-      </Alert>
-    );
-  }
-
-  const shiftTypeOptions = shiftTypes.map((type) => ({
-    value: type.id.toString(),
-    label: type.name,
-  }));
-
   const rows = templates.map((template) => {
     const shiftType = shiftTypes.find((type) => type.id === template.shiftTypeId);
     return (
       <Table.Tr key={template.id}>
         <Table.Td>{template.name}</Table.Td>
-        <Table.Td>{shiftType?.name ?? `#${template.shiftTypeId}`}</Table.Td>
+        <Table.Td>{shiftType?.name ?? ""}</Table.Td>
         <Table.Td>{template.defaultStartTime ?? "—"}</Table.Td>
         <Table.Td>{template.defaultEndTime ?? "—"}</Table.Td>
         <Table.Td>{template.defaultCapacity ?? "—"}</Table.Td>
         <Table.Td>{template.requiresLeader ? "Yes" : "No"}</Table.Td>
         <Table.Td>
-          <Group gap="xs" justify="flex-end">
-            <ActionIcon
-              size="sm"
-              variant="subtle"
-              color="blue"
-              onClick={() => handleOpenEdit(template)}
-              aria-label="Edit template"
-            >
+          <Group gap="xs">
+            <ActionIcon variant="light" color="blue" onClick={() => handleOpenEdit(template)}>
               <IconEdit size={16} />
             </ActionIcon>
             <ActionIcon
-              size="sm"
               variant="subtle"
               color="red"
-              onClick={() => handleDelete(template)}
-              aria-label="Delete template"
+              onClick={async () => {
+                await deleteTemplate.mutateAsync(template.id);
+              }}
             >
               <IconTrash size={16} />
             </ActionIcon>
@@ -316,13 +370,74 @@ const TemplatesPage = () => {
               setFormState((state) => ({ ...state, requiresLeader: event.currentTarget.checked }))
             }
           />
-          <Textarea
-            label="Default roles (JSON array)"
-            placeholder='Example: [{"role":"Leader","required":1}]'
-            minRows={3}
-            value={formState.defaultRoles}
-            onChange={(event) => setFormState((state) => ({ ...state, defaultRoles: event.currentTarget.value }))}
-          />
+
+          {shiftRolesQuery.isError ? (
+            <Alert color="red" title="Shift roles unavailable">
+              {(shiftRolesQuery.error as Error).message}
+            </Alert>
+          ) : null}
+
+          <Stack gap="xs">
+            <Group justify="space-between" align="center">
+              <Text fw={500}>Default roles</Text>
+              <Button
+                size="xs"
+                variant="light"
+                leftSection={<IconPlus size={14} />}
+                onClick={handleAddRoleEntry}
+                disabled={shiftRolesQuery.isLoading}
+              >
+                Add role
+              </Button>
+            </Group>
+            {formState.roleEntries.length ? (
+              formState.roleEntries.map((entry) => (
+                <Group key={entry.id} align="flex-end" gap="sm">
+                  <Select
+                    label="Role"
+                    data={roleSelectOptions}
+                    value={entry.roleId ?? "__custom__"}
+                    onChange={(value) => handleRoleSelectionChange(entry.id, value)}
+                    flex={1}
+                    withinPortal
+                  />
+                  {entry.roleId === null ? (
+                    <TextInput
+                      label="Custom role name"
+                      placeholder="Enter role name"
+                      value={entry.customName}
+                      onChange={(event) => handleRoleCustomNameChange(entry.id, event.currentTarget.value)}
+                      flex={1}
+                      required
+                    />
+                  ) : null}
+                  <NumberInput
+                    label="Required"
+                    min={1}
+                    value={entry.required}
+                    onChange={(value) => handleRoleRequiredChange(entry.id, value)}
+                    allowNegative={false}
+                    allowDecimal={false}
+                    hideControls
+                    style={{ width: 120 }}
+                  />
+                  <ActionIcon
+                    variant="subtle"
+                    color="red"
+                    onClick={() => handleRemoveRoleEntry(entry.id)}
+                    aria-label="Remove role"
+                  >
+                    <IconTrash size={16} />
+                  </ActionIcon>
+                </Group>
+              ))
+            ) : (
+              <Text size="sm" c="dimmed">
+                No default roles configured. {shiftRoleRecords.length ? "Use \"Add role\" to define required slots." : "Create shift roles in Settings first."}
+              </Text>
+            )}
+          </Stack>
+
           <Textarea
             label="Default metadata (JSON object)"
             placeholder='Example: {"location":"Main Hall"}'
@@ -330,6 +445,7 @@ const TemplatesPage = () => {
             value={formState.defaultMeta}
             onChange={(event) => setFormState((state) => ({ ...state, defaultMeta: event.currentTarget.value }))}
           />
+
           <Group justify="flex-end">
             <Button variant="subtle" color="gray" onClick={handleCloseModal} disabled={upsertTemplate.isPending}>
               Cancel

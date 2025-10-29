@@ -39,6 +39,8 @@ import SwapRequest from "../models/SwapRequest.js";
 import Export from "../models/Export.js";
 import Notification from "../models/Notification.js";
 import AuditLog from "../models/AuditLog.js";
+import ShiftRole from "../models/ShiftRole.js";
+import UserShiftRole from "../models/UserShiftRole.js";
 import {
   FinanceAccount,
   FinanceAuditLog,
@@ -112,6 +114,8 @@ const sequelize = new Sequelize({
     Export,
     Notification,
     AuditLog,
+    ShiftRole,
+    UserShiftRole,
     UserType,
     Page,
     Module,
