@@ -1,4 +1,18 @@
-import { Model, Table, Column, PrimaryKey, AutoIncrement, Unique, AllowNull, Default, DataType } from 'sequelize-typescript';
+import {
+  Model,
+  Table,
+  Column,
+  PrimaryKey,
+  AutoIncrement,
+  Unique,
+  AllowNull,
+  Default,
+  DataType,
+  BelongsToMany,
+} from 'sequelize-typescript';
+import type { NonAttribute } from 'sequelize';
+import ShiftRole from './ShiftRole.js';
+import UserShiftRole from './UserShiftRole.js';
 
 export type UserRole = 'owner' | 'admin' | 'assistant_manager' | 'guide';
 
@@ -66,5 +80,7 @@ export default class User extends Model {
   @Default(true)
   @Column(DataType.BOOLEAN)
   declare status: boolean;
-  
+
+  @BelongsToMany(() => ShiftRole, () => UserShiftRole)
+  declare shiftRoles?: NonAttribute<Array<ShiftRole & { UserShiftRole: UserShiftRole }>>;
 }

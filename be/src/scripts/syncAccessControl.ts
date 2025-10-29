@@ -129,7 +129,24 @@ async function syncAccessControl() {
   try {
     defineAssociations();
     await ensurePaymentMethodInfrastructure();
-    await sequelize.sync({ alter: true });
+    try {
+      await sequelize.sync({ alter: true });
+    } catch (error) {
+      const original = (error as any)?.original ?? error;
+      const code = original?.code;
+      const message = (original?.message ?? (error as Error).message) as string;
+      const isShiftRoleSchemaIssue =
+        typeof code === "string" &&
+        ["42P01", "42701"].includes(code) &&
+        (/\bshift_roles\b/i.test(message) || /\bshift_assignments\b/i.test(message));
+      if (isShiftRoleSchemaIssue) {
+        console.warn(
+          'Skipping automatic schema sync for shift role references because the "shift_roles" table is not yet available. Run the migrations to create it.',
+        );
+      } else {
+        throw error;
+      }
+    }
     await initializeAccessControl();
     console.log("Access control data synchronised.");
   } catch (error) {

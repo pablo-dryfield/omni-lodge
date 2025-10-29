@@ -32,9 +32,11 @@ const SettingsUserShiftRoles = () => {
 
   const assignments = assignmentsQuery.data?.[0]?.data ?? [];
 
-  const handleChange = async (assignment: UserShiftRoleAssignment, values: string[]) => {
-    const roleIds = values.map((value) => Number(value)).filter((value) => Number.isInteger(value));
-    await updateMutation.mutateAsync({ userId: assignment.userId, roleIds });
+  const handleChange = (assignment: UserShiftRoleAssignment, values: string[]) => {
+    const roleIds = values
+      .map((value) => Number(value))
+      .filter((value): value is number => Number.isInteger(value));
+    void updateMutation.mutateAsync({ userId: assignment.userId, roleIds });
   };
 
   return (
@@ -73,9 +75,9 @@ const SettingsUserShiftRoles = () => {
                     value={assignment.roleIds.map((roleId) => roleId.toString())}
                     onChange={(values) => handleChange(assignment, values)}
                     disabled={roleOptions.length === 0 || updateMutation.isPending || !moduleAccess.canUpdate}
-                    nothingFound="No roles"
+                    nothingFoundMessage="No roles"
                     searchable
-                    withinPortal
+                    comboboxProps={{ withinPortal: true }}
                   />
                 </Stack>
               </Card>
@@ -93,4 +95,3 @@ const SettingsUserShiftRoles = () => {
 };
 
 export default SettingsUserShiftRoles;
-
