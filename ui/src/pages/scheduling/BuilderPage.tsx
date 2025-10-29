@@ -204,18 +204,6 @@ const BuilderPage = () => {
         <WeekSelector value={selectedWeek} onChange={setSelectedWeek} />
       </Group>
 
-      {summaryQuery.data?.violations.length ? (
-        <Alert color="yellow" title="Validation warnings">
-          <Stack gap={4}>
-            {summaryQuery.data.violations.map((violation) => (
-              <Text key={`${violation.code}-${violation.message}`} size="sm">
-                {violation.message}
-              </Text>
-            ))}
-          </Stack>
-        </Alert>
-      ) : null}
-
       <Group>
         <Button
           leftSection={<IconPlus size={16} />}

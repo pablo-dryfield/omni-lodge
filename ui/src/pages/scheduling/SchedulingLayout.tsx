@@ -3,34 +3,49 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Container, Tabs } from "@mantine/core";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
+import { useAppSelector } from "../../store/hooks";
+import { makeSelectIsModuleActionAllowed } from "../../selectors/accessControlSelectors";
 
 dayjs.extend(isoWeek);
-
-const schedulingTabs = [
-  { label: "Availability", value: "availability" },
-  { label: "Builder", value: "builder" },
-  { label: "My Shifts", value: "my-shifts" },
-  { label: "Swaps", value: "swaps" },
-  { label: "History", value: "history" },
-];
 
 const SchedulingLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
+  const selectCanManageTemplates = useMemo(
+    () => makeSelectIsModuleActionAllowed("scheduling-builder", "create"),
+    [],
+  );
+  const canManageTemplates = useAppSelector(selectCanManageTemplates);
+
+  const schedulingTabs = useMemo(() => {
+    const base = [
+      { label: "Availability", value: "availability" },
+      { label: "Builder", value: "builder" },
+      { label: "My Shifts", value: "my-shifts" },
+      { label: "Swaps", value: "swaps" },
+      { label: "History", value: "history" },
+    ];
+    if (canManageTemplates) {
+      base.splice(1, 0, { label: "Templates", value: "templates" });
+    }
+    return base;
+  }, [canManageTemplates]);
+
   const activeTab = useMemo(() => {
     const segments = location.pathname.split("/").filter(Boolean);
     if (segments.length < 2) {
-      return "availability";
+      return schedulingTabs[0]?.value ?? "availability";
     }
-    return segments[1] ?? "availability";
-  }, [location.pathname]);
+    return segments[1] ?? schedulingTabs[0]?.value ?? "availability";
+  }, [location.pathname, schedulingTabs]);
 
   useEffect(() => {
     if (location.pathname === "/scheduling") {
-      navigate("/scheduling/availability", { replace: true });
+      const fallback = schedulingTabs[0]?.value ?? "availability";
+      navigate(`/scheduling/${fallback}`, { replace: true });
     }
-  }, [location.pathname, navigate]);
+  }, [location.pathname, navigate, schedulingTabs]);
 
   return (
     <Container size="xl" pb="xl">
