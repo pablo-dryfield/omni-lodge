@@ -27,6 +27,7 @@ import {
   listExports,
   listHistoricalAssignments,
   parseWeekParam,
+  autoAssignWeek,
 } from '../services/scheduleService.js';
 import ScheduleWeek from '../models/ScheduleWeek.js';
 import type { SwapRequestStatus } from '../models/SwapRequest.js';
@@ -89,6 +90,15 @@ router.post('/weeks/:id/lock', authMiddleware, requireRoles(MANAGER_ROLES), asyn
 router.post('/weeks/:id/publish', authMiddleware, requireRoles(MANAGER_ROLES), async (req, res) => {
   try {
     const result = await publishWeek(Number(req.params.id), getActorId(req));
+    res.json(result);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.post('/weeks/:id/auto-assign', authMiddleware, requireRoles(MANAGER_ROLES), async (req, res) => {
+  try {
+    const result = await autoAssignWeek(Number(req.params.id), getActorId(req));
     res.json(result);
   } catch (error) {
     res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });

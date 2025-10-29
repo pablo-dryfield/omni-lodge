@@ -29,6 +29,7 @@ import {
   useDeleteAssignment,
   useDeleteShiftInstance,
   useEnsureWeek,
+  useAutoAssignWeek,
   useLockWeek,
   usePublishWeek,
   useShiftInstances,
@@ -81,6 +82,7 @@ const BuilderPage = () => {
   const deleteAssignmentMutation = useDeleteAssignment();
   const createInstanceMutation = useCreateShiftInstance();
   const deleteInstanceMutation = useDeleteShiftInstance();
+  const autoAssignMutation = useAutoAssignWeek();
   const lockWeekMutation = useLockWeek();
   const publishWeekMutation = usePublishWeek();
 
@@ -93,6 +95,12 @@ const BuilderPage = () => {
   }, [selectedWeek]);
 
   const weekStartLabel = weekStart ? `${weekStart.format("MMM D")} - ${weekStart.add(6, "day").format("MMM D")}` : "";
+
+  const { reset: resetAutoAssign } = autoAssignMutation;
+
+  useEffect(() => {
+    resetAutoAssign();
+  }, [resetAutoAssign, weekId]);
 
   useEffect(() => {
     if (!canAccessBuilder) {
@@ -114,6 +122,39 @@ const BuilderPage = () => {
     };
     void fetchStaff();
   }, [canAccessBuilder]);
+
+  const autoAssignData = autoAssignMutation.data;
+
+  const autoAssignErrorMessage = useMemo(() => {
+    const error = autoAssignMutation.error;
+    if (!error) {
+      return null;
+    }
+    return error.response?.data?.error ?? error.response?.data?.message ?? error.message;
+  }, [autoAssignMutation.error]);
+
+  const volunteerAssignmentsPreview = useMemo(() => {
+    if (!autoAssignData?.volunteerAssignments?.length) {
+      return null;
+    }
+    const entries = autoAssignData.volunteerAssignments.map((summary) => {
+      const fallback = `User ${summary.userId}`;
+      const name = summary.fullName && summary.fullName.trim().length > 0 ? summary.fullName : fallback;
+      return `${name}: ${summary.assigned}`;
+    });
+    const preview = entries.slice(0, 6).join(", ");
+    return entries.length > 6 ? `${preview}, …` : preview;
+  }, [autoAssignData]);
+
+  const unfilledPreview = useMemo(() => {
+    if (!autoAssignData?.unfilled?.length) {
+      return null;
+    }
+    const entries = autoAssignData.unfilled
+      .slice(0, 5)
+      .map((slot) => `${dayjs(slot.date).format("MMM D")} ${slot.timeStart} (${slot.role})`);
+    return autoAssignData.unfilled.length > 5 ? `${entries.join(", ")}, …` : entries.join(", ");
+  }, [autoAssignData]);
 
   if (!accessLoaded) {
     return (
@@ -186,6 +227,17 @@ const BuilderPage = () => {
     await publishWeekMutation.mutateAsync(weekId);
   };
 
+  const handleAutoAssign = async () => {
+    if (!weekId) {
+      return;
+    }
+    try {
+      await autoAssignMutation.mutateAsync({ weekId });
+    } catch {
+      // errors are surfaced via mutation state
+    }
+  };
+
   return (
     <Stack mt="lg" gap="lg">
       {ensureWeekQuery.isError ? (
@@ -218,6 +270,15 @@ const BuilderPage = () => {
         </Button>
         <Button
           variant="light"
+          color="indigo"
+          onClick={handleAutoAssign}
+          loading={autoAssignMutation.isPending}
+          disabled={!weekId}
+        >
+          Auto assign volunteers
+        </Button>
+        <Button
+          variant="light"
           color="gray"
           onClick={handleLockWeek}
           loading={lockWeekMutation.isPending}
@@ -235,6 +296,38 @@ const BuilderPage = () => {
           Publish
         </Button>
       </Group>
+
+      {autoAssignMutation.isSuccess && autoAssignData ? (
+        <Alert color="green" title="Auto assignment complete">
+          <Stack gap={4}>
+            <Text size="sm">
+              Assigned {autoAssignData.created} slot{autoAssignData.created === 1 ? "" : "s"} and removed{" "}
+              {autoAssignData.removed} previous volunteer assignment{autoAssignData.removed === 1 ? "" : "s"}.
+            </Text>
+            <Text size="sm">
+              {autoAssignData.unfilled.length
+                ? `Remaining vacancies: ${autoAssignData.unfilled.length}.`
+                : "All volunteer-required slots are filled."}
+            </Text>
+            {unfilledPreview ? (
+              <Text size="xs" c="dimmed">
+                Open slots: {unfilledPreview}
+              </Text>
+            ) : null}
+            {volunteerAssignmentsPreview ? (
+              <Text size="xs" c="dimmed">
+                Volunteer load: {volunteerAssignmentsPreview}
+              </Text>
+            ) : null}
+          </Stack>
+        </Alert>
+      ) : null}
+
+      {autoAssignMutation.isError && autoAssignErrorMessage ? (
+        <Alert color="red" title="Auto assignment failed">
+          <Text size="sm">{autoAssignErrorMessage}</Text>
+        </Alert>
+      ) : null}
 
       {instancesQuery.isLoading ? (
         <Loader />

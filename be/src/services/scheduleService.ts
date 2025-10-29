@@ -47,6 +47,9 @@ const DEFAULT_SHIFT_TYPES: Array<{ key: string; name: string; description: strin
   { key: 'ORG_MANAGER', name: 'Organization Duty Manager', description: 'Manager on duty overseeing operations.' },
 ];
 
+const MAX_VOLUNTEER_WEEKLY_ASSIGNMENTS = 4;
+const DEFAULT_SHIFT_DURATION_HOURS = 2;
+
 function getWeekStart(year: number, week: number): dayjs.Dayjs {
   // Derive the Monday of the ISO week directly to avoid parsing quirks around year boundaries.
   return dayjs().tz(SCHED_TZ).year(year).isoWeek(week).startOf('isoWeek');
@@ -217,6 +220,94 @@ async function getStaffProfiles(userIds: number[], transaction?: Transaction): P
   const map = new Map<number, StaffProfile>();
   profiles.forEach((profile) => map.set(profile.userId, profile));
   return map;
+}
+
+type ShiftRange = { start: dayjs.Dayjs; end: dayjs.Dayjs };
+
+function getShiftRange(instance: ShiftInstance): ShiftRange {
+  const start = dayjs(`${instance.date} ${instance.timeStart}`, 'YYYY-MM-DD HH:mm');
+  const end = instance.timeEnd
+    ? dayjs(`${instance.date} ${instance.timeEnd}`, 'YYYY-MM-DD HH:mm')
+    : start.add(DEFAULT_SHIFT_DURATION_HOURS, 'hour');
+  return { start, end };
+}
+
+function availabilityAllowsShift(availability: Availability, range: ShiftRange, shiftTypeId: number): boolean {
+  if (availability.day !== range.start.format('YYYY-MM-DD')) {
+    return false;
+  }
+  if (availability.shiftTypeId && availability.shiftTypeId !== shiftTypeId) {
+    return false;
+  }
+  if (availability.startTime) {
+    const availabilityStart = dayjs(`${availability.day} ${availability.startTime}`, 'YYYY-MM-DD HH:mm');
+    if (range.start.isBefore(availabilityStart)) {
+      return false;
+    }
+  }
+  if (availability.endTime) {
+    const availabilityEnd = dayjs(`${availability.day} ${availability.endTime}`, 'YYYY-MM-DD HH:mm');
+    if (range.end.isAfter(availabilityEnd)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function rangesOverlap(a: ShiftRange, b: ShiftRange): boolean {
+  return a.start.isBefore(b.end) && b.start.isBefore(a.end);
+}
+
+function buildRoleSlots(instance: ShiftInstance): string[] {
+  const roleDefinitions = (instance.requiredRoles && instance.requiredRoles.length > 0
+    ? instance.requiredRoles
+    : instance.template?.defaultRoles) ?? [];
+
+  if (roleDefinitions.length === 0) {
+    const fallback = Math.max(1, instance.capacity ?? 1);
+    return Array.from({ length: fallback }).map(() => 'Staff');
+  }
+
+  const slots: string[] = [];
+  roleDefinitions.forEach((definition) => {
+    const roleName = definition.role ?? 'Staff';
+    const requiredCount = Math.max(1, definition.required ?? 1);
+    for (let index = 0; index < requiredCount; index += 1) {
+      slots.push(roleName);
+    }
+  });
+  return slots;
+}
+
+function computeRolesToFill(instance: ShiftInstance, volunteerSet: Set<number>): string[] {
+  const allSlots = buildRoleSlots(instance);
+  if (allSlots.length === 0) {
+    return [];
+  }
+
+  const nonVolunteerAssignments = new Map<string, number>();
+  (instance.assignments ?? []).forEach((assignment) => {
+    if (volunteerSet.has(assignment.userId)) {
+      return;
+    }
+    const current = nonVolunteerAssignments.get(assignment.roleInShift) ?? 0;
+    nonVolunteerAssignments.set(assignment.roleInShift, current + 1);
+  });
+
+  const consumed = new Map<string, number>();
+  const rolesToFill: string[] = [];
+
+  allSlots.forEach((slotRole) => {
+    const alreadyUsed = consumed.get(slotRole) ?? 0;
+    const coveredByNonVolunteers = nonVolunteerAssignments.get(slotRole) ?? 0;
+    if (alreadyUsed < coveredByNonVolunteers) {
+      consumed.set(slotRole, alreadyUsed + 1);
+      return;
+    }
+    rolesToFill.push(slotRole);
+  });
+
+  return rolesToFill;
 }
 
 async function validateVolunteerLimits(weekId: number, transaction?: Transaction): Promise<ScheduleViolation[]> {
@@ -958,6 +1049,227 @@ export async function createShiftAssignmentsBulk(assignments: AssignmentInput[],
     });
 
     return created;
+  });
+}
+
+type VolunteerAssignmentSummary = {
+  userId: number;
+  fullName: string | null;
+  assigned: number;
+};
+
+type AutoAssignSummary = {
+  created: number;
+  removed: number;
+  volunteerCount: number;
+  unfilled: Array<{ shiftInstanceId: number; role: string; date: string; timeStart: string }>;
+  volunteerAssignments: VolunteerAssignmentSummary[];
+};
+
+export async function autoAssignWeek(weekId: number, actorId: number | null): Promise<AutoAssignSummary> {
+  const week = await ScheduleWeek.findByPk(weekId);
+  if (!week) {
+    throw new HttpError(404, 'Schedule week not found');
+  }
+  assertWeekMutable(week);
+
+  return sequelize.transaction(async (transaction) => {
+    const volunteerProfiles = await StaffProfile.findAll({
+      where: {
+        staffType: 'volunteer',
+        livesInAccom: true,
+        active: true,
+      },
+      include: [{ model: User, as: 'user' }],
+      transaction,
+    });
+
+    if (volunteerProfiles.length === 0) {
+      return {
+        created: 0,
+        removed: 0,
+        volunteerCount: 0,
+        unfilled: [],
+        volunteerAssignments: [],
+      };
+    }
+
+    const volunteerIds = volunteerProfiles.map((profile) => profile.userId);
+    const volunteerSet = new Set(volunteerIds);
+
+    const availabilities = await Availability.findAll({
+      where: {
+        scheduleWeekId: weekId,
+        userId: { [Op.in]: volunteerIds },
+        status: 'available',
+      },
+      transaction,
+    });
+
+    const availabilityByUser = new Map<number, Availability[]>();
+    availabilities.forEach((availability) => {
+      const existing = availabilityByUser.get(availability.userId) ?? [];
+      existing.push(availability);
+      availabilityByUser.set(availability.userId, existing);
+    });
+
+    const shiftInstances = await ShiftInstance.findAll({
+      where: { scheduleWeekId: weekId },
+      include: [
+        { model: ShiftAssignment, as: 'assignments' },
+        { model: ShiftTemplate, as: 'template' },
+      ],
+      order: [
+        ['date', 'ASC'],
+        ['timeStart', 'ASC'],
+      ],
+      transaction,
+    });
+
+    if (shiftInstances.length === 0) {
+      const volunteerAssignments = volunteerProfiles.map((profile) => {
+        const user = profile.user as User | undefined;
+        const fullName = user ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || null : null;
+        return { userId: profile.userId, fullName, assigned: 0 };
+      });
+      return {
+        created: 0,
+        removed: 0,
+        volunteerCount: volunteerProfiles.length,
+        unfilled: [],
+        volunteerAssignments,
+      };
+    }
+
+    const shiftInstanceIds = shiftInstances.map((instance) => instance.id);
+    const removed = await ShiftAssignment.destroy({
+      where: {
+        shiftInstanceId: shiftInstanceIds,
+        userId: { [Op.in]: volunteerIds },
+      },
+      transaction,
+    });
+
+    const assignmentCounts = new Map<number, number>();
+    const assignmentSlotsByVolunteer = new Map<number, ShiftRange[]>();
+    volunteerIds.forEach((volunteerId) => {
+      assignmentCounts.set(volunteerId, 0);
+      assignmentSlotsByVolunteer.set(volunteerId, []);
+    });
+
+    const plannedAssignments: Array<{ shiftInstanceId: number; userId: number; roleInShift: string }> = [];
+    const unfilledSlots: Array<{ shiftInstanceId: number; role: string; date: string; timeStart: string }> = [];
+
+    for (const instance of shiftInstances) {
+      const rolesToFill = computeRolesToFill(instance, volunteerSet);
+      if (rolesToFill.length === 0) {
+        continue;
+      }
+
+      const range = getShiftRange(instance);
+
+      for (const roleName of rolesToFill) {
+        const sortedVolunteers = [...volunteerIds].sort((a, b) => {
+          const aCount = assignmentCounts.get(a) ?? 0;
+          const bCount = assignmentCounts.get(b) ?? 0;
+          if (aCount !== bCount) {
+            return aCount - bCount;
+          }
+          return a - b;
+        });
+
+        let assigned = false;
+
+        for (const volunteerId of sortedVolunteers) {
+          if (!volunteerSet.has(volunteerId)) {
+            continue;
+          }
+
+          const currentCount = assignmentCounts.get(volunteerId) ?? 0;
+          if (currentCount >= MAX_VOLUNTEER_WEEKLY_ASSIGNMENTS) {
+            continue;
+          }
+
+          const volunteerSlots = assignmentSlotsByVolunteer.get(volunteerId) ?? [];
+          if (volunteerSlots.some((slot) => rangesOverlap(slot, range))) {
+            continue;
+          }
+
+          const availabilityEntries = availabilityByUser.get(volunteerId) ?? [];
+          const availabilityMatches =
+            availabilityEntries.length === 0 ||
+            availabilityEntries.some((entry) => availabilityAllowsShift(entry, range, instance.shiftTypeId));
+
+          if (!availabilityMatches) {
+            continue;
+          }
+
+          plannedAssignments.push({
+            shiftInstanceId: instance.id,
+            userId: volunteerId,
+            roleInShift: roleName,
+          });
+          assignmentCounts.set(volunteerId, currentCount + 1);
+          volunteerSlots.push(range);
+          assignmentSlotsByVolunteer.set(volunteerId, volunteerSlots);
+          assigned = true;
+          break;
+        }
+
+        if (!assigned) {
+          unfilledSlots.push({
+            shiftInstanceId: instance.id,
+            role: roleName,
+            date: instance.date,
+            timeStart: instance.timeStart,
+          });
+        }
+      }
+    }
+
+    let created = 0;
+    for (const assignment of plannedAssignments) {
+      await ShiftAssignment.create(
+        {
+          shiftInstanceId: assignment.shiftInstanceId,
+          userId: assignment.userId,
+          roleInShift: assignment.roleInShift,
+        },
+        { transaction },
+      );
+      created += 1;
+    }
+
+    const volunteerAssignments = volunteerProfiles.map((profile) => {
+      const user = profile.user as User | undefined;
+      const fullName = user ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || null : null;
+      return {
+        userId: profile.userId,
+        fullName,
+        assigned: assignmentCounts.get(profile.userId) ?? 0,
+      };
+    });
+
+    await logAudit({
+      actorId,
+      action: 'schedule.week.auto-assign',
+      entity: 'schedule_week',
+      entityId: String(week.id),
+      meta: {
+        weekId,
+        created,
+        removed,
+        unfilled: unfilledSlots.length,
+      },
+    });
+
+    return {
+      created,
+      removed,
+      volunteerCount: volunteerProfiles.length,
+      unfilled: unfilledSlots,
+      volunteerAssignments,
+    };
   });
 }
 
