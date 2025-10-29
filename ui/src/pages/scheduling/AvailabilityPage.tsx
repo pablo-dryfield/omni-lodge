@@ -27,6 +27,10 @@ const AvailabilityPage = () => {
   const [selectedWeek, setSelectedWeek] = useState<string>(weekOptions[0]?.value ?? "");
   const [entries, setEntries] = useState<Record<string, AvailabilityEntryState>>({});
   const [timeframeVisible, setTimeframeVisible] = useState<Record<string, boolean>>({});
+  const [initialEntries, setInitialEntries] = useState<Record<string, AvailabilityEntryState>>({});
+  const [initialTimeframes, setInitialTimeframes] = useState<Record<string, boolean>>({});
+  const [isLocked, setIsLocked] = useState(false);
+  const [isEditing, setIsEditing] = useState(true);
 
   const authenticated = useAppSelector((state) => state.session.authenticated);
 
@@ -34,6 +38,12 @@ const AvailabilityPage = () => {
   const weekId = ensureWeekQuery.data?.week?.id ?? null;
   const availabilityQuery = useAvailability(weekId);
   const saveAvailability = useSaveAvailability();
+
+  const cloneEntries = (source: Record<string, AvailabilityEntryState>) =>
+    Object.fromEntries(Object.entries(source).map(([key, value]) => [key, { ...value }]));
+
+  const cloneTimeframes = (source: Record<string, boolean>) => ({ ...source });
+
 
   useEffect(() => {
     if (availabilityQuery.data) {
@@ -49,12 +59,21 @@ const AvailabilityPage = () => {
       });
       setEntries(entryMap);
       setTimeframeVisible(visibilityMap);
+      setInitialEntries(cloneEntries(entryMap));
+      setInitialTimeframes(cloneTimeframes(visibilityMap));
+      const hasData = availabilityQuery.data.length > 0;
+      setIsLocked(hasData);
+      setIsEditing(!hasData);
     }
   }, [availabilityQuery.data]);
 
   useEffect(() => {
     setEntries({});
     setTimeframeVisible({});
+    setInitialEntries({});
+    setInitialTimeframes({});
+    setIsLocked(false);
+    setIsEditing(true);
   }, [selectedWeek]);
 
   const weekStart = useMemo(() => {
@@ -90,32 +109,33 @@ const AvailabilityPage = () => {
     : "";
 
   const handleToggle = (day: string, status: "available" | "unavailable") => {
-    setEntries((current) => ({
-      ...current,
-      [day]: {
-        status,
-        startTime: current[day]?.startTime ?? null,
-        endTime: current[day]?.endTime ?? null,
-      },
-    }));
+    if (!isEditing) {
+      return;
+    }
+    setEntries((current) => {
+      const existing = current[day] ?? { status: "available" as const, startTime: null, endTime: null };
+      const nextEntry: AvailabilityEntryState =
+        status === "unavailable"
+          ? { status, startTime: null, endTime: null }
+          : { status, startTime: existing.startTime ?? null, endTime: existing.endTime ?? null };
+      return {
+        ...current,
+        [day]: nextEntry,
+      };
+    });
 
     if (status === "unavailable") {
       setTimeframeVisible((current) => ({
         ...current,
         [day]: false,
       }));
-      setEntries((current) => ({
-        ...current,
-        [day]: {
-          status,
-          startTime: null,
-          endTime: null,
-        },
-      }));
     }
   };
 
   const handleTimeChange = (day: string, key: "startTime" | "endTime", value: string | null) => {
+    if (!isEditing) {
+      return;
+    }
     setEntries((current) => ({
       ...current,
       [day]: {
@@ -127,6 +147,9 @@ const AvailabilityPage = () => {
   };
 
   const handleToggleTimeframe = (day: string, visible: boolean) => {
+    if (!isEditing) {
+      return;
+    }
     setTimeframeVisible((current) => ({
       ...current,
       [day]: visible,
@@ -168,6 +191,19 @@ const AvailabilityPage = () => {
     };
 
     await saveAvailability.mutateAsync(payload);
+    setInitialEntries(cloneEntries(entries));
+    setInitialTimeframes(cloneTimeframes(timeframeVisible));
+    setIsLocked(true);
+    setIsEditing(false);
+  };
+  const handleStartEditing = () => {
+    setIsEditing(true);
+  };
+
+  const handleCancelEditing = () => {
+    setEntries(cloneEntries(initialEntries));
+    setTimeframeVisible(cloneTimeframes(initialTimeframes));
+    setIsEditing(false);
   };
 
   return (
@@ -221,6 +257,7 @@ const AvailabilityPage = () => {
                     checked={isAvailable}
                     label={isAvailable ? "Available" : "Unavailable"}
                     onChange={(event) => handleToggle(dayKey, event.currentTarget.checked ? "available" : "unavailable")}
+                    disabled={!isEditing}
                   />
                 </Box>
                 <Group gap="xs" align="center" justify="center">
@@ -229,7 +266,7 @@ const AvailabilityPage = () => {
                     variant={isTimeframeVisible ? "subtle" : "light"}
                     color={isTimeframeVisible ? "red" : "blue"}
                     onClick={() => handleToggleTimeframe(dayKey, !isTimeframeVisible)}
-                    disabled={!isAvailable}
+                    disabled={!isAvailable || !isEditing}
                   >
                     {isTimeframeVisible ? "Remove timeframe" : "Add timeframe"}
                   </Button>
@@ -243,9 +280,9 @@ const AvailabilityPage = () => {
                       label="From"
                       value={entry.startTime ?? ""}
                       onChange={(event) => handleTimeChange(dayKey, "startTime", event.currentTarget.value || null)}
-                      disabled={!isAvailable}
+                      disabled={!isAvailable || !isEditing}
                       rightSection={
-                        entry.startTime ? (
+                        entry.startTime && isEditing ? (
                           <ActionIcon
                             size="sm"
                             variant="subtle"
@@ -257,15 +294,15 @@ const AvailabilityPage = () => {
                           </ActionIcon>
                         ) : undefined
                       }
-                      rightSectionPointerEvents={entry.startTime ? "auto" : "none"}
+                      rightSectionPointerEvents={entry.startTime && isEditing ? "auto" : "none"}
                     />
                     <TimeInput
                       label="To"
                       value={entry.endTime ?? ""}
                       onChange={(event) => handleTimeChange(dayKey, "endTime", event.currentTarget.value || null)}
-                      disabled={!isAvailable}
+                      disabled={!isAvailable || !isEditing}
                       rightSection={
-                        entry.endTime ? (
+                        entry.endTime && isEditing ? (
                           <ActionIcon
                             size="sm"
                             variant="subtle"
@@ -277,7 +314,7 @@ const AvailabilityPage = () => {
                           </ActionIcon>
                         ) : undefined
                       }
-                      rightSectionPointerEvents={entry.endTime ? "auto" : "none"}
+                      rightSectionPointerEvents={entry.endTime && isEditing ? "auto" : "none"}
                     />
                   </Group>
                 ) : null}
@@ -293,20 +330,41 @@ const AvailabilityPage = () => {
         </Alert>
       )}
 
-      <Group justify="center">
-        <Button
-          onClick={handleSave}
-          loading={saveAvailability.isPending || ensureWeekQuery.isFetching}
-          disabled={!weekId}
-          size="md"
-        >
-          Save availability
-        </Button>
-      </Group>
+      {isEditing ? (
+        <Group justify="center" gap="sm">
+          {isLocked ? (
+            <Button variant="subtle" color="gray" onClick={handleCancelEditing}>
+              Cancel
+            </Button>
+          ) : null}
+          <Button onClick={handleSave} loading={saveAvailability.isPending || ensureWeekQuery.isFetching} disabled={!weekId} size="md">
+            Save availability
+          </Button>
+        </Group>
+      ) : (
+        <Group justify="center">
+          <Button size="md" variant="light" onClick={handleStartEditing}>
+            Edit availability
+          </Button>
+        </Group>
+      )}
     </Stack>
   );
 };
 
 export default AvailabilityPage;
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 

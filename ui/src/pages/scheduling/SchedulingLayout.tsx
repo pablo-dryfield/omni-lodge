@@ -1,8 +1,16 @@
 import { useEffect, useMemo } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Container, Tabs } from "@mantine/core";
+import { Card, Container, Tabs } from "@mantine/core";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
+import {
+  IconCalendarCheck,
+  IconClipboardList,
+  IconHistory,
+  IconRefresh,
+  IconTemplate,
+  IconUsersGroup,
+} from "@tabler/icons-react";
 import { useAppSelector } from "../../store/hooks";
 import { makeSelectIsModuleActionAllowed } from "../../selectors/accessControlSelectors";
 
@@ -20,14 +28,14 @@ const SchedulingLayout = () => {
 
   const schedulingTabs = useMemo(() => {
     const base = [
-      { label: "Availability", value: "availability" },
-      { label: "Builder", value: "builder" },
-      { label: "My Shifts", value: "my-shifts" },
-      { label: "Swaps", value: "swaps" },
-      { label: "History", value: "history" },
+      { label: "Availability", value: "availability", icon: IconCalendarCheck },
+      { label: "Builder", value: "builder", icon: IconClipboardList },
+      { label: "My Shifts", value: "my-shifts", icon: IconUsersGroup },
+      { label: "Swaps", value: "swaps", icon: IconRefresh },
+      { label: "History", value: "history", icon: IconHistory },
     ];
     if (canManageTemplates) {
-      base.splice(1, 0, { label: "Templates", value: "templates" });
+      base.splice(1, 0, { label: "Templates", value: "templates", icon: IconTemplate });
     }
     return base;
   }, [canManageTemplates]);
@@ -49,20 +57,42 @@ const SchedulingLayout = () => {
 
   return (
     <Container size="xl" pb="xl">
-      <Tabs
-        value={activeTab}
-        onChange={(value) => value && navigate(`/scheduling/${value}`)}
-        keepMounted={false}
-        variant="outline"
-      >
-        <Tabs.List style={{ justifyContent: "center" }}>
-          {schedulingTabs.map((tab) => (
-            <Tabs.Tab key={tab.value} value={tab.value}>
-              {tab.label}
-            </Tabs.Tab>
-          ))}
-        </Tabs.List>
-      </Tabs>
+      <Card withBorder shadow="sm" radius="md" p="md">
+        <Tabs
+          value={activeTab}
+          onChange={(value) => value && navigate(`/scheduling/${value}`)}
+          keepMounted={false}
+          variant="pills"
+          radius="md"
+          defaultValue={schedulingTabs[0]?.value}
+        >
+          <Tabs.List
+            style={{
+              justifyContent: "center",
+              gap: "0.5rem",
+              flexWrap: "wrap",
+            }}
+          >
+            {schedulingTabs.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <Tabs.Tab
+                  key={tab.value}
+                  value={tab.value}
+                  leftSection={<Icon size={16} />}
+                  style={{
+                    fontWeight: 600,
+                    textTransform: "none",
+                    paddingInline: "1.25rem",
+                  }}
+                >
+                  {tab.label}
+                </Tabs.Tab>
+              );
+            })}
+          </Tabs.List>
+        </Tabs>
+      </Card>
       <Outlet />
     </Container>
   );
