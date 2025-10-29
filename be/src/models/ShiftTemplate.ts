@@ -63,6 +63,11 @@ export default class ShiftTemplate extends Model {
   declare defaultRoles: ShiftTemplateRoleRequirement[] | null;
 
   @AllowNull(true)
+  @Default([1, 2, 3, 4, 5, 6, 7])
+  @Column({ field: 'repeat_on', type: DataType.ARRAY(DataType.INTEGER) })
+  declare repeatOn: number[] | null;
+
+  @AllowNull(true)
   @Default({})
   @Column({ field: 'default_meta', type: DataType.JSONB })
   declare defaultMeta: Record<string, unknown> | null;

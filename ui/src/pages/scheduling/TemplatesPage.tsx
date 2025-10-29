@@ -3,6 +3,7 @@ import {
   ActionIcon,
   Alert,
   Button,
+  Checkbox,
   Group,
   Modal,
   NumberInput,
@@ -39,7 +40,20 @@ type TemplateFormState = {
   requiresLeader: boolean;
   roleEntries: RoleEntry[];
   defaultMeta: string;
+  repeatOn: number[];
 };
+
+const WEEKDAY_OPTIONS = [
+  { value: 1, label: "Mon" },
+  { value: 2, label: "Tue" },
+  { value: 3, label: "Wed" },
+  { value: 4, label: "Thu" },
+  { value: 5, label: "Fri" },
+  { value: 6, label: "Sat" },
+  { value: 7, label: "Sun" },
+] as const;
+
+const ALL_WEEKDAYS = WEEKDAY_OPTIONS.map((option) => option.value);
 
 const emptyForm: TemplateFormState = {
   name: "",
@@ -50,6 +64,7 @@ const emptyForm: TemplateFormState = {
   requiresLeader: false,
   roleEntries: [],
   defaultMeta: "",
+  repeatOn: [...ALL_WEEKDAYS],
 };
 
 let roleEntryCounter = 0;
@@ -69,7 +84,7 @@ const TemplatesPage = () => {
   const deleteTemplate = useDeleteShiftTemplate();
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [formState, setFormState] = useState<TemplateFormState>(emptyForm);
+  const [formState, setFormState] = useState<TemplateFormState>({ ...emptyForm, repeatOn: [...ALL_WEEKDAYS] });
   const [formError, setFormError] = useState<string | null>(null);
 
   const shiftTypes = useMemo(() => shiftTypesQuery.data ?? [], [shiftTypesQuery.data]);
@@ -90,7 +105,7 @@ const TemplatesPage = () => {
   );
 
   const handleOpenCreate = () => {
-    setFormState(emptyForm);
+    setFormState({ ...emptyForm, repeatOn: [...ALL_WEEKDAYS] });
     setFormError(null);
     setModalOpen(true);
   };
@@ -114,6 +129,9 @@ const TemplatesPage = () => {
       requiresLeader: template.requiresLeader ?? false,
       roleEntries: mapTemplateRolesToEntries(template),
       defaultMeta: template.defaultMeta ? JSON.stringify(template.defaultMeta, null, 2) : "",
+      repeatOn: (template.repeatOn && template.repeatOn.length > 0
+        ? [...template.repeatOn].sort((a, b) => a - b)
+        : [...ALL_WEEKDAYS]),
     });
     setFormError(null);
     setModalOpen(true);
@@ -122,7 +140,7 @@ const TemplatesPage = () => {
   const handleCloseModal = () => {
     if (upsertTemplate.isPending) return;
     setModalOpen(false);
-    setFormState(emptyForm);
+    setFormState({ ...emptyForm, repeatOn: [...ALL_WEEKDAYS] });
     setFormError(null);
   };
 
@@ -185,9 +203,27 @@ const TemplatesPage = () => {
     }));
   };
 
+  const handleRepeatOnChange = (values: string[]) => {
+    const cleaned = Array.from(
+      new Set(
+        values
+          .map((value) => Number(value))
+          .filter((value) => Number.isInteger(value) && value >= 1 && value <= 7),
+      ),
+    ).sort((a, b) => a - b);
+    setFormState((state) => ({
+      ...state,
+      repeatOn: cleaned,
+    }));
+  };
+
   const handleSubmit = async () => {
     if (!formState.name.trim() || !formState.shiftTypeId) {
       setFormError("Name and shift type are required.");
+      return;
+    }
+    if (formState.repeatOn.length === 0) {
+      setFormError("Select at least one weekday for this template.");
       return;
     }
 
@@ -243,6 +279,7 @@ const TemplatesPage = () => {
         requiresLeader: formState.requiresLeader,
         defaultRoles: defaultRoles.length ? defaultRoles : null,
         defaultMeta: parsedMeta ? (parsedMeta as Record<string, unknown>) : null,
+        repeatOn: formState.repeatOn.slice(),
       });
       handleCloseModal();
     } catch (error) {
@@ -370,6 +407,18 @@ const TemplatesPage = () => {
               setFormState((state) => ({ ...state, requiresLeader: event.currentTarget.checked }))
             }
           />
+          <Checkbox.Group
+            label="Auto-generate on"
+            value={formState.repeatOn.map((day) => day.toString())}
+            onChange={handleRepeatOnChange}
+            withAsterisk
+          >
+            <Group gap="sm">
+              {WEEKDAY_OPTIONS.map((option) => (
+                <Checkbox key={option.value} value={option.value.toString()} label={option.label} />
+              ))}
+            </Group>
+          </Checkbox.Group>
 
           {shiftRolesQuery.isError ? (
             <Alert color="red" title="Shift roles unavailable">

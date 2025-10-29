@@ -46,6 +46,7 @@ export interface ShiftTemplate {
   defaultCapacity: number | null;
   requiresLeader: boolean;
   defaultRoles: ShiftTemplateRoleRequirement[] | null;
+  repeatOn: number[] | null;
   defaultMeta: Record<string, unknown> | null;
 }
 
