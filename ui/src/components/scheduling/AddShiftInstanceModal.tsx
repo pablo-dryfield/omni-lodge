@@ -5,7 +5,6 @@ import { DatePickerInput, TimeInput } from "@mantine/dates";
 import dayjs from "dayjs";
 import type { ShiftInstancePayload, ShiftTemplate } from "../../types/scheduling";
 
-const timeFromDate = (value: Date | null) => (value ? dayjs(value).format("HH:mm") : "");
 
 export interface AddShiftInstanceModalProps {
   opened: boolean;
@@ -26,9 +25,9 @@ const AddShiftInstanceModal = ({
 }: AddShiftInstanceModalProps) => {
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [date, setDate] = useState<Date | null>(defaultDate);
-  const [timeStart, setTimeStart] = useState<Date | null>(null);
-  const [timeEnd, setTimeEnd] = useState<Date | null>(null);
-  const [capacity, setCapacity] = useState<number | null>(null);
+  const [timeStart, setTimeStart] = useState<string>("");
+  const [timeEnd, setTimeEnd] = useState<string>("");
+  const [capacity, setCapacity] = useState<number | undefined>(undefined);
   const [meta, setMeta] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -41,16 +40,15 @@ const AddShiftInstanceModal = ({
     setTemplateId(value);
     const template = templates.find((item) => item.id === Number(value));
     if (template) {
-      if (template.defaultStartTime) {
-        const start = dayjs(`${dayjs(defaultDate).format("YYYY-MM-DD")} ${template.defaultStartTime}`);
-        setTimeStart(start.toDate());
-      }
-      if (template.defaultEndTime) {
-        const end = dayjs(`${dayjs(defaultDate).format("YYYY-MM-DD")} ${template.defaultEndTime}`);
-        setTimeEnd(end.toDate());
-      }
-      setCapacity(template.defaultCapacity ?? null);
+      setTimeStart(template.defaultStartTime ?? "");
+      setTimeEnd(template.defaultEndTime ?? "");
+      setCapacity(template.defaultCapacity ?? undefined);
       setMeta(JSON.stringify(template.defaultMeta ?? {}, null, 2));
+    } else {
+      setTimeStart("");
+      setTimeEnd("");
+      setCapacity(undefined);
+      setMeta("");
     }
   };
 
@@ -65,8 +63,8 @@ const AddShiftInstanceModal = ({
         shiftTypeId: selectedTemplate.shiftTypeId,
         shiftTemplateId: selectedTemplate.id,
         date: dayjs(date).format("YYYY-MM-DD"),
-        timeStart: timeFromDate(timeStart),
-        timeEnd: timeFromDate(timeEnd) || null,
+        timeStart,
+        timeEnd: timeEnd ? timeEnd : null,
         capacity: capacity ?? null,
         requiredRoles: selectedTemplate.defaultRoles ?? null,
         meta: meta ? JSON.parse(meta) : null,
@@ -74,9 +72,9 @@ const AddShiftInstanceModal = ({
       await onSubmit(payload);
       onClose();
       setTemplateId(null);
-      setTimeStart(null);
-      setTimeEnd(null);
-      setCapacity(null);
+      setTimeStart("");
+      setTimeEnd("");
+      setCapacity(undefined);
       setMeta("");
     } finally {
       setSubmitting(false);
@@ -99,13 +97,18 @@ const AddShiftInstanceModal = ({
         />
         <DatePickerInput label="Date" value={date} onChange={setDate} required />
         <Group grow>
-          <TimeInput label="Start time" value={timeStart} onChange={setTimeStart} required />
-          <TimeInput label="End time" value={timeEnd} onChange={setTimeEnd} />
+          <TimeInput
+            label="Start time"
+            value={timeStart}
+            onChange={(value) => setTimeStart(value ?? "")}
+            required
+          />
+          <TimeInput label="End time" value={timeEnd} onChange={(value) => setTimeEnd(value ?? "")} />
         </Group>
         <NumberInput
           label="Capacity"
-          value={capacity}
-          onChange={(value) => setCapacity(typeof value === "string" ? Number(value) : value)}
+          value={capacity ?? undefined}
+          onChange={(value) => setCapacity(typeof value === "number" ? value : undefined)}
           min={0}
         />
         <Textarea

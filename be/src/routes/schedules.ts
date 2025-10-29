@@ -8,6 +8,7 @@ import {
   lockWeek,
   publishWeek,
   listShiftTemplates,
+  listShiftTypes,
   upsertShiftTemplate,
   deleteShiftTemplate,
   listShiftInstances,
@@ -89,6 +90,15 @@ router.post('/weeks/:id/publish', authMiddleware, requireRoles(MANAGER_ROLES), a
   try {
     const result = await publishWeek(Number(req.params.id), getActorId(req));
     res.json(result);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.get('/shift-types', authMiddleware, requireRoles(MANAGER_ROLES), async (_req, res) => {
+  try {
+    const types = await listShiftTypes();
+    res.json(types);
   } catch (error) {
     res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
   }

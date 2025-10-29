@@ -13,6 +13,7 @@ import type {
   ShiftInstance,
   ShiftInstancePayload,
   ShiftTemplate,
+  ShiftType,
   SwapRequest,
 } from "../types/scheduling";
 
@@ -32,6 +33,7 @@ const schedulingKeys = {
   base: schedulingBaseKey,
   weekSummary: (weekId: number) => [...schedulingBaseKey, "week", weekId] as const,
   shiftTemplates: [...schedulingBaseKey, "templates"] as const,
+  shiftTypes: [...schedulingBaseKey, "shift-types"] as const,
   shiftInstances: (weekId: number) => [...schedulingBaseKey, "instances", weekId] as const,
   availability: (weekId: number) => [...schedulingBaseKey, "availability", weekId] as const,
   swaps: (status: string) => [...schedulingBaseKey, "swaps", status] as const,
@@ -182,6 +184,17 @@ export const useShiftTemplates = (options?: { enabled?: boolean }) =>
         }
         throw error;
       }
+    },
+    enabled: options?.enabled ?? true,
+    retry: false,
+  });
+
+export const useShiftTypes = (options?: { enabled?: boolean }) =>
+  useQuery({
+    queryKey: schedulingKeys.shiftTypes,
+    queryFn: async () => {
+      const response = await axiosInstance.get("/schedules/shift-types");
+      return response.data as ShiftType[];
     },
     enabled: options?.enabled ?? true,
     retry: false,
@@ -397,10 +410,11 @@ export const useScheduleReports = (params: ReportsQuery | null) =>
 export const formatScheduleWeekLabel = (year: number, week: number) =>
   `Week ${week.toString().padStart(2, "0")} / ${year}`;
 
-export const getUpcomingWeeks = (count = 4) => {
+export const getUpcomingWeeks = (count = 4, includeCurrent = true) => {
   const base = dayjs();
   return Array.from({ length: count }).map((_, index) => {
-    const target = base.add(index, "week");
+    const offset = includeCurrent ? index : index + 1;
+    const target = base.add(offset, "week");
     const year = target.isoWeekYear();
     const week = target.isoWeek();
     return {
@@ -411,4 +425,3 @@ export const getUpcomingWeeks = (count = 4) => {
     };
   });
 };
-

@@ -36,6 +36,17 @@ const LOCK_HOUR = Number(process.env.SCHED_LOCK_HOUR ?? 18);
 const PUBLISHED_STATES: ScheduleWeekState[] = ['published'];
 const PUB_CRAWL_KEYS = new Set(['PUB_CRAWL', 'PRIVATE_PUB_CRAWL']);
 
+const DEFAULT_SHIFT_TYPES: Array<{ key: string; name: string; description: string | null }> = [
+  { key: 'PUB_CRAWL', name: 'Pub Crawl', description: 'Nightly pub crawl with designated leader and guides.' },
+  { key: 'PRIVATE_PUB_CRAWL', name: 'Private Pub Crawl', description: 'Private crawl for booked groups.' },
+  { key: 'BOTTOMLESS_BRUNCH', name: 'Bottomless Brunch', description: 'Brunch shift covering guests and logistics.' },
+  { key: 'GO_KARTING', name: 'Go Karting', description: 'Go-karting coordination shift.' },
+  { key: 'PROMOTION', name: 'Promotion', description: 'Street promotion and outreach shift.' },
+  { key: 'SOCIAL_MEDIA', name: 'Social Media', description: 'Evening social media coverage.' },
+  { key: 'CLEANING', name: 'Cleaning', description: 'Cleaning shift for assigned area.' },
+  { key: 'ORG_MANAGER', name: 'Organization Duty Manager', description: 'Manager on duty overseeing operations.' },
+];
+
 function getWeekStart(year: number, week: number): dayjs.Dayjs {
   const weekLabel = `${year}-W${week.toString().padStart(2, '0')}-1`; // ISO week starts on Monday (E=1)
   return dayjs.tz(weekLabel, 'YYYY-[W]WW-E', SCHED_TZ).startOf('day');
@@ -644,6 +655,29 @@ export async function listShiftTemplates(): Promise<ShiftTemplate[]> {
   });
 }
 
+export async function listShiftTypes(): Promise<ShiftType[]> {
+  return sequelize.transaction(async (transaction) => {
+    const existing = await ShiftType.findAll({
+      order: [['name', 'ASC']],
+      transaction,
+    });
+
+    if (existing.length > 0) {
+      return existing;
+    }
+
+    await ShiftType.bulkCreate(DEFAULT_SHIFT_TYPES, {
+      updateOnDuplicate: ['name', 'description'],
+      transaction,
+    });
+
+    return ShiftType.findAll({
+      order: [['name', 'ASC']],
+      transaction,
+    });
+  });
+}
+
 export async function upsertShiftTemplate(
   payload: {
     id?: number;
@@ -838,11 +872,12 @@ export async function createShiftAssignmentsBulk(assignments: AssignmentInput[],
         where: {
           shiftInstanceId: input.shiftInstanceId,
           userId: input.userId,
+          roleInShift: input.roleInShift,
         },
         transaction,
       });
       if (existing) {
-        throw new HttpError(400, 'User already assigned to this shift.');
+        throw new HttpError(400, 'User already assigned to this shift and role.');
       }
 
       const weekAssignments = await ShiftAssignment.findAll({
@@ -865,6 +900,10 @@ export async function createShiftAssignmentsBulk(assignments: AssignmentInput[],
       }
 
       weekAssignments.forEach((assignment) => {
+        if (assignment.shiftInstanceId === instance.id) {
+          return;
+        }
+
         const other = assignment.shiftInstance;
         if (!other || other.date !== instance.date) {
           return;
