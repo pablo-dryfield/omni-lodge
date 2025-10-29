@@ -27,11 +27,11 @@ const SettingsShiftRoles = () => {
   const deleteMutation = useDeleteShiftRole();
 
   const response = useMemo(() => shiftRolesQuery.data ?? [], [shiftRolesQuery.data]);
-  const records = useMemo(() => response[0]?.data ?? [], [response]);
-  const columns = useMemo<MRT_ColumnDef<ShiftRole>[]>(
-    () => modifyColumn(response[0]?.columns ?? [], []),
-    [response],
-  );
+  const records = useMemo<ShiftRole[]>(() => (response[0]?.data ?? []) as ShiftRole[], [response]);
+  const columns = useMemo<MRT_ColumnDef<ShiftRole>[]>(() => {
+    const baseColumns = (response[0]?.columns ?? []) as MRT_ColumnDef<ShiftRole>[];
+    return modifyColumn<ShiftRole>(baseColumns, []);
+  }, [response]);
 
   const handleCreate = async (payload: Partial<ShiftRole>) => {
     const name = payload.name?.trim();
@@ -70,7 +70,7 @@ const SettingsShiftRoles = () => {
           </Alert>
         ) : null}
 
-        <Table
+        <Table<ShiftRole>
           pageTitle="Shift roles"
           data={records}
           loading={

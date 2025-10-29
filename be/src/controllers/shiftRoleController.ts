@@ -138,12 +138,12 @@ export const updateUserShiftRoles = async (req: Request, res: Response): Promise
     return;
   }
 
-  const roleIds = Array.isArray(req.body?.roleIds) ? req.body.roleIds : [];
+  const roleIds = Array.isArray(req.body?.roleIds) ? (req.body.roleIds as unknown[]) : [];
   const normalizedRoleIds = Array.from(
     new Set(
       roleIds
-        .map((value) => Number(value))
-        .filter((value) => Number.isInteger(value) && value > 0),
+        .map((value: unknown) => Number(value))
+        .filter((value): value is number => Number.isInteger(value) && value > 0),
     ),
   );
 

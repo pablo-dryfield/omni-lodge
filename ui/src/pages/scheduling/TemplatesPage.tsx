@@ -399,7 +399,7 @@ const TemplatesPage = () => {
                     value={entry.roleId ?? "__custom__"}
                     onChange={(value) => handleRoleSelectionChange(entry.id, value)}
                     flex={1}
-                    withinPortal
+                    comboboxProps={{ withinPortal: true }}
                   />
                   {entry.roleId === null ? (
                     <TextInput
