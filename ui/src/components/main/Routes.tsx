@@ -29,6 +29,7 @@ import SettingsChannelProductPrices from "../../pages/settings/SettingsChannelPr
 import SettingsChannelCommissions from "../../pages/settings/SettingsChannelCommissions";
 import SettingsActions from "../../pages/settings/SettingsActions";
 import SettingsChannels from "../../pages/settings/SettingsChannels";
+import SettingsStaffProfiles from "../../pages/settings/SettingsStaffProfiles";
 import SchedulingLayout from "../../pages/scheduling/SchedulingLayout";
 import AvailabilityPage from "../../pages/scheduling/AvailabilityPage";
 import BuilderPage from "../../pages/scheduling/BuilderPage";
@@ -106,6 +107,7 @@ const Routes = () => {
         <Route path="channel-commissions" element={<SettingsChannelCommissions />} />
         <Route path="actions" element={<SettingsActions />} />
         <Route path="channels" element={<SettingsChannels />} />
+        <Route path="staff-profiles" element={<SettingsStaffProfiles />} />
       </Route>
     </ReactRoutes>
   );

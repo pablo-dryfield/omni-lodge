@@ -54,6 +54,7 @@ export const PAGE_SLUGS = {
   settingsChannelCommissions: "settings-channel-commissions",
   settingsActions: "settings-actions",
   settingsChannels: "settings-channels",
+  settingsStaffProfiles: "settings-staff-profiles",
 };
 
 export type PageSlugKey = keyof typeof PAGE_SLUGS;

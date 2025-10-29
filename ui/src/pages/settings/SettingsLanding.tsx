@@ -1,6 +1,13 @@
 import React, { useMemo } from "react";
 import { SimpleGrid, Card, Stack, Title, Text, ActionIcon, Alert } from "@mantine/core";
-import { IconUsers, IconIdBadge, IconLayoutSidebar, IconComponents, IconShieldLock } from "@tabler/icons-react";
+import {
+  IconUsers,
+  IconIdBadge,
+  IconLayoutSidebar,
+  IconComponents,
+  IconShieldLock,
+  IconAddressBook,
+} from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import { useAppSelector } from "../../store/hooks";
 import { selectAllowedPageSlugs } from "../../selectors/accessControlSelectors";
@@ -10,7 +17,7 @@ import { PAGE_SLUGS } from "../../constants/pageSlugs";
 type SettingsSection = {
   label: string;
   description: string;
-  icon: React.ComponentType<{ size?: number }>;
+  icon: React.ComponentType<{ size?: number | string }>;
   to: string;
   pageSlug: string;
 };
@@ -22,6 +29,13 @@ const sections: SettingsSection[] = [
     icon: IconUsers,
     to: "/settings/users",
     pageSlug: PAGE_SLUGS.settingsUsers,
+  },
+  {
+    label: "Staff Profiles",
+    description: "Track staff classifications and accommodation status.",
+    icon: IconAddressBook,
+    to: "/settings/staff-profiles",
+    pageSlug: PAGE_SLUGS.settingsStaffProfiles,
   },
   {
     label: "User Types",
