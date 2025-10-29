@@ -48,8 +48,8 @@ const DEFAULT_SHIFT_TYPES: Array<{ key: string; name: string; description: strin
 ];
 
 function getWeekStart(year: number, week: number): dayjs.Dayjs {
-  const weekLabel = `${year}-W${week.toString().padStart(2, '0')}-1`; // ISO week starts on Monday (E=1)
-  return dayjs.tz(weekLabel, 'YYYY-[W]WW-E', SCHED_TZ).startOf('day');
+  // Derive the Monday of the ISO week directly to avoid parsing quirks around year boundaries.
+  return dayjs().tz(SCHED_TZ).year(year).isoWeek(week).startOf('isoWeek');
 }
 
 function formatWeekLabel(year: number, week: number): string {
