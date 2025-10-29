@@ -49,6 +49,8 @@ const DEFAULT_SHIFT_TYPES: Array<{ key: string; name: string; description: strin
   { key: 'ORG_MANAGER', name: 'Organization Duty Manager', description: 'Manager on duty overseeing operations.' },
 ];
 
+const ALL_WEEKDAY_NUMBERS = [1, 2, 3, 4, 5, 6, 7] as const;
+
 const MAX_VOLUNTEER_WEEKLY_ASSIGNMENTS = 4;
 const DEFAULT_SHIFT_DURATION_HOURS = 2;
 
@@ -153,8 +155,15 @@ async function spawnInstancesFromTemplates(week: ScheduleWeek, actorId: number |
     if (!template.defaultStartTime) {
       continue;
     }
+    const activeDays = Array.isArray(template.repeatOn) && template.repeatOn.length > 0 ? template.repeatOn : ALL_WEEKDAY_NUMBERS.slice();
+    const activeDaySet = new Set(activeDays);
     for (let offset = 0; offset < 7; offset += 1) {
-      const date = weekStart.add(offset, 'day').format('YYYY-MM-DD');
+      const currentDay = weekStart.add(offset, 'day');
+      const isoWeekday = currentDay.isoWeekday();
+      if (!activeDaySet.has(isoWeekday)) {
+        continue;
+      }
+      const date = currentDay.format('YYYY-MM-DD');
       const alreadyExists = await ShiftInstance.findOne({
         where: {
           scheduleWeekId: week.id,
@@ -791,6 +800,7 @@ export async function upsertShiftTemplate(
     requiresLeader?: boolean;
     defaultRoles?: ShiftTemplateRoleRequirement[] | null;
     defaultMeta?: Record<string, unknown> | null;
+    repeatOn?: number[] | null;
   },
   actorId: number | null,
 ): Promise<ShiftTemplate> {
@@ -819,7 +829,29 @@ export async function upsertShiftTemplate(
     });
   }
 
-  const data = {
+  let cleanedRepeatOn: number[] | null = null;
+  if (Array.isArray(payload.repeatOn)) {
+    const uniqueDays = Array.from(
+      new Set(
+        payload.repeatOn
+          .map((value) => Number(value))
+          .filter((value): value is number => Number.isInteger(value) && value >= 1 && value <= 7),
+      ),
+    ).sort((a, b) => a - b);
+    cleanedRepeatOn = uniqueDays.length > 0 ? uniqueDays : null;
+  }
+
+  const data: {
+    shiftTypeId: number;
+    name: string;
+    defaultStartTime: string | null;
+    defaultEndTime: string | null;
+    defaultCapacity: number | null;
+    requiresLeader: boolean;
+    defaultRoles: ShiftTemplateRoleRequirement[] | null;
+    defaultMeta: Record<string, unknown> | null;
+    repeatOn?: number[] | null;
+  } = {
     shiftTypeId: payload.shiftTypeId,
     name: payload.name.trim(),
     defaultStartTime: payload.defaultStartTime ?? null,
@@ -829,6 +861,9 @@ export async function upsertShiftTemplate(
     defaultRoles: normalizedRoles ?? payload.defaultRoles ?? null,
     defaultMeta: payload.defaultMeta ?? null,
   };
+  if (payload.repeatOn !== undefined) {
+    data.repeatOn = cleanedRepeatOn;
+  }
 
   let template: ShiftTemplate | null = null;
   if (payload.id) {
