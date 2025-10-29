@@ -18,6 +18,8 @@ import User from '../models/User.js';
 import Export from '../models/Export.js';
 import SwapRequest, { type SwapRequestStatus } from '../models/SwapRequest.js';
 import AuditLog from '../models/AuditLog.js';
+import ShiftRole from '../models/ShiftRole.js';
+import UserShiftRole from '../models/UserShiftRole.js';
 import { renderScheduleHTML } from './renderSchedule.js';
 import { ensureFolderPath, uploadBuffer } from './googleDrive.js';
 import { sendSchedulingNotification } from './notificationService.js';
@@ -96,6 +98,7 @@ type AssignmentInput = {
   shiftInstanceId: number;
   userId: number;
   roleInShift: string;
+  shiftRoleId?: number | null;
   overrideReason?: string | null;
 };
 
@@ -224,6 +227,8 @@ async function getStaffProfiles(userIds: number[], transaction?: Transaction): P
 
 type ShiftRange = { start: dayjs.Dayjs; end: dayjs.Dayjs };
 
+type RoleSlot = { roleId: number | null; roleName: string };
+
 function getShiftRange(instance: ShiftInstance): ShiftRange {
   const start = dayjs(`${instance.date} ${instance.timeStart}`, 'YYYY-MM-DD HH:mm');
   const end = instance.timeEnd
@@ -258,28 +263,32 @@ function rangesOverlap(a: ShiftRange, b: ShiftRange): boolean {
   return a.start.isBefore(b.end) && b.start.isBefore(a.end);
 }
 
-function buildRoleSlots(instance: ShiftInstance): string[] {
+const createRoleKey = (roleId: number | null, roleName: string) =>
+  roleId != null ? `id:${roleId}` : `name:${roleName.trim().toLowerCase()}`;
+
+function buildRoleSlots(instance: ShiftInstance): RoleSlot[] {
   const roleDefinitions = (instance.requiredRoles && instance.requiredRoles.length > 0
     ? instance.requiredRoles
     : instance.template?.defaultRoles) ?? [];
 
   if (roleDefinitions.length === 0) {
     const fallback = Math.max(1, instance.capacity ?? 1);
-    return Array.from({ length: fallback }).map(() => 'Staff');
+    return Array.from({ length: fallback }).map(() => ({ roleId: null, roleName: 'Staff' }));
   }
 
-  const slots: string[] = [];
+  const slots: RoleSlot[] = [];
   roleDefinitions.forEach((definition) => {
+    const roleId = definition.shiftRoleId ?? null;
     const roleName = definition.role ?? 'Staff';
     const requiredCount = Math.max(1, definition.required ?? 1);
     for (let index = 0; index < requiredCount; index += 1) {
-      slots.push(roleName);
+      slots.push({ roleId, roleName });
     }
   });
   return slots;
 }
 
-function computeRolesToFill(instance: ShiftInstance, volunteerSet: Set<number>): string[] {
+function computeRolesToFill(instance: ShiftInstance, volunteerSet: Set<number>): RoleSlot[] {
   const allSlots = buildRoleSlots(instance);
   if (allSlots.length === 0) {
     return [];
@@ -290,21 +299,23 @@ function computeRolesToFill(instance: ShiftInstance, volunteerSet: Set<number>):
     if (volunteerSet.has(assignment.userId)) {
       return;
     }
-    const current = nonVolunteerAssignments.get(assignment.roleInShift) ?? 0;
-    nonVolunteerAssignments.set(assignment.roleInShift, current + 1);
+    const key = createRoleKey(assignment.shiftRoleId ?? null, assignment.roleInShift ?? 'Staff');
+    const current = nonVolunteerAssignments.get(key) ?? 0;
+    nonVolunteerAssignments.set(key, current + 1);
   });
 
   const consumed = new Map<string, number>();
-  const rolesToFill: string[] = [];
+  const rolesToFill: RoleSlot[] = [];
 
-  allSlots.forEach((slotRole) => {
-    const alreadyUsed = consumed.get(slotRole) ?? 0;
-    const coveredByNonVolunteers = nonVolunteerAssignments.get(slotRole) ?? 0;
+  allSlots.forEach((slot) => {
+    const key = createRoleKey(slot.roleId, slot.roleName);
+    const alreadyUsed = consumed.get(key) ?? 0;
+    const coveredByNonVolunteers = nonVolunteerAssignments.get(key) ?? 0;
     if (alreadyUsed < coveredByNonVolunteers) {
-      consumed.set(slotRole, alreadyUsed + 1);
+      consumed.set(key, alreadyUsed + 1);
       return;
     }
-    rolesToFill.push(slotRole);
+    rolesToFill.push(slot);
   });
 
   return rolesToFill;
@@ -783,6 +794,31 @@ export async function upsertShiftTemplate(
   },
   actorId: number | null,
 ): Promise<ShiftTemplate> {
+  let normalizedRoles: ShiftTemplateRoleRequirement[] | null = null;
+  if (payload.defaultRoles && payload.defaultRoles.length > 0) {
+    const uniqueRoleIds = Array.from(
+      new Set(
+        payload.defaultRoles
+          .map((role) => role.shiftRoleId)
+          .filter((value): value is number => typeof value === 'number' && Number.isInteger(value)),
+      ),
+    );
+    let rolesById = new Map<number, ShiftRole>();
+    if (uniqueRoleIds.length > 0) {
+      const roleRecords = await ShiftRole.findAll({ where: { id: uniqueRoleIds } });
+      rolesById = new Map(roleRecords.map((record) => [record.id, record]));
+    }
+    normalizedRoles = payload.defaultRoles.map((role) => {
+      const roleId = role.shiftRoleId ?? null;
+      const reference = roleId != null ? rolesById.get(roleId) : null;
+      return {
+        shiftRoleId: roleId,
+        role: reference?.name ?? role.role ?? 'Staff',
+        required: role.required ?? null,
+      };
+    });
+  }
+
   const data = {
     shiftTypeId: payload.shiftTypeId,
     name: payload.name.trim(),
@@ -790,7 +826,7 @@ export async function upsertShiftTemplate(
     defaultEndTime: payload.defaultEndTime ?? null,
     defaultCapacity: payload.defaultCapacity ?? null,
     requiresLeader: payload.requiresLeader ?? false,
-    defaultRoles: payload.defaultRoles ?? null,
+    defaultRoles: normalizedRoles ?? payload.defaultRoles ?? null,
     defaultMeta: payload.defaultMeta ?? null,
   };
 
@@ -920,7 +956,7 @@ export async function listShiftInstances(weekId: number): Promise<ShiftInstance[
       {
         model: ShiftAssignment,
         as: 'assignments',
-        include: [{ model: User, as: 'assignee' }],
+        include: [{ model: User, as: 'assignee' }, { model: ShiftRole, as: 'shiftRole' }],
       },
     ],
     order: [
@@ -959,12 +995,17 @@ export async function createShiftAssignmentsBulk(assignments: AssignmentInput[],
       }
       assertWeekMutable(instance.scheduleWeek);
 
+      const existingWhere: Record<string, unknown> = {
+        shiftInstanceId: input.shiftInstanceId,
+        userId: input.userId,
+      };
+      if (input.shiftRoleId != null) {
+        existingWhere.shiftRoleId = input.shiftRoleId;
+      } else {
+        existingWhere.roleInShift = input.roleInShift;
+      }
       const existing = await ShiftAssignment.findOne({
-        where: {
-          shiftInstanceId: input.shiftInstanceId,
-          userId: input.userId,
-          roleInShift: input.roleInShift,
-        },
+        where: existingWhere,
         transaction,
       });
       if (existing) {
@@ -1020,6 +1061,7 @@ export async function createShiftAssignmentsBulk(assignments: AssignmentInput[],
           shiftInstanceId: input.shiftInstanceId,
           userId: input.userId,
           roleInShift: input.roleInShift,
+          shiftRoleId: input.shiftRoleId ?? null,
         },
         { transaction },
       );
@@ -1157,8 +1199,21 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
       assignmentSlotsByVolunteer.set(volunteerId, []);
     });
 
-    const plannedAssignments: Array<{ shiftInstanceId: number; userId: number; roleInShift: string }> = [];
-    const unfilledSlots: Array<{ shiftInstanceId: number; role: string; date: string; timeStart: string }> = [];
+    const volunteerRoleAssignments = volunteerIds.length
+      ? await UserShiftRole.findAll({
+          where: { userId: volunteerIds },
+          transaction,
+        })
+      : [];
+    const volunteerRoleMap = new Map<number, Set<number>>();
+    volunteerRoleAssignments.forEach((assignment) => {
+      const set = volunteerRoleMap.get(assignment.userId) ?? new Set<number>();
+      set.add(assignment.shiftRoleId);
+      volunteerRoleMap.set(assignment.userId, set);
+    });
+
+    const plannedAssignments: Array<{ shiftInstanceId: number; userId: number; roleInShift: string; shiftRoleId: number | null }> = [];
+    const unfilledSlots: Array<{ shiftInstanceId: number; role: string; date: string; timeStart: string; shiftRoleId: number | null }> = [];
 
     for (const instance of shiftInstances) {
       const rolesToFill = computeRolesToFill(instance, volunteerSet);
@@ -1168,7 +1223,9 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
 
       const range = getShiftRange(instance);
 
-      for (const roleName of rolesToFill) {
+      for (const slot of rolesToFill) {
+        const slotRoleId = slot.roleId;
+        const roleName = slot.roleName;
         const sortedVolunteers = [...volunteerIds].sort((a, b) => {
           const aCount = assignmentCounts.get(a) ?? 0;
           const bCount = assignmentCounts.get(b) ?? 0;
@@ -1183,6 +1240,13 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
         for (const volunteerId of sortedVolunteers) {
           if (!volunteerSet.has(volunteerId)) {
             continue;
+          }
+
+          if (slotRoleId != null) {
+            const allowedRoles = volunteerRoleMap.get(volunteerId);
+            if (!allowedRoles || !allowedRoles.has(slotRoleId)) {
+              continue;
+            }
           }
 
           const currentCount = assignmentCounts.get(volunteerId) ?? 0;
@@ -1208,6 +1272,7 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
             shiftInstanceId: instance.id,
             userId: volunteerId,
             roleInShift: roleName,
+            shiftRoleId: slotRoleId,
           });
           assignmentCounts.set(volunteerId, currentCount + 1);
           volunteerSlots.push(range);
@@ -1222,6 +1287,7 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
             role: roleName,
             date: instance.date,
             timeStart: instance.timeStart,
+            shiftRoleId: slotRoleId,
           });
         }
       }
@@ -1234,6 +1300,7 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
           shiftInstanceId: assignment.shiftInstanceId,
           userId: assignment.userId,
           roleInShift: assignment.roleInShift,
+          shiftRoleId: assignment.shiftRoleId,
         },
         { transaction },
       );

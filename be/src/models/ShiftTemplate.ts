@@ -16,6 +16,7 @@ import ShiftType from './ShiftType.js';
 import ShiftInstance from './ShiftInstance.js';
 
 export type ShiftTemplateRoleRequirement = {
+  shiftRoleId: number | null;
   role: string;
   required: number | null;
 };

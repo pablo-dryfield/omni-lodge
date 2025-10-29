@@ -20,6 +20,8 @@ import {
   IconCurrencyEuro,
   IconPercentage,
   IconAddressBook,
+  IconHierarchy3,
+  IconUserCog,
 } from "@tabler/icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ActiveNavLink } from "./ActiveNavLink";
@@ -51,10 +53,22 @@ const settingsNav: SettingsNavSection[] = [
     links: [
       { label: "Users", to: "/settings/users", slug: PAGE_SLUGS.settingsUsers, icon: <IconUsers size={20} /> },
       {
+        label: "Shift Roles",
+        to: "/settings/shift-roles",
+        slug: PAGE_SLUGS.settingsShiftRoles,
+        icon: <IconHierarchy3 size={20} />,
+      },
+      {
         label: "Staff Profiles",
         to: "/settings/staff-profiles",
         slug: PAGE_SLUGS.settingsStaffProfiles,
         icon: <IconAddressBook size={20} />,
+      },
+      {
+        label: "User Shift Roles",
+        to: "/settings/user-shift-roles",
+        slug: PAGE_SLUGS.settingsUserShiftRoles,
+        icon: <IconUserCog size={20} />,
       },
       {
         label: "User Types",

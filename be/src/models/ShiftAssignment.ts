@@ -14,6 +14,7 @@ import type { NonAttribute } from 'sequelize';
 import ShiftInstance from './ShiftInstance.js';
 import User from './User.js';
 import SwapRequest from './SwapRequest.js';
+import ShiftRole from './ShiftRole.js';
 
 @Table({
   tableName: 'shift_assignments',
@@ -36,6 +37,11 @@ export default class ShiftAssignment extends Model {
   @Column({ field: 'user_id', type: DataType.INTEGER })
   declare userId: number;
 
+  @ForeignKey(() => ShiftRole)
+  @AllowNull(true)
+  @Column({ field: 'shift_role_id', type: DataType.INTEGER })
+  declare shiftRoleId: number | null;
+
   @AllowNull(false)
   @Column({ field: 'role_in_shift', type: DataType.STRING(80) })
   declare roleInShift: string;
@@ -45,6 +51,9 @@ export default class ShiftAssignment extends Model {
 
   @BelongsTo(() => User, { foreignKey: 'user_id', as: 'assignee' })
   declare assignee?: NonAttribute<User | null>;
+
+  @BelongsTo(() => ShiftRole, { foreignKey: 'shift_role_id', as: 'shiftRole' })
+  declare shiftRole?: NonAttribute<ShiftRole | null>;
 
   @HasMany(() => SwapRequest, { foreignKey: 'from_assignment_id', as: 'outgoingSwapRequests' })
   declare outgoingSwapRequests?: SwapRequest[];

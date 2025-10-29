@@ -143,7 +143,7 @@ const BuilderPage = () => {
       return `${name}: ${summary.assigned}`;
     });
     const preview = entries.slice(0, 6).join(", ");
-    return entries.length > 6 ? `${preview}, …` : preview;
+    return entries.length > 6 ? `${preview}, ...` : preview;
   }, [autoAssignData]);
 
   const unfilledPreview = useMemo(() => {
@@ -153,7 +153,7 @@ const BuilderPage = () => {
     const entries = autoAssignData.unfilled
       .slice(0, 5)
       .map((slot) => `${dayjs(slot.date).format("MMM D")} ${slot.timeStart} (${slot.role})`);
-    return autoAssignData.unfilled.length > 5 ? `${entries.join(", ")}, …` : entries.join(", ");
+    return autoAssignData.unfilled.length > 5 ? `${entries.join(", ")}, ...` : entries.join(", ");
   }, [autoAssignData]);
 
   if (!accessLoaded) {
@@ -335,9 +335,7 @@ const BuilderPage = () => {
         <SimpleGrid cols={{ base: 1, md: 2, lg: 3 }} spacing="lg">
           {(instancesQuery.data ?? []).map((instance) => {
             const dateLabel = dayjs(instance.date).format("ddd, MMM D");
-            const timeLabel = instance.timeEnd
-              ? `${instance.timeStart} – ${instance.timeEnd}`
-              : instance.timeStart;
+            const timeLabel = instance.timeEnd ? `${instance.timeStart} - ${instance.timeEnd}` : instance.timeStart;
             const templateRoles = instance.requiredRoles ?? instance.template?.defaultRoles ?? [];
             return (
               <Card key={instance.id} withBorder shadow="sm" radius="md">
@@ -346,7 +344,7 @@ const BuilderPage = () => {
                     <Stack gap={0}>
                       <Text fw={600}>{instance.shiftType?.name ?? "Shift"}</Text>
                       <Text size="sm" c="dimmed">
-                        {dateLabel} · {timeLabel}
+                        {dateLabel} | {timeLabel}
                       </Text>
                     </Stack>
                     <ActionIcon
@@ -416,7 +414,7 @@ const BuilderPage = () => {
           />
           <TextInput
             label="Role in shift"
-            placeholder="Leader, Guide, Staff…"
+            placeholder="Leader, Guide, Staff..."
             value={assignmentRole}
             onChange={(event) => setAssignmentRole(event.currentTarget.value)}
           />

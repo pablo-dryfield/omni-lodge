@@ -42,11 +42,15 @@ import SwapRequest from './SwapRequest.js';
 import Export from './Export.js';
 import Notification from './Notification.js';
 import AuditLog from './AuditLog.js';
+import ShiftRole from './ShiftRole.js';
+import UserShiftRole from './UserShiftRole.js';
 
 export function defineAssociations() {
   // User Associations
   User.belongsTo(UserType, { foreignKey: 'userTypeId', as: 'role' });
   User.hasOne(StaffProfile, { foreignKey: 'user_id', as: 'staffProfile' });
+  User.belongsToMany(ShiftRole, { through: UserShiftRole, as: 'shiftRoles', foreignKey: 'user_id', otherKey: 'shift_role_id' });
+  ShiftRole.belongsToMany(User, { through: UserShiftRole, as: 'users', foreignKey: 'shift_role_id', otherKey: 'user_id' });
 
   // UserType Associations
   UserType.hasMany(User, { foreignKey: 'userTypeId', as: 'users' });

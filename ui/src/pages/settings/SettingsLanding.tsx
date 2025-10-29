@@ -7,6 +7,8 @@ import {
   IconComponents,
   IconShieldLock,
   IconAddressBook,
+  IconHierarchy3,
+  IconUserCog,
 } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import { useAppSelector } from "../../store/hooks";
@@ -36,6 +38,20 @@ const sections: SettingsSection[] = [
     icon: IconAddressBook,
     to: "/settings/staff-profiles",
     pageSlug: PAGE_SLUGS.settingsStaffProfiles,
+  },
+  {
+    label: "Shift Roles",
+    description: "Manage the roles available for scheduling.",
+    icon: IconHierarchy3,
+    to: "/settings/shift-roles",
+    pageSlug: PAGE_SLUGS.settingsShiftRoles,
+  },
+  {
+    label: "User Shift Roles",
+    description: "Assign shift roles to team members.",
+    icon: IconUserCog,
+    to: "/settings/user-shift-roles",
+    pageSlug: PAGE_SLUGS.settingsUserShiftRoles,
   },
   {
     label: "User Types",
@@ -118,3 +134,4 @@ const SettingsLanding = () => {
 };
 
 export default SettingsLanding;
+

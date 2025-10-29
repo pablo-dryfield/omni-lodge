@@ -49,7 +49,7 @@ export type AutoAssignSummary = {
   created: number;
   removed: number;
   volunteerCount: number;
-  unfilled: Array<{ shiftInstanceId: number; role: string; date: string; timeStart: string }>;
+  unfilled: Array<{ shiftInstanceId: number; role: string; shiftRoleId: number | null; date: string; timeStart: string }>;
   volunteerAssignments: Array<{ userId: number; fullName: string | null; assigned: number }>;
 };
 
@@ -447,3 +447,4 @@ export const getUpcomingWeeks = (count = 4, includeCurrent = true) => {
     };
   });
 };
+

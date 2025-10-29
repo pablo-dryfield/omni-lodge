@@ -54,6 +54,8 @@ const defaultPages = [
   { slug: 'settings-actions', name: 'Actions', description: 'Manage access control actions', sortOrder: 16 },
   { slug: 'settings-channels', name: 'Channels', description: 'Manage booking channels and integrations', sortOrder: 17 },
   { slug: 'settings-staff-profiles', name: 'Staff Profiles', description: 'Maintain staff profile metadata', sortOrder: 18 },
+  { slug: 'settings-shift-roles', name: 'Shift Roles', description: 'Manage scheduling shift role definitions', sortOrder: 19 },
+  { slug: 'settings-user-shift-roles', name: 'User Shift Roles', description: 'Assign shift roles to users', sortOrder: 20 },
 ];
 
 const defaultModules = [
@@ -93,6 +95,8 @@ const defaultModules = [
   { slug: 'channel-console', name: 'Channel Console', pageSlug: 'settings-channels', description: 'Manage booking channels and integrations', componentRef: 'ChannelConsole', sortOrder: 1 },
   { slug: 'action-registry', name: 'Action Registry', pageSlug: 'settings-actions', description: 'Maintain action catalog', componentRef: 'ActionRegistry', sortOrder: 1 },
   { slug: 'staff-profile-directory', name: 'Staff Profile Directory', pageSlug: 'settings-staff-profiles', description: 'Maintain staff profile metadata', componentRef: 'StaffProfileDirectory', sortOrder: 1 },
+  { slug: 'shift-role-directory', name: 'Shift Role Directory', pageSlug: 'settings-shift-roles', description: 'Manage scheduling shift role definitions', componentRef: 'ShiftRoleDirectory', sortOrder: 1 },
+  { slug: 'user-shift-role-directory', name: 'User Shift Role Directory', pageSlug: 'settings-user-shift-roles', description: 'Assign shift roles to users', componentRef: 'UserShiftRoleDirectory', sortOrder: 1 },
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
@@ -104,8 +108,10 @@ const rolePageMatrix: Record<string, string[]> = {
 'settings-permissions',
 'settings-permissions-pages',
 'settings-permissions-modules',
-'settings-staff-profiles'],
-  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling', 'settings-staff-profiles'],
+'settings-staff-profiles',
+'settings-shift-roles',
+'settings-user-shift-roles'],
+  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles'],
   manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling'],
   'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling'],
   guide: ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'pays', 'scheduling'],
@@ -120,6 +126,8 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'booking-manifest': ['view'],
     'user-directory': ['view', 'create', 'update', 'delete'],
     'staff-profile-directory': ['view', 'create', 'update', 'delete'],
+    'shift-role-directory': ['view', 'create', 'update', 'delete'],
+    'user-shift-role-directory': ['view', 'create', 'update', 'delete'],
 'settings-home': ['view', 'create', 'update', 'delete'],
 'settings-users-admin': ['view', 'create', 'update', 'delete'],
 'settings-user-types-admin': ['view', 'create', 'update', 'delete'],
@@ -165,6 +173,8 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'booking-manifest': ['view'],
     'user-directory': ['view', 'create', 'update', 'delete'],
     'staff-profile-directory': ['view', 'create', 'update', 'delete'],
+    'shift-role-directory': ['view', 'create', 'update', 'delete'],
+    'user-shift-role-directory': ['view', 'create', 'update', 'delete'],
       reporting: ['view', 'create', 'update', 'delete'],
       'venue-numbers-management': ['view', 'create', 'update'],
       'staff-payouts-all': ['view'],

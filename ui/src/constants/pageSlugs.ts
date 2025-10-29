@@ -55,6 +55,8 @@ export const PAGE_SLUGS = {
   settingsActions: "settings-actions",
   settingsChannels: "settings-channels",
   settingsStaffProfiles: "settings-staff-profiles",
+  settingsShiftRoles: "settings-shift-roles",
+  settingsUserShiftRoles: "settings-user-shift-roles",
 };
 
 export type PageSlugKey = keyof typeof PAGE_SLUGS;
