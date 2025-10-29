@@ -35,7 +35,6 @@ import {
   useShiftTemplates,
   useWeekSummary,
   getUpcomingWeeks,
-  formatScheduleWeekLabel,
 } from "../../api/scheduling";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import AddShiftInstanceModal from "../../components/scheduling/AddShiftInstanceModal";
@@ -52,18 +51,9 @@ type StaffOption = {
 
 const BuilderPage = () => {
   const [weekOptions, initialWeekValue] = useMemo<[ReturnType<typeof getUpcomingWeeks>, string]>(() => {
-    const upcoming = getUpcomingWeeks(6, false);
-    const previousTarget = dayjs().subtract(1, "week");
-    const previousYear = previousTarget.isoWeekYear();
-    const previousWeek = previousTarget.isoWeek();
-    const previous = {
-      value: `${previousYear}-W${previousWeek.toString().padStart(2, "0")}`,
-      label: formatScheduleWeekLabel(previousYear, previousWeek),
-      year: previousYear,
-      week: previousWeek,
-    };
-    const options = [previous, ...upcoming];
-    return [options, upcoming[0]?.value ?? previous.value];
+    const options = getUpcomingWeeks(6);
+    const initial = options[1]?.value ?? options[0]?.value ?? "";
+    return [options, initial];
   }, []);
   const [selectedWeek, setSelectedWeek] = useState<string>(initialWeekValue);
   const [showAddInstance, setShowAddInstance] = useState(false);
