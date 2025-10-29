@@ -1,4 +1,3 @@
-
 import { Select, SelectProps, Stack, Text } from "@mantine/core";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
@@ -6,12 +5,14 @@ import { formatScheduleWeekLabel, getUpcomingWeeks } from "../../api/scheduling"
 
 dayjs.extend(isoWeek);
 
+type WeekOption = { value: string; label: string };
+
 export interface WeekSelectorProps {
   value: string | null;
   onChange: (value: string) => void;
   label?: string;
   description?: string;
-  weeks?: Array<{ value: string; label: string }>;
+  weeks?: WeekOption[];
   selectProps?: Partial<SelectProps>;
 }
 
@@ -35,26 +36,45 @@ const WeekSelector = ({
       })()
     : null;
 
+  const { styles: injectedStyles, ...restSelectProps } = selectProps ?? {};
+
+  const baseStyles = {
+    input: { textAlign: "center" },
+    dropdown: { textAlign: "center" },
+    item: { justifyContent: "center", textAlign: "center" },
+    option: { justifyContent: "center", textAlign: "center" },
+    optionLabel: { textAlign: "center", width: "100%" },
+  };
+
+  const injected = (injectedStyles as Record<string, any>) ?? {};
+
+  const mergedStyles = {
+    ...injected,
+    input: { ...baseStyles.input, ...(injected.input ?? {}) },
+    dropdown: { ...baseStyles.dropdown, ...(injected.dropdown ?? {}) },
+    item: { ...baseStyles.item, ...(injected.item ?? {}) },
+    option: { ...baseStyles.option, ...(injected.option ?? {}) },
+    optionLabel: { ...baseStyles.optionLabel, ...(injected.optionLabel ?? {}) },
+  } as SelectProps["styles"];
+
   return (
-    <Stack gap={4}>
+    <Stack gap={4} align="center" w="100%">
       <Select
         data={options}
-        label={label}
+        labelProps={{ style: { textAlign: "center" } }}
         description={description}
         placeholder="Select ISO week"
         value={value ?? undefined}
         onChange={(next) => next && onChange(next)}
         searchable
         nothingFoundMessage="No weeks"
-        {...selectProps}
+        w="100%"
+        {...restSelectProps}
+        styles={mergedStyles}
       />
-      {formatted && (
-        <Text size="sm" c="dimmed">
-          {formatted}
-        </Text>
-      )}
     </Stack>
   );
 };
 
 export default WeekSelector;
+
