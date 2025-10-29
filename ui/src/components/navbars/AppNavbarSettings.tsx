@@ -19,6 +19,7 @@ import {
   IconCurrencyDollar,
   IconCurrencyEuro,
   IconPercentage,
+  IconAddressBook,
 } from "@tabler/icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ActiveNavLink } from "./ActiveNavLink";
@@ -49,6 +50,12 @@ const settingsNav: SettingsNavSection[] = [
     title: "Directory",
     links: [
       { label: "Users", to: "/settings/users", slug: PAGE_SLUGS.settingsUsers, icon: <IconUsers size={20} /> },
+      {
+        label: "Staff Profiles",
+        to: "/settings/staff-profiles",
+        slug: PAGE_SLUGS.settingsStaffProfiles,
+        icon: <IconAddressBook size={20} />,
+      },
       {
         label: "User Types",
         to: "/settings/user-types",

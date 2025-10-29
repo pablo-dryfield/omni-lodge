@@ -45,6 +45,14 @@ const schedulingKeys = {
 
 type WeekQueryParams = { week?: string | null };
 
+export type AutoAssignSummary = {
+  created: number;
+  removed: number;
+  volunteerCount: number;
+  unfilled: Array<{ shiftInstanceId: number; role: string; date: string; timeStart: string }>;
+  volunteerAssignments: Array<{ userId: number; fullName: string | null; assigned: number }>;
+};
+
 export const useGenerateWeek = () => {
   const queryClient = useQueryClient();
   return useMutation({
@@ -166,6 +174,20 @@ export const usePublishWeek = () => {
     onSuccess: ({ summary }) => {
       invalidateQuery(queryClient, schedulingKeys.weekSummary(summary.week.id));
       invalidateQuery(queryClient, schedulingKeys.exports(summary.week.id));
+    },
+  });
+};
+
+export const useAutoAssignWeek = () => {
+  const queryClient = useQueryClient();
+  return useMutation<AutoAssignSummary, AxiosError<{ error?: string; message?: string }>, { weekId: number }>({
+    mutationFn: async ({ weekId }) => {
+      const response = await axiosInstance.post(`/schedules/weeks/${weekId}/auto-assign`);
+      return response.data as AutoAssignSummary;
+    },
+    onSuccess: (_data, variables) => {
+      invalidateQuery(queryClient, schedulingKeys.shiftInstances(variables.weekId));
+      invalidateQuery(queryClient, schedulingKeys.weekSummary(variables.weekId));
     },
   });
 };
