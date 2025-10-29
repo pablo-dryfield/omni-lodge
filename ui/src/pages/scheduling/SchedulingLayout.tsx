@@ -55,7 +55,7 @@ const SchedulingLayout = () => {
         keepMounted={false}
         variant="outline"
       >
-        <Tabs.List>
+        <Tabs.List style={{ justifyContent: "center" }}>
           {schedulingTabs.map((tab) => (
             <Tabs.Tab key={tab.value} value={tab.value}>
               {tab.label}
