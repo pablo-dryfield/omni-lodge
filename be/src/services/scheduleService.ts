@@ -938,7 +938,10 @@ export async function deleteShiftInstance(instanceId: number, actorId: number | 
   }
   assertWeekMutable(week);
 
-  await instance.destroy();
+  await sequelize.transaction(async (transaction) => {
+    await ShiftAssignment.destroy({ where: { shiftInstanceId: instanceId }, transaction });
+    await instance.destroy({ transaction });
+  });
   await logAudit({
     actorId,
     action: 'schedule.instance.delete',
@@ -1118,7 +1121,7 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
   return sequelize.transaction(async (transaction) => {
     const volunteerProfiles = await StaffProfile.findAll({
       where: {
-        staffType: 'volunteer',
+        staffType: { [Op.in]: ['volunteer', 'long_term'] },
         livesInAccom: true,
         active: true,
       },
