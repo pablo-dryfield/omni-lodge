@@ -53,6 +53,7 @@ const defaultPages = [
   { slug: 'settings-channel-commissions', name: 'Channel Commissions', description: 'Track commission rates by channel', sortOrder: 15 },
   { slug: 'settings-actions', name: 'Actions', description: 'Manage access control actions', sortOrder: 16 },
   { slug: 'settings-channels', name: 'Channels', description: 'Manage booking channels and integrations', sortOrder: 17 },
+  { slug: 'settings-staff-profiles', name: 'Staff Profiles', description: 'Maintain staff profile metadata', sortOrder: 18 },
 ];
 
 const defaultModules = [
@@ -91,6 +92,7 @@ const defaultModules = [
   { slug: 'channel-commission-management', name: 'Channel Commissions', pageSlug: 'settings-channel-commissions', description: 'Maintain commission agreements', componentRef: 'ChannelCommissionManagement', sortOrder: 1 },
   { slug: 'channel-console', name: 'Channel Console', pageSlug: 'settings-channels', description: 'Manage booking channels and integrations', componentRef: 'ChannelConsole', sortOrder: 1 },
   { slug: 'action-registry', name: 'Action Registry', pageSlug: 'settings-actions', description: 'Maintain action catalog', componentRef: 'ActionRegistry', sortOrder: 1 },
+  { slug: 'staff-profile-directory', name: 'Staff Profile Directory', pageSlug: 'settings-staff-profiles', description: 'Maintain staff profile metadata', componentRef: 'StaffProfileDirectory', sortOrder: 1 },
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
@@ -101,8 +103,9 @@ const rolePageMatrix: Record<string, string[]> = {
 'settings-modules',
 'settings-permissions',
 'settings-permissions-pages',
-'settings-permissions-modules'],
-  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling'],
+'settings-permissions-modules',
+'settings-staff-profiles'],
+  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling', 'settings-staff-profiles'],
   manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling'],
   'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling'],
   guide: ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'pays', 'scheduling'],
@@ -116,6 +119,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'booking-management': ['view', 'create', 'update', 'delete'],
     'booking-manifest': ['view'],
     'user-directory': ['view', 'create', 'update', 'delete'],
+    'staff-profile-directory': ['view', 'create', 'update', 'delete'],
 'settings-home': ['view', 'create', 'update', 'delete'],
 'settings-users-admin': ['view', 'create', 'update', 'delete'],
 'settings-user-types-admin': ['view', 'create', 'update', 'delete'],
@@ -160,6 +164,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'booking-management': ['view', 'create', 'update', 'delete'],
     'booking-manifest': ['view'],
     'user-directory': ['view', 'create', 'update', 'delete'],
+    'staff-profile-directory': ['view', 'create', 'update', 'delete'],
       reporting: ['view', 'create', 'update', 'delete'],
       'venue-numbers-management': ['view', 'create', 'update'],
       'staff-payouts-all': ['view'],
