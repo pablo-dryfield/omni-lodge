@@ -50,6 +50,7 @@ const roleCellStyles: CSSProperties = {
   minWidth: 160,
   height: "100%",
   verticalAlign: "middle",
+  borderLeftWidth: "3px",
   background: "linear-gradient(135deg, rgba(124, 77, 255, 0.12) 0%, rgba(255,255,255,0.7) 100%)",
 };
 
@@ -69,7 +70,7 @@ const roleHeaderCellStyles: CSSProperties = {
   ...tableCellBase,
   padding: 0,
   backgroundColor: palette.lavenderDeep,
-  borderWidth: "3px 3px 1px 1px",
+  borderWidth: "3px 3px 1px 3px",
   verticalAlign: "middle",
 };
 
@@ -554,7 +555,7 @@ const ScheduleOverviewPage = () => {
                     const topBorder = roleIndex === 0 ? "3px" : "2px";
                     const roleCellStyle: CSSProperties = {
                       ...roleCellStyles,
-                      borderWidth: `${topBorder} 3px 1px 1px`,
+                      borderWidth: `${topBorder} 3px 1px 3px`,
                     };
                     const assignmentCellStyle: CSSProperties = {
                       ...tableCellBase,
