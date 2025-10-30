@@ -35,6 +35,8 @@ const palette = {
   cardShadow: "0 12px 28px rgba(124, 77, 255, 0.22)",
 };
 
+const HEADER_FONT_STACK = "'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif";
+
 const tableCellBase: CSSProperties = {
   border: `1px solid ${palette.border}`,
   padding: "14px 16px",
@@ -59,6 +61,7 @@ const roleLabelStyles: CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   fontWeight: 700,
+  fontFamily: HEADER_FONT_STACK,
   textTransform: "uppercase",
   letterSpacing: "0.05em",
   color: palette.slate,
@@ -79,6 +82,7 @@ const roleHeaderLabelStyles: CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   fontWeight: 700,
+  fontFamily: HEADER_FONT_STACK,
   textTransform: "uppercase",
   letterSpacing: "0.12em",
   color: palette.plumDark,
@@ -392,7 +396,7 @@ const ScheduleOverviewPage = () => {
             Previous Week
           </Button>
           <Stack gap={4} align="center" style={{ flex: 1 }}>
-            <Title order={3} fw={800}>
+            <Title order={3} fw={800} style={{ fontFamily: HEADER_FONT_STACK }}>
               Krawl Through Krakow
             </Title>
             <WeekSelector
@@ -473,6 +477,7 @@ const ScheduleOverviewPage = () => {
                         padding: "18px",
                         fontSize: "22px",
                         fontWeight: 800,
+                        fontFamily: HEADER_FONT_STACK,
                         letterSpacing: "0.05em",
                         color: "#fff",
                       }}
@@ -487,6 +492,7 @@ const ScheduleOverviewPage = () => {
                         borderWidth: "3px 3px 1px 3px",
                         backgroundColor: palette.lavenderDeep,
                         fontWeight: 600,
+                        fontFamily: HEADER_FONT_STACK,
                         textTransform: "uppercase",
                         letterSpacing: "0.08em",
                         color: palette.plumDark,
@@ -504,6 +510,7 @@ const ScheduleOverviewPage = () => {
                           backgroundColor: palette.lavenderDeep,
                           textTransform: "uppercase",
                           fontWeight: 600,
+                          fontFamily: HEADER_FONT_STACK,
                           letterSpacing: "0.08em",
                           color: palette.plumDark,
                         }}
@@ -529,10 +536,10 @@ const ScheduleOverviewPage = () => {
                           }}
                         >
                           <Stack gap={0} align="center">
-                            <Text fw={700} size="sm">
+                            <Text fw={700} size="sm" style={{ fontFamily: HEADER_FONT_STACK }}>
                               {day.format("DD")}
                             </Text>
-                            <Text size="xs" c="dimmed">
+                            <Text size="xs" c="dimmed" style={{ fontFamily: HEADER_FONT_STACK }}>
                               {day.format("ddd")}
                             </Text>
                           </Stack>
