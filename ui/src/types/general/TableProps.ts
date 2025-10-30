@@ -2,7 +2,7 @@ import { MRT_ColumnDef, MRT_Row, MRT_TableState } from "mantine-react-table";
 import { TableActions } from "./TableActions";
 import { TablePermissions } from "./TablePermissions";
 
-export type TableProps<T extends Record<string, any>> = {
+export type TableProps<T extends object> = {
   pageTitle: string;
   data: T[];
   loading: boolean;

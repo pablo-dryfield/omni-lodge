@@ -501,6 +501,9 @@ async function validateOverlaps(weekId: number, transaction?: Transaction): Prom
         if (!first.shiftInstance || !second.shiftInstance) {
           continue;
         }
+        if (first.shiftInstanceId === second.shiftInstanceId) {
+          continue;
+        }
         if (first.shiftInstance.date !== second.shiftInstance.date) {
           continue;
         }

@@ -41,7 +41,7 @@ const CustomEditSelect = <TData extends MRT_RowData>(
       onChange={handleChange}
       placeholder={placeholder}
       searchable={searchable}
-      withinPortal
+      comboboxProps={{ withinPortal: true }}
       nothingFoundMessage="No options"
     />
   );
