@@ -553,13 +553,14 @@ const ScheduleOverviewPage = () => {
                 <tbody>
                   {visibleRoles.map((roleLabel, roleIndex) => {
                     const topBorder = roleIndex === 0 ? "3px" : "2px";
+                    const bottomBorder = roleIndex === visibleRoles.length - 1 ? "3px" : "1px";
                     const roleCellStyle: CSSProperties = {
                       ...roleCellStyles,
-                      borderWidth: `${topBorder} 3px 1px 3px`,
+                      borderWidth: `${topBorder} 3px ${bottomBorder} 3px`,
                     };
                     const assignmentCellStyle: CSSProperties = {
                       ...tableCellBase,
-                      borderWidth: `${topBorder} 1px 1px 0`,
+                      borderWidth: `${topBorder} 1px ${bottomBorder} 0`,
                     };
 
                     return (
@@ -577,7 +578,7 @@ const ScheduleOverviewPage = () => {
                               key={isoDate + roleLabel}
                               style={{
                                 ...assignmentCellStyle,
-                                borderWidth: `${topBorder} ${borderRightWidth} 1px 0`,
+                                borderWidth: `${topBorder} ${borderRightWidth} ${bottomBorder} 0`,
                               }}
                             >
                               <Stack gap={8} align="center" style={{ width: "100%" }}>
