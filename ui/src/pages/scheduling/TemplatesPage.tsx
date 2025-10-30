@@ -41,6 +41,7 @@ type TemplateFormState = {
   roleEntries: RoleEntry[];
   defaultMeta: string;
   repeatOn: number[];
+  managerCoversTeam: boolean;
 };
 
 const WEEKDAY_OPTIONS = [
@@ -65,6 +66,7 @@ const emptyForm: TemplateFormState = {
   roleEntries: [],
   defaultMeta: "",
   repeatOn: [...ALL_WEEKDAYS],
+  managerCoversTeam: false,
 };
 
 let roleEntryCounter = 0;
@@ -84,7 +86,7 @@ const TemplatesPage = () => {
   const deleteTemplate = useDeleteShiftTemplate();
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [formState, setFormState] = useState<TemplateFormState>({ ...emptyForm, repeatOn: [...ALL_WEEKDAYS] });
+  const [formState, setFormState] = useState<TemplateFormState>({ ...emptyForm, repeatOn: [...ALL_WEEKDAYS], managerCoversTeam: false });
   const [formError, setFormError] = useState<string | null>(null);
 
   const shiftTypes = useMemo(() => shiftTypesQuery.data ?? [], [shiftTypesQuery.data]);
@@ -105,7 +107,7 @@ const TemplatesPage = () => {
   );
 
   const handleOpenCreate = () => {
-    setFormState({ ...emptyForm, repeatOn: [...ALL_WEEKDAYS] });
+    setFormState({ ...emptyForm, repeatOn: [...ALL_WEEKDAYS], managerCoversTeam: false });
     setFormError(null);
     setModalOpen(true);
   };
@@ -132,6 +134,7 @@ const TemplatesPage = () => {
       repeatOn: (template.repeatOn && template.repeatOn.length > 0
         ? [...template.repeatOn].sort((a, b) => a - b)
         : [...ALL_WEEKDAYS]),
+      managerCoversTeam: template.managerCoversTeam ?? false,
     });
     setFormError(null);
     setModalOpen(true);
@@ -140,7 +143,7 @@ const TemplatesPage = () => {
   const handleCloseModal = () => {
     if (upsertTemplate.isPending) return;
     setModalOpen(false);
-    setFormState({ ...emptyForm, repeatOn: [...ALL_WEEKDAYS] });
+    setFormState({ ...emptyForm, repeatOn: [...ALL_WEEKDAYS], managerCoversTeam: false });
     setFormError(null);
   };
 
@@ -280,6 +283,7 @@ const TemplatesPage = () => {
         defaultRoles: defaultRoles.length ? defaultRoles : null,
         defaultMeta: parsedMeta ? (parsedMeta as Record<string, unknown>) : null,
         repeatOn: formState.repeatOn.slice(),
+        managerCoversTeam: formState.managerCoversTeam,
       });
       handleCloseModal();
     } catch (error) {
@@ -405,6 +409,13 @@ const TemplatesPage = () => {
             checked={formState.requiresLeader}
             onChange={(event) =>
               setFormState((state) => ({ ...state, requiresLeader: event.currentTarget.checked }))
+            }
+          />
+          <Switch
+            label="Manager covers Leader & Guide"
+            checked={formState.managerCoversTeam}
+            onChange={(event) =>
+              setFormState((state) => ({ ...state, managerCoversTeam: event.currentTarget.checked }))
             }
           />
           <Checkbox.Group

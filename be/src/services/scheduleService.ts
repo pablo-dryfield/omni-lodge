@@ -275,6 +275,20 @@ function rangesOverlap(a: ShiftRange, b: ShiftRange): boolean {
 const createRoleKey = (roleId: number | null, roleName: string) =>
   roleId != null ? `id:${roleId}` : `name:${roleName.trim().toLowerCase()}`;
 
+const ROLE_PRIORITY: Record<string, number> = {
+  manager: 0,
+  leader: 1,
+  guide: 2,
+  'social media': 3,
+};
+
+const normalizeRoleName = (roleName: string | null | undefined): string => roleName?.trim().toLowerCase() ?? '';
+
+const getRolePriority = (roleName: string, fallbackIndex: number): number => {
+  const normalized = normalizeRoleName(roleName);
+  return (ROLE_PRIORITY[normalized] ?? 10) + fallbackIndex / 1000;
+};
+
 function buildRoleSlots(instance: ShiftInstance): RoleSlot[] {
   const roleDefinitions = (instance.requiredRoles && instance.requiredRoles.length > 0
     ? instance.requiredRoles
@@ -327,7 +341,15 @@ function computeRolesToFill(instance: ShiftInstance, volunteerSet: Set<number>):
     rolesToFill.push(slot);
   });
 
-  return rolesToFill;
+  const decorated = rolesToFill.map((slot, index) => ({ slot, index }));
+  decorated.sort((a, b) => {
+    const diff = getRolePriority(a.slot.roleName, a.index) - getRolePriority(b.slot.roleName, b.index);
+    if (diff !== 0) {
+      return diff;
+    }
+    return a.index - b.index;
+  });
+  return decorated.map((item) => item.slot);
 }
 
 async function validateVolunteerLimits(weekId: number, transaction?: Transaction): Promise<ScheduleViolation[]> {
@@ -801,6 +823,7 @@ export async function upsertShiftTemplate(
     defaultRoles?: ShiftTemplateRoleRequirement[] | null;
     defaultMeta?: Record<string, unknown> | null;
     repeatOn?: number[] | null;
+    managerCoversTeam?: boolean;
   },
   actorId: number | null,
 ): Promise<ShiftTemplate> {
@@ -851,6 +874,7 @@ export async function upsertShiftTemplate(
     defaultRoles: ShiftTemplateRoleRequirement[] | null;
     defaultMeta: Record<string, unknown> | null;
     repeatOn?: number[] | null;
+    managerCoversTeam: boolean;
   } = {
     shiftTypeId: payload.shiftTypeId,
     name: payload.name.trim(),
@@ -860,6 +884,7 @@ export async function upsertShiftTemplate(
     requiresLeader: payload.requiresLeader ?? false,
     defaultRoles: normalizedRoles ?? payload.defaultRoles ?? null,
     defaultMeta: payload.defaultMeta ?? null,
+    managerCoversTeam: payload.managerCoversTeam ?? false,
   };
   if (payload.repeatOn !== undefined) {
     data.repeatOn = cleanedRepeatOn;
@@ -1033,21 +1058,28 @@ export async function createShiftAssignmentsBulk(assignments: AssignmentInput[],
       }
       assertWeekMutable(instance.scheduleWeek);
 
-      const existingWhere: Record<string, unknown> = {
-        shiftInstanceId: input.shiftInstanceId,
-        userId: input.userId,
-      };
-      if (input.shiftRoleId != null) {
-        existingWhere.shiftRoleId = input.shiftRoleId;
-      } else {
-        existingWhere.roleInShift = input.roleInShift;
-      }
-      const existing = await ShiftAssignment.findOne({
-        where: existingWhere,
+      const existingAssignments = await ShiftAssignment.findAll({
+        where: {
+          shiftInstanceId: input.shiftInstanceId,
+          userId: input.userId,
+        },
         transaction,
       });
-      if (existing) {
-        throw new HttpError(400, 'User already assigned to this shift and role.');
+
+      const duplicateAssignment = existingAssignments.some((assignment) => {
+        if (assignment.shiftRoleId != null && input.shiftRoleId != null) {
+          return assignment.shiftRoleId === input.shiftRoleId;
+        }
+        if (assignment.shiftRoleId == null && input.shiftRoleId == null) {
+          const existingRole = (assignment.roleInShift ?? '').trim().toLowerCase();
+          const requestedRole = (input.roleInShift ?? '').trim().toLowerCase();
+          return existingRole.length > 0 && existingRole === requestedRole;
+        }
+        return false;
+      });
+
+      if (duplicateAssignment) {
+        throw new HttpError(400, 'User already assigned to this shift with that role.');
       }
 
       const weekAssignments = await ShiftAssignment.findAll({
@@ -1254,16 +1286,23 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
     const unfilledSlots: Array<{ shiftInstanceId: number; role: string; date: string; timeStart: string; shiftRoleId: number | null }> = [];
 
     for (const instance of shiftInstances) {
-      const rolesToFill = computeRolesToFill(instance, volunteerSet);
-      if (rolesToFill.length === 0) {
+      const rawSlots = computeRolesToFill(instance, volunteerSet);
+      if (rawSlots.length === 0) {
         continue;
       }
+      const slots: Array<RoleSlot | null> = rawSlots.map((slot) => ({ ...slot }));
+      const managerCoversTeam = Boolean(instance.template?.managerCoversTeam);
 
       const range = getShiftRange(instance);
 
-      for (const slot of rolesToFill) {
+      for (let slotIndex = 0; slotIndex < slots.length; slotIndex += 1) {
+        const slot = slots[slotIndex];
+        if (!slot) {
+          continue;
+        }
         const slotRoleId = slot.roleId;
         const roleName = slot.roleName;
+        const roleKey = normalizeRoleName(roleName);
         const sortedVolunteers = [...volunteerIds].sort((a, b) => {
           const aCount = assignmentCounts.get(a) ?? 0;
           const bCount = assignmentCounts.get(b) ?? 0;
@@ -1316,6 +1355,19 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
           volunteerSlots.push(range);
           assignmentSlotsByVolunteer.set(volunteerId, volunteerSlots);
           assigned = true;
+
+          if (managerCoversTeam && roleKey === 'manager') {
+            const coverageTargets = ['leader', 'guide'];
+            coverageTargets.forEach((target) => {
+              const targetIndex = slots.findIndex(
+                (candidate, candidateIndex) =>
+                  candidateIndex > slotIndex && candidate && normalizeRoleName(candidate.roleName) === target,
+              );
+              if (targetIndex !== -1) {
+                slots[targetIndex] = null;
+              }
+            });
+          }
           break;
         }
 
