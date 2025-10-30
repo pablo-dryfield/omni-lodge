@@ -68,6 +68,11 @@ export default class ShiftTemplate extends Model {
   declare repeatOn: number[] | null;
 
   @AllowNull(true)
+  @Default(false)
+  @Column({ field: 'manager_covers_team', type: DataType.BOOLEAN })
+  declare managerCoversTeam: boolean;
+
+  @AllowNull(true)
   @Default({})
   @Column({ field: 'default_meta', type: DataType.JSONB })
   declare defaultMeta: Record<string, unknown> | null;

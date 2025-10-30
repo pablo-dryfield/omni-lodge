@@ -47,6 +47,7 @@ export interface ShiftTemplate {
   requiresLeader: boolean;
   defaultRoles: ShiftTemplateRoleRequirement[] | null;
   repeatOn: number[] | null;
+  managerCoversTeam: boolean;
   defaultMeta: Record<string, unknown> | null;
 }
 
