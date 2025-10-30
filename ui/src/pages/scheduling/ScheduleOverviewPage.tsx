@@ -28,6 +28,8 @@ const palette = {
   heroGradient: "linear-gradient(135deg, #7C4DFF 0%, #9C6CFF 45%, #FF8EC3 100%)",
   lavender: "#F6F1FF",
   lavenderDeep: "#ECE2FF",
+  lavenderAccent: "#C9BDFF",
+  lavenderBold: "#A48BFF",
   plumDark: "#5224C7",
   slate: "#2E3446",
   border: "#D8CCFF",
@@ -92,20 +94,39 @@ const roleHeaderLabelStyles: CSSProperties = {
 
 const yearHeaderTextStyles: CSSProperties = {
   fontFamily: HEADER_FONT_STACK,
-  fontWeight: 700,
-  fontSize: "18px",
-  letterSpacing: "0.12em",
-  textTransform: "uppercase",
+  fontWeight: 800,
+  fontSize: "20px",
+  letterSpacing: "0.08em",
+  textTransform: "capitalize",
   lineHeight: 1.3,
+};
+
+const yearHeaderLabelStyles: CSSProperties = {
+  ...yearHeaderTextStyles,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "100%",
+  height: "100%",
 };
 
 const monthHeaderTextStyles: CSSProperties = {
   fontFamily: HEADER_FONT_STACK,
-  fontWeight: 600,
-  fontSize: "16px",
+  fontWeight: 700,
+  fontSize: "18px",
   letterSpacing: "0.1em",
   textTransform: "uppercase",
   lineHeight: 1.3,
+};
+
+const monthHeaderLabelStyles: CSSProperties = {
+  ...monthHeaderTextStyles,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "100%",
+  height: "100%",
+  padding: "10px 8px",
 };
 
 type UserSwatch = { background: string; text: string };
@@ -232,7 +253,7 @@ const buildMonthSegments = (days: Dayjs[]): MonthSegment[] => {
   days.forEach((day) => {
     const month = day.month();
     const year = day.year();
-    const monthLabel = day.format("MMMM");
+    const monthLabel = day.format("MMMM").toUpperCase();
     const existing = segments[segments.length - 1];
     if (existing && existing.month === month && existing.year === year) {
       existing.span += 1;
@@ -508,12 +529,14 @@ const ScheduleOverviewPage = () => {
                       style={{
                         ...tableCellBase,
                         borderWidth: "3px 3px 1px 3px",
-                        backgroundColor: palette.lavenderDeep,
-                        ...yearHeaderTextStyles,
+                        backgroundColor: palette.lavenderBold,
+                        textAlign: "center",
+                        padding: "18px 12px",
+                        verticalAlign: "middle",
                         color: palette.plumDark,
                       }}
                     >
-                      {weekStart.format("YYYY")}
+                      <div style={yearHeaderLabelStyles}>{weekStart.format("YYYY")}</div>
                     </th>
                     {monthSegments.map((segment) => (
                       <th
@@ -522,12 +545,13 @@ const ScheduleOverviewPage = () => {
                         style={{
                           ...tableCellBase,
                           borderWidth: "3px 3px 1px 0",
-                          backgroundColor: palette.lavenderDeep,
-                          ...monthHeaderTextStyles,
+                          backgroundColor: palette.lavenderAccent,
+                          textAlign: "center",
+                          padding: "16px 12px",
                           color: palette.plumDark,
                         }}
                       >
-                        {segment.label}
+                        <div style={monthHeaderLabelStyles}>{segment.label}</div>
                       </th>
                     ))}
                   </tr>
