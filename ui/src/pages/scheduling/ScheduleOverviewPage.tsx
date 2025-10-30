@@ -39,6 +39,24 @@ const palette = {
 
 const HEADER_FONT_STACK = "'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif";
 
+const clampToHex = (value: number) => Math.max(0, Math.min(255, value));
+
+const lightenColor = (hexColor: string, amount = 0.2) => {
+  const normalized = hexColor.replace("#", "");
+  if (normalized.length !== 6) {
+    return hexColor;
+  }
+  const int = parseInt(normalized, 16);
+  const r = (int >> 16) & 0xff;
+  const g = (int >> 8) & 0xff;
+  const b = int & 0xff;
+  const adjust = (channel: number) =>
+    clampToHex(Math.round(channel + (255 - channel) * Math.min(Math.max(amount, 0), 1)));
+
+  const toHex = (channel: number) => adjust(channel).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+};
+
 const tableCellBase: CSSProperties = {
   border: `1px solid ${palette.border}`,
   padding: "14px 16px",
@@ -127,6 +145,40 @@ const monthHeaderLabelStyles: CSSProperties = {
   width: "100%",
   height: "100%",
   padding: "10px 8px",
+};
+
+const userCardNameStyles: CSSProperties = {
+  fontFamily: HEADER_FONT_STACK,
+  fontWeight: 800,
+  fontSize: "14px",
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  textAlign: "center",
+};
+
+const createUserCardStyles = (background: string) => {
+  const gradientStart = lightenColor(background, 0.22);
+  const borderColor = lightenColor(background, 0.36);
+  return {
+    container: {
+      background: `linear-gradient(135deg, ${gradientStart} 0%, ${background} 100%)`,
+      borderColor,
+      borderWidth: 1,
+      boxShadow: "0 18px 28px rgba(82, 36, 199, 0.18)",
+      borderRadius: 18,
+      padding: "14px 16px",
+      width: "100%",
+      position: "relative",
+      overflow: "hidden",
+      transition: "transform 120ms ease, box-shadow 120ms ease",
+    } as CSSProperties,
+    overlay: {
+      position: "absolute",
+      inset: 0,
+      background: "linear-gradient(150deg, rgba(255,255,255,0.24) 0%, rgba(255,255,255,0) 70%)",
+      pointerEvents: "none",
+    } as CSSProperties,
+  };
 };
 
 type UserSwatch = { background: string; text: string };
@@ -392,22 +444,26 @@ const ScheduleOverviewPage = () => {
       const primary = groupAssignments[0];
       const { background, text } = getUserColor(primary?.userId ?? null);
       const name = getUserDisplayName(primary);
+      const styles = createUserCardStyles(background);
+      const secondaryColor =
+        text.toLowerCase() === "#ffffff" ? "rgba(255, 255, 255, 0.78)" : lightenColor(text, 0.35);
+
       return (
         <Card
           key={groupAssignments.map((assignment) => assignment.id).join("-")}
-          radius="md"
-          padding="sm"
+          radius="lg"
           withBorder
-          style={{
-            backgroundColor: background,
-            borderColor: "rgba(124, 77, 255, 0.25)",
-            boxShadow: palette.cardShadow,
-          }}
+          padding={0}
+          style={{ ...styles.container, color: text }}
         >
-          <Stack gap={2} align="center">
-            <Text fw={700} size="sm" c={text}>
-              {name}
-            </Text>
+          <Box style={styles.overlay} />
+          <Stack gap={6} align="center" style={{ width: "100%", position: "relative", zIndex: 1 }}>
+            <Text style={{ ...userCardNameStyles, color: text }}>{name}</Text>
+            {groupAssignments.length > 1 ? (
+              <Text size="xs" style={{ fontFamily: HEADER_FONT_STACK, color: secondaryColor }}>
+                {groupAssignments.length} assignments
+              </Text>
+            ) : null}
           </Stack>
         </Card>
       );
