@@ -202,14 +202,14 @@ const ensureIsoWeekString = (value: Dayjs | string) => {
   return `${year}-W${week.toString().padStart(2, "0")}`;
 };
 
-type MonthSegment = { label: string; span: number };
+type MonthSegment = { label: string; span: number; key: string };
 
 const buildMonthSegments = (days: Dayjs[]): MonthSegment[] => {
   const segments: { label: string; span: number; month: number; year: number }[] = [];
   days.forEach((day) => {
     const month = day.month();
     const year = day.year();
-    const monthLabel = day.format("MMM");
+    const monthLabel = day.format("MMMM");
     const existing = segments[segments.length - 1];
     if (existing && existing.month === month && existing.year === year) {
       existing.span += 1;
@@ -217,7 +217,11 @@ const buildMonthSegments = (days: Dayjs[]): MonthSegment[] => {
       segments.push({ label: monthLabel, span: 1, month, year });
     }
   });
-  return segments.map(({ label, span, year }) => ({ label: `${label} ${year}`, span }));
+  return segments.map(({ label, span, year, month }) => ({
+    label,
+    span,
+    key: `${year}-${month}`,
+  }));
 };
 
 const formatWeekValue = (value: string | null | undefined) => {
@@ -500,11 +504,11 @@ const ScheduleOverviewPage = () => {
                     </th>
                     {monthSegments.map((segment) => (
                       <th
-                        key={segment.label}
+                        key={segment.key}
                         colSpan={segment.span}
                         style={{
                           ...tableCellBase,
-                          borderWidth: "3px 1px 1px 0",
+                          borderWidth: "3px 3px 1px 0",
                           backgroundColor: palette.lavenderDeep,
                           textTransform: "uppercase",
                           fontWeight: 600,
@@ -520,25 +524,29 @@ const ScheduleOverviewPage = () => {
                     <th style={roleHeaderCellStyles}>
                       <div style={roleHeaderLabelStyles}>Role</div>
                     </th>
-                    {daysOfWeek.map((day) => (
-                      <th
-                        key={day.toString()}
-                        style={{
-                          ...tableCellBase,
-                          backgroundColor: palette.lavenderDeep,
-                          borderWidth: "3px 1px 1px 0",
-                        }}
-                      >
-                        <Stack gap={0} align="center">
-                          <Text fw={700} size="sm">
-                            {day.format("DD")}
-                          </Text>
-                          <Text size="xs" c="dimmed">
-                            {day.format("ddd")}
-                          </Text>
-                        </Stack>
-                      </th>
-                    ))}
+                    {daysOfWeek.map((day, index) => {
+                      const nextDay = daysOfWeek[index + 1];
+                      const borderRightWidth = !nextDay || !day.isSame(nextDay, "month") ? "3px" : "1px";
+                      return (
+                        <th
+                          key={day.toString()}
+                          style={{
+                            ...tableCellBase,
+                            backgroundColor: palette.lavenderDeep,
+                            borderWidth: `3px ${borderRightWidth} 1px 0`,
+                          }}
+                        >
+                          <Stack gap={0} align="center">
+                            <Text fw={700} size="sm">
+                              {day.format("DD")}
+                            </Text>
+                            <Text size="xs" c="dimmed">
+                              {day.format("ddd")}
+                            </Text>
+                          </Stack>
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody>
@@ -558,11 +566,19 @@ const ScheduleOverviewPage = () => {
                         <td style={roleCellStyle}>
                           <div style={roleLabelStyles}>{roleLabel}</div>
                         </td>
-                        {daysOfWeek.map((day) => {
+                        {daysOfWeek.map((day, index) => {
                           const isoDate = day.format("YYYY-MM-DD");
                           const assignments = assignmentsByDate.get(isoDate) ?? [];
+                          const nextDay = daysOfWeek[index + 1];
+                          const borderRightWidth = !nextDay || !day.isSame(nextDay, "month") ? "3px" : "1px";
                           return (
-                            <td key={isoDate + roleLabel} style={assignmentCellStyle}>
+                            <td
+                              key={isoDate + roleLabel}
+                              style={{
+                                ...assignmentCellStyle,
+                                borderWidth: `${topBorder} ${borderRightWidth} 1px 0`,
+                              }}
+                            >
                               <Stack gap={8} align="center" style={{ width: "100%" }}>
                                 {renderAssignmentsForRole(roleLabel, assignments)}
                               </Stack>
