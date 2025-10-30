@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import {
   ActionIcon,
   Button,
@@ -79,7 +79,7 @@ const FinanceClients = () => {
         .filter((category) => category.isActive)
         .map((category) => ({
           value: String(category.id),
-          label: `${category.kind === "income" ? "Income" : "Expense"} �- ${category.name}`,
+          label: `${category.kind === "income" ? "Income" : "Expense"} Â- ${category.name}`,
         })),
     [categories.data],
   );
@@ -148,13 +148,13 @@ const FinanceClients = () => {
           {sortedClients.map((client) => (
             <Table.Tr key={client.id}>
               <Table.Td>{client.name}</Table.Td>
-              <Table.Td>{client.taxId ?? "—"}</Table.Td>
-              <Table.Td>{client.email ?? "—"}</Table.Td>
-              <Table.Td>{client.phone ?? "—"}</Table.Td>
+              <Table.Td>{client.taxId ?? "â€”"}</Table.Td>
+              <Table.Td>{client.email ?? "â€”"}</Table.Td>
+              <Table.Td>{client.phone ?? "â€”"}</Table.Td>
               <Table.Td>
                 {client.defaultCategoryId
-                  ? categories.data.find((category) => category.id === client.defaultCategoryId)?.name ?? "—"
-                  : "—"}
+                  ? categories.data.find((category) => category.id === client.defaultCategoryId)?.name ?? "â€”"
+                  : "â€”"}
               </Table.Td>
               <Table.Td>{client.isActive ? "Active" : "Inactive"}</Table.Td>
               <Table.Td width={120}>
@@ -223,7 +223,7 @@ const FinanceClients = () => {
               }))
             }
             searchable
-            nothingFound="No categories"
+            nothingFoundMessage="No categories"
           />
           <Textarea
             label="Notes"
@@ -249,4 +249,5 @@ const FinanceClients = () => {
 };
 
 export default FinanceClients;
+
 

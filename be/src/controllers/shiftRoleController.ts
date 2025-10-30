@@ -117,12 +117,15 @@ export const listUserShiftRoleAssignments = async (_req: Request, res: Response)
       include: [{ model: ShiftRole, as: 'shiftRoles', through: { attributes: [] } }],
     });
 
-    const payload = users.map((user) => ({
-      userId: user.id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      roleIds: (user.shiftRoles ?? []).map((role) => role.id),
-    }));
+    const payload = users.map((userRecord) => {
+      const relatedRoles = (userRecord as User & { shiftRoles?: ShiftRole[] }).shiftRoles ?? [];
+      return {
+        userId: userRecord.id,
+        firstName: userRecord.firstName,
+        lastName: userRecord.lastName,
+        roleIds: relatedRoles.map((role) => role.id),
+      };
+    });
 
     res.json([{ data: payload, columns: buildAssignmentColumns() }]);
   } catch (error) {

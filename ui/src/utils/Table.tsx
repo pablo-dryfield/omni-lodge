@@ -13,7 +13,7 @@ import { useMemo, useState } from "react";
 import { TableProps } from "../types/general/TableProps";
 import { useModuleAccess } from "../hooks/useModuleAccess";
 
-const Table = <T extends Record<string, unknown>>({
+const Table = <T extends object>({
   pageTitle,
   data,
   loading,

@@ -14,6 +14,7 @@ import {
   Stack,
   Text,
   TextInput,
+  Textarea,
   Title,
 } from "@mantine/core";
 import { IconPlus, IconTrash } from "@tabler/icons-react";
@@ -24,30 +25,40 @@ import axiosInstance from "../../utils/axiosInstance";
 import { useAppSelector } from "../../store/hooks";
 import { makeSelectIsModuleActionAllowed } from "../../selectors/accessControlSelectors";
 import {
+  getUpcomingWeeks,
   useAssignShifts,
+  useAutoAssignWeek,
   useCreateShiftInstance,
   useDeleteAssignment,
   useDeleteShiftInstance,
   useEnsureWeek,
-  useAutoAssignWeek,
   useLockWeek,
   usePublishWeek,
   useShiftInstances,
   useShiftTemplates,
   useWeekSummary,
-  getUpcomingWeeks,
 } from "../../api/scheduling";
+import { useShiftRoles } from "../../api/shiftRoles";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import AddShiftInstanceModal from "../../components/scheduling/AddShiftInstanceModal";
 import AssignmentCell from "../../components/scheduling/AssignmentCell";
-import type { ShiftAssignment, ShiftInstance, ShiftTemplate } from "../../types/scheduling";
+import type { ShiftAssignment, ShiftInstance, ScheduleViolation } from "../../types/scheduling";
 import type { ServerResponse } from "../../types/general/ServerResponse";
+import type { ShiftRole } from "../../types/shiftRoles/ShiftRole";
 
 dayjs.extend(isoWeek);
 
 type StaffOption = {
   value: string;
   label: string;
+};
+
+type RoleOption = {
+  value: string;
+  label: string;
+  shiftRoleId: number | null;
+  roleName: string;
+  isCustomEntry?: boolean;
 };
 
 const ROLE_PRIORITY: Record<string, number> = {
@@ -57,31 +68,41 @@ const ROLE_PRIORITY: Record<string, number> = {
   "social media": 3,
 };
 
-const normalizeRoleName = (roleName: string | null | undefined): string => roleName?.trim().toLowerCase() ?? "";
+const normalizeRoleName = (roleName: string | null | undefined) => roleName?.trim().toLowerCase() ?? "";
 
-const getRolePriority = (roleName: string, fallbackIndex: number): number =>
+const getRolePriority = (roleName: string, fallbackIndex: number) =>
   (ROLE_PRIORITY[normalizeRoleName(roleName)] ?? 10) + fallbackIndex / 1000;
 
-const resolveRoleLabel = (assignment: ShiftAssignment): string =>
-  assignment.roleInShift?.trim() ||
-  assignment.shiftRole?.name?.trim() ||
-  `Role #${assignment.shiftRoleId ?? assignment.id}`;
+const makeRoleValue = (opts: { shiftRoleId: number | null; roleName: string; prefix?: string }) => {
+  if (opts.shiftRoleId != null) {
+    return `shift-role:${opts.shiftRoleId}`;
+  }
+  const base = opts.roleName.trim().toLowerCase().replace(/\s+/g, "-");
+  return `${opts.prefix ?? "custom"}:${base || "role"}`;
+};
 
 const BuilderPage = () => {
-  const [weekOptions, initialWeekValue] = useMemo<[ReturnType<typeof getUpcomingWeeks>, string]>(() => {
+  const [weekOptions, initialWeekValue] = useMemo(() => {
     const options = getUpcomingWeeks(6);
     const initial = options[1]?.value ?? options[0]?.value ?? "";
-    return [options, initial];
+    return [options, initial] as const;
   }, []);
+
   const [selectedWeek, setSelectedWeek] = useState<string>(initialWeekValue);
   const [showAddInstance, setShowAddInstance] = useState(false);
   const [staff, setStaff] = useState<StaffOption[]>([]);
-  const [assignmentModal, setAssignmentModal] = useState<{
-    opened: boolean;
-    shift: ShiftInstance | null;
-  }>({ opened: false, shift: null });
-  const [assignmentRole, setAssignmentRole] = useState<string>("");
+  const [assignmentModal, setAssignmentModal] = useState<{ opened: boolean; shift: ShiftInstance | null }>({
+    opened: false,
+    shift: null,
+  });
   const [assignmentUserId, setAssignmentUserId] = useState<string | null>(null);
+  const [assignmentRoleOption, setAssignmentRoleOption] = useState<RoleOption | null>(null);
+  const [assignmentCustomRoleName, setAssignmentCustomRoleName] = useState("");
+  const [assignmentOverrideReason, setAssignmentOverrideReason] = useState("");
+  const [assignmentError, setAssignmentError] = useState<string | null>(null);
+  const [assignmentRequiresOverride, setAssignmentRequiresOverride] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishViolations, setPublishViolations] = useState<ScheduleViolation[] | null>(null);
 
   const selectCanAccessBuilder = useMemo(
     () => makeSelectIsModuleActionAllowed("scheduling-builder", "view"),
@@ -92,9 +113,12 @@ const BuilderPage = () => {
 
   const ensureWeekQuery = useEnsureWeek(selectedWeek, { allowGenerate: canAccessBuilder, enabled: canAccessBuilder });
   const weekId = canAccessBuilder ? ensureWeekQuery.data?.week?.id ?? null : null;
-  const summaryQuery = useWeekSummary(canAccessBuilder ? weekId : null);
+
+  const summaryQuery = useWeekSummary(canAccessBuilder && weekId ? weekId : null);
   const templatesQuery = useShiftTemplates({ enabled: canAccessBuilder });
   const instancesQuery = useShiftInstances(canAccessBuilder ? weekId : null);
+  const shiftRolesQuery = useShiftRoles();
+
   const assignMutation = useAssignShifts();
   const deleteAssignmentMutation = useDeleteAssignment();
   const createInstanceMutation = useCreateShiftInstance();
@@ -113,11 +137,14 @@ const BuilderPage = () => {
 
   const weekStartLabel = weekStart ? `${weekStart.format("MMM D")} - ${weekStart.add(6, "day").format("MMM D")}` : "";
 
-  const { reset: resetAutoAssign } = autoAssignMutation;
+  const shiftRoleRecords = useMemo<ShiftRole[]>(() => {
+    return (shiftRolesQuery.data?.[0]?.data ?? []) as ShiftRole[];
+  }, [shiftRolesQuery.data]);
 
   useEffect(() => {
-    resetAutoAssign();
-  }, [resetAutoAssign, weekId]);
+    const { reset } = autoAssignMutation;
+    reset();
+  }, [autoAssignMutation, weekId]);
 
   useEffect(() => {
     if (!canAccessBuilder) {
@@ -126,9 +153,9 @@ const BuilderPage = () => {
     }
 
     const fetchStaff = async () => {
-      const response = await axiosInstance.get<ServerResponse<{ id: number; firstName: string; lastName: string }>>(
-        "/users/active",
-      );
+      const response = await axiosInstance.get<
+        ServerResponse<{ id: number; firstName: string; lastName: string }>
+      >("/users/active");
       const items = response.data?.[0]?.data ?? [];
       setStaff(
         items.map((item) => ({
@@ -137,13 +164,99 @@ const BuilderPage = () => {
         })),
       );
     };
+
     void fetchStaff();
   }, [canAccessBuilder]);
+
+  useEffect(() => {
+    if (!assignmentModal.opened) {
+      return;
+    }
+    setAssignmentUserId(null);
+    setAssignmentError(null);
+    setAssignmentOverrideReason("");
+    setAssignmentRequiresOverride(false);
+    setAssignmentCustomRoleName("");
+  }, [assignmentModal.opened]);
+
+  const assignmentRoleOptions = useMemo<RoleOption[]>(() => {
+    const shift = assignmentModal.shift;
+    if (!shift) {
+      return [];
+    }
+
+    const options: RoleOption[] = [];
+    const seen = new Set<string>();
+
+    const addOption = (option: RoleOption) => {
+      if (seen.has(option.value)) {
+        return;
+      }
+      seen.add(option.value);
+      options.push(option);
+    };
+
+    const requiredRoles = shift.requiredRoles ?? shift.template?.defaultRoles ?? [];
+    requiredRoles.forEach((role, index) => {
+      const roleName = (role.role ?? "").trim() || "Staff";
+      addOption({
+        value: makeRoleValue({ shiftRoleId: role.shiftRoleId ?? null, roleName, prefix: `required-${index}` }),
+        label: roleName,
+        shiftRoleId: role.shiftRoleId ?? null,
+        roleName,
+      });
+    });
+
+    shiftRoleRecords
+      .slice()
+      .sort((a, b) => getRolePriority(a.name, a.id) - getRolePriority(b.name, b.id))
+      .forEach((role) => {
+        addOption({
+          value: makeRoleValue({ shiftRoleId: role.id, roleName: role.name }),
+          label: role.name,
+          shiftRoleId: role.id,
+          roleName: role.name,
+        });
+      });
+
+    addOption({
+      value: "__custom__",
+      label: "Custom role",
+      shiftRoleId: null,
+      roleName: "",
+      isCustomEntry: true,
+    });
+
+    return options;
+  }, [assignmentModal.shift, shiftRoleRecords]);
+
+  useEffect(() => {
+    if (!assignmentModal.opened) {
+      return;
+    }
+    if (assignmentRoleOptions.length === 0) {
+      setAssignmentRoleOption(null);
+      return;
+    }
+
+    setAssignmentRoleOption((current) => {
+      if (current && assignmentRoleOptions.some((option) => option.value === current.value)) {
+        return current;
+      }
+      const firstOption = assignmentRoleOptions[0];
+      if (firstOption.isCustomEntry) {
+        setAssignmentCustomRoleName("");
+      } else {
+        setAssignmentCustomRoleName(firstOption.roleName);
+      }
+      return firstOption;
+    });
+  }, [assignmentModal.opened, assignmentRoleOptions]);
 
   const autoAssignData = autoAssignMutation.data;
 
   const autoAssignErrorMessage = useMemo(() => {
-    const error = autoAssignMutation.error;
+    const error = autoAssignMutation.error as AxiosError<{ error?: string; message?: string }> | null;
     if (!error) {
       return null;
     }
@@ -173,6 +286,112 @@ const BuilderPage = () => {
     return autoAssignData.unfilled.length > 5 ? `${entries.join(", ")}, ...` : entries.join(", ");
   }, [autoAssignData]);
 
+  const handleOpenAssignment = (shift: ShiftInstance) => {
+    setAssignmentModal({ opened: true, shift });
+  };
+
+  const handleCloseAssignment = () => {
+    setAssignmentModal({ opened: false, shift: null });
+    setAssignmentUserId(null);
+    setAssignmentRoleOption(null);
+    setAssignmentCustomRoleName("");
+    setAssignmentOverrideReason("");
+    setAssignmentError(null);
+    setAssignmentRequiresOverride(false);
+    assignMutation.reset();
+  };
+
+  const handleCreateAssignment = async () => {
+    if (!assignmentModal.shift || !assignmentUserId || !assignmentRoleOption || !weekId) {
+      return;
+    }
+
+    const selectedOption = assignmentRoleOption;
+    const roleName = selectedOption.isCustomEntry
+      ? assignmentCustomRoleName.trim()
+      : selectedOption.roleName.trim() || selectedOption.label.trim();
+
+    if (!roleName) {
+      setAssignmentError("Select or enter a role for this assignment.");
+      return;
+    }
+
+    try {
+      setAssignmentError(null);
+      await assignMutation.mutateAsync({
+        assignments: [
+          {
+            shiftInstanceId: assignmentModal.shift.id,
+            userId: Number(assignmentUserId),
+            roleInShift: roleName,
+            shiftRoleId: selectedOption.shiftRoleId ?? null,
+            overrideReason: assignmentOverrideReason.trim() ? assignmentOverrideReason.trim() : undefined,
+          },
+        ],
+        weekId,
+      });
+      handleCloseAssignment();
+    } catch (error) {
+      const axiosError = error as AxiosError<{ error?: string; message?: string }>;
+      const message = axiosError.response?.data?.error ?? axiosError.response?.data?.message ?? axiosError.message;
+      setAssignmentError(message);
+      if (message.toLowerCase().includes("override")) {
+        setAssignmentRequiresOverride(true);
+      }
+    }
+  };
+
+  const handleRemoveAssignment = async (assignment: ShiftAssignment) => {
+    if (!weekId) return;
+    await deleteAssignmentMutation.mutateAsync({ assignmentId: assignment.id, weekId });
+  };
+
+  const handleDeleteInstance = async (instance: ShiftInstance) => {
+    if (!weekId) return;
+    await deleteInstanceMutation.mutateAsync({ id: instance.id, weekId });
+  };
+
+  const handleCreateInstance = async (
+    payload: Parameters<typeof createInstanceMutation.mutateAsync>[0],
+  ) => {
+    await createInstanceMutation.mutateAsync(payload);
+  };
+
+  const handleLockWeek = async () => {
+    if (!weekId) return;
+    await lockWeekMutation.mutateAsync(weekId);
+  };
+
+  const handlePublishWeek = async () => {
+    if (!weekId) return;
+    setPublishError(null);
+    setPublishViolations(null);
+    try {
+      await publishWeekMutation.mutateAsync(weekId);
+    } catch (error) {
+      const axiosError = error as AxiosError<{ error?: string; message?: string; violations?: ScheduleViolation[] }>;
+      const message = axiosError.response?.data?.error ?? axiosError.response?.data?.message ?? axiosError.message;
+      setPublishError(message);
+      const violations = axiosError.response?.data?.violations;
+      if (Array.isArray(violations) && violations.length > 0) {
+        setPublishViolations(violations);
+      }
+    }
+  };
+
+  const handleAutoAssign = async () => {
+    if (!weekId) {
+      return;
+    }
+    try {
+      setPublishError(null);
+      setPublishViolations(null);
+      await autoAssignMutation.mutateAsync({ weekId });
+    } catch {
+      // handled by mutation state
+    }
+  };
+
   if (!accessLoaded) {
     return (
       <Stack mt="lg" gap="lg" align="center">
@@ -197,63 +416,8 @@ const BuilderPage = () => {
     );
   }
 
-  const handleOpenAssignment = (shift: ShiftInstance) => {
-    setAssignmentModal({ opened: true, shift });
-    setAssignmentRole("");
-    setAssignmentUserId(null);
-  };
-
-  const handleCreateAssignment = async () => {
-    if (!assignmentModal.shift || !assignmentUserId || !weekId) {
-      return;
-    }
-    await assignMutation.mutateAsync({
-      assignments: [
-        {
-          shiftInstanceId: assignmentModal.shift.id,
-          userId: Number(assignmentUserId),
-          roleInShift: assignmentRole || "Staff",
-        },
-      ],
-      weekId,
-    });
-    setAssignmentModal({ opened: false, shift: null });
-  };
-
-  const handleRemoveAssignment = async (assignment: ShiftAssignment) => {
-    if (!weekId) return;
-    await deleteAssignmentMutation.mutateAsync({ assignmentId: assignment.id, weekId });
-  };
-
-  const handleDeleteInstance = async (instance: ShiftInstance) => {
-    if (!weekId) return;
-    await deleteInstanceMutation.mutateAsync({ id: instance.id, weekId });
-  };
-
-  const handleCreateInstance = async (payload: Parameters<typeof createInstanceMutation.mutateAsync>[0]) => {
-    await createInstanceMutation.mutateAsync(payload);
-  };
-
-  const handleLockWeek = async () => {
-    if (!weekId) return;
-    await lockWeekMutation.mutateAsync(weekId);
-  };
-
-  const handlePublishWeek = async () => {
-    if (!weekId) return;
-    await publishWeekMutation.mutateAsync(weekId);
-  };
-
-  const handleAutoAssign = async () => {
-    if (!weekId) {
-      return;
-    }
-    try {
-      await autoAssignMutation.mutateAsync({ weekId });
-    } catch {
-      // errors are surfaced via mutation state
-    }
-  };
+  const instances = instancesQuery.data ?? [];
+  const weekViolations = summaryQuery.data?.violations ?? [];
 
   return (
     <Stack mt="lg" gap="lg">
@@ -314,6 +478,41 @@ const BuilderPage = () => {
         </Button>
       </Group>
 
+      {weekViolations.length ? (
+        <Alert color="yellow" title="Open scheduling issues">
+          <Stack gap={4}>
+            {weekViolations.map((violation) => (
+              <Text key={`${violation.code}-${violation.message}`} size="sm">
+                • {violation.message}
+              </Text>
+            ))}
+          </Stack>
+        </Alert>
+      ) : null}
+
+      {publishError ? (
+        <Alert color="red" title="Unable to publish week">
+          <Stack gap={4}>
+            <Text size="sm">{publishError}</Text>
+            {publishViolations?.length ? (
+              <Stack gap={2}>
+                {publishViolations.map((violation) => (
+                  <Text key={`${violation.code}-${violation.message}`} size="sm">
+                    • {violation.message}
+                  </Text>
+                ))}
+              </Stack>
+            ) : null}
+          </Stack>
+        </Alert>
+      ) : null}
+
+      {publishWeekMutation.isSuccess ? (
+        <Alert color="green" title="Week published">
+          <Text size="sm">The schedule has been published successfully.</Text>
+        </Alert>
+      ) : null}
+
       {autoAssignMutation.isSuccess && autoAssignData ? (
         <Alert color="green" title="Auto assignment complete">
           <Stack gap={4}>
@@ -350,10 +549,22 @@ const BuilderPage = () => {
         <Loader />
       ) : (
         <SimpleGrid cols={{ base: 1, md: 2, lg: 3 }} spacing="lg">
-          {(instancesQuery.data ?? []).map((instance) => {
+          {instances.map((instance) => {
             const dateLabel = dayjs(instance.date).format("ddd, MMM D");
             const timeLabel = instance.timeEnd ? `${instance.timeStart} - ${instance.timeEnd}` : instance.timeStart;
             const templateRoles = instance.requiredRoles ?? instance.template?.defaultRoles ?? [];
+            const assignmentsByUser = new Map<string, ShiftAssignment[]>();
+            (instance.assignments ?? []).forEach((assignment) => {
+              const key =
+                assignment.userId != null ? `user-${assignment.userId}` : `assignment-${assignment.id}`;
+              const existing = assignmentsByUser.get(key);
+              if (existing) {
+                existing.push(assignment);
+              } else {
+                assignmentsByUser.set(key, [assignment]);
+              }
+            });
+
             return (
               <Card key={instance.id} withBorder shadow="sm" radius="md">
                 <Stack gap="sm">
@@ -375,46 +586,21 @@ const BuilderPage = () => {
                   </Group>
                   <Group gap="xs">
                     {templateRoles.map((role) => (
-                      <Badge key={role.role} variant="light" color="gray">
+                      <Badge key={`${role.shiftRoleId ?? "custom"}-${role.role}`} variant="light" color="gray">
                         {role.role}
                       </Badge>
                     ))}
                   </Group>
                   <Divider />
                   <Stack gap="sm">
-                    {(() => {
-                      const assignmentsByUser = new Map<string, ShiftAssignment[]>();
-                      (instance.assignments ?? []).forEach((assignment) => {
-                        const key =
-                          assignment.userId != null ? `user-${assignment.userId}` : `assignment-${assignment.id}`;
-                        const existing = assignmentsByUser.get(key);
-                        if (existing) {
-                          existing.push(assignment);
-                        } else {
-                          assignmentsByUser.set(key, [assignment]);
-                        }
-                      });
-
-                      return Array.from(assignmentsByUser.entries()).map(([groupKey, groupAssignments]) => {
-                        const sortedAssignments = groupAssignments
-                          .map((assignment, index) => ({ assignment, index }))
-                          .sort(
-                            (a, b) =>
-                              getRolePriority(resolveRoleLabel(a.assignment), a.index) -
-                              getRolePriority(resolveRoleLabel(b.assignment), b.index),
-                          )
-                          .map((item) => item.assignment);
-
-                        return (
-                          <AssignmentCell
-                            key={groupKey}
-                            assignments={sortedAssignments}
-                            onRemove={handleRemoveAssignment}
-                            canManage
-                          />
-                        );
-                      });
-                    })()}
+                    {Array.from(assignmentsByUser.entries()).map(([groupKey, groupAssignments]) => (
+                      <AssignmentCell
+                        key={groupKey}
+                        assignments={groupAssignments}
+                        onRemove={handleRemoveAssignment}
+                        canManage
+                      />
+                    ))}
                     <Button
                       variant="light"
                       leftSection={<IconPlus size={16} />}
@@ -439,12 +625,13 @@ const BuilderPage = () => {
         templates={templatesQuery.data ?? []}
       />
 
-      <Modal
-        opened={assignmentModal.opened}
-        onClose={() => setAssignmentModal({ opened: false, shift: null })}
-        title="Assign staff"
-      >
+      <Modal opened={assignmentModal.opened} onClose={handleCloseAssignment} title="Assign staff">
         <Stack>
+          {assignmentError ? (
+            <Alert color="red" title="Unable to assign">
+              <Text size="sm">{assignmentError}</Text>
+            </Alert>
+          ) : null}
           <Select
             data={staff}
             label="Team member"
@@ -454,13 +641,59 @@ const BuilderPage = () => {
             searchable
             nothingFoundMessage="No staff found"
           />
-          <TextInput
-            label="Role in shift"
-            placeholder="Leader, Guide, Staff..."
-            value={assignmentRole}
-            onChange={(event) => setAssignmentRole(event.currentTarget.value)}
+          <Select
+            data={assignmentRoleOptions.map((option) => ({
+              value: option.value,
+              label: option.label,
+            }))}
+            label="Role"
+            placeholder="Select role"
+            value={assignmentRoleOption?.value ?? null}
+            onChange={(value) => {
+              const option = assignmentRoleOptions.find((candidate) => candidate.value === value) ?? null;
+              setAssignmentRoleOption(option);
+              if (option?.isCustomEntry) {
+                setAssignmentCustomRoleName("");
+              } else if (option?.roleName) {
+                setAssignmentCustomRoleName(option.roleName);
+              }
+            }}
+            searchable
+            nothingFoundMessage="No roles"
+            disabled={assignmentRoleOptions.length === 0}
           />
-          <Button onClick={handleCreateAssignment} disabled={!assignmentUserId || !weekId} loading={assignMutation.isPending}>
+          {assignmentRoleOption?.isCustomEntry ? (
+            <TextInput
+              label="Custom role name"
+              placeholder="Enter role name"
+              value={assignmentCustomRoleName}
+              onChange={(event) => setAssignmentCustomRoleName(event.currentTarget.value)}
+              required
+            />
+          ) : null}
+          {assignmentRequiresOverride ? (
+            <Textarea
+              label="Override reason"
+              placeholder="Explain why this assignment should ignore availability"
+              value={assignmentOverrideReason}
+              minRows={2}
+              onChange={(event) => setAssignmentOverrideReason(event.currentTarget.value)}
+              required
+            />
+          ) : (
+            <Textarea
+              label="Override reason (optional)"
+              placeholder="Explain why this assignment should ignore availability"
+              value={assignmentOverrideReason}
+              minRows={2}
+              onChange={(event) => setAssignmentOverrideReason(event.currentTarget.value)}
+            />
+          )}
+          <Button
+            onClick={handleCreateAssignment}
+            disabled={!assignmentUserId || !assignmentRoleOption || assignMutation.isPending}
+            loading={assignMutation.isPending}
+          >
             Save assignment
           </Button>
         </Stack>
@@ -470,9 +703,3 @@ const BuilderPage = () => {
 };
 
 export default BuilderPage;
-
-
-
-
-
-
