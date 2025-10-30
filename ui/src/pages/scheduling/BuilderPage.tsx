@@ -17,7 +17,7 @@ import {
   Textarea,
   Title,
 } from "@mantine/core";
-import { IconPlus, IconTrash } from "@tabler/icons-react";
+import { IconHistory, IconPlus, IconTrash } from "@tabler/icons-react";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
 import type { AxiosError } from "axios";
@@ -34,6 +34,7 @@ import {
   useEnsureWeek,
   useLockWeek,
   usePublishWeek,
+  useReopenWeek,
   useShiftInstances,
   useShiftTemplates,
   useWeekSummary,
@@ -103,6 +104,7 @@ const BuilderPage = () => {
   const [assignmentRequiresOverride, setAssignmentRequiresOverride] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishViolations, setPublishViolations] = useState<ScheduleViolation[] | null>(null);
+  const [reopenError, setReopenError] = useState<string | null>(null);
 
   const selectCanAccessBuilder = useMemo(
     () => makeSelectIsModuleActionAllowed("scheduling-builder", "view"),
@@ -126,6 +128,7 @@ const BuilderPage = () => {
   const autoAssignMutation = useAutoAssignWeek();
   const lockWeekMutation = useLockWeek();
   const publishWeekMutation = usePublishWeek();
+  const reopenWeekMutation = useReopenWeek();
 
   const weekStart = useMemo(() => {
     if (!selectedWeek) {
@@ -392,6 +395,18 @@ const BuilderPage = () => {
     }
   };
 
+  const handleReopenWeek = async () => {
+    if (!weekId) return;
+    setReopenError(null);
+    try {
+      await reopenWeekMutation.mutateAsync(weekId);
+      publishWeekMutation.reset();
+    } catch (error) {
+      const axiosError = error as AxiosError<{ error?: string; message?: string }>;
+      setReopenError(axiosError.response?.data?.error ?? axiosError.response?.data?.message ?? axiosError.message);
+    }
+  };
+
   if (!accessLoaded) {
     return (
       <Stack mt="lg" gap="lg" align="center">
@@ -418,6 +433,9 @@ const BuilderPage = () => {
 
   const instances = instancesQuery.data ?? [];
   const weekViolations = summaryQuery.data?.violations ?? [];
+  const weekState = summaryQuery.data?.week?.state ?? null;
+  const isPublished = weekState === "published";
+  const canModifyWeek = Boolean(weekId) && !isPublished;
 
   return (
     <Stack mt="lg" gap="lg">
@@ -445,7 +463,7 @@ const BuilderPage = () => {
         <Button
           leftSection={<IconPlus size={16} />}
           onClick={() => setShowAddInstance(true)}
-          disabled={!weekId}
+          disabled={!canModifyWeek}
         >
           Add shift
         </Button>
@@ -454,7 +472,7 @@ const BuilderPage = () => {
           color="indigo"
           onClick={handleAutoAssign}
           loading={autoAssignMutation.isPending}
-          disabled={!weekId}
+          disabled={!canModifyWeek}
         >
           Auto assign volunteers
         </Button>
@@ -463,7 +481,7 @@ const BuilderPage = () => {
           color="gray"
           onClick={handleLockWeek}
           loading={lockWeekMutation.isPending}
-          disabled={!weekId}
+          disabled={!canModifyWeek}
         >
           Lock week
         </Button>
@@ -472,10 +490,22 @@ const BuilderPage = () => {
           color="green"
           onClick={handlePublishWeek}
           loading={publishWeekMutation.isPending}
-          disabled={!weekId}
+          disabled={!canModifyWeek}
         >
           Publish
         </Button>
+        {isPublished ? (
+          <Button
+            variant="outline"
+            color="violet"
+            leftSection={<IconHistory size={16} />}
+            onClick={handleReopenWeek}
+            loading={reopenWeekMutation.isPending}
+            disabled={!weekId}
+          >
+            Reopen week
+          </Button>
+        ) : null}
       </Group>
 
       {weekViolations.length ? (
@@ -510,6 +540,18 @@ const BuilderPage = () => {
       {publishWeekMutation.isSuccess ? (
         <Alert color="green" title="Week published">
           <Text size="sm">The schedule has been published successfully.</Text>
+        </Alert>
+      ) : null}
+
+      {reopenWeekMutation.isSuccess ? (
+        <Alert color="blue" title="Week reopened">
+          <Text size="sm">The week has been moved back to the locked state. You can make adjustments and publish again.</Text>
+        </Alert>
+      ) : null}
+
+      {reopenError ? (
+        <Alert color="red" title="Unable to reopen week">
+          <Text size="sm">{reopenError}</Text>
         </Alert>
       ) : null}
 

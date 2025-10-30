@@ -24,6 +24,8 @@ const ROLE_PRIORITY: Record<string, number> = {
   takes: 3,
 };
 
+const ROLE_ORDER = ["Guides", "Social Media", "Leader", "Manager"] as const;
+
 const palette = {
   heroGradient: "linear-gradient(135deg, #7C4DFF 0%, #9C6CFF 45%, #FF8EC3 100%)",
   lavender: "#F6F1FF",
@@ -409,11 +411,9 @@ const ScheduleOverviewPage = () => {
     return map;
   }, [pubCrawlInstances]);
 
-  const roleOrder = ["Guides", "Social Media", "Leader", "Manager"] as const;
-
   const visibleRoles = useMemo(
     () =>
-      roleOrder.filter((roleLabel) =>
+      ROLE_ORDER.filter((roleLabel) =>
         daysOfWeek.some((day) => {
           const isoDate = day.format("YYYY-MM-DD");
           const assignments = assignmentsByDate.get(isoDate) ?? [];
