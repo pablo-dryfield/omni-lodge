@@ -493,7 +493,7 @@ const ScheduleOverviewPage = () => {
                     <th
                       style={{
                         ...tableCellBase,
-                        borderWidth: "3px 3px 1px 1px",
+                        borderWidth: "3px 3px 1px 3px",
                         backgroundColor: palette.lavenderDeep,
                         fontWeight: 600,
                         textTransform: "uppercase",
