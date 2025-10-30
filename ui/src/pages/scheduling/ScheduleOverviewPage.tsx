@@ -393,16 +393,8 @@ const ScheduleOverviewPage = () => {
           </Button>
           <Stack gap={4} align="center" style={{ flex: 1 }}>
             <Title order={3} fw={800}>
-              Krawl Through Krakow Schedule
+              Krawl Through Krakow
             </Title>
-            <Group gap="xs" align="center">
-              <ThemeIcon radius="xl" size="lg" variant="light" color="grape">
-                <IconCalendarEvent size={18} />
-              </ThemeIcon>
-              <Text fw={600} size="sm">
-                {formatWeekValue(selectedWeek)}
-              </Text>
-            </Group>
             <WeekSelector
               value={selectedWeek}
               weeks={weekOptions}
