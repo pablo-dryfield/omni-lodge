@@ -7,6 +7,7 @@ import {
   IconCalendarCheck,
   IconClipboardList,
   IconHistory,
+  IconLayoutGrid,
   IconRefresh,
   IconTemplate,
   IconUsersGroup,
@@ -30,6 +31,7 @@ const SchedulingLayout = () => {
     const base = [
       { label: "Availability", value: "availability", icon: IconCalendarCheck },
       { label: "Builder", value: "builder", icon: IconClipboardList },
+      { label: "Schedule", value: "schedule", icon: IconLayoutGrid },
       { label: "My Shifts", value: "my-shifts", icon: IconUsersGroup },
       { label: "Swaps", value: "swaps", icon: IconRefresh },
       { label: "History", value: "history", icon: IconHistory },

@@ -36,6 +36,7 @@ import SchedulingLayout from "../../pages/scheduling/SchedulingLayout";
 import AvailabilityPage from "../../pages/scheduling/AvailabilityPage";
 import BuilderPage from "../../pages/scheduling/BuilderPage";
 import TemplatesPage from "../../pages/scheduling/TemplatesPage";
+import ScheduleOverviewPage from "../../pages/scheduling/ScheduleOverviewPage";
 import MyShiftsPage from "../../pages/scheduling/MyShiftsPage";
 import SwapsPage from "../../pages/scheduling/SwapsPage";
 import HistoryPage from "../../pages/scheduling/HistoryPage";
@@ -69,6 +70,7 @@ const Routes = () => {
         <Route index element={<AvailabilityPage />} />
         <Route path="availability" element={<AvailabilityPage />} />
         <Route path="builder" element={<BuilderPage />} />
+        <Route path="schedule" element={<ScheduleOverviewPage />} />
         <Route path="templates" element={<TemplatesPage />} />
         <Route path="my-shifts" element={<MyShiftsPage />} />
         <Route path="swaps" element={<SwapsPage />} />
