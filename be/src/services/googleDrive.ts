@@ -54,7 +54,7 @@ async function ensureFolder(
     `name = '${safe}'`,
     "mimeType = 'application/vnd.google-apps.folder'",
     'trashed = false',
-    parentId ? `'${parentId}' in parents` : "'root' in parents'",
+    parentId ? `'${parentId}' in parents` : "'root' in parents",
   ].join(' and ');
 
   const { data } = await drive.files.list({
