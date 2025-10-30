@@ -457,7 +457,6 @@ const ScheduleOverviewPage = () => {
                 borderRadius: 20,
                 backgroundColor: "#fff",
                 boxShadow: palette.tableShadow,
-                padding: 18,
               }}
             >
               <Box
