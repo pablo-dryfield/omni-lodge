@@ -1357,13 +1357,27 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
           assigned = true;
 
           if (managerCoversTeam && roleKey === 'manager') {
-            const coverageTargets = ['leader', 'guide'];
+            const coverageTargets: Array<{ key: string; label: string }> = [
+              { key: 'leader', label: 'Leader' },
+              { key: 'guide', label: 'Guide' },
+            ];
             coverageTargets.forEach((target) => {
               const targetIndex = slots.findIndex(
                 (candidate, candidateIndex) =>
-                  candidateIndex > slotIndex && candidate && normalizeRoleName(candidate.roleName) === target,
+                  candidateIndex > slotIndex &&
+                  candidate &&
+                  normalizeRoleName(candidate.roleName) === target.key,
               );
               if (targetIndex !== -1) {
+                const coveredSlot = slots[targetIndex];
+                if (coveredSlot) {
+                  plannedAssignments.push({
+                    shiftInstanceId: instance.id,
+                    userId: volunteerId,
+                    roleInShift: coveredSlot.roleName || target.label,
+                    shiftRoleId: coveredSlot.roleId,
+                  });
+                }
                 slots[targetIndex] = null;
               }
             });

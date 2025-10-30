@@ -50,6 +50,23 @@ type StaffOption = {
   label: string;
 };
 
+const ROLE_PRIORITY: Record<string, number> = {
+  manager: 0,
+  leader: 1,
+  guide: 2,
+  "social media": 3,
+};
+
+const normalizeRoleName = (roleName: string | null | undefined): string => roleName?.trim().toLowerCase() ?? "";
+
+const getRolePriority = (roleName: string, fallbackIndex: number): number =>
+  (ROLE_PRIORITY[normalizeRoleName(roleName)] ?? 10) + fallbackIndex / 1000;
+
+const resolveRoleLabel = (assignment: ShiftAssignment): string =>
+  assignment.roleInShift?.trim() ||
+  assignment.shiftRole?.name?.trim() ||
+  `Role #${assignment.shiftRoleId ?? assignment.id}`;
+
 const BuilderPage = () => {
   const [weekOptions, initialWeekValue] = useMemo<[ReturnType<typeof getUpcomingWeeks>, string]>(() => {
     const options = getUpcomingWeeks(6);
@@ -365,14 +382,39 @@ const BuilderPage = () => {
                   </Group>
                   <Divider />
                   <Stack gap="sm">
-                    {(instance.assignments ?? []).map((assignment) => (
-                      <AssignmentCell
-                        key={assignment.id}
-                        assignment={assignment}
-                        onRemove={handleRemoveAssignment}
-                        canManage
-                      />
-                    ))}
+                    {(() => {
+                      const assignmentsByUser = new Map<string, ShiftAssignment[]>();
+                      (instance.assignments ?? []).forEach((assignment) => {
+                        const key =
+                          assignment.userId != null ? `user-${assignment.userId}` : `assignment-${assignment.id}`;
+                        const existing = assignmentsByUser.get(key);
+                        if (existing) {
+                          existing.push(assignment);
+                        } else {
+                          assignmentsByUser.set(key, [assignment]);
+                        }
+                      });
+
+                      return Array.from(assignmentsByUser.entries()).map(([groupKey, groupAssignments]) => {
+                        const sortedAssignments = groupAssignments
+                          .map((assignment, index) => ({ assignment, index }))
+                          .sort(
+                            (a, b) =>
+                              getRolePriority(resolveRoleLabel(a.assignment), a.index) -
+                              getRolePriority(resolveRoleLabel(b.assignment), b.index),
+                          )
+                          .map((item) => item.assignment);
+
+                        return (
+                          <AssignmentCell
+                            key={groupKey}
+                            assignments={sortedAssignments}
+                            onRemove={handleRemoveAssignment}
+                            canManage
+                          />
+                        );
+                      });
+                    })()}
                     <Button
                       variant="light"
                       leftSection={<IconPlus size={16} />}
