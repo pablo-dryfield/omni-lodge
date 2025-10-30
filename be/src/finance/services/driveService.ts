@@ -94,7 +94,8 @@ async function ensureInvoiceFolder(drive: drive_v3.Drive, now: dayjs.Dayjs): Pro
 }
 
 export function computeBufferSha256(buffer: Buffer): string {
-  return crypto.createHash('sha256').update(buffer).digest('hex');
+  const view = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  return crypto.createHash('sha256').update(view).digest('hex');
 }
 
 export async function uploadFinanceFile(options: UploadOptions): Promise<UploadResult> {
@@ -145,4 +146,3 @@ export async function uploadFinanceFile(options: UploadOptions): Promise<UploadR
 export async function findDuplicateFinanceFile(sha256: string): Promise<FinanceFile | null> {
   return FinanceFile.findOne({ where: { sha256 } });
 }
-
