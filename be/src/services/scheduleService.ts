@@ -785,6 +785,30 @@ export async function publishWeek(weekId: number, actorId: number | null): Promi
   };
 }
 
+export async function reopenWeek(weekId: number, actorId: number | null): Promise<ScheduleWeekSummary> {
+  const week = await ScheduleWeek.findByPk(weekId);
+  if (!week) {
+    throw new HttpError(404, 'Schedule week not found');
+  }
+  if (week.state !== 'published') {
+    throw new HttpError(400, 'Only published weeks can be reopened.');
+  }
+
+  await Export.destroy({ where: { scheduleWeekId: weekId } });
+
+  week.state = 'locked';
+  await week.save();
+
+  await logAudit({
+    actorId,
+    action: 'schedule.week.reopen',
+    entity: 'schedule_week',
+    entityId: String(week.id),
+  });
+
+  return getWeekSummary(weekId);
+}
+
 export async function listShiftTemplates(): Promise<ShiftTemplate[]> {
   return ShiftTemplate.findAll({
     order: [['name', 'ASC']],

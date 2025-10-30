@@ -7,6 +7,7 @@ import {
   getWeekSummary,
   lockWeek,
   publishWeek,
+  reopenWeek,
   listShiftTemplates,
   listShiftTypes,
   upsertShiftTemplate,
@@ -91,6 +92,15 @@ router.post('/weeks/:id/publish', authMiddleware, requireRoles(MANAGER_ROLES), a
   try {
     const result = await publishWeek(Number(req.params.id), getActorId(req));
     res.json(result);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.post('/weeks/:id/reopen', authMiddleware, requireRoles(MANAGER_ROLES), async (req, res) => {
+  try {
+    const summary = await reopenWeek(Number(req.params.id), getActorId(req));
+    res.json(summary);
   } catch (error) {
     res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
   }

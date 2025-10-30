@@ -178,6 +178,21 @@ export const usePublishWeek = () => {
   });
 };
 
+export const useReopenWeek = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (weekId: number) => {
+      const response = await axiosInstance.post(`/schedules/weeks/${weekId}/reopen`);
+      return response.data as ScheduleWeekSummary;
+    },
+    onSuccess: (summary) => {
+      invalidateQuery(queryClient, schedulingKeys.weekSummary(summary.week.id));
+      invalidateQuery(queryClient, schedulingKeys.shiftInstances(summary.week.id));
+      invalidateQuery(queryClient, schedulingKeys.exports(summary.week.id));
+    },
+  });
+};
+
 export const useAutoAssignWeek = () => {
   const queryClient = useQueryClient();
   return useMutation<AutoAssignSummary, AxiosError<{ error?: string; message?: string }>, { weekId: number }>({
