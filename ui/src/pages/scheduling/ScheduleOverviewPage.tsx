@@ -69,7 +69,7 @@ const roleHeaderCellStyles: CSSProperties = {
   ...tableCellBase,
   padding: 0,
   backgroundColor: palette.lavenderDeep,
-  borderWidth: "0 1px 1px 1px",
+  borderWidth: "3px 3px 1px 1px",
   verticalAlign: "middle",
 };
 
@@ -471,6 +471,7 @@ const ScheduleOverviewPage = () => {
                     <th
                       colSpan={8}
                       style={{
+                        borderTop: `3px solid ${palette.border}`,
                         textAlign: "center",
                         background: "linear-gradient(135deg, #7C4DFF 0%, #9C6CFF 55%, #F48FB1 100%)",
                         padding: "18px",
@@ -487,7 +488,7 @@ const ScheduleOverviewPage = () => {
                     <th
                       style={{
                         ...tableCellBase,
-                        borderWidth: "0 1px 1px 1px",
+                        borderWidth: "3px 3px 1px 1px",
                         backgroundColor: palette.lavenderDeep,
                         fontWeight: 600,
                         textTransform: "uppercase",
@@ -503,7 +504,7 @@ const ScheduleOverviewPage = () => {
                         colSpan={segment.span}
                         style={{
                           ...tableCellBase,
-                          borderWidth: "0 1px 1px 0",
+                          borderWidth: "3px 1px 1px 0",
                           backgroundColor: palette.lavenderDeep,
                           textTransform: "uppercase",
                           fontWeight: 600,
@@ -525,7 +526,7 @@ const ScheduleOverviewPage = () => {
                         style={{
                           ...tableCellBase,
                           backgroundColor: palette.lavenderDeep,
-                          borderWidth: "0 1px 1px 0",
+                          borderWidth: "3px 1px 1px 0",
                         }}
                       >
                         <Stack gap={0} align="center">
@@ -545,7 +546,7 @@ const ScheduleOverviewPage = () => {
                     const topBorder = roleIndex === 0 ? "3px" : "2px";
                     const roleCellStyle: CSSProperties = {
                       ...roleCellStyles,
-                      borderWidth: `${topBorder} 1px 1px 1px`,
+                      borderWidth: `${topBorder} 3px 1px 1px`,
                     };
                     const assignmentCellStyle: CSSProperties = {
                       ...tableCellBase,
