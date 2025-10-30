@@ -1,27 +1,9 @@
-﻿import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  Center,
-  Divider,
-  Group,
-  Loader,
-  Paper,
-  Stack,
-  Text,
-  ThemeIcon,
-  Title,
-} from "@mantine/core";
-import {
-  IconAlertTriangle,
-  IconCalendarEvent,
-  IconChevronLeft,
-  IconChevronRight,
-} from "@tabler/icons-react";
+import { Alert, Box, Button, Card, Center, Group, Loader, Stack, Text, ThemeIcon, Title } from "@mantine/core";
+import { IconAlertTriangle, IconCalendarEvent, IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
 import dayjs from "dayjs";
+import type { Dayjs } from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import {
@@ -44,10 +26,8 @@ const ROLE_PRIORITY: Record<string, number> = {
 
 const palette = {
   heroGradient: "linear-gradient(135deg, #7C4DFF 0%, #9C6CFF 45%, #FF8EC3 100%)",
-  panelGradient: "linear-gradient(140deg, #FFE3EF 0%, #FFF8FB 80%)",
   lavender: "#F6F1FF",
   lavenderDeep: "#ECE2FF",
-  plum: "#7C4DFF",
   plumDark: "#5224C7",
   slate: "#2E3446",
   border: "#D8CCFF",
@@ -66,13 +46,65 @@ const tableCellBase: CSSProperties = {
 
 const roleCellStyles: CSSProperties = {
   ...tableCellBase,
+  padding: 0,
+  minWidth: 160,
+  height: "100%",
+  background: "linear-gradient(135deg, rgba(124, 77, 255, 0.12) 0%, rgba(255,255,255,0.7) 100%)",
+};
+
+const roleLabelStyles: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
   fontWeight: 700,
   textTransform: "uppercase",
   letterSpacing: "0.05em",
   color: palette.slate,
-  background: "linear-gradient(135deg, rgba(124, 77, 255, 0.12) 0%, rgba(255,255,255,0.7) 100%)",
-  minWidth: 160,
+  minHeight: "100%",
+  padding: "20px 12px",
 };
+
+const roleHeaderCellStyles: CSSProperties = {
+  ...tableCellBase,
+  padding: 0,
+  backgroundColor: palette.lavenderDeep,
+  borderWidth: "0 1px 1px 1px",
+};
+
+const roleHeaderLabelStyles: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: "0.12em",
+  color: palette.plumDark,
+  height: "100%",
+  padding: "18px 12px",
+};
+
+type UserSwatch = { background: string; text: string };
+
+const USER_COLOR_PALETTE: UserSwatch[] = [
+  { background: "#FF6B6B", text: "#FFFFFF" },
+  { background: "#4ECDC4", text: "#0B1F28" },
+  { background: "#FFD166", text: "#272320" },
+  { background: "#1A8FE3", text: "#FFFFFF" },
+  { background: "#9554FF", text: "#FFFFFF" },
+  { background: "#2EC4B6", text: "#023436" },
+  { background: "#FF9F1C", text: "#2B1A00" },
+  { background: "#EF476F", text: "#FFFFFF" },
+  { background: "#06D6A0", text: "#01352C" },
+  { background: "#118AB2", text: "#F4FBFF" },
+  { background: "#C77DFF", text: "#1C0433" },
+  { background: "#9CFF2E", text: "#112200" },
+  { background: "#FF5D8F", text: "#330010" },
+  { background: "#2BCAFF", text: "#071725" },
+  { background: "#FFC857", text: "#2A1B00" },
+  { background: "#845EC2", text: "#F7F4FF" },
+];
+
+const DEFAULT_USER_COLOR: UserSwatch = { background: "#ECEFF4", text: palette.slate };
 
 const normalizeRoleName = (value: string | null | undefined) => value?.trim().toLowerCase() ?? "";
 
@@ -97,37 +129,6 @@ const getUserDisplayName = (assignment: ShiftAssignment) => {
   return "Unassigned";
 };
 
-const getUserColor = (userId: number | null | undefined) => {
-  if (!userId) {
-    return "#ECEFF4";
-  }
-  const hue = (userId * 37) % 360;
-  return `hsl(${hue}, 72%, 78%)`;
-};
-
-const formatWeekValue = (weekValue: string) => {
-  const [year, weekPart] = weekValue.split("-W");
-  return formatScheduleWeekLabel(Number(year), Number(weekPart));
-};
-
-const ensureIsoWeekString = (date: dayjs.Dayjs) =>
-  `${date.isoWeekYear()}-W${String(date.isoWeek()).padStart(2, "0")}`;
-
-const buildMonthSegments = (days: dayjs.Dayjs[]) => {
-  const segments: Array<{ label: string; span: number }> = [];
-  let current: { label: string; span: number } | null = null;
-  days.forEach((day) => {
-    const label = day.format("MMMM");
-    if (!current || current.label !== label) {
-      current = { label, span: 1 };
-      segments.push(current);
-    } else {
-      current.span += 1;
-    }
-  });
-  return segments;
-};
-
 const groupAssignmentsByUser = (assignments: ShiftAssignment[]) => {
   const map = new Map<number | string, ShiftAssignment[]>();
   assignments.forEach((assignment, index) => {
@@ -147,6 +148,90 @@ const groupAssignmentsByUser = (assignments: ShiftAssignment[]) => {
       )
       .map(({ assignment }) => assignment),
   );
+};
+
+const filterAssignmentsForRole = (roleLabel: string, assignments: ShiftAssignment[]) => {
+  switch (roleLabel) {
+    case "Guides":
+      return assignments.filter((assignment) => normalizeRoleName(assignment.roleInShift).includes("guide"));
+    case "Social Media":
+      return assignments.filter((assignment) => normalizeRoleName(assignment.roleInShift).includes("social"));
+    case "Leader":
+      return assignments.filter((assignment) => normalizeRoleName(assignment.roleInShift).includes("leader"));
+    default:
+      return assignments.filter((assignment) => {
+        const normalized = normalizeRoleName(assignment.roleInShift);
+        return normalized.includes("manager") || normalized.includes("takes");
+      });
+  }
+};
+
+const getUserColor = (userId: number | null | undefined): UserSwatch => {
+  if (!userId) {
+    return DEFAULT_USER_COLOR;
+  }
+  const index = Math.abs(userId) % USER_COLOR_PALETTE.length;
+  return USER_COLOR_PALETTE[index] ?? DEFAULT_USER_COLOR;
+};
+
+const ISO_WEEK_VALUE_REGEX = /^(\d{4})-W(\d{1,2})$/;
+
+const ensureIsoWeekString = (value: Dayjs | string) => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    const match = ISO_WEEK_VALUE_REGEX.exec(trimmed);
+    if (match) {
+      const [, rawYear, rawWeek] = match;
+      const year = Number(rawYear);
+      const week = Number(rawWeek);
+      if (!Number.isNaN(year) && !Number.isNaN(week)) {
+        return `${year}-W${week.toString().padStart(2, "0")}`;
+      }
+    }
+    const parsed = dayjs(value);
+    if (parsed.isValid()) {
+      return ensureIsoWeekString(parsed);
+    }
+    return trimmed;
+  }
+
+  const year = value.isoWeekYear();
+  const week = value.isoWeek();
+  return `${year}-W${week.toString().padStart(2, "0")}`;
+};
+
+type MonthSegment = { label: string; span: number };
+
+const buildMonthSegments = (days: Dayjs[]): MonthSegment[] => {
+  const segments: { label: string; span: number; month: number; year: number }[] = [];
+  days.forEach((day) => {
+    const month = day.month();
+    const year = day.year();
+    const monthLabel = day.format("MMM");
+    const existing = segments[segments.length - 1];
+    if (existing && existing.month === month && existing.year === year) {
+      existing.span += 1;
+    } else {
+      segments.push({ label: monthLabel, span: 1, month, year });
+    }
+  });
+  return segments.map(({ label, span, year }) => ({ label: `${label} ${year}`, span }));
+};
+
+const formatWeekValue = (value: string | null | undefined) => {
+  if (!value) {
+    return "N/A";
+  }
+  const match = ISO_WEEK_VALUE_REGEX.exec(value);
+  if (match) {
+    const [, rawYear, rawWeek] = match;
+    return formatScheduleWeekLabel(Number(rawYear), Number(rawWeek));
+  }
+  const parsed = dayjs(value);
+  if (parsed.isValid()) {
+    return formatScheduleWeekLabel(parsed.isoWeekYear(), parsed.isoWeek());
+  }
+  return value;
 };
 
 const ScheduleOverviewPage = () => {
@@ -190,7 +275,7 @@ const ScheduleOverviewPage = () => {
     () => Array.from({ length: 7 }, (_, index) => weekStart.add(index, "day")),
     [weekStart],
   );
-  const monthSegments = useMemo(() => buildMonthSegments(daysOfWeek), [daysOfWeek]);
+  const monthSegments = useMemo<MonthSegment[]>(() => buildMonthSegments(daysOfWeek), [daysOfWeek]);
 
   const pubCrawlInstances = useMemo(() => {
     const instances = shiftInstancesQuery.data ?? [];
@@ -222,42 +307,40 @@ const ScheduleOverviewPage = () => {
     return map;
   }, [pubCrawlInstances]);
 
+  const roleOrder = ["Guides", "Social Media", "Leader", "Manager"] as const;
+
+  const visibleRoles = useMemo(
+    () =>
+      roleOrder.filter((roleLabel) =>
+        daysOfWeek.some((day) => {
+          const isoDate = day.format("YYYY-MM-DD");
+          const assignments = assignmentsByDate.get(isoDate) ?? [];
+          return filterAssignmentsForRole(roleLabel, assignments).length > 0;
+        }),
+      ),
+    [assignmentsByDate, daysOfWeek],
+  );
+
   const loading = ensureWeekQuery.isLoading || shiftInstancesQuery.isLoading;
   const error = ensureWeekQuery.isError ? ensureWeekQuery.error : shiftInstancesQuery.error;
   const hasWeek = Boolean(weekId);
 
   const renderAssignmentsForRole = (roleLabel: string, assignments: ShiftAssignment[]) => {
-    let predicate: (assignment: ShiftAssignment) => boolean;
-    switch (roleLabel) {
-      case "Guides":
-        predicate = (assignment) => normalizeRoleName(assignment.roleInShift).includes("guide");
-        break;
-      case "Social Media":
-        predicate = (assignment) => normalizeRoleName(assignment.roleInShift).includes("social");
-        break;
-      case "Leader":
-        predicate = (assignment) => normalizeRoleName(assignment.roleInShift).includes("leader");
-        break;
-      default:
-        predicate = (assignment) => {
-          const normalized = normalizeRoleName(assignment.roleInShift);
-          return normalized.includes("manager") || normalized.includes("takes");
-        };
-    }
+    const matches = filterAssignmentsForRole(roleLabel, assignments);
 
-    const grouped = groupAssignmentsByUser(assignments.filter(predicate));
-
-    if (!grouped.length) {
+    if (matches.length === 0) {
       return (
         <Text size="sm" c="dimmed">
-          â€”
+          {"\u2014"}
         </Text>
       );
     }
 
+    const grouped = groupAssignmentsByUser(matches);
+
     return grouped.map((groupAssignments) => {
       const primary = groupAssignments[0];
-      const color = getUserColor(primary?.userId ?? null);
+      const { background, text } = getUserColor(primary?.userId ?? null);
       const name = getUserDisplayName(primary);
       return (
         <Card
@@ -266,13 +349,13 @@ const ScheduleOverviewPage = () => {
           padding="sm"
           withBorder
           style={{
-            backgroundColor: color,
+            backgroundColor: background,
             borderColor: "rgba(124, 77, 255, 0.25)",
             boxShadow: palette.cardShadow,
           }}
         >
           <Stack gap={2} align="center">
-            <Text fw={700} size="sm" c={palette.slate}>
+            <Text fw={700} size="sm" c={text}>
               {name}
             </Text>
           </Stack>
@@ -360,163 +443,135 @@ const ScheduleOverviewPage = () => {
           style={{ backgroundColor: palette.lavender, borderColor: palette.border }}
         >
           <Stack gap="xl">
-            <Group align="flex-start" gap="xl">
-              <Paper
-                shadow="md"
-                radius="lg"
-                withBorder
-                p="lg"
-                style={{
-                  maxWidth: 340,
-                  background: palette.panelGradient,
-                  boxShadow: palette.cardShadow,
-                }}
-              >
-                <Stack gap="md">
-                  <Title order={4} c={palette.plumDark}>
-                    Briefing
-                  </Title>
-                  <Divider color={palette.border} />
-                  <Text size="sm" lh={1.6} c={palette.slate} style={{ textAlign: "justify" }}>
-                    Leader confirms the power hour venue with the Manager on shift. While doing the hostel run, ensure
-                    ticket books, flyers, and posters display the correct price. Promote the pub crawl in hostel common
-                    areas and invite hostel staff to join for free.
-                  </Text>
-                  <Text size="sm" fw={700} c={palette.plumDark}>
-                    Confirm hostel details with the person on Takes / Manager before departure.
-                  </Text>
-                </Stack>
-              </Paper>
-
+            <Box
+              style={{
+                flex: 1,
+                overflowX: "auto",
+                borderRadius: 20,
+                backgroundColor: "#fff",
+                boxShadow: palette.tableShadow,
+                padding: 18,
+              }}
+            >
               <Box
+                component="table"
                 style={{
-                  flex: 1,
-                  overflowX: "auto",
-                  borderRadius: 20,
-                  backgroundColor: "#fff",
-                  boxShadow: palette.tableShadow,
-                  padding: 18,
+                  width: "100%",
+                  borderCollapse: "separate",
+                  borderSpacing: 0,
+                  minWidth: 760,
+                  borderRadius: 18,
+                  overflow: "hidden",
                 }}
               >
-                <Box
-                  component="table"
-                  style={{
-                    width: "100%",
-                    borderCollapse: "separate",
-                    borderSpacing: 0,
-                    minWidth: 760,
-                    borderRadius: 18,
-                    overflow: "hidden",
-                  }}
-                >
-                  <thead>
-                    <tr>
+                <thead>
+                  <tr>
+                    <th
+                      colSpan={8}
+                      style={{
+                        textAlign: "center",
+                        background: "linear-gradient(135deg, #7C4DFF 0%, #9C6CFF 55%, #F48FB1 100%)",
+                        padding: "18px",
+                        fontSize: "22px",
+                        fontWeight: 800,
+                        letterSpacing: "0.05em",
+                        color: "#fff",
+                      }}
+                    >
+                      Pub Crawl - 8:45 P.M.
+                    </th>
+                  </tr>
+                  <tr>
+                    <th
+                      style={{
+                        ...tableCellBase,
+                        borderWidth: "0 1px 1px 1px",
+                        backgroundColor: palette.lavenderDeep,
+                        fontWeight: 600,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        color: palette.plumDark,
+                      }}
+                    >
+                      {weekStart.format("YYYY")}
+                    </th>
+                    {monthSegments.map((segment) => (
                       <th
-                        colSpan={8}
-                        style={{
-                          textAlign: "center",
-                          background: "linear-gradient(135deg, #7C4DFF 0%, #9C6CFF 55%, #F48FB1 100%)",
-                          padding: "18px",
-                          fontSize: "22px",
-                          fontWeight: 800,
-                          letterSpacing: "0.05em",
-                          color: "#fff",
-                        }}
-                      >
-                        Pub Crawl – 8:45 P.M.
-                      </th>
-                    </tr>
-                    <tr>
-                      <th
+                        key={segment.label}
+                        colSpan={segment.span}
                         style={{
                           ...tableCellBase,
-                          borderWidth: "0 1px 1px 1px",
+                          borderWidth: "0 1px 1px 0",
                           backgroundColor: palette.lavenderDeep,
-                          fontWeight: 600,
                           textTransform: "uppercase",
+                          fontWeight: 600,
                           letterSpacing: "0.08em",
                           color: palette.plumDark,
                         }}
                       >
-                        {weekStart.format("MMMM YYYY")}
+                        {segment.label}
                       </th>
-                      {monthSegments.map((segment) => (
-                        <th
-                          key={segment.label}
-                          colSpan={segment.span}
-                          style={{
-                            ...tableCellBase,
-                            borderWidth: "0 1px 1px 0",
-                            backgroundColor: palette.lavenderDeep,
-                            textTransform: "uppercase",
-                            fontWeight: 600,
-                            letterSpacing: "0.08em",
-                            color: palette.plumDark,
-                          }}
-                        >
-                          {segment.label}
-                        </th>
-                      ))}
-                    </tr>
-                    <tr>
+                    ))}
+                  </tr>
+                  <tr>
+                    <th style={roleHeaderCellStyles}>
+                      <div style={roleHeaderLabelStyles}>Role</div>
+                    </th>
+                    {daysOfWeek.map((day) => (
                       <th
+                        key={day.toString()}
                         style={{
                           ...tableCellBase,
                           backgroundColor: palette.lavenderDeep,
-                          borderWidth: "0 1px 1px 1px",
-                          textAlign: "left",
-                          fontWeight: 700,
-                          letterSpacing: "0.12em",
-                          color: palette.plumDark,
+                          borderWidth: "0 1px 1px 0",
                         }}
                       >
-                        Role
+                        <Stack gap={0} align="center">
+                          <Text fw={700} size="sm">
+                            {day.format("DD")}
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            {day.format("ddd")}
+                          </Text>
+                        </Stack>
                       </th>
-                      {daysOfWeek.map((day) => (
-                        <th
-                          key={day.toString()}
-                          style={{
-                            ...tableCellBase,
-                            backgroundColor: palette.lavenderDeep,
-                            borderWidth: "0 1px 1px 0",
-                          }}
-                        >
-                          <Stack gap={0} align="center">
-                            <Text fw={700} size="sm">
-                              {day.format("DD")}
-                            </Text>
-                            <Text size="xs" c="dimmed">
-                              {day.format("ddd")}
-                            </Text>
-                          </Stack>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {["Guides", "Social Media", "Leader", "Manager / Takes"].map((roleLabel) => (
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleRoles.map((roleLabel, roleIndex) => {
+                    const topBorder = roleIndex === 0 ? "3px" : "2px";
+                    const roleCellStyle: CSSProperties = {
+                      ...roleCellStyles,
+                      borderWidth: `${topBorder} 1px 1px 1px`,
+                    };
+                    const assignmentCellStyle: CSSProperties = {
+                      ...tableCellBase,
+                      borderWidth: `${topBorder} 1px 1px 0`,
+                    };
+
+                    return (
                       <tr key={roleLabel}>
-                        <td style={roleCellStyles}>{roleLabel}</td>
+                        <td style={roleCellStyle}>
+                          <div style={roleLabelStyles}>{roleLabel}</div>
+                        </td>
                         {daysOfWeek.map((day) => {
                           const isoDate = day.format("YYYY-MM-DD");
                           const assignments = assignmentsByDate.get(isoDate) ?? [];
                           return (
-                            <td
-                              key={isoDate + roleLabel}
-                              style={{ ...tableCellBase, borderWidth: "0 1px 1px 0" }}
-                            >
-                              <Stack gap={8} align="center">
+                            <td key={isoDate + roleLabel} style={assignmentCellStyle}>
+                              <Stack gap={8} align="center" style={{ width: "100%" }}>
                                 {renderAssignmentsForRole(roleLabel, assignments)}
                               </Stack>
                             </td>
                           );
                         })}
                       </tr>
-                    ))}
-                  </tbody>
-                </Box>
+                    );
+                  })}
+                </tbody>
               </Box>
-            </Group>
+            </Box>
             {pubCrawlInstances.length === 0 ? (
               <Alert
                 mb={0}
@@ -539,8 +594,3 @@ const ScheduleOverviewPage = () => {
 };
 
 export default ScheduleOverviewPage;
-
-
-
-
-
