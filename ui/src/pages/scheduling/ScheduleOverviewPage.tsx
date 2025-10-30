@@ -90,6 +90,24 @@ const roleHeaderLabelStyles: CSSProperties = {
   padding: "18px 12px",
 };
 
+const yearHeaderTextStyles: CSSProperties = {
+  fontFamily: HEADER_FONT_STACK,
+  fontWeight: 700,
+  fontSize: "18px",
+  letterSpacing: "0.12em",
+  textTransform: "uppercase",
+  lineHeight: 1.3,
+};
+
+const monthHeaderTextStyles: CSSProperties = {
+  fontFamily: HEADER_FONT_STACK,
+  fontWeight: 600,
+  fontSize: "16px",
+  letterSpacing: "0.1em",
+  textTransform: "uppercase",
+  lineHeight: 1.3,
+};
+
 type UserSwatch = { background: string; text: string };
 
 const USER_COLOR_PALETTE: UserSwatch[] = [
@@ -482,7 +500,7 @@ const ScheduleOverviewPage = () => {
                         color: "#fff",
                       }}
                     >
-                      Pub Crawl - 8:45 P.M.
+                      PUB CRAWL - 8:45 P.M.
                     </th>
                   </tr>
                   <tr>
@@ -491,11 +509,7 @@ const ScheduleOverviewPage = () => {
                         ...tableCellBase,
                         borderWidth: "3px 3px 1px 3px",
                         backgroundColor: palette.lavenderDeep,
-                        fontWeight: 600,
-                        fontFamily: HEADER_FONT_STACK,
-                        fontSize: "16px",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.08em",
+                        ...yearHeaderTextStyles,
                         color: palette.plumDark,
                       }}
                     >
@@ -509,11 +523,7 @@ const ScheduleOverviewPage = () => {
                           ...tableCellBase,
                           borderWidth: "3px 3px 1px 0",
                           backgroundColor: palette.lavenderDeep,
-                          textTransform: "uppercase",
-                          fontWeight: 600,
-                          fontFamily: HEADER_FONT_STACK,
-                          fontSize: "16px",
-                          letterSpacing: "0.08em",
+                          ...monthHeaderTextStyles,
                           color: palette.plumDark,
                         }}
                       >
