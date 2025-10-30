@@ -49,6 +49,7 @@ const roleCellStyles: CSSProperties = {
   padding: 0,
   minWidth: 160,
   height: "100%",
+  verticalAlign: "middle",
   background: "linear-gradient(135deg, rgba(124, 77, 255, 0.12) 0%, rgba(255,255,255,0.7) 100%)",
 };
 
@@ -69,6 +70,7 @@ const roleHeaderCellStyles: CSSProperties = {
   padding: 0,
   backgroundColor: palette.lavenderDeep,
   borderWidth: "0 1px 1px 1px",
+  verticalAlign: "middle",
 };
 
 const roleHeaderLabelStyles: CSSProperties = {
