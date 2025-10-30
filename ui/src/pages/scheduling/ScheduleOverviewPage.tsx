@@ -493,6 +493,7 @@ const ScheduleOverviewPage = () => {
                         backgroundColor: palette.lavenderDeep,
                         fontWeight: 600,
                         fontFamily: HEADER_FONT_STACK,
+                        fontSize: "16px",
                         textTransform: "uppercase",
                         letterSpacing: "0.08em",
                         color: palette.plumDark,
@@ -511,6 +512,7 @@ const ScheduleOverviewPage = () => {
                           textTransform: "uppercase",
                           fontWeight: 600,
                           fontFamily: HEADER_FONT_STACK,
+                          fontSize: "16px",
                           letterSpacing: "0.08em",
                           color: palette.plumDark,
                         }}
@@ -536,7 +538,11 @@ const ScheduleOverviewPage = () => {
                           }}
                         >
                           <Stack gap={0} align="center">
-                            <Text fw={700} size="sm" style={{ fontFamily: HEADER_FONT_STACK }}>
+                            <Text
+                              fw={700}
+                              size="md"
+                              style={{ fontFamily: HEADER_FONT_STACK, fontSize: "18px" }}
+                            >
                               {day.format("DD")}
                             </Text>
                             <Text size="xs" c="dimmed" style={{ fontFamily: HEADER_FONT_STACK }}>
