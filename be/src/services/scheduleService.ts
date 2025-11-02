@@ -167,9 +167,15 @@ async function spawnInstancesFromTemplates(week: ScheduleWeek, actorId: number |
       const alreadyExists = await ShiftInstance.findOne({
         where: {
           scheduleWeekId: week.id,
-          shiftTemplateId: template.id,
           date,
           timeStart: template.defaultStartTime,
+          [Op.or]: [
+            { shiftTemplateId: template.id },
+            {
+              shiftTemplateId: null,
+              shiftTypeId: template.shiftTypeId,
+            },
+          ],
         },
         transaction,
       });
@@ -388,14 +394,6 @@ async function validateVolunteerLimits(weekId: number, transaction?: Transaction
       return;
     }
     const { uniqueDayCount, totalAssignments } = summary;
-    if (uniqueDayCount < 3) {
-      violations.push({
-        code: 'volunteer-too-few',
-        message: `Volunteer ${userId} is scheduled on only ${uniqueDayCount} day(s)`,
-        meta: { userId, uniqueDayCount, totalAssignments },
-        severity: 'error',
-      });
-    }
     if (uniqueDayCount > 4) {
       violations.push({
         code: 'volunteer-too-many',
