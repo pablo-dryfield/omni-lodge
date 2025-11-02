@@ -12,6 +12,7 @@ import {
   Loader,
   Modal,
   Select,
+  Switch,
   Stack,
   Text,
   TextInput,
@@ -48,12 +49,13 @@ import {
   useReopenWeek,
   useShiftInstances,
   useShiftTemplates,
+  useWeekAvailability,
   useWeekSummary,
 } from "../../api/scheduling";
 import { useShiftRoles } from "../../api/shiftRoles";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import AddShiftInstanceModal from "../../components/scheduling/AddShiftInstanceModal";
-import type { ShiftAssignment, ShiftInstance, ScheduleViolation } from "../../types/scheduling";
+import type { AvailabilityEntry, ShiftAssignment, ShiftInstance, ScheduleViolation } from "../../types/scheduling";
 import type { ServerResponse } from "../../types/general/ServerResponse";
 import type { ShiftRole } from "../../types/shiftRoles/ShiftRole";
 
@@ -62,6 +64,11 @@ dayjs.extend(isoWeek);
 type StaffOption = {
   value: string;
   label: string;
+};
+
+type StaffOptionGroup = {
+  group: string;
+  items: StaffOption[];
 };
 
 type RoleOption = {
@@ -519,6 +526,7 @@ const BuilderPage = () => {
   const [assignmentOverrideReason, setAssignmentOverrideReason] = useState("");
   const [assignmentError, setAssignmentError] = useState<string | null>(null);
   const [assignmentRequiresOverride, setAssignmentRequiresOverride] = useState(false);
+  const [assignmentShowUnavailable, setAssignmentShowUnavailable] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishViolations, setPublishViolations] = useState<ScheduleViolation[] | null>(null);
   const [reopenError, setReopenError] = useState<string | null>(null);
@@ -537,6 +545,7 @@ const BuilderPage = () => {
   const templatesQuery = useShiftTemplates({ enabled: canAccessBuilder });
   const instancesQuery = useShiftInstances(canAccessBuilder ? weekId : null);
   const shiftRolesQuery = useShiftRoles();
+  const weekAvailabilityQuery = useWeekAvailability(canAccessBuilder ? weekId ?? null : null);
 
   const assignMutation = useAssignShifts();
   const deleteAssignmentMutation = useDeleteAssignment();
@@ -740,6 +749,7 @@ const BuilderPage = () => {
     setAssignmentOverrideReason("");
     setAssignmentRequiresOverride(false);
     setAssignmentCustomRoleName("");
+    setAssignmentShowUnavailable(false);
   }, [assignmentModal.opened]);
 
   const assignmentRoleOptions = useMemo<RoleOption[]>(() => {
@@ -815,6 +825,175 @@ const BuilderPage = () => {
       return firstOption;
     });
   }, [assignmentModal.opened, assignmentRoleOptions]);
+
+  const availabilityByUserId = useMemo(() => {
+    const map = new Map<number, AvailabilityEntry[]>();
+    const entries = weekAvailabilityQuery.data ?? [];
+    entries.forEach((entry) => {
+      const current = map.get(entry.userId);
+      if (current) {
+        current.push(entry);
+      } else {
+        map.set(entry.userId, [entry]);
+      }
+    });
+    return map;
+  }, [weekAvailabilityQuery.data]);
+
+  const isUserAvailableForShift = useCallback(
+    (userId: number, shift: ShiftInstance | null): boolean => {
+      if (!shift) {
+        return true;
+      }
+      const entries = availabilityByUserId.get(userId);
+      if (!entries || entries.length === 0) {
+        return true;
+      }
+      const dayEntries = entries.filter((entry) => entry.day === shift.date);
+      if (dayEntries.length === 0) {
+        return true;
+      }
+      const shiftStart = dayjs(`${shift.date} ${shift.timeStart}`);
+      const shiftEnd = shift.timeEnd
+        ? dayjs(`${shift.date} ${shift.timeEnd}`)
+        : shiftStart.add(2, "hour");
+
+      return dayEntries.some((entry) => {
+        if (entry.status !== "available") {
+          return false;
+        }
+        if (entry.shiftTypeId && entry.shiftTypeId !== shift.shiftTypeId) {
+          return false;
+        }
+        if (entry.startTime) {
+          const availabilityStart = dayjs(`${entry.day} ${entry.startTime}`);
+          if (shiftStart.isBefore(availabilityStart)) {
+            return false;
+          }
+        }
+        if (entry.endTime) {
+          const availabilityEnd = dayjs(`${entry.day} ${entry.endTime}`);
+          if (shiftEnd.isAfter(availabilityEnd)) {
+            return false;
+          }
+        }
+        return true;
+      });
+    },
+    [availabilityByUserId],
+  );
+
+  const staffOptionsForAssignment = useMemo(() => {
+    const shift = assignmentModal.shift;
+    if (!shift) {
+      return {
+        available: staff,
+        unavailable: [] as StaffOption[],
+      };
+    }
+
+    const availableOptions: StaffOption[] = [];
+    const unavailableOptions: StaffOption[] = [];
+
+    staff.forEach((option) => {
+      const userId = Number(option.value);
+      if (Number.isNaN(userId)) {
+        availableOptions.push(option);
+        return;
+      }
+      if (isUserAvailableForShift(userId, shift)) {
+        availableOptions.push(option);
+      } else {
+        unavailableOptions.push(option);
+      }
+    });
+
+    return {
+      available: availableOptions,
+      unavailable: unavailableOptions,
+    };
+  }, [assignmentModal.shift, isUserAvailableForShift, staff]);
+
+  useEffect(() => {
+    if (!assignmentModal.opened) {
+      return;
+    }
+    if (
+      !assignmentShowUnavailable &&
+      staffOptionsForAssignment.available.length === 0 &&
+      staffOptionsForAssignment.unavailable.length > 0
+    ) {
+      setAssignmentShowUnavailable(true);
+    }
+  }, [assignmentModal.opened, assignmentShowUnavailable, staffOptionsForAssignment]);
+
+  const staffSelectOptions = useMemo<StaffOptionGroup[]>(() => {
+    const availableItems: StaffOption[] = staffOptionsForAssignment.available.map((option) => ({
+      value: option.value,
+      label: option.label,
+    }));
+
+    const groups: StaffOptionGroup[] = [{ group: "Available", items: availableItems }];
+
+    if (assignmentShowUnavailable && staffOptionsForAssignment.unavailable.length > 0) {
+      const unavailableItems: StaffOption[] = staffOptionsForAssignment.unavailable.map((option) => ({
+        value: option.value,
+        label: `${option.label} (Unavailable)`,
+      }));
+      groups.push({ group: "Unavailable", items: unavailableItems });
+    }
+
+    return groups;
+  }, [assignmentShowUnavailable, staffOptionsForAssignment]);
+
+  useEffect(() => {
+    if (!assignmentModal.opened) {
+      return;
+    }
+    if (!assignmentUserId) {
+      setAssignmentRequiresOverride(false);
+      return;
+    }
+    const userId = Number(assignmentUserId);
+    if (Number.isNaN(userId)) {
+      setAssignmentRequiresOverride(false);
+      return;
+    }
+    const shift = assignmentModal.shift ?? null;
+    setAssignmentRequiresOverride(!isUserAvailableForShift(userId, shift));
+  }, [
+    assignmentModal.opened,
+    assignmentModal.shift,
+    assignmentUserId,
+    isUserAvailableForShift,
+  ]);
+
+  useEffect(() => {
+    if (!assignmentModal.opened) {
+      return;
+    }
+    if (assignmentShowUnavailable) {
+      return;
+    }
+    if (!assignmentUserId || !assignmentModal.shift) {
+      return;
+    }
+    const userId = Number(assignmentUserId);
+    if (Number.isNaN(userId)) {
+      return;
+    }
+    if (!isUserAvailableForShift(userId, assignmentModal.shift)) {
+      setAssignmentUserId(null);
+      setAssignmentOverrideReason("");
+      setAssignmentRequiresOverride(false);
+    }
+  }, [
+    assignmentModal.opened,
+    assignmentModal.shift,
+    assignmentShowUnavailable,
+    assignmentUserId,
+    isUserAvailableForShift,
+  ]);
 
   const autoAssignData = autoAssignMutation.data;
 
@@ -998,8 +1177,7 @@ const BuilderPage = () => {
       >
         <Box style={styles.overlay} />
         <Stack gap={8} align="center" style={{ width: "100%", position: "relative", zIndex: 1 }}>
-          <Text style={{ ...userCardNameStyles, color: text }}>
-            {name}
+          <Text style={{ ...userCardNameStyles, color: text }}>{name}</Text>
           <Group gap={6} justify="center" style={{ flexWrap: "wrap", width: "100%" }}>
             {groupAssignments.map((assignment) => {
               const label =
@@ -1026,11 +1204,11 @@ const BuilderPage = () => {
                     ) : undefined
                   }
                 >
+                  {label}
                 </Badge>
               );
             })}
           </Group>
-          </Text>
           {groupAssignments.length > 1 ? (
             <Text size="xs" style={{ fontFamily: HEADER_FONT_STACK, color: secondaryColor }}>
               {groupAssignments.length} assignments
@@ -1072,27 +1250,31 @@ const BuilderPage = () => {
           ? instancesForDate.map((instance) => {
               const label = formatShiftTimeRange(instance.timeStart, instance.timeEnd);
               return (
-                <Group justify="space-between" align="center">
-                                  <Button
-                  key={`assign-${instance.id}`}
-                  size="xs"
-                  variant="light"
-                  leftSection={<IconPlus size={14} />}
-                  onClick={() => handleOpenAssignment(instance)}
+                <Group
+                  key={`pub-instance-${instance.id}`}
+                  justify="space-between"
+                  align="center"
+                  style={{ width: "100%" }}
                 >
-                  {label ? `Assign (${label})` : "Assign staff"}
-                </Button>
-                {canModifyWeek ? (
-                  <ActionIcon
-                    variant="subtle"
-                    color="red"
-                    onClick={() => handleDeleteInstance(instance)}
-                    disabled={deleteInstanceMutation.isPending}
+                  <Button
+                    size="xs"
+                    variant="light"
+                    leftSection={<IconPlus size={14} />}
+                    onClick={() => handleOpenAssignment(instance)}
                   >
-                    <IconTrash size={16} />
-                  </ActionIcon>
-                ) : null}
-              </Group>
+                    {label ? `Assign (${label})` : "Assign staff"}
+                  </Button>
+                  {canModifyWeek ? (
+                    <ActionIcon
+                      variant="subtle"
+                      color="red"
+                      onClick={() => handleDeleteInstance(instance)}
+                      disabled={deleteInstanceMutation.isPending}
+                    >
+                      <IconTrash size={16} />
+                    </ActionIcon>
+                  ) : null}
+                </Group>
               );
             })
           : null}
@@ -1548,7 +1730,9 @@ const BuilderPage = () => {
 
       {reopenWeekMutation.isSuccess ? (
         <Alert color="blue" title="Week reopened">
-          <Text size="sm">The week has been moved back to the locked state. You can make adjustments and publish again.</Text>
+          <Text size="sm">
+            The week has been moved back to the collecting state. Team availability can be updated before you lock and publish again.
+          </Text>
         </Alert>
       ) : null}
 
@@ -1652,14 +1836,35 @@ const BuilderPage = () => {
             </Alert>
           ) : null}
           <Select
-            data={staff}
+            data={staffSelectOptions}
             label="Team member"
             placeholder="Select staff"
             value={assignmentUserId}
-            onChange={setAssignmentUserId}
+            onChange={(value) => {
+              setAssignmentUserId(value);
+              if (!value) {
+                setAssignmentRequiresOverride(false);
+                return;
+              }
+              const userId = Number(value);
+              if (Number.isNaN(userId)) {
+                setAssignmentRequiresOverride(false);
+                return;
+              }
+              const shift = assignmentModal.shift ?? null;
+              setAssignmentRequiresOverride(!isUserAvailableForShift(userId, shift));
+            }}
             searchable
-            nothingFoundMessage="No staff found"
+            nothingFoundMessage={assignmentShowUnavailable ? "No staff found" : "No staff available"}
           />
+          {staffOptionsForAssignment.unavailable.length > 0 ? (
+            <Switch
+              label="Show unavailable staff (override required)"
+              checked={assignmentShowUnavailable}
+              onChange={(event) => setAssignmentShowUnavailable(event.currentTarget.checked)}
+              size="sm"
+            />
+          ) : null}
           <Select
             data={assignmentRoleOptions.map((option) => ({
               value: option.value,

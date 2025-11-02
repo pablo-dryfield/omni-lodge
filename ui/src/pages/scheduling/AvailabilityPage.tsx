@@ -31,6 +31,7 @@ const AvailabilityPage = () => {
   const [initialTimeframes, setInitialTimeframes] = useState<Record<string, boolean>>({});
   const [isLocked, setIsLocked] = useState(false);
   const [isEditing, setIsEditing] = useState(true);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const authenticated = useAppSelector((state) => state.session.authenticated);
 
@@ -64,6 +65,7 @@ const AvailabilityPage = () => {
       const hasData = availabilityQuery.data.length > 0;
       setIsLocked(hasData);
       setIsEditing(!hasData);
+      setSaveError(null);
     }
   }, [availabilityQuery.data]);
 
@@ -74,6 +76,7 @@ const AvailabilityPage = () => {
     setInitialTimeframes({});
     setIsLocked(false);
     setIsEditing(true);
+    setSaveError(null);
   }, [selectedWeek]);
 
   const weekStart = useMemo(() => {
@@ -175,6 +178,7 @@ const AvailabilityPage = () => {
       return;
     }
 
+    setSaveError(null);
     const payload: AvailabilityPayload = {
       scheduleWeekId: weekId,
       entries: Array.from({ length: 7 }).map((_, index) => {
@@ -190,20 +194,29 @@ const AvailabilityPage = () => {
       }),
     };
 
-    await saveAvailability.mutateAsync(payload);
-    setInitialEntries(cloneEntries(entries));
-    setInitialTimeframes(cloneTimeframes(timeframeVisible));
-    setIsLocked(true);
-    setIsEditing(false);
+    try {
+      await saveAvailability.mutateAsync(payload);
+      setInitialEntries(cloneEntries(entries));
+      setInitialTimeframes(cloneTimeframes(timeframeVisible));
+      setIsLocked(true);
+      setIsEditing(false);
+      setSaveError(null);
+    } catch (error) {
+      const axiosError = error as AxiosError<{ error?: string; message?: string }>;
+      const backendMessage = axiosError.response?.data?.error ?? axiosError.response?.data?.message;
+      setSaveError(backendMessage ?? axiosError.message ?? "Failed to save availability.");
+    }
   };
   const handleStartEditing = () => {
     setIsEditing(true);
+    setSaveError(null);
   };
 
   const handleCancelEditing = () => {
     setEntries(cloneEntries(initialEntries));
     setTimeframeVisible(cloneTimeframes(initialTimeframes));
     setIsEditing(false);
+    setSaveError(null);
   };
 
   return (
@@ -324,11 +337,11 @@ const AvailabilityPage = () => {
         })}
       </SimpleGrid>
 
-      {saveAvailability.error && (
+      {saveError ? (
         <Alert color="red" title="Failed to save">
-          {(saveAvailability.error as Error).message}
+          <Text size="sm">{saveError}</Text>
         </Alert>
-      )}
+      ) : null}
 
       {isEditing ? (
         <Group justify="center" gap="sm">

@@ -5,6 +5,7 @@ import type { AxiosError } from "axios";
 import axiosInstance from "../utils/axiosInstance";
 import type {
   AssignmentInput,
+  AvailabilityEntry,
   AvailabilityPayload,
   ReportsQuery,
   ScheduleExport,
@@ -36,6 +37,7 @@ const schedulingKeys = {
   shiftTypes: [...schedulingBaseKey, "shift-types"] as const,
   shiftInstances: (weekId: number) => [...schedulingBaseKey, "instances", weekId] as const,
   availability: (weekId: number) => [...schedulingBaseKey, "availability", weekId] as const,
+  weekAvailability: (weekId: number) => [...schedulingBaseKey, "availability-week", weekId] as const,
   swaps: (status: string) => [...schedulingBaseKey, "swaps", status] as const,
   mySwaps: [...schedulingBaseKey, "swaps", "mine"] as const,
   exports: (weekId: number) => [...schedulingBaseKey, "exports", weekId] as const,
@@ -320,6 +322,16 @@ export const useAvailability = (weekId: number | null) =>
     queryFn: async () => {
       const response = await axiosInstance.get("/schedules/availability/me", { params: { weekId } });
       return response.data as AvailabilityPayload["entries"];
+    },
+    enabled: weekId !== null,
+  });
+
+export const useWeekAvailability = (weekId: number | null) =>
+  useQuery({
+    queryKey: weekId !== null ? schedulingKeys.weekAvailability(weekId) : disabledKey("availability-week"),
+    queryFn: async () => {
+      const response = await axiosInstance.get("/schedules/availability", { params: { weekId } });
+      return response.data as AvailabilityEntry[];
     },
     enabled: weekId !== null,
   });

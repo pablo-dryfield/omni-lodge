@@ -18,6 +18,7 @@ import {
   deleteShiftInstance,
   upsertAvailability,
   getAvailabilityForUser,
+  getAvailabilityForWeek,
   createShiftAssignmentsBulk,
   deleteShiftAssignment,
   createSwapRequest,
@@ -207,6 +208,20 @@ router.post('/availability', authMiddleware, async (req: AuthenticatedRequest, r
     const { scheduleWeekId, entries } = req.body;
     const saved = await upsertAvailability(userId, scheduleWeekId, entries ?? []);
     res.json(saved);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.get('/availability', authMiddleware, requireRoles(MANAGER_ROLES), async (req, res) => {
+  try {
+    const weekId = Number(req.query.weekId);
+    if (!Number.isFinite(weekId) || weekId <= 0) {
+      res.status(400).json({ error: 'Valid weekId query parameter is required.' });
+      return;
+    }
+    const entries = await getAvailabilityForWeek(weekId);
+    res.json(entries);
   } catch (error) {
     res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
   }
