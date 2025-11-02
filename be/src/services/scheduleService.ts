@@ -1153,8 +1153,19 @@ export async function createShiftAssignmentsBulk(assignments: AssignmentInput[],
         transaction,
       });
 
-      if (profile && profile.active && profile.staffType === 'volunteer' && profile.livesInAccom && weekAssignments.length >= 4) {
-        throw new HttpError(400, 'Volunteer living in accommodation cannot exceed 4 shifts per week.');
+      if (profile && profile.active && profile.staffType === 'volunteer' && profile.livesInAccom) {
+        const uniqueDates = new Set<string>();
+        weekAssignments.forEach((assignment) => {
+          const date = assignment.shiftInstance?.date;
+          if (date) {
+            uniqueDates.add(date);
+          }
+        });
+        const currentDate = instance.date;
+        const totalUniqueDays = uniqueDates.has(currentDate) ? uniqueDates.size : uniqueDates.size + 1;
+        if (totalUniqueDays > 4) {
+          throw new HttpError(400, 'Volunteer living in accommodation cannot exceed 4 working days per week.');
+        }
       }
 
       weekAssignments.forEach((assignment) => {
