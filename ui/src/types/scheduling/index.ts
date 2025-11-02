@@ -68,6 +68,12 @@ export interface ShiftAssignment {
     id: number;
     firstName: string;
     lastName: string;
+    staffProfile?: {
+      staffType: string | null;
+    } | null;
+    userShiftRoles?: Array<{
+      staffType?: string | null;
+    }> | null;
   };
   shiftRole?: {
     id: number;
@@ -113,6 +119,18 @@ export interface SwapRequest {
   decisionReason?: string | null;
   managerId?: number | null;
   createdAt?: string;
+  fromAssignment?: ShiftAssignment | null;
+  toAssignment?: ShiftAssignment | null;
+  requester?: {
+    id: number;
+    firstName: string;
+    lastName: string;
+  } | null;
+  partner?: {
+    id: number;
+    firstName: string;
+    lastName: string;
+  } | null;
 }
 
 export interface ScheduleExport {
