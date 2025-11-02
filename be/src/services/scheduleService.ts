@@ -203,22 +203,47 @@ async function spawnInstancesFromTemplates(week: ScheduleWeek, actorId: number |
   });
 }
 
-async function getVolunteerAssignmentCounts(weekId: number, transaction?: Transaction): Promise<Map<number, number>> {
+type VolunteerWeekAssignmentSummary = {
+  totalAssignments: number;
+  uniqueDayCount: number;
+};
+
+async function getVolunteerAssignmentCounts(
+  weekId: number,
+  transaction?: Transaction,
+): Promise<Map<number, VolunteerWeekAssignmentSummary>> {
   const assignments = await ShiftAssignment.findAll({
     attributes: ['userId'],
     include: [{
       model: ShiftInstance,
       as: 'shiftInstance',
-      attributes: [],
+      attributes: ['date'],
       where: { scheduleWeekId: weekId },
     }],
     transaction,
   });
-  const counts = new Map<number, number>();
+  const interim = new Map<number, { totalAssignments: number; dates: Set<string> }>();
   assignments.forEach((assignment) => {
-    counts.set(assignment.userId, (counts.get(assignment.userId) ?? 0) + 1);
+    if (!assignment.userId) {
+      return;
+    }
+    const existing = interim.get(assignment.userId);
+    const dates = existing?.dates ?? new Set<string>();
+    const totalAssignments = (existing?.totalAssignments ?? 0) + 1;
+    const date = assignment.shiftInstance?.date;
+    if (date) {
+      dates.add(date);
+    }
+    interim.set(assignment.userId, { totalAssignments, dates });
   });
-  return counts;
+  const summaries = new Map<number, VolunteerWeekAssignmentSummary>();
+  interim.forEach((value, userId) => {
+    summaries.set(userId, {
+      totalAssignments: value.totalAssignments,
+      uniqueDayCount: value.dates.size,
+    });
+  });
+  return summaries;
 }
 
 async function getStaffProfiles(userIds: number[], transaction?: Transaction): Promise<Map<number, StaffProfile>> {
@@ -357,24 +382,25 @@ async function validateVolunteerLimits(weekId: number, transaction?: Transaction
   const profiles = await getStaffProfiles(Array.from(counts.keys()), transaction);
   const violations: ScheduleViolation[] = [];
 
-  counts.forEach((count, userId) => {
+  counts.forEach((summary, userId) => {
     const profile = profiles.get(userId);
     if (!profile || !profile.active || profile.staffType !== 'volunteer' || !profile.livesInAccom) {
       return;
     }
-    if (count < 3) {
+    const { uniqueDayCount, totalAssignments } = summary;
+    if (uniqueDayCount < 3) {
       violations.push({
         code: 'volunteer-too-few',
-        message: `Volunteer ${userId} has only ${count} shifts`,
-        meta: { userId, count },
+        message: `Volunteer ${userId} is scheduled on only ${uniqueDayCount} day(s)`,
+        meta: { userId, uniqueDayCount, totalAssignments },
         severity: 'error',
       });
     }
-    if (count > 4) {
+    if (uniqueDayCount > 4) {
       violations.push({
         code: 'volunteer-too-many',
-        message: `Volunteer ${userId} exceeds weekly maximum (has ${count})`,
-        meta: { userId, count },
+        message: `Volunteer ${userId} exceeds weekly day limit (scheduled on ${uniqueDayCount} days)`,
+        meta: { userId, uniqueDayCount, totalAssignments },
         severity: 'error',
       });
     }
