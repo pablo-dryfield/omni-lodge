@@ -240,19 +240,13 @@ type ShiftTimeBucket = {
 type ShiftGroup = {
   key: string;
   shiftTypeName: string;
-  templateName: string | null;
   heading: string;
   timeBuckets: ShiftTimeBucket[];
 };
 
 const createShiftGroupKey = (instance: ShiftInstance) => {
-  if (instance.shiftTemplateId) {
-    return `template:${instance.shiftTemplateId}`;
-  }
   const shiftKey = instance.shiftType?.key ?? `type-${instance.shiftTypeId ?? "unknown"}`;
-  const start = instance.timeStart ?? "";
-  const end = instance.timeEnd ?? "";
-  return `type:${shiftKey}|time:${start}-${end}`;
+  return `type:${shiftKey}`;
 };
 
 const normalizeTimeLabel = (value: string) => {
@@ -260,11 +254,10 @@ const normalizeTimeLabel = (value: string) => {
   return trimmed.length > 0 ? trimmed : "Any Time";
 };
 
-const getShiftGroupHeading = (shiftTypeName: string, templateName: string | null) =>
-  templateName ? `${shiftTypeName} - ${templateName}` : shiftTypeName;
+const getShiftGroupHeading = (shiftTypeName: string) => shiftTypeName;
 
-const getShiftGroupPriority = (shiftTypeName: string, templateName: string | null) => {
-  const combined = `${shiftTypeName} ${templateName ?? ""}`.toLowerCase();
+const getShiftGroupPriority = (shiftTypeName: string) => {
+  const combined = shiftTypeName.toLowerCase();
   if (combined.includes("promotion")) {
     return 0;
   }
@@ -475,7 +468,6 @@ const ScheduleOverviewPage = () => {
       {
         key: string;
         shiftTypeName: string;
-        templateName: string | null;
         timeBuckets: Map<string, Map<string, ShiftInstance[]>>;
       }
     >();
@@ -491,7 +483,6 @@ const ScheduleOverviewPage = () => {
         group = {
           key,
           shiftTypeName: instance.shiftType?.name ?? "Shift",
-          templateName: instance.template?.name ?? null,
           timeBuckets: new Map<string, Map<string, ShiftInstance[]>>(),
         };
         groups.set(key, group);
@@ -516,8 +507,7 @@ const ScheduleOverviewPage = () => {
       .map((group) => ({
         key: group.key,
         shiftTypeName: group.shiftTypeName,
-        templateName: group.templateName,
-        heading: getShiftGroupHeading(group.shiftTypeName, group.templateName),
+        heading: getShiftGroupHeading(group.shiftTypeName),
         timeBuckets: Array.from(group.timeBuckets.entries())
           .sort(([a], [b]) => compareTimeLabels(a, b))
           .map(([label, instancesByDate]) => ({
@@ -526,20 +516,13 @@ const ScheduleOverviewPage = () => {
           })),
       }))
       .sort((a, b) => {
-        const priorityDiff =
-          getShiftGroupPriority(a.shiftTypeName, a.templateName) - getShiftGroupPriority(b.shiftTypeName, b.templateName);
+        const priorityDiff = getShiftGroupPriority(a.shiftTypeName) - getShiftGroupPriority(b.shiftTypeName);
         if (priorityDiff !== 0) {
           return priorityDiff;
         }
         const typeCompare = a.shiftTypeName.localeCompare(b.shiftTypeName);
         if (typeCompare !== 0) {
           return typeCompare;
-        }
-        const templateA = a.templateName ?? "";
-        const templateB = b.templateName ?? "";
-        const templateCompare = templateA.localeCompare(templateB);
-        if (templateCompare !== 0) {
-          return templateCompare;
         }
         return a.key.localeCompare(b.key);
       });
@@ -928,6 +911,10 @@ const ScheduleOverviewPage = () => {
           </tr>
         );
       });
+
+      if (rows.length === 0) {
+        return null;
+      }
 
       return renderScheduleTable(`group-${group.key}`, group.heading, "Timeframe", rows);
     })

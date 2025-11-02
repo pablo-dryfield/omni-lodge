@@ -259,12 +259,12 @@ function normalizeTimeLabel(value: string) {
   return trimmed.length > 0 ? trimmed : 'Any Time';
 }
 
-function getShiftGroupHeading(shiftType: string, templateName: string | null) {
-  return templateName ? `${shiftType} - ${templateName}` : shiftType;
+function getShiftGroupHeading(shiftType: string) {
+  return shiftType;
 }
 
-function getShiftGroupPriority(shiftType: string, templateName: string | null) {
-  const combined = `${shiftType} ${templateName ?? ''}`.toLowerCase();
+function getShiftGroupPriority(shiftType: string) {
+  const combined = shiftType.toLowerCase();
   if (combined.includes('promotion')) {
     return 0;
   }
@@ -287,12 +287,7 @@ function isPubCrawlShift(shift: ShiftView) {
 
 function getShiftGroupKey(shift: ShiftView) {
   const typeKey = (shift.shiftTypeKey ?? shift.shiftType).toLowerCase();
-  const template = (shift.templateName ?? '').toLowerCase();
-  const time = shift.timeLabel.toLowerCase();
-  if (template) {
-    return `template:${typeKey}:${template}`;
-  }
-  return `type:${typeKey}:time:${time || 'none'}`;
+  return `type:${typeKey}`;
 }
 
 export async function buildScheduleView(weekId: number): Promise<{ week: ScheduleWeek; days: DayView[] }> {
@@ -393,7 +388,6 @@ export async function renderScheduleHTML(weekId: number): Promise<{ html: string
     {
       key: string;
       shiftType: string;
-      templateName: string | null;
       timeBuckets: Map<string, Map<string, ShiftView[]>>;
     }
   >();
@@ -420,7 +414,6 @@ export async function renderScheduleHTML(weekId: number): Promise<{ html: string
         group = {
           key,
           shiftType: shift.shiftType,
-          templateName: shift.templateName,
           timeBuckets: new Map<string, Map<string, ShiftView[]>>(),
         };
         otherShiftGroupMap.set(key, group);
@@ -444,8 +437,7 @@ export async function renderScheduleHTML(weekId: number): Promise<{ html: string
     .map((group) => ({
       key: group.key,
       shiftType: group.shiftType,
-      templateName: group.templateName,
-      heading: getShiftGroupHeading(group.shiftType, group.templateName),
+      heading: getShiftGroupHeading(group.shiftType),
       timeBuckets: Array.from(group.timeBuckets.entries())
         .sort(([a], [b]) => compareTimeLabels(a, b))
         .map(([label, shiftsByDate]) => ({
@@ -454,18 +446,12 @@ export async function renderScheduleHTML(weekId: number): Promise<{ html: string
         })),
     }))
     .sort((a, b) => {
-      const priorityDiff =
-        getShiftGroupPriority(a.shiftType, a.templateName) - getShiftGroupPriority(b.shiftType, b.templateName);
-      if (priorityDiff !== 0) {
+      const priorityDiff = getShiftGroupPriority(a.shiftType) - getShiftGroupPriority(b.shiftType);
         return priorityDiff;
       }
       const typeCompare = a.shiftType.localeCompare(b.shiftType);
       if (typeCompare !== 0) {
         return typeCompare;
-      }
-      const templateCompare = (a.templateName ?? '').localeCompare(b.templateName ?? '');
-      if (templateCompare !== 0) {
-        return templateCompare;
       }
       return a.key.localeCompare(b.key);
     });
@@ -497,7 +483,7 @@ export async function renderScheduleHTML(weekId: number): Promise<{ html: string
   })();
 
   const weekLabel = `Week ${week.isoWeek.toString().padStart(2, '0')} / ${week.year}`;
-  const weekRangeLabel = ${weekStart.format('MMM D')} - ;
+  const weekRangeLabel = `${weekStart.format('MMM D')} - ${weekStart.add(6, 'day').format('MMM D, YYYY')}`;
   const generatedAt = dayjs().tz(SCHED_TZ).format('YYYY-MM-DD HH:mm');
 
   const bodyRows = rolesToRender
