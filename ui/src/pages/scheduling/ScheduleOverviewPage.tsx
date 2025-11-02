@@ -657,7 +657,12 @@ const ScheduleOverviewPage = () => {
     return grouped.map((groupAssignments) => renderAssignmentGroupCard(groupAssignments));
   };
 
-  const renderInstancesForCell = (instances: ShiftInstance[]) => {
+  const renderInstancesForCell = (
+    instances: ShiftInstance[],
+    options?: { showTime?: boolean; showRoles?: boolean },
+  ) => {
+    const showTime = options?.showTime ?? true;
+    const showRoles = options?.showRoles ?? true;
     if (instances.length === 0) {
       return (
         <Text size="sm" c="dimmed">
@@ -687,7 +692,7 @@ const ScheduleOverviewPage = () => {
 
           return (
             <Stack key={`instance-${instance.id}`} gap={8} align="center" style={{ width: "100%" }}>
-              {timeLabel ? (
+              {showTime && timeLabel ? (
                 <Text
                   size="xs"
                   c="dimmed"
@@ -698,7 +703,7 @@ const ScheduleOverviewPage = () => {
               ) : null}
               {grouped.length > 0
                 ? grouped.map((groupAssignments) =>
-                    renderAssignmentGroupCard(groupAssignments, { showRoles: true }),
+                    renderAssignmentGroupCard(groupAssignments, { showRoles }),
                   )
                 : (
                     <Text size="sm" c="dimmed">
@@ -904,7 +909,7 @@ const ScheduleOverviewPage = () => {
                     borderWidth: `${topBorder} ${borderRightWidth} ${bottomBorder} 0`,
                   }}
                 >
-                  {renderInstancesForCell(instances)}
+                  {renderInstancesForCell(instances, { showTime: false, showRoles: false })}
                 </td>
               );
             })}
