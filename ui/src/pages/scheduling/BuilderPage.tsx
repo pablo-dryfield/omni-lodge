@@ -71,6 +71,28 @@ type StaffOptionGroup = {
   items: StaffOption[];
 };
 
+type StaffSelectData = Array<StaffOption | StaffOptionGroup>;
+
+type AvailabilityWithMinutes = AvailabilityEntry & {
+  startMinutesValue: number | null;
+  endMinutesValue: number | null;
+};
+
+const DEFAULT_SHIFT_DURATION_MINUTES = 120;
+
+const parseTimeToMinutes = (time: string | null | undefined): number | null => {
+  if (!time) {
+    return null;
+  }
+  const [hoursPart, minutesPart] = time.split(":");
+  const hours = Number(hoursPart);
+  const minutes = Number(minutesPart);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) {
+    return null;
+  }
+  return hours * 60 + minutes;
+};
+
 type RoleOption = {
   value: string;
   label: string;
@@ -545,7 +567,9 @@ const BuilderPage = () => {
   const templatesQuery = useShiftTemplates({ enabled: canAccessBuilder });
   const instancesQuery = useShiftInstances(canAccessBuilder ? weekId : null);
   const shiftRolesQuery = useShiftRoles();
-  const weekAvailabilityQuery = useWeekAvailability(canAccessBuilder ? weekId ?? null : null);
+  const weekAvailabilityQuery = useWeekAvailability(
+    canAccessBuilder && assignmentModal.opened ? weekId ?? null : null,
+  );
 
   const assignMutation = useAssignShifts();
   const deleteAssignmentMutation = useDeleteAssignment();
@@ -714,9 +738,8 @@ const BuilderPage = () => {
   }, [shiftRolesQuery.data]);
 
   useEffect(() => {
-    const { reset } = autoAssignMutation;
-    reset();
-  }, [autoAssignMutation, weekId]);
+    autoAssignMutation.reset();
+  }, [weekId]);
 
   useEffect(() => {
     if (!canAccessBuilder) {
@@ -827,65 +850,89 @@ const BuilderPage = () => {
   }, [assignmentModal.opened, assignmentRoleOptions]);
 
   const availabilityByUserId = useMemo(() => {
-    const map = new Map<number, AvailabilityEntry[]>();
-    const entries = weekAvailabilityQuery.data ?? [];
+    if (!assignmentModal.opened) {
+      return new Map<number, AvailabilityWithMinutes[]>();
+    }
+
+    const map = new Map<number, AvailabilityWithMinutes[]>();
+    const entries = (weekAvailabilityQuery.data ?? []) as AvailabilityEntry[];
     entries.forEach((entry) => {
-      const current = map.get(entry.userId);
-      if (current) {
-        current.push(entry);
+      const startMinutesValue = parseTimeToMinutes(entry.startTime ?? null);
+      const endMinutesValue = parseTimeToMinutes(entry.endTime ?? null);
+      const enriched: AvailabilityWithMinutes = {
+        ...entry,
+        startMinutesValue,
+        endMinutesValue,
+      };
+      const existing = map.get(entry.userId);
+      if (existing) {
+        existing.push(enriched);
       } else {
-        map.set(entry.userId, [entry]);
+        map.set(entry.userId, [enriched]);
       }
     });
     return map;
-  }, [weekAvailabilityQuery.data]);
+  }, [assignmentModal.opened, weekAvailabilityQuery.data]);
+
+  const activeShiftWindow = useMemo(() => {
+    if (!assignmentModal.opened || !assignmentModal.shift) {
+      return null;
+    }
+    const shift = assignmentModal.shift;
+    const startMinutes = parseTimeToMinutes(shift.timeStart) ?? 0;
+    const endMinutesRaw = shift.timeEnd ? parseTimeToMinutes(shift.timeEnd) : null;
+    const endMinutes =
+      endMinutesRaw != null ? endMinutesRaw : startMinutes + DEFAULT_SHIFT_DURATION_MINUTES;
+
+    return {
+      date: shift.date,
+      shiftTypeId: shift.shiftTypeId,
+      startMinutes,
+      endMinutes,
+    };
+  }, [assignmentModal.opened, assignmentModal.shift]);
 
   const isUserAvailableForShift = useCallback(
-    (userId: number, shift: ShiftInstance | null): boolean => {
-      if (!shift) {
+    (userId: number): boolean => {
+      if (!assignmentModal.opened || !activeShiftWindow) {
         return true;
       }
       const entries = availabilityByUserId.get(userId);
       if (!entries || entries.length === 0) {
         return true;
       }
-      const dayEntries = entries.filter((entry) => entry.day === shift.date);
+      const dayEntries = entries.filter((entry) => entry.day === activeShiftWindow.date);
       if (dayEntries.length === 0) {
         return true;
       }
-      const shiftStart = dayjs(`${shift.date} ${shift.timeStart}`);
-      const shiftEnd = shift.timeEnd
-        ? dayjs(`${shift.date} ${shift.timeEnd}`)
-        : shiftStart.add(2, "hour");
 
       return dayEntries.some((entry) => {
         if (entry.status !== "available") {
           return false;
         }
-        if (entry.shiftTypeId && entry.shiftTypeId !== shift.shiftTypeId) {
+        if (entry.shiftTypeId && entry.shiftTypeId !== activeShiftWindow.shiftTypeId) {
           return false;
         }
-        if (entry.startTime) {
-          const availabilityStart = dayjs(`${entry.day} ${entry.startTime}`);
-          if (shiftStart.isBefore(availabilityStart)) {
-            return false;
-          }
+        if (
+          entry.startMinutesValue != null &&
+          activeShiftWindow.startMinutes < entry.startMinutesValue
+        ) {
+          return false;
         }
-        if (entry.endTime) {
-          const availabilityEnd = dayjs(`${entry.day} ${entry.endTime}`);
-          if (shiftEnd.isAfter(availabilityEnd)) {
-            return false;
-          }
+        if (
+          entry.endMinutesValue != null &&
+          activeShiftWindow.endMinutes > entry.endMinutesValue
+        ) {
+          return false;
         }
         return true;
       });
     },
-    [availabilityByUserId],
+    [activeShiftWindow, assignmentModal.opened, availabilityByUserId],
   );
 
-  const staffOptionsForAssignment = useMemo(() => {
-    const shift = assignmentModal.shift;
-    if (!shift) {
+  const staffOptionsByAvailability = useMemo(() => {
+    if (!assignmentModal.opened || !activeShiftWindow) {
       return {
         available: staff,
         unavailable: [] as StaffOption[],
@@ -901,7 +948,7 @@ const BuilderPage = () => {
         availableOptions.push(option);
         return;
       }
-      if (isUserAvailableForShift(userId, shift)) {
+      if (isUserAvailableForShift(userId)) {
         availableOptions.push(option);
       } else {
         unavailableOptions.push(option);
@@ -912,7 +959,12 @@ const BuilderPage = () => {
       available: availableOptions,
       unavailable: unavailableOptions,
     };
-  }, [assignmentModal.shift, isUserAvailableForShift, staff]);
+  }, [activeShiftWindow, assignmentModal.opened, isUserAvailableForShift, staff]);
+
+  const availableStaffOptions = staffOptionsByAvailability.available;
+  const unavailableStaffOptions = staffOptionsByAvailability.unavailable;
+  const availableOptionCount = availableStaffOptions.length;
+  const unavailableOptionCount = unavailableStaffOptions.length;
 
   useEffect(() => {
     if (!assignmentModal.opened) {
@@ -920,52 +972,48 @@ const BuilderPage = () => {
     }
     if (
       !assignmentShowUnavailable &&
-      staffOptionsForAssignment.available.length === 0 &&
-      staffOptionsForAssignment.unavailable.length > 0
+      availableOptionCount === 0 &&
+      unavailableOptionCount > 0
     ) {
       setAssignmentShowUnavailable(true);
     }
-  }, [assignmentModal.opened, assignmentShowUnavailable, staffOptionsForAssignment]);
+  }, [
+    assignmentModal.opened,
+    assignmentShowUnavailable,
+    availableOptionCount,
+    unavailableOptionCount,
+  ]);
 
-  const staffSelectOptions = useMemo<StaffOptionGroup[]>(() => {
-    const availableItems: StaffOption[] = staffOptionsForAssignment.available.map((option) => ({
+  const staffSelectOptions = useMemo<StaffSelectData>(() => {
+    if (!assignmentModal.opened) {
+      return staff;
+    }
+
+    const availableItems: StaffOption[] = availableStaffOptions.map((option) => ({
       value: option.value,
       label: option.label,
     }));
 
-    const groups: StaffOptionGroup[] = [{ group: "Available", items: availableItems }];
-
-    if (assignmentShowUnavailable && staffOptionsForAssignment.unavailable.length > 0) {
-      const unavailableItems: StaffOption[] = staffOptionsForAssignment.unavailable.map((option) => ({
-        value: option.value,
-        label: `${option.label} (Unavailable)`,
-      }));
-      groups.push({ group: "Unavailable", items: unavailableItems });
+    if (!assignmentShowUnavailable || unavailableOptionCount === 0) {
+      return availableItems;
     }
 
-    return groups;
-  }, [assignmentShowUnavailable, staffOptionsForAssignment]);
+    const unavailableItems: StaffOption[] = unavailableStaffOptions.map((option) => ({
+      value: option.value,
+      label: `${option.label} (Unavailable)`,
+    }));
 
-  useEffect(() => {
-    if (!assignmentModal.opened) {
-      return;
-    }
-    if (!assignmentUserId) {
-      setAssignmentRequiresOverride(false);
-      return;
-    }
-    const userId = Number(assignmentUserId);
-    if (Number.isNaN(userId)) {
-      setAssignmentRequiresOverride(false);
-      return;
-    }
-    const shift = assignmentModal.shift ?? null;
-    setAssignmentRequiresOverride(!isUserAvailableForShift(userId, shift));
+    return [
+      { group: "Available", items: availableItems },
+      { group: "Unavailable", items: unavailableItems },
+    ];
   }, [
     assignmentModal.opened,
-    assignmentModal.shift,
-    assignmentUserId,
-    isUserAvailableForShift,
+    assignmentShowUnavailable,
+    staff,
+    availableStaffOptions,
+    unavailableStaffOptions,
+    unavailableOptionCount,
   ]);
 
   useEffect(() => {
@@ -975,23 +1023,23 @@ const BuilderPage = () => {
     if (assignmentShowUnavailable) {
       return;
     }
-    if (!assignmentUserId || !assignmentModal.shift) {
+    if (!assignmentUserId || !activeShiftWindow) {
       return;
     }
     const userId = Number(assignmentUserId);
     if (Number.isNaN(userId)) {
       return;
     }
-    if (!isUserAvailableForShift(userId, assignmentModal.shift)) {
+    if (!isUserAvailableForShift(userId)) {
       setAssignmentUserId(null);
       setAssignmentOverrideReason("");
       setAssignmentRequiresOverride(false);
     }
   }, [
     assignmentModal.opened,
-    assignmentModal.shift,
     assignmentShowUnavailable,
     assignmentUserId,
+    activeShiftWindow,
     isUserAvailableForShift,
   ]);
 
@@ -1851,13 +1899,12 @@ const BuilderPage = () => {
                 setAssignmentRequiresOverride(false);
                 return;
               }
-              const shift = assignmentModal.shift ?? null;
-              setAssignmentRequiresOverride(!isUserAvailableForShift(userId, shift));
+              setAssignmentRequiresOverride(!isUserAvailableForShift(userId));
             }}
             searchable
             nothingFoundMessage={assignmentShowUnavailable ? "No staff found" : "No staff available"}
           />
-          {staffOptionsForAssignment.unavailable.length > 0 ? (
+          {unavailableOptionCount > 0 ? (
             <Switch
               label="Show unavailable staff (override required)"
               checked={assignmentShowUnavailable}
