@@ -51,7 +51,8 @@ async function ensureFolder(drive: drive_v3.Drive, name: string, parentId: strin
     q: query,
     fields: 'files(id, name)',
     pageSize: 1,
-    supportsAllDrives: false,
+    includeItemsFromAllDrives: true,
+    supportsAllDrives: true,
   });
 
   const existing = data.files?.[0];
@@ -68,7 +69,7 @@ async function ensureFolder(drive: drive_v3.Drive, name: string, parentId: strin
   const created = await drive.files.create({
     requestBody: folderMetadata,
     fields: 'id',
-    supportsAllDrives: false,
+    supportsAllDrives: true,
   });
 
   if (!created.data.id) {
@@ -117,13 +118,13 @@ export async function uploadFinanceFile(options: UploadOptions): Promise<UploadR
         parents: [folderId],
         mimeType: file.mimetype,
       },
-      media: {
-        mimeType: file.mimetype,
-        body: Readable.from(file.buffer),
-      },
-      fields: 'id, webViewLink',
-      supportsAllDrives: false,
-    });
+    media: {
+      mimeType: file.mimetype,
+      body: Readable.from(file.buffer),
+    },
+    fields: 'id, webViewLink',
+    supportsAllDrives: true,
+  });
 
     const driveFileId = response.data.id;
     const driveWebViewLink = response.data.webViewLink;

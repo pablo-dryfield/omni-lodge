@@ -61,7 +61,8 @@ async function ensureFolder(
     q: query,
     fields: 'files(id)',
     pageSize: 1,
-    supportsAllDrives: false,
+    includeItemsFromAllDrives: true,
+    supportsAllDrives: true,
   });
 
   const existing = data.files?.[0];
@@ -78,7 +79,7 @@ async function ensureFolder(
   const created = await drive.files.create({
     requestBody: folderMetadata,
     fields: 'id',
-    supportsAllDrives: false,
+    supportsAllDrives: true,
   });
 
   const folderId = created.data.id;
@@ -141,7 +142,7 @@ export async function uploadBuffer(params: UploadBufferParams): Promise<UploadRe
       body: Readable.from(buffer),
     },
     fields: 'id, webViewLink, webContentLink',
-    supportsAllDrives: false,
+    supportsAllDrives: true,
   });
 
   const { id, webViewLink, webContentLink } = response.data;
