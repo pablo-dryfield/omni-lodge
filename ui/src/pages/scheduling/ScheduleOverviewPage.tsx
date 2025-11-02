@@ -207,8 +207,8 @@ const USER_COLOR_PALETTE: UserSwatch[] = [
 const DEFAULT_USER_COLOR: UserSwatch = { background: "#ECEFF4", text: palette.slate };
 
 const formatShiftTimeRange = (start?: string | null, end?: string | null) => {
-  const first = (start ?? "").trim();
-  const second = (end ?? "").trim();
+  const first = (start ?? "").trim().replace(/^(\d{1,2}:\d{2}).*$/, "$1");
+  const second = (end ?? "").trim().replace(/^(\d{1,2}:\d{2}).*$/, "$1");
   if (!first && !second) {
     return "";
   }
@@ -755,6 +755,7 @@ const ScheduleOverviewPage = () => {
                 padding: "18px",
                 fontSize: "22px",
                 fontWeight: 800,
+                textTransform: "uppercase",
                 fontFamily: HEADER_FONT_STACK,
                 letterSpacing: "0.05em",
                 color: "#fff",
