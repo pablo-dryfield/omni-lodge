@@ -796,7 +796,7 @@ export async function reopenWeek(weekId: number, actorId: number | null): Promis
 
   await Export.destroy({ where: { scheduleWeekId: weekId } });
 
-  week.state = 'locked';
+  week.state = 'collecting';
   await week.save();
 
   await logAudit({
@@ -1559,6 +1559,17 @@ export async function getAvailabilityForUser(userId: number, scheduleWeekId: num
   return Availability.findAll({
     where: { userId, scheduleWeekId },
     order: [['day', 'ASC']],
+  });
+}
+
+export async function getAvailabilityForWeek(scheduleWeekId: number): Promise<Availability[]> {
+  return Availability.findAll({
+    where: { scheduleWeekId },
+    order: [
+      ['userId', 'ASC'],
+      ['day', 'ASC'],
+      ['startTime', 'ASC'],
+    ],
   });
 }
 
