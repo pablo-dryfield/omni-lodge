@@ -685,17 +685,19 @@ const BuilderPage = () => {
     return map;
   }, [pubCrawlInstances]);
 
-  const visibleRoles = useMemo(
-    () =>
-      ROLE_ORDER.filter((roleLabel) =>
-        daysOfWeek.some((day) => {
-          const isoDate = day.format("YYYY-MM-DD");
-          const assignments = assignmentsByDate.get(isoDate) ?? [];
-          return filterAssignmentsForRole(roleLabel, assignments).length > 0;
-        }),
-      ),
-    [assignmentsByDate, daysOfWeek],
-  );
+  const visibleRoles = useMemo(() => {
+    const rolesWithAssignments = ROLE_ORDER.filter((roleLabel) =>
+      daysOfWeek.some((day) => {
+        const isoDate = day.format("YYYY-MM-DD");
+        const assignments = assignmentsByDate.get(isoDate) ?? [];
+        return filterAssignmentsForRole(roleLabel, assignments).length > 0;
+      }),
+    );
+    if (rolesWithAssignments.length > 0) {
+      return rolesWithAssignments;
+    }
+    return pubCrawlInstances.length > 0 ? Array.from(ROLE_ORDER) : rolesWithAssignments;
+  }, [assignmentsByDate, daysOfWeek, pubCrawlInstances.length]);
 
   const pubCrawlHeading = useMemo(() => {
     if (pubCrawlInstances.length === 0) {
