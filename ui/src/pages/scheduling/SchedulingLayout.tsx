@@ -1,8 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Card, Container, Tabs } from "@mantine/core";
-import dayjs from "dayjs";
-import isoWeek from "dayjs/plugin/isoWeek";
 import {
   IconCalendarCheck,
   IconClipboardList,
@@ -13,60 +11,111 @@ import {
   IconUsersGroup,
 } from "@tabler/icons-react";
 import { useAppSelector } from "../../store/hooks";
-import { makeSelectIsModuleActionAllowed } from "../../selectors/accessControlSelectors";
+import {
+  makeSelectIsModuleActionAllowed,
+  selectModulePermissionsMap,
+} from "../../selectors/accessControlSelectors";
 
-dayjs.extend(isoWeek);
+type SchedulingTabDefinition = {
+  label: string;
+  value: string;
+  icon: typeof IconCalendarCheck;
+  module?: string;
+  requiredAction?: string;
+};
+
+const BASE_TABS: SchedulingTabDefinition[] = [
+  { label: "Availability", value: "availability", icon: IconCalendarCheck, module: "scheduling-availability" },
+  { label: "Builder", value: "builder", icon: IconClipboardList, module: "scheduling-builder", requiredAction: "create" },
+  { label: "Schedule", value: "schedule", icon: IconLayoutGrid, module: "scheduling-builder" },
+  { label: "My Shifts", value: "my-shifts", icon: IconUsersGroup, module: "scheduling-my-shifts" },
+  { label: "Swaps", value: "swaps", icon: IconRefresh, module: "scheduling-swaps" },
+  { label: "History", value: "history", icon: IconHistory, module: "scheduling-history" },
+];
 
 const SchedulingLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
+  const modulePermissions = useAppSelector(selectModulePermissionsMap);
   const selectCanManageTemplates = useMemo(
     () => makeSelectIsModuleActionAllowed("scheduling-builder", "create"),
     [],
   );
   const canManageTemplates = useAppSelector(selectCanManageTemplates);
 
-  const schedulingTabs = useMemo(() => {
-    const base = [
-      { label: "Availability", value: "availability", icon: IconCalendarCheck },
-      { label: "Builder", value: "builder", icon: IconClipboardList },
-      { label: "Schedule", value: "schedule", icon: IconLayoutGrid },
-      { label: "My Shifts", value: "my-shifts", icon: IconUsersGroup },
-      { label: "Swaps", value: "swaps", icon: IconRefresh },
-      { label: "History", value: "history", icon: IconHistory },
-    ];
-    if (canManageTemplates) {
-      base.splice(1, 0, { label: "Templates", value: "templates", icon: IconTemplate });
+  const availableTabs = useMemo(() => {
+    const hasAction = (moduleSlug: string | undefined, action = "view") => {
+      if (!moduleSlug) {
+        return true;
+      }
+      const actions = modulePermissions.get(moduleSlug);
+      return actions?.has(action) ?? false;
+    };
+
+    const tabs = BASE_TABS.filter((tab) => hasAction(tab.module, tab.requiredAction ?? "view"));
+
+    if (canManageTemplates && hasAction("scheduling-builder", "create")) {
+      tabs.splice(1, 0, {
+        label: "Templates",
+        value: "templates",
+        icon: IconTemplate,
+        module: "scheduling-builder",
+        requiredAction: "create",
+      });
     }
-    return base;
-  }, [canManageTemplates]);
+
+    return tabs;
+  }, [modulePermissions, canManageTemplates]);
 
   const activeTab = useMemo(() => {
     const segments = location.pathname.split("/").filter(Boolean);
-    if (segments.length < 2) {
-      return schedulingTabs[0]?.value ?? "availability";
+    const current = segments.length >= 2 ? segments[1] : null;
+    const allowedValues = new Set(availableTabs.map((tab) => tab.value));
+    if (current && allowedValues.has(current)) {
+      return current;
     }
-    return segments[1] ?? schedulingTabs[0]?.value ?? "availability";
-  }, [location.pathname, schedulingTabs]);
+    return availableTabs[0]?.value ?? null;
+  }, [location.pathname, availableTabs]);
 
   useEffect(() => {
     if (location.pathname === "/scheduling") {
-      const fallback = schedulingTabs[0]?.value ?? "availability";
-      navigate(`/scheduling/${fallback}`, { replace: true });
+      const fallback = availableTabs[0]?.value;
+      if (fallback) {
+        navigate(`/scheduling/${fallback}`, { replace: true });
+      }
     }
-  }, [location.pathname, navigate, schedulingTabs]);
+  }, [location.pathname, navigate, availableTabs]);
+
+  useEffect(() => {
+    if (!activeTab && availableTabs[0]) {
+      navigate(`/scheduling/${availableTabs[0].value}`, { replace: true });
+    }
+  }, [activeTab, availableTabs, navigate]);
+
+  if (!availableTabs.length) {
+    return (
+      <Container size="xl" pb="xl">
+        <Card withBorder shadow="sm" radius="md" p="md">
+          <Tabs value={null} keepMounted={false} variant="pills" radius="md">
+            <Tabs.List>{null}</Tabs.List>
+          </Tabs>
+        </Card>
+        <Outlet />
+      </Container>
+    );
+  }
 
   return (
     <Container size="xl" pb="xl">
       <Card withBorder shadow="sm" radius="md" p="md">
         <Tabs
-          value={activeTab}
+          value={activeTab ?? availableTabs[0].value}
           onChange={(value) => value && navigate(`/scheduling/${value}`)}
           keepMounted={false}
           variant="pills"
           radius="md"
-          defaultValue={schedulingTabs[0]?.value}
+          defaultValue={availableTabs[0].value}
         >
           <Tabs.List
             style={{
@@ -75,7 +124,7 @@ const SchedulingLayout = () => {
               flexWrap: "wrap",
             }}
           >
-            {schedulingTabs.map((tab) => {
+            {availableTabs.map((tab) => {
               const Icon = tab.icon;
               return (
                 <Tabs.Tab
