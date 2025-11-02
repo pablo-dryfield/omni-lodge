@@ -1,9 +1,27 @@
 import path from 'path';
 import { promises as fs, createReadStream } from 'fs';
-import type { ReadStream } from 'fs';
-import crypto from 'crypto';
+import { Readable } from 'stream';
+import dayjs from 'dayjs';
+import { ensureFolderPath, uploadBuffer, getDriveClient } from './googleDrive.js';
 
 const DEFAULT_UPLOAD_DIR = path.resolve(process.cwd(), 'uploads', 'night-reports');
+const DRIVE_PREFIX = 'drive:';
+const VENUE_NUMBERS_ROOT = 'Venue Numbers';
+
+type StoreNightReportPhotoParams = {
+  reportId: number;
+  activityDate: string | Date | null;
+  originalName: string;
+  mimeType: string;
+  data: Buffer;
+};
+
+type StoreNightReportPhotoResult = {
+  relativePath: string;
+  driveFileId: string;
+  driveWebViewLink: string | null;
+  folderSegments: string[];
+};
 
 function getBaseDir(): string {
   const raw = process.env.NIGHT_REPORT_UPLOAD_DIR;
@@ -12,10 +30,6 @@ function getBaseDir(): string {
   }
   const resolved = path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
   return resolved;
-}
-
-async function ensureDirectory(dir: string): Promise<void> {
-  await fs.mkdir(dir, { recursive: true });
 }
 
 function sanitizeRelativePath(relativePath: string): string {
@@ -36,6 +50,14 @@ function toAbsolutePath(relativePath: string): string {
   return full;
 }
 
+function isDriveStorage(storagePath: string): boolean {
+  return storagePath.startsWith(DRIVE_PREFIX);
+}
+
+function getDriveFileId(storagePath: string): string {
+  return storagePath.replace(DRIVE_PREFIX, '').trim();
+}
+
 function extensionFromMime(mimeType: string): string | null {
   const lower = mimeType.toLowerCase();
   if (lower === 'image/jpeg' || lower === 'image/jpg') {
@@ -53,36 +75,68 @@ function extensionFromMime(mimeType: string): string | null {
   return null;
 }
 
-function buildFilename(originalName: string, mimeType: string): string {
-  const originalExt = path.extname(originalName);
-  const ext = originalExt || extensionFromMime(mimeType) || '.jpg';
-  const id = crypto.randomUUID();
-  return `${id}${ext}`;
+export async function ensureNightReportStorage(): Promise<void> {
+  await ensureFolderPath(VENUE_NUMBERS_ROOT);
 }
 
-export async function storeNightReportPhoto(
-  reportId: number,
-  originalName: string,
-  mimeType: string,
-  data: Buffer,
-): Promise<{ relativePath: string; absolutePath: string }> {
+export async function storeNightReportPhoto(params: StoreNightReportPhotoParams): Promise<StoreNightReportPhotoResult> {
+  const { activityDate, originalName, mimeType, data } = params;
+
   if (!Buffer.isBuffer(data) || data.length === 0) {
     throw new Error('Cannot store empty file');
   }
 
-  const baseDir = getBaseDir();
-  const targetDir = path.join(baseDir, String(reportId));
-  await ensureDirectory(targetDir);
+  const parsed = activityDate ? dayjs(activityDate) : dayjs();
+  const reportDate = parsed.isValid() ? parsed : dayjs();
+  const year = reportDate.format('YYYY');
+  const monthName = reportDate.format('MMMM');
+  const dateStamp = reportDate.format('YYYYMMDD');
 
-  const fileName = buildFilename(originalName, mimeType);
-  const absolutePath = path.join(targetDir, fileName);
-  await fs.writeFile(absolutePath, data);
+  const ext = path.extname(originalName) || extensionFromMime(mimeType) || '.jpg';
+  const normalizedExt = ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`;
+  const fileName = `night_report_${dateStamp}${normalizedExt}`;
+  const folderPath = `${VENUE_NUMBERS_ROOT}/${year}/${monthName}`;
 
-  const relativePath = path.relative(baseDir, absolutePath).replace(/\\/g, '/');
-  return { relativePath, absolutePath };
+  const folder = await ensureFolderPath(folderPath);
+
+  const upload = await uploadBuffer({
+    name: fileName,
+    mimeType,
+    buffer: data,
+    parents: [folder.id],
+  });
+
+  return {
+    relativePath: `${DRIVE_PREFIX}${upload.id}`,
+    driveFileId: upload.id,
+    driveWebViewLink: upload.webViewLink ?? upload.webContentLink ?? null,
+    folderSegments: folder.path.concat(fileName),
+  };
 }
 
 export async function deleteNightReportPhoto(storagePath: string): Promise<void> {
+  if (!storagePath) {
+    return;
+  }
+
+  if (isDriveStorage(storagePath)) {
+    const fileId = getDriveFileId(storagePath);
+    if (!fileId) {
+      return;
+    }
+    try {
+      const drive = await getDriveClient();
+      await drive.files.delete({ fileId });
+    } catch (error) {
+      const code = (error as { code?: number })?.code;
+      if (code === 404) {
+        return;
+      }
+      throw error;
+    }
+    return;
+  }
+
   const absolutePath = toAbsolutePath(storagePath);
   try {
     await fs.unlink(absolutePath);
@@ -100,13 +154,24 @@ export async function deleteNightReportPhoto(storagePath: string): Promise<void>
   }
 }
 
-export function openNightReportPhotoStream(storagePath: string): ReadStream {
+export async function openNightReportPhotoStream(storagePath: string): Promise<Readable> {
+  if (!storagePath) {
+    throw new Error('Missing storage path for night report photo');
+  }
+
+  if (isDriveStorage(storagePath)) {
+    const fileId = getDriveFileId(storagePath);
+    if (!fileId) {
+      throw new Error('Invalid Drive storage identifier');
+    }
+    const drive = await getDriveClient();
+    const response = await drive.files.get(
+      { fileId, alt: 'media' },
+      { responseType: 'stream' },
+    );
+    return response.data as unknown as Readable;
+  }
+
   const absolutePath = toAbsolutePath(storagePath);
   return createReadStream(absolutePath);
-}
-
-export async function ensureNightReportStorage(): Promise<string> {
-  const baseDir = getBaseDir();
-  await ensureDirectory(baseDir);
-  return baseDir;
 }

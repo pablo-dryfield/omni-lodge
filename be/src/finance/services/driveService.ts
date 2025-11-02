@@ -79,7 +79,7 @@ async function ensureFolder(drive: drive_v3.Drive, name: string, parentId: strin
 }
 
 async function ensureInvoiceFolder(drive: drive_v3.Drive, now: dayjs.Dayjs): Promise<{ folderId: string; path: string[] }> {
-  const rootSegments = ['OmniLodge_Finance', 'Invoices', now.format('YYYY'), now.format('MM')];
+  const rootSegments = ['Invoices', now.format('MMMM')];
   let parentId: string | null = null;
 
   for (const segment of rootSegments) {

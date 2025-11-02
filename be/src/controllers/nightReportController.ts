@@ -730,7 +730,13 @@ export const uploadNightReportPhoto = async (req: AuthenticatedRequest, res: Res
 
     await ensureNightReportStorage();
 
-    const { relativePath } = await storeNightReportPhoto(reportId, file.originalname, file.mimetype, file.buffer);
+    const { relativePath } = await storeNightReportPhoto({
+      reportId,
+      activityDate: report.activityDate,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      data: file.buffer,
+    });
 
     const capturedAt =
       typeof req.body?.capturedAt === 'string' && req.body.capturedAt
@@ -849,7 +855,7 @@ export const downloadNightReportPhoto = async (req: AuthenticatedRequest, res: R
       return;
     }
 
-    const stream = openNightReportPhotoStream(photo.storagePath);
+    const stream = await openNightReportPhotoStream(photo.storagePath);
     res.setHeader('Content-Type', photo.mimeType);
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(photo.originalName)}"`);
     stream.on('error', (error) => {
