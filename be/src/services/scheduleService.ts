@@ -1046,7 +1046,10 @@ export async function listShiftInstances(weekId: number): Promise<ShiftInstance[
       {
         model: ShiftAssignment,
         as: 'assignments',
-        include: [{ model: User, as: 'assignee' }, { model: ShiftRole, as: 'shiftRole' }],
+        include: [
+          { model: User, as: 'assignee', include: [{ model: StaffProfile, as: 'staffProfile' }] },
+          { model: ShiftRole, as: 'shiftRole' },
+        ],
       },
     ],
     order: [
@@ -1728,8 +1731,22 @@ export async function listSwapsForUser(userId: number): Promise<SwapRequest[]> {
       [Op.or]: [{ requesterId: userId }, { partnerId: userId }],
     },
     include: [
-      { model: ShiftAssignment, as: 'fromAssignment', include: [{ model: ShiftInstance, as: 'shiftInstance' }] },
-      { model: ShiftAssignment, as: 'toAssignment', include: [{ model: ShiftInstance, as: 'shiftInstance' }] },
+      {
+        model: ShiftAssignment,
+        as: 'fromAssignment',
+        include: [
+          { model: ShiftInstance, as: 'shiftInstance' },
+          { model: User, as: 'assignee', include: [{ model: StaffProfile, as: 'staffProfile' }] },
+        ],
+      },
+      {
+        model: ShiftAssignment,
+        as: 'toAssignment',
+        include: [
+          { model: ShiftInstance, as: 'shiftInstance' },
+          { model: User, as: 'assignee', include: [{ model: StaffProfile, as: 'staffProfile' }] },
+        ],
+      },
       { model: User, as: 'requester' },
       { model: User, as: 'partner' },
       { model: User, as: 'manager' },
