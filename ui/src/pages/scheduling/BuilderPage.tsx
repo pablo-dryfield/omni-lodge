@@ -168,7 +168,7 @@ const tableCellBase: CSSProperties = {
   border: `1px solid ${palette.border}`,
   padding: "14px 16px",
   textAlign: "center",
-  minWidth: 110,
+  minWidth: 0,
   backgroundColor: "#ffffff",
   verticalAlign: "top",
 };
@@ -176,7 +176,7 @@ const tableCellBase: CSSProperties = {
 const roleCellStyles: CSSProperties = {
   ...tableCellBase,
   padding: 0,
-  minWidth: 160,
+  minWidth: 0,
   height: "100%",
   verticalAlign: "middle",
   borderLeftWidth: "3px",
@@ -739,6 +739,7 @@ const BuilderPage = () => {
 
   useEffect(() => {
     autoAssignMutation.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekId]);
 
   useEffect(() => {
@@ -1412,7 +1413,7 @@ const BuilderPage = () => {
       key={key}
       style={{
         flex: 1,
-        overflowX: "auto",
+        overflowX: "hidden",
         borderRadius: 20,
         backgroundColor: "#fff",
         boxShadow: palette.tableShadow,
@@ -1422,9 +1423,9 @@ const BuilderPage = () => {
         component="table"
         style={{
           width: "100%",
+          tableLayout: "fixed",
           borderCollapse: "separate",
           borderSpacing: 0,
-          minWidth: 760,
           borderRadius: 18,
           overflow: "hidden",
         }}
@@ -1661,7 +1662,7 @@ const BuilderPage = () => {
             >
               Previous Week
             </Button>
-            <Stack gap={4} align="center" style={{ flex: 1, minWidth: 240 }}>
+            <Stack gap={4} align="center" style={{ flex: 1, minWidth: 0 }}>
               <Title order={3} fw={800} style={{ fontFamily: HEADER_FONT_STACK }}>
                 Schedule Builder
               </Title>
