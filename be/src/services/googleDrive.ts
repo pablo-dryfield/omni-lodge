@@ -39,7 +39,7 @@ function assertDriveCredentials(): void {
   }
 }
 
-async function getDriveClient(): Promise<drive_v3.Drive> {
+export async function getDriveClient(): Promise<drive_v3.Drive> {
   assertDriveCredentials();
   return google.drive({ version: 'v3', auth: oauthClient });
 }
