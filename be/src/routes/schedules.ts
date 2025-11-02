@@ -23,6 +23,7 @@ import {
   deleteShiftAssignment,
   createSwapRequest,
   swapPartnerResponse,
+  cancelSwapRequest,
   swapManagerDecision,
   listSwapsByStatus,
   listSwapsForUser,
@@ -287,6 +288,20 @@ router.post('/swaps/:id/partner-response', authMiddleware, async (req, res) => {
       return;
     }
     const swap = await swapPartnerResponse(Number(req.params.id), partnerId, Boolean(req.body.accept));
+    res.json(swap);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.post('/swaps/:id/cancel', authMiddleware, async (req, res) => {
+  try {
+    const actorId = req.authContext?.id;
+    if (!actorId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const swap = await cancelSwapRequest(Number(req.params.id), actorId);
     res.json(swap);
   } catch (error) {
     res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });

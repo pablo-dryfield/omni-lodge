@@ -423,6 +423,19 @@ export const usePartnerSwapResponse = () => {
   });
 };
 
+export const useCancelSwap = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (swapId: number) => {
+      const response = await axiosInstance.post(`/schedules/swaps/${swapId}/cancel`);
+      return response.data as SwapRequest;
+    },
+    onSuccess: () => {
+      invalidateQuery(queryClient, schedulingKeys.mySwaps);
+    },
+  });
+};
+
 export const useManagerSwapDecision = () => {
   const queryClient = useQueryClient();
   return useMutation({

@@ -11,6 +11,7 @@ import {
   useEnsureWeek,
   useMySwaps,
   usePartnerSwapResponse,
+  useCancelSwap,
   useShiftInstances,
 } from "../../api/scheduling";
 import WeekSelector from "../../components/scheduling/WeekSelector";
@@ -49,6 +50,7 @@ const MyShiftsPage = () => {
   const createSwap = useCreateSwap();
   const mySwaps = useMySwaps();
   const partnerResponse = usePartnerSwapResponse();
+  const cancelSwap = useCancelSwap();
 
   const selectedWeekRange = useMemo(() => {
     if (!selectedWeek) {
@@ -67,6 +69,7 @@ const MyShiftsPage = () => {
   }>({ opened: false, assignment: null, shift: null });
 
   const [respondingSwapId, setRespondingSwapId] = useState<number | null>(null);
+  const [cancelingSwapId, setCancelingSwapId] = useState<number | null>(null);
 
   const getSwapStatusLabel = useCallback((status: "pending_partner" | "pending_manager" | "approved" | "denied" | "canceled") => {
     switch (status) {
@@ -217,6 +220,18 @@ const MyShiftsPage = () => {
     [partnerResponse],
   );
 
+  const handleCancelSwap = useCallback(
+    async (swapId: number) => {
+      setCancelingSwapId(swapId);
+      try {
+        await cancelSwap.mutateAsync(swapId);
+      } finally {
+        setCancelingSwapId(null);
+      }
+    },
+    [cancelSwap],
+  );
+
   return (
     <Stack mt="lg" gap="lg">
       {isAuthenticated && ensureWeekQuery.isError ? (
@@ -316,7 +331,7 @@ const MyShiftsPage = () => {
                     ) : null}
                     {swap.toAssignment?.shiftInstance ? (
                       <Text size="xs">
-                        {`Teammate shift: ${dayjs(swap.toAssignment.shiftInstance.date).format("MMM D")} · ${
+                        {`${swap.partner?.firstName ?? "Teammate"} ${swap.partner?.lastName ?? ""} shift: ${dayjs(swap.toAssignment.shiftInstance.date).format("MMM D")} · ${
                           swap.toAssignment.shiftInstance.shiftType?.name ?? "Shift"
                         } · ${swap.toAssignment.roleInShift}`}
                       </Text>

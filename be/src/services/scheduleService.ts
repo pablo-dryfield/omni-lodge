@@ -1652,6 +1652,32 @@ export async function swapPartnerResponse(swapId: number, partnerId: number, acc
   return swap;
 }
 
+export async function cancelSwapRequest(swapId: number, actorId: number): Promise<SwapRequest> {
+  const swap = await SwapRequest.findByPk(swapId);
+  if (!swap) {
+    throw new HttpError(404, 'Swap request not found');
+  }
+  if (!['pending_partner', 'pending_manager'].includes(swap.status)) {
+    throw new HttpError(400, 'Only pending swap requests can be canceled');
+  }
+  if (swap.requesterId !== actorId && swap.partnerId !== actorId) {
+    throw new HttpError(403, 'You may only cancel swap requests you are part of');
+  }
+
+  swap.status = 'canceled';
+  swap.decisionReason = 'Canceled by participant';
+  await swap.save();
+
+  await logAudit({
+    actorId,
+    action: 'schedule.swap.cancel',
+    entity: 'swap_request',
+    entityId: String(swap.id),
+  });
+
+  return swap;
+}
+
 export async function swapManagerDecision(swapId: number, managerId: number, approve: boolean, reason?: string): Promise<SwapRequest> {
   const swap = await SwapRequest.findByPk(swapId, {
     include: [
@@ -1715,8 +1741,22 @@ export async function listSwapsByStatus(status: SwapRequestStatus): Promise<Swap
   return SwapRequest.findAll({
     where: { status },
     include: [
-      { model: ShiftAssignment, as: 'fromAssignment' },
-      { model: ShiftAssignment, as: 'toAssignment' },
+      {
+        model: ShiftAssignment,
+        as: 'fromAssignment',
+        include: [
+          { model: ShiftInstance, as: 'shiftInstance', include: [{ model: ShiftType, as: 'shiftType' }] },
+          { model: User, as: 'assignee', include: [{ model: StaffProfile, as: 'staffProfile' }] },
+        ],
+      },
+      {
+        model: ShiftAssignment,
+        as: 'toAssignment',
+        include: [
+          { model: ShiftInstance, as: 'shiftInstance', include: [{ model: ShiftType, as: 'shiftType' }] },
+          { model: User, as: 'assignee', include: [{ model: StaffProfile, as: 'staffProfile' }] },
+        ],
+      },
       { model: User, as: 'requester' },
       { model: User, as: 'partner' },
       { model: User, as: 'manager' },
