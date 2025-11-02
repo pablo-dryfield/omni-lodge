@@ -307,65 +307,81 @@ const MyShiftsPage = () => {
       {mySwaps.data && mySwaps.data.length > 0 && (
         <Stack mt="lg" gap="sm">
           <Title order={5}>Swap requests</Title>
-          {mySwaps.data.map((swap) => (
-            <Card key={swap.id} withBorder radius="md">
-              <Stack gap="xs">
-                <Group justify="space-between" align="center">
+          {mySwaps.data.map((swap) => {
+            const isRequester = swap.requesterId === loggedUserId;
+            const isPartner = swap.partnerId === loggedUserId;
+            const showPartnerActions = swap.status === "pending_partner" && isPartner;
+            const canCancel =
+              (swap.status === "pending_partner" || swap.status === "pending_manager") && (isRequester || isPartner);
+            const requesterShiftLabel = swap.fromAssignment?.shiftInstance
+              ? `Your shift: ${dayjs(swap.fromAssignment.shiftInstance.date).format("MMM D")} - ${swap.fromAssignment.shiftInstance.shiftType?.name ?? "Shift"} - ${swap.fromAssignment.roleInShift}`
+              : null;
+            const partnerShiftLabel = swap.toAssignment?.shiftInstance
+              ? `${swap.partner?.firstName ?? "Teammate"} ${swap.partner?.lastName ?? ""} shift: ${dayjs(swap.toAssignment.shiftInstance.date).format("MMM D")} - ${swap.toAssignment.shiftInstance.shiftType?.name ?? "Shift"} - ${swap.toAssignment.roleInShift}`
+              : null;
+
+            return (
+              <Card key={swap.id} withBorder radius="md">
+                <Stack gap="xs">
                   <Stack gap={2}>
                     <Text size="sm" fw={600}>
                       Request #{swap.id} - <Badge>{getSwapStatusLabel(swap.status)}</Badge>
                     </Text>
                     <Text size="xs" c="dimmed">
                       {`Requested by ${
-                        swap.requesterId === loggedUserId
+                        isRequester
                           ? "you"
                           : `${swap.requester?.firstName ?? "Teammate"} ${swap.requester?.lastName ?? ""}`.trim()
                       }`}
                     </Text>
-                    {swap.fromAssignment?.shiftInstance ? (
-                      <Text size="xs">
-                        {`Your shift: ${dayjs(swap.fromAssignment.shiftInstance.date).format("MMM D")} · ${
-                          swap.fromAssignment.shiftInstance.shiftType?.name ?? "Shift"
-                        } · ${swap.fromAssignment.roleInShift}`}
-                      </Text>
-                    ) : null}
-                    {swap.toAssignment?.shiftInstance ? (
-                      <Text size="xs">
-                        {`${swap.partner?.firstName ?? "Teammate"} ${swap.partner?.lastName ?? ""} shift: ${dayjs(swap.toAssignment.shiftInstance.date).format("MMM D")} · ${
-                          swap.toAssignment.shiftInstance.shiftType?.name ?? "Shift"
-                        } · ${swap.toAssignment.roleInShift}`}
-                      </Text>
-                    ) : null}
+                    {requesterShiftLabel ? <Text size="xs">{requesterShiftLabel}</Text> : null}
+                    {partnerShiftLabel ? <Text size="xs">{partnerShiftLabel}</Text> : null}
                     {swap.decisionReason ? (
                       <Text size="xs" c="dimmed">
                         {swap.decisionReason}
                       </Text>
                     ) : null}
                   </Stack>
-                  {swap.status === "pending_partner" && swap.partnerId === loggedUserId ? (
-                    <Group gap="xs">
-                      <Button
-                        variant="light"
-                        color="green"
-                        loading={respondingSwapId === swap.id && partnerResponse.isPending}
-                        onClick={() => handlePartnerDecision(swap.id, true)}
-                      >
-                        Accept
-                      </Button>
-                      <Button
-                        variant="light"
-                        color="red"
-                        loading={respondingSwapId === swap.id && partnerResponse.isPending}
-                        onClick={() => handlePartnerDecision(swap.id, false)}
-                      >
-                        Decline
-                      </Button>
+                  {(showPartnerActions || canCancel) && (
+                    <Group justify="space-between" align="center">
+                      {showPartnerActions ? (
+                        <Group gap="xs">
+                          <Button
+                            variant="light"
+                            color="green"
+                            loading={respondingSwapId === swap.id && partnerResponse.isPending}
+                            onClick={() => handlePartnerDecision(swap.id, true)}
+                          >
+                            Accept
+                          </Button>
+                          <Button
+                            variant="light"
+                            color="red"
+                            loading={respondingSwapId === swap.id && partnerResponse.isPending}
+                            onClick={() => handlePartnerDecision(swap.id, false)}
+                          >
+                            Decline
+                          </Button>
+                        </Group>
+                      ) : (
+                        <span />
+                      )}
+                      {canCancel ? (
+                        <Button
+                          variant="light"
+                          color="gray"
+                          loading={cancelingSwapId === swap.id && cancelSwap.isPending}
+                          onClick={() => handleCancelSwap(swap.id)}
+                        >
+                          Cancel request
+                        </Button>
+                      ) : null}
                     </Group>
-                  ) : null}
-                </Group>
-              </Stack>
-            </Card>
-          ))}
+                  )}
+                </Stack>
+              </Card>
+            );
+          })}
         </Stack>
       )}
 

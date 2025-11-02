@@ -94,9 +94,8 @@ const SwapsPage = () => {
                   <Badge>{statusLabelMap.get(swap.status) ?? swap.status.toUpperCase()}</Badge>
                 </Group>
                 <Stack gap={4}>
-                  <Text size="sm">{describeShift(swap.fromAssignment ?? null, "Requester")}</Text>
-                  <Text size="sm">{describeShift(swap.toAssignment ?? null, "Partner")}</Text>
-                  <Text size="sm">{`Teammate: ${formatUserName(swap.partner ?? null, swap.partnerId)}`}</Text>
+                  <Text size="sm">{describeShift(swap.fromAssignment ?? null, `${swap.requester?.firstName ?? "Teammate"} ${swap.requester?.lastName ?? ""}`)}</Text>
+                  <Text size="sm">{describeShift(swap.toAssignment ?? null, `${swap.partner?.firstName ?? "Teammate"} ${swap.partner?.lastName ?? ""}`)}</Text>
                 </Stack>
                 {swap.decisionReason ? (
                   <Text size="xs" c="dimmed">
