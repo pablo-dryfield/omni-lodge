@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { CSSProperties } from "react";
-import { Alert, Box, Button, Card, Center, Group, Loader, Stack, Text, ThemeIcon, Title } from "@mantine/core";
-import { IconAlertTriangle, IconCalendarEvent, IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
+import type { CSSProperties, ReactNode } from "react";
+import { Alert, Box, Button, Card, Center, Group, Loader, Stack, Text, Title } from "@mantine/core";
+import { IconAlertTriangle, IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
 import dayjs from "dayjs";
 import type { Dayjs } from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
@@ -12,7 +12,7 @@ import {
   useEnsureWeek,
   useShiftInstances,
 } from "../../api/scheduling";
-import type { ShiftAssignment } from "../../types/scheduling";
+import type { ShiftAssignment, ShiftInstance } from "../../types/scheduling";
 
 dayjs.extend(isoWeek);
 
@@ -206,7 +206,89 @@ const USER_COLOR_PALETTE: UserSwatch[] = [
 
 const DEFAULT_USER_COLOR: UserSwatch = { background: "#ECEFF4", text: palette.slate };
 
+const formatShiftTimeRange = (start?: string | null, end?: string | null) => {
+  const first = (start ?? "").trim();
+  const second = (end ?? "").trim();
+  if (!first && !second) {
+    return "";
+  }
+  if (!first) {
+    return second;
+  }
+  if (!second) {
+    return first;
+  }
+  return `${first} \u2013 ${second}`;
+};
+
+const isPubCrawlShiftInstance = (instance: ShiftInstance) => {
+  const typeKey = instance.shiftType?.key?.toLowerCase() ?? "";
+  const typeName = instance.shiftType?.name?.toLowerCase() ?? "";
+  const templateName = instance.template?.name?.toLowerCase() ?? "";
+  return (
+    typeKey.includes("pub_crawl") ||
+    typeName.includes("pub crawl") ||
+    templateName.includes("pub crawl")
+  );
+};
+
+type ShiftTimeBucket = {
+  label: string;
+  instancesByDate: Map<string, ShiftInstance[]>;
+};
+
+type ShiftGroup = {
+  key: string;
+  shiftTypeName: string;
+  templateName: string | null;
+  heading: string;
+  timeBuckets: ShiftTimeBucket[];
+};
+
+const createShiftGroupKey = (instance: ShiftInstance) => {
+  if (instance.shiftTemplateId) {
+    return `template:${instance.shiftTemplateId}`;
+  }
+  const shiftKey = instance.shiftType?.key ?? `type-${instance.shiftTypeId ?? "unknown"}`;
+  const start = instance.timeStart ?? "";
+  const end = instance.timeEnd ?? "";
+  return `type:${shiftKey}|time:${start}-${end}`;
+};
+
+const normalizeTimeLabel = (value: string) => {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : "Any Time";
+};
+
+const getShiftGroupHeading = (shiftTypeName: string, templateName: string | null) =>
+  templateName ? `${shiftTypeName} - ${templateName}` : shiftTypeName;
+
+const getShiftGroupPriority = (shiftTypeName: string, templateName: string | null) => {
+  const combined = `${shiftTypeName} ${templateName ?? ""}`.toLowerCase();
+  if (combined.includes("promotion")) {
+    return 0;
+  }
+  if (combined.includes("clean")) {
+    return 1;
+  }
+  return 2;
+};
+
+const compareTimeLabels = (a: string, b: string) =>
+  a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+
 const normalizeRoleName = (value: string | null | undefined) => value?.trim().toLowerCase() ?? "";
+
+const formatRoleLabel = (value: string | null | undefined) => {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return "";
+  }
+  return normalized
+    .split(/\s+/)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+};
 
 const getRoleOrderValue = (assignment: ShiftAssignment, index: number) => {
   const normalized = normalizeRoleName(assignment.roleInShift);
@@ -350,6 +432,7 @@ const ScheduleOverviewPage = () => {
   const ensureWeekQuery = useEnsureWeek(selectedWeek, { allowGenerate: false, enabled: true });
   const weekId = ensureWeekQuery.data?.week?.id ?? null;
   const shiftInstancesQuery = useShiftInstances(weekId);
+  const shiftInstances = useMemo(() => shiftInstancesQuery.data ?? [], [shiftInstancesQuery.data]);
 
   const handleNavigateWeek = useCallback(
     (direction: -1 | 1) => {
@@ -381,19 +464,86 @@ const ScheduleOverviewPage = () => {
   );
   const monthSegments = useMemo<MonthSegment[]>(() => buildMonthSegments(daysOfWeek), [daysOfWeek]);
 
-  const pubCrawlInstances = useMemo(() => {
-    const instances = shiftInstancesQuery.data ?? [];
-    return instances.filter((instance) => {
-      const typeKey = instance.shiftType?.key?.toLowerCase() ?? "";
-      const typeName = instance.shiftType?.name?.toLowerCase() ?? "";
-      const templateName = instance.template?.name?.toLowerCase() ?? "";
-      return (
-        typeKey.includes("pub_crawl") ||
-        typeName.includes("pub crawl") ||
-        templateName.includes("pub crawl")
-      );
+  const pubCrawlInstances = useMemo(
+    () => shiftInstances.filter((instance) => isPubCrawlShiftInstance(instance)),
+    [shiftInstances],
+  );
+
+  const otherShiftGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        key: string;
+        shiftTypeName: string;
+        templateName: string | null;
+        timeBuckets: Map<string, Map<string, ShiftInstance[]>>;
+      }
+    >();
+
+    shiftInstances.forEach((instance) => {
+      if (isPubCrawlShiftInstance(instance)) {
+        return;
+      }
+
+      const key = createShiftGroupKey(instance);
+      let group = groups.get(key);
+      if (!group) {
+        group = {
+          key,
+          shiftTypeName: instance.shiftType?.name ?? "Shift",
+          templateName: instance.template?.name ?? null,
+          timeBuckets: new Map<string, Map<string, ShiftInstance[]>>(),
+        };
+        groups.set(key, group);
+      }
+
+      const label = normalizeTimeLabel(formatShiftTimeRange(instance.timeStart, instance.timeEnd));
+      let bucket = group.timeBuckets.get(label);
+      if (!bucket) {
+        bucket = new Map<string, ShiftInstance[]>();
+        group.timeBuckets.set(label, bucket);
+      }
+
+      const dayInstances = bucket.get(instance.date);
+      if (dayInstances) {
+        dayInstances.push(instance);
+      } else {
+        bucket.set(instance.date, [instance]);
+      }
     });
-  }, [shiftInstancesQuery.data]);
+
+    return Array.from(groups.values())
+      .map((group) => ({
+        key: group.key,
+        shiftTypeName: group.shiftTypeName,
+        templateName: group.templateName,
+        heading: getShiftGroupHeading(group.shiftTypeName, group.templateName),
+        timeBuckets: Array.from(group.timeBuckets.entries())
+          .sort(([a], [b]) => compareTimeLabels(a, b))
+          .map(([label, instancesByDate]) => ({
+            label,
+            instancesByDate,
+          })),
+      }))
+      .sort((a, b) => {
+        const priorityDiff =
+          getShiftGroupPriority(a.shiftTypeName, a.templateName) - getShiftGroupPriority(b.shiftTypeName, b.templateName);
+        if (priorityDiff !== 0) {
+          return priorityDiff;
+        }
+        const typeCompare = a.shiftTypeName.localeCompare(b.shiftTypeName);
+        if (typeCompare !== 0) {
+          return typeCompare;
+        }
+        const templateA = a.templateName ?? "";
+        const templateB = b.templateName ?? "";
+        const templateCompare = templateA.localeCompare(templateB);
+        if (templateCompare !== 0) {
+          return templateCompare;
+        }
+        return a.key.localeCompare(b.key);
+      });
+  }, [shiftInstances]);
 
   const assignmentsByDate = useMemo(() => {
     const map = new Map<string, ShiftAssignment[]>();
@@ -423,9 +573,90 @@ const ScheduleOverviewPage = () => {
     [assignmentsByDate, daysOfWeek],
   );
 
+  const pubCrawlHeading = useMemo(() => {
+    if (pubCrawlInstances.length === 0) {
+      return "PUB CRAWL";
+    }
+    const timeLabels = new Set<string>();
+    pubCrawlInstances.forEach((instance) => {
+      const label = formatShiftTimeRange(instance.timeStart, instance.timeEnd);
+      if (label) {
+        timeLabels.add(label);
+      }
+    });
+    const suffix = timeLabels.size === 1 ? Array.from(timeLabels)[0] : null;
+    return suffix ? `PUB CRAWL - ${suffix}` : "PUB CRAWL";
+  }, [pubCrawlInstances]);
+
   const loading = ensureWeekQuery.isLoading || shiftInstancesQuery.isLoading;
   const error = ensureWeekQuery.isError ? ensureWeekQuery.error : shiftInstancesQuery.error;
   const hasWeek = Boolean(weekId);
+
+  const renderAssignmentGroupCard = (
+    groupAssignments: ShiftAssignment[],
+    options?: { showRoles?: boolean },
+  ) => {
+    const primary = groupAssignments[0];
+    const { background, text } = getUserColor(primary?.userId ?? null);
+    const name = getUserDisplayName(primary);
+    const styles = createUserCardStyles(background);
+    const secondaryColor =
+      text.toLowerCase() === "#ffffff" ? "rgba(255, 255, 255, 0.78)" : lightenColor(text, 0.35);
+    const showRoles = options?.showRoles ?? false;
+    const roleLabels = showRoles
+      ? Array.from(
+          groupAssignments
+            .map((assignment) => {
+              const formatted = formatRoleLabel(assignment.roleInShift);
+              const normalized = normalizeRoleName(assignment.roleInShift);
+              return formatted
+                ? ({ formatted, normalized } as const)
+                : null;
+            })
+            .filter(
+              (
+                item,
+              ): item is {
+                formatted: string;
+                normalized: string;
+              } => item !== null,
+            )
+            .reduce<Map<string, string>>((map, item) => {
+              if (!map.has(item.normalized)) {
+                map.set(item.normalized, item.formatted);
+              }
+              return map;
+            }, new Map())
+            .values(),
+        )
+      : [];
+    const showCount = groupAssignments.length > 1;
+
+    return (
+      <Card
+        key={groupAssignments.map((assignment) => assignment.id).join("-")}
+        radius="lg"
+        withBorder
+        padding={0}
+        style={{ ...styles.container, color: text }}
+      >
+        <Box style={styles.overlay} />
+        <Stack gap={6} align="center" style={{ width: "100%", position: "relative", zIndex: 1 }}>
+          <Text style={{ ...userCardNameStyles, color: text }}>{name}</Text>
+          {showRoles && roleLabels.length > 0 ? (
+            <Text size="xs" style={{ fontFamily: HEADER_FONT_STACK, color: secondaryColor }}>
+              {roleLabels.join(" \u2022 ")}
+            </Text>
+          ) : null}
+          {showCount ? (
+            <Text size="xs" style={{ fontFamily: HEADER_FONT_STACK, color: secondaryColor }}>
+              {groupAssignments.length} assignments
+            </Text>
+          ) : null}
+        </Stack>
+      </Card>
+    );
+  };
 
   const renderAssignmentsForRole = (roleLabel: string, assignments: ShiftAssignment[]) => {
     const matches = filterAssignmentsForRole(roleLabel, assignments);
@@ -440,35 +671,269 @@ const ScheduleOverviewPage = () => {
 
     const grouped = groupAssignmentsByUser(matches);
 
-    return grouped.map((groupAssignments) => {
-      const primary = groupAssignments[0];
-      const { background, text } = getUserColor(primary?.userId ?? null);
-      const name = getUserDisplayName(primary);
-      const styles = createUserCardStyles(background);
-      const secondaryColor =
-        text.toLowerCase() === "#ffffff" ? "rgba(255, 255, 255, 0.78)" : lightenColor(text, 0.35);
-
-      return (
-        <Card
-          key={groupAssignments.map((assignment) => assignment.id).join("-")}
-          radius="lg"
-          withBorder
-          padding={0}
-          style={{ ...styles.container, color: text }}
-        >
-          <Box style={styles.overlay} />
-          <Stack gap={6} align="center" style={{ width: "100%", position: "relative", zIndex: 1 }}>
-            <Text style={{ ...userCardNameStyles, color: text }}>{name}</Text>
-            {groupAssignments.length > 1 ? (
-              <Text size="xs" style={{ fontFamily: HEADER_FONT_STACK, color: secondaryColor }}>
-                {groupAssignments.length} assignments
-              </Text>
-            ) : null}
-          </Stack>
-        </Card>
-      );
-    });
+    return grouped.map((groupAssignments) => renderAssignmentGroupCard(groupAssignments));
   };
+
+  const renderInstancesForCell = (instances: ShiftInstance[]) => {
+    if (instances.length === 0) {
+      return (
+        <Text size="sm" c="dimmed">
+          {"\u2014"}
+        </Text>
+      );
+    }
+
+    const sorted = [...instances].sort((a, b) => {
+      const aStart = a.timeStart ?? "";
+      const bStart = b.timeStart ?? "";
+      if (aStart && bStart) {
+        const compare = aStart.localeCompare(bStart);
+        if (compare !== 0) {
+          return compare;
+        }
+      }
+      return a.id - b.id;
+    });
+
+    return (
+      <Stack gap={12} align="center" style={{ width: "100%" }}>
+        {sorted.map((instance) => {
+          const assignments = instance.assignments ?? [];
+          const grouped = groupAssignmentsByUser(assignments);
+          const timeLabel = formatShiftTimeRange(instance.timeStart, instance.timeEnd);
+
+          return (
+            <Stack key={`instance-${instance.id}`} gap={8} align="center" style={{ width: "100%" }}>
+              {timeLabel ? (
+                <Text
+                  size="xs"
+                  c="dimmed"
+                  style={{ fontFamily: HEADER_FONT_STACK, fontWeight: 600, letterSpacing: "0.05em" }}
+                >
+                  {timeLabel}
+                </Text>
+              ) : null}
+              {grouped.length > 0
+                ? grouped.map((groupAssignments) =>
+                    renderAssignmentGroupCard(groupAssignments, { showRoles: true }),
+                  )
+                : (
+                    <Text size="sm" c="dimmed">
+                      {"\u2014"}
+                    </Text>
+                  )}
+            </Stack>
+          );
+        })}
+      </Stack>
+    );
+  };
+
+  const renderScheduleTable = (
+    key: string,
+    heading: string,
+    firstColumnLabel: string,
+    rows: ReactNode[],
+  ) => (
+    <Box
+      key={key}
+      style={{
+        flex: 1,
+        overflowX: "auto",
+        borderRadius: 20,
+        backgroundColor: "#fff",
+        boxShadow: palette.tableShadow,
+      }}
+    >
+      <Box
+        component="table"
+        style={{
+          width: "100%",
+          borderCollapse: "separate",
+          borderSpacing: 0,
+          minWidth: 760,
+          borderRadius: 18,
+          overflow: "hidden",
+        }}
+      >
+        <thead>
+          <tr>
+            <th
+              colSpan={daysOfWeek.length + 1}
+              style={{
+                borderTop: `3px solid ${palette.border}`,
+                textAlign: "center",
+                background: "linear-gradient(135deg, #7C4DFF 0%, #9C6CFF 55%, #F48FB1 100%)",
+                padding: "18px",
+                fontSize: "22px",
+                fontWeight: 800,
+                fontFamily: HEADER_FONT_STACK,
+                letterSpacing: "0.05em",
+                color: "#fff",
+              }}
+            >
+              {heading}
+            </th>
+          </tr>
+          <tr>
+            <th
+              style={{
+                ...tableCellBase,
+                borderWidth: "3px 3px 1px 3px",
+                backgroundColor: palette.lavenderBold,
+                textAlign: "center",
+                padding: "18px 12px",
+                verticalAlign: "middle",
+                color: palette.plumDark,
+              }}
+            >
+              <div style={yearHeaderLabelStyles}>{weekStart.format("YYYY")}</div>
+            </th>
+            {monthSegments.map((segment) => (
+              <th
+                key={`${key}-month-${segment.key}`}
+                colSpan={segment.span}
+                style={{
+                  ...tableCellBase,
+                  borderWidth: "3px 3px 1px 0",
+                  backgroundColor: palette.lavenderAccent,
+                  textAlign: "center",
+                  padding: "16px 12px",
+                  color: palette.plumDark,
+                }}
+              >
+                <div style={monthHeaderLabelStyles}>{segment.label}</div>
+              </th>
+            ))}
+          </tr>
+          <tr>
+            <th style={roleHeaderCellStyles}>
+              <div style={roleHeaderLabelStyles}>{firstColumnLabel}</div>
+            </th>
+            {daysOfWeek.map((day, index) => {
+              const nextDay = daysOfWeek[index + 1];
+              const borderRightWidth = !nextDay || !day.isSame(nextDay, "month") ? "3px" : "1px";
+              return (
+                <th
+                  key={`${key}-date-${day.toString()}`}
+                  style={{
+                    ...tableCellBase,
+                    backgroundColor: palette.lavenderDeep,
+                    borderWidth: `3px ${borderRightWidth} 1px 0`,
+                  }}
+                >
+                  <Stack gap={0} align="center">
+                    <Text
+                      fw={700}
+                      size="md"
+                      style={{ fontFamily: HEADER_FONT_STACK, fontSize: "18px" }}
+                    >
+                      {day.format("DD")}
+                    </Text>
+                    <Text size="xs" c="dimmed" style={{ fontFamily: HEADER_FONT_STACK }}>
+                      {day.format("ddd")}
+                    </Text>
+                  </Stack>
+                </th>
+              );
+            })}
+          </tr>
+        </thead>
+        <tbody>{rows}</tbody>
+      </Box>
+    </Box>
+  );
+
+  const pubCrawlRows = visibleRoles.map((roleLabel, roleIndex) => {
+    const topBorder = roleIndex === 0 ? "3px" : "2px";
+    const bottomBorder = roleIndex === visibleRoles.length - 1 ? "3px" : "1px";
+    const roleCellStyle: CSSProperties = {
+      ...roleCellStyles,
+      borderWidth: `${topBorder} 3px ${bottomBorder} 3px`,
+    };
+    const assignmentCellStyle: CSSProperties = {
+      ...tableCellBase,
+      borderWidth: `${topBorder} 1px ${bottomBorder} 0`,
+    };
+
+    return (
+      <tr key={`role-${roleLabel}`}>
+        <td style={roleCellStyle}>
+          <div style={roleLabelStyles}>{roleLabel}</div>
+        </td>
+        {daysOfWeek.map((day, index) => {
+          const isoDate = day.format("YYYY-MM-DD");
+          const assignments = assignmentsByDate.get(isoDate) ?? [];
+          const nextDay = daysOfWeek[index + 1];
+          const borderRightWidth = !nextDay || !day.isSame(nextDay, "month") ? "3px" : "1px";
+          return (
+            <td
+              key={`${isoDate}-${roleLabel}`}
+              style={{
+                ...assignmentCellStyle,
+                borderWidth: `${topBorder} ${borderRightWidth} ${bottomBorder} 0`,
+              }}
+            >
+              <Stack gap={8} align="center" style={{ width: "100%" }}>
+                {renderAssignmentsForRole(roleLabel, assignments)}
+              </Stack>
+            </td>
+          );
+        })}
+      </tr>
+    );
+  });
+
+  const otherShiftTables = otherShiftGroups
+    .map((group) => {
+      if (group.timeBuckets.length === 0) {
+        return null;
+      }
+
+      const rows = group.timeBuckets.map((bucket, bucketIndex) => {
+        const topBorder = bucketIndex === 0 ? "3px" : "2px";
+        const bottomBorder = bucketIndex === group.timeBuckets.length - 1 ? "3px" : "1px";
+        const timeframeCellStyle: CSSProperties = {
+          ...roleCellStyles,
+          borderWidth: `${topBorder} 3px ${bottomBorder} 3px`,
+        };
+        const assignmentCellStyle: CSSProperties = {
+          ...tableCellBase,
+          borderWidth: `${topBorder} 1px ${bottomBorder} 0`,
+          verticalAlign: "top",
+        };
+
+        return (
+          <tr key={`${group.key}-${bucket.label}`}>
+            <td style={timeframeCellStyle}>
+              <div style={roleLabelStyles}>{bucket.label}</div>
+            </td>
+            {daysOfWeek.map((day, index) => {
+              const isoDate = day.format("YYYY-MM-DD");
+              const nextDay = daysOfWeek[index + 1];
+              const borderRightWidth = !nextDay || !day.isSame(nextDay, "month") ? "3px" : "1px";
+              const instances = bucket.instancesByDate.get(isoDate) ?? [];
+              return (
+                <td
+                  key={`${group.key}-${bucket.label}-${isoDate}`}
+                  style={{
+                    ...assignmentCellStyle,
+                    borderWidth: `${topBorder} ${borderRightWidth} ${bottomBorder} 0`,
+                  }}
+                >
+                  {renderInstancesForCell(instances)}
+                </td>
+              );
+            })}
+          </tr>
+        );
+      });
+
+      return renderScheduleTable(`group-${group.key}`, group.heading, "Timeframe", rows);
+    })
+    .filter((table): table is JSX.Element => Boolean(table));
+
+  const pubCrawlTable = renderScheduleTable("pub-crawl", pubCrawlHeading, "Role", pubCrawlRows);
 
   return (
     <Stack mt="lg" gap="lg">
@@ -492,7 +957,7 @@ const ScheduleOverviewPage = () => {
           </Button>
           <Stack gap={4} align="center" style={{ flex: 1 }}>
             <Title order={3} fw={800} style={{ fontFamily: HEADER_FONT_STACK }}>
-              Krawl Through Krakow
+              Weekly Shift Schedule
             </Title>
             <WeekSelector
               value={selectedWeek}
@@ -541,152 +1006,8 @@ const ScheduleOverviewPage = () => {
           style={{ backgroundColor: palette.lavender, borderColor: palette.border }}
         >
           <Stack gap="xl">
-            <Box
-              style={{
-                flex: 1,
-                overflowX: "auto",
-                borderRadius: 20,
-                backgroundColor: "#fff",
-                boxShadow: palette.tableShadow,
-              }}
-            >
-              <Box
-                component="table"
-                style={{
-                  width: "100%",
-                  borderCollapse: "separate",
-                  borderSpacing: 0,
-                  minWidth: 760,
-                  borderRadius: 18,
-                  overflow: "hidden",
-                }}
-              >
-                <thead>
-                  <tr>
-                    <th
-                      colSpan={8}
-                      style={{
-                        borderTop: `3px solid ${palette.border}`,
-                        textAlign: "center",
-                        background: "linear-gradient(135deg, #7C4DFF 0%, #9C6CFF 55%, #F48FB1 100%)",
-                        padding: "18px",
-                        fontSize: "22px",
-                        fontWeight: 800,
-                        fontFamily: HEADER_FONT_STACK,
-                        letterSpacing: "0.05em",
-                        color: "#fff",
-                      }}
-                    >
-                      PUB CRAWL - 8:45 P.M.
-                    </th>
-                  </tr>
-                  <tr>
-                    <th
-                      style={{
-                        ...tableCellBase,
-                        borderWidth: "3px 3px 1px 3px",
-                        backgroundColor: palette.lavenderBold,
-                        textAlign: "center",
-                        padding: "18px 12px",
-                        verticalAlign: "middle",
-                        color: palette.plumDark,
-                      }}
-                    >
-                      <div style={yearHeaderLabelStyles}>{weekStart.format("YYYY")}</div>
-                    </th>
-                    {monthSegments.map((segment) => (
-                      <th
-                        key={segment.key}
-                        colSpan={segment.span}
-                        style={{
-                          ...tableCellBase,
-                          borderWidth: "3px 3px 1px 0",
-                          backgroundColor: palette.lavenderAccent,
-                          textAlign: "center",
-                          padding: "16px 12px",
-                          color: palette.plumDark,
-                        }}
-                      >
-                        <div style={monthHeaderLabelStyles}>{segment.label}</div>
-                      </th>
-                    ))}
-                  </tr>
-                  <tr>
-                    <th style={roleHeaderCellStyles}>
-                      <div style={roleHeaderLabelStyles}>Role</div>
-                    </th>
-                    {daysOfWeek.map((day, index) => {
-                      const nextDay = daysOfWeek[index + 1];
-                      const borderRightWidth = !nextDay || !day.isSame(nextDay, "month") ? "3px" : "1px";
-                      return (
-                        <th
-                          key={day.toString()}
-                          style={{
-                            ...tableCellBase,
-                            backgroundColor: palette.lavenderDeep,
-                            borderWidth: `3px ${borderRightWidth} 1px 0`,
-                          }}
-                        >
-                          <Stack gap={0} align="center">
-                            <Text
-                              fw={700}
-                              size="md"
-                              style={{ fontFamily: HEADER_FONT_STACK, fontSize: "18px" }}
-                            >
-                              {day.format("DD")}
-                            </Text>
-                            <Text size="xs" c="dimmed" style={{ fontFamily: HEADER_FONT_STACK }}>
-                              {day.format("ddd")}
-                            </Text>
-                          </Stack>
-                        </th>
-                      );
-                    })}
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleRoles.map((roleLabel, roleIndex) => {
-                    const topBorder = roleIndex === 0 ? "3px" : "2px";
-                    const bottomBorder = roleIndex === visibleRoles.length - 1 ? "3px" : "1px";
-                    const roleCellStyle: CSSProperties = {
-                      ...roleCellStyles,
-                      borderWidth: `${topBorder} 3px ${bottomBorder} 3px`,
-                    };
-                    const assignmentCellStyle: CSSProperties = {
-                      ...tableCellBase,
-                      borderWidth: `${topBorder} 1px ${bottomBorder} 0`,
-                    };
-
-                    return (
-                      <tr key={roleLabel}>
-                        <td style={roleCellStyle}>
-                          <div style={roleLabelStyles}>{roleLabel}</div>
-                        </td>
-                        {daysOfWeek.map((day, index) => {
-                          const isoDate = day.format("YYYY-MM-DD");
-                          const assignments = assignmentsByDate.get(isoDate) ?? [];
-                          const nextDay = daysOfWeek[index + 1];
-                          const borderRightWidth = !nextDay || !day.isSame(nextDay, "month") ? "3px" : "1px";
-                          return (
-                            <td
-                              key={isoDate + roleLabel}
-                              style={{
-                                ...assignmentCellStyle,
-                                borderWidth: `${topBorder} ${borderRightWidth} ${bottomBorder} 0`,
-                              }}
-                            >
-                              <Stack gap={8} align="center" style={{ width: "100%" }}>
-                                {renderAssignmentsForRole(roleLabel, assignments)}
-                              </Stack>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </Box>
-            </Box>
+            {pubCrawlTable}
+            {otherShiftTables}
             {pubCrawlInstances.length === 0 ? (
               <Alert
                 mb={0}
