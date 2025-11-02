@@ -432,6 +432,7 @@ export const useCancelSwap = () => {
     },
     onSuccess: () => {
       invalidateQuery(queryClient, schedulingKeys.mySwaps);
+      invalidateQuery(queryClient, schedulingKeys.base);
     },
   });
 };
