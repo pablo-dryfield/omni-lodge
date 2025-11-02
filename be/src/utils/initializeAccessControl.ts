@@ -249,11 +249,18 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'booking-manifest': ['view'],
     'venue-numbers-management': ['view', 'create', 'update'],
     'staff-payouts-self': ['view'],
+    'scheduling-availability': ['view', 'create', 'update'],
+    'scheduling-builder': ['view'],
+    'scheduling-my-shifts': ['view'],
   },
 };
 
 roleModuleMatrix['administrator'] = Object.fromEntries(
   Object.entries(roleModuleMatrix.admin).map(([moduleSlug, actions]) => [moduleSlug, [...actions]])
+);
+
+roleModuleMatrix['pub-crawl-guide'] = Object.fromEntries(
+  Object.entries(roleModuleMatrix.guide).map(([moduleSlug, actions]) => [moduleSlug, [...actions]])
 );
 
 export const PAYMENT_METHOD_SEED = [
