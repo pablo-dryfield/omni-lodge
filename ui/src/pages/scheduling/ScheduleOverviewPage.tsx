@@ -686,15 +686,15 @@ const ScheduleOverviewPage = () => {
     );
   };
 
-  const renderAssignmentsForRole = (roleLabel: string, assignments: ShiftAssignment[]) => {
+  const renderAssignmentsForRole = (roleLabel: string, assignments: ShiftAssignment[]): ReactNode[] => {
     const matches = filterAssignmentsForRole(roleLabel, assignments);
 
     if (matches.length === 0) {
-      return (
+      return [
         <Text size="sm" c="dimmed">
           {"\u2014"}
         </Text>
-      );
+      ];
     }
 
     const grouped = groupAssignmentsByUser(matches);
