@@ -1,6 +1,11 @@
 import { Request, Response } from "express";
-import { Op } from "sequelize";
-import { Sequelize } from "sequelize-typescript";
+import {
+  Association,
+  ModelAttributeColumnOptions,
+  Op,
+  type ModelAttributeColumnReferencesOptions,
+} from "sequelize";
+import { Model, ModelCtor, Sequelize } from "sequelize-typescript";
 import dayjs from "dayjs";
 import Counter from "../models/Counter.js";
 import CounterChannelMetric from "../models/CounterChannelMetric.js";
@@ -8,6 +13,7 @@ import CounterProduct from "../models/CounterProduct.js";
 import CounterUser from "../models/CounterUser.js";
 import User from "../models/User.js";
 import { AuthenticatedRequest } from "../types/AuthenticatedRequest";
+import sequelize from "../config/database.js";
 
 type CommissionSummary = {
   userId: number;
@@ -274,6 +280,59 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
   }
 };
 
+type ReportModelFieldDescriptor = {
+  fieldName: string;
+  columnName: string;
+  type: string;
+  allowNull: boolean;
+  primaryKey: boolean;
+  defaultValue: string | number | boolean | null;
+  unique: boolean;
+  references?: {
+    model: string | null;
+    key?: string | null;
+  };
+};
+
+type ReportModelAssociationDescriptor = {
+  name: string | null;
+  targetModel: string;
+  associationType: string;
+  foreignKey?: string;
+  sourceKey?: string;
+  through?: string | null;
+  as?: string;
+};
+
+type ReportModelDescriptor = {
+  id: string;
+  name: string;
+  tableName: string;
+  schema?: string;
+  description: string;
+  connection: string;
+  recordCount: string;
+  lastSynced: string;
+  primaryKeys: string[];
+  primaryKey: string | null;
+  fields: ReportModelFieldDescriptor[];
+  associations: ReportModelAssociationDescriptor[];
+};
+
+export const listReportModels = (_req: Request, res: Response): void => {
+  try {
+    const models = Object.values(sequelize.models) as Array<ModelCtor<Model>>;
+    const payload = models
+      .map(describeModel)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    res.status(200).json({ models: payload });
+  } catch (error) {
+    console.error("Failed to enumerate report models", error);
+    res.status(500).json({ message: "Unable to enumerate data models" });
+  }
+};
+
 function aggregateDailyBreakdownByUser(
   dailyAggregates: Map<string, DailyAggregate>,
   commissionDataByUser: Map<number, CommissionSummary>,
@@ -295,4 +354,183 @@ function aggregateDailyBreakdownByUser(
       });
     });
   });
+}
+
+function describeModel(model: ModelCtor<Model>): ReportModelDescriptor {
+  const attributes = model.getAttributes();
+  const fields = Object.entries(attributes).map(([fieldName, attribute]) =>
+    describeField(fieldName, attribute),
+  );
+
+  const primaryKeys = fields
+    .filter((field) => field.primaryKey)
+    .map((field) => field.fieldName);
+
+  const tableNameRaw = model.getTableName();
+  const tableName =
+    typeof tableNameRaw === "string" ? tableNameRaw : tableNameRaw.tableName ?? model.name;
+  const schema =
+    typeof tableNameRaw === "string" ? undefined : tableNameRaw.schema ?? undefined;
+
+  const associations = Object.values(model.associations ?? {}).map((association) =>
+    describeAssociation(association),
+  );
+
+  return {
+    id: model.name,
+    name: model.name,
+    tableName,
+    schema,
+    description: buildModelDescription(model.name, schema, tableName),
+    connection: "OmniLodge core database",
+    recordCount: "N/A",
+    lastSynced: new Date().toISOString(),
+    primaryKeys,
+    primaryKey: primaryKeys[0] ?? null,
+    fields,
+    associations,
+  };
+}
+
+function describeField(
+  fieldName: string,
+  attribute: ModelAttributeColumnOptions<Model>,
+): ReportModelFieldDescriptor {
+  const columnName = (attribute.field as string | undefined) ?? fieldName;
+  const type = describeAttributeType(attribute);
+  const allowNull =
+    attribute.allowNull !== undefined ? attribute.allowNull : !attribute.primaryKey;
+  const primaryKey = Boolean(attribute.primaryKey);
+  const unique = Boolean(
+    typeof attribute.unique === "boolean"
+      ? attribute.unique
+      : attribute.unique && typeof attribute.unique === "object",
+  );
+  const defaultValue = serializeDefaultValue(attribute.defaultValue);
+
+  let referenceModel: string | null = null;
+  let referenceKey: string | null = null;
+  const references = attribute.references;
+  if (references) {
+    if (typeof references === "string") {
+      referenceModel = references;
+    } else {
+      const referenceOptions = references as ModelAttributeColumnReferencesOptions;
+      const modelReference = referenceOptions.model;
+      if (typeof modelReference === "string") {
+        referenceModel = modelReference;
+      } else if (modelReference && typeof modelReference === "object") {
+        referenceModel =
+          (modelReference as { tableName?: string; name?: string }).tableName ??
+          (modelReference as { name?: string }).name ??
+          null;
+      }
+      if (typeof referenceOptions.key === "string") {
+        referenceKey = referenceOptions.key;
+      }
+    }
+  }
+
+  return {
+    fieldName,
+    columnName,
+    type,
+    allowNull,
+    primaryKey,
+    defaultValue,
+    unique,
+    references: referenceModel
+      ? {
+          model: referenceModel,
+          key: referenceKey,
+        }
+      : undefined,
+  };
+}
+
+function describeAssociation(association: Association): ReportModelAssociationDescriptor {
+  const target =
+    (association.target && "name" in association.target
+      ? (association.target as { name?: string }).name
+      : undefined) ?? "";
+
+  const foreignKeyRaw = (association as unknown as { foreignKey?: string | { fieldName?: string } })
+    .foreignKey;
+  const foreignKey =
+    typeof foreignKeyRaw === "string"
+      ? foreignKeyRaw
+      : foreignKeyRaw && typeof foreignKeyRaw === "object"
+      ? foreignKeyRaw.fieldName
+      : undefined;
+
+  const through =
+    (association as unknown as { throughModel?: { name?: string } }).throughModel?.name ??
+    (association as unknown as { through?: { model?: { name?: string } } }).through?.model?.name ??
+    null;
+
+  return {
+    name: (association as { as?: string }).as ?? null,
+    targetModel: target,
+    associationType: association.associationType,
+    foreignKey,
+    sourceKey: (association as { sourceKey?: string }).sourceKey,
+    through,
+    as: (association as { as?: string }).as,
+  };
+}
+
+function describeAttributeType(attribute: ModelAttributeColumnOptions<Model>): string {
+  const rawType = (attribute.type ?? {}) as {
+    key?: string;
+    toSql?: () => string;
+    constructor?: { name?: string };
+    options?: { values?: unknown[] };
+  };
+
+  if (typeof rawType.toSql === "function") {
+    try {
+      return rawType.toSql();
+    } catch {
+      // ignore toSql errors and fall through to other formats
+    }
+  }
+
+  if (rawType.key) {
+    return rawType.key;
+  }
+
+  if (rawType.constructor?.name) {
+    return rawType.constructor.name;
+  }
+
+  return "UNKNOWN";
+}
+
+function serializeDefaultValue(
+  defaultValue: ModelAttributeColumnOptions<Model>["defaultValue"],
+): string | number | boolean | null {
+  if (defaultValue === undefined || defaultValue === null) {
+    return null;
+  }
+
+  if (typeof defaultValue === "function") {
+    return "[function]";
+  }
+
+  if (defaultValue instanceof Date) {
+    return defaultValue.toISOString();
+  }
+
+  if (typeof defaultValue === "string" || typeof defaultValue === "number" || typeof defaultValue === "boolean") {
+    return defaultValue;
+  }
+
+  return String(defaultValue);
+}
+
+function buildModelDescription(modelName: string, schema: string | undefined, tableName: string): string {
+  if (schema) {
+    return `${modelName} model mapped to ${schema}.${tableName}`;
+  }
+  return `${modelName} model mapped to ${tableName}`;
 }
