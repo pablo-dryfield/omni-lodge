@@ -56,6 +56,7 @@ const defaultPages = [
   { slug: 'settings-staff-profiles', name: 'Staff Profiles', description: 'Maintain staff profile metadata', sortOrder: 18 },
   { slug: 'settings-shift-roles', name: 'Shift Roles', description: 'Manage scheduling shift role definitions', sortOrder: 19 },
   { slug: 'settings-user-shift-roles', name: 'User Shift Roles', description: 'Assign shift roles to users', sortOrder: 20 },
+  { slug: 'settings-db-backups', name: 'Database Backups', description: 'Review and manage PostgreSQL backups', sortOrder: 21 },
 ];
 
 const defaultModules = [
@@ -110,7 +111,8 @@ const rolePageMatrix: Record<string, string[]> = {
 'settings-permissions-modules',
 'settings-staff-profiles',
 'settings-shift-roles',
-'settings-user-shift-roles'],
+'settings-user-shift-roles',
+'settings-db-backups'],
   owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles'],
   manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling'],
   'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling'],

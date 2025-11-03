@@ -23,6 +23,7 @@ import {
   IconHierarchy3,
   IconUserCog,
   IconDatabase,
+  IconCloudDownload,
 } from "@tabler/icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ActiveNavLink } from "./ActiveNavLink";
@@ -188,6 +189,12 @@ const settingsNav: SettingsNavSection[] = [
         to: "/settings/sql-helper",
         slug: PAGE_SLUGS.settingsActions,
         icon: <IconDatabase size={20} />,
+      },
+      {
+        label: "DB Backups",
+        to: "/settings/db-backups",
+        slug: PAGE_SLUGS.settingsDbBackups,
+        icon: <IconCloudDownload size={20} />,
       },
     ],
   },
