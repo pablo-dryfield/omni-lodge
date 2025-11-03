@@ -762,19 +762,6 @@ const Reports = (props: GenericPageProps) => {
   }, [dispatch, props.title]);
 
   useEffect(() => {
-    if (dataModels.length === 0 || templates.length > 0) {
-      return;
-    }
-    const initialTemplates = buildInitialTemplates(dataModels);
-    const fallback = initialTemplates.length > 0 ? initialTemplates : [createEmptyTemplate()];
-    setTemplates(fallback);
-    if (fallback[0]) {
-      setSelectedTemplateId(fallback[0].id);
-      setDraft(deepClone(fallback[0]));
-    }
-  }, [dataModels, templates.length]);
-
-  useEffect(() => {
     if (!activeKey || activeKey === "GoogleReviews") {
       return;
     }
@@ -2694,7 +2681,7 @@ const Reports = (props: GenericPageProps) => {
                                       value === "" || value === null ? "" : String(value),
                                     )
                                   }
-                                  allowDecimals
+                                  allowDecimal
                                   w={180}
                                 />
                               );
