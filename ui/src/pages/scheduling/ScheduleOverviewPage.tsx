@@ -5,6 +5,7 @@ import { IconAlertTriangle, IconChevronLeft, IconChevronRight } from "@tabler/ic
 import dayjs from "dayjs";
 import type { Dayjs } from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
+import { useMediaQuery } from "@mantine/hooks";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import {
   formatScheduleWeekLabel,
@@ -39,6 +40,11 @@ const palette = {
   cardShadow: "0 12px 28px rgba(124, 77, 255, 0.22)",
 };
 
+const MOBILE_CARD_SHADOW = "0 20px 36px rgba(46, 52, 70, 0.12)";
+const MOBILE_SECTION_SHADOW = "0 14px 28px rgba(82, 36, 199, 0.12)";
+const MOBILE_SECTION_BACKGROUND = "#F6F1FF";
+const MOBILE_SECONDARY_SECTION_BACKGROUND = "#F8F9FD";
+
 const HEADER_FONT_STACK = "'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif";
 
 const clampToHex = (value: number) => Math.max(0, Math.min(255, value));
@@ -61,9 +67,9 @@ const lightenColor = (hexColor: string, amount = 0.2) => {
 
 const tableCellBase: CSSProperties = {
   border: `1px solid ${palette.border}`,
-  padding: "14px 16px",
+  padding: "12px 8px",
   textAlign: "center",
-  minWidth: 110,
+  minWidth: 0,
   backgroundColor: "#ffffff",
   verticalAlign: "top",
 };
@@ -71,7 +77,7 @@ const tableCellBase: CSSProperties = {
 const roleCellStyles: CSSProperties = {
   ...tableCellBase,
   padding: 0,
-  minWidth: 160,
+  minWidth: 0,
   height: "100%",
   verticalAlign: "middle",
   borderLeftWidth: "3px",
@@ -170,6 +176,8 @@ const createUserCardStyles = (background: string) => {
       borderRadius: 18,
       padding: "14px 16px",
       width: "100%",
+      maxWidth: 260,
+      minWidth: 0,
       position: "relative",
       overflow: "hidden",
       transition: "transform 120ms ease, box-shadow 120ms ease",
@@ -422,6 +430,7 @@ const formatWeekValue = (value: string | null | undefined) => {
 };
 
 const ScheduleOverviewPage = () => {
+  const isMobile = useMediaQuery("(max-width: 768px)");
   const [weekOptions, initialWeekValue] = useMemo(() => {
     const options = getUpcomingWeeks(6);
     const initial = options[0]?.value ?? dayjs().format("GGGG-[W]WW");
@@ -695,10 +704,11 @@ const ScheduleOverviewPage = () => {
 
   const renderInstancesForCell = (
     instances: ShiftInstance[],
-    options?: { showTime?: boolean; showRoles?: boolean },
+    options?: { showTime?: boolean; showRoles?: boolean; emphasizeTime?: boolean },
   ) => {
     const showTime = options?.showTime ?? true;
     const showRoles = options?.showRoles ?? true;
+    const emphasizeTime = options?.emphasizeTime ?? false;
     if (instances.length === 0) {
       return (
         <Text size="sm" c="dimmed">
@@ -730,9 +740,13 @@ const ScheduleOverviewPage = () => {
             <Stack key={`instance-${instance.id}`} gap={8} align="center" style={{ width: "100%" }}>
               {showTime && timeLabel ? (
                 <Text
-                  size="xs"
-                  c="dimmed"
-                  style={{ fontFamily: HEADER_FONT_STACK, fontWeight: 600, letterSpacing: "0.05em" }}
+                  size={emphasizeTime ? "sm" : "xs"}
+                  fw={emphasizeTime ? 700 : 600}
+                  c={emphasizeTime ? palette.slate : "dimmed"}
+                  style={{
+                    fontFamily: HEADER_FONT_STACK,
+                    letterSpacing: emphasizeTime ? "0.02em" : "0.05em",
+                  }}
                 >
                   {timeLabel}
                 </Text>
@@ -763,7 +777,8 @@ const ScheduleOverviewPage = () => {
       key={key}
       style={{
         flex: 1,
-        overflowX: "auto",
+        minWidth: 0,
+        overflow: "hidden",
         borderRadius: 20,
         backgroundColor: "#fff",
         boxShadow: palette.tableShadow,
@@ -773,9 +788,11 @@ const ScheduleOverviewPage = () => {
         component="table"
         style={{
           width: "100%",
+          maxWidth: "100%",
+          minWidth: 0,
+          tableLayout: "fixed",
           borderCollapse: "separate",
           borderSpacing: 0,
-          minWidth: 760,
           borderRadius: 18,
           overflow: "hidden",
         }}
@@ -868,6 +885,180 @@ const ScheduleOverviewPage = () => {
       </Box>
     </Box>
   );
+
+  const renderMobileSchedule = () => {
+    const dayCards = daysOfWeek
+      .map((day) => {
+        const isoDate = day.format("YYYY-MM-DD");
+        const assignments = assignmentsByDate.get(isoDate) ?? [];
+        const pubSections = visibleRoles
+          .map((roleLabel) => ({
+            roleLabel,
+            nodes: renderAssignmentsForRole(roleLabel, assignments),
+          }))
+          .filter((section) => section.nodes.length > 0);
+
+        const otherSections = otherShiftGroups
+          .flatMap((group) =>
+            group.timeBuckets.map((bucket) => {
+              const instances = bucket.instancesByDate.get(isoDate) ?? [];
+              if (instances.length === 0) {
+                return null;
+              }
+              return {
+                key: `${group.key}-${bucket.label}`,
+                heading: group.heading,
+                label: bucket.label,
+                instances,
+              };
+            }),
+          )
+          .filter(
+            (
+              section,
+            ): section is {
+              key: string;
+              heading: string;
+              label: string;
+              instances: ShiftInstance[];
+            } => section !== null,
+          );
+
+        if (pubSections.length === 0 && otherSections.length === 0) {
+          return null;
+        }
+
+        return (
+          <Card
+            key={`mobile-day-${isoDate}`}
+            radius="lg"
+            shadow="xl"
+            padding="lg"
+            withBorder
+            style={{
+              width: "100%",
+              backgroundColor: "#ffffff",
+              borderColor: palette.border,
+              boxShadow: MOBILE_CARD_SHADOW,
+            }}
+          >
+            <Stack gap="lg" align="center" style={{ width: "100%" }}>
+              <Stack gap={6} align="center" style={{ width: "100%" }}>
+                <Text
+                  size="lg"
+                  fw={700}
+                  style={{ fontFamily: HEADER_FONT_STACK, color: palette.slate }}
+                  ta="center"
+                >
+                  {day.format("dddd")}
+                </Text>
+                <Text size="sm" c="dimmed" style={{ fontFamily: HEADER_FONT_STACK }} ta="center">
+                  {day.format("MMM D, YYYY")}
+                </Text>
+                <Box style={{ width: 56, height: 2, backgroundColor: palette.border }} />
+              </Stack>
+
+              {pubSections.length > 0 ? (
+                <Stack gap={12} align="center" style={{ width: "100%" }}>
+                  <Text
+                    size="sm"
+                    fw={700}
+                    style={{ fontFamily: HEADER_FONT_STACK, letterSpacing: "0.08em", color: palette.plumDark }}
+                  >
+                    Pub Crawl
+                  </Text>
+                  <Stack gap={12} style={{ width: "100%" }}>
+                    {pubSections.map((section) => (
+                      <Card
+                        key={`pub-${isoDate}-${section.roleLabel}`}
+                        withBorder
+                        radius="md"
+                        padding="md"
+                        shadow="sm"
+                        style={{
+                          width: "100%",
+                          backgroundColor: MOBILE_SECTION_BACKGROUND,
+                          borderColor: "rgba(124, 77, 255, 0.14)",
+                          boxShadow: MOBILE_SECTION_SHADOW,
+                        }}
+                      >
+                        <Stack gap={10} align="center" style={{ width: "100%" }}>
+                          <Text
+                            size="xs"
+                            fw={600}
+                            style={{ fontFamily: HEADER_FONT_STACK, letterSpacing: "0.08em", color: palette.plumDark }}
+                          >
+                            {section.roleLabel.toUpperCase()}
+                          </Text>
+                          <Stack gap={8} align="center" style={{ width: "100%" }}>
+                            {section.nodes.map((node, index) => (
+                              <Box
+                                key={`pub-${isoDate}-${section.roleLabel}-node-${index}`}
+                                style={{ width: "100%", display: "flex", justifyContent: "center" }}
+                              >
+                                {node}
+                              </Box>
+                            ))}
+                          </Stack>
+                        </Stack>
+                      </Card>
+                    ))}
+                  </Stack>
+                </Stack>
+              ) : null}
+
+              {otherSections.map((section) => (
+                <Card
+                  key={`other-${isoDate}-${section.key}`}
+                  withBorder
+                  radius="md"
+                  padding="md"
+                  shadow="sm"
+                  style={{
+                    width: "100%",
+                    backgroundColor: MOBILE_SECONDARY_SECTION_BACKGROUND,
+                    borderColor: "rgba(46, 52, 70, 0.1)",
+                    boxShadow: MOBILE_SECTION_SHADOW,
+                  }}
+                >
+                  <Stack gap={10} align="center" style={{ width: "100%" }}>
+                    <Text
+                      size="sm"
+                      fw={700}
+                      style={{ fontFamily: HEADER_FONT_STACK, letterSpacing: "0.06em", color: palette.plumDark }}
+                    >
+                      {section.heading}
+                    </Text>
+                    <Stack gap={8} align="center" style={{ width: "100%" }}>
+                      {renderInstancesForCell(section.instances, {
+                        showTime: true,
+                        showRoles: false,
+                        emphasizeTime: true,
+                      })}
+                    </Stack>
+                  </Stack>
+                </Card>
+              ))}
+            </Stack>
+          </Card>
+        );
+      })
+      .filter((card): card is JSX.Element => card !== null);
+
+    if (dayCards.length === 0) {
+      return (
+        <Text size="sm" c="dimmed" ta="center" style={{ fontFamily: HEADER_FONT_STACK }}>
+          No shifts scheduled for this week yet.
+        </Text>
+      );
+    }
+
+    return (
+      <Stack gap="lg" align="center" style={{ width: "100%" }}>
+        {dayCards}
+      </Stack>
+    );
+  };
 
   const pubCrawlRows = visibleRoles.map((roleLabel, roleIndex) => {
     const topBorder = roleIndex === 0 ? "3px" : "2px";
@@ -963,6 +1154,37 @@ const ScheduleOverviewPage = () => {
     .filter((table): table is JSX.Element => Boolean(table));
 
   const pubCrawlTable = renderScheduleTable("pub-crawl", pubCrawlHeading, "Role", pubCrawlRows);
+  const hasShiftContent = shiftInstances.length > 0;
+  const weekLabel = formatWeekValue(selectedWeek);
+  const navigationIsLoading = shiftInstancesQuery.isLoading;
+  const navButtonStyle = isMobile ? ({ flex: "1 1 140px", minWidth: "140px" } as CSSProperties) : undefined;
+  const weekSelectorWrapperStyle: CSSProperties = isMobile
+    ? {
+        flex: "1 1 100%",
+        minWidth: "100%",
+        padding: "6px 12px",
+        backgroundColor: "rgba(255,255,255,0.18)",
+        borderRadius: 14,
+        boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.25)",
+      }
+    : {
+        flex: "0 0 240px",
+        minWidth: "240px",
+        padding: "6px 12px",
+        backgroundColor: "rgba(255,255,255,0.18)",
+        borderRadius: 14,
+        boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.25)",
+      };
+  const scheduleContent = isMobile
+    ? renderMobileSchedule()
+    : hasShiftContent
+      ? (
+        <>
+          {pubCrawlTable}
+          {otherShiftTables}
+        </>
+      )
+      : null;
 
   return (
     <Stack mt="lg" gap="lg">
@@ -973,42 +1195,54 @@ const ScheduleOverviewPage = () => {
         style={{
           background: palette.heroGradient,
           color: "#fff",
+          overflowX: "hidden",
         }}
       >
-        <Group justify="space-between" align="center">
-          <Button
-            variant="white"
-            color="dark"
-            leftSection={<IconChevronLeft size={16} />}
-            onClick={() => handleNavigateWeek(-1)}
-            disabled={!canNavigateBackward || shiftInstancesQuery.isLoading}
-          >
-            Previous Week
-          </Button>
-          <Stack gap={4} align="center" style={{ flex: 1 }}>
+        <Stack gap="md" align={isMobile ? "stretch" : "center"} style={{ width: "100%" }}>
+          <Stack gap={6} align="center" style={{ width: "100%" }}>
             <Title order={3} fw={800} style={{ fontFamily: HEADER_FONT_STACK }}>
               Weekly Shift Schedule
             </Title>
-            <WeekSelector
-              value={selectedWeek}
-              weeks={weekOptions}
-              onChange={setSelectedWeek}
-              selectProps={{
-                style: { maxWidth: 260, width: "100%" },
-                styles: { input: { fontWeight: 600, textAlign: "center" } },
-              }}
-            />
           </Stack>
-          <Button
-            variant="white"
-            color="dark"
-            rightSection={<IconChevronRight size={16} />}
-            onClick={() => handleNavigateWeek(1)}
-            disabled={!canNavigateForward || shiftInstancesQuery.isLoading}
-          >
-            Next Week
-          </Button>
-        </Group>
+          <Group justify="center" gap="sm" wrap="wrap" style={{ width: "100%" }}>
+            <Button
+              variant="white"
+              color="dark"
+              leftSection={<IconChevronLeft size={16} />}
+              onClick={() => handleNavigateWeek(-1)}
+              disabled={!canNavigateBackward || navigationIsLoading}
+              style={navButtonStyle}
+            >
+              Previous
+            </Button>
+            <Box style={weekSelectorWrapperStyle}>
+              <WeekSelector
+                value={selectedWeek}
+                weeks={weekOptions}
+                onChange={setSelectedWeek}
+                selectProps={{
+                  style: { width: "100%" },
+                  styles: {
+                    input: {
+                      fontWeight: 600,
+                      textAlign: "center",
+                    },
+                  },
+                }}
+              />
+            </Box>
+            <Button
+              variant="white"
+              color="dark"
+              rightSection={<IconChevronRight size={16} />}
+              onClick={() => handleNavigateWeek(1)}
+              disabled={!canNavigateForward || navigationIsLoading}
+              style={navButtonStyle}
+            >
+              Next
+            </Button>
+          </Group>
+        </Stack>
       </Card>
 
       {error ? (
@@ -1034,11 +1268,15 @@ const ScheduleOverviewPage = () => {
           shadow="xl"
           radius="lg"
           padding="xl"
-          style={{ backgroundColor: palette.lavender, borderColor: palette.border }}
+          style={{ backgroundColor: palette.lavender, borderColor: palette.border, overflow: "hidden" }}
         >
-          <Stack gap="xl">
-            {pubCrawlTable}
-            {otherShiftTables}
+          <Stack gap="xl" style={{ width: "100%", minWidth: 0, overflowX: "hidden" }}>
+            {scheduleContent}
+            {!hasShiftContent && !isMobile ? (
+              <Text size="sm" c="dimmed" ta="center">
+                No shifts scheduled for this week yet. Use the actions above to add shifts or auto assign staff.
+              </Text>
+            ) : null}
             {pubCrawlInstances.length === 0 ? (
               <Alert
                 mb={0}
