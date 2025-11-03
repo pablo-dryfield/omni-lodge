@@ -738,6 +738,15 @@ function buildModelDescription(modelName: string, schema: string | undefined, ta
   return `${modelName} model mapped to ${tableName}`;
 }
 
+function findField(
+  descriptor: ReportModelDescriptor,
+  identifier: string,
+): ReportModelFieldDescriptor | undefined {
+  return descriptor.fields.find(
+    (field) => field.fieldName === identifier || field.columnName === identifier,
+  );
+}
+
 function ensureModelDescriptor(modelId: string): ReportModelDescriptor | null {
   const cached = modelDescriptorCache.get(modelId);
   if (cached) {
@@ -804,9 +813,31 @@ function buildJoinClauses(
         continue;
       }
 
-      const leftField = leftDescriptor.fields.find((field) => field.fieldName === leftFieldId);
-      const rightField = rightDescriptor.fields.find((field) => field.fieldName === rightFieldId);
+    const leftField = findField(leftDescriptor, leftFieldId);
+      const rightField = findField(rightDescriptor, rightFieldId);
       if (!leftField || !rightField) {
+        const knownLeft = leftFieldId.split("__").pop() ?? leftFieldId;
+        const knownRight = rightFieldId.split("__").pop() ?? rightFieldId;
+        const leftFallback = findField(leftDescriptor, knownLeft);
+        const rightFallback = findField(rightDescriptor, knownRight);
+
+        if (!leftFallback || !rightFallback) {
+          remaining.splice(index, 1);
+          progress = true;
+          unresolved.push(
+            `${leftModelId}.${leftFieldId} -> ${rightModelId}.${rightFieldId} (missing field metadata)`,
+          );
+          continue;
+        }
+
+        leftFieldId = leftFallback.fieldName;
+        rightFieldId = rightFallback.fieldName;
+      }
+
+      const resolvedLeftField = leftField ?? findField(leftDescriptor, leftFieldId)!;
+      const resolvedRightField = rightField ?? findField(rightDescriptor, rightFieldId)!;
+
+      if (!resolvedLeftField || !resolvedRightField) {
         remaining.splice(index, 1);
         progress = true;
         unresolved.push(
@@ -822,7 +853,7 @@ function buildJoinClauses(
       const rightTable = buildFromClause(rightDescriptor, rightAlias);
 
       clauses.push(
-        `${normalizedJoin} JOIN ${rightTable} ON ${leftAlias}.${quoteIdentifier(leftField.columnName)} = ${rightAlias}.${quoteIdentifier(rightField.columnName)}`,
+        `${normalizedJoin} JOIN ${rightTable} ON ${leftAlias}.${quoteIdentifier(resolvedLeftField.columnName ?? resolvedLeftField.fieldName)} = ${rightAlias}.${quoteIdentifier(resolvedRightField.columnName ?? resolvedRightField.fieldName)}`,
       );
 
       joined.add(rightModelId);
