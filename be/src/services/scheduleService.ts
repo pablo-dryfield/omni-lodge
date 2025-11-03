@@ -68,10 +68,23 @@ export type WeekIdentifier = {
   isoWeek: number;
 };
 
+const ISO_WEEK_PARAM_REGEX = /^(\d{4})-W(\d{1,2})$/i;
+
 export function parseWeekParam(weekParam?: string | null): WeekIdentifier {
-  if (weekParam && dayjs(weekParam, 'YYYY-[W]WW', true).isValid()) {
-    const [year, week] = weekParam.split('-W');
-    return { year: Number(year), isoWeek: Number(week) };
+  if (typeof weekParam === 'string') {
+    const trimmed = weekParam.trim();
+    const match = ISO_WEEK_PARAM_REGEX.exec(trimmed);
+    if (match) {
+      const year = Number(match[1]);
+      const week = Number(match[2]);
+      if (!Number.isNaN(year) && !Number.isNaN(week) && week >= 1 && week <= 53) {
+        return { year, isoWeek: week };
+      }
+    }
+    if (dayjs(weekParam, 'YYYY-[W]WW', true).isValid()) {
+      const [year, week] = weekParam.split('-W');
+      return { year: Number(year), isoWeek: Number(week) };
+    }
   }
   const target = dayjs().tz(SCHED_TZ).add(1, 'week');
   return { year: target.isoWeekYear(), isoWeek: target.isoWeek() };
