@@ -47,25 +47,12 @@ const schedulingKeys = {
 
 type WeekQueryParams = { week?: string | null };
 
-const ISO_WEEK_VALUE_REGEX = /^(\d{4})-W(\d{1,2})$/i;
-
 const toIsoWeekStart = (value: string | null): dayjs.Dayjs | null => {
   if (!value) {
     return null;
   }
-  const match = ISO_WEEK_VALUE_REGEX.exec(value.trim());
-  if (!match) {
-    return null;
-  }
-  const year = Number(match[1]);
-  const week = Number(match[2]);
-  if (!Number.isFinite(year) || !Number.isFinite(week) || week < 1 || week > 53) {
-    return null;
-  }
-  return dayjs()
-    .isoWeekYear(year)
-    .isoWeek(week)
-    .startOf("isoWeek");
+  const parsed = dayjs(value.trim(), "YYYY-[W]WW", true);
+  return parsed.isValid() ? parsed.startOf("isoWeek") : null;
 };
 
 export type AutoAssignSummary = {
@@ -99,9 +86,8 @@ export const useEnsureWeek = (
   const allowGenerate = options?.allowGenerate ?? false;
   const enabled = Boolean(weekValue) && (options?.enabled ?? true);
   const weekStart = toIsoWeekStart(weekValue);
-  const nowStart = dayjs().startOf("isoWeek");
-  const isPastWeek = weekStart ? weekStart.isBefore(nowStart, "week") : false;
-  const shouldGenerate = allowGenerate && !isPastWeek;
+  const nowIsoStart = dayjs().startOf("isoWeek");
+  const shouldGenerate = allowGenerate && !(weekStart && weekStart.isBefore(nowIsoStart, "week"));
 
   return useQuery<EnsureWeekResult>({
     queryKey: weekValue && enabled ? schedulingKeys.ensureWeek(weekValue) : disabledKey("ensure-week"),
