@@ -32,6 +32,7 @@ import SettingsChannels from "../../pages/settings/SettingsChannels";
 import SettingsStaffProfiles from "../../pages/settings/SettingsStaffProfiles";
 import SettingsShiftRoles from "../../pages/settings/SettingsShiftRoles";
 import SettingsUserShiftRoles from "../../pages/settings/SettingsUserShiftRoles";
+import SettingsSqlHelper from "../../pages/settings/SettingsSqlHelper";
 import SchedulingLayout from "../../pages/scheduling/SchedulingLayout";
 import AvailabilityPage from "../../pages/scheduling/AvailabilityPage";
 import BuilderPage from "../../pages/scheduling/BuilderPage";
@@ -110,6 +111,7 @@ const Routes = () => {
         <Route path="channel-product-prices" element={<SettingsChannelProductPrices />} />
         <Route path="channel-commissions" element={<SettingsChannelCommissions />} />
         <Route path="actions" element={<SettingsActions />} />
+        <Route path="sql-helper" element={<SettingsSqlHelper />} />
         <Route path="channels" element={<SettingsChannels />} />
         <Route path="staff-profiles" element={<SettingsStaffProfiles />} />
         <Route path="shift-roles" element={<SettingsShiftRoles />} />

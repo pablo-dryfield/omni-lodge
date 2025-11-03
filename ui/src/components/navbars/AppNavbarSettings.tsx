@@ -22,6 +22,7 @@ import {
   IconAddressBook,
   IconHierarchy3,
   IconUserCog,
+  IconDatabase,
 } from "@tabler/icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ActiveNavLink } from "./ActiveNavLink";
@@ -181,6 +182,12 @@ const settingsNav: SettingsNavSection[] = [
         to: "/settings/actions",
         slug: PAGE_SLUGS.settingsActions,
         icon: <IconBolt size={20} />,
+      },
+      {
+        label: "SQL Helper",
+        to: "/settings/sql-helper",
+        slug: PAGE_SLUGS.settingsActions,
+        icon: <IconDatabase size={20} />,
       },
     ],
   },
