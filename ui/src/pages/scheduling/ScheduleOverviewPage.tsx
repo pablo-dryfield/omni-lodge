@@ -892,7 +892,7 @@ const ScheduleOverviewPage = () => {
         const isoDate = day.format("YYYY-MM-DD");
         const assignments = assignmentsByDate.get(isoDate) ?? [];
         const pubSections = visibleRoles
-          .map((roleLabel) => ({
+          .map((roleLabel): { roleLabel: string; nodes: ReactNode[] } => ({
             roleLabel,
             nodes: renderAssignmentsForRole(roleLabel, assignments),
           }))
@@ -1155,7 +1155,6 @@ const ScheduleOverviewPage = () => {
 
   const pubCrawlTable = renderScheduleTable("pub-crawl", pubCrawlHeading, "Role", pubCrawlRows);
   const hasShiftContent = shiftInstances.length > 0;
-  const weekLabel = formatWeekValue(selectedWeek);
   const navigationIsLoading = shiftInstancesQuery.isLoading;
   const navButtonStyle = isMobile ? ({ flex: "1 1 140px", minWidth: "140px" } as CSSProperties) : undefined;
   const weekSelectorWrapperStyle: CSSProperties = isMobile
