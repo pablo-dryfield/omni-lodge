@@ -476,6 +476,14 @@ const ensureIsoWeekString = (value: Dayjs | string) => {
   return `${year}-W${week.toString().padStart(2, "0")}`;
 };
 
+const parseIsoWeekStart = (value: string | null | undefined): Dayjs | null => {
+  if (!value) {
+    return null;
+  }
+  const parsed = dayjs(value, "GGGG-[W]WW", true);
+  return parsed.isValid() ? parsed.startOf("isoWeek") : null;
+};
+
 type MonthSegment = { label: string; span: number; key: string };
 
 const buildMonthSegments = (days: Dayjs[]): MonthSegment[] => {
@@ -522,13 +530,27 @@ const BuilderPage = () => {
   }, []);
 
   const [selectedWeek, setSelectedWeek] = useState<string>(initialWeekValue);
+  const currentWeekStart = useMemo(() => dayjs().startOf("isoWeek"), []);
+  const selectedWeekStart = useMemo(() => parseIsoWeekStart(selectedWeek), [selectedWeek]);
+  const canNavigateBackward = useMemo(() => {
+    if (!selectedWeekStart) {
+      return false;
+    }
+    return selectedWeekStart.isAfter(currentWeekStart, "week");
+  }, [selectedWeekStart, currentWeekStart]);
   const handleNavigateWeek = useCallback(
     (direction: -1 | 1) => {
       const [year, weekPart] = selectedWeek.split("-W");
       const adjusted = dayjs().year(Number(year)).isoWeek(Number(weekPart)).add(direction, "week");
+      if (direction === -1) {
+        const targetStart = adjusted.startOf("isoWeek");
+        if (targetStart.isBefore(currentWeekStart, "week")) {
+          return;
+        }
+      }
       setSelectedWeek(ensureIsoWeekString(adjusted));
     },
-    [selectedWeek],
+    [selectedWeek, currentWeekStart],
   );
   useEffect(() => {
     if (!selectedWeek) {
@@ -1660,7 +1682,7 @@ const BuilderPage = () => {
               color="dark"
               leftSection={<IconChevronLeft size={16} />}
               onClick={() => handleNavigateWeek(-1)}
-              disabled={loading}
+              disabled={loading || !canNavigateBackward}
             >
               Previous Week
             </Button>
