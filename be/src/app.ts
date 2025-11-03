@@ -47,6 +47,7 @@ import dbBackupRoutes from './routes/dbBackupRoutes.js';
 import { financeRouter } from './finance/index.js';
 import { startFinanceRecurringJob } from './finance/jobs/recurringJob.js';
 import { startScheduleJobs } from './jobs/schedules.cron.js';
+import { startDbBackupJob } from './jobs/dbBackup.cron.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -190,12 +191,14 @@ async function bootstrap(): Promise<void> {
         logger.info(`backend listening on http://127.0.0.1:${PORT}`);
         startFinanceRecurringJob();
         startScheduleJobs();
+        startDbBackupJob();
       });
     } else {
       app.listen(PORT, '0.0.0.0', () => {
         logger.info(`Server is running on port ${PORT}`);
         startFinanceRecurringJob();
         startScheduleJobs();
+        startDbBackupJob();
       });
     }
   } catch (err) {
