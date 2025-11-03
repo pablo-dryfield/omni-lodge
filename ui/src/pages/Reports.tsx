@@ -67,6 +67,7 @@ import {
   type ReportPreviewRequest,
   type ReportPreviewResponse,
   type ReportTemplateDto,
+  type ReportTemplateListResponse,
   type SaveReportTemplateRequest,
 } from "../api/reports";
 
@@ -658,71 +659,6 @@ const buildFilterOptionKey = (modelId: string, fieldId: string) => `${modelId}::
 
 const quoteIdentifier = (value: string) => `"${value.replace(/"/g, '""')}"`;
 
-const buildInitialTemplates = (models: DataModelDefinition[]): ReportTemplate[] => {
-  if (models.length === 0) {
-    return [];
-  }
-
-  const primaryModel =
-    models.find((candidate) => candidate.fields.length >= 3) ?? models[0];
-
-  const association =
-    primaryModel.associations?.find((assoc) =>
-      models.some((candidate) => candidate.id === assoc.targetModelId)
-    ) ?? null;
-
-  const secondaryModel = association
-    ? models.find((candidate) => candidate.id === association.targetModelId)
-    : undefined;
-
-  const defaultFields = primaryModel.fields.slice(0, 5).map((field) => field.id);
-
-  const template: ReportTemplate = {
-    id: `template-${primaryModel.id.toLowerCase()}`,
-    name: `${primaryModel.name} overview`,
-    category: "Custom",
-    description: secondaryModel
-      ? `Explore ${primaryModel.name} with ${secondaryModel.name} linked for context.`
-      : `Explore key fields from the ${primaryModel.name} model.`,
-    schedule: "Manual",
-    lastUpdated: "Just now",
-    owner: "You",
-    autoDistribution: true,
-    notifyTeam: true,
-    models: secondaryModel ? [primaryModel.id, secondaryModel.id] : [primaryModel.id],
-    fields: [
-      { modelId: primaryModel.id, fieldIds: defaultFields },
-      ...(secondaryModel
-        ? [
-            {
-              modelId: secondaryModel.id,
-              fieldIds: secondaryModel.fields.slice(0, 3).map((field) => field.id),
-            },
-          ]
-        : []),
-    ],
-    joins:
-      secondaryModel && association
-        ? [
-            {
-              id: `join-${primaryModel.id}-${secondaryModel.id}`,
-              leftModel: primaryModel.id,
-              leftField: association.foreignKey ?? getDefaultKey(primaryModel),
-              rightModel: secondaryModel.id,
-              rightField: association.sourceKey ?? getDefaultKey(secondaryModel),
-              joinType: "left",
-              description: `${association.associationType} association`,
-            },
-          ]
-        : [],
-    visuals: [deepClone(DEFAULT_VISUAL)],
-    metrics: METRIC_LIBRARY.slice(0, 2).map((metric) => metric.value),
-    filters: [],
-  };
-
-  return [template];
-};
-
 const findMetricDefinition = (metricValue: string) =>
   METRIC_LIBRARY.find((metric) => metric.value === metricValue) ?? METRIC_LIBRARY[0];
 
@@ -821,11 +757,43 @@ const Reports = (props: GenericPageProps) => {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [templateError, setTemplateError] = useState<string | null>(null);
 
+  const upsertTemplateInCache = useCallback(
+    (record: ReportTemplateDto) => {
+      queryClient.setQueryData<ReportTemplateListResponse>(["reports", "templates"], (current) => {
+        if (!current) {
+          return { templates: [record] };
+        }
+        const exists = current.templates.some((template) => template.id === record.id);
+        return {
+          templates: exists
+            ? current.templates.map((template) => (template.id === record.id ? record : template))
+            : [...current.templates, record],
+        };
+      });
+    },
+    [queryClient],
+  );
+
+  const removeTemplateFromCache = useCallback(
+    (templateId: string) => {
+      queryClient.setQueryData<ReportTemplateListResponse>(["reports", "templates"], (current) => {
+        if (!current) {
+          return current;
+        }
+        return {
+          templates: current.templates.filter((template) => template.id !== templateId),
+        };
+      });
+    },
+    [queryClient],
+  );
+
   useEffect(() => {
     if (!templatesResponse) {
       return;
     }
 
+    setTemplateError(null);
     const mapped = templatesResponse.templates.map((template) => mapTemplateFromApi(template));
     setTemplates(mapped);
 
@@ -1251,6 +1219,7 @@ const Reports = (props: GenericPageProps) => {
     if (!template) {
       return;
     }
+    setTemplateError(null);
     setSelectedTemplateId(templateId);
     setDraft(deepClone(template));
   };
@@ -1329,12 +1298,12 @@ const Reports = (props: GenericPageProps) => {
       category: draft.category.trim() || "Custom",
       description: draft.description,
       schedule: draft.schedule || "Manual",
-      models: draft.models,
-      fields: draft.fields,
-      joins: draft.joins,
-      visuals: draft.visuals,
-      metrics: draft.metrics,
-      filters: draft.filters,
+      models: [...draft.models],
+      fields: deepClone(draft.fields),
+      joins: deepClone(draft.joins),
+      visuals: deepClone(draft.visuals),
+      metrics: [...draft.metrics],
+      filters: deepClone(draft.filters),
       options: {
         autoDistribution: draft.autoDistribution,
         notifyTeam: draft.notifyTeam,
@@ -1343,6 +1312,7 @@ const Reports = (props: GenericPageProps) => {
 
     try {
       const saved = await saveTemplateMutation.mutateAsync(payload);
+      upsertTemplateInCache(saved);
       const mapped = mapTemplateFromApi(saved);
       setTemplates((current) => {
         const exists = current.some((template) => template.id === mapped.id);
@@ -1353,7 +1323,6 @@ const Reports = (props: GenericPageProps) => {
       });
       setSelectedTemplateId(mapped.id);
       setDraft(deepClone(mapped));
-      await queryClient.invalidateQueries({ queryKey: ["reports", "templates"] });
     } catch (error) {
       setTemplateError(extractAxiosErrorMessage(error, "Failed to save template"));
     }
@@ -1385,13 +1354,13 @@ const Reports = (props: GenericPageProps) => {
       },
     };
 
-    try {
+  try {
       const created = await saveTemplateMutation.mutateAsync(payload);
+      upsertTemplateInCache(created);
       const mapped = mapTemplateFromApi(created);
       setTemplates((current) => [...current, mapped]);
       setSelectedTemplateId(mapped.id);
       setDraft(deepClone(mapped));
-      await queryClient.invalidateQueries({ queryKey: ["reports", "templates"] });
     } catch (error) {
       setTemplateError(extractAxiosErrorMessage(error, "Failed to create template"));
     }
@@ -1423,11 +1392,11 @@ const Reports = (props: GenericPageProps) => {
 
     try {
       const created = await saveTemplateMutation.mutateAsync(duplicatePayload);
+      upsertTemplateInCache(created);
       const mapped = mapTemplateFromApi(created);
       setTemplates((current) => [...current, mapped]);
       setSelectedTemplateId(mapped.id);
       setDraft(deepClone(mapped));
-      await queryClient.invalidateQueries({ queryKey: ["reports", "templates"] });
     } catch (error) {
       setTemplateError(extractAxiosErrorMessage(error, "Failed to duplicate template"));
     }
@@ -1442,6 +1411,7 @@ const Reports = (props: GenericPageProps) => {
 
     try {
       await deleteTemplateMutation.mutateAsync(selectedTemplate.id);
+      removeTemplateFromCache(selectedTemplate.id);
       setTemplates((current) => {
         const filtered = current.filter((template) => template.id !== selectedTemplate.id);
         if (filtered.length === 0) {
@@ -1454,7 +1424,6 @@ const Reports = (props: GenericPageProps) => {
         setDraft(deepClone(fallback));
         return filtered;
       });
-      await queryClient.invalidateQueries({ queryKey: ["reports", "templates"] });
     } catch (error) {
       setTemplateError(extractAxiosErrorMessage(error, "Failed to delete template"));
     }
@@ -2067,7 +2036,7 @@ const Reports = (props: GenericPageProps) => {
   );
 
 
-  const builderLoaded = dataModels.length > 0;
+  const builderLoaded = dataModels.length > 0 && !isTemplatesLoading && !isTemplatesError;
 
   if (isGoogleReviewsView) {
     return (
@@ -2123,7 +2092,12 @@ const Reports = (props: GenericPageProps) => {
               </Group>
             </div>
             <Group>
-              <Button leftSection={<IconTemplate size={16} />} variant="light" onClick={handleCreateTemplate}>
+              <Button
+                leftSection={<IconTemplate size={16} />}
+                variant="light"
+                onClick={handleCreateTemplate}
+                loading={saveTemplateMutation.isPending}
+              >
                 New template
               </Button>
               <Button
@@ -2137,18 +2111,29 @@ const Reports = (props: GenericPageProps) => {
               <Button leftSection={<IconDownload size={16} />} variant="light">
                 Export preview
               </Button>
-              <Button leftSection={<IconDeviceFloppy size={16} />} onClick={handleSaveTemplate}>
+              <Button
+                leftSection={<IconDeviceFloppy size={16} />}
+                onClick={handleSaveTemplate}
+                loading={saveTemplateMutation.isPending}
+              >
                 Save changes
               </Button>
             </Group>
           </Group>
+          {templateError && (
+            <Text c="red" mt="sm">
+              {templateError}
+            </Text>
+          )}
 
           {!builderLoaded ? (
             <Paper p="lg" radius="lg" shadow="xs" withBorder>
-              {isModelsLoading ? (
-                <Text c="dimmed">Loading data models</Text>
+              {isModelsLoading || isTemplatesLoading ? (
+                <Text c="dimmed">Loading report builder data...</Text>
               ) : isModelsError ? (
                 <Text c="red">Unable to load data models. Please verify backend connectivity.</Text>
+              ) : isTemplatesError ? (
+                <Text c="red">Unable to load saved templates. Please try again.</Text>
               ) : (
                 <Text c="dimmed">No data models available. Try refreshing or contact your administrator.</Text>
               )}
@@ -2162,13 +2147,14 @@ const Reports = (props: GenericPageProps) => {
                       Template library
                     </Text>
                     <ActionIcon
-                      variant="subtle"
-                      color="blue"
-                      onClick={handleCreateTemplate}
-                      aria-label="Add template"
-                    >
-                      <IconPlus size={18} />
-                    </ActionIcon>
+                    variant="subtle"
+                    color="blue"
+                    onClick={handleCreateTemplate}
+                    aria-label="Add template"
+                    disabled={saveTemplateMutation.isPending}
+                  >
+                    <IconPlus size={18} />
+                  </ActionIcon>
                   </Group>
                   <Divider mb="sm" />
                   <ScrollArea h={260} type="always" offsetScrollbars>
@@ -2220,7 +2206,8 @@ const Reports = (props: GenericPageProps) => {
                       variant="light"
                       leftSection={<IconCopy size={14} />}
                       onClick={handleDuplicateTemplate}
-                      disabled={!selectedTemplate}
+                      disabled={!selectedTemplate || saveTemplateMutation.isPending}
+                      loading={saveTemplateMutation.isPending && Boolean(selectedTemplate)}
                     >
                       Duplicate
                     </Button>
@@ -2229,7 +2216,8 @@ const Reports = (props: GenericPageProps) => {
                       color="red"
                       leftSection={<IconTrash size={14} />}
                       onClick={handleDeleteTemplate}
-                      disabled={!selectedTemplate}
+                      disabled={!selectedTemplate || deleteTemplateMutation.isPending}
+                      loading={deleteTemplateMutation.isPending && Boolean(selectedTemplate)}
                     >
                       Remove
                     </Button>
@@ -2967,7 +2955,7 @@ const Reports = (props: GenericPageProps) => {
                       <Badge variant="light">{previewRows.length} rows</Badge>
                     </Group>
                     <Text fz="xs" c="dimmed">
-                      {lastRunAt === "—" ? "Preview not run yet" : `Last run: ${lastRunAt}`}
+                      {lastRunAt === "Not run yet" ? "Preview not run yet" : `Last run: ${lastRunAt}`}
                     </Text>
                   </Group>
                   {previewError && (

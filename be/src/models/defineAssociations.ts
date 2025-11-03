@@ -51,7 +51,7 @@ export function defineAssociations() {
   User.belongsTo(UserType, { foreignKey: 'userTypeId', as: 'role' });
   User.hasOne(StaffProfile, { foreignKey: 'user_id', as: 'staffProfile' });
   User.hasMany(ReportTemplate, { foreignKey: 'userId', as: 'reportTemplates' });
-  ReportTemplate.belongsTo(User, { foreignKey: 'userId', as: 'owner' });
+  ReportTemplate.belongsTo(User, { foreignKey: 'userId', as: 'reportOwner' });
 
   // UserType Associations
   UserType.hasMany(User, { foreignKey: 'userTypeId', as: 'users' });

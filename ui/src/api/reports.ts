@@ -138,6 +138,8 @@ export const useReportTemplates = () =>
       return response.data as ReportTemplateListResponse;
     },
     staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
 export const useSaveReportTemplate = () =>
