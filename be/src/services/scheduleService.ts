@@ -181,7 +181,6 @@ async function spawnInstancesFromTemplates(week: ScheduleWeek, actorId: number |
         where: {
           scheduleWeekId: week.id,
           date,
-          timeStart: template.defaultStartTime,
           [Op.or]: [
             { shiftTemplateId: template.id },
             {
