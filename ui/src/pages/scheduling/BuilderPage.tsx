@@ -530,27 +530,41 @@ const BuilderPage = () => {
   }, []);
 
   const [selectedWeek, setSelectedWeek] = useState<string>(initialWeekValue);
-  const currentWeekStart = useMemo(() => dayjs().startOf("isoWeek"), []);
-  const selectedWeekStart = useMemo(() => parseIsoWeekStart(selectedWeek), [selectedWeek]);
-  const canNavigateBackward = useMemo(() => {
-    if (!selectedWeekStart) {
+  const previousWeekValue = useMemo(() => {
+    const start = parseIsoWeekStart(selectedWeek);
+    if (!start) {
+      return null;
+    }
+    const previous = start.subtract(1, "week");
+    return ensureIsoWeekString(previous);
+  }, [selectedWeek]);
+  const previousWeekQuery = useEnsureWeek(previousWeekValue, {
+    allowGenerate: false,
+    enabled: Boolean(previousWeekValue),
+  });
+  const canNavigateBackward = Boolean(previousWeekQuery.data?.week);
+  const canNavigateForward = useMemo(() => {
+    const start = parseIsoWeekStart(selectedWeek);
+    if (!start) {
       return false;
     }
-    return selectedWeekStart.isAfter(currentWeekStart, "week");
-  }, [selectedWeekStart, currentWeekStart]);
+    const currentStart = dayjs().startOf("isoWeek");
+    const diff = start.diff(currentStart, "week");
+    return diff < 1;
+  }, [selectedWeek]);
   const handleNavigateWeek = useCallback(
     (direction: -1 | 1) => {
       const [year, weekPart] = selectedWeek.split("-W");
       const adjusted = dayjs().year(Number(year)).isoWeek(Number(weekPart)).add(direction, "week");
-      if (direction === -1) {
-        const targetStart = adjusted.startOf("isoWeek");
-        if (targetStart.isBefore(currentWeekStart, "week")) {
-          return;
-        }
+      if (direction === -1 && !canNavigateBackward) {
+        return;
+      }
+      if (direction === 1 && !canNavigateForward) {
+        return;
       }
       setSelectedWeek(ensureIsoWeekString(adjusted));
     },
-    [selectedWeek, currentWeekStart],
+    [selectedWeek, canNavigateBackward, canNavigateForward],
   );
   useEffect(() => {
     if (!selectedWeek) {
@@ -1708,7 +1722,7 @@ const BuilderPage = () => {
               color="dark"
               rightSection={<IconChevronRight size={16} />}
               onClick={() => handleNavigateWeek(1)}
-              disabled={loading}
+              disabled={loading || !canNavigateForward}
             >
               Next Week
             </Button>
