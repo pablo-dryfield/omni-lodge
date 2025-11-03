@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import type { AxiosError } from "axios";
 import axiosInstance from "../utils/axiosInstance";
 
 export type ReportModelFieldResponse = {
@@ -52,4 +53,34 @@ export const useReportModels = () =>
       return response.data as ReportModelsResponse;
     },
     staleTime: 5 * 60 * 1000,
+  });
+
+export type ReportPreviewRequest = {
+  models: string[];
+  fields: Array<{ modelId: string; fieldIds: string[] }>;
+  joins?: Array<{
+    id: string;
+    leftModel: string;
+    leftField: string;
+    rightModel: string;
+    rightField: string;
+    joinType?: "inner" | "left" | "right" | "full";
+    description?: string;
+  }>;
+  filters?: string[];
+  limit?: number;
+};
+
+export type ReportPreviewResponse = {
+  rows: Array<Record<string, unknown>>;
+  columns: string[];
+  sql: string;
+};
+
+export const useRunReportPreview = () =>
+  useMutation<ReportPreviewResponse, AxiosError<{ message?: string }>, ReportPreviewRequest>({
+    mutationFn: async (payload: ReportPreviewRequest) => {
+      const response = await axiosInstance.post("/reports/preview", payload);
+      return response.data as ReportPreviewResponse;
+    },
   });

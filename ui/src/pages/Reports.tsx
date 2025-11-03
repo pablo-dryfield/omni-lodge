@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { AxiosError } from "axios";
 import {
   Accordion,
   ActionIcon,
@@ -56,8 +57,11 @@ import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import {
   useReportModels,
+  useRunReportPreview,
   type ReportModelFieldResponse,
   type ReportModelPayload,
+  type ReportPreviewRequest,
+  type ReportPreviewResponse,
 } from "../api/reports";
 
 const PAGE_SLUG = PAGE_SLUGS.reports;
@@ -154,30 +158,6 @@ interface MetricDefinition {
   secondaryLabel?: string;
   format: (value: number) => string;
   description: string;
-}
-
-interface MonthlyRecord {
-  month: string;
-  revenue: number;
-  bookings: number;
-  adr: number;
-  occupancy: number;
-  addOnRevenue: number;
-  cancellations: number;
-  guests: number;
-  nps: number;
-}
-
-interface ChannelRecord {
-  channel: string;
-  revenue: number;
-  bookings: number;
-  adr: number;
-  occupancy: number;
-  addOnRevenue: number;
-  cancellations: number;
-  guests: number;
-  nps: number;
 }
 
 const DEFAULT_CONNECTION_LABEL = "OmniLodge core database";
@@ -312,143 +292,116 @@ const formatPercent = (value: number) =>
 const formatWhole = (value: number) => Math.round(value).toLocaleString("en-US");
 const formatScore = (value: number) => `${Math.round(value)} pts`;
 
-const MONTHLY_SAMPLE_DATA: MonthlyRecord[] = [
-  {
-    month: "Jan 2025",
-    revenue: 187_420,
-    bookings: 386,
-    adr: 217,
-    occupancy: 0.72,
-    addOnRevenue: 23_910,
-    cancellations: 24,
-    guests: 942,
-    nps: 46,
-  },
-  {
-    month: "Feb 2025",
-    revenue: 201_380,
-    bookings: 402,
-    adr: 224,
-    occupancy: 0.74,
-    addOnRevenue: 26_080,
-    cancellations: 31,
-    guests: 1_008,
-    nps: 47,
-  },
-  {
-    month: "Mar 2025",
-    revenue: 242_610,
-    bookings: 444,
-    adr: 244,
-    occupancy: 0.81,
-    addOnRevenue: 30_440,
-    cancellations: 28,
-    guests: 1_118,
-    nps: 51,
-  },
-  {
-    month: "Apr 2025",
-    revenue: 226_940,
-    bookings: 423,
-    adr: 236,
-    occupancy: 0.79,
-    addOnRevenue: 29_310,
-    cancellations: 27,
-    guests: 1_074,
-    nps: 52,
-  },
-  {
-    month: "May 2025",
-    revenue: 255_780,
-    bookings: 461,
-    adr: 248,
-    occupancy: 0.83,
-    addOnRevenue: 34_620,
-    cancellations: 29,
-    guests: 1_162,
-    nps: 54,
-  },
-  {
-    month: "Jun 2025",
-    revenue: 268_330,
-    bookings: 478,
-    adr: 257,
-    occupancy: 0.86,
-    addOnRevenue: 36_440,
-    cancellations: 33,
-    guests: 1_204,
-    nps: 55,
-  },
-  {
-    month: "Jul 2025",
-    revenue: 275_910,
-    bookings: 489,
-    adr: 262,
-    occupancy: 0.88,
-    addOnRevenue: 38_210,
-    cancellations: 35,
-    guests: 1_228,
-    nps: 57,
-  },
-  {
-    month: "Aug 2025",
-    revenue: 286_440,
-    bookings: 498,
-    adr: 268,
-    occupancy: 0.9,
-    addOnRevenue: 41_380,
-    cancellations: 32,
-    guests: 1_256,
-    nps: 58,
-  },
-];
+const toColumnAlias = (modelId: string, fieldId: string) => `${modelId}__${fieldId}`;
 
-const CHANNEL_SAMPLE_DATA: ChannelRecord[] = [
-  {
-    channel: "Direct web",
-    revenue: 412_840,
-    bookings: 872,
-    adr: 236,
-    occupancy: 0.86,
-    addOnRevenue: 61_420,
-    cancellations: 42,
-    guests: 2_210,
-    nps: 57,
-  },
-  {
-    channel: "Corporate contracts",
-    revenue: 298_120,
-    bookings: 518,
-    adr: 252,
-    occupancy: 0.82,
-    addOnRevenue: 28_610,
-    cancellations: 26,
-    guests: 1_276,
-    nps: 52,
-  },
-  {
-    channel: "OTA marketplaces",
-    revenue: 265_930,
-    bookings: 552,
-    adr: 221,
-    occupancy: 0.84,
-    addOnRevenue: 19_840,
-    cancellations: 61,
-    guests: 1_148,
-    nps: 44,
-  },
-  {
-    channel: "Travel agents",
-    revenue: 182_640,
-    bookings: 392,
-    adr: 233,
-    occupancy: 0.78,
-    addOnRevenue: 14_320,
-    cancellations: 24,
-    guests: 942,
-    nps: 48,
-  },
-];
+const humanizeAlias = (alias: string) => {
+  const [, field = alias] = alias.split("__");
+  return humanizeName(field);
+};
+
+const coerceNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const numeric = Number(value.replace(/[^0-9.\-]+/g, ""));
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+  if (value instanceof Date) {
+    return value.getTime();
+  }
+  if (typeof value === "boolean") {
+    return value ? 1 : 0;
+  }
+  return null;
+};
+
+const coerceString = (value: unknown): string | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value.toLocaleString("en-US");
+  }
+  if (typeof value === "boolean") {
+    return value ? "Yes" : "No";
+  }
+  return String(value);
+};
+
+const formatPreviewValue = (value: unknown) => {
+  if (value === null || value === undefined) {
+    return "—";
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value.toLocaleString("en-US") : "—";
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === "boolean") {
+    return value ? "Yes" : "No";
+  }
+  return String(value);
+};
+
+const AVERAGE_METRICS = new Set<SharedMetricKey>(["adr", "occupancy", "nps"]);
+
+const computeMetricDelta = (values: number[], metric: SharedMetricKey) => {
+  if (values.length < 2) {
+    return {
+      delta: "Stable",
+      context: "Not enough history",
+      tone: "neutral" as const,
+    };
+  }
+
+  const first = values[0];
+  const last = values[values.length - 1];
+  const change = last - first;
+  const tone: "positive" | "neutral" | "negative" = change > 0 ? "positive" : change < 0 ? "negative" : "neutral";
+
+  if (metric === "occupancy") {
+    const points = change * 100;
+    return {
+      delta: `${points >= 0 ? "+" : ""}${points.toFixed(1)} pts`,
+      context: "vs. first record",
+      tone,
+    };
+  }
+
+  if (metric === "nps") {
+    return {
+      delta: `${change >= 0 ? "+" : ""}${change.toFixed(1)}`,
+      context: "vs. first record",
+      tone,
+    };
+  }
+
+  if (Math.abs(first) < 1e-6) {
+    return {
+      delta: `${change >= 0 ? "+" : ""}${change.toFixed(1)}`,
+      context: "Absolute change vs. first record",
+      tone,
+    };
+  }
+
+  const percent = (change / Math.abs(first)) * 100;
+  return {
+    delta: `${percent >= 0 ? "+" : ""}${percent.toFixed(1)}%`,
+    context: "Percentage change vs. first record",
+    tone,
+  };
+};
 
 const METRIC_LIBRARY: MetricDefinition[] = [
   {
@@ -635,13 +588,17 @@ const Reports = (props: GenericPageProps) => {
     return models.map(mapBackendModel);
   }, [backendModelsResponse]);
 
+  const { mutateAsync: runPreview, isPending: isPreviewLoading } = useRunReportPreview();
+
   const [templates, setTemplates] = useState<ReportTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [draft, setDraft] = useState<ReportTemplate>(createEmptyTemplate());
-  const [lastRunAt, setLastRunAt] = useState<string>("Today - 08:05");
+  const [lastRunAt, setLastRunAt] = useState<string>("—");
   const [filterInput, setFilterInput] = useState("");
   const [autoDistribution, setAutoDistribution] = useState(true);
   const [notifyTeam, setNotifyTeam] = useState(true);
+  const [previewResult, setPreviewResult] = useState<ReportPreviewResponse | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   useEffect(() => {
     dispatch(navigateToPage("Reports"));
@@ -725,29 +682,191 @@ const Reports = (props: GenericPageProps) => {
     });
   }, [draft.fields, modelMap]);
 
+  const previewColumns = previewResult?.columns ?? [];
+  const previewRows = previewResult?.rows ?? [];
+
+  const previewColumnSets = useMemo(() => {
+    const numeric = new Set<string>();
+    const textual = new Set<string>();
+    const boolean = new Set<string>();
+
+    previewColumns.forEach((column) => {
+      let hasNumeric = false;
+      let hasText = false;
+      let hasBoolean = false;
+
+      previewRows.forEach((row) => {
+        const value = row[column];
+        if (value === null || value === undefined) {
+          return;
+        }
+        if (typeof value === "number") {
+          if (Number.isFinite(value)) {
+            hasNumeric = true;
+          }
+          return;
+        }
+        if (typeof value === "boolean") {
+          hasBoolean = true;
+          return;
+        }
+        if (value instanceof Date) {
+          hasNumeric = true;
+          hasText = true;
+          return;
+        }
+        if (typeof value === "string") {
+          const numericCandidate = Number(value.replace(/[^0-9.\-]+/g, ""));
+          if (Number.isFinite(numericCandidate) && value.trim().length > 0) {
+            hasNumeric = true;
+          }
+          hasText = true;
+          return;
+        }
+        hasText = true;
+      });
+
+      if (hasNumeric) {
+        numeric.add(column);
+      }
+      if (hasText) {
+        textual.add(column);
+      }
+      if (hasBoolean) {
+        boolean.add(column);
+      }
+    });
+
+    return { numeric, textual, boolean };
+  }, [previewColumns, previewRows]);
+
+  const numericColumnsSet = previewColumnSets.numeric;
+  const textualColumnsSet = previewColumnSets.textual;
+
+  const getDefaultColumn = useCallback(
+    (preference: "numeric" | "textual" | "any"): string | undefined => {
+      if (preference === "numeric") {
+        const candidate = previewColumns.find((column) => numericColumnsSet.has(column));
+        if (candidate) {
+          return candidate;
+        }
+      }
+      if (preference === "textual") {
+        const candidate = previewColumns.find((column) => textualColumnsSet.has(column));
+        if (candidate) {
+          return candidate;
+        }
+      }
+      return previewColumns[0];
+    },
+    [numericColumnsSet, previewColumns, textualColumnsSet],
+  );
+
+  const findColumnByKeyword = useCallback(
+    (keyword: string, preference: "numeric" | "textual" | "any" = "any"): string | undefined => {
+      if (previewColumns.length === 0) {
+        return undefined;
+      }
+
+      if (!keyword) {
+        return getDefaultColumn(preference);
+      }
+
+      const normalized = keyword.toLowerCase();
+
+      const candidateFields = selectedFieldDetails
+        .filter(
+          (field) =>
+            field.id.toLowerCase().includes(normalized) ||
+            field.label.toLowerCase().includes(normalized) ||
+            (field.sourceColumn ?? "").toLowerCase().includes(normalized),
+        )
+        .map((field) => toColumnAlias(field.modelId, field.id))
+        .filter((alias) => previewColumns.includes(alias));
+
+      const pickByPreference = (candidates: string[]): string | undefined => {
+        if (candidates.length === 0) {
+          return undefined;
+        }
+        if (preference === "numeric") {
+          return candidates.find((alias) => numericColumnsSet.has(alias)) ?? undefined;
+        }
+        if (preference === "textual") {
+          return candidates.find((alias) => textualColumnsSet.has(alias)) ?? undefined;
+        }
+        return candidates[0];
+      };
+
+      const fieldMatch = pickByPreference(candidateFields);
+      if (fieldMatch) {
+        return fieldMatch;
+      }
+
+      const aliasMatches = previewColumns.filter((column) => {
+        const segments = column.toLowerCase().split(/__|\.|_/g);
+        return segments.some((segment) => segment.includes(normalized));
+      });
+
+      const aliasMatch = pickByPreference(aliasMatches);
+      if (aliasMatch) {
+        return aliasMatch;
+      }
+
+      return getDefaultColumn(preference);
+    },
+    [getDefaultColumn, numericColumnsSet, previewColumns, selectedFieldDetails, textualColumnsSet],
+  );
+
   const activeVisual = draft.visuals[0] ?? DEFAULT_VISUAL;
   const metricDefinition = findMetricDefinition(activeVisual.metric);
   const comparisonKey =
     activeVisual.comparison ?? metricDefinition.secondaryKey ?? undefined;
 
   const chartData = useMemo(() => {
-    if (activeVisual.dimension === "channel") {
-      return CHANNEL_SAMPLE_DATA.map((row) => ({
-        dimension: row.channel,
-        primary: row[metricDefinition.primaryKey as keyof ChannelRecord] as number,
-        secondary: comparisonKey
-          ? (row[comparisonKey as keyof ChannelRecord] as number)
-          : undefined,
-      }));
+    if (previewRows.length === 0 || previewColumns.length === 0) {
+      return [];
     }
-    return MONTHLY_SAMPLE_DATA.map((row) => ({
-      dimension: row.month,
-      primary: row[metricDefinition.primaryKey as keyof MonthlyRecord] as number,
-      secondary: comparisonKey
-        ? (row[comparisonKey as keyof MonthlyRecord] as number)
-        : undefined,
-    }));
-  }, [activeVisual.dimension, comparisonKey, metricDefinition.primaryKey]);
+
+    const dimensionAlias = findColumnByKeyword(activeVisual.dimension, "textual");
+    const primaryAlias = findColumnByKeyword(metricDefinition.primaryKey, "numeric");
+    const comparisonAlias = comparisonKey ? findColumnByKeyword(comparisonKey, "numeric") : undefined;
+
+    if (!dimensionAlias || !primaryAlias) {
+      return [];
+    }
+
+    return previewRows
+      .map((row) => {
+        const dimensionValue = coerceString(row[dimensionAlias]);
+        const primaryValue = coerceNumber(row[primaryAlias]);
+        if (!dimensionValue || primaryValue === null) {
+          return null;
+        }
+        const point: { dimension: string; primary: number; secondary?: number } = {
+          dimension: dimensionValue,
+          primary: primaryValue,
+        };
+        if (comparisonAlias) {
+          const comparisonValue = coerceNumber(row[comparisonAlias]);
+          if (comparisonValue !== null) {
+            point.secondary = comparisonValue;
+          }
+        }
+        return point;
+      })
+      .filter(
+        (value): value is { dimension: string; primary: number; secondary?: number } => value !== null,
+      );
+  }, [
+    activeVisual.dimension,
+    comparisonKey,
+    metricDefinition.primaryKey,
+    findColumnByKeyword,
+    previewColumns,
+    previewRows,
+  ]);
+
+  const hasChartData = chartData.length > 0;
 
   const metricsSummary = useMemo(() => {
     const chosenMetrics =
@@ -755,33 +874,61 @@ const Reports = (props: GenericPageProps) => {
         ? METRIC_LIBRARY.filter((metric) => draft.metrics.includes(metric.value))
         : METRIC_LIBRARY.slice(0, 4);
 
-    return chosenMetrics.map((definition) => {
-      const total = MONTHLY_SAMPLE_DATA.reduce(
-        (acc, row) => acc + (row[definition.primaryKey as keyof MonthlyRecord] as number),
-        0
-      );
-      const average = total / MONTHLY_SAMPLE_DATA.length;
-      const displayValue =
-        definition.primaryKey === "adr" ||
-        definition.primaryKey === "occupancy" ||
-        definition.primaryKey === "nps"
-          ? definition.format(average)
-          : definition.format(total);
-      const hint = DELTA_HINTS[definition.value] ?? {
-        delta: "Stable",
-        context: "No recent change",
+    if (previewRows.length === 0 || previewColumns.length === 0) {
+      return chosenMetrics.map((definition) => ({
+        id: definition.value,
+        label: definition.label,
+        value: "Run preview",
+        delta: "—",
+        context: definition.description,
         tone: "neutral" as const,
-      };
+      }));
+    }
+
+    return chosenMetrics.map((definition) => {
+      const primaryAlias = findColumnByKeyword(definition.primaryKey, "numeric");
+      if (!primaryAlias) {
+        return {
+          id: definition.value,
+          label: definition.label,
+          value: "Not available",
+          delta: "—",
+          context: `Add a field matching “${definition.primaryKey}” to your selection.`,
+          tone: "neutral" as const,
+        };
+      }
+
+      const values = previewRows
+        .map((row) => coerceNumber(row[primaryAlias]))
+        .filter((value): value is number => value !== null);
+
+      if (values.length === 0) {
+        return {
+          id: definition.value,
+          label: definition.label,
+          value: "Not available",
+          delta: "—",
+          context: "No numeric values returned for this metric.",
+          tone: "neutral" as const,
+        };
+      }
+
+      const total = values.reduce((acc, value) => acc + value, 0);
+      const average = total / values.length;
+      const useAverage = AVERAGE_METRICS.has(definition.primaryKey);
+      const displayValue = useAverage ? definition.format(average) : definition.format(total);
+      const delta = computeMetricDelta(values, definition.primaryKey);
+
       return {
         id: definition.value,
         label: definition.label,
         value: displayValue,
-        delta: hint.delta,
-        context: hint.context,
-        tone: hint.tone,
+        delta: delta.delta,
+        context: delta.context,
+        tone: delta.tone,
       };
     });
-  }, [draft.metrics]);
+  }, [draft.metrics, findColumnByKeyword, previewColumns, previewRows]);
 
   const joinSuggestions = useMemo(() => {
     const existingKeys = new Set(
@@ -1015,8 +1162,58 @@ const Reports = (props: GenericPageProps) => {
     }));
   };
 
-  const handleRunAnalysis = () => {
-    setLastRunAt(formatTimestamp());
+  const handleRunAnalysis = async () => {
+    setPreviewError(null);
+
+    if (draft.models.length === 0) {
+      setPreviewResult(null);
+      setPreviewError("Select at least one data model to run a preview.");
+      return;
+    }
+
+    const sanitizedFields = draft.fields
+      .map((entry) => ({
+        modelId: entry.modelId,
+        fieldIds: entry.fieldIds.filter((fieldId) => Boolean(fieldId)),
+      }))
+      .filter((entry) => entry.fieldIds.length > 0);
+
+    if (sanitizedFields.length === 0) {
+      setPreviewResult(null);
+      setPreviewError("Select at least one field to include in your preview.");
+      return;
+    }
+
+    const payload: ReportPreviewRequest = {
+      models: draft.models,
+      fields: sanitizedFields,
+      joins: draft.joins.map(
+        ({ id, leftModel, leftField, rightModel, rightField, joinType, description }) => ({
+          id,
+          leftModel,
+          leftField,
+          rightModel,
+          rightField,
+          joinType,
+          description,
+        }),
+      ),
+      filters: draft.filters.map((filter) => filter.value).filter((value) => value.trim().length > 0),
+      limit: 500,
+    };
+
+    try {
+      const response = await runPreview(payload);
+      setPreviewResult(response);
+      setPreviewError(null);
+      setLastRunAt(formatTimestamp());
+    } catch (error) {
+      console.error("Failed to run report preview", error);
+      const axiosError = error as AxiosError<{ message?: string }>;
+      const message =
+        axiosError?.response?.data?.message ?? axiosError?.message ?? "Failed to run report preview.";
+      setPreviewError(message);
+    }
   };
 
   const handleAddFilter = () => {
@@ -1104,7 +1301,12 @@ const Reports = (props: GenericPageProps) => {
               <Button leftSection={<IconTemplate size={16} />} variant="light" onClick={handleCreateTemplate}>
                 New template
               </Button>
-              <Button leftSection={<IconPlayerPlay size={16} />} variant="light" onClick={handleRunAnalysis}>
+              <Button
+                leftSection={<IconPlayerPlay size={16} />}
+                variant="light"
+                onClick={handleRunAnalysis}
+                loading={isPreviewLoading}
+              >
                 Run analysis
               </Button>
               <Button leftSection={<IconDownload size={16} />} variant="light">
@@ -1604,72 +1806,82 @@ const Reports = (props: GenericPageProps) => {
                         background: "#ffffff",
                       }}
                     >
-                      <ResponsiveContainer width="100%" height={240}>
-                        <ComposedChart data={chartData}>
-                          <CartesianGrid stroke="#f1f3f5" strokeDasharray="4 4" />
-                          <XAxis dataKey="dimension" tick={{ fontSize: 12 }} />
-                          <YAxis yAxisId="left" tick={{ fontSize: 12 }} stroke="#1c7ed6" />
-                          {comparisonKey && (
-                            <YAxis
-                              yAxisId="right"
-                              orientation="right"
-                              tick={{ fontSize: 12 }}
-                              stroke="#2b8a3e"
+                      {hasChartData ? (
+                        <ResponsiveContainer width="100%" height={240}>
+                          <ComposedChart data={chartData}>
+                            <CartesianGrid stroke="#f1f3f5" strokeDasharray="4 4" />
+                            <XAxis dataKey="dimension" tick={{ fontSize: 12 }} />
+                            <YAxis yAxisId="left" tick={{ fontSize: 12 }} stroke="#1c7ed6" />
+                            {comparisonKey && (
+                              <YAxis
+                                yAxisId="right"
+                                orientation="right"
+                                tick={{ fontSize: 12 }}
+                                stroke="#2b8a3e"
+                              />
+                            )}
+                            <RechartsTooltip
+                              formatter={(value: number, dataKey: string) => {
+                                if (dataKey === "primary") {
+                                  return metricDefinition.format(value);
+                                }
+                                if (comparisonKey === "occupancy") {
+                                  return formatPercent(value);
+                                }
+                                if (comparisonKey === "addOnRevenue" || comparisonKey === "revenue") {
+                                  return formatCurrency(value);
+                                }
+                                return formatWhole(value);
+                              }}
+                              labelFormatter={(label) => `${metricDefinition.label} - ${label}`}
                             />
-                          )}
-                          <RechartsTooltip
-                            formatter={(value: number, dataKey: string) => {
-                              if (dataKey === "primary") {
-                                return metricDefinition.format(value);
-                              }
-                              if (comparisonKey === "occupancy") {
-                                return formatPercent(value);
-                              }
-                              if (comparisonKey === "addOnRevenue" || comparisonKey === "revenue") {
-                                return formatCurrency(value);
-                              }
-                              return formatWhole(value);
-                            }}
-                            labelFormatter={(label) => `${metricDefinition.label} • ${label}`}
-                          />
-                          <Legend />
-                          {activeVisual.type === "line" && (
-                            <Line
-                              type="monotone"
-                              dataKey="primary"
-                              stroke="#1c7ed6"
-                              strokeWidth={2}
-                              dot={false}
-                              name={metricDefinition.label}
-                              yAxisId="left"
-                            />
-                          )}
-                          {activeVisual.type === "area" && (
-                            <Area
-                              type="monotone"
-                              dataKey="primary"
-                              stroke="#1c7ed6"
-                              fill="#a5d8ff"
-                              name={metricDefinition.label}
-                              yAxisId="left"
-                            />
-                          )}
-                          {comparisonKey && (
-                            <Line
-                              type="monotone"
-                              dataKey="secondary"
-                              stroke="#2b8a3e"
-                              strokeWidth={2}
-                              dot={false}
-                              name={
-                                COMPARISON_OPTIONS.find((option) => option.value === comparisonKey)?.label ??
-                                "Comparison"
-                              }
-                              yAxisId="right"
-                            />
-                          )}
-                        </ComposedChart>
-                      </ResponsiveContainer>
+                            <Legend />
+                            {activeVisual.type === "line" && (
+                              <Line
+                                type="monotone"
+                                dataKey="primary"
+                                stroke="#1c7ed6"
+                                strokeWidth={2}
+                                dot={false}
+                                name={metricDefinition.label}
+                                yAxisId="left"
+                              />
+                            )}
+                            {activeVisual.type === "area" && (
+                              <Area
+                                type="monotone"
+                                dataKey="primary"
+                                stroke="#1c7ed6"
+                                fill="#a5d8ff"
+                                name={metricDefinition.label}
+                                yAxisId="left"
+                              />
+                            )}
+                            {comparisonKey && (
+                              <Line
+                                type="monotone"
+                                dataKey="secondary"
+                                stroke="#2b8a3e"
+                                strokeWidth={2}
+                                dot={false}
+                                name={
+                                  COMPARISON_OPTIONS.find((option) => option.value === comparisonKey)?.label ??
+                                  "Comparison"
+                                }
+                                yAxisId="right"
+                              />
+                            )}
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <Flex align="center" justify="center" h={240}>
+                          <Text c="dimmed" fz="sm" ta="center">
+                            {previewRows.length === 0
+                              ? "Run the analysis to populate this visualization."
+                              : "No chartable metrics detected. Select numeric fields or adjust your visualization settings."}
+                          </Text>
+                        </Flex>
+                      )}
                     </Paper>
                   </Flex>
                 </Paper>
@@ -1737,45 +1949,56 @@ const Reports = (props: GenericPageProps) => {
 
                 <Paper p="md" radius="lg" shadow="xs" withBorder>
                   <Group justify="space-between" mb="md">
-                    <Text fw={600}>Data preview</Text>
-                    <Badge variant="light">{chartData.length} rows</Badge>
+                    <Group gap="xs">
+                      <Text fw={600}>Data preview</Text>
+                      <Badge variant="light">{previewRows.length} rows</Badge>
+                    </Group>
+                    <Text fz="xs" c="dimmed">
+                      {lastRunAt === "—" ? "Preview not run yet" : `Last run: ${lastRunAt}`}
+                    </Text>
                   </Group>
-                  <ScrollArea>
-                    <Table highlightOnHover striped verticalSpacing="xs">
-                      <Table.Thead>
-                        <Table.Tr>
-                          <Table.Th>
-                            {activeVisual.dimension === "channel" ? "Channel" : "Month"}
-                          </Table.Th>
-                          <Table.Th>{metricDefinition.label}</Table.Th>
-                          {comparisonKey && (
-                            <Table.Th>
-                              {
-                                COMPARISON_OPTIONS.find((option) => option.value === comparisonKey)?.label
-                              }
-                            </Table.Th>
-                          )}
-                        </Table.Tr>
-                      </Table.Thead>
-                      <Table.Tbody>
-                        {chartData.map((row) => (
-                          <Table.Tr key={row.dimension}>
-                            <Table.Td>{row.dimension}</Table.Td>
-                            <Table.Td>{metricDefinition.format(row.primary)}</Table.Td>
-                            {comparisonKey && (
-                              <Table.Td>
-                                {comparisonKey === "occupancy"
-                                  ? formatPercent(row.secondary ?? 0)
-                                  : comparisonKey === "addOnRevenue" || comparisonKey === "revenue"
-                                  ? formatCurrency(row.secondary ?? 0)
-                                  : formatWhole(row.secondary ?? 0)}
-                              </Table.Td>
-                            )}
+                  {previewError && (
+                    <Box mb="sm">
+                      <Text fz="sm" c="red">
+                        {previewError}
+                      </Text>
+                    </Box>
+                  )}
+                  {isPreviewLoading ? (
+                    <Text c="dimmed" fz="sm">
+                      Running preview&hellip;
+                    </Text>
+                  ) : previewRows.length === 0 || previewColumns.length === 0 ? (
+                    <Text c="dimmed" fz="sm">
+                      Configure your models, fields, and filters, then run the analysis to see sample rows.
+                    </Text>
+                  ) : (
+                    <ScrollArea>
+                      <Table highlightOnHover striped verticalSpacing="xs" fontSize="sm">
+                        <Table.Thead>
+                          <Table.Tr>
+                            {previewColumns.map((column) => (
+                              <Table.Th key={column}>{humanizeAlias(column)}</Table.Th>
+                            ))}
                           </Table.Tr>
-                        ))}
-                      </Table.Tbody>
-                    </Table>
-                  </ScrollArea>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {previewRows.map((row, rowIndex) => {
+                            const rowData = row as Record<string, unknown>;
+                            return (
+                              <Table.Tr key={`preview-row-${rowIndex}`}>
+                                {previewColumns.map((column) => (
+                                  <Table.Td key={`${rowIndex}-${column}`}>
+                                    {formatPreviewValue(rowData[column])}
+                                  </Table.Td>
+                                ))}
+                              </Table.Tr>
+                            );
+                          })}
+                        </Table.Tbody>
+                      </Table>
+                    </ScrollArea>
+                  )}
                 </Paper>
 
                 <Paper p="md" radius="lg" shadow="xs" withBorder>
@@ -1797,7 +2020,13 @@ const Reports = (props: GenericPageProps) => {
                             <Text fw={600}>{summary.label}</Text>
                             <Badge
                               variant="light"
-                              color={summary.tone === "negative" ? "red" : "teal"}
+                              color={
+                                summary.tone === "negative"
+                                  ? "red"
+                                  : summary.tone === "positive"
+                                  ? "teal"
+                                  : "gray"
+                              }
                             >
                               {summary.delta}
                             </Badge>
@@ -1839,4 +2068,7 @@ const Reports = (props: GenericPageProps) => {
 };
 
 export default Reports;
+
+
+
 

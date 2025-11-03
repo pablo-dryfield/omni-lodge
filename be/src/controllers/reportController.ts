@@ -3,6 +3,7 @@ import {
   Association,
   ModelAttributeColumnOptions,
   Op,
+  QueryTypes,
   type ModelAttributeColumnReferencesOptions,
 } from "sequelize";
 import { Model, ModelCtor, Sequelize } from "sequelize-typescript";
@@ -50,6 +51,29 @@ const FULL_ACCESS_ROLE_SLUGS = new Set([
 
 const COMMISSION_RATE_PER_ATTENDEE = 6;
 const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-08");
+type ReportPreviewRequest = {
+  models: string[];
+  fields: Array<{ modelId: string; fieldIds: string[] }>;
+  joins?: Array<{
+    id: string;
+    leftModel: string;
+    leftField: string;
+    rightModel: string;
+    rightField: string;
+    joinType?: "inner" | "left" | "right" | "full";
+    description?: string;
+  }>;
+  filters?: string[];
+  limit?: number;
+};
+
+type ReportPreviewResponse = {
+  rows: Array<Record<string, unknown>>;
+  columns: string[];
+  sql: string;
+};
+
+const modelDescriptorCache = new Map<string, ReportModelDescriptor>();
 
 export const getCommissionByDateRange = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -321,6 +345,7 @@ type ReportModelDescriptor = {
 
 export const listReportModels = (_req: Request, res: Response): void => {
   try {
+    modelDescriptorCache.clear();
     const models = Object.values(sequelize.models) as Array<ModelCtor<Model>>;
     const payload = models
       .map(describeModel)
@@ -330,6 +355,106 @@ export const listReportModels = (_req: Request, res: Response): void => {
   } catch (error) {
     console.error("Failed to enumerate report models", error);
     res.status(500).json({ message: "Unable to enumerate data models" });
+  }
+};
+
+export const runReportPreview = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  try {
+    const payload = req.body as ReportPreviewRequest;
+
+    if (!payload || !Array.isArray(payload.models) || payload.models.length === 0) {
+      res.status(400).json({ message: "At least one data model is required." });
+      return;
+    }
+
+    const requestedFields =
+      payload.fields?.filter((entry) => Array.isArray(entry.fieldIds) && entry.fieldIds.length > 0) ?? [];
+
+    if (requestedFields.length === 0) {
+      res.status(400).json({ message: "Select at least one field across your models." });
+      return;
+    }
+
+    const aliasMap = new Map<string, string>();
+    payload.models.forEach((modelId, index) => {
+      aliasMap.set(modelId, `m${index}`);
+    });
+
+    const selectClauses: string[] = [];
+    const usedFields = new Set<string>();
+
+    requestedFields.forEach((entry) => {
+      const descriptor = ensureModelDescriptor(entry.modelId);
+      const alias = aliasMap.get(entry.modelId);
+      if (!descriptor || !alias) {
+        return;
+      }
+
+      entry.fieldIds.forEach((fieldId) => {
+        const field = descriptor.fields.find((candidate) => candidate.fieldName === fieldId);
+        if (!field) {
+          return;
+        }
+        const selectAlias = `${descriptor.id}__${field.fieldName}`;
+        if (usedFields.has(selectAlias)) {
+          return;
+        }
+        usedFields.add(selectAlias);
+        selectClauses.push(
+          `${alias}.${quoteIdentifier(field.columnName)} AS ${quoteIdentifier(selectAlias)}`,
+        );
+      });
+    });
+
+    if (selectClauses.length === 0) {
+      res.status(400).json({ message: "Unable to determine any valid fields to query." });
+      return;
+    }
+
+    const baseModelId = payload.models[0];
+    const baseDescriptor = ensureModelDescriptor(baseModelId);
+    const baseAlias = aliasMap.get(baseModelId)!;
+    if (!baseDescriptor) {
+      res.status(400).json({ message: `Model ${baseModelId} is not available.` });
+      return;
+    }
+
+    const fromClause = buildFromClause(baseDescriptor, baseAlias);
+    const joinClauses = buildJoinClauses(payload.joins ?? [], aliasMap);
+    const whereClauses = buildWhereClauses(payload.filters ?? []);
+
+    const limitValue = Math.min(Math.max(Number(payload.limit ?? 200) || 200, 1), 1000);
+
+    const sqlParts = [
+      `SELECT ${selectClauses.join(", ")}`,
+      `FROM ${fromClause}`,
+      ...joinClauses,
+      whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "",
+      `LIMIT :limit`,
+    ].filter(Boolean);
+
+    const sql = sqlParts.join(" ");
+
+    const rows = await sequelize.query<Record<string, unknown>>(sql, {
+      replacements: { limit: limitValue },
+      type: QueryTypes.SELECT,
+    });
+
+    const columns = rows.length > 0 ? Object.keys(rows[0]) : Array.from(usedFields);
+
+    const response: ReportPreviewResponse = {
+      rows,
+      columns,
+      sql,
+    };
+
+    res.status(200).json(response);
+  } catch (error) {
+    console.error("Failed to run report preview", error);
+    res.status(500).json({ message: "Failed to run report preview." });
   }
 };
 
@@ -376,7 +501,7 @@ function describeModel(model: ModelCtor<Model>): ReportModelDescriptor {
     describeAssociation(association),
   );
 
-  return {
+  const descriptor: ReportModelDescriptor = {
     id: model.name,
     name: model.name,
     tableName,
@@ -390,6 +515,10 @@ function describeModel(model: ModelCtor<Model>): ReportModelDescriptor {
     fields,
     associations,
   };
+
+  modelDescriptorCache.set(descriptor.id, descriptor);
+
+  return descriptor;
 }
 
 function describeField(
@@ -533,4 +662,75 @@ function buildModelDescription(modelName: string, schema: string | undefined, ta
     return `${modelName} model mapped to ${schema}.${tableName}`;
   }
   return `${modelName} model mapped to ${tableName}`;
+}
+
+function ensureModelDescriptor(modelId: string): ReportModelDescriptor | null {
+  const cached = modelDescriptorCache.get(modelId);
+  if (cached) {
+    return cached;
+  }
+
+  const sequelizeModel = sequelize.models[modelId];
+  if (!sequelizeModel) {
+    return null;
+  }
+
+  return describeModel(sequelizeModel as ModelCtor<Model>);
+}
+
+function buildFromClause(descriptor: ReportModelDescriptor, alias: string): string {
+  const tableIdentifier = descriptor.schema
+    ? `${quoteIdentifier(descriptor.schema)}.${quoteIdentifier(descriptor.tableName)}`
+    : quoteIdentifier(descriptor.tableName);
+  return `${tableIdentifier} ${alias}`;
+}
+
+function buildJoinClauses(
+  joins: ReportPreviewRequest["joins"],
+  aliasMap: Map<string, string>,
+): string[] {
+  if (!joins || joins.length === 0) {
+    return [];
+  }
+
+  const clauses: string[] = [];
+
+  joins.forEach((join) => {
+    const leftAlias = aliasMap.get(join.leftModel);
+    const rightAlias = aliasMap.get(join.rightModel);
+    const leftDescriptor = ensureModelDescriptor(join.leftModel);
+    const rightDescriptor = ensureModelDescriptor(join.rightModel);
+
+    if (!leftAlias || !rightAlias || !leftDescriptor || !rightDescriptor) {
+      return;
+    }
+
+    const leftField = leftDescriptor.fields.find((field) => field.fieldName === join.leftField);
+    const rightField = rightDescriptor.fields.find((field) => field.fieldName === join.rightField);
+    if (!leftField || !rightField) {
+      return;
+    }
+
+    const joinType = (join.joinType ?? "left").toUpperCase();
+    const normalizedJoin =
+      joinType === "INNER" || joinType === "RIGHT" || joinType === "FULL" ? joinType : "LEFT";
+
+    const rightTable = buildFromClause(rightDescriptor, rightAlias);
+
+    clauses.push(
+      `${normalizedJoin} JOIN ${rightTable} ON ${leftAlias}.${quoteIdentifier(leftField.columnName)} = ${rightAlias}.${quoteIdentifier(rightField.columnName)}`,
+    );
+  });
+
+  return clauses;
+}
+
+function buildWhereClauses(filters: string[]): string[] {
+  return filters
+    .map((filter) => (typeof filter === "string" ? filter.trim() : ""))
+    .filter((filter) => filter.length > 0 && !filter.includes(";") && !filter.includes("--"));
+}
+
+function quoteIdentifier(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
 }
