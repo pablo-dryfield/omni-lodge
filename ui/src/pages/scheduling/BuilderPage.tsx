@@ -275,6 +275,8 @@ const createUserCardStyles = (background: string) => {
       borderRadius: 18,
       padding: "14px 16px",
       width: "100%",
+      maxWidth: 260,
+      minWidth: 0,
       position: "relative",
       overflow: "hidden",
       transition: "transform 120ms ease, box-shadow 120ms ease",
@@ -1399,7 +1401,7 @@ const BuilderPage = () => {
 
           return (
             <Stack key={`instance-${instance.id}`} gap={10} style={{ width: "100%" }}>
-              <Stack gap={10} align="stretch">
+        <Stack gap={10} align="center" style={{ width: "100%" }}>
                 {grouped.length > 0 ? (
                   grouped
                     .map((groupAssignments) =>
@@ -1447,20 +1449,23 @@ const BuilderPage = () => {
     firstColumnLabel: string,
     rows: ReactNode[],
   ) => (
-    <Box
-      key={key}
-      style={{
-        flex: 1,
-        overflowX: "hidden",
-        borderRadius: 20,
-        backgroundColor: "#fff",
-        boxShadow: palette.tableShadow,
-      }}
-    >
+  <Box
+    key={key}
+    style={{
+      flex: 1,
+      minWidth: 0,
+      overflow: "hidden",
+      borderRadius: 20,
+      backgroundColor: "#fff",
+      boxShadow: palette.tableShadow,
+    }}
+  >
       <Box
         component="table"
         style={{
           width: "100%",
+          maxWidth: "100%",
+          minWidth: 0,
           tableLayout: "fixed",
           borderCollapse: "separate",
           borderSpacing: 0,
@@ -1878,9 +1883,9 @@ const BuilderPage = () => {
           shadow="xl"
           radius="lg"
           padding="xl"
-          style={{ backgroundColor: palette.lavender, borderColor: palette.border }}
+          style={{ backgroundColor: palette.lavender, borderColor: palette.border, overflow: "hidden" }}
         >
-          <Stack gap="xl">
+          <Stack gap="xl" style={{ width: "100%", minWidth: 0, overflowX: "hidden" }}>
             {pubCrawlTable}
             {otherShiftTables}
             {!pubCrawlTable && otherShiftTables.length === 0 ? (
