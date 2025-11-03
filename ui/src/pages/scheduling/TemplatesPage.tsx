@@ -112,13 +112,13 @@ const TemplatesPage = () => {
     setModalOpen(true);
   };
 
-  const mapTemplateRolesToEntries = (template: ShiftTemplate): RoleEntry[] =>
-    (template.defaultRoles ?? []).map((definition) => ({
-      id: createRoleEntryId(),
-      roleId: definition.shiftRoleId != null ? definition.shiftRoleId.toString() : null,
-      customName: definition.role ?? "",
-      required: Math.max(1, definition.required ?? 1),
-    }));
+const mapTemplateRolesToEntries = (template: ShiftTemplate): RoleEntry[] =>
+  (template.defaultRoles ?? []).map((definition) => ({
+    id: createRoleEntryId(),
+    roleId: definition.shiftRoleId != null ? definition.shiftRoleId.toString() : null,
+    customName: definition.role ?? "",
+    required: Math.max(0, definition.required ?? 0),
+  }));
 
   const handleOpenEdit = (template: ShiftTemplate) => {
     setFormState({
@@ -194,7 +194,12 @@ const TemplatesPage = () => {
     setFormState((state) => ({
       ...state,
       roleEntries: state.roleEntries.map((entry) =>
-        entry.id === entryId ? { ...entry, required: Number.isFinite(numeric) ? Math.max(1, Math.floor(numeric)) : 1 } : entry,
+        entry.id === entryId
+          ? {
+              ...entry,
+              required: Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : 0,
+            }
+          : entry,
       ),
     }));
   };
@@ -243,7 +248,7 @@ const TemplatesPage = () => {
     let hasInvalidCustomName = false;
     const defaultRoles: ShiftTemplateRoleRequirement[] = formState.roleEntries
       .map((entry) => {
-        const required = Number.isFinite(entry.required) ? Math.max(1, entry.required) : 1;
+        const required = Number.isFinite(entry.required) ? Math.max(0, entry.required) : 0;
         if (entry.roleId) {
           const numericId = Number(entry.roleId);
           const reference = shiftRoleRecords.find((role) => role.id === numericId);
@@ -471,14 +476,14 @@ const TemplatesPage = () => {
                       required
                     />
                   ) : null}
-                  <NumberInput
-                    label="Required"
-                    min={1}
-                    value={entry.required}
-                    onChange={(value) => handleRoleRequiredChange(entry.id, value)}
-                    allowNegative={false}
-                    allowDecimal={false}
-                    hideControls
+          <NumberInput
+            label="Required"
+            min={0}
+            value={entry.required}
+            onChange={(value) => handleRoleRequiredChange(entry.id, value)}
+            allowNegative={false}
+            allowDecimal={false}
+            hideControls
                     style={{ width: 120 }}
                   />
                   <ActionIcon
