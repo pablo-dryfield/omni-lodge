@@ -134,6 +134,7 @@ export const useEnsureWeek = (
 
       if (result.week) {
         invalidateQuery(queryClient, schedulingKeys.weekSummary(result.week.id));
+        invalidateQuery(queryClient, schedulingKeys.shiftInstances(result.week.id));
       }
       return result;
     },
