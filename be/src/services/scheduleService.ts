@@ -583,7 +583,15 @@ export async function generateWeek(options: { week?: string | null; actorId?: nu
   const transaction = await sequelize.transaction();
   try {
     const { week, created } = await ensureWeekExists(identifier, transaction);
-    if (created || options.autoSpawn) {
+    let shouldSpawn = created;
+    if (!shouldSpawn && options.autoSpawn) {
+      const existingInstances = await ShiftInstance.count({
+        where: { scheduleWeekId: week.id },
+        transaction,
+      });
+      shouldSpawn = existingInstances === 0;
+    }
+    if (shouldSpawn) {
       await spawnInstancesFromTemplates(week, options.actorId ?? null, transaction);
     }
     await transaction.commit();
