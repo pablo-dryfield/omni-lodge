@@ -44,11 +44,14 @@ import Notification from './Notification.js';
 import AuditLog from './AuditLog.js';
 import ShiftRole from './ShiftRole.js';
 import UserShiftRole from './UserShiftRole.js';
+import ReportTemplate from './ReportTemplate.js';
 
 export function defineAssociations() {
   // User Associations
   User.belongsTo(UserType, { foreignKey: 'userTypeId', as: 'role' });
   User.hasOne(StaffProfile, { foreignKey: 'user_id', as: 'staffProfile' });
+  User.hasMany(ReportTemplate, { foreignKey: 'userId', as: 'reportTemplates' });
+  ReportTemplate.belongsTo(User, { foreignKey: 'userId', as: 'owner' });
 
   // UserType Associations
   UserType.hasMany(User, { foreignKey: 'userTypeId', as: 'users' });

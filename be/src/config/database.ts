@@ -41,6 +41,7 @@ import Notification from "../models/Notification.js";
 import AuditLog from "../models/AuditLog.js";
 import ShiftRole from "../models/ShiftRole.js";
 import UserShiftRole from "../models/UserShiftRole.js";
+import ReportTemplate from "../models/ReportTemplate.js";
 import {
   FinanceAccount,
   FinanceAuditLog,
@@ -111,6 +112,7 @@ const sequelize = new Sequelize({
     Availability,
     ShiftAssignment,
     SwapRequest,
+    ReportTemplate,
     Export,
     Notification,
     AuditLog,
