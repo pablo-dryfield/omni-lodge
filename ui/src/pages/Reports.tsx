@@ -682,8 +682,14 @@ const Reports = (props: GenericPageProps) => {
     });
   }, [draft.fields, modelMap]);
 
-  const previewColumns = previewResult?.columns ?? [];
-  const previewRows = previewResult?.rows ?? [];
+  const previewColumns = useMemo(
+    () => previewResult?.columns ?? [],
+    [previewResult],
+  );
+  const previewRows = useMemo(
+    () => previewResult?.rows ?? [],
+    [previewResult],
+  );
 
   const previewColumnSets = useMemo(() => {
     const numeric = new Set<string>();
@@ -1974,7 +1980,12 @@ const Reports = (props: GenericPageProps) => {
                     </Text>
                   ) : (
                     <ScrollArea>
-                      <Table highlightOnHover striped verticalSpacing="xs" fontSize="sm">
+                      <Table
+                        highlightOnHover
+                        striped
+                        verticalSpacing="xs"
+                        style={{ fontSize: "0.85rem" }}
+                      >
                         <Table.Thead>
                           <Table.Tr>
                             {previewColumns.map((column) => (

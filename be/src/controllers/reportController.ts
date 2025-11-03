@@ -1,11 +1,5 @@
 import { Request, Response } from "express";
-import {
-  Association,
-  ModelAttributeColumnOptions,
-  Op,
-  QueryTypes,
-  type ModelAttributeColumnReferencesOptions,
-} from "sequelize";
+import { Association, ModelAttributeColumnOptions, Op, QueryTypes, type ModelAttributeColumnReferencesOptions } from "sequelize";
 import { Model, ModelCtor, Sequelize } from "sequelize-typescript";
 import dayjs from "dayjs";
 import Counter from "../models/Counter.js";
@@ -51,6 +45,94 @@ const FULL_ACCESS_ROLE_SLUGS = new Set([
 
 const COMMISSION_RATE_PER_ATTENDEE = 6;
 const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-08");
+
+type DialectQuoter = {
+  quoteTable: (value: string | { tableName: string; schema?: string }) => string;
+  quoteIdentifier: (value: string) => string;
+};
+
+const getDialectQuoter = (): DialectQuoter => {
+  const queryInterface = sequelize.getQueryInterface() as unknown as {
+    quoteTable?: DialectQuoter["quoteTable"];
+    quoteIdentifier?: DialectQuoter["quoteIdentifier"];
+    queryGenerator?: DialectQuoter;
+  };
+
+  if (
+    queryInterface &&
+    typeof queryInterface.quoteTable === "function" &&
+    typeof queryInterface.quoteIdentifier === "function"
+  ) {
+    return {
+      quoteTable: queryInterface.quoteTable.bind(queryInterface),
+      quoteIdentifier: queryInterface.quoteIdentifier.bind(queryInterface),
+    };
+  }
+
+  const generator = queryInterface?.queryGenerator;
+  if (
+    generator &&
+    typeof generator.quoteTable === "function" &&
+    typeof generator.quoteIdentifier === "function"
+  ) {
+    return {
+      quoteTable: generator.quoteTable.bind(generator),
+      quoteIdentifier: generator.quoteIdentifier.bind(generator),
+    };
+  }
+
+  return {
+    quoteTable: (value) => {
+      if (typeof value === "string") {
+        return `"${value.replace(/"/g, '""')}"`;
+      }
+      const table = `"${value.tableName.replace(/"/g, '""')}"`;
+      const schema = value.schema ? `"${value.schema.replace(/"/g, '""')}"` : null;
+      return schema ? `${schema}.${table}` : table;
+    },
+    quoteIdentifier: (value) => `"${value.replace(/"/g, '""')}"`,
+  };
+};
+
+type ReportModelFieldDescriptor = {
+  fieldName: string;
+  columnName: string;
+  type: string;
+  allowNull: boolean;
+  primaryKey: boolean;
+  defaultValue: string | number | boolean | null;
+  unique: boolean;
+  references?: {
+    model: string | null;
+    key?: string | null;
+  };
+};
+
+type ReportModelAssociationDescriptor = {
+  name: string | null;
+  targetModel: string;
+  associationType: string;
+  foreignKey?: string;
+  sourceKey?: string;
+  through?: string | null;
+  as?: string;
+};
+
+type ReportModelDescriptor = {
+  id: string;
+  name: string;
+  tableName: string;
+  schema?: string;
+  description: string;
+  connection: string;
+  recordCount: string;
+  lastSynced: string;
+  primaryKeys: string[];
+  primaryKey: string | null;
+  fields: ReportModelFieldDescriptor[];
+  associations: ReportModelAssociationDescriptor[];
+};
+
 type ReportPreviewRequest = {
   models: string[];
   fields: Array<{ modelId: string; fieldIds: string[] }>;
@@ -304,45 +386,6 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
   }
 };
 
-type ReportModelFieldDescriptor = {
-  fieldName: string;
-  columnName: string;
-  type: string;
-  allowNull: boolean;
-  primaryKey: boolean;
-  defaultValue: string | number | boolean | null;
-  unique: boolean;
-  references?: {
-    model: string | null;
-    key?: string | null;
-  };
-};
-
-type ReportModelAssociationDescriptor = {
-  name: string | null;
-  targetModel: string;
-  associationType: string;
-  foreignKey?: string;
-  sourceKey?: string;
-  through?: string | null;
-  as?: string;
-};
-
-type ReportModelDescriptor = {
-  id: string;
-  name: string;
-  tableName: string;
-  schema?: string;
-  description: string;
-  connection: string;
-  recordCount: string;
-  lastSynced: string;
-  primaryKeys: string[];
-  primaryKey: string | null;
-  fields: ReportModelFieldDescriptor[];
-  associations: ReportModelAssociationDescriptor[];
-};
-
 export const listReportModels = (_req: Request, res: Response): void => {
   try {
     modelDescriptorCache.clear();
@@ -362,6 +405,7 @@ export const runReportPreview = async (
   req: Request,
   res: Response,
 ): Promise<void> => {
+  let lastSql = "";
   try {
     const payload = req.body as ReportPreviewRequest;
 
@@ -423,7 +467,32 @@ export const runReportPreview = async (
     }
 
     const fromClause = buildFromClause(baseDescriptor, baseAlias);
-    const joinClauses = buildJoinClauses(payload.joins ?? [], aliasMap);
+    const { clauses: joinClauses, joinedModels, unresolvedJoins } = buildJoinClauses(
+      payload.joins ?? [],
+      aliasMap,
+      baseModelId,
+    );
+
+    if (unresolvedJoins.length > 0) {
+      res.status(400).json({
+        message: "Some models could not be joined. Verify your join configuration.",
+        details: unresolvedJoins,
+      });
+      return;
+    }
+
+    const unjoinedModels = payload.models.filter(
+      (modelId) => modelId !== baseModelId && !joinedModels.has(modelId),
+    );
+
+    if (unjoinedModels.length > 0) {
+      res.status(400).json({
+        message: "Some selected models are not connected to the base model.",
+        details: unjoinedModels,
+      });
+      return;
+    }
+
     const whereClauses = buildWhereClauses(payload.filters ?? []);
 
     const limitValue = Math.min(Math.max(Number(payload.limit ?? 200) || 200, 1), 1000);
@@ -437,6 +506,7 @@ export const runReportPreview = async (
     ].filter(Boolean);
 
     const sql = sqlParts.join(" ");
+    lastSql = sql;
 
     const rows = await sequelize.query<Record<string, unknown>>(sql, {
       replacements: { limit: limitValue },
@@ -453,8 +523,12 @@ export const runReportPreview = async (
 
     res.status(200).json(response);
   } catch (error) {
-    console.error("Failed to run report preview", error);
-    res.status(500).json({ message: "Failed to run report preview." });
+    console.error("Failed to run report preview", error, lastSql ? `SQL: ${lastSql}` : "");
+    const payload =
+      process.env.NODE_ENV !== "production" && error instanceof Error
+        ? { message: "Failed to run report preview.", details: error.message }
+        : { message: "Failed to run report preview." };
+    res.status(500).json(payload);
   }
 };
 
@@ -679,50 +753,91 @@ function ensureModelDescriptor(modelId: string): ReportModelDescriptor | null {
 }
 
 function buildFromClause(descriptor: ReportModelDescriptor, alias: string): string {
-  const tableIdentifier = descriptor.schema
-    ? `${quoteIdentifier(descriptor.schema)}.${quoteIdentifier(descriptor.tableName)}`
-    : quoteIdentifier(descriptor.tableName);
-  return `${tableIdentifier} ${alias}`;
+  return `${quoteTable(descriptor)} ${alias}`;
 }
 
 function buildJoinClauses(
   joins: ReportPreviewRequest["joins"],
   aliasMap: Map<string, string>,
-): string[] {
+  baseModelId: string,
+): { clauses: string[]; joinedModels: Set<string>; unresolvedJoins: string[] } {
   if (!joins || joins.length === 0) {
-    return [];
+    return { clauses: [], joinedModels: new Set<string>([baseModelId]), unresolvedJoins: [] };
   }
 
   const clauses: string[] = [];
+  const remaining = [...joins];
+  const joined = new Set<string>([baseModelId]);
+  const unresolved: string[] = [];
 
-  joins.forEach((join) => {
-    const leftAlias = aliasMap.get(join.leftModel);
-    const rightAlias = aliasMap.get(join.rightModel);
-    const leftDescriptor = ensureModelDescriptor(join.leftModel);
-    const rightDescriptor = ensureModelDescriptor(join.rightModel);
+  let progress = true;
+  while (remaining.length > 0 && progress) {
+    progress = false;
 
-    if (!leftAlias || !rightAlias || !leftDescriptor || !rightDescriptor) {
-      return;
+    for (let index = remaining.length - 1; index >= 0; index -= 1) {
+      const join = remaining[index];
+
+      let leftModelId = join.leftModel;
+      let rightModelId = join.rightModel;
+      let leftFieldId = join.leftField;
+      let rightFieldId = join.rightField;
+
+      const leftJoined = joined.has(leftModelId);
+      const rightJoined = joined.has(rightModelId);
+
+      if (!leftJoined && rightJoined) {
+        // Swap orientation so that the already joined model appears on the left side.
+        [leftModelId, rightModelId] = [rightModelId, leftModelId];
+        [leftFieldId, rightFieldId] = [rightFieldId, leftFieldId];
+      } else if (!leftJoined && !rightJoined) {
+        continue;
+      }
+
+      const leftAlias = aliasMap.get(leftModelId);
+      const rightAlias = aliasMap.get(rightModelId);
+      const leftDescriptor = ensureModelDescriptor(leftModelId);
+      const rightDescriptor = ensureModelDescriptor(rightModelId);
+
+      if (!leftAlias || !rightAlias || !leftDescriptor || !rightDescriptor) {
+        remaining.splice(index, 1);
+        progress = true;
+        continue;
+      }
+
+      const leftField = leftDescriptor.fields.find((field) => field.fieldName === leftFieldId);
+      const rightField = rightDescriptor.fields.find((field) => field.fieldName === rightFieldId);
+      if (!leftField || !rightField) {
+        remaining.splice(index, 1);
+        progress = true;
+        unresolved.push(
+          `${leftModelId}.${leftFieldId} -> ${rightModelId}.${rightFieldId} (missing field metadata)`,
+        );
+        continue;
+      }
+
+      const joinType = (join.joinType ?? "left").toUpperCase();
+      const normalizedJoin =
+        joinType === "INNER" || joinType === "RIGHT" || joinType === "FULL" ? joinType : "LEFT";
+
+      const rightTable = buildFromClause(rightDescriptor, rightAlias);
+
+      clauses.push(
+        `${normalizedJoin} JOIN ${rightTable} ON ${leftAlias}.${quoteIdentifier(leftField.columnName)} = ${rightAlias}.${quoteIdentifier(rightField.columnName)}`,
+      );
+
+      joined.add(rightModelId);
+      remaining.splice(index, 1);
+      progress = true;
     }
+  }
 
-    const leftField = leftDescriptor.fields.find((field) => field.fieldName === join.leftField);
-    const rightField = rightDescriptor.fields.find((field) => field.fieldName === join.rightField);
-    if (!leftField || !rightField) {
-      return;
-    }
+  if (remaining.length > 0) {
+    remaining.forEach((join) => {
+      unresolved.push(`${join.leftModel}.${join.leftField} -> ${join.rightModel}.${join.rightField}`);
+    });
+  }
 
-    const joinType = (join.joinType ?? "left").toUpperCase();
-    const normalizedJoin =
-      joinType === "INNER" || joinType === "RIGHT" || joinType === "FULL" ? joinType : "LEFT";
-
-    const rightTable = buildFromClause(rightDescriptor, rightAlias);
-
-    clauses.push(
-      `${normalizedJoin} JOIN ${rightTable} ON ${leftAlias}.${quoteIdentifier(leftField.columnName)} = ${rightAlias}.${quoteIdentifier(rightField.columnName)}`,
-    );
-  });
-
-  return clauses;
+  return { clauses, joinedModels: joined, unresolvedJoins: unresolved };
 }
 
 function buildWhereClauses(filters: string[]): string[] {
@@ -731,6 +846,18 @@ function buildWhereClauses(filters: string[]): string[] {
     .filter((filter) => filter.length > 0 && !filter.includes(";") && !filter.includes("--"));
 }
 
+function quoteTable(descriptor: ReportModelDescriptor): string {
+  const quoter = getDialectQuoter();
+  if (descriptor.schema) {
+    return quoter.quoteTable({
+      tableName: descriptor.tableName,
+      schema: descriptor.schema,
+    });
+  }
+  return quoter.quoteTable(descriptor.tableName);
+}
+
 function quoteIdentifier(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
+  const quoter = getDialectQuoter();
+  return quoter.quoteIdentifier(value);
 }
