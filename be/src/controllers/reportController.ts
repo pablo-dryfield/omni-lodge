@@ -7,6 +7,7 @@ import CounterChannelMetric from "../models/CounterChannelMetric.js";
 import CounterProduct from "../models/CounterProduct.js";
 import CounterUser from "../models/CounterUser.js";
 import User from "../models/User.js";
+import ReportTemplate, { ReportTemplateFieldSelection, ReportTemplateOptions } from "../models/ReportTemplate.js";
 import { AuthenticatedRequest } from "../types/AuthenticatedRequest";
 import sequelize from "../config/database.js";
 
@@ -155,7 +156,160 @@ type ReportPreviewResponse = {
   sql: string;
 };
 
+type TemplateOptionsInput = {
+  autoDistribution?: unknown;
+  notifyTeam?: unknown;
+};
+
+type TemplatePayloadInput = {
+  name?: unknown;
+  category?: unknown;
+  description?: unknown;
+  schedule?: unknown;
+  models?: unknown;
+  fields?: unknown;
+  joins?: unknown;
+  visuals?: unknown;
+  metrics?: unknown;
+  filters?: unknown;
+  options?: TemplateOptionsInput | null;
+};
+
+type SerializedReportTemplate = {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  schedule: string;
+  models: string[];
+  fields: ReportTemplateFieldSelection[];
+  joins: unknown[];
+  visuals: unknown[];
+  metrics: string[];
+  filters: unknown[];
+  options: ReportTemplateOptions;
+  owner: {
+    id: number | null;
+    name: string;
+  };
+  createdAt: string;
+  updatedAt: string;
+};
+
+const DEFAULT_TEMPLATE_OPTIONS: ReportTemplateOptions = {
+  autoDistribution: true,
+  notifyTeam: true,
+};
+
 const modelDescriptorCache = new Map<string, ReportModelDescriptor>();
+
+const toStringOr = (value: unknown, fallback: string): string => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : fallback;
+  }
+  return fallback;
+};
+
+const toNullableString = (value: unknown): string | null => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  return null;
+};
+
+const toStringArray = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : [];
+
+const toFieldSelections = (value: unknown): ReportTemplateFieldSelection[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const candidate = entry as Record<string, unknown>;
+      const modelId = typeof candidate.modelId === "string" ? candidate.modelId : null;
+      const rawFieldIds = candidate.fieldIds;
+      const fieldIds = Array.isArray(rawFieldIds)
+        ? rawFieldIds.filter((fieldId): fieldId is string => typeof fieldId === "string")
+        : [];
+
+      if (!modelId) {
+        return null;
+      }
+
+      return { modelId, fieldIds };
+    })
+    .filter((value): value is ReportTemplateFieldSelection => Boolean(value));
+};
+
+const toUnknownArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+
+const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
+  const optionsCandidate =
+    input.options && typeof input.options === "object" && !Array.isArray(input.options)
+      ? (input.options as TemplateOptionsInput)
+      : undefined;
+
+  const options: ReportTemplateOptions = {
+    autoDistribution:
+      typeof optionsCandidate?.autoDistribution === "boolean"
+        ? optionsCandidate.autoDistribution
+        : DEFAULT_TEMPLATE_OPTIONS.autoDistribution,
+    notifyTeam:
+      typeof optionsCandidate?.notifyTeam === "boolean"
+        ? optionsCandidate.notifyTeam
+        : DEFAULT_TEMPLATE_OPTIONS.notifyTeam,
+  };
+
+  return {
+    name: toStringOr(input.name, ""),
+    category: toNullableString(input.category),
+    description: toNullableString(input.description),
+    schedule: toStringOr(input.schedule, "Manual"),
+    models: toStringArray(input.models),
+    fields: toFieldSelections(input.fields),
+    joins: toUnknownArray(input.joins),
+    visuals: toUnknownArray(input.visuals),
+    metrics: toStringArray(input.metrics),
+    filters: toUnknownArray(input.filters),
+    options,
+  };
+};
+
+const serializeReportTemplate = (
+  template: ReportTemplate & { owner?: User | null },
+): SerializedReportTemplate => {
+  const owner = template.owner ?? null;
+  const ownerName = owner ? `${owner.firstName} ${owner.lastName}`.trim() : "Shared";
+  return {
+    id: template.id,
+    name: template.name,
+    category: template.category ?? "Custom",
+    description: template.description ?? "",
+    schedule: template.schedule ?? "Manual",
+    models: Array.isArray(template.models) ? template.models : [],
+    fields: Array.isArray(template.fields) ? template.fields : [],
+    joins: Array.isArray(template.joins) ? template.joins : [],
+    visuals: Array.isArray(template.visuals) ? template.visuals : [],
+    metrics: Array.isArray(template.metrics) ? template.metrics : [],
+    filters: Array.isArray(template.filters) ? template.filters : [],
+    options: template.options ?? DEFAULT_TEMPLATE_OPTIONS,
+    owner: {
+      id: template.userId ?? null,
+      name: ownerName.length > 0 ? ownerName : "Shared",
+    },
+    createdAt: template.createdAt?.toISOString() ?? new Date().toISOString(),
+    updatedAt: template.updatedAt?.toISOString() ?? new Date().toISOString(),
+  };
+};
 
 export const getCommissionByDateRange = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -529,6 +683,176 @@ export const runReportPreview = async (
         ? { message: "Failed to run report preview.", details: error.message }
         : { message: "Failed to run report preview." };
     res.status(500).json(payload);
+  }
+};
+
+export const listReportTemplates = async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const templates = await ReportTemplate.findAll({
+      include: [
+        {
+          model: User,
+          as: "owner",
+          attributes: ["id", "firstName", "lastName"],
+        },
+      ],
+      order: [["updatedAt", "DESC"]],
+    });
+
+    res.json({
+      templates: templates.map((template) => serializeReportTemplate(template)),
+    });
+  } catch (error) {
+    console.error("Failed to list report templates", error);
+    res.status(500).json({ error: "Failed to load report templates" });
+  }
+};
+
+export const createReportTemplate = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const actorId = req.authContext?.id ?? null;
+    const payload = normalizeTemplatePayload((req.body ?? {}) as TemplatePayloadInput);
+
+    if (!payload.name) {
+      res.status(400).json({ error: "Template name is required" });
+      return;
+    }
+
+    const template = await ReportTemplate.create({
+      userId: actorId,
+      name: payload.name,
+      category: payload.category,
+      description: payload.description,
+      schedule: payload.schedule,
+      models: payload.models,
+      fields: payload.fields,
+      joins: payload.joins,
+      visuals: payload.visuals,
+      metrics: payload.metrics,
+      filters: payload.filters,
+      options: payload.options,
+    });
+
+    const reloaded = await template.reload({
+      include: [
+        {
+          model: User,
+          as: "owner",
+          attributes: ["id", "firstName", "lastName"],
+        },
+      ],
+    });
+
+    res.status(201).json({
+      template: serializeReportTemplate(reloaded),
+    });
+  } catch (error) {
+    console.error("Failed to create report template", error);
+    res.status(500).json({ error: "Failed to create report template" });
+  }
+};
+
+export const updateReportTemplate = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      res.status(400).json({ error: "Template id is required" });
+      return;
+    }
+
+    const template = await ReportTemplate.findByPk(id, {
+      include: [
+        {
+          model: User,
+          as: "owner",
+          attributes: ["id", "firstName", "lastName"],
+        },
+      ],
+    });
+
+    if (!template) {
+      res.status(404).json({ error: "Template not found" });
+      return;
+    }
+
+    const actorId = req.authContext?.id ?? null;
+    const roleSlug = req.authContext?.roleSlug ?? null;
+    const hasFullAccess = roleSlug ? FULL_ACCESS_ROLE_SLUGS.has(roleSlug) : false;
+    const isOwner = actorId !== null && template.userId === actorId;
+
+    if (!hasFullAccess && !isOwner) {
+      res.status(403).json({ error: "You do not have permission to modify this template" });
+      return;
+    }
+
+    const payload = normalizeTemplatePayload((req.body ?? {}) as TemplatePayloadInput);
+
+    if (!payload.name) {
+      res.status(400).json({ error: "Template name is required" });
+      return;
+    }
+
+    template.name = payload.name;
+    template.category = payload.category;
+    template.description = payload.description;
+    template.schedule = payload.schedule;
+    template.models = payload.models;
+    template.fields = payload.fields;
+    template.joins = payload.joins;
+    template.visuals = payload.visuals;
+    template.metrics = payload.metrics;
+    template.filters = payload.filters;
+    template.options = payload.options;
+
+    await template.save();
+    await template.reload({
+      include: [
+        {
+          model: User,
+          as: "owner",
+          attributes: ["id", "firstName", "lastName"],
+        },
+      ],
+    });
+
+    res.json({
+      template: serializeReportTemplate(template),
+    });
+  } catch (error) {
+    console.error("Failed to update report template", error);
+    res.status(500).json({ error: "Failed to update report template" });
+  }
+};
+
+export const deleteReportTemplate = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      res.status(400).json({ error: "Template id is required" });
+      return;
+    }
+
+    const template = await ReportTemplate.findByPk(id);
+    if (!template) {
+      res.status(404).json({ error: "Template not found" });
+      return;
+    }
+
+    const actorId = req.authContext?.id ?? null;
+    const roleSlug = req.authContext?.roleSlug ?? null;
+    const hasFullAccess = roleSlug ? FULL_ACCESS_ROLE_SLUGS.has(roleSlug) : false;
+    const isOwner = actorId !== null && template.userId === actorId;
+
+    if (!hasFullAccess && !isOwner) {
+      res.status(403).json({ error: "You do not have permission to delete this template" });
+      return;
+    }
+
+    await template.destroy();
+    res.status(204).send();
+  } catch (error) {
+    console.error("Failed to delete report template", error);
+    res.status(500).json({ error: "Failed to delete report template" });
   }
 };
 

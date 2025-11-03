@@ -84,3 +84,77 @@ export const useRunReportPreview = () =>
       return response.data as ReportPreviewResponse;
     },
   });
+
+export type ReportTemplateOptionsDto = {
+  autoDistribution: boolean;
+  notifyTeam: boolean;
+};
+
+export type ReportTemplateDto = {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  schedule: string;
+  models: string[];
+  fields: Array<{ modelId: string; fieldIds: string[] }>;
+  joins: unknown[];
+  visuals: unknown[];
+  metrics: string[];
+  filters: unknown[];
+  options: ReportTemplateOptionsDto;
+  owner: {
+    id: number | null;
+    name: string;
+  };
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ReportTemplateListResponse = {
+  templates: ReportTemplateDto[];
+};
+
+export type SaveReportTemplateRequest = {
+  id?: string;
+  name: string;
+  category: string;
+  description: string;
+  schedule: string;
+  models: string[];
+  fields: Array<{ modelId: string; fieldIds: string[] }>;
+  joins: unknown[];
+  visuals: unknown[];
+  metrics: string[];
+  filters: unknown[];
+  options: ReportTemplateOptionsDto;
+};
+
+export const useReportTemplates = () =>
+  useQuery<ReportTemplateListResponse>({
+    queryKey: ["reports", "templates"],
+    queryFn: async () => {
+      const response = await axiosInstance.get("/reports/templates");
+      return response.data as ReportTemplateListResponse;
+    },
+    staleTime: 60 * 1000,
+  });
+
+export const useSaveReportTemplate = () =>
+  useMutation<ReportTemplateDto, AxiosError<{ error?: string; message?: string }>, SaveReportTemplateRequest>({
+    mutationFn: async (payload: SaveReportTemplateRequest) => {
+      if (payload.id) {
+        const response = await axiosInstance.put(`/reports/templates/${payload.id}`, payload);
+        return (response.data as { template: ReportTemplateDto }).template;
+      }
+      const response = await axiosInstance.post("/reports/templates", payload);
+      return (response.data as { template: ReportTemplateDto }).template;
+    },
+  });
+
+export const useDeleteReportTemplate = () =>
+  useMutation<void, AxiosError<{ error?: string; message?: string }>, string>({
+    mutationFn: async (templateId: string) => {
+      await axiosInstance.delete(`/reports/templates/${templateId}`);
+    },
+  });

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import {
   Accordion,
@@ -57,15 +58,19 @@ import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import {
   useReportModels,
+  useReportTemplates,
   useRunReportPreview,
+  useSaveReportTemplate,
+  useDeleteReportTemplate,
   type ReportModelFieldResponse,
   type ReportModelPayload,
   type ReportPreviewRequest,
   type ReportPreviewResponse,
+  type ReportTemplateDto,
+  type SaveReportTemplateRequest,
 } from "../api/reports";
 
 const PAGE_SLUG = PAGE_SLUGS.reports;
-
 type SharedMetricKey =
   | "revenue"
   | "bookings"
@@ -179,6 +184,8 @@ type ReportTemplate = {
   schedule: string;
   lastUpdated: string;
   owner: string;
+  autoDistribution: boolean;
+  notifyTeam: boolean;
   models: string[];
   fields: Array<{ modelId: string; fieldIds: string[] }>;
   joins: JoinCondition[];
@@ -300,25 +307,18 @@ const deepClone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 
 const createEmptyTemplate = (): ReportTemplate => ({
   id: "template-empty",
-  name: "Ad-hoc report",
-  category: "Custom",
-  description: "Configure models and fields to begin building your report.",
+  name: "",
+  category: "",
+  description: "",
   schedule: "Manual",
-  lastUpdated: "Just now",
+  lastUpdated: "Not saved yet",
   owner: "You",
+  autoDistribution: true,
+  notifyTeam: true,
   models: [],
   fields: [],
   joins: [],
-  visuals: [
-    {
-      id: "visual-default",
-      name: "Revenue trend",
-      type: "line",
-      metric: "revenue",
-      dimension: "month",
-      comparison: "bookings",
-    },
-  ],
+  visuals: [],
   metrics: [],
   filters: [],
 });
@@ -687,6 +687,8 @@ const buildInitialTemplates = (models: DataModelDefinition[]): ReportTemplate[] 
     schedule: "Manual",
     lastUpdated: "Just now",
     owner: "You",
+    autoDistribution: true,
+    notifyTeam: true,
     models: secondaryModel ? [primaryModel.id, secondaryModel.id] : [primaryModel.id],
     fields: [
       { modelId: primaryModel.id, fieldIds: defaultFields },
@@ -731,6 +733,59 @@ const formatTimestamp = () =>
     minute: "2-digit",
   });
 
+const formatLastUpdatedLabel = (value?: string | Date | null) => {
+  if (!value) {
+    return "Not saved yet";
+  }
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "Not saved yet";
+  }
+  return parsed.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+};
+
+const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => ({
+  id: template.id,
+  name: template.name ?? "Untitled report",
+  category: template.category ?? "Custom",
+  description: template.description ?? "",
+  schedule: template.schedule ?? "Manual",
+  lastUpdated: formatLastUpdatedLabel(template.updatedAt),
+  owner: template.owner?.name ?? "Shared",
+  autoDistribution: template.options?.autoDistribution ?? true,
+  notifyTeam: template.options?.notifyTeam ?? true,
+  models: Array.isArray(template.models) ? template.models : [],
+  fields: Array.isArray(template.fields)
+    ? template.fields.map((entry) => ({
+        modelId: entry.modelId,
+        fieldIds: Array.isArray(entry.fieldIds)
+          ? entry.fieldIds.filter((fieldId): fieldId is string => typeof fieldId === "string")
+          : [],
+      }))
+    : [],
+  joins: Array.isArray(template.joins) ? (template.joins as JoinCondition[]) : [],
+  visuals: Array.isArray(template.visuals) ? (template.visuals as VisualDefinition[]) : [],
+  metrics: Array.isArray(template.metrics)
+    ? template.metrics.filter((metric): metric is string => typeof metric === "string")
+    : [],
+  filters: Array.isArray(template.filters) ? (template.filters as ReportFilter[]) : [],
+});
+
+const extractAxiosErrorMessage = (error: unknown, fallback: string): string => {
+  const axiosError = error as AxiosError<{ error?: string; message?: string }> | undefined;
+  return (
+    axiosError?.response?.data?.error ??
+    axiosError?.response?.data?.message ??
+    axiosError?.message ??
+    fallback
+  );
+};
+
 const Reports = (props: GenericPageProps) => {
   const dispatch = useAppDispatch();
   const activeKey = useAppSelector((state) => state.reportsNavBarActiveKey);
@@ -746,16 +801,38 @@ const Reports = (props: GenericPageProps) => {
     return models.map(mapBackendModel);
   }, [backendModelsResponse]);
 
+  const queryClient = useQueryClient();
   const { mutateAsync: runPreview, isPending: isPreviewLoading } = useRunReportPreview();
+
+  const {
+    data: templatesResponse,
+    isLoading: isTemplatesLoading,
+    isError: isTemplatesError,
+  } = useReportTemplates();
+
+  const saveTemplateMutation = useSaveReportTemplate();
+  const deleteTemplateMutation = useDeleteReportTemplate();
 
   const [templates, setTemplates] = useState<ReportTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [draft, setDraft] = useState<ReportTemplate>(createEmptyTemplate());
-  const [lastRunAt, setLastRunAt] = useState<string>("—");
-  const [autoDistribution, setAutoDistribution] = useState(true);
-  const [notifyTeam, setNotifyTeam] = useState(true);
+  const [lastRunAt, setLastRunAt] = useState<string>("Not run yet");
   const [previewResult, setPreviewResult] = useState<ReportPreviewResponse | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!templatesResponse) {
+      return;
+    }
+
+    const mapped = templatesResponse.templates.map((template) => mapTemplateFromApi(template));
+    setTemplates(mapped);
+
+    if (!selectedTemplateId && mapped.length > 0) {
+      setSelectedTemplateId(mapped[0].id);
+    }
+  }, [templatesResponse, selectedTemplateId]);
 
   useEffect(() => {
     dispatch(navigateToPage("Reports"));
@@ -763,6 +840,9 @@ const Reports = (props: GenericPageProps) => {
 
   useEffect(() => {
     if (!activeKey || activeKey === "GoogleReviews") {
+      return;
+    }
+    if (!selectedTemplateId) {
       return;
     }
     const token = activeKey.toLowerCase();
@@ -1231,74 +1311,153 @@ const Reports = (props: GenericPageProps) => {
     });
   };
 
-  const handleSaveTemplate = () => {
-    setTemplates((current) => {
-      const formatted = { ...draft, lastUpdated: formatTimestamp() };
-      const exists = current.some((template) => template.id === draft.id);
-      if (exists) {
-        return current.map((template) => (template.id === draft.id ? formatted : template));
-      }
-      return [...current, formatted];
-    });
+  const handleSaveTemplate = async () => {
+    if (saveTemplateMutation.isPending) {
+      return;
+    }
+
+    if (!draft.name.trim()) {
+      setTemplateError("Template name is required.");
+      return;
+    }
+
+    setTemplateError(null);
+
+    const payload: SaveReportTemplateRequest = {
+      id: templates.some((template) => template.id === draft.id) ? draft.id : undefined,
+      name: draft.name.trim(),
+      category: draft.category.trim() || "Custom",
+      description: draft.description,
+      schedule: draft.schedule || "Manual",
+      models: draft.models,
+      fields: draft.fields,
+      joins: draft.joins,
+      visuals: draft.visuals,
+      metrics: draft.metrics,
+      filters: draft.filters,
+      options: {
+        autoDistribution: draft.autoDistribution,
+        notifyTeam: draft.notifyTeam,
+      },
+    };
+
+    try {
+      const saved = await saveTemplateMutation.mutateAsync(payload);
+      const mapped = mapTemplateFromApi(saved);
+      setTemplates((current) => {
+        const exists = current.some((template) => template.id === mapped.id);
+        if (exists) {
+          return current.map((template) => (template.id === mapped.id ? mapped : template));
+        }
+        return [...current, mapped];
+      });
+      setSelectedTemplateId(mapped.id);
+      setDraft(deepClone(mapped));
+      await queryClient.invalidateQueries({ queryKey: ["reports", "templates"] });
+    } catch (error) {
+      setTemplateError(extractAxiosErrorMessage(error, "Failed to save template"));
+    }
   };
 
-  const handleCreateTemplate = () => {
+  const handleCreateTemplate = async () => {
+    if (saveTemplateMutation.isPending) {
+      return;
+    }
+
+    setTemplateError(null);
+
     const contextLabel = activeKey && activeKey !== "GoogleReviews" ? activeKey : "Custom";
-    const fresh: ReportTemplate = {
-      id: `template-${Date.now()}`,
+    const payload: SaveReportTemplateRequest = {
       name: `${contextLabel} report`,
       category: "Custom",
       description:
         "Blank template. Add data models, joins and visualizations to start building your report.",
       schedule: "Manual",
-      lastUpdated: "Just now",
-      owner: "You",
       models: [],
       fields: [],
       joins: [],
       visuals: [deepClone(DEFAULT_VISUAL)],
       metrics: [],
       filters: [],
+      options: {
+        autoDistribution: true,
+        notifyTeam: true,
+      },
     };
-    setTemplates((current) => [...current, fresh]);
-    setSelectedTemplateId(fresh.id);
-    setDraft(deepClone(fresh));
+
+    try {
+      const created = await saveTemplateMutation.mutateAsync(payload);
+      const mapped = mapTemplateFromApi(created);
+      setTemplates((current) => [...current, mapped]);
+      setSelectedTemplateId(mapped.id);
+      setDraft(deepClone(mapped));
+      await queryClient.invalidateQueries({ queryKey: ["reports", "templates"] });
+    } catch (error) {
+      setTemplateError(extractAxiosErrorMessage(error, "Failed to create template"));
+    }
   };
 
-  const handleDuplicateTemplate = () => {
-    if (!selectedTemplate) {
+  const handleDuplicateTemplate = async () => {
+    if (!selectedTemplate || saveTemplateMutation.isPending) {
       return;
     }
-    const duplicated: ReportTemplate = {
-      ...deepClone(selectedTemplate),
-      id: `${selectedTemplate.id}-copy-${Date.now()}`,
-      name: `${selectedTemplate.name} (copy)`,
-      lastUpdated: "Just now",
-      owner: "You",
+
+    setTemplateError(null);
+
+    const duplicatePayload: SaveReportTemplateRequest = {
+      name: `${selectedTemplate.name || "Untitled report"} (copy)`,
+      category: selectedTemplate.category,
+      description: selectedTemplate.description,
+      schedule: selectedTemplate.schedule,
+      models: [...selectedTemplate.models],
+      fields: deepClone(selectedTemplate.fields),
+      joins: deepClone(selectedTemplate.joins),
+      visuals: deepClone(selectedTemplate.visuals),
+      metrics: [...selectedTemplate.metrics],
+      filters: deepClone(selectedTemplate.filters),
+      options: {
+        autoDistribution: selectedTemplate.autoDistribution,
+        notifyTeam: selectedTemplate.notifyTeam,
+      },
     };
-    setTemplates((current) => [...current, duplicated]);
-    setSelectedTemplateId(duplicated.id);
-    setDraft(deepClone(duplicated));
+
+    try {
+      const created = await saveTemplateMutation.mutateAsync(duplicatePayload);
+      const mapped = mapTemplateFromApi(created);
+      setTemplates((current) => [...current, mapped]);
+      setSelectedTemplateId(mapped.id);
+      setDraft(deepClone(mapped));
+      await queryClient.invalidateQueries({ queryKey: ["reports", "templates"] });
+    } catch (error) {
+      setTemplateError(extractAxiosErrorMessage(error, "Failed to duplicate template"));
+    }
   };
 
-  const handleDeleteTemplate = () => {
-    if (!selectedTemplate) {
+  const handleDeleteTemplate = async () => {
+    if (!selectedTemplate || deleteTemplateMutation.isPending) {
       return;
     }
-    setTemplates((current) => {
-      const filtered = current.filter((template) => template.id !== selectedTemplate.id);
-      if (filtered.length === 0) {
-        const regenerated = buildInitialTemplates(dataModels);
-        const fallbackTemplate = regenerated[0] ?? createEmptyTemplate();
-        setSelectedTemplateId(fallbackTemplate.id);
-        setDraft(deepClone(fallbackTemplate));
-        return regenerated.length > 0 ? regenerated : [fallbackTemplate];
-      }
-      const nextSelection = filtered[0];
-      setSelectedTemplateId(nextSelection.id);
-      setDraft(deepClone(nextSelection));
-      return filtered;
-    });
+
+    setTemplateError(null);
+
+    try {
+      await deleteTemplateMutation.mutateAsync(selectedTemplate.id);
+      setTemplates((current) => {
+        const filtered = current.filter((template) => template.id !== selectedTemplate.id);
+        if (filtered.length === 0) {
+          setSelectedTemplateId("");
+          setDraft(createEmptyTemplate());
+          return [];
+        }
+        const fallback = filtered[0];
+        setSelectedTemplateId(fallback.id);
+        setDraft(deepClone(fallback));
+        return filtered;
+      });
+      await queryClient.invalidateQueries({ queryKey: ["reports", "templates"] });
+    } catch (error) {
+      setTemplateError(extractAxiosErrorMessage(error, "Failed to delete template"));
+    }
   };
 
   const handleAddJoin = (
@@ -2780,13 +2939,23 @@ const Reports = (props: GenericPageProps) => {
                     <Divider my="sm" />
                     <Checkbox
                       label="Auto-publish PDF package to leadership workspace"
-                      checked={autoDistribution}
-                      onChange={(event) => setAutoDistribution(event.currentTarget.checked)}
+                      checked={draft.autoDistribution}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          autoDistribution: event.currentTarget.checked,
+                        }))
+                      }
                     />
                     <Checkbox
                       label="Send digest to #revenue-ops Slack channel on refresh"
-                      checked={notifyTeam}
-                      onChange={(event) => setNotifyTeam(event.currentTarget.checked)}
+                      checked={draft.notifyTeam}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          notifyTeam: event.currentTarget.checked,
+                        }))
+                      }
                     />
                   </Stack>
                 </Paper>
