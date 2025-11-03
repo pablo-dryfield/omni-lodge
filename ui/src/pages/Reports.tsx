@@ -50,7 +50,7 @@ import {
   YAxis,
   Legend,
 } from "recharts";
-import { useAppDispatch, useAppSelector } from "../store/hooks";
+import { useAppDispatch } from "../store/hooks";
 import { navigateToPage } from "../actions/navigationActions";
 import { GenericPageProps } from "../types/general/GenericPageProps";
 import GoogleReviews from "../components/reports/GoogleReviews";
@@ -724,7 +724,6 @@ const extractAxiosErrorMessage = (error: unknown, fallback: string): string => {
 
 const Reports = (props: GenericPageProps) => {
   const dispatch = useAppDispatch();
-  const activeKey = useAppSelector((state) => state.reportsNavBarActiveKey);
 
   const {
     data: backendModelsResponse,
@@ -805,25 +804,6 @@ const Reports = (props: GenericPageProps) => {
   useEffect(() => {
     dispatch(navigateToPage("Reports"));
   }, [dispatch, props.title]);
-
-  useEffect(() => {
-    if (!activeKey || activeKey === "GoogleReviews") {
-      return;
-    }
-    if (!selectedTemplateId) {
-      return;
-    }
-    const token = activeKey.toLowerCase();
-    const candidate = templates.find(
-      (template) =>
-        template.category.toLowerCase().includes(token) ||
-        template.name.toLowerCase().includes(token)
-    );
-    if (candidate && candidate.id !== selectedTemplateId) {
-      setSelectedTemplateId(candidate.id);
-      setDraft(deepClone(candidate));
-    }
-  }, [activeKey, templates, selectedTemplateId]);
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === selectedTemplateId),
@@ -1207,12 +1187,7 @@ const Reports = (props: GenericPageProps) => {
     return suggestions;
   }, [draft.joins, draft.models, modelMap, selectedModels]);
 
-  const builderContext =
-    activeKey && activeKey !== "GoogleReviews"
-      ? activeKey
-      : selectedTemplate?.category ?? "Report builder";
-
-  const isGoogleReviewsView = activeKey === "GoogleReviews";
+  const builderContext = selectedTemplate?.category ?? "Report builder";
 
   const handleSelectTemplate = (templateId: string) => {
     const template = templates.find((item) => item.id === templateId);
@@ -1335,7 +1310,10 @@ const Reports = (props: GenericPageProps) => {
 
     setTemplateError(null);
 
-    const contextLabel = activeKey && activeKey !== "GoogleReviews" ? activeKey : "Custom";
+    const contextLabel =
+      selectedTemplate?.category && selectedTemplate.category.trim().length > 0
+        ? selectedTemplate.category
+        : "Custom";
     const payload: SaveReportTemplateRequest = {
       name: `${contextLabel} report`,
       category: "Custom",
@@ -1354,7 +1332,7 @@ const Reports = (props: GenericPageProps) => {
       },
     };
 
-  try {
+    try {
       const created = await saveTemplateMutation.mutateAsync(payload);
       upsertTemplateInCache(created);
       const mapped = mapTemplateFromApi(created);
@@ -2037,35 +2015,6 @@ const Reports = (props: GenericPageProps) => {
 
 
   const builderLoaded = dataModels.length > 0 && !isTemplatesLoading && !isTemplatesError;
-
-  if (isGoogleReviewsView) {
-    return (
-      <PageAccessGuard pageSlug={PAGE_SLUG}>
-        <Box
-          p="xl"
-          bg="#f4f6f8"
-          style={{ minHeight: "100vh", display: "flex", flexDirection: "column", gap: 24 }}
-        >
-          <Paper radius="lg" shadow="sm" p="xl" withBorder>
-            <Group justify="space-between" align="flex-start">
-              <div>
-                <Title order={2}>Guest sentiment intelligence</Title>
-                <Text c="dimmed" mt={6}>
-                  Monitor Google reviews, response velocity and reputation indicators.
-                </Text>
-              </div>
-              <Badge color="blue" variant="filled">
-                Live feed
-              </Badge>
-            </Group>
-          </Paper>
-          <Paper radius="lg" shadow="sm" p="xl" withBorder style={{ flex: 1 }}>
-            <GoogleReviews />
-          </Paper>
-        </Box>
-      </PageAccessGuard>
-    );
-  }
 
   return (
     <PageAccessGuard pageSlug={PAGE_SLUG}>
