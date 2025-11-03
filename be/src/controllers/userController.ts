@@ -77,11 +77,13 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
       expiresIn: '7d',
     });
 
+    const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+
     res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-      maxAge: 3600000,
+      maxAge: oneWeekMs,
     });
     res.status(200).json([{ message: 'Logged in successfully', userId: user.id }]);
   } catch (error) {
