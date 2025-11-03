@@ -1170,6 +1170,31 @@ const VenueNumbersList = () => {
         return defaultTotalGuests;
       })();
 
+      const openBarIndex = venuesForDisplay.findIndex((venue) => venue.isOpenBar);
+      const firstPostOpenBarIndex = openBarIndex >= 0 ? openBarIndex + 1 : 1;
+      const venuesAfterOpenBar =
+        firstPostOpenBarIndex < venuesForDisplay.length ? venuesForDisplay.slice(firstPostOpenBarIndex) : [];
+      const secondVenueForTargets =
+        firstPostOpenBarIndex < venuesForDisplay.length ? venuesForDisplay[firstPostOpenBarIndex] : null;
+      const secondVenueTotal =
+        secondVenueForTargets &&
+        typeof secondVenueForTargets.totalPeople === "number" &&
+        Number.isFinite(secondVenueForTargets.totalPeople)
+          ? secondVenueForTargets.totalPeople
+          : null;
+      const totalAfterOpenBar =
+        venuesAfterOpenBar.length > 0
+          ? venuesAfterOpenBar.reduce((sum, venue) => {
+              const value =
+                typeof venue.totalPeople === "number" && Number.isFinite(venue.totalPeople)
+                  ? venue.totalPeople
+                  : 0;
+              return sum + value;
+            }, 0)
+          : null;
+      const minimumTarget = secondVenueTotal != null ? secondVenueTotal * 4 : null;
+      const retentionTarget = secondVenueTotal != null ? secondVenueTotal * 5 : null;
+
       const formatNumberValue = (value: number | null | undefined): string =>
         typeof value === "number" && Number.isFinite(value) ? value.toLocaleString() : "—";
 
@@ -1218,6 +1243,9 @@ const VenueNumbersList = () => {
         { label: "Product", value: productName },
         { label: "Leader", value: leaderName },
         { label: "Total People", value: formatNumberValue(totalGuests) },
+        { label: "Total Entries In Venues", value: formatNumberValue(totalAfterOpenBar) },
+        { label: "Minimum Target - Entries In Venues", value: formatNumberValue(minimumTarget) },
+        { label: "Retention Target - Entries In Venues", value: formatNumberValue(retentionTarget) },
       ];
       if (formattedCounterDate) {
         summaryItems.push({ label: "Counter Date", value: formattedCounterDate });
