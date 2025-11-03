@@ -11,8 +11,8 @@ import {
   Divider,
   Flex,
   Group,
-  List,
   MultiSelect,
+  NumberInput,
   Paper,
   ScrollArea,
   SegmentedControl,
@@ -134,6 +134,43 @@ type VisualDefinition = {
   comparison?: SharedMetricKey;
 };
 
+type FilterValueKind = "string" | "number" | "date" | "boolean";
+type FilterComparisonMode = "value" | "field";
+type FilterOperator =
+  | "eq"
+  | "neq"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "contains"
+  | "starts_with"
+  | "ends_with"
+  | "is_null"
+  | "is_not_null"
+  | "is_true"
+  | "is_false";
+
+type ReportFilter = {
+  id: string;
+  leftModelId: string;
+  leftFieldId: string;
+  operator: FilterOperator;
+  rightType: FilterComparisonMode;
+  rightModelId?: string;
+  rightFieldId?: string;
+  value?: string;
+  valueKind: FilterValueKind;
+};
+
+type FilterFieldOption = {
+  value: string;
+  label: string;
+  modelId: string;
+  fieldId: string;
+  field: DataField;
+};
+
 type ReportTemplate = {
   id: string;
   name: string;
@@ -147,7 +184,7 @@ type ReportTemplate = {
   joins: JoinCondition[];
   visuals: VisualDefinition[];
   metrics: string[];
-  filters: Array<{ id: string; label: string; value: string }>;
+  filters: ReportFilter[];
 };
 
 interface MetricDefinition {
@@ -500,6 +537,127 @@ const DELTA_HINTS: Record<
   nps: { delta: "+6 pts", context: "post-renovation feedback", tone: "positive" },
 };
 
+type FilterOperatorDefinition = {
+  value: FilterOperator;
+  label: string;
+  types: DataField["type"][];
+  requiresValue: boolean;
+  allowFieldComparison?: boolean;
+};
+
+const FILTER_OPERATOR_LIBRARY: FilterOperatorDefinition[] = [
+  {
+    value: "eq",
+    label: "Equals",
+    types: ["id", "string", "number", "currency", "date", "percentage", "boolean"],
+    requiresValue: true,
+    allowFieldComparison: true,
+  },
+  {
+    value: "neq",
+    label: "Does not equal",
+    types: ["id", "string", "number", "currency", "date", "percentage", "boolean"],
+    requiresValue: true,
+    allowFieldComparison: true,
+  },
+  {
+    value: "gt",
+    label: "Greater than",
+    types: ["number", "currency", "percentage", "date"],
+    requiresValue: true,
+    allowFieldComparison: true,
+  },
+  {
+    value: "gte",
+    label: "Greater than or equal",
+    types: ["number", "currency", "percentage", "date"],
+    requiresValue: true,
+    allowFieldComparison: true,
+  },
+  {
+    value: "lt",
+    label: "Less than",
+    types: ["number", "currency", "percentage", "date"],
+    requiresValue: true,
+    allowFieldComparison: true,
+  },
+  {
+    value: "lte",
+    label: "Less than or equal",
+    types: ["number", "currency", "percentage", "date"],
+    requiresValue: true,
+    allowFieldComparison: true,
+  },
+  {
+    value: "contains",
+    label: "Contains",
+    types: ["string", "id"],
+    requiresValue: true,
+  },
+  {
+    value: "starts_with",
+    label: "Starts with",
+    types: ["string", "id"],
+    requiresValue: true,
+  },
+  {
+    value: "ends_with",
+    label: "Ends with",
+    types: ["string", "id"],
+    requiresValue: true,
+  },
+  {
+    value: "is_null",
+    label: "Is null",
+    types: ["id", "string", "number", "currency", "date", "percentage", "boolean"],
+    requiresValue: false,
+  },
+  {
+    value: "is_not_null",
+    label: "Is not null",
+    types: ["id", "string", "number", "currency", "date", "percentage", "boolean"],
+    requiresValue: false,
+  },
+  {
+    value: "is_true",
+    label: "Is true",
+    types: ["boolean"],
+    requiresValue: false,
+  },
+  {
+    value: "is_false",
+    label: "Is false",
+    types: ["boolean"],
+    requiresValue: false,
+  },
+];
+
+const FILTER_OPERATOR_LOOKUP = new Map<FilterOperator, FilterOperatorDefinition>(
+  FILTER_OPERATOR_LIBRARY.map((definition) => [definition.value, definition]),
+);
+
+const getValueKindForFieldType = (type: DataField["type"]): FilterValueKind => {
+  if (type === "number" || type === "currency" || type === "percentage") {
+    return "number";
+  }
+  if (type === "date") {
+    return "date";
+  }
+  if (type === "boolean") {
+    return "boolean";
+  }
+  return "string";
+};
+
+const getOperatorOptionsForFieldType = (type: DataField["type"]) =>
+  FILTER_OPERATOR_LIBRARY.filter((operator) => operator.types.includes(type));
+
+const escapeSqlLiteral = (value: string) => value.replace(/'/g, "''");
+
+const buildFilterOptionKey = (modelId: string, fieldId: string) => `${modelId}::${fieldId}`;
+
+const quoteIdentifier = (value: string) => `"${value.replace(/"/g, '""')}"`;
+
 const buildInitialTemplates = (models: DataModelDefinition[]): ReportTemplate[] => {
   if (models.length === 0) {
     return [];
@@ -594,7 +752,6 @@ const Reports = (props: GenericPageProps) => {
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [draft, setDraft] = useState<ReportTemplate>(createEmptyTemplate());
   const [lastRunAt, setLastRunAt] = useState<string>("—");
-  const [filterInput, setFilterInput] = useState("");
   const [autoDistribution, setAutoDistribution] = useState(true);
   const [notifyTeam, setNotifyTeam] = useState(true);
   const [previewResult, setPreviewResult] = useState<ReportPreviewResponse | null>(null);
@@ -681,6 +838,30 @@ const Reports = (props: GenericPageProps) => {
         );
     });
   }, [draft.fields, modelMap]);
+
+  const filterFieldOptions = useMemo<FilterFieldOption[]>(() => {
+    return draft.models.flatMap((modelId) => {
+      const model = modelMap.get(modelId);
+      if (!model) {
+        return [];
+      }
+      return model.fields.map((field) => ({
+        value: buildFilterOptionKey(model.id, field.id),
+        label: `${model.name} • ${field.label}`,
+        modelId: model.id,
+        fieldId: field.id,
+        field,
+      }));
+    });
+  }, [draft.models, modelMap]);
+
+  const filterFieldLookup = useMemo(() => {
+    const lookup = new Map<string, FilterFieldOption>();
+    filterFieldOptions.forEach((option) => {
+      lookup.set(buildFilterOptionKey(option.modelId, option.fieldId), option);
+    });
+    return lookup;
+  }, [filterFieldOptions]);
 
   const previewColumns = useMemo(
     () => previewResult?.columns ?? [],
@@ -1018,6 +1199,11 @@ const Reports = (props: GenericPageProps) => {
           joins: current.joins.filter(
             (join) => join.leftModel !== modelId && join.rightModel !== modelId
           ),
+          filters: current.filters.filter(
+            (filter) =>
+              filter.leftModelId !== modelId &&
+              (filter.rightType !== "field" || filter.rightModelId !== modelId),
+          ),
         };
       }
       return {
@@ -1190,6 +1376,22 @@ const Reports = (props: GenericPageProps) => {
       return;
     }
 
+    const aliasMap = new Map<string, string>();
+    draft.models.forEach((modelId, index) => {
+      aliasMap.set(modelId, `m${index}`);
+    });
+
+    const { clauses: filterClauses, errors: filterErrors } = buildFilterClausesForRequest(
+      draft.filters,
+      aliasMap,
+    );
+
+    if (filterErrors.length > 0) {
+      setPreviewResult(null);
+      setPreviewError(filterErrors.join(" • "));
+      return;
+    }
+
     const payload: ReportPreviewRequest = {
       models: draft.models,
       fields: sanitizedFields,
@@ -1204,7 +1406,7 @@ const Reports = (props: GenericPageProps) => {
           description,
         }),
       ),
-      filters: draft.filters.map((filter) => filter.value).filter((value) => value.trim().length > 0),
+      filters: filterClauses,
       limit: 500,
     };
 
@@ -1222,23 +1424,11 @@ const Reports = (props: GenericPageProps) => {
     }
   };
 
-  const handleAddFilter = () => {
-    const trimmed = filterInput.trim();
-    if (!trimmed) {
-      return;
-    }
+  const updateFilter = (filterId: string, updater: (filter: ReportFilter) => ReportFilter) => {
     setDraft((current) => ({
       ...current,
-      filters: [
-        ...current.filters,
-        {
-          id: `filter-${Date.now()}`,
-          label: trimmed,
-          value: trimmed,
-        },
-      ],
+      filters: current.filters.map((filter) => (filter.id === filterId ? updater(filter) : filter)),
     }));
-    setFilterInput("");
   };
 
   const handleRemoveFilter = (filterId: string) => {
@@ -1247,6 +1437,489 @@ const Reports = (props: GenericPageProps) => {
       filters: current.filters.filter((filter) => filter.id !== filterId),
     }));
   };
+
+  const handleAddFilterRow = () => {
+    const defaultOption = filterFieldOptions[0];
+    if (!defaultOption) {
+      return;
+    }
+    const operatorOptions = getOperatorOptionsForFieldType(defaultOption.field.type);
+    const defaultOperator =
+      operatorOptions.find((definition) => definition.value === "eq")?.value ??
+      operatorOptions[0]?.value ??
+      "eq";
+    const operatorDefinition = FILTER_OPERATOR_LOOKUP.get(defaultOperator);
+    const requiresValue = operatorDefinition?.requiresValue ?? true;
+    const defaultKind = getValueKindForFieldType(defaultOption.field.type);
+
+    const newFilter: ReportFilter = {
+      id: `filter-${Date.now()}`,
+      leftModelId: defaultOption.modelId,
+      leftFieldId: defaultOption.fieldId,
+      operator: defaultOperator,
+      rightType: "value",
+      valueKind: defaultKind,
+      value: defaultKind === "boolean" ? "true" : "",
+    };
+
+    if (!requiresValue) {
+      newFilter.value = undefined;
+    }
+
+    setDraft((current) => ({
+      ...current,
+      filters: [...current.filters, newFilter],
+    }));
+  };
+
+  const handleFilterFieldChange = (filterId: string, optionValue: string | null) => {
+    if (!optionValue) {
+      return;
+    }
+    const option = filterFieldOptions.find((candidate) => candidate.value === optionValue);
+    if (!option) {
+      return;
+    }
+
+    updateFilter(filterId, (filter) => {
+      const operatorOptions = getOperatorOptionsForFieldType(option.field.type);
+      const nextOperator =
+        operatorOptions.find((definition) => definition.value === filter.operator)?.value ??
+        operatorOptions[0]?.value ??
+        filter.operator;
+      const operatorDefinition = FILTER_OPERATOR_LOOKUP.get(nextOperator);
+      const requiresValue = operatorDefinition?.requiresValue ?? true;
+      const allowFieldComparison = operatorDefinition?.allowFieldComparison ?? false;
+      const nextValueKind = getValueKindForFieldType(option.field.type);
+
+      const nextFilter: ReportFilter = {
+        ...filter,
+        leftModelId: option.modelId,
+        leftFieldId: option.fieldId,
+        operator: nextOperator,
+        valueKind: nextValueKind,
+      };
+
+      if (!requiresValue) {
+        nextFilter.rightType = "value";
+        nextFilter.rightModelId = undefined;
+        nextFilter.rightFieldId = undefined;
+        nextFilter.value = undefined;
+        return nextFilter;
+      }
+
+      if (!allowFieldComparison && nextFilter.rightType === "field") {
+        nextFilter.rightType = "value";
+        nextFilter.rightModelId = undefined;
+        nextFilter.rightFieldId = undefined;
+      }
+
+      if (nextFilter.rightType === "field") {
+        const compatibleOption = filterFieldOptions.find(
+          (candidate) =>
+            getValueKindForFieldType(candidate.field.type) === nextValueKind &&
+            (candidate.modelId !== option.modelId || candidate.fieldId !== option.fieldId),
+        );
+        if (compatibleOption) {
+          nextFilter.rightModelId = compatibleOption.modelId;
+          nextFilter.rightFieldId = compatibleOption.fieldId;
+        } else {
+          nextFilter.rightType = "value";
+          nextFilter.rightModelId = undefined;
+          nextFilter.rightFieldId = undefined;
+        }
+      }
+
+      if (nextFilter.rightType === "value") {
+        nextFilter.value =
+          nextValueKind === "boolean"
+            ? nextFilter.value === "false"
+              ? "false"
+              : "true"
+            : "";
+      }
+
+      return nextFilter;
+    });
+  };
+
+  const handleFilterOperatorChange = (filterId: string, operator: FilterOperator) => {
+    const definition = FILTER_OPERATOR_LOOKUP.get(operator);
+    if (!definition) {
+      return;
+    }
+    updateFilter(filterId, (filter) => {
+      const nextFilter: ReportFilter = { ...filter, operator };
+      const requiresValue = definition.requiresValue;
+      const allowFieldComparison = definition.allowFieldComparison ?? false;
+
+      if (!requiresValue) {
+        nextFilter.rightType = "value";
+        nextFilter.rightModelId = undefined;
+        nextFilter.rightFieldId = undefined;
+        nextFilter.value = undefined;
+        return nextFilter;
+      }
+
+      if (!allowFieldComparison && nextFilter.rightType === "field") {
+        nextFilter.rightType = "value";
+        nextFilter.rightModelId = undefined;
+        nextFilter.rightFieldId = undefined;
+      }
+
+      if (nextFilter.rightType === "value") {
+        nextFilter.value =
+          nextFilter.valueKind === "boolean"
+            ? nextFilter.value === "false"
+              ? "false"
+              : "true"
+            : nextFilter.value ?? "";
+      }
+
+      return nextFilter;
+    });
+  };
+
+  const handleFilterComparisonModeChange = (filterId: string, mode: FilterComparisonMode) => {
+    updateFilter(filterId, (filter) => {
+      if (mode === "field") {
+        const operatorDefinition = FILTER_OPERATOR_LOOKUP.get(filter.operator);
+        if (!operatorDefinition?.allowFieldComparison) {
+          return filter;
+        }
+        const leftOption = filterFieldLookup.get(
+          buildFilterOptionKey(filter.leftModelId, filter.leftFieldId),
+        );
+        if (!leftOption) {
+          return filter;
+        }
+        const targetKind = getValueKindForFieldType(leftOption.field.type);
+        const compatibleOption = filterFieldOptions.find(
+          (candidate) =>
+            getValueKindForFieldType(candidate.field.type) === targetKind &&
+            !(candidate.modelId === leftOption.modelId && candidate.fieldId === leftOption.fieldId),
+        );
+        if (!compatibleOption) {
+          return filter;
+        }
+        return {
+          ...filter,
+          rightType: "field",
+          rightModelId: compatibleOption.modelId,
+          rightFieldId: compatibleOption.fieldId,
+          value: undefined,
+        };
+      }
+
+      return {
+        ...filter,
+        rightType: "value",
+        rightModelId: undefined,
+        rightFieldId: undefined,
+        value:
+          filter.valueKind === "boolean"
+            ? filter.value === "false"
+              ? "false"
+              : "true"
+            : filter.value ?? "",
+      };
+    });
+  };
+
+  const handleFilterRightFieldChange = (filterId: string, optionValue: string | null) => {
+    if (!optionValue) {
+      return;
+    }
+    const option = filterFieldOptions.find((candidate) => candidate.value === optionValue);
+    if (!option) {
+      return;
+    }
+    updateFilter(filterId, (filter) => ({
+      ...filter,
+      rightModelId: option.modelId,
+      rightFieldId: option.fieldId,
+    }));
+  };
+
+  const handleFilterValueChange = (filterId: string, rawValue: string | null) => {
+    updateFilter(filterId, (filter) => ({
+      ...filter,
+      value: rawValue ?? "",
+    }));
+  };
+
+  useEffect(() => {
+    setDraft((current) => {
+      let changed = false;
+      const nextFilters = current.filters
+        .map((filter) => {
+          const leftOption = filterFieldLookup.get(
+            buildFilterOptionKey(filter.leftModelId, filter.leftFieldId),
+          );
+          if (!leftOption) {
+            changed = true;
+            return null;
+          }
+
+          const operatorOptions = getOperatorOptionsForFieldType(leftOption.field.type);
+          let operator = filter.operator;
+          if (!operatorOptions.some((definition) => definition.value === operator)) {
+            operator =
+              operatorOptions.find((definition) => definition.value === "eq")?.value ??
+              operatorOptions[0]?.value ??
+              operator;
+            changed = true;
+          }
+          const operatorDefinition = FILTER_OPERATOR_LOOKUP.get(operator);
+          const requiresValue = operatorDefinition?.requiresValue ?? true;
+          const allowFieldComparison = operatorDefinition?.allowFieldComparison ?? false;
+          const valueKind = getValueKindForFieldType(leftOption.field.type);
+
+          const normalized: ReportFilter = {
+            ...filter,
+            leftModelId: leftOption.modelId,
+            leftFieldId: leftOption.fieldId,
+            operator,
+            valueKind,
+          };
+
+          if (!requiresValue) {
+            if (
+              normalized.rightType !== "value" ||
+              normalized.value !== undefined ||
+              normalized.rightModelId ||
+              normalized.rightFieldId
+            ) {
+              changed = true;
+            }
+            normalized.rightType = "value";
+            normalized.rightModelId = undefined;
+            normalized.rightFieldId = undefined;
+            normalized.value = undefined;
+            return normalized;
+          }
+
+          if (!allowFieldComparison && normalized.rightType === "field") {
+            normalized.rightType = "value";
+            normalized.rightModelId = undefined;
+            normalized.rightFieldId = undefined;
+            changed = true;
+          }
+
+          if (normalized.rightType === "field") {
+            const rightKey =
+              normalized.rightModelId && normalized.rightFieldId
+                ? buildFilterOptionKey(normalized.rightModelId, normalized.rightFieldId)
+                : null;
+            const rightOption = rightKey ? filterFieldLookup.get(rightKey) : undefined;
+            const targetKind = getValueKindForFieldType(leftOption.field.type);
+
+            if (
+              !rightOption ||
+              getValueKindForFieldType(rightOption.field.type) !== targetKind
+            ) {
+              const replacement = filterFieldOptions.find(
+                (candidate) =>
+                  getValueKindForFieldType(candidate.field.type) === targetKind &&
+                  !(candidate.modelId === leftOption.modelId && candidate.fieldId === leftOption.fieldId),
+              );
+              if (replacement) {
+                normalized.rightModelId = replacement.modelId;
+                normalized.rightFieldId = replacement.fieldId;
+              } else {
+                normalized.rightType = "value";
+                normalized.rightModelId = undefined;
+                normalized.rightFieldId = undefined;
+              }
+              changed = true;
+            }
+          }
+
+          if (normalized.rightType === "value" && normalized.valueKind === "boolean") {
+            normalized.value = normalized.value === "false" ? "false" : "true";
+          }
+
+          return normalized;
+        })
+        .filter((filter): filter is ReportFilter => filter !== null);
+
+      if (!changed) {
+        return current;
+      }
+      return {
+        ...current,
+        filters: nextFilters,
+      };
+    });
+  }, [filterFieldLookup, filterFieldOptions]);
+
+  const buildFilterClausesForRequest = useCallback(
+    (filters: ReportFilter[], aliasLookup: Map<string, string>) => {
+      const clauses: string[] = [];
+      const errors: string[] = [];
+
+      filters.forEach((filter) => {
+        const leftOption = filterFieldLookup.get(
+          buildFilterOptionKey(filter.leftModelId, filter.leftFieldId),
+        );
+        if (!leftOption) {
+          errors.push("A filter references a field that is no longer available.");
+          return;
+        }
+
+        const leftAlias = aliasLookup.get(filter.leftModelId);
+        if (!leftAlias) {
+          errors.push(`Model ${filter.leftModelId} is not included in the current preview.`);
+          return;
+        }
+
+        const operatorDefinition = FILTER_OPERATOR_LOOKUP.get(filter.operator);
+        if (!operatorDefinition) {
+          return;
+        }
+
+        const leftColumn = leftOption.field.sourceColumn ?? leftOption.field.id;
+        const leftExpression = `${leftAlias}.${quoteIdentifier(leftColumn)}`;
+        const requiresValue = operatorDefinition.requiresValue;
+        const allowFieldComparison = operatorDefinition.allowFieldComparison ?? false;
+        const fieldLabel = leftOption.label;
+
+        if (!requiresValue) {
+          switch (filter.operator) {
+            case "is_null":
+              clauses.push(`${leftExpression} IS NULL`);
+              break;
+            case "is_not_null":
+              clauses.push(`${leftExpression} IS NOT NULL`);
+              break;
+            case "is_true":
+              clauses.push(`${leftExpression} IS TRUE`);
+              break;
+            case "is_false":
+              clauses.push(`${leftExpression} IS FALSE`);
+              break;
+            default:
+              break;
+          }
+          return;
+        }
+
+        if (filter.rightType === "field") {
+          if (!allowFieldComparison) {
+            errors.push(`The operator on "${fieldLabel}" does not support comparing against a field.`);
+            return;
+          }
+          if (!filter.rightModelId || !filter.rightFieldId) {
+            errors.push(`Select a comparison field for "${fieldLabel}".`);
+            return;
+          }
+          const rightAlias = aliasLookup.get(filter.rightModelId);
+          const rightOption = filterFieldLookup.get(
+            buildFilterOptionKey(filter.rightModelId, filter.rightFieldId),
+          );
+          if (!rightAlias || !rightOption) {
+            errors.push("The comparison field is no longer available.");
+            return;
+          }
+          const rightColumn = rightOption.field.sourceColumn ?? rightOption.field.id;
+          const rightExpression = `${rightAlias}.${quoteIdentifier(rightColumn)}`;
+          const operatorSqlMap: Partial<Record<FilterOperator, string>> = {
+            eq: "=",
+            neq: "<>",
+            gt: ">",
+            gte: ">=",
+            lt: "<",
+            lte: "<=",
+          };
+          const sqlOperator = operatorSqlMap[filter.operator];
+          if (!sqlOperator) {
+            errors.push(`"${fieldLabel}" operator requires a literal value.`);
+            return;
+          }
+          clauses.push(`${leftExpression} ${sqlOperator} ${rightExpression}`);
+          return;
+        }
+
+        const trimmedValue = (filter.value ?? "").trim();
+        if (filter.valueKind !== "boolean" && trimmedValue.length === 0) {
+          errors.push(`Provide a value for the filter on "${fieldLabel}".`);
+          return;
+        }
+
+        const buildLiteral = (kind: FilterValueKind, value: string): string | null => {
+          if (kind === "number") {
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) {
+              errors.push(`Enter a valid number for "${fieldLabel}".`);
+              return null;
+            }
+            return String(numeric);
+          }
+          if (kind === "boolean") {
+            const normalized = value.toLowerCase();
+            if (normalized !== "true" && normalized !== "false") {
+              errors.push(`Select true or false for "${fieldLabel}".`);
+              return null;
+            }
+            return normalized === "true" ? "TRUE" : "FALSE";
+          }
+          return `'${escapeSqlLiteral(value)}'`;
+        };
+
+        switch (filter.operator) {
+          case "eq":
+          case "neq":
+          case "gt":
+          case "gte":
+          case "lt":
+          case "lte": {
+            const operatorSqlMap: Record<FilterOperator, string> = {
+              eq: "=",
+              neq: "<>",
+              gt: ">",
+              gte: ">=",
+              lt: "<",
+              lte: "<=",
+              contains: "",
+              starts_with: "",
+              ends_with: "",
+              is_null: "",
+              is_not_null: "",
+              is_true: "",
+              is_false: "",
+            };
+            const literal = buildLiteral(filter.valueKind, trimmedValue);
+            if (!literal) {
+              return;
+            }
+            clauses.push(`${leftExpression} ${operatorSqlMap[filter.operator]} ${literal}`);
+            break;
+          }
+          case "contains": {
+            const literal = `'${`%${escapeSqlLiteral(trimmedValue)}%`}'`;
+            clauses.push(`${leftExpression} ILIKE ${literal}`);
+            break;
+          }
+          case "starts_with": {
+            const literal = `'${`${escapeSqlLiteral(trimmedValue)}%`}'`;
+            clauses.push(`${leftExpression} ILIKE ${literal}`);
+            break;
+          }
+          case "ends_with": {
+            const literal = `'${`%${escapeSqlLiteral(trimmedValue)}`}'`;
+            clauses.push(`${leftExpression} ILIKE ${literal}`);
+            break;
+          }
+          default:
+            break;
+        }
+      });
+
+      return { clauses, errors };
+    },
+    [filterFieldLookup],
+  );
+
 
   const builderLoaded = dataModels.length > 0;
 
@@ -1902,43 +2575,221 @@ const Reports = (props: GenericPageProps) => {
                     </Group>
                   </Group>
                   <Stack gap="sm">
-                    <Group align="flex-start" gap="sm">
-                      <TextInput
-                        placeholder="Add a filter clause (e.g. stay_date >= current_date - interval '30 day')"
-                        value={filterInput}
-                        onChange={(event) => setFilterInput(event.currentTarget.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            handleAddFilter();
+                    {draft.filters.length === 0 ? (
+                      filterFieldOptions.length === 0 ? (
+                        <Text c="dimmed" fz="sm">
+                          Select at least one data model to start defining filter conditions.
+                        </Text>
+                      ) : (
+                        <Text c="dimmed" fz="sm">
+                          No filters applied. Add a condition to focus your preview.
+                        </Text>
+                      )
+                    ) : (
+                      draft.filters.map((filter) => {
+                        const leftKey = buildFilterOptionKey(filter.leftModelId, filter.leftFieldId);
+                        const leftOption = filterFieldLookup.get(leftKey);
+
+                        if (!leftOption) {
+                          return (
+                            <Paper key={filter.id} withBorder radius="md" p="sm">
+                              <Group justify="space-between" align="center">
+                                <Text c="red" fz="sm">
+                                  Filter references a field that is no longer available.
+                                </Text>
+                                <ActionIcon
+                                  variant="subtle"
+                                  color="red"
+                                  onClick={() => handleRemoveFilter(filter.id)}
+                                  aria-label="Remove filter"
+                                >
+                                  <IconTrash size={16} />
+                                </ActionIcon>
+                              </Group>
+                            </Paper>
+                          );
+                        }
+
+                        const operatorOptions = getOperatorOptionsForFieldType(leftOption.field.type);
+                        const operatorDefinition =
+                          operatorOptions.find((definition) => definition.value === filter.operator) ??
+                          FILTER_OPERATOR_LOOKUP.get(filter.operator);
+                        const operatorSelectData = operatorOptions.map((definition) => ({
+                          value: definition.value,
+                          label: definition.label,
+                        }));
+                        const requiresValue = operatorDefinition?.requiresValue ?? true;
+                        const allowFieldComparison = operatorDefinition?.allowFieldComparison ?? false;
+                        const comparisonModeOptions =
+                          allowFieldComparison && requiresValue
+                            ? [
+                                { label: "Value", value: "value" },
+                                { label: "Field", value: "field" },
+                              ]
+                            : [{ label: "Value", value: "value" }];
+                        const targetKind = getValueKindForFieldType(leftOption.field.type);
+                        const comparableFieldOptions = filterFieldOptions
+                          .filter(
+                            (option) =>
+                              getValueKindForFieldType(option.field.type) === targetKind &&
+                              !(option.modelId === leftOption.modelId && option.fieldId === leftOption.fieldId),
+                          )
+                          .map((option) => ({
+                            value: option.value,
+                            label: option.label,
+                          }));
+                        const comparisonMode =
+                          filter.rightType === "field" && comparableFieldOptions.length === 0
+                            ? "value"
+                            : filter.rightType;
+                        const rightFieldValue =
+                          filter.rightModelId && filter.rightFieldId
+                            ? buildFilterOptionKey(filter.rightModelId, filter.rightFieldId)
+                            : null;
+
+                        let valueControl: JSX.Element | null = null;
+                        if (requiresValue) {
+                          if (comparisonMode === "field" && comparableFieldOptions.length > 0) {
+                            valueControl = (
+                              <Select
+                                label="Compare to"
+                                data={comparableFieldOptions}
+                                value={rightFieldValue}
+                                onChange={(value) => handleFilterRightFieldChange(filter.id, value)}
+                                w={260}
+                              />
+                            );
+                          } else if (comparisonMode === "value") {
+                            if (filter.valueKind === "boolean") {
+                              valueControl = (
+                                <Select
+                                  label="Value"
+                                  data={[
+                                    { value: "true", label: "True" },
+                                    { value: "false", label: "False" },
+                                  ]}
+                                  value={filter.value ?? "true"}
+                                  onChange={(value) =>
+                                    handleFilterValueChange(filter.id, value ?? "true")
+                                  }
+                                  w={140}
+                                />
+                              );
+                            } else if (filter.valueKind === "number") {
+                              const parsedValue =
+                                filter.value !== undefined && filter.value !== ""
+                                  ? Number(filter.value)
+                                  : undefined;
+                              valueControl = (
+                                <NumberInput
+                                  label="Value"
+                                  value={
+                                    parsedValue !== undefined && Number.isFinite(parsedValue)
+                                      ? parsedValue
+                                      : undefined
+                                  }
+                                  onChange={(value) =>
+                                    handleFilterValueChange(
+                                      filter.id,
+                                      value === "" || value === null ? "" : String(value),
+                                    )
+                                  }
+                                  allowDecimals
+                                  w={180}
+                                />
+                              );
+                            } else {
+                              valueControl = (
+                                <TextInput
+                                  label="Value"
+                                  placeholder={
+                                    filter.valueKind === "date" ? "YYYY-MM-DD" : "Enter value"
+                                  }
+                                  value={filter.value ?? ""}
+                                  onChange={(event) =>
+                                    handleFilterValueChange(filter.id, event.currentTarget.value)
+                                  }
+                                  w={240}
+                                />
+                              );
+                            }
                           }
-                        }}
-                        style={{ flex: 1 }}
-                      />
-                      <Button variant="light" onClick={handleAddFilter}>
-                        Apply filter
-                      </Button>
-                    </Group>
-                    {draft.filters.length > 0 && (
-                      <List size="sm" spacing="xs">
-                        {draft.filters.map((filter) => (
-                          <List.Item key={filter.id} icon={<IconAdjustments size={14} />}>
-                            <Group justify="space-between">
-                              <Text>{filter.label}</Text>
-                              <ActionIcon
-                                size="sm"
-                                variant="subtle"
-                                color="red"
-                                onClick={() => handleRemoveFilter(filter.id)}
-                                aria-label="Remove filter"
-                              >
-                                <IconTrash size={14} />
-                              </ActionIcon>
-                            </Group>
-                          </List.Item>
-                        ))}
-                      </List>
+                        }
+
+                        return (
+                          <Paper key={filter.id} withBorder radius="md" p="sm">
+                            <Stack gap="xs">
+                              <Group align="flex-end" gap="sm" wrap="wrap">
+                                <Select
+                                  label="Field"
+                                  data={filterFieldOptions.map((option) => ({
+                                    value: option.value,
+                                    label: option.label,
+                                  }))}
+                                  value={leftOption.value}
+                                  onChange={(value) => handleFilterFieldChange(filter.id, value)}
+                                  w={260}
+                                />
+                                <Select
+                                  label="Operator"
+                                  data={operatorSelectData}
+                                  value={filter.operator}
+                                  onChange={(value) =>
+                                    handleFilterOperatorChange(
+                                      filter.id,
+                                      (value ?? filter.operator) as FilterOperator,
+                                    )
+                                  }
+                                  w={200}
+                                />
+                                {requiresValue && allowFieldComparison && (
+                                  <Stack gap={4} style={{ width: 160 }}>
+                                    <Text fz="xs" fw={500}>
+                                      Compare with
+                                    </Text>
+                                    <SegmentedControl
+                                      value={comparisonMode}
+                                      onChange={(value) =>
+                                        handleFilterComparisonModeChange(
+                                          filter.id,
+                                          value as FilterComparisonMode,
+                                        )
+                                      }
+                                      data={comparisonModeOptions}
+                                      disabled={comparableFieldOptions.length === 0}
+                                    />
+                                  </Stack>
+                                )}
+                                {valueControl}
+                                <ActionIcon
+                                  variant="subtle"
+                                  color="red"
+                                  onClick={() => handleRemoveFilter(filter.id)}
+                                  aria-label="Remove filter"
+                                >
+                                  <IconTrash size={16} />
+                                </ActionIcon>
+                              </Group>
+                              {filter.operator === "contains" ||
+                              filter.operator === "starts_with" ||
+                              filter.operator === "ends_with" ? (
+                                <Text fz="xs" c="dimmed">
+                                  Text comparisons use case-insensitive matching.
+                                </Text>
+                              ) : null}
+                            </Stack>
+                          </Paper>
+                        );
+                      })
                     )}
+                    <Button
+                      variant="light"
+                      leftSection={<IconPlus size={16} />}
+                      onClick={handleAddFilterRow}
+                      disabled={filterFieldOptions.length === 0}
+                    >
+                      Add condition
+                    </Button>
                     <Divider my="sm" />
                     <Checkbox
                       label="Auto-publish PDF package to leadership workspace"
