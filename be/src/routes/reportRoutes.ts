@@ -22,5 +22,6 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
 
 router.get('/getCommissionByDateRange', authMiddleware, reportController.getCommissionByDateRange);
 router.get('/models', authMiddleware, reportController.listReportModels);
+router.post('/preview', authMiddleware, reportController.runReportPreview);
 
 export default router;
