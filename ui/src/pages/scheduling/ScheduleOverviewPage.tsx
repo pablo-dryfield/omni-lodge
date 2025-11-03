@@ -375,6 +375,14 @@ const ensureIsoWeekString = (value: Dayjs | string) => {
   return `${year}-W${week.toString().padStart(2, "0")}`;
 };
 
+const parseIsoWeekStart = (value: string | null | undefined): Dayjs | null => {
+  if (!value) {
+    return null;
+  }
+  const parsed = dayjs(value, "GGGG-[W]WW", true);
+  return parsed.isValid() ? parsed.startOf("isoWeek") : null;
+};
+
 type MonthSegment = { label: string; span: number; key: string };
 
 const buildMonthSegments = (days: Dayjs[]): MonthSegment[] => {
@@ -426,14 +434,42 @@ const ScheduleOverviewPage = () => {
   const weekId = ensureWeekQuery.data?.week?.id ?? null;
   const shiftInstancesQuery = useShiftInstances(weekId);
   const shiftInstances = useMemo(() => shiftInstancesQuery.data ?? [], [shiftInstancesQuery.data]);
+  const previousWeekValue = useMemo(() => {
+    const start = parseIsoWeekStart(selectedWeek);
+    if (!start) {
+      return null;
+    }
+    const previous = start.subtract(1, "week");
+    return ensureIsoWeekString(previous);
+  }, [selectedWeek]);
+  const previousWeekQuery = useEnsureWeek(previousWeekValue, {
+    allowGenerate: false,
+    enabled: Boolean(previousWeekValue),
+  });
+  const canNavigateBackward = Boolean(previousWeekQuery.data?.week);
+  const canNavigateForward = useMemo(() => {
+    const start = parseIsoWeekStart(selectedWeek);
+    if (!start) {
+      return false;
+    }
+    const currentStart = dayjs().startOf("isoWeek");
+    const diff = start.diff(currentStart, "week");
+    return diff < 1;
+  }, [selectedWeek]);
 
   const handleNavigateWeek = useCallback(
     (direction: -1 | 1) => {
       const [year, weekPart] = selectedWeek.split("-W");
       const adjusted = dayjs().year(Number(year)).isoWeek(Number(weekPart)).add(direction, "week");
+      if (direction === -1 && !canNavigateBackward) {
+        return;
+      }
+      if (direction === 1 && !canNavigateForward) {
+        return;
+      }
       setSelectedWeek(ensureIsoWeekString(adjusted));
     },
-    [selectedWeek],
+    [selectedWeek, canNavigateBackward, canNavigateForward],
   );
 
   useEffect(() => {
@@ -945,6 +981,7 @@ const ScheduleOverviewPage = () => {
             color="dark"
             leftSection={<IconChevronLeft size={16} />}
             onClick={() => handleNavigateWeek(-1)}
+            disabled={!canNavigateBackward || shiftInstancesQuery.isLoading}
           >
             Previous Week
           </Button>
@@ -967,6 +1004,7 @@ const ScheduleOverviewPage = () => {
             color="dark"
             rightSection={<IconChevronRight size={16} />}
             onClick={() => handleNavigateWeek(1)}
+            disabled={!canNavigateForward || shiftInstancesQuery.isLoading}
           >
             Next Week
           </Button>
