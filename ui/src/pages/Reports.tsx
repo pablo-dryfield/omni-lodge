@@ -2630,7 +2630,7 @@ const Reports = (props: GenericPageProps) => {
                             >
                               <div>
                                 <Text fw={500} fz="sm">
-                                  {suggestion.source.name} - {suggestion.target.name}
+                                  {`${suggestion.source.name} -> ${suggestion.target.name}`}
                                 </Text>
                                 <Text fz="xs" c="dimmed">
                                   {suggestion.relationship}
