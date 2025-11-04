@@ -99,13 +99,6 @@
  */
 
 /**
- * @license lucide-react v0.511.0 - ISC
- *
- * This source code is licensed under the ISC license.
- * See the LICENSE file in the root directory of this source tree.
- */
-
-/**
  * @name match-sorter
  * @license MIT license.
  * @copyright (c) 2099 Kent C. Dodds
