@@ -131,6 +131,14 @@ type JoinCondition = {
   description?: string;
 };
 
+type ManualJoinDraft = {
+  leftModelId: string;
+  leftFieldId: string;
+  rightModelId: string;
+  rightFieldId: string;
+  joinType: JoinCondition["joinType"];
+};
+
 type VisualDefinition = {
   id: string;
   name: string;
@@ -206,6 +214,21 @@ interface MetricDefinition {
 }
 
 const DEFAULT_CONNECTION_LABEL = "OmniLodge core database";
+
+const JOIN_TYPE_OPTIONS: { value: JoinCondition["joinType"]; label: string }[] = [
+  { value: "inner", label: "Inner join" },
+  { value: "left", label: "Left join" },
+  { value: "right", label: "Right join" },
+  { value: "full", label: "Full outer join" },
+];
+
+const createManualJoinDraft = (joinType: JoinCondition["joinType"] = "left"): ManualJoinDraft => ({
+  leftModelId: "",
+  leftFieldId: "",
+  rightModelId: "",
+  rightFieldId: "",
+  joinType,
+});
 
 const humanizeName = (value: string): string =>
   value
@@ -755,6 +778,7 @@ const Reports = (props: GenericPageProps) => {
   const [previewResult, setPreviewResult] = useState<ReportPreviewResponse | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [templateError, setTemplateError] = useState<string | null>(null);
+  const [manualJoinDraft, setManualJoinDraft] = useState<ManualJoinDraft>(() => createManualJoinDraft());
 
   const upsertTemplateInCache = useCallback(
     (record: ReportTemplateDto) => {
@@ -853,6 +877,105 @@ const Reports = (props: GenericPageProps) => {
         );
     });
   }, [draft.fields, modelMap]);
+
+  const joinModelOptions = useMemo(() => {
+    return draft.models
+      .map((modelId) => modelMap.get(modelId))
+      .filter((value): value is DataModelDefinition => Boolean(value))
+      .map((model) => ({
+        value: model.id,
+        label: model.name,
+      }));
+  }, [draft.models, modelMap]);
+
+  const getFieldOptions = useCallback(
+    (modelId: string) => {
+      const model = modelMap.get(modelId);
+      if (!model) {
+        return [];
+      }
+      return model.fields.map((field) => ({
+        value: field.id,
+        label: field.label ?? humanizeName(field.id),
+      }));
+    },
+    [modelMap],
+  );
+
+  const updateManualJoinDraft = useCallback(
+    (patch: Partial<ManualJoinDraft>) => {
+      setManualJoinDraft((current) => {
+        const next = { ...current, ...patch };
+        if (patch.leftModelId !== undefined) {
+          const model = modelMap.get(patch.leftModelId);
+          next.leftFieldId = patch.leftModelId && model ? model.fields[0]?.id ?? "" : "";
+        }
+        if (patch.rightModelId !== undefined) {
+          const model = modelMap.get(patch.rightModelId);
+          next.rightFieldId = patch.rightModelId && model ? model.fields[0]?.id ?? "" : "";
+        }
+        return next;
+      });
+      if (templateError === "This join already exists.") {
+        setTemplateError(null);
+      }
+    },
+    [modelMap, templateError],
+  );
+
+  useEffect(() => {
+    setManualJoinDraft((current) => {
+      let changed = false;
+      let leftModelId = current.leftModelId;
+      let leftFieldId = current.leftFieldId;
+      if (leftModelId && !draft.models.includes(leftModelId)) {
+        leftModelId = "";
+        leftFieldId = "";
+        changed = true;
+      } else if (leftModelId) {
+        const model = modelMap.get(leftModelId);
+        const hasField = model?.fields.some((field) => field.id === leftFieldId);
+        if (!hasField) {
+          leftFieldId = model?.fields[0]?.id ?? "";
+          changed = true;
+        }
+      }
+
+      let rightModelId = current.rightModelId;
+      let rightFieldId = current.rightFieldId;
+      if (rightModelId && !draft.models.includes(rightModelId)) {
+        rightModelId = "";
+        rightFieldId = "";
+        changed = true;
+      } else if (rightModelId) {
+        const model = modelMap.get(rightModelId);
+        const hasField = model?.fields.some((field) => field.id === rightFieldId);
+        if (!hasField) {
+          rightFieldId = model?.fields[0]?.id ?? "";
+          changed = true;
+        }
+      }
+
+      if (!changed) {
+        return current;
+      }
+
+      return {
+        ...current,
+        leftModelId,
+        leftFieldId,
+        rightModelId,
+        rightFieldId,
+      };
+    });
+  }, [draft.models, modelMap]);
+
+  const joinModelsAvailable = joinModelOptions.length >= 2;
+  const canSubmitManualJoin =
+    Boolean(manualJoinDraft.leftModelId) &&
+    Boolean(manualJoinDraft.leftFieldId) &&
+    Boolean(manualJoinDraft.rightModelId) &&
+    Boolean(manualJoinDraft.rightFieldId);
 
   const filterFieldOptions = useMemo<FilterFieldOption[]>(() => {
     return draft.models.flatMap((modelId) => {
@@ -1407,38 +1530,82 @@ const Reports = (props: GenericPageProps) => {
     }
   };
 
-  const handleAddJoin = (
-    leftModelId: string,
-    rightModelId: string,
-    options?: {
-      leftField?: string;
-      rightField?: string;
-      joinType?: JoinCondition["joinType"];
-      description?: string;
-    }
-  ) => {
-    const leftModel = modelMap.get(leftModelId);
-    const rightModel = modelMap.get(rightModelId);
-    if (!leftModel || !rightModel) {
+  const handleAddJoin = useCallback(
+    (
+      leftModelId: string,
+      rightModelId: string,
+      options?: {
+        leftField?: string;
+        rightField?: string;
+        joinType?: JoinCondition["joinType"];
+        description?: string;
+      },
+    ) => {
+      const leftModel = modelMap.get(leftModelId);
+      const rightModel = modelMap.get(rightModelId);
+      if (!leftModel || !rightModel) {
+        return;
+      }
+      setDraft((current) => ({
+        ...current,
+        joins: [
+          ...current.joins,
+          {
+            id: `join-${leftModelId}-${rightModelId}-${Date.now()}`,
+            leftModel: leftModelId,
+            leftField: options?.leftField ?? getDefaultKey(leftModel),
+            rightModel: rightModelId,
+            rightField: options?.rightField ?? getDefaultKey(rightModel),
+            joinType: options?.joinType ?? "left",
+            description:
+              options?.description ?? `Join ${leftModel.name} to ${rightModel.name}`,
+          },
+        ],
+      }));
+    },
+    [modelMap],
+  );
+
+  const handleManualJoinSubmit = useCallback(() => {
+    if (
+      !manualJoinDraft.leftModelId ||
+      !manualJoinDraft.leftFieldId ||
+      !manualJoinDraft.rightModelId ||
+      !manualJoinDraft.rightFieldId
+    ) {
       return;
     }
-    setDraft((current) => ({
-      ...current,
-      joins: [
-        ...current.joins,
-        {
-          id: `join-${leftModelId}-${rightModelId}-${Date.now()}`,
-          leftModel: leftModelId,
-          leftField: options?.leftField ?? getDefaultKey(leftModel),
-          rightModel: rightModelId,
-          rightField: options?.rightField ?? getDefaultKey(rightModel),
-          joinType: options?.joinType ?? "left",
-          description:
-            options?.description ?? `Join ${leftModel.name} to ${rightModel.name}`,
-        },
-      ],
-    }));
-  };
+
+    const duplicate = draft.joins.some(
+      (join) =>
+        join.leftModel === manualJoinDraft.leftModelId &&
+        join.rightModel === manualJoinDraft.rightModelId &&
+        join.leftField === manualJoinDraft.leftFieldId &&
+        join.rightField === manualJoinDraft.rightFieldId &&
+        join.joinType === manualJoinDraft.joinType,
+    );
+
+    if (duplicate) {
+      setTemplateError("This join already exists.");
+      return;
+    }
+
+    setTemplateError(null);
+
+    const leftModel = modelMap.get(manualJoinDraft.leftModelId);
+    const rightModel = modelMap.get(manualJoinDraft.rightModelId);
+
+    handleAddJoin(manualJoinDraft.leftModelId, manualJoinDraft.rightModelId, {
+      leftField: manualJoinDraft.leftFieldId,
+      rightField: manualJoinDraft.rightFieldId,
+      joinType: manualJoinDraft.joinType,
+      description: `${manualJoinDraft.joinType.toUpperCase()} join between ${
+        leftModel?.name ?? manualJoinDraft.leftModelId
+      } and ${rightModel?.name ?? manualJoinDraft.rightModelId}`,
+    });
+
+    setManualJoinDraft((current) => createManualJoinDraft(current.joinType));
+  }, [draft.joins, handleAddJoin, manualJoinDraft, modelMap]);
 
   const handleRemoveJoin = (joinId: string) => {
     setDraft((current) => ({
@@ -2334,90 +2501,161 @@ const Reports = (props: GenericPageProps) => {
                     <Text fw={600}>Data model joins</Text>
                     <Badge variant="light">{draft.joins.length} defined</Badge>
                   </Group>
-                  {draft.joins.length === 0 ? (
-                    <Text c="dimmed">
-                      Add relationships between models to enable blended reporting.
-                    </Text>
-                  ) : (
-                    <Stack gap="sm">
-                      {draft.joins.map((join) => {
-                        const leftModel = modelMap.get(join.leftModel);
-                        const rightModel = modelMap.get(join.rightModel);
-                        return (
-                          <Card key={join.id} withBorder padding="sm" radius="md">
-                            <Group justify="space-between" align="flex-start">
+                  <Stack gap="md">
+                    <Stack gap="xs">
+                      <Text fw={600} fz="sm">
+                        Create custom join
+                      </Text>
+                      {!joinModelsAvailable ? (
+                        <Text c="dimmed" fz="sm">
+                          Select at least two data models to configure a custom join.
+                        </Text>
+                      ) : (
+                        <Stack gap="xs">
+                          <Group align="flex-end" gap="sm" wrap="wrap">
+                            <Select
+                              label="Left model"
+                              data={joinModelOptions}
+                              placeholder="Select model"
+                              value={manualJoinDraft.leftModelId || null}
+                              onChange={(value) => updateManualJoinDraft({ leftModelId: value ?? "" })}
+                              style={{ flex: 1, minWidth: 200 }}
+                            />
+                            <Select
+                              label="Left field"
+                              data={getFieldOptions(manualJoinDraft.leftModelId)}
+                              placeholder="Select field"
+                              value={manualJoinDraft.leftFieldId || null}
+                              onChange={(value) => updateManualJoinDraft({ leftFieldId: value ?? "" })}
+                              disabled={!manualJoinDraft.leftModelId}
+                              style={{ flex: 1, minWidth: 200 }}
+                            />
+                          </Group>
+                          <Group align="flex-end" gap="sm" wrap="wrap">
+                            <Select
+                              label="Right model"
+                              data={joinModelOptions}
+                              placeholder="Select model"
+                              value={manualJoinDraft.rightModelId || null}
+                              onChange={(value) => updateManualJoinDraft({ rightModelId: value ?? "" })}
+                              style={{ flex: 1, minWidth: 200 }}
+                            />
+                            <Select
+                              label="Right field"
+                              data={getFieldOptions(manualJoinDraft.rightModelId)}
+                              placeholder="Select field"
+                              value={manualJoinDraft.rightFieldId || null}
+                              onChange={(value) => updateManualJoinDraft({ rightFieldId: value ?? "" })}
+                              disabled={!manualJoinDraft.rightModelId}
+                              style={{ flex: 1, minWidth: 200 }}
+                            />
+                            <Select
+                              label="Join type"
+                              data={JOIN_TYPE_OPTIONS}
+                              value={manualJoinDraft.joinType}
+                              onChange={(value) =>
+                                updateManualJoinDraft({
+                                  joinType: (value ?? manualJoinDraft.joinType) as JoinCondition["joinType"],
+                                })
+                              }
+                              style={{ width: 160 }}
+                            />
+                            <Button
+                              leftSection={<IconPlus size={14} />}
+                              onClick={handleManualJoinSubmit}
+                              disabled={!canSubmitManualJoin || !joinModelsAvailable}
+                            >
+                              Add join
+                            </Button>
+                          </Group>
+                        </Stack>
+                      )}
+                    </Stack>
+                    {draft.joins.length === 0 ? (
+                      <Text c="dimmed">
+                        Add relationships between models to enable blended reporting.
+                      </Text>
+                    ) : (
+                      <Stack gap="sm">
+                        {draft.joins.map((join) => {
+                          const leftModel = modelMap.get(join.leftModel);
+                          const rightModel = modelMap.get(join.rightModel);
+                          return (
+                            <Card key={join.id} withBorder padding="sm" radius="md">
+                              <Group justify="space-between" align="flex-start">
+                                <div>
+                                  <Group gap="xs">
+                                    <Badge variant="light" color="blue">
+                                      {join.joinType.toUpperCase()}
+                                    </Badge>
+                                    <Text fw={600} fz="sm">
+                                      {leftModel?.name ?? join.leftModel} - {rightModel?.name ?? join.rightModel}
+                                    </Text>
+                                  </Group>
+                                  <Text fz="xs" c="dimmed" mt={4}>
+                                    {join.leftModel}.{join.leftField} = {join.rightModel}.{join.rightField}
+                                  </Text>
+                                  {join.description && (
+                                    <Text fz="xs" mt={6}>
+                                      {join.description}
+                                    </Text>
+                                  )}
+                                </div>
+                                <ActionIcon
+                                  variant="subtle"
+                                  color="red"
+                                  onClick={() => handleRemoveJoin(join.id)}
+                                  aria-label="Remove join"
+                                >
+                                  <IconTrash size={16} />
+                                </ActionIcon>
+                              </Group>
+                            </Card>
+                          );
+                        })}
+                      </Stack>
+                    )}
+                    {joinSuggestions.length > 0 && (
+                      <>
+                        <Divider my="md" />
+                        <Text fw={600} fz="sm" mb={6}>
+                          Suggested joins
+                        </Text>
+                        <Stack gap="xs">
+                          {joinSuggestions.map((suggestion) => (
+                            <Group
+                              key={`${suggestion.source.id}-${suggestion.target.id}-${suggestion.leftField}`}
+                              justify="space-between"
+                              align="flex-start"
+                            >
                               <div>
-                                <Group gap="xs">
-                                  <Badge variant="light" color="blue">
-                                    {join.joinType.toUpperCase()}
-                                  </Badge>
-                                  <Text fw={600} fz="sm">
-                                    {leftModel?.name ?? join.leftModel} - {rightModel?.name ?? join.rightModel}
-                                  </Text>
-                                </Group>
-                                <Text fz="xs" c="dimmed" mt={4}>
-                                  {join.leftModel}.{join.leftField} = {join.rightModel}.{join.rightField}
+                                <Text fw={500} fz="sm">
+                                  {suggestion.source.name} - {suggestion.target.name}
                                 </Text>
-                                {join.description && (
-                                  <Text fz="xs" mt={6}>
-                                    {join.description}
-                                  </Text>
-                                )}
+                                <Text fz="xs" c="dimmed">
+                                  {suggestion.relationship}
+                                </Text>
                               </div>
                               <ActionIcon
                                 variant="subtle"
-                                color="red"
-                                onClick={() => handleRemoveJoin(join.id)}
-                                aria-label="Remove join"
+                                color="blue"
+                                onClick={() =>
+                                  handleAddJoin(suggestion.source.id, suggestion.target.id, {
+                                    leftField: suggestion.leftField,
+                                    rightField: suggestion.rightField,
+                                    description: suggestion.relationship,
+                                  })
+                                }
+                                aria-label="Add join"
                               >
-                                <IconTrash size={16} />
+                                <IconPlus size={16} />
                               </ActionIcon>
                             </Group>
-                          </Card>
-                        );
-                      })}
-                    </Stack>
-                  )}
-                  {joinSuggestions.length > 0 && (
-                    <>
-                      <Divider my="md" />
-                      <Text fw={600} fz="sm" mb={6}>
-                        Suggested joins
-                      </Text>
-                      <Stack gap="xs">
-                        {joinSuggestions.map((suggestion) => (
-                          <Group
-                            key={`${suggestion.source.id}-${suggestion.target.id}-${suggestion.leftField}`}
-                            justify="space-between"
-                            align="flex-start"
-                          >
-                            <div>
-                              <Text fw={500} fz="sm">
-                                {suggestion.source.name} - {suggestion.target.name}
-                              </Text>
-                              <Text fz="xs" c="dimmed">
-                                {suggestion.relationship}
-                              </Text>
-                            </div>
-                            <ActionIcon
-                              variant="subtle"
-                              color="blue"
-                              onClick={() =>
-                                handleAddJoin(suggestion.source.id, suggestion.target.id, {
-                                  leftField: suggestion.leftField,
-                                  rightField: suggestion.rightField,
-                                  description: suggestion.relationship,
-                                })
-                              }
-                              aria-label="Add join"
-                            >
-                              <IconPlus size={16} />
-                            </ActionIcon>
-                          </Group>
-                        ))}
-                      </Stack>
-                    </>
-                  )}
+                          ))}
+                        </Stack>
+                      </>
+                    )}
+                  </Stack>
                 </Paper>
                 <Paper p="md" radius="lg" shadow="xs" withBorder>
                   <Group justify="space-between" mb="md">
