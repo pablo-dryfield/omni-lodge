@@ -1,0 +1,148 @@
+# Reporting Platform Redesign – Technical Plan
+
+## Task Tracker
+- [ ] Backend: define `QueryConfig` contract and schema migrations
+- [ ] Backend: implement query builder, caching, async jobs, RBAC hooks
+- [ ] Backend: expose expanded reporting APIs (query, templates, dashboards, derived fields)
+- [ ] Frontend: update shared data models/state to new contract
+- [ ] Frontend: rebuild Visuals & Analytics with advanced charting and interactions
+- [ ] Frontend: enhance template builder (library, joins graph, spotlight, scheduling, export)
+- [ ] Frontend: add dashboards builder/viewer/export flows
+- [ ] Cross-cutting: derived field manager, scheduling UI, Google Drive export, notifications
+- [ ] QA & rollout: automated tests, monitoring, migration tooling, documentation
+
+## Goals & Scope
+- Replace the current preview-only flow with a composable query engine that supports advanced aggregations, comparisons, rolling windows, and caching.
+- Upgrade the template builder and Visuals & Analytics experience to consume the new engine.
+- Introduce reusable dashboards fed by saved template “views,” with export/sharing capabilities.
+- Provide foundations for derived fields, scheduling, RBAC, and future extensibility.
+
+Deliverables are split across backend services, API contracts, frontend surfaces, and cross-cutting infrastructure.
+
+---
+
+## Backend Query Engine
+### QueryConfig Contract
+- `sources`: array of model ids with optional aliases.
+- `joins`: join graph (`left`, `right`, `on`, `type`).
+- `filters`: structured objects (`field`, `op`, `value`, `mode`).
+- `metrics`: name, expression (column or derived), aggregation (`sum`, `avg`, `count`, `count_distinct`, `min`, `max`), optional window spec.
+- `dimensions`: name, expression or column, optional bucketing (`date_trunc`, custom bucket size), sort order, top‑N with “Others”.  
+- `time`: optional `{ field, range: { from, to }, bucket: hour/day/week/month/quarter/year, gapFill: zero|null }`.
+- `comparison`: optional array describing comparison periods (prev, WoW, MoM, YoY) and join keys.
+- `derivedFields`: definitions with expression DSL (validated AST, dependency graph).
+- `sort`, `limit`, `offset`, `postProcessing` (pivot, funnel, cohort).
+- `options`: `{ explain: boolean, anomalyDetection: { method, threshold }, allowAsync: boolean }`.
+
+### Engine Responsibilities
+1. Validate `QueryConfig` (schema + semantic checks).
+2. Translate to parameterized SQL using builder utilities (Sequelize `literal`/`fn` wrappers or Knex-like layer).
+3. Apply window functions for rolling/cumulative metrics, and `generate_series` for gap fill.
+4. Run query via pooled connection with timeout.
+5. Support async execution when estimated cost exceeds threshold (enqueue job, poll for status).
+6. Cache results by SHA256 hash of normalized `QueryConfig` + template version, with TTL and invalidation when dependencies change.
+7. Provide “explain” metadata (selected models, metrics, filters, bucket, comparison) for UI summary.
+8. Enforce RBAC hooks (currently permissive, but expose guard points for future role filters).
+
+### Persistence & Schema
+- Extend `report_templates` JSONB to store `queryConfig`, `visuals`, `metricsSpotlight`, `schedules`, `derivedFields`.
+- New tables:
+  - `dashboard_layouts` (id, owner, name, config JSON, share settings, created/updated).
+  - `dashboard_cards` (id, dashboard_id, template_id, view_config JSON, position).
+  - `report_schedules` (id, template_id, cadence, delivery_targets, last_run, status).
+  - `query_cache` (hash, template_id, result JSONB, meta, expires_at, created_at).
+  - `derived_field_library` (id, scope workspace/global, name, expression, metadata).
+  - `async_jobs` (id, hash, status, payload, result pointer, started/finished).
+
+### APIs
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/reports/query` | `POST` | Execute `QueryConfig` (sync); returns result or async token. |
+| `/reports/query/:hash` | `GET` | Poll async job & cached responses. |
+| `/reports/templates` | `GET/POST` | CRUD with expanded schema, includes derived fields & visuals. |
+| `/reports/templates/:id/run` | `POST` | Run stored template with optional overrides (filters/time range). |
+| `/reports/templates/:id/schedules` | `POST/PUT/DELETE` | Manage scheduled deliveries. |
+| `/reports/dashboards` | `GET/POST/PUT/DELETE` | Manage dashboards & cards. |
+| `/reports/derived-fields` | `GET/POST/PUT/DELETE` | Workspace-level derived fields. |
+| `/reports/cache/:hash/invalidate` | `POST` | Manual cache bust. |
+| `/reports/templates/:id/export` | `POST` | Export template (JSON) to Google Drive. |
+
+### Infrastructure Considerations
+- Introduce centralized query builder module (`be/src/services/reporting/queryBuilder.ts`).
+- Add Redis or reuse Postgres for caching (initially PG table; abstract storage for future swap).
+- Job runner: simple in-process queue with exponential backoff, pluggable adapter (upgrade later to BullMQ/Sidekiq-style).
+- Logging & metrics: instrument query duration, cache hit rate, async job latency.
+
+---
+
+## Frontend Architecture
+### Data Layer
+- Expand API client in `ui/src/api/reports.ts` to support new endpoints, typed `QueryConfig`, `Template`, `Dashboard`, `DerivedField` models.
+- Introduce context/store for report builder state (e.g., Zustand/Redux) to manage templates, fields, derived field registry, cached previews.
+- Provide query-building helpers mirroring backend contract (ensuring shared validation rules via generated schema or shared package).
+
+### Visuals & Analytics
+- **Builder Panel**: metric/dimension selectors with aggregation picker, bucketing controls, comparison toggles, segment/group-by UI, Top-N w/ “Others”.  
+- **Derived Field Editor**: expression editor with autocomplete, validation feedback, dependency visuals; support row-level vs aggregate-level fields.  
+- **Advanced Charting**: chart gallery (Line/Area/Bar/Scatter/Histogram/Box/Pivot/Funnel/Calendar/ Pareto/Cohort). Each chart gets a renderer component using Recharts/D3, with stable color palette, optional secondary y-axis, tooltips showing deltas and comparisons.  
+- **Interaction**: drill-down from chart to data table, cross-filter badges, anomaly toggle (using z-score column).  
+- **Explain Panel**: natural-language summary plus raw SQL preview.
+- **Data Table**: true query result, sortable, pageable, export to CSV.
+
+### Template Builder Enhancements
+- Template library UI with search, version history, rename/duplicate/delete/export.
+- Join graph visualization using dagre/vis.js to display multi-hop relationships.
+- Field inventory: searchable tree grouped by model, toggle metric/dimension, display data type, derived field badge.
+- Metrics spotlight configuration: select metric alias, define target, choose comparison period (prev/ WoW/MoM/YoY), set formatting.
+- Schedule configuration (email addresses, Slack webhooks, time zone, cadence).
+- Save workflow: optimistic updates, validation for derived-field dependencies, use new template schema.
+
+### Dashboards
+- Builder mode: draggable grid layout (React Grid Layout), add cards by selecting template + saved view, configure per-card overrides (time range, filters, comparison).  
+- Viewer mode: read-only, supports global time range override and cross-card filters.  
+- Export: render dashboard as PNG/PDF (html2canvas + jsPDF or server-side via headless browser).  
+- Sharing: generate signed URLs with optional expiry, enforce RBAC.  
+- Dashboard list page with search, owners, last updated.
+
+### Derived Fields & Library
+- Separate manager view (global vs template).  
+- Expression builder: syntax highlighting, linting, preview results using current query sample.  
+- Dependency graph anywhere fields are used (visuals, metrics, filters) with safe deletion checks.
+
+### Scheduling & Delivery
+- UI flow to enable schedule: choose cadence, recipients, delivery format (PDF, CSV, Slack message), message template.  
+- Show next run, history, status.  
+- Integration hooks for Google Drive export (OAuth & drive API).  
+- Error handling surfaced in UI and via notifications.
+
+---
+
+## Backend–Frontend Alignment
+- Share validation schemas via generated types (`@reporting/types` package) or JSON schema compilation.
+- Ensure serialization of derived expressions / QueryConfig is stable (canonical ordering before hashing).
+- Standardize time zone handling (store UTC, display per-user locale).
+- Add `explain` metadata to template runs to populate UI summary & logging.
+
+---
+
+## Rollout Strategy
+1. **Infra & Contracts**: build query builder, migrations, schema validation, minimal API stub returning mocked data for UI development.
+2. **Frontend Pilot**: implement new Visuals & Analytics against mock query service; preserve fallback to legacy preview for regression safety.
+3. **Template Schema Migration**: migration script to convert existing templates into new JSON structure (initially infer metrics & visuals from selected columns).
+4. **Backend Feature Parity**: incrementally enable aggregations, comparisons, caching; gate advanced features behind feature flags.
+5. **Dashboards & Scheduling**: once query engine solid, roll out dashboard builder, derived field manager, scheduling UI.
+6. **Production Enablement**: monitoring, alerting, load testing, documentation, training materials.
+
+---
+
+## Open Questions / Follow-ups
+- Expression language: adopt SQL fragments with sanitizer or introduce safe DSL (e.g., math.js AST).  
+- Caching store choice (Postgres vs Redis) for first iteration.  
+- Async job queue persistence (in Postgres vs dedicated queue).  
+- Slack/email delivery infrastructure (existing notifier or new microservice).  
+- RBAC granularity (field-level restrictions, template ownership, dashboard sharing scope).  
+- Migration tooling & backward compatibility for users relying on legacy preview UI during transition.
+
+---
+
+This document serves as the foundation for the implementation steps outlined in the project plan. As we execute, we’ll open focused design docs for any deep-dive areas (expression DSL, dashboard layout schema, scheduling pipeline). Should requirements shift, update this doc to keep backend/frontend teams aligned.
