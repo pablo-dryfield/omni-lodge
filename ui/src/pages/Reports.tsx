@@ -121,6 +121,16 @@ type DataModelDefinition = {
   associations?: AssociationDefinition[];
 };
 
+type PreviewColumnMeta = {
+  alias: string;
+  fieldLabel: string;
+  modelName?: string;
+  modelId?: string;
+  tableName?: string;
+  fieldId?: string;
+  sourceColumn?: string;
+};
+
 type JoinCondition = {
   id: string;
   leftModel: string;
@@ -1001,14 +1011,70 @@ const Reports = (props: GenericPageProps) => {
     return lookup;
   }, [filterFieldOptions]);
 
-  const previewColumns = useMemo(
-    () => previewResult?.columns ?? [],
-    [previewResult],
-  );
+  const previewColumns = useMemo(() => {
+    const columns = previewResult?.columns ?? [];
+    if (columns.length === 0) {
+      return columns;
+    }
+
+    const orderedAliases = draft.fields.flatMap((entry) =>
+      entry.fieldIds
+        .filter((fieldId): fieldId is string => Boolean(fieldId))
+        .map((fieldId) => toColumnAlias(entry.modelId, fieldId)),
+    );
+
+    if (orderedAliases.length === 0) {
+      return columns;
+    }
+
+    const columnSet = new Set(columns);
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+
+    orderedAliases.forEach((alias) => {
+      if (!seen.has(alias) && columnSet.has(alias)) {
+        ordered.push(alias);
+        seen.add(alias);
+      }
+    });
+
+    columns.forEach((alias) => {
+      if (!seen.has(alias)) {
+        ordered.push(alias);
+        seen.add(alias);
+      }
+    });
+
+    return ordered;
+  }, [draft.fields, previewResult]);
   const previewRows = useMemo(
     () => previewResult?.rows ?? [],
     [previewResult],
   );
+
+  const previewColumnMetadata = useMemo(() => {
+    return new Map<string, PreviewColumnMeta>(
+      previewColumns.map((alias) => {
+        const [rawModelId, rawFieldId] = alias.split("__");
+        const fieldId = rawFieldId && rawFieldId.length > 0 ? rawFieldId : undefined;
+        const modelId = fieldId ? rawModelId : undefined;
+        const model = modelId ? modelMap.get(modelId) : undefined;
+        const field = model?.fields.find((candidate) => candidate.id === fieldId);
+        return [
+          alias,
+          {
+            alias,
+            fieldLabel: field?.label ?? humanizeAlias(alias),
+            modelName: model?.name,
+            modelId,
+            tableName: model?.tableName,
+            fieldId,
+            sourceColumn: field?.sourceColumn,
+          },
+        ];
+      }),
+    );
+  }, [modelMap, previewColumns]);
 
   const previewColumnSets = useMemo(() => {
     const numeric = new Set<string>();
@@ -3170,9 +3236,31 @@ const Reports = (props: GenericPageProps) => {
                       >
                         <Table.Thead>
                           <Table.Tr>
-                            {previewColumns.map((column) => (
-                              <Table.Th key={column}>{humanizeAlias(column)}</Table.Th>
-                            ))}
+                            {previewColumns.map((column) => {
+                              const metadata = previewColumnMetadata.get(column);
+                              const tableDescriptor =
+                                metadata?.modelName ?? metadata?.tableName ?? metadata?.modelId;
+                              const technicalDescriptor =
+                                metadata?.modelId && metadata?.fieldId
+                                  ? `${metadata.modelId}.${metadata.fieldId}`
+                                  : metadata?.fieldId ?? metadata?.sourceColumn;
+                              return (
+                                <Table.Th key={column}>
+                                  <Box>
+                                    <Text fw={600} fz="sm">
+                                      {metadata?.fieldLabel ?? humanizeAlias(column)}
+                                    </Text>
+                                    {(tableDescriptor || technicalDescriptor) && (
+                                      <Text fz="xs" c="dimmed">
+                                        {tableDescriptor ?? ""}
+                                        {tableDescriptor && technicalDescriptor ? " / " : ""}
+                                        {technicalDescriptor ?? ""}
+                                      </Text>
+                                    )}
+                                  </Box>
+                                </Table.Th>
+                              );
+                            })}
                           </Table.Tr>
                         </Table.Thead>
                         <Table.Tbody>
