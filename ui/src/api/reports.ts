@@ -2,6 +2,117 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import axiosInstance from "../utils/axiosInstance";
 
+export type QueryConfigFieldRef = {
+  modelId: string;
+  fieldId: string;
+};
+
+export type QueryConfigSelect = QueryConfigFieldRef & {
+  alias?: string;
+};
+
+export type QueryConfigMetric = QueryConfigFieldRef & {
+  alias?: string;
+  aggregation: "sum" | "avg" | "min" | "max" | "count" | "count_distinct";
+  window?: {
+    kind: "rolling" | "cumulative";
+    frame: number;
+  };
+};
+
+export type QueryConfigDimension = QueryConfigFieldRef & {
+  alias?: string;
+  bucket?: "hour" | "day" | "week" | "month" | "quarter" | "year";
+  topN?: {
+    limit: number;
+    includeOthers?: boolean;
+  };
+};
+
+export type QueryConfigFilterValue =
+  | string
+  | number
+  | boolean
+  | null
+  | Array<string | number | boolean | null>
+  | { from?: string | number; to?: string | number };
+
+export type QueryConfigFilter = QueryConfigFieldRef & {
+  operator: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "in" | "not_in" | "between";
+  value: QueryConfigFilterValue;
+  joinWith?: "and" | "or";
+};
+
+export type QueryConfigOrderBy = {
+  alias: string;
+  direction?: "asc" | "desc";
+};
+
+export type QueryConfigTimeRange = {
+  field: QueryConfigFieldRef["fieldId"];
+  modelId: QueryConfigFieldRef["modelId"];
+  range?: { from?: string; to?: string };
+  bucket?: "hour" | "day" | "week" | "month" | "quarter" | "year";
+  gapFill?: "zero" | "null";
+};
+
+export type QueryConfigComparison = {
+  mode: "previous" | "wow" | "mom" | "yoy";
+  label?: string;
+};
+
+export type QueryConfigOptions = {
+  allowAsync?: boolean;
+  cacheTtlSeconds?: number;
+  forceAsync?: boolean;
+  templateId?: string | null;
+  explain?: boolean;
+  anomalyDetection?: {
+    method: "zscore";
+    threshold?: number;
+  };
+};
+
+export type QueryConfig = {
+  models: string[];
+  select?: QueryConfigSelect[];
+  metrics?: QueryConfigMetric[];
+  dimensions?: QueryConfigDimension[];
+  filters?: QueryConfigFilter[];
+  orderBy?: QueryConfigOrderBy[];
+  joins?: Array<{
+    id: string;
+    leftModel: string;
+    leftField: string;
+    rightModel: string;
+    rightField: string;
+    joinType?: "inner" | "left" | "right" | "full";
+    description?: string;
+  }>;
+  limit?: number;
+  offset?: number;
+  time?: QueryConfigTimeRange | null;
+  comparisons?: QueryConfigComparison[];
+  options?: QueryConfigOptions;
+};
+
+export type DerivedFieldDefinitionDto = {
+  id: string;
+  name: string;
+  expression: string;
+  kind: "row" | "aggregate";
+  scope: "template" | "workspace";
+  metadata?: Record<string, unknown>;
+};
+
+export type MetricSpotlightDefinitionDto = {
+  metric: string;
+  label: string;
+  target?: number;
+  comparison?: "previous" | "wow" | "mom" | "yoy";
+  format?: "number" | "currency" | "percentage";
+};
+
 export type ReportModelFieldResponse = {
   fieldName: string;
   columnName: string;
@@ -88,8 +199,8 @@ export const useRunReportPreview = () =>
 export type ReportTemplateOptionsDto = {
   autoDistribution: boolean;
   notifyTeam: boolean;
-  columnOrder?: string[];
-  columnAliases?: Record<string, string>;
+  columnOrder: string[];
+  columnAliases: Record<string, string>;
 };
 
 export type ReportTemplateDto = {
@@ -105,14 +216,17 @@ export type ReportTemplateDto = {
   metrics: string[];
   filters: unknown[];
   options: ReportTemplateOptionsDto;
+  queryConfig: QueryConfig | null;
+  derivedFields: DerivedFieldDefinitionDto[];
+  metricsSpotlight: MetricSpotlightDefinitionDto[];
   owner: {
     id: number | null;
     name: string;
   };
   createdAt: string;
   updatedAt: string;
-  columnOrder?: string[];
-  columnAliases?: Record<string, string>;
+  columnOrder: string[];
+  columnAliases: Record<string, string>;
 };
 
 export type ReportTemplateListResponse = {
@@ -132,6 +246,9 @@ export type SaveReportTemplateRequest = {
   metrics: string[];
   filters: unknown[];
   options: ReportTemplateOptionsDto;
+  queryConfig?: QueryConfig | null;
+  derivedFields?: DerivedFieldDefinitionDto[];
+  metricsSpotlight?: MetricSpotlightDefinitionDto[];
   columnOrder?: string[];
   columnAliases?: Record<string, string>;
 };

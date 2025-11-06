@@ -45,13 +45,19 @@ import AuditLog from './AuditLog.js';
 import ShiftRole from './ShiftRole.js';
 import UserShiftRole from './UserShiftRole.js';
 import ReportTemplate from './ReportTemplate.js';
+import ReportSchedule from './ReportSchedule.js';
+import DerivedFieldDefinition from './DerivedFieldDefinition.js';
+import ReportDashboard from './ReportDashboard.js';
+import ReportDashboardCard from './ReportDashboardCard.js';
 
 export function defineAssociations() {
   // User Associations
   User.belongsTo(UserType, { foreignKey: 'userTypeId', as: 'role' });
   User.hasOne(StaffProfile, { foreignKey: 'user_id', as: 'staffProfile' });
   User.hasMany(ReportTemplate, { foreignKey: 'userId', as: 'reportTemplates' });
+  User.hasMany(ReportDashboard, { foreignKey: 'ownerId', as: 'reportDashboards' });
   ReportTemplate.belongsTo(User, { foreignKey: 'userId', as: 'reportOwner' });
+  ReportDashboard.belongsTo(User, { foreignKey: 'ownerId', as: 'owner' });
 
   // UserType Associations
   UserType.hasMany(User, { foreignKey: 'userTypeId', as: 'users' });
@@ -138,6 +144,16 @@ export function defineAssociations() {
   Channel.belongsTo(User, { foreignKey: 'createdBy' });
   Channel.belongsTo(User, { foreignKey: 'updatedBy' });
   // Payment Method associations are defined via decorators on the models
+
+  // Reporting engine associations
+  ReportTemplate.hasMany(ReportSchedule, { foreignKey: 'templateId', as: 'schedules' });
+  ReportSchedule.belongsTo(ReportTemplate, { foreignKey: 'templateId', as: 'template' });
+  ReportTemplate.hasMany(DerivedFieldDefinition, { foreignKey: 'templateId', as: 'derivedFieldDefs' });
+  DerivedFieldDefinition.belongsTo(ReportTemplate, { foreignKey: 'templateId', as: 'template' });
+  ReportDashboard.hasMany(ReportDashboardCard, { foreignKey: 'dashboardId', as: 'cards' });
+  ReportDashboardCard.belongsTo(ReportDashboard, { foreignKey: 'dashboardId', as: 'dashboard' });
+  ReportTemplate.hasMany(ReportDashboardCard, { foreignKey: 'templateId', as: 'dashboardCards' });
+  ReportDashboardCard.belongsTo(ReportTemplate, { foreignKey: 'templateId', as: 'template' });
 
   // Night Report Associations
   Counter.hasOne(NightReport, { foreignKey: 'counterId', as: 'nightReport', onDelete: 'CASCADE', hooks: true });

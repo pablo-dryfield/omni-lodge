@@ -7,9 +7,24 @@ import CounterChannelMetric from "../models/CounterChannelMetric.js";
 import CounterProduct from "../models/CounterProduct.js";
 import CounterUser from "../models/CounterUser.js";
 import User from "../models/User.js";
-import ReportTemplate, { ReportTemplateFieldSelection, ReportTemplateOptions } from "../models/ReportTemplate.js";
+import ReportTemplate, {
+  ReportTemplateFieldSelection,
+  ReportTemplateOptions,
+  ReportTemplateDerivedField,
+  ReportTemplateMetricSpotlight,
+} from "../models/ReportTemplate.js";
 import { AuthenticatedRequest } from "../types/AuthenticatedRequest";
 import sequelize from "../config/database.js";
+import {
+  computeQueryHash,
+  getCachedQueryResult,
+  storeQueryCacheEntry,
+  enqueueQueryJob,
+  getAsyncJobStatus,
+  type QueryExecutionResult,
+} from "../services/reporting/reportQueryService.js";
+import { PreviewQueryError } from "../errors/PreviewQueryError.js";
+import { ensureReportingAccess } from "../utils/reportingAccess.js";
 
 type CommissionSummary = {
   userId: number;
@@ -156,6 +171,62 @@ type ReportPreviewResponse = {
   sql: string;
 };
 
+export type QueryConfigFieldRef = {
+  modelId: string;
+  fieldId: string;
+};
+
+export type QueryConfigSelect = QueryConfigFieldRef & {
+  alias?: string;
+};
+
+export type QueryConfigMetric = QueryConfigFieldRef & {
+  alias?: string;
+  aggregation: "sum" | "avg" | "min" | "max" | "count" | "count_distinct";
+};
+
+export type QueryConfigDimension = QueryConfigFieldRef & {
+  alias?: string;
+  bucket?: "hour" | "day" | "week" | "month" | "quarter" | "year";
+};
+
+export type QueryConfigFilterValue =
+  | string
+  | number
+  | boolean
+  | null
+  | Array<string | number | boolean | null>
+  | { from?: string | number; to?: string | number };
+
+export type QueryConfigFilter = QueryConfigFieldRef & {
+  operator: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "in" | "not_in" | "between";
+  value: QueryConfigFilterValue;
+};
+
+export type QueryConfigOrderBy = {
+  alias: string;
+  direction?: "asc" | "desc";
+};
+
+export type QueryConfigOptions = {
+  allowAsync?: boolean;
+  cacheTtlSeconds?: number;
+  forceAsync?: boolean;
+  templateId?: string | null;
+};
+
+export type QueryConfig = {
+  models: string[];
+  select?: QueryConfigSelect[];
+  metrics?: QueryConfigMetric[];
+  dimensions?: QueryConfigDimension[];
+  filters?: QueryConfigFilter[];
+  orderBy?: QueryConfigOrderBy[];
+  joins?: ReportPreviewRequest["joins"];
+  limit?: number;
+  options?: QueryConfigOptions;
+};
+
 type TemplateOptionsInput = {
   autoDistribution?: unknown;
   notifyTeam?: unknown;
@@ -177,6 +248,9 @@ type TemplatePayloadInput = {
   options?: TemplateOptionsInput | null;
   columnOrder?: unknown;
   columnAliases?: unknown;
+  queryConfig?: unknown;
+  derivedFields?: unknown;
+  metricsSpotlight?: unknown;
 };
 
 type SerializedReportTemplate = {
@@ -192,6 +266,9 @@ type SerializedReportTemplate = {
   metrics: string[];
   filters: unknown[];
   options: ReportTemplateOptions;
+  queryConfig: unknown | null;
+  derivedFields: ReportTemplateDerivedField[];
+  metricsSpotlight: ReportTemplateMetricSpotlight[];
   columnOrder: string[];
   columnAliases: Record<string, string>;
   owner: {
@@ -296,6 +373,98 @@ const toColumnAliasMap = (value: unknown): Record<string, string> => {
   return aliases;
 };
 
+const toDerivedFieldArray = (value: unknown): ReportTemplateDerivedField[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry, index): ReportTemplateDerivedField | null => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const candidate = entry as Record<string, unknown>;
+      const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
+      const expression = typeof candidate.expression === "string" ? candidate.expression.trim() : "";
+      if (!name || !expression) {
+        return null;
+      }
+      const id =
+        typeof candidate.id === "string" && candidate.id.trim().length > 0
+          ? candidate.id.trim()
+          : `derived-${index}`;
+      const kind =
+        candidate.kind === "aggregate" || candidate.kind === "row"
+          ? (candidate.kind as "aggregate" | "row")
+          : "row";
+      const metadata =
+        candidate.metadata && typeof candidate.metadata === "object" && !Array.isArray(candidate.metadata)
+          ? (candidate.metadata as Record<string, unknown>)
+          : {};
+      return {
+        id,
+        name,
+        expression,
+        kind,
+        scope: "template",
+        metadata,
+      };
+    })
+    .filter((entry): entry is ReportTemplateDerivedField => Boolean(entry));
+};
+
+const toMetricsSpotlightArray = (value: unknown): ReportTemplateMetricSpotlight[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const allowedComparisons = new Set(["previous", "wow", "mom", "yoy"]);
+  const allowedFormats = new Set(["number", "currency", "percentage"]);
+  return value
+    .map((entry): ReportTemplateMetricSpotlight | null => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const candidate = entry as Record<string, unknown>;
+      const metric = typeof candidate.metric === "string" ? candidate.metric.trim() : "";
+      if (!metric) {
+        return null;
+      }
+      const label =
+        typeof candidate.label === "string" && candidate.label.trim().length > 0
+          ? candidate.label.trim()
+          : metric;
+      const targetValue = candidate.target;
+      let target: number | undefined;
+      if (typeof targetValue === "number" && Number.isFinite(targetValue)) {
+        target = targetValue;
+      } else if (typeof targetValue === "string" && targetValue.trim().length > 0) {
+        const parsed = Number(targetValue);
+        if (Number.isFinite(parsed)) {
+          target = parsed;
+        }
+      }
+      const comparisonRaw =
+        typeof candidate.comparison === "string" ? candidate.comparison.trim().toLowerCase() : undefined;
+      const comparison =
+        comparisonRaw && allowedComparisons.has(comparisonRaw)
+          ? (comparisonRaw as "previous" | "wow" | "mom" | "yoy")
+          : undefined;
+      const formatRaw =
+        typeof candidate.format === "string" ? candidate.format.trim().toLowerCase() : undefined;
+      const format =
+        formatRaw && allowedFormats.has(formatRaw)
+          ? (formatRaw as "number" | "currency" | "percentage")
+          : undefined;
+      return {
+        metric,
+        label,
+        target,
+        comparison,
+        format,
+      };
+    })
+    .filter((entry): entry is ReportTemplateMetricSpotlight => Boolean(entry));
+};
+
 const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
   const optionsCandidate =
     input.options && typeof input.options === "object" && !Array.isArray(input.options)
@@ -332,6 +501,9 @@ const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
     visuals: toUnknownArray(input.visuals),
     metrics: toStringArray(input.metrics),
     filters: toUnknownArray(input.filters),
+    queryConfig: input.queryConfig && typeof input.queryConfig === "object" ? input.queryConfig : null,
+    derivedFields: toDerivedFieldArray(input.derivedFields),
+    metricsSpotlight: toMetricsSpotlightArray(input.metricsSpotlight),
     options,
   };
 };
@@ -372,6 +544,9 @@ const serializeReportTemplate = (
     metrics: Array.isArray(template.metrics) ? template.metrics : [],
     filters: Array.isArray(template.filters) ? template.filters : [],
     options: mergedOptions,
+    queryConfig: template.queryConfig ?? null,
+    derivedFields: Array.isArray(template.derivedFields) ? template.derivedFields : [],
+    metricsSpotlight: Array.isArray(template.metricsSpotlight) ? template.metricsSpotlight : [],
     columnOrder: [...mergedOptions.columnOrder],
     columnAliases: { ...mergedOptions.columnAliases },
     owner: {
@@ -627,134 +802,667 @@ export const listReportModels = (_req: Request, res: Response): void => {
   }
 };
 
+const normalizeSelectQueryConfig = (config: QueryConfig): ReportPreviewRequest => {
+  if (!config || !Array.isArray(config.models)) {
+    throw new PreviewQueryError("Invalid query payload.");
+  }
+
+  const selectEntries = Array.isArray(config.select) ? config.select : [];
+  if (selectEntries.length === 0) {
+    throw new PreviewQueryError("Select at least one field for your query.");
+  }
+
+  const groupedFields = new Map<string, Set<string>>();
+  selectEntries.forEach((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const { modelId, fieldId } = entry;
+    if (typeof modelId !== "string" || typeof fieldId !== "string") {
+      return;
+    }
+    if (!groupedFields.has(modelId)) {
+      groupedFields.set(modelId, new Set<string>());
+    }
+    groupedFields.get(modelId)!.add(fieldId);
+  });
+
+  if (groupedFields.size === 0) {
+    throw new PreviewQueryError("Unable to determine any valid fields to query.");
+  }
+
+  const dedupedModels = new Set(
+    config.models
+      .filter((modelId): modelId is string => typeof modelId === "string" && modelId.trim().length > 0)
+      .map((modelId) => modelId.trim()),
+  );
+
+  groupedFields.forEach((_fields, modelId) => {
+    if (typeof modelId === "string" && modelId.trim().length > 0) {
+      dedupedModels.add(modelId.trim());
+    }
+  });
+
+  if (dedupedModels.size === 0) {
+    throw new PreviewQueryError("At least one data model is required.");
+  }
+
+  const fields = Array.from(groupedFields.entries()).map(([modelId, fieldSet]) => ({
+    modelId,
+    fieldIds: Array.from(fieldSet),
+  }));
+
+  const joins = Array.isArray(config.joins) ? config.joins : [];
+
+  return {
+    models: Array.from(dedupedModels),
+    fields,
+    joins,
+    filters: [],
+    limit: config.limit,
+  };
+};
+
+const executePreviewQuery = async (
+  payload: ReportPreviewRequest,
+): Promise<{ result: ReportPreviewResponse; sql: string; meta: Record<string, unknown> }> => {
+  if (!payload || !Array.isArray(payload.models) || payload.models.length === 0) {
+    throw new PreviewQueryError("At least one data model is required.");
+  }
+
+  const requestedFields =
+    payload.fields?.filter((entry) => Array.isArray(entry.fieldIds) && entry.fieldIds.length > 0) ?? [];
+
+  if (requestedFields.length === 0) {
+    throw new PreviewQueryError("Select at least one field across your models.");
+  }
+
+  const aliasMap = new Map<string, string>();
+  payload.models.forEach((modelId, index) => {
+    aliasMap.set(modelId, `m${index}`);
+  });
+
+  const selectClauses: string[] = [];
+  const usedFields = new Set<string>();
+
+  requestedFields.forEach((entry) => {
+    const descriptor = ensureModelDescriptor(entry.modelId);
+    const alias = aliasMap.get(entry.modelId);
+    if (!descriptor || !alias) {
+      return;
+    }
+
+    entry.fieldIds.forEach((fieldId) => {
+      const field = descriptor.fields.find((candidate) => candidate.fieldName === fieldId);
+      if (!field) {
+        return;
+      }
+      const selectAlias = `${descriptor.id}__${field.fieldName}`;
+      if (usedFields.has(selectAlias)) {
+        return;
+      }
+      usedFields.add(selectAlias);
+      selectClauses.push(
+        `${alias}.${quoteIdentifier(field.columnName)} AS ${quoteIdentifier(selectAlias)}`,
+      );
+    });
+  });
+
+  if (selectClauses.length === 0) {
+    throw new PreviewQueryError("Unable to determine any valid fields to query.");
+  }
+
+  const baseModelId = payload.models[0];
+  const baseDescriptor = ensureModelDescriptor(baseModelId);
+  const baseAlias = aliasMap.get(baseModelId)!;
+  if (!baseDescriptor) {
+    throw new PreviewQueryError(`Model ${baseModelId} is not available.`);
+  }
+
+  const fromClause = buildFromClause(baseDescriptor, baseAlias);
+  const { clauses: joinClauses, joinedModels, unresolvedJoins } = buildJoinClauses(
+    payload.joins ?? [],
+    aliasMap,
+    baseModelId,
+  );
+
+  if (unresolvedJoins.length > 0) {
+    throw new PreviewQueryError("Some models could not be joined. Verify your join configuration.", 400, unresolvedJoins);
+  }
+
+  const unjoinedModels = payload.models.filter(
+    (modelId) => modelId !== baseModelId && !joinedModels.has(modelId),
+  );
+
+  if (unjoinedModels.length > 0) {
+    throw new PreviewQueryError("Some selected models are not connected to the base model.", 400, unjoinedModels);
+  }
+
+  const whereClauses = buildWhereClauses(payload.filters ?? []);
+
+  const limitValue = Math.min(Math.max(Number(payload.limit ?? 200) || 200, 1), 1000);
+
+  const sqlParts = [
+    `SELECT ${selectClauses.join(", ")}`,
+    `FROM ${fromClause}`,
+    ...joinClauses,
+    whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "",
+    `LIMIT :limit`,
+  ].filter(Boolean);
+
+  const sql = sqlParts.join(" ");
+
+  const rows = await sequelize.query<Record<string, unknown>>(sql, {
+    replacements: { limit: limitValue },
+    type: QueryTypes.SELECT,
+  });
+
+  const columns = rows.length > 0 ? Object.keys(rows[0]) : Array.from(usedFields);
+
+  const response: ReportPreviewResponse = {
+    rows,
+    columns,
+    sql,
+  };
+
+  return {
+    result: response,
+    sql,
+    meta: {
+      type: "preview",
+      models: payload.models,
+      selectedColumns: Array.from(usedFields),
+    },
+  };
+};
+
+const executeAggregatedQuery = async (
+  config: QueryConfig,
+): Promise<{ result: ReportPreviewResponse; sql: string; meta: Record<string, unknown> }> => {
+  if (!config || !Array.isArray(config.models) || config.models.length === 0) {
+    throw new PreviewQueryError("At least one data model is required.");
+  }
+
+  const metrics = (config.metrics ?? []).filter(
+    (metric): metric is QueryConfigMetric =>
+      metric !== null &&
+      typeof metric === "object" &&
+      typeof metric.modelId === "string" &&
+      metric.modelId.trim().length > 0 &&
+      typeof metric.fieldId === "string" &&
+      metric.fieldId.trim().length > 0 &&
+      typeof metric.aggregation === "string",
+  );
+
+  const dimensions = (config.dimensions ?? []).filter(
+    (dimension): dimension is QueryConfigDimension =>
+      dimension !== null &&
+      typeof dimension === "object" &&
+      typeof dimension.modelId === "string" &&
+      dimension.modelId.trim().length > 0 &&
+      typeof dimension.fieldId === "string" &&
+      dimension.fieldId.trim().length > 0,
+  );
+
+  if (metrics.length === 0) {
+    throw new PreviewQueryError("Configure at least one metric for aggregated queries.");
+  }
+
+  const aliasMap = new Map<string, string>();
+  config.models.forEach((modelId, index) => {
+    aliasMap.set(modelId, `m${index}`);
+  });
+
+  const allowedBuckets = new Set(["hour", "day", "week", "month", "quarter", "year"]);
+
+  const dimensionSelectClauses: string[] = [];
+  const groupByClauses: string[] = [];
+  const resolvedDimensions: string[] = [];
+
+  dimensions.forEach((dimension) => {
+    const modelId = dimension.modelId.trim();
+    const descriptor = ensureModelDescriptor(modelId);
+    const modelAlias = aliasMap.get(modelId);
+    if (!descriptor || !modelAlias) {
+      throw new PreviewQueryError(`Model ${modelId} is not available.`);
+    }
+    const field = descriptor.fields.find((candidate) => candidate.fieldName === dimension.fieldId);
+    if (!field) {
+      throw new PreviewQueryError(
+        `Field ${dimension.fieldId} is not available on model ${modelId}.`,
+      );
+    }
+    const baseExpression = `${modelAlias}.${quoteIdentifier(field.columnName)}`;
+    let columnExpression = baseExpression;
+    if (dimension.bucket) {
+      const bucketKey = dimension.bucket.toLowerCase();
+      if (!allowedBuckets.has(bucketKey)) {
+        throw new PreviewQueryError(`Unsupported time bucket: ${dimension.bucket}`);
+      }
+      columnExpression = `date_trunc('${bucketKey}', ${baseExpression})`;
+    }
+    const alias =
+      dimension.alias && dimension.alias.trim().length > 0
+        ? dimension.alias.trim()
+        : dimension.bucket
+        ? `${descriptor.id}__${field.fieldName}_${dimension.bucket}`
+        : `${descriptor.id}__${field.fieldName}`;
+    dimensionSelectClauses.push(`${columnExpression} AS ${quoteIdentifier(alias)}`);
+    groupByClauses.push(columnExpression);
+    resolvedDimensions.push(alias);
+  });
+
+  const metricSelectClauses: string[] = [];
+  const resolvedMetrics: string[] = [];
+
+  const aggregationMap: Record<QueryConfigMetric["aggregation"], string> = {
+    sum: "SUM",
+    avg: "AVG",
+    min: "MIN",
+    max: "MAX",
+    count: "COUNT",
+    count_distinct: "COUNT",
+  };
+
+  metrics.forEach((metric, index) => {
+    const modelId = metric.modelId.trim();
+    const descriptor = ensureModelDescriptor(modelId);
+    const modelAlias = aliasMap.get(modelId);
+    if (!descriptor || !modelAlias) {
+      throw new PreviewQueryError(`Model ${modelId} is not available.`);
+    }
+    const field = descriptor.fields.find((candidate) => candidate.fieldName === metric.fieldId);
+    if (!field) {
+      throw new PreviewQueryError(
+        `Field ${metric.fieldId} is not available on model ${modelId}.`,
+      );
+    }
+    const baseExpression = `${modelAlias}.${quoteIdentifier(field.columnName)}`;
+    const aggregationKey = metric.aggregation;
+    const sqlAggregation = aggregationMap[aggregationKey];
+    if (!sqlAggregation) {
+      throw new PreviewQueryError(`Unsupported aggregation: ${aggregationKey}`);
+    }
+    const alias =
+      metric.alias && metric.alias.trim().length > 0
+        ? metric.alias.trim()
+        : `${descriptor.id}__${field.fieldName}_${aggregationKey}_${index}`;
+    const aggregationExpression =
+      aggregationKey === "count_distinct"
+        ? `${sqlAggregation}(DISTINCT ${baseExpression})`
+        : `${sqlAggregation}(${baseExpression})`;
+    metricSelectClauses.push(`${aggregationExpression} AS ${quoteIdentifier(alias)}`);
+    resolvedMetrics.push(alias);
+  });
+
+  const selectClauses = [...dimensionSelectClauses, ...metricSelectClauses];
+
+  const baseModelId = config.models[0];
+  const baseDescriptor = ensureModelDescriptor(baseModelId);
+  const baseAlias = aliasMap.get(baseModelId)!;
+  if (!baseDescriptor) {
+    throw new PreviewQueryError(`Model ${baseModelId} is not available.`);
+  }
+
+  const fromClause = buildFromClause(baseDescriptor, baseAlias);
+  const { clauses: joinClauses, joinedModels, unresolvedJoins } = buildJoinClauses(
+    config.joins ?? [],
+    aliasMap,
+    baseModelId,
+  );
+
+  if (unresolvedJoins.length > 0) {
+    throw new PreviewQueryError("Some models could not be joined. Verify your join configuration.", 400, unresolvedJoins);
+  }
+
+  const unjoinedModels = config.models.filter(
+    (modelId) => modelId !== baseModelId && !joinedModels.has(modelId),
+  );
+  if (unjoinedModels.length > 0) {
+    throw new PreviewQueryError("Some selected models are not connected to the base model.", 400, unjoinedModels);
+  }
+
+  const filterFragments: string[] = [];
+  const replacements: Record<string, unknown> = {};
+
+  (config.filters ?? []).forEach((filter, index) => {
+    if (
+      !filter ||
+      typeof filter.modelId !== "string" ||
+      typeof filter.fieldId !== "string" ||
+      typeof filter.operator !== "string"
+    ) {
+      return;
+    }
+    const descriptor = ensureModelDescriptor(filter.modelId);
+    const modelAlias = aliasMap.get(filter.modelId);
+    if (!descriptor || !modelAlias) {
+      throw new PreviewQueryError(`Model ${filter.modelId} is not available for filters.`);
+    }
+    const field = descriptor.fields.find((candidate) => candidate.fieldName === filter.fieldId);
+    if (!field) {
+      throw new PreviewQueryError(
+        `Field ${filter.fieldId} is not available on model ${filter.modelId}.`,
+      );
+    }
+
+    const column = `${modelAlias}.${quoteIdentifier(field.columnName)}`;
+    const paramKey = `filter_${index}`;
+    let fragment: string | null = null;
+    const value = filter.value;
+
+    switch (filter.operator) {
+      case "eq":
+        fragment = `${column} = :${paramKey}`;
+        break;
+      case "neq":
+        fragment = `${column} <> :${paramKey}`;
+        break;
+      case "gt":
+        fragment = `${column} > :${paramKey}`;
+        break;
+      case "gte":
+        fragment = `${column} >= :${paramKey}`;
+        break;
+      case "lt":
+        fragment = `${column} < :${paramKey}`;
+        break;
+      case "lte":
+        fragment = `${column} <= :${paramKey}`;
+        break;
+      case "in": {
+        if (!Array.isArray(value) || value.length === 0) {
+          throw new PreviewQueryError("Filter 'in' requires a non-empty array value.");
+        }
+        const listKey = `${paramKey}_list`;
+        fragment = `${column} IN (:${listKey})`;
+        replacements[listKey] = value;
+        break;
+      }
+      case "not_in": {
+        if (!Array.isArray(value) || value.length === 0) {
+          throw new PreviewQueryError("Filter 'not_in' requires a non-empty array value.");
+        }
+        const listKey = `${paramKey}_list`;
+        fragment = `${column} NOT IN (:${listKey})`;
+        replacements[listKey] = value;
+        break;
+      }
+      case "between": {
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          throw new PreviewQueryError("Filter 'between' requires an object value with from/to.");
+        }
+        const from = (value as { from?: string | number }).from;
+        const to = (value as { to?: string | number }).to;
+        if (from === undefined || to === undefined) {
+          throw new PreviewQueryError("Filter 'between' requires both from and to values.");
+        }
+        const fromKey = `${paramKey}_from`;
+        const toKey = `${paramKey}_to`;
+        fragment = `${column} BETWEEN :${fromKey} AND :${toKey}`;
+        replacements[fromKey] = from;
+        replacements[toKey] = to;
+        break;
+      }
+      default:
+        throw new PreviewQueryError(`Unsupported filter operator: ${filter.operator}`);
+    }
+
+    if (
+      filter.operator === "eq" ||
+      filter.operator === "neq" ||
+      filter.operator === "gt" ||
+      filter.operator === "gte" ||
+      filter.operator === "lt" ||
+      filter.operator === "lte"
+    ) {
+      replacements[paramKey] = value;
+    }
+
+    if (fragment) {
+      filterFragments.push(fragment);
+    }
+  });
+
+  const limitValue = Math.min(Math.max(Number(config.limit ?? 500) || 500, 1), 10000);
+  replacements.limit = limitValue;
+
+  const sqlParts = [
+    `SELECT ${selectClauses.join(", ")}`,
+    `FROM ${fromClause}`,
+    ...joinClauses,
+    filterFragments.length > 0 ? `WHERE ${filterFragments.join(" AND ")}` : "",
+    resolvedDimensions.length > 0 ? `GROUP BY ${groupByClauses.join(", ")}` : "",
+  ];
+
+  const orderByParts: string[] = [];
+  (config.orderBy ?? []).forEach((clause) => {
+    if (!clause || typeof clause.alias !== "string") {
+      return;
+    }
+    const direction = clause.direction && clause.direction.toLowerCase() === "desc" ? "DESC" : "ASC";
+    const alias = clause.alias.trim();
+    if (resolvedMetrics.includes(alias) || resolvedDimensions.includes(alias)) {
+      orderByParts.push(`${quoteIdentifier(alias)} ${direction}`);
+    }
+  });
+
+  if (orderByParts.length > 0) {
+    sqlParts.push(`ORDER BY ${orderByParts.join(", ")}`);
+  }
+
+  sqlParts.push("LIMIT :limit");
+
+  const sql = sqlParts.filter(Boolean).join(" ");
+
+  const rows = await sequelize.query<Record<string, unknown>>(sql, {
+    replacements,
+    type: QueryTypes.SELECT,
+  });
+
+  const columns = [...resolvedDimensions, ...resolvedMetrics];
+
+  return {
+    result: {
+      rows,
+      columns,
+      sql,
+    },
+    sql,
+    meta: {
+      type: "aggregated",
+      models: config.models,
+      metrics: resolvedMetrics,
+      dimensions: resolvedDimensions,
+      filters: config.filters ?? [],
+      limit: config.limit ?? null,
+    },
+  };
+};
+
 export const runReportPreview = async (
-  req: Request,
+  req: AuthenticatedRequest,
   res: Response,
 ): Promise<void> => {
   let lastSql = "";
   try {
+    ensureReportingAccess(req);
     const payload = req.body as ReportPreviewRequest;
-
-    if (!payload || !Array.isArray(payload.models) || payload.models.length === 0) {
-      res.status(400).json({ message: "At least one data model is required." });
-      return;
-    }
-
-    const requestedFields =
-      payload.fields?.filter((entry) => Array.isArray(entry.fieldIds) && entry.fieldIds.length > 0) ?? [];
-
-    if (requestedFields.length === 0) {
-      res.status(400).json({ message: "Select at least one field across your models." });
-      return;
-    }
-
-    const aliasMap = new Map<string, string>();
-    payload.models.forEach((modelId, index) => {
-      aliasMap.set(modelId, `m${index}`);
-    });
-
-    const selectClauses: string[] = [];
-    const usedFields = new Set<string>();
-
-    requestedFields.forEach((entry) => {
-      const descriptor = ensureModelDescriptor(entry.modelId);
-      const alias = aliasMap.get(entry.modelId);
-      if (!descriptor || !alias) {
-        return;
-      }
-
-      entry.fieldIds.forEach((fieldId) => {
-        const field = descriptor.fields.find((candidate) => candidate.fieldName === fieldId);
-        if (!field) {
-          return;
-        }
-        const selectAlias = `${descriptor.id}__${field.fieldName}`;
-        if (usedFields.has(selectAlias)) {
-          return;
-        }
-        usedFields.add(selectAlias);
-        selectClauses.push(
-          `${alias}.${quoteIdentifier(field.columnName)} AS ${quoteIdentifier(selectAlias)}`,
-        );
-      });
-    });
-
-    if (selectClauses.length === 0) {
-      res.status(400).json({ message: "Unable to determine any valid fields to query." });
-      return;
-    }
-
-    const baseModelId = payload.models[0];
-    const baseDescriptor = ensureModelDescriptor(baseModelId);
-    const baseAlias = aliasMap.get(baseModelId)!;
-    if (!baseDescriptor) {
-      res.status(400).json({ message: `Model ${baseModelId} is not available.` });
-      return;
-    }
-
-    const fromClause = buildFromClause(baseDescriptor, baseAlias);
-    const { clauses: joinClauses, joinedModels, unresolvedJoins } = buildJoinClauses(
-      payload.joins ?? [],
-      aliasMap,
-      baseModelId,
-    );
-
-    if (unresolvedJoins.length > 0) {
-      res.status(400).json({
-        message: "Some models could not be joined. Verify your join configuration.",
-        details: unresolvedJoins,
-      });
-      return;
-    }
-
-    const unjoinedModels = payload.models.filter(
-      (modelId) => modelId !== baseModelId && !joinedModels.has(modelId),
-    );
-
-    if (unjoinedModels.length > 0) {
-      res.status(400).json({
-        message: "Some selected models are not connected to the base model.",
-        details: unjoinedModels,
-      });
-      return;
-    }
-
-    const whereClauses = buildWhereClauses(payload.filters ?? []);
-
-    const limitValue = Math.min(Math.max(Number(payload.limit ?? 200) || 200, 1), 1000);
-
-    const sqlParts = [
-      `SELECT ${selectClauses.join(", ")}`,
-      `FROM ${fromClause}`,
-      ...joinClauses,
-      whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "",
-      `LIMIT :limit`,
-    ].filter(Boolean);
-
-    const sql = sqlParts.join(" ");
+    const { result, sql, meta } = await executePreviewQuery(payload);
     lastSql = sql;
-
-    const rows = await sequelize.query<Record<string, unknown>>(sql, {
-      replacements: { limit: limitValue },
-      type: QueryTypes.SELECT,
+    res.status(200).json({
+      ...result,
+      meta: {
+        ...meta,
+        executedAt: new Date().toISOString(),
+      },
     });
-
-    const columns = rows.length > 0 ? Object.keys(rows[0]) : Array.from(usedFields);
-
-    const response: ReportPreviewResponse = {
-      rows,
-      columns,
-      sql,
-    };
-
-    res.status(200).json(response);
   } catch (error) {
+    if (error instanceof PreviewQueryError) {
+      res
+        .status(error.status)
+        .json(error.details ? { message: error.message, details: error.details } : { message: error.message });
+      return;
+    }
     console.error("Failed to run report preview", error, lastSql ? `SQL: ${lastSql}` : "");
     const payload =
       process.env.NODE_ENV !== "production" && error instanceof Error
         ? { message: "Failed to run report preview.", details: error.message }
         : { message: "Failed to run report preview." };
     res.status(500).json(payload);
+  }
+};
+
+export const executeReportQuery = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  let lastSql = "";
+  try {
+    ensureReportingAccess(req);
+    const config = req.body as QueryConfig;
+    const templateId = config.options?.templateId ?? null;
+    const cacheTtlSeconds = config.options?.cacheTtlSeconds ?? undefined;
+    const hash = computeQueryHash(config);
+
+    const cached = await getCachedQueryResult(hash);
+    if (cached) {
+      res.status(200).json({
+        rows: cached.rows,
+        columns: cached.columns,
+        sql: cached.sql,
+        meta: {
+          ...cached.meta,
+          hash,
+        },
+      });
+      return;
+    }
+
+    const executeQuery = async (): Promise<QueryExecutionResult> => {
+      if ((config.metrics?.length ?? 0) > 0 || (config.dimensions?.length ?? 0) > 0) {
+        const aggregated = await executeAggregatedQuery(config);
+        lastSql = aggregated.sql;
+        return {
+          rows: aggregated.result.rows,
+          columns: aggregated.result.columns,
+          sql: aggregated.sql,
+          meta: {
+            ...aggregated.meta,
+            models: config.models,
+            metrics: (config.metrics ?? []).map(
+              (metric) => metric.alias ?? `${metric.modelId}.${metric.fieldId}`,
+            ),
+            dimensions: (config.dimensions ?? []).map(
+              (dimension) => dimension.alias ?? `${dimension.modelId}.${dimension.fieldId}`,
+            ),
+            limit: config.limit ?? null,
+          },
+        };
+      }
+      const previewPayload = normalizeSelectQueryConfig(config);
+      const preview = await executePreviewQuery(previewPayload);
+      lastSql = preview.sql;
+      return {
+        rows: preview.result.rows,
+        columns: preview.result.columns,
+        sql: preview.sql,
+        meta: {
+          ...preview.meta,
+          models: config.models,
+          metrics: [],
+          dimensions: preview.meta.selectedColumns ?? [],
+          limit: config.limit ?? null,
+        },
+      };
+    };
+
+    const shouldAllowAsync = Boolean(config.options?.allowAsync);
+    const forceAsync = Boolean(config.options?.forceAsync);
+    const metricsCount = config.metrics?.length ?? 0;
+    const plannedLimit = config.limit ?? 0;
+    const shouldProcessAsync =
+      shouldAllowAsync &&
+      (forceAsync || metricsCount > 2 || plannedLimit > 5000 || (config.dimensions?.length ?? 0) > 3);
+
+    if (shouldProcessAsync) {
+      const job = await enqueueQueryJob(hash, templateId, executeQuery, cacheTtlSeconds);
+      res.status(202).json({
+        jobId: job.id,
+        hash,
+        status: job.status,
+        queuedAt: job.createdAt?.toISOString() ?? new Date().toISOString(),
+      });
+      return;
+    }
+
+    const execution = await executeQuery();
+    await storeQueryCacheEntry(hash, templateId, execution, cacheTtlSeconds);
+
+    res.status(200).json({
+      rows: execution.rows,
+      columns: execution.columns,
+      sql: execution.sql,
+      meta: {
+        ...execution.meta,
+        hash,
+        cached: false,
+        executedAt: new Date().toISOString(),
+      },
+    });
+  } catch (error) {
+    if (error instanceof PreviewQueryError) {
+      res
+        .status(error.status)
+        .json(error.details ? { message: error.message, details: error.details } : { message: error.message });
+      return;
+    }
+    console.error("Failed to execute report query", error, lastSql ? `SQL: ${lastSql}` : "");
+    const payload =
+      process.env.NODE_ENV !== "production" && error instanceof Error
+        ? { message: "Failed to execute report query.", details: error.message }
+        : { message: "Failed to execute report query." };
+    res.status(500).json(payload);
+  }
+};
+
+export const getReportQueryJobStatus = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { jobId } = req.params;
+    if (!jobId) {
+      res.status(400).json({ message: "Job id is required." });
+      return;
+    }
+    const job = await getAsyncJobStatus(jobId);
+    if (!job) {
+      res.status(404).json({ message: "Job not found." });
+      return;
+    }
+
+    if (job.status === "completed" && job.result) {
+      const result = job.result as QueryExecutionResult;
+      res.status(200).json({
+        rows: result.rows,
+        columns: result.columns,
+        sql: result.sql,
+        meta: {
+          ...(result.meta ?? {}),
+          hash: job.hash ?? undefined,
+          cached: false,
+          executedAt: job.finishedAt?.toISOString() ?? new Date().toISOString(),
+        },
+      });
+      return;
+    }
+
+    res.status(200).json({
+      jobId: job.id,
+      status: job.status,
+      hash: job.hash,
+      startedAt: job.startedAt?.toISOString() ?? null,
+      finishedAt: job.finishedAt?.toISOString() ?? null,
+      error: job.error ?? null,
+    });
+  } catch (error) {
+    console.error("Failed to fetch query job status", error);
+    res.status(500).json({ message: "Failed to fetch query job status." });
   }
 };
 
@@ -802,6 +1510,9 @@ export const createReportTemplate = async (req: AuthenticatedRequest, res: Respo
       visuals: payload.visuals,
       metrics: payload.metrics,
       filters: payload.filters,
+      queryConfig: payload.queryConfig,
+      derivedFields: payload.derivedFields,
+      metricsSpotlight: payload.metricsSpotlight,
       options: payload.options,
     });
 
@@ -874,6 +1585,9 @@ export const updateReportTemplate = async (req: AuthenticatedRequest, res: Respo
     template.visuals = payload.visuals;
     template.metrics = payload.metrics;
     template.filters = payload.filters;
+    template.queryConfig = payload.queryConfig;
+    template.derivedFields = payload.derivedFields;
+    template.metricsSpotlight = payload.metricsSpotlight;
     template.options = payload.options;
 
     await template.save();

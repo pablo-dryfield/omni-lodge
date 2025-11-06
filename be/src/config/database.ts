@@ -42,6 +42,12 @@ import AuditLog from "../models/AuditLog.js";
 import ShiftRole from "../models/ShiftRole.js";
 import UserShiftRole from "../models/UserShiftRole.js";
 import ReportTemplate from "../models/ReportTemplate.js";
+import ReportSchedule from "../models/ReportSchedule.js";
+import DerivedFieldDefinition from "../models/DerivedFieldDefinition.js";
+import ReportQueryCacheEntry from "../models/ReportQueryCacheEntry.js";
+import ReportDashboard from "../models/ReportDashboard.js";
+import ReportDashboardCard from "../models/ReportDashboardCard.js";
+import ReportAsyncJob from "../models/ReportAsyncJob.js";
 import {
   FinanceAccount,
   FinanceAuditLog,
@@ -113,6 +119,12 @@ const sequelize = new Sequelize({
     ShiftAssignment,
     SwapRequest,
     ReportTemplate,
+    ReportSchedule,
+    DerivedFieldDefinition,
+    ReportQueryCacheEntry,
+    ReportDashboard,
+    ReportDashboardCard,
+    ReportAsyncJob,
     Export,
     Notification,
     AuditLog,

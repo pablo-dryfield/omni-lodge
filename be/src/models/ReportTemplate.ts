@@ -24,6 +24,23 @@ export type ReportTemplateOptions = {
   columnAliases: Record<string, string>;
 };
 
+export type ReportTemplateDerivedField = {
+  id: string;
+  name: string;
+  expression: string;
+  kind: "row" | "aggregate";
+  scope: "template";
+  metadata?: Record<string, unknown>;
+};
+
+export type ReportTemplateMetricSpotlight = {
+  metric: string;
+  label: string;
+  target?: number;
+  comparison?: "previous" | "wow" | "mom" | "yoy";
+  format?: "number" | "currency" | "percentage";
+};
+
 @Table({
   tableName: 'report_templates',
   modelName: 'ReportTemplate',
@@ -91,6 +108,20 @@ export default class ReportTemplate extends Model {
   @Default({ autoDistribution: true, notifyTeam: true, columnOrder: [], columnAliases: {} })
   @Column({ type: DataType.JSONB })
   declare options: ReportTemplateOptions;
+
+  @AllowNull(true)
+  @Column({ field: 'query_config', type: DataType.JSONB })
+  declare queryConfig: unknown | null;
+
+  @AllowNull(false)
+  @Default([])
+  @Column({ field: 'derived_fields', type: DataType.JSONB })
+  declare derivedFields: ReportTemplateDerivedField[];
+
+  @AllowNull(false)
+  @Default([])
+  @Column({ field: 'metrics_spotlight', type: DataType.JSONB })
+  declare metricsSpotlight: ReportTemplateMetricSpotlight[];
 
   @BelongsTo(() => User, { foreignKey: 'userId', as: 'owner' })
   declare owner?: NonAttribute<User | null>;
