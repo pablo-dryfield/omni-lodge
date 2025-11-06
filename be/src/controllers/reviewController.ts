@@ -6,7 +6,9 @@ import { scrapeTripAdvisor } from '../scrapers/tripAdvisorScraper.js';
 import axios from 'axios';
 import dotenv from 'dotenv';
 
-dotenv.config();
+const environment = (process.env.NODE_ENV || 'development').trim();
+const envFile = environment === 'production' ? '.env.prod' : '.env.dev';
+dotenv.config({ path: envFile });
 
 const {
   GOOGLE_CLIENT_ID,

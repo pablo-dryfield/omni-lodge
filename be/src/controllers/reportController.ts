@@ -159,6 +159,8 @@ type ReportPreviewResponse = {
 type TemplateOptionsInput = {
   autoDistribution?: unknown;
   notifyTeam?: unknown;
+  columnOrder?: unknown;
+  columnAliases?: unknown;
 };
 
 type TemplatePayloadInput = {
@@ -173,6 +175,8 @@ type TemplatePayloadInput = {
   metrics?: unknown;
   filters?: unknown;
   options?: TemplateOptionsInput | null;
+  columnOrder?: unknown;
+  columnAliases?: unknown;
 };
 
 type SerializedReportTemplate = {
@@ -188,6 +192,8 @@ type SerializedReportTemplate = {
   metrics: string[];
   filters: unknown[];
   options: ReportTemplateOptions;
+  columnOrder: string[];
+  columnAliases: Record<string, string>;
   owner: {
     id: number | null;
     name: string;
@@ -199,6 +205,8 @@ type SerializedReportTemplate = {
 const DEFAULT_TEMPLATE_OPTIONS: ReportTemplateOptions = {
   autoDistribution: true,
   notifyTeam: true,
+  columnOrder: [],
+  columnAliases: {},
 };
 
 const modelDescriptorCache = new Map<string, ReportModelDescriptor>();
@@ -252,11 +260,53 @@ const toFieldSelections = (value: unknown): ReportTemplateFieldSelection[] => {
 
 const toUnknownArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 
+const toColumnOrder = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  value.forEach((entry) => {
+    if (typeof entry === "string") {
+      const trimmed = entry.trim();
+      if (trimmed.length > 0 && !seen.has(trimmed)) {
+        seen.add(trimmed);
+        ordered.push(trimmed);
+      }
+    }
+  });
+  return ordered;
+};
+
+const toColumnAliasMap = (value: unknown): Record<string, string> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  const aliases: Record<string, string> = {};
+  entries.forEach(([key, rawValue]) => {
+    if (typeof key === "string" && typeof rawValue === "string") {
+      const trimmedKey = key.trim();
+      const trimmedValue = rawValue.trim();
+      if (trimmedKey.length > 0 && trimmedValue.length > 0) {
+        aliases[trimmedKey] = trimmedValue;
+      }
+    }
+  });
+  return aliases;
+};
+
 const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
   const optionsCandidate =
     input.options && typeof input.options === "object" && !Array.isArray(input.options)
       ? (input.options as TemplateOptionsInput)
       : undefined;
+  const columnOrder = toColumnOrder(
+    input.columnOrder !== undefined ? input.columnOrder : optionsCandidate?.columnOrder,
+  );
+  const columnAliases = toColumnAliasMap(
+    input.columnAliases !== undefined ? input.columnAliases : optionsCandidate?.columnAliases,
+  );
 
   const options: ReportTemplateOptions = {
     autoDistribution:
@@ -267,6 +317,8 @@ const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
       typeof optionsCandidate?.notifyTeam === "boolean"
         ? optionsCandidate.notifyTeam
         : DEFAULT_TEMPLATE_OPTIONS.notifyTeam,
+    columnOrder,
+    columnAliases,
   };
 
   return {
@@ -289,6 +341,24 @@ const serializeReportTemplate = (
 ): SerializedReportTemplate => {
   const owner = template.owner ?? null;
   const ownerName = owner ? `${owner.firstName} ${owner.lastName}`.trim() : "Shared";
+  const rawOptions = template.options ?? DEFAULT_TEMPLATE_OPTIONS;
+  const mergedOptions: ReportTemplateOptions = {
+    autoDistribution:
+      typeof rawOptions.autoDistribution === "boolean"
+        ? rawOptions.autoDistribution
+        : DEFAULT_TEMPLATE_OPTIONS.autoDistribution,
+    notifyTeam:
+      typeof rawOptions.notifyTeam === "boolean"
+        ? rawOptions.notifyTeam
+        : DEFAULT_TEMPLATE_OPTIONS.notifyTeam,
+    columnOrder: toColumnOrder(
+      Array.isArray(rawOptions.columnOrder) ? rawOptions.columnOrder : DEFAULT_TEMPLATE_OPTIONS.columnOrder,
+    ),
+    columnAliases: toColumnAliasMap(
+      rawOptions.columnAliases !== undefined ? rawOptions.columnAliases : DEFAULT_TEMPLATE_OPTIONS.columnAliases,
+    ),
+  };
+
   return {
     id: template.id,
     name: template.name,
@@ -301,7 +371,9 @@ const serializeReportTemplate = (
     visuals: Array.isArray(template.visuals) ? template.visuals : [],
     metrics: Array.isArray(template.metrics) ? template.metrics : [],
     filters: Array.isArray(template.filters) ? template.filters : [],
-    options: template.options ?? DEFAULT_TEMPLATE_OPTIONS,
+    options: mergedOptions,
+    columnOrder: [...mergedOptions.columnOrder],
+    columnAliases: { ...mergedOptions.columnAliases },
     owner: {
       id: template.userId ?? null,
       name: ownerName.length > 0 ? ownerName : "Shared",
