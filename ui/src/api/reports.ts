@@ -115,6 +115,35 @@ export type ReportQueryJobResponse = {
 
 export type ReportQueryResult = ReportQuerySuccessResponse | ReportQueryJobResponse;
 
+export type TemplateScheduleDeliveryTarget = Record<string, unknown>;
+
+export type TemplateScheduleDto = {
+  id: string;
+  templateId: string;
+  cadence: string;
+  timezone: string;
+  deliveryTargets: TemplateScheduleDeliveryTarget[];
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  status: string | null;
+  meta: Record<string, unknown>;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export type TemplateScheduleListResponse = {
+  schedules: TemplateScheduleDto[];
+};
+
+export type TemplateSchedulePayload = {
+  cadence: string;
+  timezone?: string;
+  deliveryTargets?: TemplateScheduleDeliveryTarget[];
+  status?: string;
+  meta?: Record<string, unknown>;
+  nextRunAt?: string | null;
+};
+
 export type DerivedFieldDefinitionDto = {
   id: string;
   name: string;
@@ -229,6 +258,58 @@ export const getReportQueryJob = async (jobId: string): Promise<ReportQueryResul
   const response = await axiosInstance.get(`/reports/query/jobs/${jobId}`);
   return response.data as ReportQueryResult;
 };
+
+export const useTemplateSchedules = (templateId?: string) =>
+  useQuery<TemplateScheduleListResponse>({
+    queryKey: ["reports", "templates", templateId, "schedules"],
+    enabled: Boolean(templateId),
+    queryFn: async () => {
+      const response = await axiosInstance.get(`/reports/templates/${templateId}/schedules`);
+      return response.data as TemplateScheduleListResponse;
+    },
+  });
+
+export const useCreateTemplateSchedule = () =>
+  useMutation<
+    TemplateScheduleDto,
+    AxiosError<{ message?: string }>,
+    { templateId: string; payload: TemplateSchedulePayload }
+  >({
+    mutationFn: async ({ templateId, payload }) => {
+      const response = await axiosInstance.post(`/reports/templates/${templateId}/schedules`, payload);
+      return (response.data as { schedule: TemplateScheduleDto }).schedule;
+    },
+  });
+
+export const useUpdateTemplateSchedule = () =>
+  useMutation<
+    TemplateScheduleDto,
+    AxiosError<{ message?: string }>,
+    { templateId: string; scheduleId: string; payload: Partial<TemplateSchedulePayload> }
+  >({
+    mutationFn: async ({ templateId, scheduleId, payload }) => {
+      const response = await axiosInstance.put(
+        `/reports/templates/${templateId}/schedules/${scheduleId}`,
+        payload,
+      );
+      return (response.data as { schedule: TemplateScheduleDto }).schedule;
+    },
+  });
+
+export const useDeleteTemplateSchedule = () =>
+  useMutation<void, AxiosError<{ message?: string }>, { templateId: string; scheduleId: string }>({
+    mutationFn: async ({ templateId, scheduleId }) => {
+      await axiosInstance.delete(`/reports/templates/${templateId}/schedules/${scheduleId}`);
+    },
+  });
+
+export const useExportReportTemplate = () =>
+  useMutation<unknown, AxiosError<{ message?: string }>, string>({
+    mutationFn: async (templateId: string) => {
+      const response = await axiosInstance.post(`/reports/templates/${templateId}/export`, {});
+      return response.data;
+    },
+  });
 
 export type ReportTemplateOptionsDto = {
   autoDistribution: boolean;
