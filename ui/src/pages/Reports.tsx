@@ -666,31 +666,38 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
 
   const visuals: VisualDefinition[] = Array.isArray(template.visuals)
     ? template.visuals
-        .map((entry, index) => {
+        .map((entry, index): VisualDefinition | null => {
           if (!entry || typeof entry !== "object") {
-            return undefined;
+            return null;
           }
           const candidate = entry as Record<string, unknown>;
           const idCandidate = typeof candidate.id === "string" ? candidate.id.trim() : "";
           const nameCandidate = typeof candidate.name === "string" ? candidate.name.trim() : "";
-          const metricCandidate = typeof candidate.metric === "string" ? candidate.metric : "";
-          const dimensionCandidate = typeof candidate.dimension === "string" ? candidate.dimension : "";
+          const metricCandidate =
+            typeof candidate.metric === "string" ? candidate.metric.trim() : "";
+          const dimensionCandidate =
+            typeof candidate.dimension === "string" ? candidate.dimension.trim() : "";
           const comparisonCandidate =
             typeof candidate.comparison === "string" && candidate.comparison.trim().length > 0
               ? candidate.comparison.trim()
               : undefined;
           const typeCandidate = candidate.type === "area" ? "area" : "line";
 
-          return {
-            id: (idCandidate.length > 0 ? idCandidate : `visual-${index}`) as string,
-            name: (nameCandidate.length > 0 ? nameCandidate : `Visual ${index + 1}`) as string,
+          const visual: VisualDefinition = {
+            id: idCandidate.length > 0 ? idCandidate : `visual-${index}`,
+            name: nameCandidate.length > 0 ? nameCandidate : `Visual ${index + 1}`,
             type: typeCandidate,
             metric: metricCandidate,
             dimension: dimensionCandidate,
-            comparison: comparisonCandidate,
           };
+
+          if (comparisonCandidate) {
+            visual.comparison = comparisonCandidate;
+          }
+
+          return visual;
         })
-        .filter((visual): visual is VisualDefinition => Boolean(visual))
+        .filter((visual): visual is VisualDefinition => visual !== null)
     : [];
 
   return {
@@ -1272,9 +1279,20 @@ const Reports = (props: GenericPageProps) => {
           visual.comparison !== metricAlias
             ? visual.comparison
             : undefined;
-        const type = visual.type === "area" ? "area" : "line";
+        const type: VisualDefinition["type"] = visual.type === "area" ? "area" : "line";
         const name = visual.name && visual.name.trim().length > 0 ? visual.name : `Visual ${index + 1}`;
         const id = visual.id && visual.id.trim().length > 0 ? visual.id : `visual-${index}`;
+
+        const nextVisual: VisualDefinition = {
+          id,
+          name,
+          type,
+          metric: metricAlias,
+          dimension: dimensionAlias,
+        };
+        if (comparisonAlias) {
+          nextVisual.comparison = comparisonAlias;
+        }
 
         if (
           metricAlias !== visual.metric ||
@@ -1287,14 +1305,7 @@ const Reports = (props: GenericPageProps) => {
           visualsChanged = true;
         }
 
-        return {
-          id,
-          name,
-          type,
-          metric: metricAlias,
-          dimension: dimensionAlias,
-          comparison: comparisonAlias,
-        };
+        return nextVisual;
       });
 
       if (!metricsChanged && !visualsChanged) {
