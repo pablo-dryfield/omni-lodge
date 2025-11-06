@@ -74,18 +74,6 @@ import {
 } from "../api/reports";
 
 const PAGE_SLUG = PAGE_SLUGS.reports;
-type SharedMetricKey =
-  | "revenue"
-  | "bookings"
-  | "adr"
-  | "occupancy"
-  | "addOnRevenue"
-  | "cancellations"
-  | "guests"
-  | "nps";
-
-type DimensionKey = "month" | "channel";
-
 type DataField = {
   id: string;
   label: string;
@@ -159,8 +147,8 @@ type VisualDefinition = {
   name: string;
   type: "line" | "area";
   metric: string;
-  dimension: DimensionKey;
-  comparison?: SharedMetricKey;
+  dimension: string;
+  comparison?: string;
 };
 
 type FilterValueKind = "string" | "number" | "date" | "boolean";
@@ -219,16 +207,6 @@ type ReportTemplate = {
   columnOrder: string[];
   columnAliases: Record<string, string>;
 };
-
-interface MetricDefinition {
-  value: string;
-  label: string;
-  primaryKey: SharedMetricKey;
-  secondaryKey?: SharedMetricKey;
-  secondaryLabel?: string;
-  format: (value: number) => string;
-  description: string;
-}
 
 const DEFAULT_CONNECTION_LABEL = "OmniLodge core database";
 
@@ -366,11 +344,13 @@ const createEmptyTemplate = (): ReportTemplate => ({
   columnAliases: {},
 });
 
-const formatCurrency = (value: number) => `$${Math.round(value).toLocaleString("en-US")}`;
-const formatPercent = (value: number) =>
-  `${(value * 100).toFixed(1).replace(".0", "")}%`;
-const formatWhole = (value: number) => Math.round(value).toLocaleString("en-US");
-const formatScore = (value: number) => `${Math.round(value)} pts`;
+const DEFAULT_VISUAL: VisualDefinition = {
+  id: "visual-default",
+  name: "Preview visual",
+  type: "line",
+  metric: "",
+  dimension: "",
+};
 
 const toColumnAlias = (modelId: string, fieldId: string) => `${modelId}__${fieldId}`;
 
@@ -440,10 +420,10 @@ const coerceString = (value: unknown): string | null => {
 
 const formatPreviewValue = (value: unknown) => {
   if (value === null || value === undefined) {
-    return "—";
+    return "-";
   }
   if (typeof value === "number") {
-    return Number.isFinite(value) ? value.toLocaleString("en-US") : "—";
+    return Number.isFinite(value) ? value.toLocaleString("en-US") : "-";
   }
   if (value instanceof Date) {
     return value.toISOString();
@@ -453,103 +433,6 @@ const formatPreviewValue = (value: unknown) => {
   }
   return String(value);
 };
-
-const AVERAGE_METRICS = new Set<SharedMetricKey>(["adr", "occupancy", "nps"]);
-
-const computeMetricDelta = (values: number[], metric: SharedMetricKey) => {
-  if (values.length < 2) {
-    return {
-      delta: "Stable",
-      context: "Not enough history",
-      tone: "neutral" as const,
-    };
-  }
-
-  const first = values[0];
-  const last = values[values.length - 1];
-  const change = last - first;
-  const tone: "positive" | "neutral" | "negative" = change > 0 ? "positive" : change < 0 ? "negative" : "neutral";
-
-  if (metric === "occupancy") {
-    const points = change * 100;
-    return {
-      delta: `${points >= 0 ? "+" : ""}${points.toFixed(1)} pts`,
-      context: "vs. first record",
-      tone,
-    };
-  }
-
-  if (metric === "nps") {
-    return {
-      delta: `${change >= 0 ? "+" : ""}${change.toFixed(1)}`,
-      context: "vs. first record",
-      tone,
-    };
-  }
-
-  if (Math.abs(first) < 1e-6) {
-    return {
-      delta: `${change >= 0 ? "+" : ""}${change.toFixed(1)}`,
-      context: "Absolute change vs. first record",
-      tone,
-    };
-  }
-
-  const percent = (change / Math.abs(first)) * 100;
-  return {
-    delta: `${percent >= 0 ? "+" : ""}${percent.toFixed(1)}%`,
-    context: "Percentage change vs. first record",
-    tone,
-  };
-};
-
-const METRIC_LIBRARY: MetricDefinition[] = [
-  {
-    value: "revenue",
-    label: "Total revenue",
-    primaryKey: "revenue",
-    secondaryKey: "bookings",
-    secondaryLabel: "Bookings",
-    format: formatCurrency,
-    description: "Gross lodging, ancillary and package revenue.",
-  },
-  {
-    value: "adr",
-    label: "Average daily rate",
-    primaryKey: "adr",
-    secondaryKey: "occupancy",
-    secondaryLabel: "Occupancy",
-    format: formatCurrency,
-    description: "Revenue per occupied room night.",
-  },
-  {
-    value: "occupancy",
-    label: "Occupancy",
-    primaryKey: "occupancy",
-    secondaryKey: "bookings",
-    secondaryLabel: "Bookings",
-    format: formatPercent,
-    description: "Share of available inventory that was sold.",
-  },
-  {
-    value: "addOnRevenue",
-    label: "Ancillary revenue",
-    primaryKey: "addOnRevenue",
-    secondaryKey: "guests",
-    secondaryLabel: "Guests",
-    format: formatCurrency,
-    description: "Upsell and experience revenue attached to reservations.",
-  },
-  {
-    value: "nps",
-    label: "Net promoter score",
-    primaryKey: "nps",
-    secondaryKey: "cancellations",
-    secondaryLabel: "Cancellations",
-    format: formatScore,
-    description: "Guest loyalty indicator from review feedback.",
-  },
-];
 
 const CATEGORY_OPTIONS = [
   { value: "Executive summary", label: "Executive summary" },
@@ -566,39 +449,6 @@ const SCHEDULE_OPTIONS = [
   { value: "Weekly Monday 07:30", label: "Weekly - Monday 07:30" },
   { value: "Monthly 1st 09:00", label: "Monthly - 1st @ 09:00" },
 ];
-
-const COMPARISON_OPTIONS: { value: SharedMetricKey; label: string }[] = [
-  { value: "bookings", label: "Bookings" },
-  { value: "occupancy", label: "Occupancy" },
-  { value: "addOnRevenue", label: "Ancillary revenue" },
-  { value: "guests", label: "Guests" },
-  { value: "cancellations", label: "Cancellations" },
-];
-
-const DIMENSION_OPTIONS: { value: DimensionKey; label: string }[] = [
-  { value: "month", label: "Month" },
-  { value: "channel", label: "Booking channel" },
-];
-
-const DEFAULT_VISUAL: VisualDefinition = {
-  id: "visual-default",
-  name: "Revenue trend",
-  type: "line",
-  metric: "revenue",
-  dimension: "month",
-  comparison: "bookings",
-};
-
-const DELTA_HINTS: Record<
-  string,
-  { delta: string; context: string; tone: "positive" | "neutral" | "negative" }
-> = {
-  revenue: { delta: "+12.4%", context: "vs. rolling 8 months", tone: "positive" },
-  adr: { delta: "+4.1%", context: "summer event uplift", tone: "positive" },
-  occupancy: { delta: "+2.6 pts", context: "corporate contracts", tone: "positive" },
-  addOnRevenue: { delta: "+18.7%", context: "experience upsell mix", tone: "positive" },
-  nps: { delta: "+6 pts", context: "post-renovation feedback", tone: "positive" },
-};
 
 type FilterOperatorDefinition = {
   value: FilterOperator;
@@ -721,9 +571,6 @@ const buildFilterOptionKey = (modelId: string, fieldId: string) => `${modelId}::
 
 const quoteIdentifier = (value: string) => `"${value.replace(/"/g, '""')}"`;
 
-const findMetricDefinition = (metricValue: string) =>
-  METRIC_LIBRARY.find((metric) => metric.value === metricValue) ?? METRIC_LIBRARY[0];
-
 const formatTimestamp = () =>
   new Date().toLocaleString("en-US", {
     weekday: "short",
@@ -817,6 +664,35 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
         .filter((entry): entry is { modelId: string; fieldIds: string[] } => Boolean(entry))
     : [];
 
+  const visuals: VisualDefinition[] = Array.isArray(template.visuals)
+    ? template.visuals
+        .map((entry, index) => {
+          if (!entry || typeof entry !== "object") {
+            return undefined;
+          }
+          const candidate = entry as Record<string, unknown>;
+          const idCandidate = typeof candidate.id === "string" ? candidate.id.trim() : "";
+          const nameCandidate = typeof candidate.name === "string" ? candidate.name.trim() : "";
+          const metricCandidate = typeof candidate.metric === "string" ? candidate.metric : "";
+          const dimensionCandidate = typeof candidate.dimension === "string" ? candidate.dimension : "";
+          const comparisonCandidate =
+            typeof candidate.comparison === "string" && candidate.comparison.trim().length > 0
+              ? candidate.comparison.trim()
+              : undefined;
+          const typeCandidate = candidate.type === "area" ? "area" : "line";
+
+          return {
+            id: (idCandidate.length > 0 ? idCandidate : `visual-${index}`) as string,
+            name: (nameCandidate.length > 0 ? nameCandidate : `Visual ${index + 1}`) as string,
+            type: typeCandidate,
+            metric: metricCandidate,
+            dimension: dimensionCandidate,
+            comparison: comparisonCandidate,
+          };
+        })
+        .filter((visual): visual is VisualDefinition => Boolean(visual))
+    : [];
+
   return {
     id: template.id,
     name: template.name ?? "Untitled report",
@@ -830,9 +706,12 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
     models: Array.isArray(template.models) ? template.models : [],
     fields: mappedFields,
     joins: Array.isArray(template.joins) ? (template.joins as JoinCondition[]) : [],
-    visuals: Array.isArray(template.visuals) ? (template.visuals as VisualDefinition[]) : [],
+    visuals: visuals.length > 0 ? visuals : [DEFAULT_VISUAL],
     metrics: Array.isArray(template.metrics)
-      ? template.metrics.filter((metric): metric is string => typeof metric === "string")
+      ? template.metrics.filter(
+          (metric): metric is string =>
+            typeof metric === "string" && metric.trim().length > 0 && metric.includes("__"),
+        )
       : [],
     filters: Array.isArray(template.filters) ? (template.filters as ReportFilter[]) : [],
     columnOrder,
@@ -1267,6 +1146,17 @@ const Reports = (props: GenericPageProps) => {
     );
   }, [draft.columnAliases, modelMap, previewColumns]);
 
+  const getColumnLabel = useCallback(
+    (alias: string) => {
+      if (!alias) {
+        return "Select column";
+      }
+      const metadata = previewColumnMetadata.get(alias);
+      return metadata?.customLabel ?? metadata?.fieldLabel ?? humanizeAlias(alias);
+    },
+    [previewColumnMetadata],
+  );
+
   const previewColumnSets = useMemo(() => {
     const numeric = new Set<string>();
     const textual = new Set<string>();
@@ -1324,112 +1214,141 @@ const Reports = (props: GenericPageProps) => {
 
   const numericColumnsSet = previewColumnSets.numeric;
   const textualColumnsSet = previewColumnSets.textual;
-
-  const getDefaultColumn = useCallback(
-    (preference: "numeric" | "textual" | "any"): string | undefined => {
-      if (preference === "numeric") {
-        const candidate = previewColumns.find((column) => numericColumnsSet.has(column));
-        if (candidate) {
-          return candidate;
-        }
-      }
-      if (preference === "textual") {
-        const candidate = previewColumns.find((column) => textualColumnsSet.has(column));
-        if (candidate) {
-          return candidate;
-        }
-      }
-      return previewColumns[0];
-    },
-    [numericColumnsSet, previewColumns, textualColumnsSet],
+  const orderedNumericColumns = useMemo(
+    () => previewColumns.filter((alias) => numericColumnsSet.has(alias)),
+    [numericColumnsSet, previewColumns],
+  );
+  const orderedTextualColumns = useMemo(
+    () => previewColumns.filter((alias) => textualColumnsSet.has(alias)),
+    [previewColumns, textualColumnsSet],
   );
 
-  const findColumnByKeyword = useCallback(
-    (keyword: string, preference: "numeric" | "textual" | "any" = "any"): string | undefined => {
-      if (previewColumns.length === 0) {
-        return undefined;
-      }
+  const metricOptions = useMemo(
+    () =>
+      orderedNumericColumns.map((alias) => ({
+        value: alias,
+        label: getColumnLabel(alias),
+      })),
+    [getColumnLabel, orderedNumericColumns],
+  );
 
-      if (!keyword) {
-        return getDefaultColumn(preference);
-      }
+  const dimensionOptions = useMemo(
+    () =>
+      orderedTextualColumns.map((alias) => ({
+        value: alias,
+        label: getColumnLabel(alias),
+      })),
+    [getColumnLabel, orderedTextualColumns],
+  );
 
-      const normalized = keyword.toLowerCase();
+  useEffect(() => {
+    setDraft((current) => {
+      const numericSet = new Set(orderedNumericColumns);
+      const textualSet = new Set(orderedTextualColumns);
 
-      const candidateFields = selectedFieldDetails
-        .filter(
-          (field) =>
-            field.id.toLowerCase().includes(normalized) ||
-            field.label.toLowerCase().includes(normalized) ||
-            (field.sourceColumn ?? "").toLowerCase().includes(normalized),
-        )
-        .map((field) => toColumnAlias(field.modelId, field.id))
-        .filter((alias) => previewColumns.includes(alias));
+      const sanitizedMetrics =
+        orderedNumericColumns.length === 0
+          ? current.metrics
+          : current.metrics.filter((alias) => numericSet.has(alias));
+      let metricsChanged = sanitizedMetrics.length !== current.metrics.length;
 
-      const pickByPreference = (candidates: string[]): string | undefined => {
-        if (candidates.length === 0) {
-          return undefined;
+      const baseVisuals = current.visuals.length > 0 ? current.visuals : [DEFAULT_VISUAL];
+      let visualsChanged = baseVisuals.length !== current.visuals.length;
+
+      const sanitizedVisuals = baseVisuals.map((visual, index) => {
+        const metricAlias =
+          visual.metric &&
+          (numericSet.has(visual.metric) || orderedNumericColumns.length === 0)
+            ? visual.metric
+            : orderedNumericColumns[0] ?? "";
+        const dimensionAlias =
+          visual.dimension &&
+          (textualSet.has(visual.dimension) || orderedTextualColumns.length === 0)
+            ? visual.dimension
+            : orderedTextualColumns[0] ?? "";
+        const comparisonAlias =
+          visual.comparison &&
+          (numericSet.has(visual.comparison) || orderedNumericColumns.length === 0) &&
+          visual.comparison !== metricAlias
+            ? visual.comparison
+            : undefined;
+        const type = visual.type === "area" ? "area" : "line";
+        const name = visual.name && visual.name.trim().length > 0 ? visual.name : `Visual ${index + 1}`;
+        const id = visual.id && visual.id.trim().length > 0 ? visual.id : `visual-${index}`;
+
+        if (
+          metricAlias !== visual.metric ||
+          dimensionAlias !== visual.dimension ||
+          comparisonAlias !== visual.comparison ||
+          type !== visual.type ||
+          name !== visual.name ||
+          id !== visual.id
+        ) {
+          visualsChanged = true;
         }
-        if (preference === "numeric") {
-          return candidates.find((alias) => numericColumnsSet.has(alias)) ?? undefined;
-        }
-        if (preference === "textual") {
-          return candidates.find((alias) => textualColumnsSet.has(alias)) ?? undefined;
-        }
-        return candidates[0];
-      };
 
-      const fieldMatch = pickByPreference(candidateFields);
-      if (fieldMatch) {
-        return fieldMatch;
-      }
-
-      const aliasMatches = previewColumns.filter((column) => {
-        const segments = column.toLowerCase().split(/__|\.|_/g);
-        return segments.some((segment) => segment.includes(normalized));
+        return {
+          id,
+          name,
+          type,
+          metric: metricAlias,
+          dimension: dimensionAlias,
+          comparison: comparisonAlias,
+        };
       });
 
-      const aliasMatch = pickByPreference(aliasMatches);
-      if (aliasMatch) {
-        return aliasMatch;
+      if (!metricsChanged && !visualsChanged) {
+        return current;
       }
 
-      return getDefaultColumn(preference);
-    },
-    [getDefaultColumn, numericColumnsSet, previewColumns, selectedFieldDetails, textualColumnsSet],
-  );
+      const result: ReportTemplate = {
+        ...current,
+        metrics: sanitizedMetrics,
+        visuals: sanitizedVisuals as VisualDefinition[],
+      };
+
+      return result;
+    });
+  }, [orderedNumericColumns, orderedTextualColumns]);
 
   const activeVisual = draft.visuals[0] ?? DEFAULT_VISUAL;
-  const metricDefinition = findMetricDefinition(activeVisual.metric);
-  const comparisonKey =
-    activeVisual.comparison ?? metricDefinition.secondaryKey ?? undefined;
+
+  const chartMetricAlias =
+    activeVisual.metric && numericColumnsSet.has(activeVisual.metric) ? activeVisual.metric : "";
+  const chartDimensionAlias =
+    activeVisual.dimension && previewColumns.includes(activeVisual.dimension)
+      ? activeVisual.dimension
+      : "";
+  const chartComparisonAlias =
+    activeVisual.comparison && numericColumnsSet.has(activeVisual.comparison)
+      ? activeVisual.comparison
+      : undefined;
 
   const chartData = useMemo(() => {
-    if (previewRows.length === 0 || previewColumns.length === 0) {
+    if (!chartMetricAlias || !chartDimensionAlias) {
       return [];
     }
 
-    const dimensionAlias = findColumnByKeyword(activeVisual.dimension, "textual");
-    const primaryAlias = findColumnByKeyword(metricDefinition.primaryKey, "numeric");
-    const comparisonAlias = comparisonKey ? findColumnByKeyword(comparisonKey, "numeric") : undefined;
-
-    if (!dimensionAlias || !primaryAlias) {
+    if (
+      !previewColumns.includes(chartMetricAlias) ||
+      !previewColumns.includes(chartDimensionAlias)
+    ) {
       return [];
     }
 
     return previewRows
       .map((row) => {
-        const dimensionValue = coerceString(row[dimensionAlias]);
-        const primaryValue = coerceNumber(row[primaryAlias]);
-        if (!dimensionValue || primaryValue === null) {
+        const dimensionValue = coerceString(row[chartDimensionAlias]);
+        const metricValue = coerceNumber(row[chartMetricAlias]);
+        if (!dimensionValue || metricValue === null) {
           return null;
         }
         const point: { dimension: string; primary: number; secondary?: number } = {
           dimension: dimensionValue,
-          primary: primaryValue,
+          primary: metricValue,
         };
-        if (comparisonAlias) {
-          const comparisonValue = coerceNumber(row[comparisonAlias]);
+        if (chartComparisonAlias) {
+          const comparisonValue = coerceNumber(row[chartComparisonAlias]);
           if (comparisonValue !== null) {
             point.secondary = comparisonValue;
           }
@@ -1439,55 +1358,62 @@ const Reports = (props: GenericPageProps) => {
       .filter(
         (value): value is { dimension: string; primary: number; secondary?: number } => value !== null,
       );
-  }, [
-    activeVisual.dimension,
-    comparisonKey,
-    metricDefinition.primaryKey,
-    findColumnByKeyword,
-    previewColumns,
-    previewRows,
-  ]);
+  }, [chartComparisonAlias, chartDimensionAlias, chartMetricAlias, previewColumns, previewRows]);
 
   const hasChartData = chartData.length > 0;
+  const metricLabel = chartMetricAlias ? getColumnLabel(chartMetricAlias) : "Metric";
+  const dimensionLabel = chartDimensionAlias ? getColumnLabel(chartDimensionAlias) : "Dimension";
+  const comparisonLabel = chartComparisonAlias ? getColumnLabel(chartComparisonAlias) : undefined;
+
+  const formatNumberForDisplay = useCallback(
+    (value: number) =>
+      Number.isFinite(value) ? value.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—",
+    [],
+  );
 
   const metricsSummary = useMemo(() => {
-    const chosenMetrics =
+    const candidateAliases =
       draft.metrics.length > 0
-        ? METRIC_LIBRARY.filter((metric) => draft.metrics.includes(metric.value))
-        : METRIC_LIBRARY.slice(0, 4);
+        ? draft.metrics.filter((alias) => numericColumnsSet.has(alias))
+        : orderedNumericColumns.slice(0, 4);
+
+    const uniqueAliases = Array.from(new Set(candidateAliases)).slice(0, 4);
+
+    if (uniqueAliases.length === 0) {
+      return [];
+    }
 
     if (previewRows.length === 0 || previewColumns.length === 0) {
-      return chosenMetrics.map((definition) => ({
-        id: definition.value,
-        label: definition.label,
+      return uniqueAliases.map((alias, index) => ({
+        id: alias || `metric-${index}`,
+        label: getColumnLabel(alias),
         value: "Run preview",
         delta: "—",
-        context: definition.description,
+        context: "Execute a preview to populate this metric.",
         tone: "neutral" as const,
       }));
     }
 
-    return chosenMetrics.map((definition) => {
-      const primaryAlias = findColumnByKeyword(definition.primaryKey, "numeric");
-      if (!primaryAlias) {
+    return uniqueAliases.map((alias, index) => {
+      if (!alias || !previewColumns.includes(alias)) {
         return {
-          id: definition.value,
-          label: definition.label,
+          id: alias || `metric-${index}`,
+          label: getColumnLabel(alias),
           value: "Not available",
           delta: "—",
-          context: `Add a field matching “${definition.primaryKey}” to your selection.`,
+          context: "Field not present in preview results.",
           tone: "neutral" as const,
         };
       }
 
       const values = previewRows
-        .map((row) => coerceNumber(row[primaryAlias]))
+        .map((row) => coerceNumber(row[alias]))
         .filter((value): value is number => value !== null);
 
       if (values.length === 0) {
         return {
-          id: definition.value,
-          label: definition.label,
+          id: alias,
+          label: getColumnLabel(alias),
           value: "Not available",
           delta: "—",
           context: "No numeric values returned for this metric.",
@@ -1495,22 +1421,46 @@ const Reports = (props: GenericPageProps) => {
         };
       }
 
-      const total = values.reduce((acc, value) => acc + value, 0);
-      const average = total / values.length;
-      const useAverage = AVERAGE_METRICS.has(definition.primaryKey);
-      const displayValue = useAverage ? definition.format(average) : definition.format(total);
-      const delta = computeMetricDelta(values, definition.primaryKey);
+      const latest = values[values.length - 1];
+      const baseline = values[0];
+      const formattedValue = Number.isFinite(latest)
+        ? latest.toLocaleString("en-US", { maximumFractionDigits: 2 })
+        : "—";
+
+      let deltaDisplay = "—";
+      let context = "Not enough datapoints";
+      let tone: "positive" | "neutral" | "negative" = "neutral";
+
+      if (values.length >= 2) {
+        const change = latest - baseline;
+        tone = change > 0 ? "positive" : change < 0 ? "negative" : "neutral";
+        if (Math.abs(baseline) < 1e-6) {
+          deltaDisplay = `${change >= 0 ? "+" : ""}${change.toFixed(2)}`;
+          context = "Absolute change vs. first row";
+        } else {
+          const percentChange = (change / Math.abs(baseline)) * 100;
+          deltaDisplay = `${percentChange >= 0 ? "+" : ""}${percentChange.toFixed(1)}%`;
+          context = "Percentage change vs. first row";
+        }
+      }
 
       return {
-        id: definition.value,
-        label: definition.label,
-        value: displayValue,
-        delta: delta.delta,
-        context: delta.context,
-        tone: delta.tone,
+        id: alias,
+        label: getColumnLabel(alias),
+        value: formattedValue,
+        delta: deltaDisplay,
+        context,
+        tone,
       };
     });
-  }, [draft.metrics, findColumnByKeyword, previewColumns, previewRows]);
+  }, [
+    draft.metrics,
+    getColumnLabel,
+    numericColumnsSet,
+    orderedNumericColumns,
+    previewColumns,
+    previewRows,
+  ]);
 
   const joinSuggestions = useMemo(() => {
     const existingKeys = new Set(
@@ -1594,6 +1544,16 @@ const Reports = (props: GenericPageProps) => {
           },
           {},
         );
+        const filteredMetrics = current.metrics.filter((alias) => !alias.startsWith(aliasPrefix));
+        const filteredVisuals = current.visuals.map((visual) => {
+          const metric = visual.metric.startsWith(aliasPrefix) ? "" : visual.metric;
+          const dimension = visual.dimension.startsWith(aliasPrefix) ? "" : visual.dimension;
+          const comparison =
+            visual.comparison && visual.comparison.startsWith(aliasPrefix)
+              ? undefined
+              : visual.comparison;
+          return { ...visual, metric, dimension, comparison };
+        });
         return {
           ...current,
           models: current.models.filter((id) => id !== modelId),
@@ -1608,6 +1568,8 @@ const Reports = (props: GenericPageProps) => {
           ),
           columnOrder: filteredColumnOrder,
           columnAliases: filteredColumnAliases,
+          metrics: filteredMetrics,
+          visuals: filteredVisuals,
         };
       }
       return {
@@ -1644,11 +1606,25 @@ const Reports = (props: GenericPageProps) => {
         ? omitRecordKey(current.columnAliases, aliasKey)
         : current.columnAliases;
 
+      const nextMetrics = fieldWasSelected
+        ? current.metrics.filter((alias) => alias !== aliasKey)
+        : current.metrics;
+
+      const nextVisuals = current.visuals.map((visual) => {
+        const metric = fieldWasSelected && visual.metric === aliasKey ? "" : visual.metric;
+        const dimension = fieldWasSelected && visual.dimension === aliasKey ? "" : visual.dimension;
+        const comparison =
+          fieldWasSelected && visual.comparison === aliasKey ? undefined : visual.comparison;
+        return { ...visual, metric, dimension, comparison };
+      });
+
       return {
         ...current,
         fields: nextFields,
         columnOrder: nextColumnOrder,
         columnAliases: nextColumnAliases,
+        metrics: nextMetrics,
+        visuals: nextVisuals,
       };
     });
   };
@@ -2837,13 +2813,19 @@ const Reports = (props: GenericPageProps) => {
                     </Flex>
                     <MultiSelect
                       label="Key metrics to highlight"
-                      data={METRIC_LIBRARY.map((metric) => ({
-                        value: metric.value,
-                        label: metric.label,
-                      }))}
-                      value={draft.metrics}
-                      onChange={(value) => setDraft((current) => ({ ...current, metrics: value }))}
-                      placeholder="Select metrics"
+                      data={metricOptions}
+                      value={draft.metrics.filter((alias) =>
+                        metricOptions.some((option) => option.value === alias),
+                      )}
+                      onChange={(value) =>
+                        setDraft((current) => ({
+                          ...current,
+                          metrics: Array.from(new Set(value)),
+                        }))
+                      }
+                      placeholder={metricOptions.length === 0 ? "Add numeric fields" : "Select metrics"}
+                      searchable
+                      disabled={metricOptions.length === 0}
                     />
                   </Stack>
                 </Paper>
@@ -3123,41 +3105,45 @@ const Reports = (props: GenericPageProps) => {
                       />
                       <Select
                         label="Metric"
-                        data={METRIC_LIBRARY.map((metric) => ({
-                          value: metric.value,
-                          label: metric.label,
-                        }))}
-                        value={activeVisual.metric}
+                        data={metricOptions}
+                        value={chartMetricAlias || null}
                         onChange={(value) =>
-                          handleVisualChange({ metric: value ?? activeVisual.metric })
+                          handleVisualChange({ metric: value ?? "" })
                         }
+                        placeholder={
+                          metricOptions.length === 0 ? "Add numeric fields to your preview" : undefined
+                        }
+                        disabled={metricOptions.length === 0}
+                        searchable
                       />
                       <Select
                         label="Dimension"
-                        data={DIMENSION_OPTIONS}
-                        value={activeVisual.dimension}
+                        data={dimensionOptions}
+                        value={chartDimensionAlias || null}
                         onChange={(value) =>
                           handleVisualChange({
-                            dimension: (value ?? activeVisual.dimension) as DimensionKey,
+                            dimension: value ?? "",
                           })
                         }
+                        placeholder={
+                          dimensionOptions.length === 0 ? "Add textual fields to your preview" : undefined
+                        }
+                        disabled={dimensionOptions.length === 0}
+                        searchable
                       />
                       <Select
                         label="Comparison series"
-                        data={COMPARISON_OPTIONS}
-                        value={comparisonKey}
+                        data={metricOptions.filter((option) => option.value !== chartMetricAlias)}
+                        value={chartComparisonAlias ?? null}
                         onChange={(value) =>
                           handleVisualChange({
-                            comparison: (value ?? undefined) as SharedMetricKey | undefined,
+                            comparison: value ?? undefined,
                           })
                         }
                         placeholder="Optional secondary series"
+                        disabled={metricOptions.length <= 1}
+                        searchable
                         clearable
-                      />
-                      <Textarea
-                        label="Insight annotation"
-                        placeholder="Add narrative context for stakeholders..."
-                        minRows={2}
                       />
                     </Stack>
                     <Paper
@@ -3178,7 +3164,7 @@ const Reports = (props: GenericPageProps) => {
                             <CartesianGrid stroke="#f1f3f5" strokeDasharray="4 4" />
                             <XAxis dataKey="dimension" tick={{ fontSize: 12 }} />
                             <YAxis yAxisId="left" tick={{ fontSize: 12 }} stroke="#1c7ed6" />
-                            {comparisonKey && (
+                            {chartComparisonAlias && (
                               <YAxis
                                 yAxisId="right"
                                 orientation="right"
@@ -3187,54 +3173,44 @@ const Reports = (props: GenericPageProps) => {
                               />
                             )}
                             <RechartsTooltip
-                              formatter={(value: number, dataKey: string) => {
-                                if (dataKey === "primary") {
-                                  return metricDefinition.format(value);
-                                }
-                                if (comparisonKey === "occupancy") {
-                                  return formatPercent(value);
-                                }
-                                if (comparisonKey === "addOnRevenue" || comparisonKey === "revenue") {
-                                  return formatCurrency(value);
-                                }
-                                return formatWhole(value);
-                              }}
-                              labelFormatter={(label) => `${metricDefinition.label} - ${label}`}
+                              formatter={(value: number, dataKey: string) => [
+                                formatNumberForDisplay(value),
+                                dataKey === "primary"
+                                  ? metricLabel
+                                  : comparisonLabel ?? "Comparison",
+                              ]}
+                              labelFormatter={(label) => `${dimensionLabel}: ${label}`}
                             />
                             <Legend />
-                            {activeVisual.type === "line" && (
+                            {activeVisual.type === "line" ? (
                               <Line
                                 type="monotone"
                                 dataKey="primary"
                                 stroke="#1c7ed6"
                                 strokeWidth={2}
                                 dot={false}
-                                name={metricDefinition.label}
+                                name={metricLabel}
                                 yAxisId="left"
                               />
-                            )}
-                            {activeVisual.type === "area" && (
+                            ) : (
                               <Area
                                 type="monotone"
                                 dataKey="primary"
                                 stroke="#1c7ed6"
                                 fill="#a5d8ff"
-                                name={metricDefinition.label}
+                                name={metricLabel}
                                 yAxisId="left"
                               />
                             )}
-                            {comparisonKey && (
+                            {chartComparisonAlias && (
                               <Line
                                 type="monotone"
                                 dataKey="secondary"
                                 stroke="#2b8a3e"
                                 strokeWidth={2}
                                 dot={false}
-                                name={
-                                  COMPARISON_OPTIONS.find((option) => option.value === comparisonKey)?.label ??
-                                  "Comparison"
-                                }
-                                yAxisId="right"
+                                name={comparisonLabel ?? "Comparison"}
+                                yAxisId={chartComparisonAlias ? "right" : "left"}
                               />
                             )}
                           </ComposedChart>
@@ -3242,9 +3218,11 @@ const Reports = (props: GenericPageProps) => {
                       ) : (
                         <Flex align="center" justify="center" h={240}>
                           <Text c="dimmed" fz="sm" ta="center">
-                            {previewRows.length === 0
+                            {!chartMetricAlias || !chartDimensionAlias
+                              ? "Select a numeric metric and a dimension to render this visualization."
+                              : previewRows.length === 0
                               ? "Run the analysis to populate this visualization."
-                              : "No chartable metrics detected. Select numeric fields or adjust your visualization settings."}
+                              : "No chartable datapoints were returned for the selected fields."}
                           </Text>
                         </Flex>
                       )}
@@ -3691,6 +3669,7 @@ const Reports = (props: GenericPageProps) => {
 };
 
 export default Reports;
+
 
 
 
