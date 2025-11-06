@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import {
@@ -44,6 +45,7 @@ import {
   IconDatabase,
   IconDeviceFloppy,
   IconDownload,
+  IconLayoutGrid,
   IconMail,
   IconMessage2,
   IconPlayerPlay,
@@ -1215,6 +1217,7 @@ const extractAxiosErrorMessage = (error: unknown, fallback: string): string => {
 
 const Reports = (props: GenericPageProps) => {
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
 
   const {
     data: backendModelsResponse,
@@ -3949,6 +3952,13 @@ const Reports = (props: GenericPageProps) => {
               </Group>
             </div>
             <Group>
+              <Button
+                leftSection={<IconLayoutGrid size={16} />}
+                variant="subtle"
+                onClick={() => navigate("/reports/dashboards")}
+              >
+                Dashboards
+              </Button>
               <Button
                 leftSection={<IconTemplate size={16} />}
                 variant="light"
