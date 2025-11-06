@@ -6,7 +6,7 @@
 - [x] Backend: expose expanded reporting APIs (query, templates, dashboards, derived fields)
 - [x] Frontend: update shared data models/state to new contract
 - [x] Frontend: rebuild Visuals & Analytics with advanced charting and interactions
-- [ ] Frontend: enhance template builder (library, joins graph, spotlight, scheduling, export)
+- [x] Frontend: enhance template builder (library, joins graph, spotlight, scheduling, export)
 - [ ] Frontend: add dashboards builder/viewer/export flows
 - [ ] Cross-cutting: derived field manager, scheduling UI, Google Drive export, notifications
 - [ ] QA & rollout: automated tests, monitoring, migration tooling, documentation
