@@ -57,7 +57,7 @@ export function defineAssociations() {
   User.hasMany(ReportTemplate, { foreignKey: 'userId', as: 'reportTemplates' });
   User.hasMany(ReportDashboard, { foreignKey: 'ownerId', as: 'reportDashboards' });
   ReportTemplate.belongsTo(User, { foreignKey: 'userId', as: 'reportOwner' });
-  ReportDashboard.belongsTo(User, { foreignKey: 'ownerId', as: 'owner' });
+  ReportDashboard.belongsTo(User, { foreignKey: 'ownerId', as: 'dashboardOwner' });
 
   // UserType Associations
   UserType.hasMany(User, { foreignKey: 'userTypeId', as: 'users' });
@@ -147,13 +147,13 @@ export function defineAssociations() {
 
   // Reporting engine associations
   ReportTemplate.hasMany(ReportSchedule, { foreignKey: 'templateId', as: 'schedules' });
-  ReportSchedule.belongsTo(ReportTemplate, { foreignKey: 'templateId', as: 'template' });
+  ReportSchedule.belongsTo(ReportTemplate, { foreignKey: 'templateId', as: 'templateReport' });
   ReportTemplate.hasMany(DerivedFieldDefinition, { foreignKey: 'templateId', as: 'derivedFieldDefs' });
-  DerivedFieldDefinition.belongsTo(ReportTemplate, { foreignKey: 'templateId', as: 'template' });
-  ReportDashboard.hasMany(ReportDashboardCard, { foreignKey: 'dashboardId', as: 'cards' });
-  ReportDashboardCard.belongsTo(ReportDashboard, { foreignKey: 'dashboardId', as: 'dashboard' });
+  DerivedFieldDefinition.belongsTo(ReportTemplate, { foreignKey: 'templateId', as: 'templateDerived' });
+  ReportDashboard.hasMany(ReportDashboardCard, { foreignKey: 'dashboardId', as: 'cardsDashboard' });
+  ReportDashboardCard.belongsTo(ReportDashboard, { foreignKey: 'dashboardId', as: 'dashboardDashboard' });
   ReportTemplate.hasMany(ReportDashboardCard, { foreignKey: 'templateId', as: 'dashboardCards' });
-  ReportDashboardCard.belongsTo(ReportTemplate, { foreignKey: 'templateId', as: 'template' });
+  ReportDashboardCard.belongsTo(ReportTemplate, { foreignKey: 'templateId', as: 'templateDashboard' });
 
   // Night Report Associations
   Counter.hasOne(NightReport, { foreignKey: 'counterId', as: 'nightReport', onDelete: 'CASCADE', hooks: true });
