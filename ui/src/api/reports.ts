@@ -144,6 +144,59 @@ export type TemplateSchedulePayload = {
   nextRunAt?: string | null;
 };
 
+export type DashboardCardDto = {
+  id: string;
+  dashboardId: string;
+  templateId: string;
+  title: string;
+  viewConfig: Record<string, unknown>;
+  layout: Record<string, unknown>;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export type ReportDashboardDto = {
+  id: string;
+  name: string;
+  description: string | null;
+  ownerId: number | null;
+  config: Record<string, unknown>;
+  filters: Record<string, unknown>;
+  shareToken: string | null;
+  shareExpiresAt: string | null;
+  cards: DashboardCardDto[];
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export type DashboardListResponse = {
+  dashboards: ReportDashboardDto[];
+};
+
+export type DashboardPayload = {
+  name: string;
+  description?: string | null;
+  config?: Record<string, unknown>;
+  filters?: Record<string, unknown>;
+  shareToken?: string | null;
+  shareExpiresAt?: string | null;
+};
+
+export type DashboardCardPayload = {
+  templateId: string;
+  title: string;
+  viewConfig?: Record<string, unknown>;
+  layout?: Record<string, unknown>;
+};
+
+export type DashboardExportResponse = {
+  export: {
+    format: string;
+    generatedAt: string;
+    dashboard: ReportDashboardDto;
+  };
+};
+
 export type DerivedFieldDefinitionDto = {
   id: string;
   name: string;
@@ -308,6 +361,74 @@ export const useExportReportTemplate = () =>
     mutationFn: async (templateId: string) => {
       const response = await axiosInstance.post(`/reports/templates/${templateId}/export`, {});
       return response.data;
+    },
+  });
+
+export const useReportDashboards = (search?: string) =>
+  useQuery<DashboardListResponse>({
+    queryKey: ["reports", "dashboards", search ?? "all"],
+    queryFn: async () => {
+      const response = await axiosInstance.get("/reports/dashboards", {
+        params: search && search.trim().length > 0 ? { search: search.trim() } : undefined,
+      });
+      return response.data as DashboardListResponse;
+    },
+  });
+
+export const useCreateDashboard = () =>
+  useMutation<ReportDashboardDto, AxiosError<{ message?: string }>, DashboardPayload>({
+    mutationFn: async (payload: DashboardPayload) => {
+      const response = await axiosInstance.post("/reports/dashboards", payload);
+      return (response.data as { dashboard: ReportDashboardDto }).dashboard;
+    },
+  });
+
+export const useUpdateDashboard = () =>
+  useMutation<
+    ReportDashboardDto,
+    AxiosError<{ message?: string }>,
+    { id: string; payload: Partial<DashboardPayload> }
+  >({
+    mutationFn: async ({ id, payload }) => {
+      const response = await axiosInstance.put(`/reports/dashboards/${id}`, payload);
+      return (response.data as { dashboard: ReportDashboardDto }).dashboard;
+    },
+  });
+
+export const useDeleteDashboard = () =>
+  useMutation<void, AxiosError<{ message?: string }>, string>({
+    mutationFn: async (dashboardId: string) => {
+      await axiosInstance.delete(`/reports/dashboards/${dashboardId}`);
+    },
+  });
+
+export const useUpsertDashboardCard = () =>
+  useMutation<
+    DashboardCardDto,
+    AxiosError<{ message?: string }>,
+    { dashboardId: string; cardId?: string; payload: DashboardCardPayload }
+  >({
+    mutationFn: async ({ dashboardId, cardId, payload }) => {
+      const url = cardId
+        ? `/reports/dashboards/${dashboardId}/cards/${cardId}`
+        : `/reports/dashboards/${dashboardId}/cards`;
+      const response = await axiosInstance[cardId ? "put" : "post"](url, payload);
+      return (response.data as { card: DashboardCardDto }).card;
+    },
+  });
+
+export const useDeleteDashboardCard = () =>
+  useMutation<void, AxiosError<{ message?: string }>, { dashboardId: string; cardId: string }>({
+    mutationFn: async ({ dashboardId, cardId }) => {
+      await axiosInstance.delete(`/reports/dashboards/${dashboardId}/cards/${cardId}`);
+    },
+  });
+
+export const useExportDashboard = () =>
+  useMutation<DashboardExportResponse, AxiosError<{ message?: string }>, string>({
+    mutationFn: async (dashboardId: string) => {
+      const response = await axiosInstance.post(`/reports/dashboards/${dashboardId}/export`, {});
+      return response.data as DashboardExportResponse;
     },
   });
 

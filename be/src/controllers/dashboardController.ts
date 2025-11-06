@@ -155,6 +155,61 @@ export const updateDashboard = async (req: AuthenticatedRequest, res: Response):
   }
 };
 
+export const exportDashboard = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    ensureReportingAccess(req);
+    const { id } = req.params;
+    if (!id) {
+      res.status(400).json({ message: "Dashboard id is required." });
+      return;
+    }
+
+    const dashboard = await ReportDashboard.findByPk(id, {
+      include: [{ model: ReportDashboardCard, as: "cards" }],
+    });
+
+    if (!dashboard) {
+      res.status(404).json({ message: "Dashboard not found." });
+      return;
+    }
+
+    const exportPayload = {
+      id: dashboard.id,
+      name: dashboard.name,
+      description: dashboard.description,
+      ownerId: dashboard.ownerId,
+      config: dashboard.config,
+      filters: dashboard.filters,
+      shareToken: dashboard.shareToken,
+      shareExpiresAt: dashboard.shareExpiresAt?.toISOString() ?? null,
+      cards:
+        dashboard.cards?.map((card) => ({
+          id: card.id,
+          dashboardId: card.dashboardId,
+          templateId: card.templateId,
+          title: card.title,
+          viewConfig: card.viewConfig,
+          layout: card.layout,
+          createdAt: card.createdAt?.toISOString() ?? null,
+          updatedAt: card.updatedAt?.toISOString() ?? null,
+        })) ?? [],
+      createdAt: dashboard.createdAt?.toISOString() ?? null,
+      updatedAt: dashboard.updatedAt?.toISOString() ?? null,
+    };
+
+    res.json({
+      export: {
+        format: "application/json",
+        generatedAt: new Date().toISOString(),
+        dashboard: exportPayload,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to export dashboard", error);
+    res.status(500).json({ message: "Failed to export dashboard" });
+  }
+};
+
 export const deleteDashboard = async (req: Request, res: Response): Promise<void> => {
   try {
     ensureReportingAccess(req as AuthenticatedRequest);
