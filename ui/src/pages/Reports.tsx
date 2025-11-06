@@ -28,6 +28,8 @@ import {
 } from "@mantine/core";
 import {
   IconAdjustments,
+  IconArrowLeft,
+  IconArrowRight,
   IconChartHistogram,
   IconCopy,
   IconDatabase,
@@ -124,12 +126,15 @@ type DataModelDefinition = {
 type PreviewColumnMeta = {
   alias: string;
   fieldLabel: string;
+  customLabel?: string;
   modelName?: string;
   modelId?: string;
   tableName?: string;
   fieldId?: string;
   sourceColumn?: string;
 };
+
+type SelectedFieldDetail = DataField & { modelId: string; modelName: string; alias?: string };
 
 type JoinCondition = {
   id: string;
@@ -211,6 +216,8 @@ type ReportTemplate = {
   visuals: VisualDefinition[];
   metrics: string[];
   filters: ReportFilter[];
+  columnOrder: string[];
+  columnAliases: Record<string, string>;
 };
 
 interface MetricDefinition {
@@ -355,6 +362,8 @@ const createEmptyTemplate = (): ReportTemplate => ({
   visuals: [],
   metrics: [],
   filters: [],
+  columnOrder: [],
+  columnAliases: {},
 });
 
 const formatCurrency = (value: number) => `$${Math.round(value).toLocaleString("en-US")}`;
@@ -364,6 +373,26 @@ const formatWhole = (value: number) => Math.round(value).toLocaleString("en-US")
 const formatScore = (value: number) => `${Math.round(value)} pts`;
 
 const toColumnAlias = (modelId: string, fieldId: string) => `${modelId}__${fieldId}`;
+
+const arraysShallowEqual = <T,>(first: readonly T[], second: readonly T[]) =>
+  first.length === second.length && first.every((value, index) => value === second[index]);
+
+const recordsShallowEqual = <T,>(first: Record<string, T>, second: Record<string, T>) => {
+  const firstKeys = Object.keys(first);
+  const secondKeys = Object.keys(second);
+  if (firstKeys.length !== secondKeys.length) {
+    return false;
+  }
+  return firstKeys.every((key) => Object.prototype.hasOwnProperty.call(second, key) && first[key] === second[key]);
+};
+
+const omitRecordKey = <T,>(record: Record<string, T>, key: string) => {
+  if (!Object.prototype.hasOwnProperty.call(record, key)) {
+    return record;
+  }
+  const { [key]: _omitted, ...rest } = record;
+  return rest;
+};
 
 const humanizeAlias = (alias: string) => {
   const [, field = alias] = alias.split("__");
@@ -718,32 +747,98 @@ const formatLastUpdatedLabel = (value?: string | Date | null) => {
   });
 };
 
-const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => ({
-  id: template.id,
-  name: template.name ?? "Untitled report",
-  category: template.category ?? "Custom",
-  description: template.description ?? "",
-  schedule: template.schedule ?? "Manual",
-  lastUpdated: formatLastUpdatedLabel(template.updatedAt),
-  owner: template.owner?.name ?? "Shared",
-  autoDistribution: template.options?.autoDistribution ?? true,
-  notifyTeam: template.options?.notifyTeam ?? true,
-  models: Array.isArray(template.models) ? template.models : [],
-  fields: Array.isArray(template.fields)
-    ? template.fields.map((entry) => ({
-        modelId: entry.modelId,
-        fieldIds: Array.isArray(entry.fieldIds)
-          ? entry.fieldIds.filter((fieldId): fieldId is string => typeof fieldId === "string")
-          : [],
-      }))
-    : [],
-  joins: Array.isArray(template.joins) ? (template.joins as JoinCondition[]) : [],
-  visuals: Array.isArray(template.visuals) ? (template.visuals as VisualDefinition[]) : [],
-  metrics: Array.isArray(template.metrics)
-    ? template.metrics.filter((metric): metric is string => typeof metric === "string")
-    : [],
-  filters: Array.isArray(template.filters) ? (template.filters as ReportFilter[]) : [],
-});
+const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
+  const rawColumnOrder = Array.isArray(template.columnOrder)
+    ? template.columnOrder
+    : Array.isArray(template.options?.columnOrder)
+    ? template.options.columnOrder
+    : [];
+
+  const rawColumnAliases =
+    (template.columnAliases && typeof template.columnAliases === "object" && template.columnAliases) ||
+    (template.options?.columnAliases && typeof template.options.columnAliases === "object"
+      ? template.options.columnAliases
+      : {});
+
+  const columnAliases = Object.entries(rawColumnAliases as Record<string, unknown>).reduce<
+    Record<string, string>
+  >((accumulator, [key, value]) => {
+    if (typeof key === "string" && typeof value === "string") {
+      accumulator[key] = value;
+    }
+    return accumulator;
+  }, {});
+
+  const columnOrder = rawColumnOrder.filter(
+    (alias): alias is string => typeof alias === "string" && alias.length > 0,
+  );
+  const orderRank = new Map<string, number>();
+  columnOrder.forEach((alias, index) => {
+    if (!orderRank.has(alias)) {
+      orderRank.set(alias, index);
+    }
+  });
+
+  const mappedFields: Array<{ modelId: string; fieldIds: string[] }> = Array.isArray(template.fields)
+    ? template.fields
+        .map((entry) => {
+          if (!entry || typeof entry !== "object") {
+            return null;
+          }
+          const modelId = typeof entry.modelId === "string" ? entry.modelId : null;
+          const fieldIds = Array.isArray(entry.fieldIds)
+            ? entry.fieldIds.filter((fieldId): fieldId is string => typeof fieldId === "string")
+            : [];
+          if (!modelId) {
+            return null;
+          }
+          const sortedFieldIds = [...fieldIds].sort((a, b) => {
+            const aliasA = toColumnAlias(modelId, a);
+            const aliasB = toColumnAlias(modelId, b);
+            const rankA = orderRank.get(aliasA);
+            const rankB = orderRank.get(aliasB);
+            if (rankA === undefined && rankB === undefined) {
+              return fieldIds.indexOf(a) - fieldIds.indexOf(b);
+            }
+            if (rankA === undefined) {
+              return 1;
+            }
+            if (rankB === undefined) {
+              return -1;
+            }
+            return rankA - rankB;
+          });
+
+          return {
+            modelId,
+            fieldIds: sortedFieldIds,
+          };
+        })
+        .filter((entry): entry is { modelId: string; fieldIds: string[] } => Boolean(entry))
+    : [];
+
+  return {
+    id: template.id,
+    name: template.name ?? "Untitled report",
+    category: template.category ?? "Custom",
+    description: template.description ?? "",
+    schedule: template.schedule ?? "Manual",
+    lastUpdated: formatLastUpdatedLabel(template.updatedAt),
+    owner: template.owner?.name ?? "Shared",
+    autoDistribution: template.options?.autoDistribution ?? true,
+    notifyTeam: template.options?.notifyTeam ?? true,
+    models: Array.isArray(template.models) ? template.models : [],
+    fields: mappedFields,
+    joins: Array.isArray(template.joins) ? (template.joins as JoinCondition[]) : [],
+    visuals: Array.isArray(template.visuals) ? (template.visuals as VisualDefinition[]) : [],
+    metrics: Array.isArray(template.metrics)
+      ? template.metrics.filter((metric): metric is string => typeof metric === "string")
+      : [],
+    filters: Array.isArray(template.filters) ? (template.filters as ReportFilter[]) : [],
+    columnOrder,
+    columnAliases,
+  };
+};
 
 const extractAxiosErrorMessage = (error: unknown, fallback: string): string => {
   const axiosError = error as AxiosError<{ error?: string; message?: string }> | undefined;
@@ -789,7 +884,6 @@ const Reports = (props: GenericPageProps) => {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [templateError, setTemplateError] = useState<string | null>(null);
   const [manualJoinDraft, setManualJoinDraft] = useState<ManualJoinDraft>(() => createManualJoinDraft());
-
   const upsertTemplateInCache = useCallback(
     (record: ReportTemplateDto) => {
       queryClient.setQueryData<ReportTemplateListResponse>(["reports", "templates"], (current) => {
@@ -864,29 +958,40 @@ const Reports = (props: GenericPageProps) => {
     [draft.models, modelMap]
   );
 
-  const selectedFieldDetails = useMemo(() => {
-    return draft.fields.flatMap((entry) => {
+  const selectedFieldDetails = useMemo<SelectedFieldDetail[]>(() => {
+    const details: SelectedFieldDetail[] = [];
+
+    draft.fields.forEach((entry) => {
       const model = modelMap.get(entry.modelId);
       if (!model) {
-        return [];
+        return;
       }
-      return entry.fieldIds
-        .map((fieldId) => {
-          const field = model.fields.find((candidate) => candidate.id === fieldId);
-          if (!field) {
-            return null;
-          }
-          return {
-            ...field,
-            modelId: model.id,
-            modelName: model.name,
-          };
-        })
-        .filter((field): field is DataField & { modelId: string; modelName: string } =>
-          Boolean(field)
-        );
+
+      entry.fieldIds.forEach((fieldId) => {
+        const field = model.fields.find((candidate) => candidate.id === fieldId);
+        if (!field) {
+          return;
+        }
+
+        const aliasKey = toColumnAlias(model.id, field.id);
+        const aliasValue = draft.columnAliases[aliasKey];
+
+        const detail: SelectedFieldDetail = {
+          ...field,
+          modelId: model.id,
+          modelName: model.name,
+        };
+
+        if (aliasValue !== undefined) {
+          detail.alias = aliasValue;
+        }
+
+        details.push(detail);
+      });
     });
-  }, [draft.fields, modelMap]);
+
+    return details;
+  }, [draft.columnAliases, draft.fields, modelMap]);
 
   const joinModelOptions = useMemo(() => {
     return draft.models
@@ -1011,7 +1116,7 @@ const Reports = (props: GenericPageProps) => {
     return lookup;
   }, [filterFieldOptions]);
 
-  const previewColumns = useMemo(() => {
+  const previewColumnsFromSelection = useMemo(() => {
     const columns = previewResult?.columns ?? [];
     if (columns.length === 0) {
       return columns;
@@ -1047,9 +1152,94 @@ const Reports = (props: GenericPageProps) => {
 
     return ordered;
   }, [draft.fields, previewResult]);
+
+  useEffect(() => {
+    setDraft((current) => {
+      if (!current || current.columnOrder.length === 0) {
+        return current;
+      }
+      const allowed = new Set(previewColumnsFromSelection);
+      const sanitized = current.columnOrder.filter((alias) => allowed.has(alias));
+      if (arraysShallowEqual(current.columnOrder, sanitized)) {
+        return current;
+      }
+      return {
+        ...current,
+        columnOrder: sanitized,
+      };
+    });
+  }, [previewColumnsFromSelection]);
+
+  useEffect(() => {
+    setDraft((current) => {
+      if (!current) {
+        return current;
+      }
+      const selectedAliases = new Set(
+        current.fields.flatMap((entry) =>
+          entry.fieldIds
+            .filter((fieldId): fieldId is string => Boolean(fieldId))
+            .map((fieldId) => toColumnAlias(entry.modelId, fieldId)),
+        ),
+      );
+      const aliasEntries = Object.entries(current.columnAliases);
+      const sanitizedEntries = aliasEntries.filter(
+        ([aliasKey, label]) => selectedAliases.has(aliasKey) && typeof label === "string" && label.trim().length > 0,
+      );
+      const sanitizedMap = sanitizedEntries.reduce<Record<string, string>>((accumulator, [key, value]) => {
+        const trimmed = value.trim();
+        if (trimmed.length > 0) {
+          accumulator[key] = trimmed;
+        }
+        return accumulator;
+      }, {});
+      if (recordsShallowEqual(current.columnAliases, sanitizedMap)) {
+        return current;
+      }
+      return {
+        ...current,
+        columnAliases: sanitizedMap,
+      };
+    });
+  }, [draft.fields]);
+
+  const previewColumns = useMemo(() => {
+    if (previewColumnsFromSelection.length === 0) {
+      return previewColumnsFromSelection;
+    }
+
+    const baseSet = new Set(previewColumnsFromSelection);
+    const sanitizedOverrides = draft.columnOrder.filter((alias) => baseSet.has(alias));
+    const remainder = previewColumnsFromSelection.filter((alias) => !sanitizedOverrides.includes(alias));
+
+    return [...sanitizedOverrides, ...remainder];
+  }, [draft.columnOrder, previewColumnsFromSelection]);
   const previewRows = useMemo(
     () => previewResult?.rows ?? [],
     [previewResult],
+  );
+
+  const movePreviewColumn = useCallback(
+    (alias: string, direction: "left" | "right") => {
+      const delta = direction === "left" ? -1 : 1;
+      const workingOrder = previewColumns;
+      const currentIndex = workingOrder.indexOf(alias);
+      if (currentIndex === -1) {
+        return;
+      }
+      const targetIndex = currentIndex + delta;
+      if (targetIndex < 0 || targetIndex >= workingOrder.length) {
+        return;
+      }
+      const nextOrder = [...workingOrder];
+      const [moved] = nextOrder.splice(currentIndex, 1);
+      nextOrder.splice(targetIndex, 0, moved);
+      setDraft((current) => ({
+        ...current,
+        columnOrder: nextOrder,
+      }));
+    },
+    [previewColumns],
   );
 
   const previewColumnMetadata = useMemo(() => {
@@ -1065,6 +1255,7 @@ const Reports = (props: GenericPageProps) => {
           {
             alias,
             fieldLabel: field?.label ?? humanizeAlias(alias),
+            customLabel: draft.columnAliases[alias],
             modelName: model?.name,
             modelId,
             tableName: model?.tableName,
@@ -1074,7 +1265,7 @@ const Reports = (props: GenericPageProps) => {
         ];
       }),
     );
-  }, [modelMap, previewColumns]);
+  }, [draft.columnAliases, modelMap, previewColumns]);
 
   const previewColumnSets = useMemo(() => {
     const numeric = new Set<string>();
@@ -1392,6 +1583,17 @@ const Reports = (props: GenericPageProps) => {
     setDraft((current) => {
       const hasModel = current.models.includes(modelId);
       if (hasModel) {
+        const aliasPrefix = `${modelId}__`;
+        const filteredColumnOrder = current.columnOrder.filter((alias) => !alias.startsWith(aliasPrefix));
+        const filteredColumnAliases = Object.entries(current.columnAliases).reduce<Record<string, string>>(
+          (accumulator, [aliasKey, value]) => {
+            if (!aliasKey.startsWith(aliasPrefix)) {
+              accumulator[aliasKey] = value;
+            }
+            return accumulator;
+          },
+          {},
+        );
         return {
           ...current,
           models: current.models.filter((id) => id !== modelId),
@@ -1404,6 +1606,8 @@ const Reports = (props: GenericPageProps) => {
               filter.leftModelId !== modelId &&
               (filter.rightType !== "field" || filter.rightModelId !== modelId),
           ),
+          columnOrder: filteredColumnOrder,
+          columnAliases: filteredColumnAliases,
         };
       }
       return {
@@ -1417,20 +1621,66 @@ const Reports = (props: GenericPageProps) => {
   };
 
   const handleFieldToggle = (modelId: string, fieldId: string) => {
+    const aliasKey = toColumnAlias(modelId, fieldId);
     setDraft((current) => {
-      const nextFields = current.fields.map((entry) => {
-        if (entry.modelId !== modelId) {
-          return entry;
+      const existingEntry = current.fields.find((entry) => entry.modelId === modelId);
+      const existingFieldIds = existingEntry?.fieldIds ?? [];
+      const fieldWasSelected = existingFieldIds.includes(fieldId);
+      const updatedFieldIds = fieldWasSelected
+        ? existingFieldIds.filter((id) => id !== fieldId)
+        : [...existingFieldIds, fieldId];
+
+      const nextFields = existingEntry
+        ? current.fields.map((entry) =>
+            entry.modelId === modelId ? { ...entry, fieldIds: updatedFieldIds } : entry,
+          )
+        : [...current.fields, { modelId, fieldIds: [fieldId] }];
+
+      const nextColumnOrder = fieldWasSelected
+        ? current.columnOrder.filter((alias) => alias !== aliasKey)
+        : current.columnOrder;
+
+      const nextColumnAliases = fieldWasSelected
+        ? omitRecordKey(current.columnAliases, aliasKey)
+        : current.columnAliases;
+
+      return {
+        ...current,
+        fields: nextFields,
+        columnOrder: nextColumnOrder,
+        columnAliases: nextColumnAliases,
+      };
+    });
+  };
+
+  const handleFieldAliasChange = (modelId: string, fieldId: string, alias: string) => {
+    const aliasKey = toColumnAlias(modelId, fieldId);
+    const trimmed = alias.trim();
+    setDraft((current) => {
+      const hasExistingAlias = Object.prototype.hasOwnProperty.call(current.columnAliases, aliasKey);
+      if (trimmed.length === 0) {
+        if (!hasExistingAlias) {
+          return current;
         }
-        const hasField = entry.fieldIds.includes(fieldId);
+        const nextAliases = omitRecordKey(current.columnAliases, aliasKey);
+        if (nextAliases === current.columnAliases) {
+          return current;
+        }
         return {
-          ...entry,
-          fieldIds: hasField
-            ? entry.fieldIds.filter((id) => id !== fieldId)
-            : [...entry.fieldIds, fieldId],
+          ...current,
+          columnAliases: nextAliases,
         };
-      });
-      return { ...current, fields: nextFields };
+      }
+      if (hasExistingAlias && current.columnAliases[aliasKey] === trimmed) {
+        return current;
+      }
+      return {
+        ...current,
+        columnAliases: {
+          ...current.columnAliases,
+          [aliasKey]: trimmed,
+        },
+      };
     });
   };
 
@@ -1471,22 +1721,34 @@ const Reports = (props: GenericPageProps) => {
       options: {
         autoDistribution: draft.autoDistribution,
         notifyTeam: draft.notifyTeam,
+        columnOrder: [...draft.columnOrder],
+        columnAliases: { ...draft.columnAliases },
       },
+      columnOrder: [...draft.columnOrder],
+      columnAliases: { ...draft.columnAliases },
     };
 
     try {
       const saved = await saveTemplateMutation.mutateAsync(payload);
       upsertTemplateInCache(saved);
       const mapped = mapTemplateFromApi(saved);
+      const mergedTemplate =
+        mapped.columnOrder.length > 0 || Object.keys(mapped.columnAliases).length > 0
+          ? mapped
+          : {
+              ...mapped,
+              columnOrder: [...draft.columnOrder],
+              columnAliases: { ...draft.columnAliases },
+            };
       setTemplates((current) => {
-        const exists = current.some((template) => template.id === mapped.id);
+        const exists = current.some((template) => template.id === mergedTemplate.id);
         if (exists) {
-          return current.map((template) => (template.id === mapped.id ? mapped : template));
+          return current.map((template) => (template.id === mergedTemplate.id ? mergedTemplate : template));
         }
-        return [...current, mapped];
+        return [...current, mergedTemplate];
       });
-      setSelectedTemplateId(mapped.id);
-      setDraft(deepClone(mapped));
+      setSelectedTemplateId(mergedTemplate.id);
+      setDraft(deepClone(mergedTemplate));
     } catch (error) {
       setTemplateError(extractAxiosErrorMessage(error, "Failed to save template"));
     }
@@ -1518,16 +1780,28 @@ const Reports = (props: GenericPageProps) => {
       options: {
         autoDistribution: true,
         notifyTeam: true,
+        columnOrder: [],
+        columnAliases: {},
       },
+      columnOrder: [],
+      columnAliases: {},
     };
 
     try {
       const created = await saveTemplateMutation.mutateAsync(payload);
       upsertTemplateInCache(created);
       const mapped = mapTemplateFromApi(created);
-      setTemplates((current) => [...current, mapped]);
-      setSelectedTemplateId(mapped.id);
-      setDraft(deepClone(mapped));
+      const mergedTemplate =
+        mapped.columnOrder.length > 0 || Object.keys(mapped.columnAliases).length > 0
+          ? mapped
+          : {
+              ...mapped,
+              columnOrder: [],
+              columnAliases: {},
+            };
+      setTemplates((current) => [...current, mergedTemplate]);
+      setSelectedTemplateId(mergedTemplate.id);
+      setDraft(deepClone(mergedTemplate));
     } catch (error) {
       setTemplateError(extractAxiosErrorMessage(error, "Failed to create template"));
     }
@@ -1554,16 +1828,28 @@ const Reports = (props: GenericPageProps) => {
       options: {
         autoDistribution: selectedTemplate.autoDistribution,
         notifyTeam: selectedTemplate.notifyTeam,
+        columnOrder: [...selectedTemplate.columnOrder],
+        columnAliases: { ...selectedTemplate.columnAliases },
       },
+      columnOrder: [...selectedTemplate.columnOrder],
+      columnAliases: { ...selectedTemplate.columnAliases },
     };
 
     try {
       const created = await saveTemplateMutation.mutateAsync(duplicatePayload);
       upsertTemplateInCache(created);
       const mapped = mapTemplateFromApi(created);
-      setTemplates((current) => [...current, mapped]);
-      setSelectedTemplateId(mapped.id);
-      setDraft(deepClone(mapped));
+      const mergedTemplate =
+        mapped.columnOrder.length > 0 || Object.keys(mapped.columnAliases).length > 0
+          ? mapped
+          : {
+              ...mapped,
+              columnOrder: [...selectedTemplate.columnOrder],
+              columnAliases: { ...selectedTemplate.columnAliases },
+            };
+      setTemplates((current) => [...current, mergedTemplate]);
+      setSelectedTemplateId(mergedTemplate.id);
+      setDraft(deepClone(mergedTemplate));
     } catch (error) {
       setTemplateError(extractAxiosErrorMessage(error, "Failed to duplicate template"));
     }
@@ -2752,6 +3038,7 @@ const Reports = (props: GenericPageProps) => {
                                 <Table.Thead>
                                   <Table.Tr>
                                     <Table.Th>Field</Table.Th>
+                                    <Table.Th>Alias</Table.Th>
                                     <Table.Th>Type</Table.Th>
                                     <Table.Th>Column</Table.Th>
                                     <Table.Th align="right">Include</Table.Th>
@@ -2760,6 +3047,8 @@ const Reports = (props: GenericPageProps) => {
                                 <Table.Tbody>
                                   {model.fields.map((field) => {
                                     const checked = selections.includes(field.id);
+                                    const aliasKey = toColumnAlias(model.id, field.id);
+                                    const aliasValue = draft.columnAliases[aliasKey] ?? "";
                                     return (
                                       <Table.Tr key={field.id}>
                                         <Table.Td>
@@ -2769,6 +3058,17 @@ const Reports = (props: GenericPageProps) => {
                                           <Text fz="xs" c="dimmed">
                                             {field.id}
                                           </Text>
+                                        </Table.Td>
+                                        <Table.Td>
+                                          <TextInput
+                                            size="xs"
+                                            placeholder="Custom label"
+                                            value={aliasValue}
+                                            disabled={!checked}
+                                            onChange={(event) =>
+                                              handleFieldAliasChange(model.id, field.id, event.currentTarget.value)
+                                            }
+                                          />
                                         </Table.Td>
                                         <Table.Td>
                                           <Badge size="xs" variant="light">
@@ -3236,7 +3536,7 @@ const Reports = (props: GenericPageProps) => {
                       >
                         <Table.Thead>
                           <Table.Tr>
-                            {previewColumns.map((column) => {
+                            {previewColumns.map((column, columnIndex) => {
                               const metadata = previewColumnMetadata.get(column);
                               const tableDescriptor =
                                 metadata?.modelName ?? metadata?.tableName ?? metadata?.modelId;
@@ -3244,20 +3544,62 @@ const Reports = (props: GenericPageProps) => {
                                 metadata?.modelId && metadata?.fieldId
                                   ? `${metadata.modelId}.${metadata.fieldId}`
                                   : metadata?.fieldId ?? metadata?.sourceColumn;
+                              const baseLabel = metadata?.fieldLabel ?? humanizeAlias(column);
+                              const customLabel =
+                                metadata?.customLabel && metadata.customLabel.length > 0
+                                  ? metadata.customLabel
+                                  : undefined;
+                              const displayLabel = customLabel ?? baseLabel;
+                              const secondarySegments: string[] = [];
+                              if (customLabel && customLabel !== baseLabel) {
+                                secondarySegments.push(baseLabel);
+                              }
+                              if (tableDescriptor) {
+                                secondarySegments.push(tableDescriptor);
+                              }
+                              if (technicalDescriptor) {
+                                secondarySegments.push(technicalDescriptor);
+                              }
+                              const subtitle = secondarySegments.join(" / ");
+                              const isFirst = columnIndex === 0;
+                              const isLast = columnIndex === previewColumns.length - 1;
+                              const showReorder = previewColumns.length > 1;
                               return (
                                 <Table.Th key={column}>
-                                  <Box>
-                                    <Text fw={600} fz="sm">
-                                      {metadata?.fieldLabel ?? humanizeAlias(column)}
-                                    </Text>
-                                    {(tableDescriptor || technicalDescriptor) && (
-                                      <Text fz="xs" c="dimmed">
-                                        {tableDescriptor ?? ""}
-                                        {tableDescriptor && technicalDescriptor ? " / " : ""}
-                                        {technicalDescriptor ?? ""}
+                                  <Group gap="xs" justify="space-between" align="flex-start">
+                                    <Box>
+                                      <Text fw={600} fz="sm">
+                                        {displayLabel}
                                       </Text>
+                                      {subtitle && (
+                                        <Text fz="xs" c="dimmed">
+                                          {subtitle}
+                                        </Text>
+                                      )}
+                                    </Box>
+                                    {showReorder && (
+                                      <Group gap={4}>
+                                        <ActionIcon
+                                          size="sm"
+                                          variant="subtle"
+                                          aria-label={`Move ${displayLabel} left`}
+                                          onClick={() => movePreviewColumn(column, "left")}
+                                          disabled={isFirst}
+                                        >
+                                          <IconArrowLeft size={14} />
+                                        </ActionIcon>
+                                        <ActionIcon
+                                          size="sm"
+                                          variant="subtle"
+                                          aria-label={`Move ${displayLabel} right`}
+                                          onClick={() => movePreviewColumn(column, "right")}
+                                          disabled={isLast}
+                                        >
+                                          <IconArrowRight size={14} />
+                                        </ActionIcon>
+                                      </Group>
                                     )}
-                                  </Box>
+                                  </Group>
                                 </Table.Th>
                               );
                             })}

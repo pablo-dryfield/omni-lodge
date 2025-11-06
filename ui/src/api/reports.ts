@@ -88,6 +88,8 @@ export const useRunReportPreview = () =>
 export type ReportTemplateOptionsDto = {
   autoDistribution: boolean;
   notifyTeam: boolean;
+  columnOrder?: string[];
+  columnAliases?: Record<string, string>;
 };
 
 export type ReportTemplateDto = {
@@ -109,6 +111,8 @@ export type ReportTemplateDto = {
   };
   createdAt: string;
   updatedAt: string;
+  columnOrder?: string[];
+  columnAliases?: Record<string, string>;
 };
 
 export type ReportTemplateListResponse = {
@@ -128,6 +132,8 @@ export type SaveReportTemplateRequest = {
   metrics: string[];
   filters: unknown[];
   options: ReportTemplateOptionsDto;
+  columnOrder?: string[];
+  columnAliases?: Record<string, string>;
 };
 
 export const useReportTemplates = () =>

@@ -20,6 +20,8 @@ export type ReportTemplateFieldSelection = {
 export type ReportTemplateOptions = {
   autoDistribution: boolean;
   notifyTeam: boolean;
+  columnOrder: string[];
+  columnAliases: Record<string, string>;
 };
 
 @Table({
@@ -86,7 +88,7 @@ export default class ReportTemplate extends Model {
   declare filters: unknown[];
 
   @AllowNull(false)
-  @Default({ autoDistribution: true, notifyTeam: true })
+  @Default({ autoDistribution: true, notifyTeam: true, columnOrder: [], columnAliases: {} })
   @Column({ type: DataType.JSONB })
   declare options: ReportTemplateOptions;
 
