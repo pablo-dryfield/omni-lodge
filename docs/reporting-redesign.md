@@ -1,10 +1,10 @@
 # Reporting Platform Redesign – Technical Plan
 
 ## Task Tracker
-- [ ] Backend: define `QueryConfig` contract and schema migrations
-- [ ] Backend: implement query builder, caching, async jobs, RBAC hooks
-- [ ] Backend: expose expanded reporting APIs (query, templates, dashboards, derived fields)
-- [ ] Frontend: update shared data models/state to new contract
+- [x] Backend: define `QueryConfig` contract and schema migrations
+- [x] Backend: implement query builder, caching, async jobs, RBAC hooks
+- [x] Backend: expose expanded reporting APIs (query, templates, dashboards, derived fields)
+- [x] Frontend: update shared data models/state to new contract
 - [ ] Frontend: rebuild Visuals & Analytics with advanced charting and interactions
 - [ ] Frontend: enhance template builder (library, joins graph, spotlight, scheduling, export)
 - [ ] Frontend: add dashboards builder/viewer/export flows

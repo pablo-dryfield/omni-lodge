@@ -64,6 +64,9 @@ import {
   useRunReportPreview,
   useSaveReportTemplate,
   useDeleteReportTemplate,
+  type QueryConfig,
+  type DerivedFieldDefinitionDto,
+  type MetricSpotlightDefinitionDto,
   type ReportModelFieldResponse,
   type ReportModelPayload,
   type ReportPreviewRequest,
@@ -206,6 +209,9 @@ type ReportTemplate = {
   filters: ReportFilter[];
   columnOrder: string[];
   columnAliases: Record<string, string>;
+  queryConfig: QueryConfig | null;
+  derivedFields: DerivedFieldDefinitionDto[];
+  metricsSpotlight: MetricSpotlightDefinitionDto[];
 };
 
 const DEFAULT_CONNECTION_LABEL = "OmniLodge core database";
@@ -342,6 +348,9 @@ const createEmptyTemplate = (): ReportTemplate => ({
   filters: [],
   columnOrder: [],
   columnAliases: {},
+  queryConfig: null,
+  derivedFields: [],
+  metricsSpotlight: [],
 });
 
 const DEFAULT_VISUAL: VisualDefinition = {
@@ -594,6 +603,111 @@ const formatLastUpdatedLabel = (value?: string | Date | null) => {
   });
 };
 
+const normalizeQueryConfig = (candidate: unknown): QueryConfig | null => {
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+  const parsed = candidate as QueryConfig;
+  if (!Array.isArray(parsed.models) || parsed.models.some((model) => typeof model !== "string")) {
+    return null;
+  }
+  return deepClone(parsed);
+};
+
+const normalizeDerivedFields = (candidate: unknown): DerivedFieldDefinitionDto[] => {
+  if (!Array.isArray(candidate)) {
+    return [];
+  }
+
+  return candidate
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const record = entry as Record<string, unknown>;
+      const id = typeof record.id === "string" ? record.id.trim() : "";
+      const name = typeof record.name === "string" ? record.name.trim() : "";
+      const expression = typeof record.expression === "string" ? record.expression.trim() : "";
+      const kind = record.kind === "aggregate" ? "aggregate" : record.kind === "row" ? "row" : null;
+      if (!id || !name || !expression || !kind) {
+        return null;
+      }
+      const scope: DerivedFieldDefinitionDto["scope"] =
+        record.scope === "workspace" ? "workspace" : "template";
+      const metadata =
+        record.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata)
+          ? (deepClone(record.metadata) as Record<string, unknown>)
+          : undefined;
+      return {
+        id,
+        name,
+        expression,
+        kind,
+        scope,
+        ...(metadata ? { metadata } : {}),
+      };
+    })
+    .filter((entry): entry is DerivedFieldDefinitionDto => Boolean(entry));
+};
+
+const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitionDto[] => {
+  if (!Array.isArray(candidate)) {
+    return [];
+  }
+
+  const comparisonValues: ReadonlyArray<MetricSpotlightDefinitionDto["comparison"]> = [
+    "previous",
+    "wow",
+    "mom",
+    "yoy",
+  ];
+  const formatValues: ReadonlyArray<MetricSpotlightDefinitionDto["format"]> = [
+    "number",
+    "currency",
+    "percentage",
+  ];
+
+  return candidate
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const record = entry as Record<string, unknown>;
+      const metric = typeof record.metric === "string" ? record.metric.trim() : "";
+      const label = typeof record.label === "string" ? record.label.trim() : "";
+      if (!metric || !label) {
+        return null;
+      }
+      const targetRaw = record.target;
+      const numericTarget =
+        typeof targetRaw === "number"
+          ? targetRaw
+          : typeof targetRaw === "string"
+          ? Number(targetRaw)
+          : undefined;
+      const target =
+        typeof numericTarget === "number" && Number.isFinite(numericTarget) ? numericTarget : undefined;
+      const comparisonCandidate =
+        typeof record.comparison === "string"
+          ? (record.comparison as MetricSpotlightDefinitionDto["comparison"])
+          : null;
+      const comparison =
+        comparisonCandidate && comparisonValues.includes(comparisonCandidate) ? comparisonCandidate : undefined;
+      const formatCandidate =
+        typeof record.format === "string" ? (record.format as MetricSpotlightDefinitionDto["format"]) : null;
+      const format = formatCandidate && formatValues.includes(formatCandidate) ? formatCandidate : undefined;
+
+      return {
+        metric,
+        label,
+        ...(target !== undefined ? { target } : {}),
+        ...(comparison ? { comparison } : {}),
+        ...(format ? { format } : {}),
+      };
+    })
+    .filter((entry): entry is MetricSpotlightDefinitionDto => Boolean(entry));
+};
+
 const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
   const rawColumnOrder = Array.isArray(template.columnOrder)
     ? template.columnOrder
@@ -615,6 +729,10 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
     }
     return accumulator;
   }, {});
+
+  const queryConfig = normalizeQueryConfig(template.queryConfig);
+  const derivedFields = normalizeDerivedFields(template.derivedFields);
+  const metricsSpotlight = normalizeMetricSpotlights(template.metricsSpotlight);
 
   const columnOrder = rawColumnOrder.filter(
     (alias): alias is string => typeof alias === "string" && alias.length > 0,
@@ -723,6 +841,9 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
     filters: Array.isArray(template.filters) ? (template.filters as ReportFilter[]) : [],
     columnOrder,
     columnAliases,
+    queryConfig,
+    derivedFields,
+    metricsSpotlight,
   };
 };
 
@@ -1711,6 +1832,9 @@ const Reports = (props: GenericPageProps) => {
         columnOrder: [...draft.columnOrder],
         columnAliases: { ...draft.columnAliases },
       },
+      queryConfig: draft.queryConfig ? deepClone(draft.queryConfig) : null,
+      derivedFields: deepClone(draft.derivedFields),
+      metricsSpotlight: deepClone(draft.metricsSpotlight),
       columnOrder: [...draft.columnOrder],
       columnAliases: { ...draft.columnAliases },
     };
@@ -1770,6 +1894,9 @@ const Reports = (props: GenericPageProps) => {
         columnOrder: [],
         columnAliases: {},
       },
+      queryConfig: null,
+      derivedFields: [],
+      metricsSpotlight: [],
       columnOrder: [],
       columnAliases: {},
     };
@@ -1818,6 +1945,11 @@ const Reports = (props: GenericPageProps) => {
         columnOrder: [...selectedTemplate.columnOrder],
         columnAliases: { ...selectedTemplate.columnAliases },
       },
+      queryConfig: selectedTemplate.queryConfig
+        ? deepClone(selectedTemplate.queryConfig)
+        : null,
+      derivedFields: deepClone(selectedTemplate.derivedFields),
+      metricsSpotlight: deepClone(selectedTemplate.metricsSpotlight),
       columnOrder: [...selectedTemplate.columnOrder],
       columnAliases: { ...selectedTemplate.columnAliases },
     };
