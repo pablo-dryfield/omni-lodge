@@ -5,7 +5,7 @@
 - [x] Backend: implement query builder, caching, async jobs, RBAC hooks
 - [x] Backend: expose expanded reporting APIs (query, templates, dashboards, derived fields)
 - [x] Frontend: update shared data models/state to new contract
-- [ ] Frontend: rebuild Visuals & Analytics with advanced charting and interactions
+- [x] Frontend: rebuild Visuals & Analytics with advanced charting and interactions
 - [ ] Frontend: enhance template builder (library, joins graph, spotlight, scheduling, export)
 - [ ] Frontend: add dashboards builder/viewer/export flows
 - [ ] Cross-cutting: derived field manager, scheduling UI, Google Drive export, notifications
