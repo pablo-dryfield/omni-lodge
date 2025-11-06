@@ -70,6 +70,7 @@ import {
   type QueryConfigMetric,
   type QueryConfigDimension,
   type QueryConfigFilter,
+  type QueryConfigFilterValue,
   type ReportQueryResult,
   type ReportQuerySuccessResponse,
   type ReportQueryJobResponse,
@@ -267,7 +268,9 @@ const AGGREGATION_LABELS: Record<QueryConfigMetric["aggregation"], string> = {
   count_distinct: "Unique count",
 };
 
-const DIMENSION_BUCKETS: QueryConfigDimension["bucket"][] = [
+type TimeBucket = Exclude<QueryConfigDimension["bucket"], undefined>;
+
+const DIMENSION_BUCKETS: TimeBucket[] = [
   "hour",
   "day",
   "week",
@@ -276,7 +279,7 @@ const DIMENSION_BUCKETS: QueryConfigDimension["bucket"][] = [
   "year",
 ];
 
-const BUCKET_LABELS: Record<QueryConfigDimension["bucket"], string> = {
+const BUCKET_LABELS: Record<TimeBucket, string> = {
   hour: "Hour",
   day: "Day",
   week: "Week",
@@ -1724,79 +1727,6 @@ const Reports = (props: GenericPageProps) => {
   }, [orderedNumericColumns, orderedTextualColumns]);
 
   const activeVisual = draft.visuals[0] ?? DEFAULT_VISUAL;
-
-  const chartMetricAlias = visualQueryDescriptor.metricAlias ?? "";
-  const chartDimensionAlias = visualQueryDescriptor.dimensionAlias ?? "";
-  const chartComparisonAlias = visualQueryDescriptor.comparisonAlias ?? undefined;
-
-  const chartData = useMemo(() => {
-    if (!chartMetricAlias || !chartDimensionAlias) {
-      return [];
-    }
-
-    if (
-      !visualColumns.includes(chartMetricAlias) ||
-      !visualColumns.includes(chartDimensionAlias)
-    ) {
-      return [];
-    }
-
-    return visualRows
-      .map((row) => {
-        const dimensionValue = coerceString(row[chartDimensionAlias]);
-        const metricValue = coerceNumber(row[chartMetricAlias]);
-        if (!dimensionValue || metricValue === null) {
-          return null;
-        }
-        const point: { dimension: string; primary: number; secondary?: number } = {
-          dimension: dimensionValue,
-          primary: metricValue,
-        };
-        if (chartComparisonAlias) {
-          const comparisonValue = coerceNumber(row[chartComparisonAlias]);
-          if (comparisonValue !== null) {
-            point.secondary = comparisonValue;
-          }
-        }
-        return point;
-      })
-      .filter(
-        (value): value is { dimension: string; primary: number; secondary?: number } => value !== null,
-      );
-  }, [chartComparisonAlias, chartDimensionAlias, chartMetricAlias, visualColumns, visualRows]);
-
-  const hasChartData = chartData.length > 0;
-  const metricAggregationLabel = AGGREGATION_LABELS[activeVisual.metricAggregation ?? "sum"];
-  const metricLabelBase = visualQueryDescriptor.metricLabel || "Metric";
-  const metricLabel =
-    activeVisual.metric && metricAggregationLabel
-      ? `${metricLabelBase} (${metricAggregationLabel})`
-      : metricLabelBase;
-  const dimensionBucketLabel = activeVisual.dimensionBucket
-    ? BUCKET_LABELS[activeVisual.dimensionBucket]
-    : null;
-  const dimensionLabelBase = visualQueryDescriptor.dimensionLabel || "Dimension";
-  const dimensionLabel = dimensionBucketLabel
-    ? `${dimensionLabelBase} (${dimensionBucketLabel})`
-    : dimensionLabelBase;
-  const comparisonAggregationLabel = activeVisual.comparison
-    ? AGGREGATION_LABELS[
-        activeVisual.comparisonAggregation ?? activeVisual.metricAggregation ?? "sum"
-      ]
-    : null;
-  const comparisonLabel =
-    activeVisual.comparison && visualQueryDescriptor.comparisonLabel
-      ? comparisonAggregationLabel
-        ? `${visualQueryDescriptor.comparisonLabel} (${comparisonAggregationLabel})`
-        : visualQueryDescriptor.comparisonLabel
-      : undefined;
-
-  const formatNumberForDisplay = useCallback(
-    (value: number) =>
-      Number.isFinite(value) ? value.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—",
-    [],
-  );
-
   const visualQueryDescriptor = useMemo<VisualQueryDescriptor>(() => {
     const emptyDescriptor: VisualQueryDescriptor = {
       config: null,
@@ -1974,6 +1904,81 @@ const Reports = (props: GenericPageProps) => {
     getColumnLabel,
   ]);
 
+  const chartMetricAlias = visualQueryDescriptor.metricAlias ?? "";
+  const chartDimensionAlias = visualQueryDescriptor.dimensionAlias ?? "";
+  const chartComparisonAlias = visualQueryDescriptor.comparisonAlias ?? undefined;
+  const visualRows = useMemo(() => visualResult?.rows ?? [], [visualResult]);
+  const visualColumns = useMemo(() => visualResult?.columns ?? [], [visualResult]);
+
+
+  const chartData = useMemo(() => {
+    if (!chartMetricAlias || !chartDimensionAlias) {
+      return [];
+    }
+
+    if (
+      !visualColumns.includes(chartMetricAlias) ||
+      !visualColumns.includes(chartDimensionAlias)
+    ) {
+      return [];
+    }
+
+    return visualRows
+      .map((row) => {
+        const dimensionValue = coerceString(row[chartDimensionAlias]);
+        const metricValue = coerceNumber(row[chartMetricAlias]);
+        if (!dimensionValue || metricValue === null) {
+          return null;
+        }
+        const point: { dimension: string; primary: number; secondary?: number } = {
+          dimension: dimensionValue,
+          primary: metricValue,
+        };
+        if (chartComparisonAlias) {
+          const comparisonValue = coerceNumber(row[chartComparisonAlias]);
+          if (comparisonValue !== null) {
+            point.secondary = comparisonValue;
+          }
+        }
+        return point;
+      })
+      .filter(
+        (value): value is { dimension: string; primary: number; secondary?: number } => value !== null,
+      );
+  }, [chartComparisonAlias, chartDimensionAlias, chartMetricAlias, visualColumns, visualRows]);
+
+  const hasChartData = chartData.length > 0;
+  const metricAggregationLabel = AGGREGATION_LABELS[activeVisual.metricAggregation ?? "sum"];
+  const metricLabelBase = visualQueryDescriptor.metricLabel || "Metric";
+  const metricLabel =
+    activeVisual.metric && metricAggregationLabel
+      ? `${metricLabelBase} (${metricAggregationLabel})`
+      : metricLabelBase;
+  const dimensionBucketLabel = activeVisual.dimensionBucket
+    ? BUCKET_LABELS[activeVisual.dimensionBucket]
+    : null;
+  const dimensionLabelBase = visualQueryDescriptor.dimensionLabel || "Dimension";
+  const dimensionLabel = dimensionBucketLabel
+    ? `${dimensionLabelBase} (${dimensionBucketLabel})`
+    : dimensionLabelBase;
+  const comparisonAggregationLabel = activeVisual.comparison
+    ? AGGREGATION_LABELS[
+        activeVisual.comparisonAggregation ?? activeVisual.metricAggregation ?? "sum"
+      ]
+    : null;
+  const comparisonLabel =
+    activeVisual.comparison && visualQueryDescriptor.comparisonLabel
+      ? comparisonAggregationLabel
+        ? `${visualQueryDescriptor.comparisonLabel} (${comparisonAggregationLabel})`
+        : visualQueryDescriptor.comparisonLabel
+      : undefined;
+
+  const formatNumberForDisplay = useCallback(
+    (value: number) =>
+      Number.isFinite(value) ? value.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—",
+    [],
+  );
+
   const aggregationOptions = useMemo(
     () =>
       METRIC_AGGREGATIONS.map((value) => ({
@@ -2114,8 +2119,6 @@ const Reports = (props: GenericPageProps) => {
     };
   }, [visualJob]);
 
-  const visualRows = visualResult?.rows ?? [];
-  const visualColumns = visualResult?.columns ?? [];
   const analyticsRunLabel = useMemo(
     () => (visualExecutedAt ? formatLastUpdatedLabel(visualExecutedAt) : null),
     [visualExecutedAt],
