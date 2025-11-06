@@ -24,6 +24,7 @@ import {
   TextInput,
   Textarea,
   ThemeIcon,
+  Loader,
   Title,
 } from "@mantine/core";
 import {
@@ -62,9 +63,17 @@ import {
   useReportModels,
   useReportTemplates,
   useRunReportPreview,
+  useRunReportQuery,
   useSaveReportTemplate,
   useDeleteReportTemplate,
   type QueryConfig,
+  type QueryConfigMetric,
+  type QueryConfigDimension,
+  type QueryConfigFilter,
+  type ReportQueryResult,
+  type ReportQuerySuccessResponse,
+  type ReportQueryJobResponse,
+  getReportQueryJob,
   type DerivedFieldDefinitionDto,
   type MetricSpotlightDefinitionDto,
   type ReportModelFieldResponse,
@@ -150,8 +159,12 @@ type VisualDefinition = {
   name: string;
   type: "line" | "area";
   metric: string;
+  metricAggregation?: QueryConfigMetric["aggregation"];
   dimension: string;
+  dimensionBucket?: QueryConfigDimension["bucket"];
   comparison?: string;
+  comparisonAggregation?: QueryConfigMetric["aggregation"];
+  limit?: number | null;
 };
 
 type FilterValueKind = "string" | "number" | "date" | "boolean";
@@ -191,6 +204,19 @@ type FilterFieldOption = {
   field: DataField;
 };
 
+type VisualQueryDescriptor = {
+  config: QueryConfig | null;
+  metricAlias: string | null;
+  dimensionAlias: string | null;
+  comparisonAlias: string | null;
+  metricBaseAlias: string | null;
+  dimensionBaseAlias: string | null;
+  metricLabel: string;
+  dimensionLabel: string;
+  comparisonLabel?: string;
+  warnings: string[];
+};
+
 type ReportTemplate = {
   id: string;
   name: string;
@@ -222,6 +248,57 @@ const JOIN_TYPE_OPTIONS: { value: JoinCondition["joinType"]; label: string }[] =
   { value: "right", label: "Right join" },
   { value: "full", label: "Full outer join" },
 ];
+
+const METRIC_AGGREGATIONS: QueryConfigMetric["aggregation"][] = [
+  "sum",
+  "avg",
+  "min",
+  "max",
+  "count",
+  "count_distinct",
+];
+
+const AGGREGATION_LABELS: Record<QueryConfigMetric["aggregation"], string> = {
+  sum: "Sum",
+  avg: "Average",
+  min: "Minimum",
+  max: "Maximum",
+  count: "Count",
+  count_distinct: "Unique count",
+};
+
+const DIMENSION_BUCKETS: QueryConfigDimension["bucket"][] = [
+  "hour",
+  "day",
+  "week",
+  "month",
+  "quarter",
+  "year",
+];
+
+const BUCKET_LABELS: Record<QueryConfigDimension["bucket"], string> = {
+  hour: "Hour",
+  day: "Day",
+  week: "Week",
+  month: "Month",
+  quarter: "Quarter",
+  year: "Year",
+};
+
+const isReportQuerySuccess = (
+  result: ReportQueryResult,
+): result is ReportQuerySuccessResponse => {
+  return Boolean(
+    result &&
+      typeof result === "object" &&
+      Array.isArray((result as ReportQuerySuccessResponse).rows) &&
+      Array.isArray((result as ReportQuerySuccessResponse).columns),
+  );
+};
+
+const isReportQueryJob = (result: ReportQueryResult): result is ReportQueryJobResponse => {
+  return Boolean(result && typeof result === "object" && "jobId" in result);
+};
 
 const createManualJoinDraft = (joinType: JoinCondition["joinType"] = "left"): ManualJoinDraft => ({
   leftModelId: "",
@@ -359,9 +436,126 @@ const DEFAULT_VISUAL: VisualDefinition = {
   type: "line",
   metric: "",
   dimension: "",
+  metricAggregation: "sum",
+  limit: 100,
 };
 
 const toColumnAlias = (modelId: string, fieldId: string) => `${modelId}__${fieldId}`;
+
+const parseColumnAlias = (
+  alias: string | undefined,
+): { modelId: string; fieldId: string } | null => {
+  if (!alias || typeof alias !== "string") {
+    return null;
+  }
+  const parts = alias.split("__");
+  if (parts.length < 2) {
+    return null;
+  }
+  const [modelId, ...fieldParts] = parts;
+  const fieldId = fieldParts.join("__");
+  if (!modelId || !fieldId) {
+    return null;
+  }
+  return { modelId, fieldId };
+};
+
+const buildMetricAggregationAlias = (
+  baseAlias: string,
+  aggregation: QueryConfigMetric["aggregation"],
+) => `${baseAlias}_${aggregation}`;
+
+const buildDimensionAlias = (
+  baseAlias: string,
+  bucket?: QueryConfigDimension["bucket"],
+) => (bucket ? `${baseAlias}_${bucket}` : baseAlias);
+
+const normalizeFiltersForQuery = (
+  filters: ReportFilter[],
+): { filters: QueryConfigFilter[]; warnings: string[] } => {
+  const supportedOperators: Partial<Record<FilterOperator, QueryConfigFilter["operator"]>> = {
+    eq: "eq",
+    neq: "neq",
+    gt: "gt",
+    gte: "gte",
+    lt: "lt",
+    lte: "lte",
+  };
+
+  const normalized: QueryConfigFilter[] = [];
+  const warnings: string[] = [];
+
+  filters.forEach((filter) => {
+    if (filter.rightType === "field") {
+      warnings.push(
+        `Filter on ${filter.leftModelId}.${filter.leftFieldId} compares to another field and was skipped for analytics.`,
+      );
+      return;
+    }
+
+    const operator = supportedOperators[filter.operator];
+    if (!operator) {
+      warnings.push(
+        `Filter operator "${filter.operator}" on ${filter.leftModelId}.${filter.leftFieldId} is not supported for analytics and was skipped.`,
+      );
+      return;
+    }
+
+    let value: QueryConfigFilterValue | undefined;
+    if (filter.valueKind === "boolean") {
+      if (filter.value === "true") {
+        value = true;
+      } else if (filter.value === "false") {
+        value = false;
+      } else {
+        warnings.push(
+          `Filter on ${filter.leftModelId}.${filter.leftFieldId} has an invalid boolean value and was skipped.`,
+        );
+        return;
+      }
+    } else if (filter.valueKind === "number") {
+      if (filter.value === undefined || filter.value === "") {
+        warnings.push(
+          `Filter on ${filter.leftModelId}.${filter.leftFieldId} requires a numeric value and was skipped.`,
+        );
+        return;
+      }
+      const numericValue = Number(filter.value);
+      if (!Number.isFinite(numericValue)) {
+        warnings.push(
+          `Filter on ${filter.leftModelId}.${filter.leftFieldId} has an invalid number and was skipped.`,
+        );
+        return;
+      }
+      value = numericValue;
+    } else if (filter.valueKind === "date") {
+      if (!filter.value) {
+        warnings.push(
+          `Filter on ${filter.leftModelId}.${filter.leftFieldId} requires a date value and was skipped.`,
+        );
+        return;
+      }
+      value = filter.value;
+    } else {
+      if (!filter.value) {
+        warnings.push(
+          `Filter on ${filter.leftModelId}.${filter.leftFieldId} requires a value and was skipped.`,
+        );
+        return;
+      }
+      value = filter.value;
+    }
+
+    normalized.push({
+      modelId: filter.leftModelId,
+      fieldId: filter.leftFieldId,
+      operator,
+      value,
+    });
+  });
+
+  return { filters: normalized, warnings };
+};
 
 const arraysShallowEqual = <T,>(first: readonly T[], second: readonly T[]) =>
   first.length === second.length && first.every((value, index) => value === second[index]);
@@ -800,6 +994,44 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
               ? candidate.comparison.trim()
               : undefined;
           const typeCandidate = candidate.type === "area" ? "area" : "line";
+          const metricAggregationCandidate =
+            typeof candidate.metricAggregation === "string"
+              ? (candidate.metricAggregation as QueryConfigMetric["aggregation"])
+              : null;
+          const comparisonAggregationCandidate =
+            typeof candidate.comparisonAggregation === "string"
+              ? (candidate.comparisonAggregation as QueryConfigMetric["aggregation"])
+              : null;
+          const dimensionBucketCandidate =
+            typeof candidate.dimensionBucket === "string"
+              ? (candidate.dimensionBucket as QueryConfigDimension["bucket"])
+              : null;
+          const limitCandidate =
+            typeof candidate.limit === "number"
+              ? candidate.limit
+              : typeof candidate.limit === "string"
+              ? Number(candidate.limit)
+              : null;
+
+          const metricAggregation = METRIC_AGGREGATIONS.includes(
+            (metricAggregationCandidate ?? "sum") as QueryConfigMetric["aggregation"],
+          )
+            ? (metricAggregationCandidate ?? "sum")
+            : "sum";
+          const dimensionBucket =
+            dimensionBucketCandidate && DIMENSION_BUCKETS.includes(dimensionBucketCandidate)
+              ? dimensionBucketCandidate
+              : undefined;
+          const comparisonAggregation =
+            comparisonCandidate &&
+            comparisonAggregationCandidate &&
+            METRIC_AGGREGATIONS.includes(comparisonAggregationCandidate)
+              ? comparisonAggregationCandidate
+              : undefined;
+          const limit =
+            limitCandidate !== null && Number.isFinite(limitCandidate) && limitCandidate > 0
+              ? Math.round(Number(limitCandidate))
+              : 100;
 
           const visual: VisualDefinition = {
             id: idCandidate.length > 0 ? idCandidate : `visual-${index}`,
@@ -807,10 +1039,16 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
             type: typeCandidate,
             metric: metricCandidate,
             dimension: dimensionCandidate,
+            metricAggregation,
+            dimensionBucket,
+            limit,
           };
 
           if (comparisonCandidate) {
             visual.comparison = comparisonCandidate;
+            if (comparisonAggregation) {
+              visual.comparisonAggregation = comparisonAggregation;
+            }
           }
 
           return visual;
@@ -873,6 +1111,7 @@ const Reports = (props: GenericPageProps) => {
 
   const queryClient = useQueryClient();
   const { mutateAsync: runPreview, isPending: isPreviewLoading } = useRunReportPreview();
+  const { mutateAsync: runAnalyticsQuery, isPending: isAnalyticsMutationPending } = useRunReportQuery();
 
   const {
     data: templatesResponse,
@@ -891,6 +1130,13 @@ const Reports = (props: GenericPageProps) => {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [templateError, setTemplateError] = useState<string | null>(null);
   const [manualJoinDraft, setManualJoinDraft] = useState<ManualJoinDraft>(() => createManualJoinDraft());
+  const [visualResult, setVisualResult] = useState<ReportQuerySuccessResponse | null>(null);
+  const [visualQueryError, setVisualQueryError] = useState<string | null>(null);
+  const [visualWarnings, setVisualWarnings] = useState<string[]>([]);
+  const [visualJob, setVisualJob] = useState<{ jobId: string; hash?: string } | null>(null);
+  const [visualJobStatus, setVisualJobStatus] = useState<ReportQueryJobResponse["status"] | null>(null);
+  const [isVisualQueryRunning, setIsVisualQueryRunning] = useState(false);
+  const [visualExecutedAt, setVisualExecutedAt] = useState<string | null>(null);
   const upsertTemplateInCache = useCallback(
     (record: ReportTemplateDto) => {
       queryClient.setQueryData<ReportTemplateListResponse>(["reports", "templates"], (current) => {
@@ -999,6 +1245,14 @@ const Reports = (props: GenericPageProps) => {
 
     return details;
   }, [draft.columnAliases, draft.fields, modelMap]);
+
+  const fieldDetailByAlias = useMemo(() => {
+    const map = new Map<string, SelectedFieldDetail>();
+    selectedFieldDetails.forEach((detail) => {
+      map.set(toColumnAlias(detail.modelId, detail.id), detail);
+    });
+    return map;
+  }, [selectedFieldDetails]);
 
   const joinModelOptions = useMemo(() => {
     return draft.models
@@ -1403,6 +1657,22 @@ const Reports = (props: GenericPageProps) => {
         const type: VisualDefinition["type"] = visual.type === "area" ? "area" : "line";
         const name = visual.name && visual.name.trim().length > 0 ? visual.name : `Visual ${index + 1}`;
         const id = visual.id && visual.id.trim().length > 0 ? visual.id : `visual-${index}`;
+        const metricAggregation =
+          visual.metricAggregation && METRIC_AGGREGATIONS.includes(visual.metricAggregation)
+            ? visual.metricAggregation
+            : "sum";
+        const dimensionBucket =
+          visual.dimensionBucket && DIMENSION_BUCKETS.includes(visual.dimensionBucket)
+            ? visual.dimensionBucket
+            : undefined;
+        const comparisonAggregation =
+          visual.comparisonAggregation && METRIC_AGGREGATIONS.includes(visual.comparisonAggregation)
+            ? visual.comparisonAggregation
+            : undefined;
+        const limitValue =
+          typeof visual.limit === "number" && Number.isFinite(visual.limit) && visual.limit > 0
+            ? Math.round(visual.limit)
+            : 100;
 
         const nextVisual: VisualDefinition = {
           id,
@@ -1410,9 +1680,15 @@ const Reports = (props: GenericPageProps) => {
           type,
           metric: metricAlias,
           dimension: dimensionAlias,
+          metricAggregation,
+          dimensionBucket,
+          limit: limitValue,
         };
         if (comparisonAlias) {
           nextVisual.comparison = comparisonAlias;
+          if (comparisonAggregation) {
+            nextVisual.comparisonAggregation = comparisonAggregation;
+          }
         }
 
         if (
@@ -1421,7 +1697,11 @@ const Reports = (props: GenericPageProps) => {
           comparisonAlias !== visual.comparison ||
           type !== visual.type ||
           name !== visual.name ||
-          id !== visual.id
+          id !== visual.id ||
+          nextVisual.metricAggregation !== visual.metricAggregation ||
+          nextVisual.dimensionBucket !== visual.dimensionBucket ||
+          nextVisual.comparisonAggregation !== visual.comparisonAggregation ||
+          nextVisual.limit !== visual.limit
         ) {
           visualsChanged = true;
         }
@@ -1445,16 +1725,9 @@ const Reports = (props: GenericPageProps) => {
 
   const activeVisual = draft.visuals[0] ?? DEFAULT_VISUAL;
 
-  const chartMetricAlias =
-    activeVisual.metric && numericColumnsSet.has(activeVisual.metric) ? activeVisual.metric : "";
-  const chartDimensionAlias =
-    activeVisual.dimension && previewColumns.includes(activeVisual.dimension)
-      ? activeVisual.dimension
-      : "";
-  const chartComparisonAlias =
-    activeVisual.comparison && numericColumnsSet.has(activeVisual.comparison)
-      ? activeVisual.comparison
-      : undefined;
+  const chartMetricAlias = visualQueryDescriptor.metricAlias ?? "";
+  const chartDimensionAlias = visualQueryDescriptor.dimensionAlias ?? "";
+  const chartComparisonAlias = visualQueryDescriptor.comparisonAlias ?? undefined;
 
   const chartData = useMemo(() => {
     if (!chartMetricAlias || !chartDimensionAlias) {
@@ -1462,13 +1735,13 @@ const Reports = (props: GenericPageProps) => {
     }
 
     if (
-      !previewColumns.includes(chartMetricAlias) ||
-      !previewColumns.includes(chartDimensionAlias)
+      !visualColumns.includes(chartMetricAlias) ||
+      !visualColumns.includes(chartDimensionAlias)
     ) {
       return [];
     }
 
-    return previewRows
+    return visualRows
       .map((row) => {
         const dimensionValue = coerceString(row[chartDimensionAlias]);
         const metricValue = coerceNumber(row[chartMetricAlias]);
@@ -1490,12 +1763,33 @@ const Reports = (props: GenericPageProps) => {
       .filter(
         (value): value is { dimension: string; primary: number; secondary?: number } => value !== null,
       );
-  }, [chartComparisonAlias, chartDimensionAlias, chartMetricAlias, previewColumns, previewRows]);
+  }, [chartComparisonAlias, chartDimensionAlias, chartMetricAlias, visualColumns, visualRows]);
 
   const hasChartData = chartData.length > 0;
-  const metricLabel = chartMetricAlias ? getColumnLabel(chartMetricAlias) : "Metric";
-  const dimensionLabel = chartDimensionAlias ? getColumnLabel(chartDimensionAlias) : "Dimension";
-  const comparisonLabel = chartComparisonAlias ? getColumnLabel(chartComparisonAlias) : undefined;
+  const metricAggregationLabel = AGGREGATION_LABELS[activeVisual.metricAggregation ?? "sum"];
+  const metricLabelBase = visualQueryDescriptor.metricLabel || "Metric";
+  const metricLabel =
+    activeVisual.metric && metricAggregationLabel
+      ? `${metricLabelBase} (${metricAggregationLabel})`
+      : metricLabelBase;
+  const dimensionBucketLabel = activeVisual.dimensionBucket
+    ? BUCKET_LABELS[activeVisual.dimensionBucket]
+    : null;
+  const dimensionLabelBase = visualQueryDescriptor.dimensionLabel || "Dimension";
+  const dimensionLabel = dimensionBucketLabel
+    ? `${dimensionLabelBase} (${dimensionBucketLabel})`
+    : dimensionLabelBase;
+  const comparisonAggregationLabel = activeVisual.comparison
+    ? AGGREGATION_LABELS[
+        activeVisual.comparisonAggregation ?? activeVisual.metricAggregation ?? "sum"
+      ]
+    : null;
+  const comparisonLabel =
+    activeVisual.comparison && visualQueryDescriptor.comparisonLabel
+      ? comparisonAggregationLabel
+        ? `${visualQueryDescriptor.comparisonLabel} (${comparisonAggregationLabel})`
+        : visualQueryDescriptor.comparisonLabel
+      : undefined;
 
   const formatNumberForDisplay = useCallback(
     (value: number) =>
@@ -1503,95 +1797,476 @@ const Reports = (props: GenericPageProps) => {
     [],
   );
 
+  const visualQueryDescriptor = useMemo<VisualQueryDescriptor>(() => {
+    const emptyDescriptor: VisualQueryDescriptor = {
+      config: null,
+      metricAlias: null,
+      dimensionAlias: null,
+      comparisonAlias: null,
+      metricBaseAlias: null,
+      dimensionBaseAlias: null,
+      metricLabel: "Metric",
+      dimensionLabel: "Dimension",
+      warnings: [],
+    };
+
+    if (draft.models.length === 0) {
+      return emptyDescriptor;
+    }
+
+    const metricBaseAlias = activeVisual.metric;
+    const dimensionBaseAlias = activeVisual.dimension;
+
+    if (!metricBaseAlias || !dimensionBaseAlias) {
+      return emptyDescriptor;
+    }
+
+    const metricDetail = fieldDetailByAlias.get(metricBaseAlias);
+    const dimensionDetail = fieldDetailByAlias.get(dimensionBaseAlias);
+
+    const warnings: string[] = [];
+
+    if (!metricDetail) {
+      warnings.push("Select a metric field to run analytics.");
+      return { ...emptyDescriptor, warnings };
+    }
+
+    if (!dimensionDetail) {
+      warnings.push("Select a dimension field to run analytics.");
+      return { ...emptyDescriptor, warnings };
+    }
+
+    const metricReference = parseColumnAlias(metricBaseAlias);
+    const dimensionReference = parseColumnAlias(dimensionBaseAlias);
+
+    if (!metricReference || !dimensionReference) {
+      warnings.push("Unable to determine metric/dimension columns for analytics.");
+      return { ...emptyDescriptor, warnings };
+    }
+
+    const metricAggregation =
+      activeVisual.metricAggregation && METRIC_AGGREGATIONS.includes(activeVisual.metricAggregation)
+        ? activeVisual.metricAggregation
+        : "sum";
+    const metricAlias = buildMetricAggregationAlias(metricBaseAlias, metricAggregation);
+
+    const dimensionBucket =
+      activeVisual.dimensionBucket && DIMENSION_BUCKETS.includes(activeVisual.dimensionBucket)
+        ? activeVisual.dimensionBucket
+        : undefined;
+    const dimensionAlias = buildDimensionAlias(dimensionBaseAlias, dimensionBucket);
+
+    const metrics: QueryConfigMetric[] = [
+      {
+        modelId: metricReference.modelId,
+        fieldId: metricReference.fieldId,
+        aggregation: metricAggregation,
+        alias: metricAlias,
+      },
+    ];
+
+    let comparisonAlias: string | null = null;
+    if (activeVisual.comparison) {
+      const comparisonBaseAlias = activeVisual.comparison;
+      const comparisonDetail = fieldDetailByAlias.get(comparisonBaseAlias);
+      if (comparisonDetail) {
+        const comparisonReference = parseColumnAlias(comparisonBaseAlias);
+        if (comparisonReference) {
+          const comparisonAggregation =
+            activeVisual.comparisonAggregation &&
+            METRIC_AGGREGATIONS.includes(activeVisual.comparisonAggregation)
+              ? activeVisual.comparisonAggregation
+              : metricAggregation;
+          comparisonAlias = buildMetricAggregationAlias(
+            comparisonBaseAlias,
+            comparisonAggregation,
+          );
+          metrics.push({
+            modelId: comparisonReference.modelId,
+            fieldId: comparisonReference.fieldId,
+            aggregation: comparisonAggregation,
+            alias: comparisonAlias,
+          });
+        } else {
+          warnings.push(
+            `Comparison series ${comparisonBaseAlias} could not be resolved and was skipped.`,
+          );
+        }
+      } else {
+        warnings.push(
+          `Comparison series ${activeVisual.comparison} is not in the selected field list and was skipped.`,
+        );
+      }
+    }
+
+    const { filters: normalizedFilters, warnings: filterWarnings } = normalizeFiltersForQuery(
+      draft.filters,
+    );
+    warnings.push(...filterWarnings);
+
+    const limitValue =
+      typeof activeVisual.limit === "number" && Number.isFinite(activeVisual.limit) && activeVisual.limit > 0
+        ? Math.round(activeVisual.limit)
+        : 100;
+
+    const joins =
+      draft.joins.length > 0
+        ? draft.joins.map(
+            ({ id, leftModel, leftField, rightModel, rightField, joinType, description }) => ({
+              id,
+              leftModel,
+              leftField,
+              rightModel,
+              rightField,
+              joinType,
+              description,
+            }),
+          )
+        : undefined;
+
+    const descriptor: VisualQueryDescriptor = {
+      config: {
+        models: [...draft.models],
+        joins,
+        filters: normalizedFilters.length > 0 ? normalizedFilters : undefined,
+        metrics,
+        dimensions: [
+          {
+            modelId: dimensionReference.modelId,
+            fieldId: dimensionReference.fieldId,
+            bucket: dimensionBucket,
+            alias: dimensionAlias,
+          },
+        ],
+        orderBy: [{ alias: dimensionAlias, direction: "asc" }],
+        limit: limitValue,
+        options: {
+          allowAsync: true,
+          templateId:
+            draft.id && draft.id !== "template-empty" ? draft.id : undefined,
+        },
+      },
+      metricAlias,
+      dimensionAlias,
+      comparisonAlias,
+      metricBaseAlias,
+      dimensionBaseAlias,
+      metricLabel: getColumnLabel(metricBaseAlias),
+      dimensionLabel: getColumnLabel(dimensionBaseAlias),
+      comparisonLabel: activeVisual.comparison ? getColumnLabel(activeVisual.comparison) : undefined,
+      warnings,
+    };
+
+    return descriptor;
+  }, [
+    activeVisual.comparison,
+    activeVisual.comparisonAggregation,
+    activeVisual.dimension,
+    activeVisual.dimensionBucket,
+    activeVisual.limit,
+    activeVisual.metric,
+    activeVisual.metricAggregation,
+    draft.filters,
+    draft.id,
+    draft.joins,
+    draft.models,
+    fieldDetailByAlias,
+    getColumnLabel,
+  ]);
+
+  const aggregationOptions = useMemo(
+    () =>
+      METRIC_AGGREGATIONS.map((value) => ({
+        value,
+        label: AGGREGATION_LABELS[value],
+      })),
+    [],
+  );
+
+  const bucketOptions = useMemo(
+    () =>
+      DIMENSION_BUCKETS.map((value) => ({
+        value,
+        label: BUCKET_LABELS[value],
+      })),
+    [],
+  );
+
+  const dimensionDetail = visualQueryDescriptor.dimensionBaseAlias
+    ? fieldDetailByAlias.get(visualQueryDescriptor.dimensionBaseAlias)
+    : undefined;
+  const supportsDimensionBuckets = dimensionDetail?.type === "date";
+
+  const runVisualAnalytics = useCallback(async () => {
+    setVisualWarnings(visualQueryDescriptor.warnings);
+
+    if (!visualQueryDescriptor.config) {
+      setVisualResult(null);
+      setVisualExecutedAt(null);
+      if (visualQueryDescriptor.warnings.length > 0) {
+        setVisualQueryError(visualQueryDescriptor.warnings[0]);
+      } else {
+        setVisualQueryError("Select a metric and dimension to run analytics.");
+      }
+      setVisualJob(null);
+      setVisualJobStatus(null);
+      setIsVisualQueryRunning(false);
+      return;
+    }
+
+    setIsVisualQueryRunning(true);
+    setVisualQueryError(null);
+    setVisualJob(null);
+    setVisualJobStatus(null);
+    setVisualResult(null);
+    setVisualExecutedAt(null);
+
+    try {
+      const response = await runAnalyticsQuery(visualQueryDescriptor.config);
+      if (isReportQuerySuccess(response)) {
+        setVisualResult(response);
+        const executedAt =
+          typeof response.meta?.executedAt === "string"
+            ? response.meta.executedAt
+            : typeof response.meta?.cachedAt === "string"
+            ? response.meta.cachedAt
+            : new Date().toISOString();
+        setVisualExecutedAt(executedAt);
+        setVisualQueryError(null);
+        setVisualJobStatus("completed");
+        setIsVisualQueryRunning(false);
+      } else if (isReportQueryJob(response)) {
+        setVisualJob({ jobId: response.jobId, hash: response.hash });
+        setVisualJobStatus(response.status);
+      } else {
+        setVisualQueryError("Received an unknown analytics response.");
+        setIsVisualQueryRunning(false);
+      }
+    } catch (error) {
+      setVisualQueryError(extractAxiosErrorMessage(error, "Failed to run analytics query."));
+      setIsVisualQueryRunning(false);
+      setVisualJobStatus("failed");
+      setVisualExecutedAt(null);
+    }
+  }, [runAnalyticsQuery, visualQueryDescriptor]);
+
+  useEffect(() => {
+    if (!visualJob) {
+      return;
+    }
+
+    let isCancelled = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+    const poll = async () => {
+      try {
+        const result = await getReportQueryJob(visualJob.jobId);
+        if (isCancelled) {
+          return;
+        }
+        if (isReportQuerySuccess(result)) {
+          setVisualResult(result);
+          const executedAt =
+            typeof result.meta?.executedAt === "string"
+              ? result.meta.executedAt
+              : typeof result.meta?.cachedAt === "string"
+              ? result.meta.cachedAt
+              : new Date().toISOString();
+          setVisualExecutedAt(executedAt);
+          setVisualQueryError(null);
+          setVisualJob(null);
+          setVisualJobStatus("completed");
+          setIsVisualQueryRunning(false);
+          return;
+        }
+        if (isReportQueryJob(result)) {
+          setVisualJobStatus(result.status);
+          if (result.status === "failed") {
+            setVisualQueryError("Analytics job failed. Try running the query again.");
+            setVisualJob(null);
+            setVisualExecutedAt(null);
+            setIsVisualQueryRunning(false);
+            return;
+          }
+          timeoutHandle = setTimeout(poll, 1500);
+        }
+      } catch (error) {
+        if (isCancelled) {
+          return;
+        }
+        setVisualQueryError(
+          extractAxiosErrorMessage(error, "Failed to fetch analytics job status."),
+        );
+        setVisualJob(null);
+        setVisualJobStatus("failed");
+        setVisualExecutedAt(null);
+        setIsVisualQueryRunning(false);
+      }
+    };
+
+    poll();
+
+    return () => {
+      isCancelled = true;
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    };
+  }, [visualJob]);
+
+  const visualRows = visualResult?.rows ?? [];
+  const visualColumns = visualResult?.columns ?? [];
+  const analyticsRunLabel = useMemo(
+    () => (visualExecutedAt ? formatLastUpdatedLabel(visualExecutedAt) : null),
+    [visualExecutedAt],
+  );
+  const visualJobStatusLabel = visualJobStatus
+    ? `${visualJobStatus.charAt(0).toUpperCase()}${visualJobStatus.slice(1)}`
+    : null;
+
   const metricsSummary = useMemo(() => {
-    const candidateAliases =
-      draft.metrics.length > 0
-        ? draft.metrics.filter((alias) => numericColumnsSet.has(alias))
-        : orderedNumericColumns.slice(0, 4);
-
-    const uniqueAliases = Array.from(new Set(candidateAliases)).slice(0, 4);
-
-    if (uniqueAliases.length === 0) {
+    if (!chartMetricAlias || visualRows.length === 0) {
       return [];
     }
 
-    if (previewRows.length === 0 || previewColumns.length === 0) {
-      return uniqueAliases.map((alias, index) => ({
-        id: alias || `metric-${index}`,
-        label: getColumnLabel(alias),
-        value: "Run preview",
-        delta: "—",
-        context: "Execute a preview to populate this metric.",
-        tone: "neutral" as const,
-      }));
+    const metricValues = visualRows
+      .map((row) => coerceNumber(row[chartMetricAlias]))
+      .filter((value): value is number => value !== null);
+
+    if (metricValues.length === 0) {
+      return [];
     }
 
-    return uniqueAliases.map((alias, index) => {
-      if (!alias || !previewColumns.includes(alias)) {
-        return {
-          id: alias || `metric-${index}`,
-          label: getColumnLabel(alias),
-          value: "Not available",
-          delta: "—",
-          context: "Field not present in preview results.",
-          tone: "neutral" as const,
-        };
+    const aggregation = activeVisual.metricAggregation ?? "sum";
+    let headlineValue: number | null = null;
+    let headlineLabel = metricLabel;
+    let context = "";
+
+    switch (aggregation) {
+      case "avg": {
+        headlineValue =
+          metricValues.reduce((total, value) => total + value, 0) / metricValues.length;
+        context = `Average across ${metricValues.length} rows`;
+        headlineLabel = `Average ${metricLabel.toLowerCase()}`;
+        break;
       }
-
-      const values = previewRows
-        .map((row) => coerceNumber(row[alias]))
-        .filter((value): value is number => value !== null);
-
-      if (values.length === 0) {
-        return {
-          id: alias,
-          label: getColumnLabel(alias),
-          value: "Not available",
-          delta: "—",
-          context: "No numeric values returned for this metric.",
-          tone: "neutral" as const,
-        };
+      case "min": {
+        headlineValue = Math.min(...metricValues);
+        context = "Minimum value across the result set";
+        headlineLabel = `Minimum ${metricLabel.toLowerCase()}`;
+        break;
       }
+      case "max": {
+        headlineValue = Math.max(...metricValues);
+        context = "Maximum value across the result set";
+        headlineLabel = `Maximum ${metricLabel.toLowerCase()}`;
+        break;
+      }
+      default: {
+        headlineValue = metricValues.reduce((total, value) => total + value, 0);
+        context = `Total across ${metricValues.length} rows`;
+        headlineLabel = `Total ${metricLabel.toLowerCase()}`;
+        break;
+      }
+    }
 
-      const latest = values[values.length - 1];
-      const baseline = values[0];
-      const formattedValue = Number.isFinite(latest)
-        ? latest.toLocaleString("en-US", { maximumFractionDigits: 2 })
-        : "—";
+    const cards: Array<{
+      id: string;
+      label: string;
+      value: string;
+      delta: string;
+      context: string;
+      tone: "positive" | "neutral" | "negative";
+    }> = [];
 
-      let deltaDisplay = "—";
-      let context = "Not enough datapoints";
+    if (headlineValue !== null) {
+      let deltaDisplay = "--";
       let tone: "positive" | "neutral" | "negative" = "neutral";
 
-      if (values.length >= 2) {
-        const change = latest - baseline;
-        tone = change > 0 ? "positive" : change < 0 ? "negative" : "neutral";
-        if (Math.abs(baseline) < 1e-6) {
-          deltaDisplay = `${change >= 0 ? "+" : ""}${change.toFixed(2)}`;
-          context = "Absolute change vs. first row";
-        } else {
-          const percentChange = (change / Math.abs(baseline)) * 100;
-          deltaDisplay = `${percentChange >= 0 ? "+" : ""}${percentChange.toFixed(1)}%`;
-          context = "Percentage change vs. first row";
+      if (chartComparisonAlias) {
+        const comparisonAggregation =
+          activeVisual.comparisonAggregation ?? activeVisual.metricAggregation ?? "sum";
+        const comparisonValues = visualRows
+          .map((row) => coerceNumber(row[chartComparisonAlias]))
+          .filter((value): value is number => value !== null);
+
+        if (comparisonValues.length > 0) {
+          let comparisonHeadline: number | null = null;
+          switch (comparisonAggregation) {
+            case "avg":
+              comparisonHeadline =
+                comparisonValues.reduce((total, value) => total + value, 0) /
+                comparisonValues.length;
+              break;
+            case "min":
+              comparisonHeadline = Math.min(...comparisonValues);
+              break;
+            case "max":
+              comparisonHeadline = Math.max(...comparisonValues);
+              break;
+            default:
+              comparisonHeadline = comparisonValues.reduce((total, value) => total + value, 0);
+              break;
+          }
+
+          if (comparisonHeadline !== null) {
+            const diff = headlineValue - comparisonHeadline;
+            tone = diff > 0 ? "positive" : diff < 0 ? "negative" : "neutral";
+            const diffLabel = `${diff >= 0 ? "+" : ""}${formatNumberForDisplay(diff)}`;
+            if (Math.abs(comparisonHeadline) > 1e-6) {
+              const percent = (diff / Math.abs(comparisonHeadline)) * 100;
+              deltaDisplay = `${diffLabel} (${percent >= 0 ? "+" : ""}${percent.toFixed(1)}%)`;
+            } else {
+              deltaDisplay = diffLabel;
+            }
+          }
         }
       }
 
-      return {
-        id: alias,
-        label: getColumnLabel(alias),
-        value: formattedValue,
+      cards.push({
+        id: "headline-metric",
+        label: headlineLabel,
+        value: formatNumberForDisplay(headlineValue),
         delta: deltaDisplay,
         context,
         tone,
-      };
-    });
+      });
+    }
+
+    if (chartDimensionAlias) {
+      const ranked = [...visualRows].sort((a, b) => {
+        const first = coerceNumber(a[chartMetricAlias]) ?? -Infinity;
+        const second = coerceNumber(b[chartMetricAlias]) ?? -Infinity;
+        return second - first;
+      });
+      const topRow = ranked[0];
+      if (topRow) {
+        const dimensionValue = coerceString(topRow[chartDimensionAlias]);
+        const metricValue = coerceNumber(topRow[chartMetricAlias]);
+        if (dimensionValue && metricValue !== null) {
+          cards.push({
+            id: `top-dimension-${dimensionValue}`,
+            label: `Top ${dimensionLabel.toLowerCase()}`,
+            value: dimensionValue,
+            delta: formatNumberForDisplay(metricValue),
+            context: `Highest ${metricLabel.toLowerCase()} by dimension`,
+            tone: "neutral",
+          });
+        }
+      }
+    }
+
+    return cards;
   }, [
-    draft.metrics,
-    getColumnLabel,
-    numericColumnsSet,
-    orderedNumericColumns,
-    previewColumns,
-    previewRows,
+    activeVisual.comparisonAggregation,
+    activeVisual.metricAggregation,
+    chartComparisonAlias,
+    chartDimensionAlias,
+    chartMetricAlias,
+    dimensionLabel,
+    formatNumberForDisplay,
+    metricLabel,
+    visualRows,
   ]);
 
   const joinSuggestions = useMemo(() => {
@@ -2091,6 +2766,10 @@ const Reports = (props: GenericPageProps) => {
     if (draft.models.length === 0) {
       setPreviewResult(null);
       setPreviewError("Select at least one data model to run a preview.");
+      setVisualResult(null);
+      setVisualQueryError("Select at least one data model to run analytics.");
+      setVisualExecutedAt(null);
+      setIsVisualQueryRunning(false);
       return;
     }
 
@@ -2104,6 +2783,10 @@ const Reports = (props: GenericPageProps) => {
     if (sanitizedFields.length === 0) {
       setPreviewResult(null);
       setPreviewError("Select at least one field to include in your preview.");
+      setVisualResult(null);
+      setVisualQueryError("Select at least one field to power analytics.");
+      setVisualExecutedAt(null);
+      setIsVisualQueryRunning(false);
       return;
     }
 
@@ -2119,7 +2802,11 @@ const Reports = (props: GenericPageProps) => {
 
     if (filterErrors.length > 0) {
       setPreviewResult(null);
-      setPreviewError(filterErrors.join(" • "));
+      setPreviewError(filterErrors.join(" | "));
+      setVisualResult(null);
+      setVisualQueryError(filterErrors.join(" | "));
+      setVisualExecutedAt(null);
+      setIsVisualQueryRunning(false);
       return;
     }
 
@@ -2145,6 +2832,7 @@ const Reports = (props: GenericPageProps) => {
       const response = await runPreview(payload);
       setPreviewResult(response);
       setPreviewError(null);
+      await runVisualAnalytics();
       setLastRunAt(formatTimestamp());
     } catch (error) {
       console.error("Failed to run report preview", error);
@@ -2152,6 +2840,10 @@ const Reports = (props: GenericPageProps) => {
       const message =
         axiosError?.response?.data?.message ?? axiosError?.message ?? "Failed to run report preview.";
       setPreviewError(message);
+      setVisualQueryError("Analytics query was not executed because the preview failed.");
+      setIsVisualQueryRunning(false);
+      setVisualResult(null);
+      setVisualExecutedAt(null);
     }
   };
 
@@ -2691,7 +3383,7 @@ const Reports = (props: GenericPageProps) => {
                 leftSection={<IconPlayerPlay size={16} />}
                 variant="light"
                 onClick={handleRunAnalysis}
-                loading={isPreviewLoading}
+                loading={isPreviewLoading || isVisualQueryRunning}
               >
                 Run analysis
               </Button>
@@ -3232,7 +3924,27 @@ const Reports = (props: GenericPageProps) => {
                       </ThemeIcon>
                       <Text fw={600}>Visuals & analytics</Text>
                     </Group>
-                    <Badge variant="light">{chartData.length} datapoints</Badge>
+                    <Group gap="xs" align="center">
+                      <Badge variant="light">{chartData.length} points</Badge>
+                      {visualJobStatusLabel && (
+                        <Badge
+                          color={
+                            visualJobStatus === "failed"
+                              ? "red"
+                              : visualJobStatus === "completed"
+                              ? "green"
+                              : "yellow"
+                          }
+                        >
+                          {visualJobStatusLabel}
+                        </Badge>
+                      )}
+                      {analyticsRunLabel && (
+                        <Badge variant="outline" color="gray">
+                          Updated {analyticsRunLabel}
+                        </Badge>
+                      )}
+                    </Group>
                   </Group>
                   <Flex gap="lg" align="flex-start" wrap="wrap">
                     <Stack gap="sm" style={{ minWidth: 260, flex: "0 0 260px" }}>
@@ -3249,7 +3961,7 @@ const Reports = (props: GenericPageProps) => {
                       <Select
                         label="Metric"
                         data={metricOptions}
-                        value={chartMetricAlias || null}
+                        value={activeVisual.metric || null}
                         onChange={(value) =>
                           handleVisualChange({ metric: value ?? "" })
                         }
@@ -3260,9 +3972,20 @@ const Reports = (props: GenericPageProps) => {
                         searchable
                       />
                       <Select
+                        label="Aggregation"
+                        data={aggregationOptions}
+                        value={activeVisual.metricAggregation ?? "sum"}
+                        onChange={(value) =>
+                          handleVisualChange({
+                            metricAggregation: (value ?? "sum") as QueryConfigMetric["aggregation"],
+                          })
+                        }
+                        disabled={metricOptions.length === 0}
+                      />
+                      <Select
                         label="Dimension"
                         data={dimensionOptions}
-                        value={chartDimensionAlias || null}
+                        value={activeVisual.dimension || null}
                         onChange={(value) =>
                           handleVisualChange({
                             dimension: value ?? "",
@@ -3274,10 +3997,26 @@ const Reports = (props: GenericPageProps) => {
                         disabled={dimensionOptions.length === 0}
                         searchable
                       />
+                      {supportsDimensionBuckets && (
+                        <Select
+                          label="Time bucket"
+                          data={bucketOptions}
+                          value={activeVisual.dimensionBucket ?? null}
+                          onChange={(value) =>
+                            handleVisualChange({
+                              dimensionBucket: (value ?? undefined) as
+                                | QueryConfigDimension["bucket"]
+                                | undefined,
+                            })
+                          }
+                          placeholder="No bucketing"
+                          clearable
+                        />
+                      )}
                       <Select
                         label="Comparison series"
-                        data={metricOptions.filter((option) => option.value !== chartMetricAlias)}
-                        value={chartComparisonAlias ?? null}
+                        data={metricOptions.filter((option) => option.value !== activeVisual.metric)}
+                        value={activeVisual.comparison ?? null}
                         onChange={(value) =>
                           handleVisualChange({
                             comparison: value ?? undefined,
@@ -3288,6 +4027,61 @@ const Reports = (props: GenericPageProps) => {
                         searchable
                         clearable
                       />
+                      {activeVisual.comparison && (
+                        <Select
+                          label="Comparison aggregation"
+                          data={aggregationOptions}
+                          value={
+                            activeVisual.comparisonAggregation ??
+                            activeVisual.metricAggregation ??
+                            "sum"
+                          }
+                          onChange={(value) =>
+                            handleVisualChange({
+                              comparisonAggregation: (value ?? undefined) as
+                                | QueryConfigMetric["aggregation"]
+                                | undefined,
+                            })
+                          }
+                        />
+                      )}
+                      <NumberInput
+                        label="Row limit"
+                        value={activeVisual.limit ?? 100}
+                        onChange={(value) =>
+                          handleVisualChange({
+                            limit:
+                              typeof value === "number" && Number.isFinite(value) && value > 0
+                                ? Math.round(value)
+                                : null,
+                          })
+                        }
+                        min={10}
+                        max={10000}
+                        step={10}
+                      />
+                      <Button
+                        variant="light"
+                        leftSection={<IconPlayerPlay size={14} />}
+                        onClick={runVisualAnalytics}
+                        loading={isVisualQueryRunning || isAnalyticsMutationPending}
+                      >
+                        Re-run analytics
+                      </Button>
+                      {visualWarnings.length > 0 && (
+                        <Stack gap={4}>
+                          {visualWarnings.map((warning, index) => (
+                            <Text key={`visual-warning-${index}`} c="orange" fz="xs">
+                              {warning}
+                            </Text>
+                          ))}
+                        </Stack>
+                      )}
+                      {visualQueryError && (
+                        <Text c="red" fz="sm">
+                          {visualQueryError}
+                        </Text>
+                      )}
                     </Stack>
                     <Paper
                       withBorder
@@ -3301,7 +4095,14 @@ const Reports = (props: GenericPageProps) => {
                         background: "#ffffff",
                       }}
                     >
-                      {hasChartData ? (
+                      {isVisualQueryRunning ? (
+                        <Flex align="center" justify="center" direction="column" h={240} gap="xs">
+                          <Loader size="sm" color="blue" />
+                          <Text c="dimmed" fz="sm">
+                            Running analytics query...
+                          </Text>
+                        </Flex>
+                      ) : hasChartData ? (
                         <ResponsiveContainer width="100%" height={240}>
                           <ComposedChart data={chartData}>
                             <CartesianGrid stroke="#f1f3f5" strokeDasharray="4 4" />
@@ -3361,9 +4162,9 @@ const Reports = (props: GenericPageProps) => {
                       ) : (
                         <Flex align="center" justify="center" h={240}>
                           <Text c="dimmed" fz="sm" ta="center">
-                            {!chartMetricAlias || !chartDimensionAlias
-                              ? "Select a numeric metric and a dimension to render this visualization."
-                              : previewRows.length === 0
+                            {!activeVisual.metric || !activeVisual.dimension
+                              ? "Select a metric and dimension to render this visualization."
+                              : visualRows.length === 0
                               ? "Run the analysis to populate this visualization."
                               : "No chartable datapoints were returned for the selected fields."}
                           </Text>

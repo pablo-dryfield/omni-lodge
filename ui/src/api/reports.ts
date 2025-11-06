@@ -96,6 +96,25 @@ export type QueryConfig = {
   options?: QueryConfigOptions;
 };
 
+export type ReportQuerySuccessResponse = {
+  rows: Array<Record<string, unknown>>;
+  columns: string[];
+  sql: string;
+  meta: Record<string, unknown>;
+};
+
+export type ReportQueryJobResponse = {
+  jobId: string;
+  status: "queued" | "running" | "completed" | "failed";
+  hash?: string;
+  queuedAt?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  error?: Record<string, unknown>;
+};
+
+export type ReportQueryResult = ReportQuerySuccessResponse | ReportQueryJobResponse;
+
 export type DerivedFieldDefinitionDto = {
   id: string;
   name: string;
@@ -195,6 +214,21 @@ export const useRunReportPreview = () =>
       return response.data as ReportPreviewResponse;
     },
   });
+
+export type ReportQueryRequest = QueryConfig;
+
+export const useRunReportQuery = () =>
+  useMutation<ReportQueryResult, AxiosError<{ message?: string; error?: string }>, ReportQueryRequest>({
+    mutationFn: async (payload: ReportQueryRequest) => {
+      const response = await axiosInstance.post("/reports/query", payload);
+      return response.data as ReportQueryResult;
+    },
+  });
+
+export const getReportQueryJob = async (jobId: string): Promise<ReportQueryResult> => {
+  const response = await axiosInstance.get(`/reports/query/jobs/${jobId}`);
+  return response.data as ReportQueryResult;
+};
 
 export type ReportTemplateOptionsDto = {
   autoDistribution: boolean;
