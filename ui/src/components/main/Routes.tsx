@@ -9,6 +9,7 @@ import Counters from "../../pages/Counters";
 import VenueNumbers from "../../pages/VenueNumbers";
 import Pays from "../../pages/Pays";
 import Reports from "../../pages/Reports";
+import DerivedFieldsManager from "../../pages/DerivedFieldsManager";
 import ReportDashboards from "../../pages/ReportDashboards";
 import SettingsLayout from "../../pages/settings/SettingsLayout";
 import SettingsLanding from "../../pages/settings/SettingsLanding";
@@ -69,6 +70,7 @@ const Routes = () => {
       <Route path="/venueNumbers" element={<VenueNumbers title="Venue Numbers" />} />
       <Route path="/pays" element={<Pays />} />
       <Route path="/reports" element={<Reports title={"Reports"} />} />
+      <Route path="/reports/derived-fields" element={<DerivedFieldsManager title="Derived fields" />} />
       <Route path="/reports/dashboards" element={<ReportDashboards title="Dashboards" />} />
       <Route path="/scheduling" element={<SchedulingLayout />}>
         <Route index element={<AvailabilityPage />} />

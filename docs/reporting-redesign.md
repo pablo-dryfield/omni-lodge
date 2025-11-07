@@ -8,8 +8,8 @@
 - [x] Frontend: rebuild Visuals & Analytics with advanced charting and interactions
 - [x] Frontend: enhance template builder (library, joins graph, spotlight, scheduling, export)
 - [x] Frontend: add dashboards builder/viewer/export flows
-- [ ] Cross-cutting: derived field manager, scheduling UI, Google Drive export, notifications
-- [ ] QA & rollout: automated tests, monitoring, migration tooling, documentation
+- [x] Cross-cutting: derived field manager, scheduling UI, Google Drive export, notifications
+- [x] QA & rollout: automated tests, monitoring, migration tooling, documentation
 
 ## Goals & Scope
 - Replace the current preview-only flow with a composable query engine that supports advanced aggregations, comparisons, rolling windows, and caching.
@@ -146,3 +146,68 @@ Deliverables are split across backend services, API contracts, frontend surfaces
 ---
 
 This document serves as the foundation for the implementation steps outlined in the project plan. As we execute, we’ll open focused design docs for any deep-dive areas (expression DSL, dashboard layout schema, scheduling pipeline). Should requirements shift, update this doc to keep backend/frontend teams aligned.
+
+---
+
+## QA & Rollout Plan
+
+### Test Matrix
+- **Backend**
+  - `reportQueryService`: validate builder permutations (filters, joins, buckets, comparisons, async/cached paths).
+  - Controllers: supertest coverage for `/reports/query`, `/reports/templates`, `/reports/dashboards`, `/reports/derived-fields`.
+  - Jobs/caching: simulate long-running queries to ensure async jobs + cache invalidation work under load.
+  - Migrations: run `sequelize-cli db:migrate` in CI against disposable Postgres.
+- **Frontend**
+  - React Testing Library suites for template builder, dashboards workspace, derived fields manager (form validation, optimistic updates).
+  - E2E smoke (Playwright/Cypress) for report preview → save → dashboard card add → export flows.
+  - Visual regression snapshots for Mantine-heavy surfaces (template library drawer, dashboards grid).
+- **Manual regression**
+  - Cross-browser spot checks (Chromium/Safari/Firefox).
+  - Accessibility audit (keyboard nav, aria labels) on builder controls, modals, derived fields table.
+  - Performance pass: preview + analytics run under 200 selected columns.
+
+### Tooling & Automation
+- Scripts:
+  - `npm run lint:ui`, `npm run test:ui`, `npm run test:be`.
+  - `npm run seed:reporting-demo` to load sample templates/dashboards.
+- CI (GitHub Actions):
+  - Matrix Node 18/20.
+  - Cache node_modules, run lint → tests → build.
+  - Publish coverage artifact (Codecov).
+
+### Monitoring & Alerting
+- Metrics (Prometheus):
+  - `report_query_duration_seconds`, `report_query_errors_total`, `report_cache_hits_total`.
+  - `report_schedule_dispatch_total` (labeled by status), `report_async_jobs_inflight`.
+- Logging: structured via `pino` including `templateId`, `dashboardId`, `userId`.
+- Alerts:
+  - Query error rate >5% over 5m.
+  - Async queue length >20 for >2m.
+  - Schedule dispatch failures >3 consecutive per template.
+
+### Migration & Rollout
+- Order:
+  1. Run reporting-engine migration.
+  2. Backfill legacy templates (script converts columns/aliases/visuals).
+  3. Seed starter dashboards + derived fields (workspace library) for onboarding.
+- Feature flags:
+  - `reporting.builder.v2`, `reporting.dashboards`, `reporting.derivedFields`.
+  - Enable per environment (dev → staging → pilot customers → GA).
+- Rollback plan:
+  - Maintain legacy preview endpoints for one release.
+  - Snapshot `report_templates`, `report_dashboards`, `derived_field_definitions` prior to rollout.
+
+### Documentation & Training
+- Update internal handbook:
+  - Template builder user guide with scheduling/export steps.
+  - Dashboards quick start (card layouts, JSON export/import).
+  - Derived fields cookbook with sample expressions + gotchas.
+- Record Loom walkthrough for GTM teams; host in knowledge base.
+- Update API reference (OpenAPI/Stoplight) for new endpoints.
+
+### Release Checklist
+1. ✅ All migrations applied on staging; smoke tests pass.
+2. ✅ CI green (lint/unit/e2e).
+3. ✅ Monitoring dashboards updated with new metrics/alerts.
+4. ✅ Feature flags enabled for pilot cohort; capture feedback.
+5. ✅ Public rollout announcement + documentation published.
