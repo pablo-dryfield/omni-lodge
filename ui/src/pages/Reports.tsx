@@ -3960,6 +3960,13 @@ const Reports = (props: GenericPageProps) => {
                 Dashboards
               </Button>
               <Button
+                leftSection={<IconAdjustments size={16} />}
+                variant="subtle"
+                onClick={() => navigate("/reports/derived-fields")}
+              >
+                Derived fields
+              </Button>
+              <Button
                 leftSection={<IconTemplate size={16} />}
                 variant="light"
                 onClick={handleCreateTemplate}

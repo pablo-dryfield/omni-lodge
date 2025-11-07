@@ -197,6 +197,33 @@ export type DashboardExportResponse = {
   };
 };
 
+export type DerivedFieldDto = {
+  id: string;
+  scope: "workspace" | "template";
+  templateId: string | null;
+  workspaceId: string | null;
+  name: string;
+  expression: string;
+  kind: "row" | "aggregate";
+  metadata: Record<string, unknown>;
+  createdBy: number | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export type DerivedFieldListResponse = {
+  derivedFields: DerivedFieldDto[];
+};
+
+export type DerivedFieldPayload = {
+  templateId?: string | null;
+  name: string;
+  expression: string;
+  kind?: "row" | "aggregate";
+  scope?: "workspace" | "template";
+  metadata?: Record<string, unknown>;
+};
+
 export type DerivedFieldDefinitionDto = {
   id: string;
   name: string;
@@ -429,6 +456,45 @@ export const useExportDashboard = () =>
     mutationFn: async (dashboardId: string) => {
       const response = await axiosInstance.post(`/reports/dashboards/${dashboardId}/export`, {});
       return response.data as DashboardExportResponse;
+    },
+  });
+
+export const useDerivedFields = (templateId?: string) =>
+  useQuery<DerivedFieldListResponse>({
+    queryKey: ["reports", "derived-fields", templateId ?? "workspace"],
+    queryFn: async () => {
+      const response = await axiosInstance.get("/reports/derived-fields", {
+        params: templateId ? { templateId } : undefined,
+      });
+      return response.data as DerivedFieldListResponse;
+    },
+    staleTime: 60 * 1000,
+  });
+
+export const useCreateDerivedField = () =>
+  useMutation<DerivedFieldDto, AxiosError<{ message?: string }>, DerivedFieldPayload>({
+    mutationFn: async (payload: DerivedFieldPayload) => {
+      const response = await axiosInstance.post("/reports/derived-fields", payload);
+      return (response.data as { derivedField: DerivedFieldDto }).derivedField;
+    },
+  });
+
+export const useUpdateDerivedField = () =>
+  useMutation<
+    DerivedFieldDto,
+    AxiosError<{ message?: string }>,
+    { id: string; payload: Partial<DerivedFieldPayload> }
+  >({
+    mutationFn: async ({ id, payload }) => {
+      const response = await axiosInstance.put(`/reports/derived-fields/${id}`, payload);
+      return (response.data as { derivedField: DerivedFieldDto }).derivedField;
+    },
+  });
+
+export const useDeleteDerivedField = () =>
+  useMutation<void, AxiosError<{ message?: string }>, string>({
+    mutationFn: async (derivedFieldId: string) => {
+      await axiosInstance.delete(`/reports/derived-fields/${derivedFieldId}`);
     },
   });
 
