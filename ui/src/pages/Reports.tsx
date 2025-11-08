@@ -11,7 +11,6 @@ import {
   Button,
   Card,
   Checkbox,
-  Chip,
   Divider,
   Drawer,
   Flex,
@@ -1135,6 +1134,21 @@ const evaluateJoinCoverage = (
   }));
 };
 
+const validateDerivedFieldExpression = (value: string): string | null => {
+  if (!value || value.trim().length === 0) {
+    return "Expression is required.";
+  }
+  const openParen = (value.match(/\(/g) ?? []).length;
+  const closeParen = (value.match(/\)/g) ?? []).length;
+  if (openParen !== closeParen) {
+    return "Unbalanced parentheses detected.";
+  }
+  if (value.includes(";")) {
+    return "Expressions cannot contain semicolons.";
+  }
+  return null;
+};
+
 const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitionDto[] => {
   if (!Array.isArray(candidate)) {
     return [];
@@ -1443,6 +1457,15 @@ const Reports = (props: GenericPageProps) => {
     draft.derivedFields[0]?.id ?? null,
   );
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [derivedFieldDraft, setDerivedFieldDraft] = useState<{
+    expression: string;
+    lastSaved: string;
+    error: string | null;
+  }>({
+    expression: "",
+    lastSaved: "",
+    error: null,
+  });
   const [scheduleDraft, setScheduleDraft] = useState(() => {
     const timezoneGuess = (() => {
       try {
@@ -1655,6 +1678,21 @@ const Reports = (props: GenericPageProps) => {
       null,
     [draft.derivedFields, selectedDerivedFieldId],
   );
+  useEffect(() => {
+    if (selectedDerivedField) {
+      setDerivedFieldDraft({
+        expression: selectedDerivedField.expression,
+        lastSaved: selectedDerivedField.expression,
+        error: null,
+      });
+    } else {
+      setDerivedFieldDraft({
+        expression: "",
+        lastSaved: "",
+        error: null,
+      });
+    }
+  }, [selectedDerivedField]);
   const joinCoverageLookup = useMemo(() => {
     const lookup = new Set<string>();
     draft.joins.forEach((join) => {
@@ -1705,6 +1743,14 @@ const Reports = (props: GenericPageProps) => {
     }));
     return { alias, rows };
   }, [previewResult?.rows, previewResult?.columns, selectedDerivedField]);
+  const derivedExpressionHasChanges = useMemo(
+    () =>
+      Boolean(
+        selectedDerivedField &&
+          derivedFieldDraft.expression !== derivedFieldDraft.lastSaved,
+      ),
+    [derivedFieldDraft.expression, derivedFieldDraft.lastSaved, selectedDerivedField],
+  );
   const joinModelOptions = useMemo(() => {
     return draft.models
       .map((modelId) => modelMap.get(modelId))
@@ -3840,6 +3886,52 @@ const Reports = (props: GenericPageProps) => {
     },
     [setTemplateError, setTemplateSuccess],
   );
+
+  const handleExpressionDraftChange = useCallback((value: string) => {
+    setDerivedFieldDraft((current) => ({
+      ...current,
+      expression: value,
+      error: validateDerivedFieldExpression(value),
+    }));
+  }, []);
+
+  const handleResetExpressionDraft = useCallback(() => {
+    setDerivedFieldDraft((current) => ({
+      ...current,
+      expression: current.lastSaved,
+      error: null,
+    }));
+  }, []);
+
+  const handleApplyExpressionDraft = useCallback(() => {
+    if (!selectedDerivedField || derivedFieldDraft.error) {
+      return;
+    }
+    setDraft((current) => {
+      const nextFields = current.derivedFields.map((field) =>
+        field.id === selectedDerivedField.id
+          ? { ...field, expression: derivedFieldDraft.expression }
+          : field,
+      );
+      return {
+        ...current,
+        derivedFields: reconcileDerivedFieldStatuses(nextFields, current.models),
+      };
+    });
+    setDerivedFieldDraft((current) => ({
+      ...current,
+      lastSaved: current.expression,
+      error: null,
+    }));
+    setTemplateError(null);
+    setTemplateSuccess("Expression updated. Save the template to persist changes.");
+  }, [
+    derivedFieldDraft.error,
+    derivedFieldDraft.expression,
+    selectedDerivedField,
+    setTemplateError,
+    setTemplateSuccess,
+  ]);
 
   const updateFilter = (filterId: string, updater: (filter: ReportFilter) => ReportFilter) => {
     setDraft((current) => ({
@@ -6317,12 +6409,30 @@ const Reports = (props: GenericPageProps) => {
                       </Button>
                     </Group>
                     <Textarea
-                      value={selectedDerivedField.expression}
-                      readOnly
+                      value={derivedFieldDraft.expression}
                       autosize
-                      minRows={3}
+                      minRows={6}
                       styles={{ input: { fontFamily: "monospace" } }}
+                      onChange={(event) => handleExpressionDraftChange(event.currentTarget.value)}
+                      error={derivedFieldDraft.error ?? undefined}
                     />
+                    <Group gap="xs">
+                      <Button
+                        variant="light"
+                        size="xs"
+                        onClick={handleResetExpressionDraft}
+                        disabled={!derivedExpressionHasChanges}
+                      >
+                        Reset
+                      </Button>
+                      <Button
+                        size="xs"
+                        onClick={handleApplyExpressionDraft}
+                        disabled={!derivedExpressionHasChanges || Boolean(derivedFieldDraft.error)}
+                      >
+                        Apply changes
+                      </Button>
+                    </Group>
                     <Stack gap="xs">
                       <Text fw={600}>Join coverage</Text>
                       {selectedDerivedFieldCoverage.length === 0 ? (

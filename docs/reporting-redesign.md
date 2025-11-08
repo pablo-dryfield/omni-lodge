@@ -124,7 +124,7 @@ Deliverables are split across backend services, API contracts, frontend surfaces
 - [x] Query serialization & hashing
   - Include `derivedFields` payload (id, expression AST, referenced models, join dependencies, compiled SQL hash) in both the template serialization and the query hash input.
   - Update cache invalidation so that a change in the derived field graph or template join graph busts relevant cache entries.
-- [ ] Frontend: template-level derived field workspace
+- [x] Frontend: template-level derived field workspace
   - Add a persistent "Derived fields" drawer (right-side panel) in the template builder that lists derived fields, along with CTA buttons for "New" and "Edit." Drawer hosts a tokenized expression editor (Monaco-lite) with syntax highlighting for functions/operators and in-line validation states.
   - [x] Introduce a chips-based field palette grouped by model: each chip inserts `modelId.fieldId` tokens; palette should respect current template field selections and grey out fields that aren't available in the selected models.
   - [x] Display a "join coverage" callout under the editor that enumerates models referenced in the current AST, the joins currently connecting them, and warnings when coverage is missing (e.g., "Add a join between Bookings and Guests").
