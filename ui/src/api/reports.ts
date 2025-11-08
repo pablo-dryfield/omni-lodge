@@ -320,6 +320,12 @@ export type ReportPreviewRequest = {
   }>;
   filters?: string[];
   limit?: number;
+  derivedFields?: Array<{
+    id: string;
+    alias?: string;
+    expressionAst: DerivedFieldExpressionAst;
+    referencedModels?: string[];
+  }>;
 };
 
 export type ReportPreviewResponse = {

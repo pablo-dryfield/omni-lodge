@@ -5,9 +5,9 @@ type ParsedAst = {
   referencedModels: string[];
 };
 
-const BINARY_OPERATORS: ReadonlySet<BinaryOperator> = new Set(["+", "-", "*", "/"]);
-const UNARY_OPERATORS: ReadonlySet<UnaryOperator> = new Set(["+", "-"]);
-const ALLOWED_FUNCTIONS: ReadonlySet<string> = new Set([
+export const BINARY_OPERATORS: ReadonlySet<BinaryOperator> = new Set(["+", "-", "*", "/"]);
+export const UNARY_OPERATORS: ReadonlySet<UnaryOperator> = new Set(["+", "-"]);
+export const ALLOWED_FUNCTIONS: ReadonlySet<string> = new Set([
   "abs",
   "ceil",
   "coalesce",
