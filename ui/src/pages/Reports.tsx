@@ -82,6 +82,7 @@ import {
   useRunReportQuery,
   useSaveReportTemplate,
   useDeleteReportTemplate,
+  useDerivedFields,
   type QueryConfig,
   type QueryConfigMetric,
   type QueryConfigDimension,
@@ -102,6 +103,7 @@ import {
   type TemplateScheduleDeliveryTarget,
   type DerivedFieldDefinitionDto,
   type DerivedFieldExpressionAst,
+  type DerivedFieldDto,
   type MetricSpotlightDefinitionDto,
   type ReportModelFieldResponse,
   type ReportModelPayload,
@@ -1393,6 +1395,22 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
   };
 };
 
+const mapDerivedFieldDtoToReportField = (field: DerivedFieldDto): ReportDerivedField => ({
+  id: field.id,
+  name: field.name,
+  expression: field.expression,
+  kind: field.kind,
+  scope: field.scope,
+  metadata: field.metadata ?? {},
+  expressionAst: field.expressionAst ?? undefined,
+  referencedModels: field.referencedModels ?? [],
+  referencedFields: field.referencedFields ?? {},
+  joinDependencies: field.joinDependencies ?? [],
+  modelGraphSignature: field.modelGraphSignature ?? null,
+  compiledSqlHash: field.compiledSqlHash ?? null,
+  status: field.status,
+});
+
 const extractAxiosErrorMessage = (error: unknown, fallback: string): string => {
   const axiosError = error as AxiosError<{ error?: string; message?: string }> | undefined;
   return (
@@ -1466,6 +1484,10 @@ const Reports = (props: GenericPageProps) => {
     lastSaved: "",
     error: null,
   });
+
+  const derivedFieldsTemplateId =
+    draft.id && draft.id !== "template-empty" ? draft.id : undefined;
+  const templateDerivedFieldsQuery = useDerivedFields(derivedFieldsTemplateId);
   const [scheduleDraft, setScheduleDraft] = useState(() => {
     const timezoneGuess = (() => {
       try {
@@ -1693,6 +1715,56 @@ const Reports = (props: GenericPageProps) => {
       });
     }
   }, [selectedDerivedField]);
+
+  useEffect(() => {
+    if (!derivedFieldsTemplateId || !templateDerivedFieldsQuery.data?.derivedFields) {
+      return;
+    }
+    setDraft((current) => {
+      if (current.id !== derivedFieldsTemplateId) {
+        return current;
+      }
+      const fetchedMap = new Map(
+        templateDerivedFieldsQuery.data.derivedFields.map((dto) => [
+          dto.id,
+          mapDerivedFieldDtoToReportField(dto),
+        ]),
+      );
+      if (fetchedMap.size === 0) {
+        return current;
+      }
+      let mutated = false;
+      const merged: ReportDerivedField[] = current.derivedFields.map((field) => {
+        const remote = fetchedMap.get(field.id);
+        if (!remote) {
+          return field;
+        }
+        fetchedMap.delete(field.id);
+        const hasChanged =
+          field.expression !== remote.expression ||
+          field.compiledSqlHash !== remote.compiledSqlHash ||
+          field.modelGraphSignature !== remote.modelGraphSignature ||
+          (field.expressionAst ? JSON.stringify(field.expressionAst) : null) !==
+            (remote.expressionAst ? JSON.stringify(remote.expressionAst) : null);
+        if (hasChanged) {
+          mutated = true;
+          return { ...field, ...remote };
+        }
+        return field;
+      });
+      fetchedMap.forEach((field) => {
+        merged.push(field);
+        mutated = true;
+      });
+      if (!mutated) {
+        return current;
+      }
+      return {
+        ...current,
+        derivedFields: reconcileDerivedFieldStatuses(merged, current.models),
+      };
+    });
+  }, [derivedFieldsTemplateId, templateDerivedFieldsQuery.data, setDraft]);
   const joinCoverageLookup = useMemo(() => {
     const lookup = new Set<string>();
     draft.joins.forEach((join) => {
