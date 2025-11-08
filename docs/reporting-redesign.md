@@ -130,9 +130,9 @@ Deliverables are split across backend services, API contracts, frontend surfaces
   - [x] Display a "join coverage" callout under the editor that enumerates models referenced in the current AST, the joins currently connecting them, and warnings when coverage is missing (e.g., "Add a join between Bookings and Guests").
   - [x] When the expression validates, show a read-only preview table seeded by the first 20 rows of the current models to reinforce cross-model behavior; hide the preview if validation fails.
   - Persist `referencedModels`, `referencedFields`, `joinDependencies`, and `modelGraphSignature` when saving so the backend no longer needs to re-derive them.
-- [ ] Template model change handling
-  - Detect model add/remove events in the builder reducer; when a referenced model disappears, mark the affected derived fields with a `status: "stale"` flag, disable them from the preview payload, and surface an inline badge (“Needs model Bookings”) next to each field.
-  - Provide one-click “Resolve” actions that either reopen the editor (to swap columns) or restore the missing model; log the change to analytics so we can see how often users hit this edge case.
+- [x] Template model change handling
+  - Detect model add/remove events in the builder reducer; when a referenced model disappears, mark the affected derived fields with a `status: "stale"` flag, disable them from the preview payload, and surface an inline badge ("Needs model Bookings") next to each field.
+  - Provide one-click "Resolve" actions that either reopen the editor (to swap columns) or restore the missing model; log the change to analytics so we can see how often users hit this edge case.
   - Backend preview/query endpoints should reject payloads containing stale derived fields with a structured error (`code: "DERIVED_FIELD_STALE"`) to keep API behavior consistent even if the UI misses a state update.
   - Saving or running a template with stale derived fields should block the CTA, explaining which models must be re-added or which fields must be edited/removed before proceeding.
 - [x] API DTO & transport updates
