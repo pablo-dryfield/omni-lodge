@@ -1691,6 +1691,20 @@ const Reports = (props: GenericPageProps) => {
         : [],
     [joinCoverageLookup, selectedDerivedField],
   );
+  const derivedFieldPreviewSamples = useMemo(() => {
+    if (!selectedDerivedField || !previewResult?.rows || !previewResult?.columns) {
+      return null;
+    }
+    const alias = selectedDerivedField.id;
+    if (!previewResult.columns.includes(alias)) {
+      return null;
+    }
+    const rows = previewResult.rows.slice(0, 20).map((row, index) => ({
+      key: `${alias}-${index}`,
+      value: (row as Record<string, unknown>)[alias],
+    }));
+    return { alias, rows };
+  }, [previewResult?.rows, previewResult?.columns, selectedDerivedField]);
   const joinModelOptions = useMemo(() => {
     return draft.models
       .map((modelId) => modelMap.get(modelId))
@@ -6360,6 +6374,29 @@ const Reports = (props: GenericPageProps) => {
                         );
                       })()
                     )}
+                    <Stack gap="xs">
+                      <Text fw={600}>Sample output</Text>
+                      {derivedFieldPreviewSamples ? (
+                        <Table striped highlightOnHover withColumnBorders>
+                          <Table.Thead>
+                            <Table.Tr>
+                              <Table.Th>{selectedDerivedField.name}</Table.Th>
+                            </Table.Tr>
+                          </Table.Thead>
+                          <Table.Tbody>
+                            {derivedFieldPreviewSamples.rows.map((row) => (
+                              <Table.Tr key={row.key}>
+                                <Table.Td>{formatPreviewValue(row.value)}</Table.Td>
+                              </Table.Tr>
+                            ))}
+                          </Table.Tbody>
+                        </Table>
+                      ) : (
+                        <Alert color="gray" variant="light">
+                          Run a preview to see sample values for this derived field.
+                        </Alert>
+                      )}
+                    </Stack>
                     <Stack gap="xs">
                       <Group justify="space-between">
                         <Text fw={600}>Insert column tokens</Text>
