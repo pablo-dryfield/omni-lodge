@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import {
@@ -44,6 +45,7 @@ import {
   IconDatabase,
   IconDeviceFloppy,
   IconDownload,
+  IconLayoutGrid,
   IconMail,
   IconMessage2,
   IconPlayerPlay,
@@ -92,6 +94,7 @@ import {
   useDeleteTemplateSchedule,
   useExportReportTemplate,
   type TemplateScheduleDto,
+  type TemplateSchedulePayload,
   type TemplateScheduleDeliveryTarget,
   type DerivedFieldDefinitionDto,
   type MetricSpotlightDefinitionDto,
@@ -561,15 +564,20 @@ const formatMetricValue = (
   }
 };
 
-const SPOTLIGHT_COMPARISON_OPTIONS: { value: MetricSpotlightDefinitionDto["comparison"]; label: string }[] =
-  [
-    { value: "previous", label: "Previous period" },
-    { value: "wow", label: "Week over week" },
-    { value: "mom", label: "Month over month" },
-    { value: "yoy", label: "Year over year" },
-  ];
+const SPOTLIGHT_COMPARISON_OPTIONS: {
+  value: NonNullable<MetricSpotlightDefinitionDto["comparison"]>;
+  label: string;
+}[] = [
+  { value: "previous", label: "Previous period" },
+  { value: "wow", label: "Week over week" },
+  { value: "mom", label: "Month over month" },
+  { value: "yoy", label: "Year over year" },
+];
 
-const SPOTLIGHT_FORMAT_OPTIONS: { value: MetricSpotlightDefinitionDto["format"]; label: string }[] = [
+const SPOTLIGHT_FORMAT_OPTIONS: {
+  value: NonNullable<MetricSpotlightDefinitionDto["format"]>;
+  label: string;
+}[] = [
   { value: "number", label: "Number" },
   { value: "currency", label: "Currency (USD)" },
   { value: "percentage", label: "Percentage" },
@@ -1209,6 +1217,7 @@ const extractAxiosErrorMessage = (error: unknown, fallback: string): string => {
 
 const Reports = (props: GenericPageProps) => {
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
 
   const {
     data: backendModelsResponse,
@@ -1809,29 +1818,6 @@ const Reports = (props: GenericPageProps) => {
     [getColumnLabel, orderedTextualColumns],
   );
 
-  const metricAliasOptions = useMemo(() => {
-    const registry = new Map<string, string>();
-    const register = (alias?: string | null) => {
-      if (!alias) {
-        return;
-      }
-      if (!registry.has(alias)) {
-        registry.set(alias, getColumnLabel(alias));
-      }
-    };
-
-    metricOptions.forEach((option) => register(option.value));
-    draft.metrics.forEach(register);
-    draft.metricsSpotlight.forEach((spotlight) => register(spotlight.metric));
-    register(visualQueryDescriptor.metricAlias ?? undefined);
-    register(visualQueryDescriptor.comparisonAlias ?? undefined);
-
-    return Array.from(registry.entries()).map(([value, label]) => ({
-      value,
-      label,
-    }));
-  }, [draft.metrics, draft.metricsSpotlight, getColumnLabel, metricOptions, visualQueryDescriptor.comparisonAlias, visualQueryDescriptor.metricAlias]);
-
   useEffect(() => {
     setDraft((current) => {
       const numericSet = new Set(orderedNumericColumns);
@@ -2116,6 +2102,36 @@ const Reports = (props: GenericPageProps) => {
   const chartComparisonAlias = visualQueryDescriptor.comparisonAlias ?? undefined;
   const visualRows = useMemo(() => visualResult?.rows ?? [], [visualResult]);
   const visualColumns = useMemo(() => visualResult?.columns ?? [], [visualResult]);
+
+  const metricAliasOptions = useMemo(() => {
+    const registry = new Map<string, string>();
+    const register = (alias?: string | null) => {
+      if (!alias) {
+        return;
+      }
+      if (!registry.has(alias)) {
+        registry.set(alias, getColumnLabel(alias));
+      }
+    };
+
+    metricOptions.forEach((option) => register(option.value));
+    draft.metrics.forEach(register);
+    draft.metricsSpotlight.forEach((spotlight) => register(spotlight.metric));
+    register(visualQueryDescriptor.metricAlias ?? undefined);
+    register(visualQueryDescriptor.comparisonAlias ?? undefined);
+
+    return Array.from(registry.entries()).map(([value, label]) => ({
+      value,
+      label,
+    }));
+  }, [
+    draft.metrics,
+    draft.metricsSpotlight,
+    getColumnLabel,
+    metricOptions,
+    visualQueryDescriptor.comparisonAlias,
+    visualQueryDescriptor.metricAlias,
+  ]);
 
 
   const chartData = useMemo(() => {
@@ -3937,6 +3953,20 @@ const Reports = (props: GenericPageProps) => {
             </div>
             <Group>
               <Button
+                leftSection={<IconLayoutGrid size={16} />}
+                variant="subtle"
+                onClick={() => navigate("/reports/dashboards")}
+              >
+                Dashboards
+              </Button>
+              <Button
+                leftSection={<IconAdjustments size={16} />}
+                variant="subtle"
+                onClick={() => navigate("/reports/derived-fields")}
+              >
+                Derived fields
+              </Button>
+              <Button
                 leftSection={<IconTemplate size={16} />}
                 variant="light"
                 onClick={handleCreateTemplate}
@@ -4707,13 +4737,7 @@ const Reports = (props: GenericPageProps) => {
                                 : `${joinGraph.disconnected.length} disconnected`}
                             </Badge>
                           </Group>
-                          <SimpleGrid
-                            cols={2}
-                            spacing="sm"
-                            breakpoints={[
-                              { maxWidth: 1200, cols: 1 },
-                            ]}
-                          >
+                          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
                             <Stack gap={6}>
                               <Text fz="xs" fw={600} c="dimmed">
                                 Model coverage
@@ -5161,14 +5185,7 @@ const Reports = (props: GenericPageProps) => {
                                 <IconTrash size={16} />
                               </ActionIcon>
                             </Group>
-                            <SimpleGrid
-                              cols={3}
-                              spacing="sm"
-                              breakpoints={[
-                                { maxWidth: 1400, cols: 2 },
-                                { maxWidth: 900, cols: 1 },
-                              ]}
-                            >
+                            <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="sm">
                               <Select
                                 label="Metric"
                                 data={metricAliasOptions}

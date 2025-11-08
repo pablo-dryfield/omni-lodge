@@ -1258,6 +1258,8 @@ const Reports = (props: GenericPageProps) => {
   const [visualJobStatus, setVisualJobStatus] = useState<ReportQueryJobResponse["status"] | null>(null);
   const [isVisualQueryRunning, setIsVisualQueryRunning] = useState(false);
   const [visualExecutedAt, setVisualExecutedAt] = useState<string | null>(null);
+  const [previewSql, setPreviewSql] = useState<string | null>(null);
+  const [visualSql, setVisualSql] = useState<string | null>(null);
   const [templateSearch, setTemplateSearch] = useState<string>("");
   const [debouncedTemplateSearch] = useDebouncedValue(templateSearch, 250);
   const [templateCategoryFilter, setTemplateCategoryFilter] = useState<string>("all");
@@ -2196,6 +2198,30 @@ const Reports = (props: GenericPageProps) => {
         : visualQueryDescriptor.comparisonLabel
       : undefined;
 
+  const getMetricLabel = useCallback(
+    (alias?: string) => metricOptions.find((option) => option.value === alias)?.label,
+    [metricOptions],
+  );
+
+  const metricDisplayLabel = useMemo(() => {
+    const base = getMetricLabel(activeVisual.metric);
+    if (!base) {
+      return metricLabel;
+    }
+    return metricAggregationLabel ? `${base} (${metricAggregationLabel})` : base;
+  }, [activeVisual.metric, getMetricLabel, metricAggregationLabel, metricLabel]);
+
+  const comparisonDisplayLabel = useMemo(() => {
+    if (!activeVisual.comparison) {
+      return comparisonLabel;
+    }
+    const base = getMetricLabel(activeVisual.comparison);
+    if (!base) {
+      return comparisonLabel;
+    }
+    return comparisonAggregationLabel ? `${base} (${comparisonAggregationLabel})` : base;
+  }, [activeVisual.comparison, comparisonAggregationLabel, comparisonLabel, getMetricLabel]);
+
   const formatNumberForDisplay = useCallback(
     (value: number) =>
       Number.isFinite(value) ? value.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—",
@@ -2231,6 +2257,7 @@ const Reports = (props: GenericPageProps) => {
     if (!visualQueryDescriptor.config) {
       setVisualResult(null);
       setVisualExecutedAt(null);
+      setVisualSql(null);
       if (visualQueryDescriptor.warnings.length > 0) {
         setVisualQueryError(visualQueryDescriptor.warnings[0]);
       } else {
@@ -2248,11 +2275,13 @@ const Reports = (props: GenericPageProps) => {
     setVisualJobStatus(null);
     setVisualResult(null);
     setVisualExecutedAt(null);
+    setVisualSql(null);
 
     try {
       const response = await runAnalyticsQuery(visualQueryDescriptor.config);
       if (isReportQuerySuccess(response)) {
         setVisualResult(response);
+        setVisualSql(typeof response.sql === "string" ? response.sql : null);
         const executedAt =
           typeof response.meta?.executedAt === "string"
             ? response.meta.executedAt
@@ -2266,15 +2295,18 @@ const Reports = (props: GenericPageProps) => {
       } else if (isReportQueryJob(response)) {
         setVisualJob({ jobId: response.jobId, hash: response.hash });
         setVisualJobStatus(response.status);
+        setVisualSql(null);
       } else {
         setVisualQueryError("Received an unknown analytics response.");
         setIsVisualQueryRunning(false);
+        setVisualSql(null);
       }
     } catch (error) {
       setVisualQueryError(extractAxiosErrorMessage(error, "Failed to run analytics query."));
       setIsVisualQueryRunning(false);
       setVisualJobStatus("failed");
       setVisualExecutedAt(null);
+      setVisualSql(null);
     }
   }, [runAnalyticsQuery, visualQueryDescriptor]);
 
@@ -2294,6 +2326,7 @@ const Reports = (props: GenericPageProps) => {
         }
         if (isReportQuerySuccess(result)) {
           setVisualResult(result);
+          setVisualSql(typeof result.sql === "string" ? result.sql : null);
           const executedAt =
             typeof result.meta?.executedAt === "string"
               ? result.meta.executedAt
@@ -2314,6 +2347,7 @@ const Reports = (props: GenericPageProps) => {
             setVisualJob(null);
             setVisualExecutedAt(null);
             setIsVisualQueryRunning(false);
+            setVisualSql(null);
             return;
           }
           timeoutHandle = setTimeout(poll, 1500);
@@ -2329,6 +2363,7 @@ const Reports = (props: GenericPageProps) => {
         setVisualJobStatus("failed");
         setVisualExecutedAt(null);
         setIsVisualQueryRunning(false);
+        setVisualSql(null);
       }
     };
 
@@ -3412,6 +3447,7 @@ const Reports = (props: GenericPageProps) => {
     try {
       const response = await runPreview(payload);
       setPreviewResult(response);
+      setPreviewSql(typeof response.sql === "string" ? response.sql : null);
       setPreviewError(null);
       await runVisualAnalytics();
       setLastRunAt(formatTimestamp());
@@ -3421,6 +3457,7 @@ const Reports = (props: GenericPageProps) => {
       const message =
         axiosError?.response?.data?.message ?? axiosError?.message ?? "Failed to run report preview.";
       setPreviewError(message);
+      setPreviewSql(null);
       setVisualQueryError("Analytics query was not executed because the preview failed.");
       setIsVisualQueryRunning(false);
       setVisualResult(null);
@@ -5080,8 +5117,8 @@ const Reports = (props: GenericPageProps) => {
                               formatter={(value: number, dataKey: string) => [
                                 formatNumberForDisplay(value),
                                 dataKey === "primary"
-                                  ? metricLabel
-                                  : comparisonLabel ?? "Comparison",
+                                  ? metricDisplayLabel
+                                  : comparisonDisplayLabel ?? "Comparison",
                               ]}
                               labelFormatter={(label) => `${dimensionLabel}: ${label}`}
                             />
@@ -5091,18 +5128,18 @@ const Reports = (props: GenericPageProps) => {
                                 type="monotone"
                                 dataKey="primary"
                                 stroke="#1c7ed6"
-                                strokeWidth={2}
-                                dot={false}
-                                name={metricLabel}
+                               strokeWidth={2}
+                               dot={false}
+                                name={metricDisplayLabel}
                                 yAxisId="left"
                               />
                             ) : (
                               <Area
                                 type="monotone"
                                 dataKey="primary"
-                                stroke="#1c7ed6"
-                                fill="#a5d8ff"
-                                name={metricLabel}
+                               stroke="#1c7ed6"
+                               fill="#a5d8ff"
+                                name={metricDisplayLabel}
                                 yAxisId="left"
                               />
                             )}
@@ -5113,7 +5150,7 @@ const Reports = (props: GenericPageProps) => {
                                 stroke="#2b8a3e"
                                 strokeWidth={2}
                                 dot={false}
-                                name={comparisonLabel ?? "Comparison"}
+                                name={comparisonDisplayLabel ?? "Comparison"}
                                 yAxisId={chartComparisonAlias ? "right" : "left"}
                               />
                             )}
@@ -5255,6 +5292,48 @@ const Reports = (props: GenericPageProps) => {
                         </Card>
                       ))
                     )}
+                  </Stack>
+                </Paper>
+
+                <Paper p="md" radius="lg" shadow="xs" withBorder>
+                  <Stack gap="md">
+                    <Group justify="space-between" align="center">
+                      <Group gap="xs" align="center">
+                        <ThemeIcon variant="light" color="gray">
+                          <IconAdjustments size={16} />
+                        </ThemeIcon>
+                        <Text fw={600}>Query inspector</Text>
+                      </Group>
+                      <Badge variant="light">Diagnostics</Badge>
+                    </Group>
+                    <Stack gap="xs">
+                      <Text fw={500} fz="sm">
+                        Preview query
+                      </Text>
+                      <Textarea
+                        value={
+                          previewSql ?? "Run data preview to capture the SQL backing the table."
+                        }
+                        readOnly
+                        autosize
+                        minRows={3}
+                        styles={{ input: { fontFamily: "monospace" } }}
+                      />
+                    </Stack>
+                    <Stack gap="xs">
+                      <Text fw={500} fz="sm">
+                        Visuals & analytics query
+                      </Text>
+                      <Textarea
+                        value={
+                          visualSql ?? "Run analytics to capture the SQL powering the chart."
+                        }
+                        readOnly
+                        autosize
+                        minRows={3}
+                        styles={{ input: { fontFamily: "monospace" } }}
+                      />
+                    </Stack>
                   </Stack>
                 </Paper>
 
