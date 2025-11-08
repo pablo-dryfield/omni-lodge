@@ -42,6 +42,7 @@ import {
   IconArrowRight,
   IconCalendarStats,
   IconChartHistogram,
+  IconCheck,
   IconClock,
   IconCopy,
   IconDatabase,
@@ -461,6 +462,27 @@ const createEmptyTemplate = (): ReportTemplate => ({
   derivedFields: [],
   metricsSpotlight: [],
 });
+
+const buildJoinKey = (left: string, right: string) => {
+  const normalized = [left.trim(), right.trim()].filter((entry) => entry.length > 0).sort();
+  return normalized.join("::");
+};
+
+const buildModelPairs = (models: string[] | undefined): Array<[string, string]> => {
+  if (!Array.isArray(models) || models.length < 2) {
+    return [];
+  }
+  const uniqueModels = Array.from(
+    new Set(models.filter((modelId): modelId is string => typeof modelId === "string" && modelId.length > 0)),
+  ).sort();
+  const pairs: Array<[string, string]> = [];
+  for (let i = 0; i < uniqueModels.length; i += 1) {
+    for (let j = i + 1; j < uniqueModels.length; j += 1) {
+      pairs.push([uniqueModels[i], uniqueModels[j]]);
+    }
+  }
+  return pairs;
+};
 
 const reconcileDerivedFieldStatuses = <T extends DerivedFieldDefinitionDto>(
   fields: T[],
@@ -1096,6 +1118,23 @@ const buildDerivedFieldPayloads = (
     }));
 };
 
+const evaluateJoinCoverage = (
+  field: ReportDerivedField,
+  joinLookup: ReadonlySet<string>,
+): Array<{ pair: [string, string]; satisfied: boolean }> => {
+  const dependencies =
+    field.joinDependencies && field.joinDependencies.length > 0
+      ? field.joinDependencies
+      : buildModelPairs(field.referencedModels);
+  if (!dependencies || dependencies.length === 0) {
+    return [];
+  }
+  return dependencies.map((pair) => ({
+    pair,
+    satisfied: joinLookup.has(buildJoinKey(pair[0], pair[1])),
+  }));
+};
+
 const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitionDto[] => {
   if (!Array.isArray(candidate)) {
     return [];
@@ -1400,6 +1439,10 @@ const Reports = (props: GenericPageProps) => {
   const [templateCategoryFilter, setTemplateCategoryFilter] = useState<string>("all");
   const [templateSuccess, setTemplateSuccess] = useState<string | null>(null);
   const [isDerivedFieldsDrawerOpen, setDerivedFieldsDrawerOpen] = useState(false);
+  const [selectedDerivedFieldId, setSelectedDerivedFieldId] = useState<string | null>(() =>
+    draft.derivedFields[0]?.id ?? null,
+  );
+  const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState(() => {
     const timezoneGuess = (() => {
       try {
@@ -1596,6 +1639,58 @@ const Reports = (props: GenericPageProps) => {
   );
   const hasStaleDerivedFields = staleDerivedFields.length > 0;
   const staleDerivedFieldNames = staleDerivedFields.map((field) => field.name).join(", ");
+  useEffect(() => {
+    if (draft.derivedFields.length === 0) {
+      setSelectedDerivedFieldId(null);
+      return;
+    }
+    if (!selectedDerivedFieldId || !draft.derivedFields.some((field) => field.id === selectedDerivedFieldId)) {
+      setSelectedDerivedFieldId(draft.derivedFields[0].id);
+    }
+  }, [draft.derivedFields, selectedDerivedFieldId]);
+  const selectedDerivedField = useMemo(
+    () =>
+      draft.derivedFields.find((field) => field.id === selectedDerivedFieldId) ??
+      draft.derivedFields[0] ??
+      null,
+    [draft.derivedFields, selectedDerivedFieldId],
+  );
+  const joinCoverageLookup = useMemo(() => {
+    const lookup = new Set<string>();
+    draft.joins.forEach((join) => {
+      if (typeof join.leftModel === "string" && typeof join.rightModel === "string") {
+        lookup.add(buildJoinKey(join.leftModel, join.rightModel));
+      }
+    });
+    return lookup;
+  }, [draft.joins]);
+  const fieldPaletteEntries = useMemo(() => {
+    return draft.fields
+      .map((selection) => {
+        const model = modelMap.get(selection.modelId);
+        if (!model) {
+          return null;
+        }
+        const activeFields =
+          selection.fieldIds.length > 0
+            ? model.fields.filter((field) => selection.fieldIds.includes(field.id))
+            : model.fields;
+        if (activeFields.length === 0) {
+          return null;
+        }
+        return { model, fields: activeFields };
+      })
+      .filter(
+        (entry): entry is { model: DataModelDefinition; fields: DataField[] } => entry !== null,
+      );
+  }, [draft.fields, modelMap]);
+  const selectedDerivedFieldCoverage = useMemo(
+    () =>
+      selectedDerivedField
+        ? evaluateJoinCoverage(selectedDerivedField, joinCoverageLookup)
+        : [],
+    [joinCoverageLookup, selectedDerivedField],
+  );
   const joinModelOptions = useMemo(() => {
     return draft.models
       .map((modelId) => modelMap.get(modelId))
@@ -3661,6 +3756,37 @@ const Reports = (props: GenericPageProps) => {
     }));
   }, []);
 
+  const handleRestoreModel = useCallback(
+    (modelId: string) => {
+      if (!modelId) {
+        return;
+      }
+      setDraft((current) => {
+        if (current.models.includes(modelId)) {
+          const reconciled = reconcileDerivedFieldStatuses(current.derivedFields, current.models);
+          if (reconciled === current.derivedFields) {
+            return current;
+          }
+          return {
+            ...current,
+            derivedFields: reconciled,
+          };
+        }
+        const nextModels = [...current.models, modelId];
+        return {
+          ...current,
+          models: nextModels,
+          fields: current.fields.some((entry) => entry.modelId === modelId)
+            ? current.fields
+            : [...current.fields, { modelId, fieldIds: [] }],
+          derivedFields: reconcileDerivedFieldStatuses(current.derivedFields, nextModels),
+        };
+      });
+      setTemplateSuccess(`Re-added ${modelMap.get(modelId)?.name ?? modelId} to this template.`);
+    },
+    [modelMap, setTemplateSuccess],
+  );
+
   const handleRecheckDerivedFields = useCallback(() => {
     setDraft((current) => {
       const reconciled = reconcileDerivedFieldStatuses(current.derivedFields, current.models);
@@ -3678,6 +3804,28 @@ const Reports = (props: GenericPageProps) => {
     setDerivedFieldsDrawerOpen(false);
     navigate("/reports/derived-fields");
   }, [navigate]);
+
+  const handleCopyToken = useCallback(async (token: string) => {
+    try {
+      await navigator.clipboard.writeText(token);
+      setCopiedToken(token);
+      setTimeout(() => setCopiedToken((current) => (current === token ? null : current)), 2000);
+    } catch {
+      setCopiedToken(token);
+    }
+  }, []);
+
+  const handleCopyExpression = useCallback(
+    async (expression: string) => {
+      try {
+        await navigator.clipboard.writeText(expression);
+        setTemplateSuccess(`Copied expression for derived field.`);
+      } catch {
+        setTemplateError("Failed to copy expression to clipboard.");
+      }
+    },
+    [setTemplateError, setTemplateSuccess],
+  );
 
   const updateFilter = (filterId: string, updater: (filter: ReportFilter) => ReportFilter) => {
     setDraft((current) => ({
@@ -6041,85 +6189,226 @@ const Reports = (props: GenericPageProps) => {
               them to templates as they become available.
             </Alert>
           ) : (
-            <Stack gap="sm">
-              {draft.derivedFields.map((field) => {
-                const missingModels =
-                  field.referencedModels?.filter((modelId) => !draft.models.includes(modelId)) ?? [];
-                return (
-                  <Card key={field.id} withBorder shadow="xs" radius="md">
-                    <Stack gap="sm">
-                      <Group justify="space-between" align="flex-start">
-                        <div>
-                          <Text fw={600}>{field.name}</Text>
-                          <Group gap="xs" mt={4}>
-                            <Badge variant="light">
-                              {field.scope === "workspace" ? "Workspace scope" : "Template scope"}
-                            </Badge>
-                            {field.status === "stale" ? (
-                              <Badge color="red" variant="filled">
-                                Needs attention
+            <Flex gap="lg" align="flex-start" wrap="wrap">
+              <Stack gap="sm" style={{ flex: "1 1 280px" }}>
+                {draft.derivedFields.map((field) => {
+                  const missingModels =
+                    field.referencedModels?.filter((modelId) => !draft.models.includes(modelId)) ?? [];
+                  const isSelected = selectedDerivedField?.id === field.id;
+                  return (
+                    <Card
+                      key={field.id}
+                      withBorder
+                      shadow={isSelected ? "md" : "xs"}
+                      radius="md"
+                      onClick={() => setSelectedDerivedFieldId(field.id)}
+                      role="button"
+                      aria-pressed={isSelected}
+                      tabIndex={0}
+                      style={{
+                        borderColor: isSelected ? "#228be6" : undefined,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <Stack gap="sm">
+                        <Group justify="space-between" align="flex-start">
+                          <div>
+                            <Text fw={600}>{field.name}</Text>
+                            <Group gap="xs" mt={4}>
+                              <Badge variant="light">
+                                {field.scope === "workspace" ? "Workspace scope" : "Template scope"}
                               </Badge>
-                            ) : (
-                              <Badge color="green" variant="outline">
-                                Ready
-                              </Badge>
-                            )}
-                          </Group>
-                        </div>
-                        <Group gap="xs">
-                          {field.status === "stale" && (
-                            <Button
-                              size="xs"
-                              variant="subtle"
-                              leftSection={<IconRefresh size={14} />}
-                              onClick={handleRecheckDerivedFields}
-                            >
-                              Re-check
-                            </Button>
-                          )}
-                          <ActionIcon
-                            variant="subtle"
-                            color="red"
-                            onClick={() => handleRemoveDerivedField(field.id)}
-                            aria-label={`Remove derived field ${field.name}`}
-                          >
-                            <IconTrash size={16} />
-                          </ActionIcon>
-                        </Group>
-                      </Group>
-                      {field.expression && (
-                        <Text fz="sm" c="dimmed">
-                          {field.expression}
-                        </Text>
-                      )}
-                      {field.referencedFields && Object.keys(field.referencedFields).length > 0 && (
-                        <Stack gap={4}>
-                          {Object.entries(field.referencedFields).map(([modelId, fields]) => (
-                            <Group key={modelId} gap={6} align="flex-start">
-                              <Badge variant="outline" size="sm">
-                                {modelId}
-                              </Badge>
-                              <Group gap={4}>
-                                {fields.map((fieldId) => (
-                                  <Badge key={`${modelId}.${fieldId}`} variant="outline" size="xs">
-                                    {fieldId}
-                                  </Badge>
-                                ))}
-                              </Group>
+                              {field.status === "stale" ? (
+                                <Badge color="red" variant="filled">
+                                  Needs attention
+                                </Badge>
+                              ) : (
+                                <Badge color="green" variant="outline">
+                                  Ready
+                                </Badge>
+                              )}
                             </Group>
-                          ))}
-                        </Stack>
-                      )}
-                      {field.status === "stale" && missingModels.length > 0 && (
-                        <Alert color="red" variant="light" icon={<IconAlertTriangle size={16} />}>
-                          Re-add these models to resolve: {missingModels.join(", ")}
+                          </div>
+                          <Group gap="xs">
+                            {field.status === "stale" && (
+                              <Button
+                                size="xs"
+                                variant="subtle"
+                                leftSection={<IconRefresh size={14} />}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleRecheckDerivedFields();
+                                }}
+                              >
+                                Re-check
+                              </Button>
+                            )}
+                            <ActionIcon
+                              variant="subtle"
+                              color="red"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleRemoveDerivedField(field.id);
+                              }}
+                              aria-label={`Remove derived field ${field.name}`}
+                            >
+                              <IconTrash size={16} />
+                            </ActionIcon>
+                          </Group>
+                        </Group>
+                        {field.expression && (
+                          <Text fz="sm" c="dimmed" lineClamp={3}>
+                            {field.expression}
+                          </Text>
+                        )}
+                        {field.status === "stale" && missingModels.length > 0 && (
+                          <Stack gap={6}>
+                            <Alert color="red" variant="light" icon={<IconAlertTriangle size={16} />}>
+                              Re-add these models to resolve: {missingModels.join(", ")}
+                            </Alert>
+                            <Group gap="xs" wrap="wrap">
+                              {missingModels.map((modelId) => (
+                                <Button
+                                  key={`${field.id}-restore-${modelId}`}
+                                  size="xs"
+                                  variant="light"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleRestoreModel(modelId);
+                                  }}
+                                >
+                                  Re-add {modelMap.get(modelId)?.name ?? modelId}
+                                </Button>
+                              ))}
+                            </Group>
+                          </Stack>
+                        )}
+                      </Stack>
+                    </Card>
+                  );
+                })}
+              </Stack>
+              <Stack gap="md" style={{ flex: "1 1 360px" }}>
+                {selectedDerivedField ? (
+                  <>
+                    <Group justify="space-between" align="center">
+                      <Text fw={600}>Field details</Text>
+                      <Button
+                        variant="subtle"
+                        size="xs"
+                        leftSection={<IconCopy size={14} />}
+                        onClick={() => handleCopyExpression(selectedDerivedField.expression)}
+                      >
+                        Copy expression
+                      </Button>
+                    </Group>
+                    <Textarea
+                      value={selectedDerivedField.expression}
+                      readOnly
+                      autosize
+                      minRows={3}
+                      styles={{ input: { fontFamily: "monospace" } }}
+                    />
+                    <Stack gap="xs">
+                      <Text fw={600}>Join coverage</Text>
+                      {selectedDerivedFieldCoverage.length === 0 ? (
+                        <Alert color="gray" variant="light">
+                          Single-model expression. No joins required.
                         </Alert>
+                      ) : (
+                        <Group gap="xs">
+                          {selectedDerivedFieldCoverage.map(({ pair, satisfied }) => (
+                            <Badge
+                              key={`${pair[0]}-${pair[1]}`}
+                              color={satisfied ? "green" : "red"}
+                              variant={satisfied ? "light" : "filled"}
+                              leftSection={<IconCheck size={12} />}
+                            >
+                              {pair[0]} ↔ {pair[1]}
+                            </Badge>
+                          ))}
+                        </Group>
                       )}
                     </Stack>
-                  </Card>
-                );
-              })}
-            </Stack>
+                    {selectedDerivedField?.status === "stale" && (
+                      (() => {
+                        const missingModels =
+                          selectedDerivedField.referencedModels?.filter(
+                            (modelId) => !draft.models.includes(modelId),
+                          ) ?? [];
+                        if (missingModels.length === 0) {
+                          return null;
+                        }
+                        return (
+                          <Stack gap={6}>
+                            <Alert color="red" variant="light" icon={<IconAlertTriangle size={16} />}>
+                              Re-add these models to resolve: {missingModels.join(", ")}
+                            </Alert>
+                            <Group gap="xs" wrap="wrap">
+                              {missingModels.map((modelId) => (
+                                <Button
+                                  key={`selected-restore-${modelId}`}
+                                  size="xs"
+                                  variant="light"
+                                  onClick={() => handleRestoreModel(modelId)}
+                                >
+                                  Re-add {modelMap.get(modelId)?.name ?? modelId}
+                                </Button>
+                              ))}
+                            </Group>
+                          </Stack>
+                        );
+                      })()
+                    )}
+                    <Stack gap="xs">
+                      <Group justify="space-between">
+                        <Text fw={600}>Insert column tokens</Text>
+                        {copiedToken && (
+                          <Badge color="teal" variant="light">
+                            Copied {copiedToken}
+                          </Badge>
+                        )}
+                      </Group>
+                      {fieldPaletteEntries.length === 0 ? (
+                        <Alert color="gray" variant="light">
+                          Select fields in your template to enable quick token insertion.
+                        </Alert>
+                      ) : (
+                        <ScrollArea h={220}>
+                          <Stack gap="sm">
+                            {fieldPaletteEntries.map(({ model, fields }) => (
+                              <Stack key={model.id} gap={4}>
+                                <Text fw={500}>{model.name}</Text>
+                                <Group gap="xs" wrap="wrap">
+                                  {fields.map((field) => {
+                                    const token = `${model.id}.${field.id}`;
+                                    return (
+                                      <Button
+                                        key={token}
+                                        size="xs"
+                                        variant="light"
+                                        compact
+                                        onClick={() => handleCopyToken(token)}
+                                      >
+                                        {field.label ?? field.id}
+                                      </Button>
+                                    );
+                                  })}
+                                </Group>
+                              </Stack>
+                            ))}
+                          </Stack>
+                        </ScrollArea>
+                      )}
+                    </Stack>
+                  </>
+                ) : (
+                  <Alert color="gray" variant="light">
+                    Select a derived field to inspect its joins and available tokens.
+                  </Alert>
+                )}
+              </Stack>
+            </Flex>
           )}
           <Button
             variant="light"
