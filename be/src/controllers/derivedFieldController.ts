@@ -1,14 +1,63 @@
 import { Request, Response } from "express";
+import type { Model, ModelCtor } from "sequelize-typescript";
 import DerivedFieldDefinition from "../models/DerivedFieldDefinition.js";
 import { AuthenticatedRequest } from "../types/AuthenticatedRequest";
 import { ensureReportingAccess } from "../utils/reportingAccess.js";
 import { normalizeDerivedFieldExpressionAst } from "../utils/derivedFieldExpression.js";
+import sequelize from "../config/database.js";
 
 const coerceKind = (value: unknown): "row" | "aggregate" =>
   value === "aggregate" ? "aggregate" : "row";
 
 const coerceScope = (value: unknown): "workspace" | "template" =>
   value === "template" ? "template" : "workspace";
+
+const trimString = (value: unknown): string =>
+  typeof value === "string" ? value.trim() : "";
+
+const getModelCtor = (modelId: string): ModelCtor<Model> | null => {
+  const candidate = sequelize.models[modelId];
+  if (!candidate) {
+    return null;
+  }
+  return candidate as ModelCtor<Model>;
+};
+
+const modelHasField = (model: ModelCtor<Model>, fieldId: string): boolean => {
+  const attributes = model.getAttributes();
+  if (attributes[fieldId]) {
+    return true;
+  }
+  return Object.values(attributes).some((attribute) => attribute.field === fieldId);
+};
+
+const collectReferenceIssues = (references: Record<string, string[]>) => {
+  const missingModels: string[] = [];
+  const missingFields: string[] = [];
+
+  Object.entries(references).forEach(([modelId, fieldIds]) => {
+    const trimmedModelId = trimString(modelId);
+    if (!trimmedModelId || !Array.isArray(fieldIds) || fieldIds.length === 0) {
+      return;
+    }
+    const model = getModelCtor(trimmedModelId);
+    if (!model) {
+      missingModels.push(trimmedModelId);
+      return;
+    }
+    fieldIds.forEach((fieldId) => {
+      const trimmedField = trimString(fieldId);
+      if (!trimmedField) {
+        return;
+      }
+      if (!modelHasField(model, trimmedField)) {
+        missingFields.push(`${trimmedModelId}.${trimmedField}`);
+      }
+    });
+  });
+
+  return { missingModels, missingFields };
+};
 
 export const listDerivedFields = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -33,6 +82,12 @@ export const listDerivedFields = async (req: Request, res: Response): Promise<vo
         kind: field.kind,
         expressionAst: field.expressionAst ?? null,
         referencedModels: Array.isArray(field.referencedModels) ? field.referencedModels : [],
+        referencedFields:
+          field.referencedFields && typeof field.referencedFields === "object"
+            ? (field.referencedFields as Record<string, string[]>)
+            : {},
+        joinDependencies: Array.isArray(field.joinDependencies) ? field.joinDependencies : [],
+        modelGraphSignature: field.modelGraphSignature ?? null,
         metadata: field.metadata ?? {},
         createdBy: field.createdBy,
         createdAt: field.createdAt?.toISOString() ?? null,
@@ -57,6 +112,20 @@ export const createDerivedField = async (req: AuthenticatedRequest, res: Respons
     const astResult = normalizeDerivedFieldExpressionAst(expressionAst);
     const normalizedAst = astResult?.ast ?? null;
     const referencedModels = astResult?.referencedModels ?? [];
+    const referencedFields = astResult?.referencedFields ?? {};
+    const joinDependencies = astResult?.joinDependencies ?? [];
+    const referenceIssues = collectReferenceIssues(referencedFields);
+    if (referenceIssues.missingModels.length > 0 || referenceIssues.missingFields.length > 0) {
+      res.status(400).json({
+        message: "Derived field references unknown models or fields.",
+        details: referenceIssues,
+      });
+      return;
+    }
+    const modelGraphSignature =
+      typeof req.body?.modelGraphSignature === "string" && trimString(req.body.modelGraphSignature).length > 0
+        ? trimString(req.body.modelGraphSignature)
+        : null;
 
     const field = await DerivedFieldDefinition.create({
       templateId: typeof templateId === "string" && templateId.trim().length > 0 ? templateId.trim() : null,
@@ -67,6 +136,9 @@ export const createDerivedField = async (req: AuthenticatedRequest, res: Respons
       metadata: metadata && typeof metadata === "object" ? metadata : {},
       expressionAst: normalizedAst,
       referencedModels,
+      referencedFields,
+      joinDependencies,
+      modelGraphSignature,
       createdBy: req.authContext?.id ?? null,
     });
 
@@ -81,6 +153,12 @@ export const createDerivedField = async (req: AuthenticatedRequest, res: Respons
         kind: field.kind,
         expressionAst: field.expressionAst ?? null,
         referencedModels: Array.isArray(field.referencedModels) ? field.referencedModels : [],
+        referencedFields:
+          field.referencedFields && typeof field.referencedFields === "object"
+            ? (field.referencedFields as Record<string, string[]>)
+            : {},
+        joinDependencies: Array.isArray(field.joinDependencies) ? field.joinDependencies : [],
+        modelGraphSignature: field.modelGraphSignature ?? null,
         metadata: field.metadata ?? {},
         createdBy: field.createdBy,
         createdAt: field.createdAt?.toISOString() ?? null,
@@ -125,6 +203,20 @@ export const updateDerivedField = async (req: AuthenticatedRequest, res: Respons
       const astResult = normalizeDerivedFieldExpressionAst(expressionAst);
       field.expressionAst = astResult?.ast ?? null;
       field.referencedModels = astResult?.referencedModels ?? [];
+      field.referencedFields = astResult?.referencedFields ?? {};
+      field.joinDependencies = astResult?.joinDependencies ?? [];
+      const referenceIssues = collectReferenceIssues(field.referencedFields);
+      if (referenceIssues.missingModels.length > 0 || referenceIssues.missingFields.length > 0) {
+        res.status(400).json({
+          message: "Derived field references unknown models or fields.",
+          details: referenceIssues,
+        });
+        return;
+      }
+    }
+    if (req.body?.modelGraphSignature !== undefined) {
+      const nextSignature = trimString(req.body.modelGraphSignature);
+      field.modelGraphSignature = nextSignature.length > 0 ? nextSignature : null;
     }
 
     await field.save();
@@ -140,6 +232,12 @@ export const updateDerivedField = async (req: AuthenticatedRequest, res: Respons
         kind: field.kind,
         expressionAst: field.expressionAst ?? null,
         referencedModels: Array.isArray(field.referencedModels) ? field.referencedModels : [],
+        referencedFields:
+          field.referencedFields && typeof field.referencedFields === "object"
+            ? (field.referencedFields as Record<string, string[]>)
+            : {},
+        joinDependencies: Array.isArray(field.joinDependencies) ? field.joinDependencies : [],
+        modelGraphSignature: field.modelGraphSignature ?? null,
         metadata: field.metadata ?? {},
         createdBy: field.createdBy,
         createdAt: field.createdAt?.toISOString() ?? null,

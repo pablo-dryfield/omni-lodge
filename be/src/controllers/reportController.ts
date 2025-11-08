@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { Request, Response } from "express";
 import { Association, ModelAttributeColumnOptions, Op, QueryTypes, type ModelAttributeColumnReferencesOptions } from "sequelize";
 import { Model, ModelCtor, Sequelize } from "sequelize-typescript";
@@ -156,6 +157,18 @@ type DerivedFieldQueryPayload = {
   alias?: string;
   expressionAst: DerivedFieldExpressionAst;
   referencedModels?: string[];
+  joinDependencies?: Array<[string, string]>;
+  modelGraphSignature?: string | null;
+};
+
+const formatDerivedFieldLabel = (field: DerivedFieldQueryPayload, index: number): string => {
+  if (field.alias && field.alias.trim().length > 0) {
+    return field.alias.trim();
+  }
+  if (field.id && field.id.trim().length > 0) {
+    return field.id.trim();
+  }
+  return `derived_${index + 1}`;
 };
 
 type ReportPreviewRequest = {
@@ -314,9 +327,14 @@ const toNullableString = (value: unknown): string | null => {
   return null;
 };
 
+const toTrimmedString = (value: unknown): string =>
+  typeof value === "string" ? value.trim() : "";
+
 const toStringArray = (value: unknown): string[] =>
   Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    ? value
+        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+        .filter((entry): entry is string => entry.length > 0)
     : [];
 
 const toFieldSelections = (value: unknown): ReportTemplateFieldSelection[] => {
@@ -383,6 +401,148 @@ const toColumnAliasMap = (value: unknown): Record<string, string> => {
   return aliases;
 };
 
+const toReferencedFieldMap = (value: unknown): Record<string, string[]> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  const references: Record<string, string[]> = {};
+  entries.forEach(([modelId, fields]) => {
+    if (typeof modelId !== "string" || !Array.isArray(fields)) {
+      return;
+    }
+    const trimmedModel = modelId.trim();
+    if (!trimmedModel) {
+      return;
+    }
+    const uniqueFields = Array.from(
+      new Set(
+        fields
+          .map((field) => (typeof field === "string" ? field.trim() : ""))
+          .filter((field) => field.length > 0),
+      ),
+    );
+    if (uniqueFields.length > 0) {
+      references[trimmedModel] = uniqueFields;
+    }
+  });
+  return references;
+};
+
+const toJoinDependencyPairs = (value: unknown): Array<[string, string]> => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const dependencies: Array<[string, string]> = [];
+  value.forEach((entry) => {
+    let left: string | null = null;
+    let right: string | null = null;
+    if (Array.isArray(entry) && entry.length === 2) {
+      left = typeof entry[0] === "string" ? entry[0].trim() : null;
+      right = typeof entry[1] === "string" ? entry[1].trim() : null;
+    } else if (entry && typeof entry === "object") {
+      const record = entry as Record<string, unknown>;
+      left = typeof record.left === "string" ? record.left.trim() : null;
+      right = typeof record.right === "string" ? record.right.trim() : null;
+    }
+    if (!left || !right || left === right) {
+      return;
+    }
+    const ordered: [string, string] = left < right ? [left, right] : [right, left];
+    const signature = `${ordered[0]}|${ordered[1]}`;
+    if (!seen.has(signature)) {
+      seen.add(signature);
+      dependencies.push(ordered);
+    }
+  });
+  dependencies.sort(([aLeft, aRight], [bLeft, bRight]) => {
+    if (aLeft === bLeft) {
+      return aRight.localeCompare(bRight);
+    }
+    return aLeft.localeCompare(bLeft);
+  });
+  return dependencies;
+};
+
+type JoinSignatureDescriptor = {
+  leftModel: string;
+  leftField: string;
+  rightModel: string;
+  rightField: string;
+  joinType: string;
+  id?: string;
+};
+
+const normalizeModelsForSignature = (models: string[]): string[] => {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  models.forEach((modelId) => {
+    const trimmed = toTrimmedString(modelId);
+    if (!trimmed || seen.has(trimmed)) {
+      return;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  });
+  normalized.sort();
+  return normalized;
+};
+
+const normalizeJoinsForSignature = (joins: unknown[]): JoinSignatureDescriptor[] => {
+  if (!Array.isArray(joins)) {
+    return [];
+  }
+  const allowedJoinTypes = new Set(["inner", "left", "right", "full"]);
+  const normalized: JoinSignatureDescriptor[] = [];
+  joins.forEach((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const candidate = entry as Record<string, unknown>;
+    const leftModel = toTrimmedString(candidate.leftModel);
+    const rightModel = toTrimmedString(candidate.rightModel);
+    const leftField = toTrimmedString(candidate.leftField);
+    const rightField = toTrimmedString(candidate.rightField);
+    if (!leftModel || !rightModel || !leftField || !rightField) {
+      return;
+    }
+    const joinTypeRaw = toTrimmedString(candidate.joinType).toLowerCase();
+    const joinType = allowedJoinTypes.has(joinTypeRaw) ? joinTypeRaw : "left";
+    const descriptor: JoinSignatureDescriptor = {
+      leftModel,
+      leftField,
+      rightModel,
+      rightField,
+      joinType,
+    };
+    const id = toTrimmedString(candidate.id);
+    if (id) {
+      descriptor.id = id;
+    }
+    normalized.push(descriptor);
+  });
+  normalized.sort((a, b) => {
+    const left = JSON.stringify(a);
+    const right = JSON.stringify(b);
+    return left.localeCompare(right);
+  });
+  return normalized;
+};
+
+const computeModelGraphSignature = (models: string[], joins: unknown[]): string | null => {
+  const normalizedModels = normalizeModelsForSignature(models);
+  if (normalizedModels.length === 0) {
+    return null;
+  }
+  const normalizedJoins = normalizeJoinsForSignature(joins);
+  const canonical = JSON.stringify({
+    models: normalizedModels,
+    joins: normalizedJoins,
+  });
+  return crypto.createHash("sha1").update(canonical).digest("hex");
+};
+
 const toDerivedFieldArray = (value: unknown): ReportTemplateDerivedField[] => {
   if (!Array.isArray(value)) {
     return [];
@@ -401,6 +561,10 @@ const toDerivedFieldArray = (value: unknown): ReportTemplateDerivedField[] => {
       const astResult = normalizeDerivedFieldExpressionAst(candidate.expressionAst);
       const expressionAst = astResult?.ast ?? null;
       const referencedModels = astResult?.referencedModels ?? [];
+      const referencedFields =
+        astResult?.referencedFields ?? toReferencedFieldMap(candidate.referencedFields);
+      const joinDependencies =
+        astResult?.joinDependencies ?? toJoinDependencyPairs(candidate.joinDependencies);
       const id =
         typeof candidate.id === "string" && candidate.id.trim().length > 0
           ? candidate.id.trim()
@@ -413,6 +577,10 @@ const toDerivedFieldArray = (value: unknown): ReportTemplateDerivedField[] => {
         candidate.metadata && typeof candidate.metadata === "object" && !Array.isArray(candidate.metadata)
           ? (candidate.metadata as Record<string, unknown>)
           : {};
+      const modelGraphSignature =
+        typeof candidate.modelGraphSignature === "string" && candidate.modelGraphSignature.trim().length > 0
+          ? candidate.modelGraphSignature.trim()
+          : null;
       return {
         id,
         name,
@@ -422,6 +590,9 @@ const toDerivedFieldArray = (value: unknown): ReportTemplateDerivedField[] => {
         metadata,
         expressionAst,
         referencedModels,
+        referencedFields,
+        joinDependencies,
+        modelGraphSignature,
       };
     })
     .filter((entry): entry is ReportTemplateDerivedField => Boolean(entry));
@@ -505,19 +676,31 @@ const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
     columnAliases,
   };
 
+  const models = toStringArray(input.models);
+  const joins = toUnknownArray(input.joins);
+  const derivedFieldsRaw = toDerivedFieldArray(input.derivedFields);
+  const modelGraphSignature = computeModelGraphSignature(models, joins);
+  const derivedFields =
+    derivedFieldsRaw.length === 0
+      ? derivedFieldsRaw
+      : derivedFieldsRaw.map((field) => ({
+          ...field,
+          modelGraphSignature: modelGraphSignature ?? field.modelGraphSignature ?? null,
+        }));
+
   return {
     name: toStringOr(input.name, ""),
     category: toNullableString(input.category),
     description: toNullableString(input.description),
     schedule: toStringOr(input.schedule, "Manual"),
-    models: toStringArray(input.models),
+    models,
     fields: toFieldSelections(input.fields),
-    joins: toUnknownArray(input.joins),
+    joins,
     visuals: toUnknownArray(input.visuals),
     metrics: toStringArray(input.metrics),
     filters: toUnknownArray(input.filters),
     queryConfig: input.queryConfig && typeof input.queryConfig === "object" ? input.queryConfig : null,
-    derivedFields: toDerivedFieldArray(input.derivedFields),
+    derivedFields,
     metricsSpotlight: toMetricsSpotlightArray(input.metricsSpotlight),
     options,
   };
@@ -566,6 +749,12 @@ const serializeReportTemplate = (
           id: field.id ?? `derived-${index}`,
           expressionAst: field.expressionAst ?? null,
           referencedModels: Array.isArray(field.referencedModels) ? field.referencedModels : [],
+          referencedFields: toReferencedFieldMap(field.referencedFields),
+          joinDependencies: toJoinDependencyPairs(field.joinDependencies),
+          modelGraphSignature:
+            typeof field.modelGraphSignature === "string" && field.modelGraphSignature.length > 0
+              ? field.modelGraphSignature
+              : null,
         }))
       : [],
     metricsSpotlight: Array.isArray(template.metricsSpotlight) ? template.metricsSpotlight : [],
@@ -935,6 +1124,34 @@ const executePreviewQuery = async (
   }
 
   const derivedFieldPayloads = Array.isArray(payload.derivedFields) ? payload.derivedFields : [];
+  const currentGraphSignature = computeModelGraphSignature(payload.models, payload.joins ?? []);
+  if (derivedFieldPayloads.length > 0) {
+    const derivedFieldErrors: string[] = [];
+    derivedFieldPayloads.forEach((field, index) => {
+      const label = formatDerivedFieldLabel(field, index);
+      if (
+        field.modelGraphSignature &&
+        currentGraphSignature &&
+        field.modelGraphSignature !== currentGraphSignature
+      ) {
+        derivedFieldErrors.push(
+          `Derived field ${label} is out of date after recent model/join changes. Edit and save it again.`,
+        );
+      }
+      const referencedModels = Array.isArray(field.referencedModels) ? field.referencedModels : [];
+      const missingModels = referencedModels.filter((modelId) => !aliasMap.has(modelId));
+      if (missingModels.length > 0) {
+        derivedFieldErrors.push(
+          `Derived field ${label} references models that are not selected in this template: ${missingModels.join(
+            ", ",
+          )}.`,
+        );
+      }
+    });
+    if (derivedFieldErrors.length > 0) {
+      throw new PreviewQueryError(derivedFieldErrors.join(" | "));
+    }
+  }
   derivedFieldPayloads.forEach((field, index) => {
     try {
       const { clause, alias } = buildDerivedFieldSelectClause(field, aliasMap, index);
@@ -963,6 +1180,20 @@ const executePreviewQuery = async (
     aliasMap,
     baseModelId,
   );
+
+  if (derivedFieldPayloads.length > 0) {
+    derivedFieldPayloads.forEach((field, index) => {
+      const referencedModels = Array.isArray(field.referencedModels) ? field.referencedModels : [];
+      const unmetModels = referencedModels.filter((modelId) => !joinedModels.has(modelId));
+      if (unmetModels.length > 0) {
+        throw new PreviewQueryError(
+          `Derived field ${formatDerivedFieldLabel(field, index)} requires joins covering models: ${unmetModels.join(
+            ", ",
+          )}.`,
+        );
+      }
+    });
+  }
 
   if (unresolvedJoins.length > 0) {
     throw new PreviewQueryError("Some models could not be joined. Verify your join configuration.", 400, unresolvedJoins);

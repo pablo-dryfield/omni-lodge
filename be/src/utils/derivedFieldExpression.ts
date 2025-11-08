@@ -3,6 +3,8 @@ import type { DerivedFieldExpressionAst, BinaryOperator, UnaryOperator } from ".
 type ParsedAst = {
   ast: DerivedFieldExpressionAst;
   referencedModels: string[];
+  referencedFields: Record<string, string[]>;
+  joinDependencies: Array<[string, string]>;
 };
 
 export const BINARY_OPERATORS: ReadonlySet<BinaryOperator> = new Set(["+", "-", "*", "/"]);
@@ -27,11 +29,14 @@ export const normalizeDerivedFieldExpressionAst = (value: unknown): ParsedAst | 
   if (!ast) {
     return null;
   }
-  const referenced = new Set<string>();
-  collectReferencedModels(ast, referenced);
+  const referencedModels = new Set<string>();
+  const referencedFieldsMap = new Map<string, Set<string>>();
+  collectExpressionMetadata(ast, referencedModels, referencedFieldsMap);
   return {
     ast,
-    referencedModels: Array.from(referenced),
+    referencedModels: Array.from(referencedModels),
+    referencedFields: serializeReferencedFields(referencedFieldsMap),
+    joinDependencies: buildJoinDependencies(referencedModels),
   };
 };
 
@@ -125,23 +130,62 @@ const parseNode = (value: unknown): DerivedFieldExpressionAst | null => {
   }
 };
 
-const collectReferencedModels = (node: DerivedFieldExpressionAst, accumulator: Set<string>) => {
+const collectExpressionMetadata = (
+  node: DerivedFieldExpressionAst,
+  modelAccumulator: Set<string>,
+  fieldMap: Map<string, Set<string>>,
+) => {
   switch (node.type) {
-    case "column":
-      accumulator.add(node.modelId);
+    case "column": {
+      modelAccumulator.add(node.modelId);
+      if (!fieldMap.has(node.modelId)) {
+        fieldMap.set(node.modelId, new Set<string>());
+      }
+      fieldMap.get(node.modelId)!.add(node.fieldId);
       return;
+    }
     case "binary":
-      collectReferencedModels(node.left, accumulator);
-      collectReferencedModels(node.right, accumulator);
+      collectExpressionMetadata(node.left, modelAccumulator, fieldMap);
+      collectExpressionMetadata(node.right, modelAccumulator, fieldMap);
       return;
     case "unary":
-      collectReferencedModels(node.argument, accumulator);
+      collectExpressionMetadata(node.argument, modelAccumulator, fieldMap);
       return;
     case "function":
-      node.args.forEach((arg) => collectReferencedModels(arg, accumulator));
+      node.args.forEach((arg) => collectExpressionMetadata(arg, modelAccumulator, fieldMap));
       return;
     case "literal":
     default:
       return;
   }
+};
+
+const serializeReferencedFields = (
+  fieldMap: Map<string, Set<string>>,
+): Record<string, string[]> => {
+  const entries: Array<[string, string[]]> = Array.from(fieldMap.entries()).map(
+    ([modelId, fields]): [string, string[]] => {
+      const sortedFields = Array.from(fields).sort((left, right) => left.localeCompare(right));
+      return [modelId, sortedFields];
+    },
+  );
+  entries.sort((left, right) => left[0].localeCompare(right[0]));
+  return entries.reduce<Record<string, string[]>>((accumulator, [modelId, fields]) => {
+    accumulator[modelId] = fields;
+    return accumulator;
+  }, {});
+};
+
+const buildJoinDependencies = (models: Set<string>): Array<[string, string]> => {
+  if (models.size < 2) {
+    return [];
+  }
+  const sortedModels = Array.from(models).sort();
+  const dependencies: Array<[string, string]> = [];
+  for (let leftIndex = 0; leftIndex < sortedModels.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < sortedModels.length; rightIndex += 1) {
+      dependencies.push([sortedModels[leftIndex], sortedModels[rightIndex]]);
+    }
+  }
+  return dependencies;
 };
