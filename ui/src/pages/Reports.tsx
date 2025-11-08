@@ -6387,8 +6387,8 @@ const Reports = (props: GenericPageProps) => {
                                         key={token}
                                         size="xs"
                                         variant="light"
-                                        compact
                                         onClick={() => handleCopyToken(token)}
+                                        styles={{ root: { paddingLeft: 10, paddingRight: 10 } }}
                                       >
                                         {field.label ?? field.id}
                                       </Button>

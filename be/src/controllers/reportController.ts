@@ -172,6 +172,88 @@ const formatDerivedFieldLabel = (field: DerivedFieldQueryPayload, index: number)
   return `derived_${index + 1}`;
 };
 
+type DerivedFieldValidationIssue = {
+  fieldId: string;
+  reason: "graph_mismatch" | "missing_model" | "unjoined_model";
+  models?: string[];
+};
+
+const raiseDerivedFieldStaleError = (issues: DerivedFieldValidationIssue[]): never => {
+  throw new PreviewQueryError("Resolve derived field issues before running this query.", 400, {
+    code: "DERIVED_FIELD_STALE",
+    issues,
+  });
+};
+
+const toDerivedFieldIssueFieldId = (field: DerivedFieldQueryPayload, index: number): string => {
+  if (typeof field.id === "string" && field.id.trim().length > 0) {
+    return field.id.trim();
+  }
+  return formatDerivedFieldLabel(field, index);
+};
+
+const validateDerivedFieldGraph = (
+  derivedFields: DerivedFieldQueryPayload[],
+  models: string[],
+  joins: ReportPreviewRequest["joins"] | QueryConfig["joins"] | undefined,
+  aliasMap: Map<string, string>,
+) => {
+  if (!derivedFields || derivedFields.length === 0) {
+    return;
+  }
+  const currentGraphSignature = computeModelGraphSignature(models, joins ?? []);
+  const issues: DerivedFieldValidationIssue[] = [];
+  derivedFields.forEach((field, index) => {
+    const fieldId = toDerivedFieldIssueFieldId(field, index);
+    if (
+      field.modelGraphSignature &&
+      currentGraphSignature &&
+      field.modelGraphSignature !== currentGraphSignature
+    ) {
+      issues.push({
+        fieldId,
+        reason: "graph_mismatch",
+      });
+    }
+    const referencedModels = Array.isArray(field.referencedModels) ? field.referencedModels : [];
+    const missingModels = referencedModels.filter((modelId) => !aliasMap.has(modelId));
+    if (missingModels.length > 0) {
+      issues.push({
+        fieldId,
+        reason: "missing_model",
+        models: missingModels,
+      });
+    }
+  });
+  if (issues.length > 0) {
+    raiseDerivedFieldStaleError(issues);
+  }
+};
+
+const validateDerivedFieldJoinCoverage = (
+  derivedFields: DerivedFieldQueryPayload[],
+  joinedModels: Set<string>,
+) => {
+  if (!derivedFields || derivedFields.length === 0) {
+    return;
+  }
+  const issues: DerivedFieldValidationIssue[] = [];
+  derivedFields.forEach((field, index) => {
+    const referencedModels = Array.isArray(field.referencedModels) ? field.referencedModels : [];
+    const unmetModels = referencedModels.filter((modelId) => !joinedModels.has(modelId));
+    if (unmetModels.length > 0) {
+      issues.push({
+        fieldId: toDerivedFieldIssueFieldId(field, index),
+        reason: "unjoined_model",
+        models: unmetModels,
+      });
+    }
+  });
+  if (issues.length > 0) {
+    raiseDerivedFieldStaleError(issues);
+  }
+};
+
 type ReportPreviewRequest = {
   models: string[];
   fields: Array<{ modelId: string; fieldIds: string[] }>;
@@ -1140,34 +1222,7 @@ const executePreviewQuery = async (
   }
 
   const derivedFieldPayloads = Array.isArray(payload.derivedFields) ? payload.derivedFields : [];
-  const currentGraphSignature = computeModelGraphSignature(payload.models, payload.joins ?? []);
-  if (derivedFieldPayloads.length > 0) {
-    const derivedFieldErrors: string[] = [];
-    derivedFieldPayloads.forEach((field, index) => {
-      const label = formatDerivedFieldLabel(field, index);
-      if (
-        field.modelGraphSignature &&
-        currentGraphSignature &&
-        field.modelGraphSignature !== currentGraphSignature
-      ) {
-        derivedFieldErrors.push(
-          `Derived field ${label} is out of date after recent model/join changes. Edit and save it again.`,
-        );
-      }
-      const referencedModels = Array.isArray(field.referencedModels) ? field.referencedModels : [];
-      const missingModels = referencedModels.filter((modelId) => !aliasMap.has(modelId));
-      if (missingModels.length > 0) {
-        derivedFieldErrors.push(
-          `Derived field ${label} references models that are not selected in this template: ${missingModels.join(
-            ", ",
-          )}.`,
-        );
-      }
-    });
-    if (derivedFieldErrors.length > 0) {
-      throw new PreviewQueryError(derivedFieldErrors.join(" | "));
-    }
-  }
+  validateDerivedFieldGraph(derivedFieldPayloads, payload.models, payload.joins ?? [], aliasMap);
   derivedFieldPayloads.forEach((field, index) => {
     try {
       const { clause, alias } = buildDerivedFieldSelectClause(field, aliasMap, index);
@@ -1197,20 +1252,6 @@ const executePreviewQuery = async (
     baseModelId,
   );
 
-  if (derivedFieldPayloads.length > 0) {
-    derivedFieldPayloads.forEach((field, index) => {
-      const referencedModels = Array.isArray(field.referencedModels) ? field.referencedModels : [];
-      const unmetModels = referencedModels.filter((modelId) => !joinedModels.has(modelId));
-      if (unmetModels.length > 0) {
-        throw new PreviewQueryError(
-          `Derived field ${formatDerivedFieldLabel(field, index)} requires joins covering models: ${unmetModels.join(
-            ", ",
-          )}.`,
-        );
-      }
-    });
-  }
-
   if (unresolvedJoins.length > 0) {
     throw new PreviewQueryError("Some models could not be joined. Verify your join configuration.", 400, unresolvedJoins);
   }
@@ -1222,6 +1263,8 @@ const executePreviewQuery = async (
   if (unjoinedModels.length > 0) {
     throw new PreviewQueryError("Some selected models are not connected to the base model.", 400, unjoinedModels);
   }
+
+  validateDerivedFieldJoinCoverage(derivedFieldPayloads, joinedModels);
 
   const whereClauses = buildWhereClauses(payload.filters ?? []);
 
@@ -1297,6 +1340,9 @@ const executeAggregatedQuery = async (
   config.models.forEach((modelId, index) => {
     aliasMap.set(modelId, `m${index}`);
   });
+
+  const derivedFieldPayloads = Array.isArray(config.derivedFields) ? config.derivedFields : [];
+  validateDerivedFieldGraph(derivedFieldPayloads, config.models, config.joins ?? [], aliasMap);
 
   const allowedBuckets = new Set(["hour", "day", "week", "month", "quarter", "year"]);
 
@@ -1406,6 +1452,8 @@ const executeAggregatedQuery = async (
   if (unjoinedModels.length > 0) {
     throw new PreviewQueryError("Some selected models are not connected to the base model.", 400, unjoinedModels);
   }
+
+  validateDerivedFieldJoinCoverage(derivedFieldPayloads, joinedModels);
 
   const filterFragments: string[] = [];
   const replacements: Record<string, unknown> = {};
