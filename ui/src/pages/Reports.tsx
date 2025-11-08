@@ -11,7 +11,9 @@ import {
   Button,
   Card,
   Checkbox,
+  Chip,
   Divider,
+  Drawer,
   Flex,
   Group,
   Highlight,
@@ -50,6 +52,7 @@ import {
   IconMessage2,
   IconPlayerPlay,
   IconPlus,
+  IconRefresh,
   IconSearch,
   IconSend,
   IconTemplate,
@@ -84,6 +87,7 @@ import {
   type QueryConfigDimension,
   type QueryConfigFilter,
   type QueryConfigFilterValue,
+  type QueryConfigDerivedField,
   type ReportQueryResult,
   type ReportQuerySuccessResponse,
   type ReportQueryJobResponse,
@@ -240,6 +244,9 @@ type VisualQueryDescriptor = {
   warnings: string[];
 };
 
+type DerivedFieldStatus = "active" | "stale";
+type ReportDerivedField = DerivedFieldDefinitionDto & { status?: DerivedFieldStatus };
+
 type ReportTemplate = {
   id: string;
   name: string;
@@ -259,7 +266,7 @@ type ReportTemplate = {
   columnOrder: string[];
   columnAliases: Record<string, string>;
   queryConfig: QueryConfig | null;
-  derivedFields: DerivedFieldDefinitionDto[];
+  derivedFields: ReportDerivedField[];
   metricsSpotlight: MetricSpotlightDefinitionDto[];
 };
 
@@ -454,6 +461,42 @@ const createEmptyTemplate = (): ReportTemplate => ({
   derivedFields: [],
   metricsSpotlight: [],
 });
+
+const reconcileDerivedFieldStatuses = <T extends DerivedFieldDefinitionDto>(
+  fields: T[],
+  models: string[],
+): T[] => {
+  if (!fields || fields.length === 0) {
+    return fields;
+  }
+  const modelSet = new Set(models);
+  let mutated = false;
+  const next = fields.map((field) => {
+    const referenced = Array.isArray(field.referencedModels) ? field.referencedModels : [];
+    if (referenced.length === 0) {
+      if (!field.status) {
+        return field;
+      }
+      mutated = true;
+      const clone = { ...field };
+      delete clone.status;
+      return clone;
+    }
+    const isStale = referenced.some((modelId) => !modelSet.has(modelId));
+    const currentStatus = field.status === "stale" ? "stale" : undefined;
+    if ((!isStale && !currentStatus) || (isStale && currentStatus === "stale")) {
+      return field;
+    }
+    mutated = true;
+    if (isStale) {
+      return { ...field, status: "stale" };
+    }
+    const clone = { ...field };
+    delete clone.status;
+    return clone;
+  });
+  return mutated ? next : fields;
+};
 
 const DEFAULT_VISUAL: VisualDefinition = {
   id: "visual-default",
@@ -1009,6 +1052,12 @@ const normalizeDerivedFields = (candidate: unknown): DerivedFieldDefinitionDto[]
       typeof record.modelGraphSignature === "string" && record.modelGraphSignature.trim().length > 0
         ? record.modelGraphSignature.trim()
         : undefined;
+    const compiledSqlHash =
+      typeof record.compiledSqlHash === "string" && record.compiledSqlHash.trim().length > 0
+        ? record.compiledSqlHash.trim()
+        : undefined;
+    const status =
+      record.status === "stale" ? "stale" : record.status === "active" ? "active" : undefined;
     derived.push({
       id,
       name,
@@ -1021,9 +1070,30 @@ const normalizeDerivedFields = (candidate: unknown): DerivedFieldDefinitionDto[]
       ...(referencedFields && Object.keys(referencedFields).length > 0 ? { referencedFields } : {}),
       ...(joinDependencies && joinDependencies.length > 0 ? { joinDependencies } : {}),
       ...(modelGraphSignature ? { modelGraphSignature } : {}),
+      ...(compiledSqlHash ? { compiledSqlHash } : {}),
+      ...(status ? { status } : {}),
     });
   });
   return derived;
+};
+
+const buildDerivedFieldPayloads = (
+  fields: DerivedFieldDefinitionDto[],
+): QueryConfigDerivedField[] => {
+  return fields
+    .filter(
+      (field) =>
+        field.status !== "stale" && field.expressionAst && typeof field.expressionAst === "object",
+    )
+    .map((field) => ({
+      id: field.id,
+      alias: field.id,
+      expressionAst: deepClone(field.expressionAst!) as DerivedFieldExpressionAst,
+      referencedModels: field.referencedModels ?? [],
+      joinDependencies: field.joinDependencies ?? [],
+      modelGraphSignature: field.modelGraphSignature ?? null,
+      compiledSqlHash: field.compiledSqlHash ?? null,
+    }));
 };
 
 const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitionDto[] => {
@@ -1107,7 +1177,10 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
   }, {});
 
   const queryConfig = normalizeQueryConfig(template.queryConfig);
-  const derivedFields = normalizeDerivedFields(template.derivedFields);
+  const derivedFields = reconcileDerivedFieldStatuses(
+    normalizeDerivedFields(template.derivedFields),
+    Array.isArray(template.models) ? template.models : [],
+  );
   const metricsSpotlight = normalizeMetricSpotlights(template.metricsSpotlight);
 
   const columnOrder = rawColumnOrder.filter(
@@ -1326,6 +1399,7 @@ const Reports = (props: GenericPageProps) => {
   const [debouncedTemplateSearch] = useDebouncedValue(templateSearch, 250);
   const [templateCategoryFilter, setTemplateCategoryFilter] = useState<string>("all");
   const [templateSuccess, setTemplateSuccess] = useState<string | null>(null);
+  const [isDerivedFieldsDrawerOpen, setDerivedFieldsDrawerOpen] = useState(false);
   const [scheduleDraft, setScheduleDraft] = useState(() => {
     const timezoneGuess = (() => {
       try {
@@ -1512,7 +1586,16 @@ const Reports = (props: GenericPageProps) => {
     });
     return map;
   }, [selectedFieldDetails]);
-
+  const derivedFieldPayloads = useMemo(
+    () => buildDerivedFieldPayloads(draft.derivedFields),
+    [draft.derivedFields],
+  );
+  const staleDerivedFields = useMemo(
+    () => draft.derivedFields.filter((field) => field.status === "stale"),
+    [draft.derivedFields],
+  );
+  const hasStaleDerivedFields = staleDerivedFields.length > 0;
+  const staleDerivedFieldNames = staleDerivedFields.map((field) => field.name).join(", ");
   const joinModelOptions = useMemo(() => {
     return draft.models
       .map((modelId) => modelMap.get(modelId))
@@ -2127,6 +2210,7 @@ const Reports = (props: GenericPageProps) => {
         ],
         orderBy: [{ alias: dimensionAlias, direction: "asc" }],
         limit: limitValue,
+        derivedFields: derivedFieldPayloads.length > 0 ? derivedFieldPayloads : undefined,
         options: {
           allowAsync: true,
           templateId:
@@ -2159,6 +2243,7 @@ const Reports = (props: GenericPageProps) => {
     draft.models,
     fieldDetailByAlias,
     getColumnLabel,
+    derivedFieldPayloads,
   ]);
 
   const chartMetricAlias = visualQueryDescriptor.metricAlias ?? "";
@@ -2331,6 +2416,20 @@ const Reports = (props: GenericPageProps) => {
       return;
     }
 
+    if (hasStaleDerivedFields) {
+      const staleMessage =
+        staleDerivedFieldNames.length > 0
+          ? `Resolve stale derived fields (${staleDerivedFieldNames}) before running analytics.`
+          : "Resolve stale derived fields before running analytics.";
+      setVisualResult(null);
+      setVisualQueryError(staleMessage);
+      setIsVisualQueryRunning(false);
+      setVisualExecutedAt(null);
+      setVisualJob(null);
+      setVisualJobStatus(null);
+      return;
+    }
+
     setIsVisualQueryRunning(true);
     setVisualQueryError(null);
     setVisualJob(null);
@@ -2370,7 +2469,7 @@ const Reports = (props: GenericPageProps) => {
       setVisualExecutedAt(null);
       setVisualSql(null);
     }
-  }, [runAnalyticsQuery, visualQueryDescriptor]);
+  }, [hasStaleDerivedFields, runAnalyticsQuery, staleDerivedFieldNames, visualQueryDescriptor]);
 
   useEffect(() => {
     if (!visualJob) {
@@ -2851,9 +2950,10 @@ const Reports = (props: GenericPageProps) => {
               : visual.comparison;
           return { ...visual, metric, dimension, comparison };
         });
+        const nextModels = current.models.filter((id) => id !== modelId);
         return {
           ...current,
-          models: current.models.filter((id) => id !== modelId),
+          models: nextModels,
           fields: current.fields.filter((entry) => entry.modelId !== modelId),
           joins: current.joins.filter(
             (join) => join.leftModel !== modelId && join.rightModel !== modelId
@@ -2867,14 +2967,17 @@ const Reports = (props: GenericPageProps) => {
           columnAliases: filteredColumnAliases,
           metrics: filteredMetrics,
           visuals: filteredVisuals,
+          derivedFields: reconcileDerivedFieldStatuses(current.derivedFields, nextModels),
         };
       }
+      const nextModels = [...current.models, modelId];
       return {
         ...current,
-        models: [...current.models, modelId],
+        models: nextModels,
         fields: current.fields.some((entry) => entry.modelId === modelId)
           ? current.fields
           : [...current.fields, { modelId, fieldIds: [] }],
+        derivedFields: reconcileDerivedFieldStatuses(current.derivedFields, nextModels),
       };
     });
   };
@@ -3155,6 +3258,15 @@ const Reports = (props: GenericPageProps) => {
     setTemplateSuccess(null);
     if (!draft.name.trim()) {
       setTemplateError("Template name is required.");
+      return;
+    }
+
+    if (hasStaleDerivedFields) {
+      setTemplateError(
+        staleDerivedFieldNames.length > 0
+          ? `Resolve stale derived fields (${staleDerivedFieldNames}) before saving.`
+          : "Resolve stale derived fields before saving.",
+      );
       return;
     }
 
@@ -3468,6 +3580,20 @@ const Reports = (props: GenericPageProps) => {
       return;
     }
 
+    if (hasStaleDerivedFields) {
+      const staleMessage =
+        staleDerivedFieldNames.length > 0
+          ? `Resolve stale derived fields (${staleDerivedFieldNames}) before running a preview.`
+          : "Resolve stale derived fields before running a preview.";
+      setPreviewResult(null);
+      setPreviewError(staleMessage);
+      setVisualResult(null);
+      setVisualQueryError(staleMessage);
+      setVisualExecutedAt(null);
+      setIsVisualQueryRunning(false);
+      return;
+    }
+
     const aliasMap = new Map<string, string>();
     draft.models.forEach((modelId, index) => {
       aliasMap.set(modelId, `m${index}`);
@@ -3488,18 +3614,6 @@ const Reports = (props: GenericPageProps) => {
       return;
     }
 
-    const derivedFieldPayloads =
-      draft.derivedFields
-        .filter((field) => field.expressionAst && typeof field.expressionAst === "object")
-        .map((field) => ({
-          id: field.id,
-          alias: field.id,
-          expressionAst: field.expressionAst!,
-          referencedModels: field.referencedModels ?? [],
-          joinDependencies: field.joinDependencies ?? [],
-          modelGraphSignature: field.modelGraphSignature ?? null,
-        })) ?? [];
-
     const payload: ReportPreviewRequest = {
       models: draft.models,
       fields: sanitizedFields,
@@ -3516,7 +3630,7 @@ const Reports = (props: GenericPageProps) => {
       ),
       filters: filterClauses,
       limit: 500,
-      derivedFields: derivedFieldPayloads,
+      derivedFields: derivedFieldPayloads.length > 0 ? derivedFieldPayloads : undefined,
     };
 
     try {
@@ -3539,6 +3653,31 @@ const Reports = (props: GenericPageProps) => {
       setVisualExecutedAt(null);
     }
   };
+
+  const handleRemoveDerivedField = useCallback((fieldId: string) => {
+    setDraft((current) => ({
+      ...current,
+      derivedFields: current.derivedFields.filter((field) => field.id !== fieldId),
+    }));
+  }, []);
+
+  const handleRecheckDerivedFields = useCallback(() => {
+    setDraft((current) => {
+      const reconciled = reconcileDerivedFieldStatuses(current.derivedFields, current.models);
+      if (reconciled === current.derivedFields) {
+        return current;
+      }
+      return {
+        ...current,
+        derivedFields: reconciled,
+      };
+    });
+  }, []);
+
+  const handleOpenDerivedFieldManager = useCallback(() => {
+    setDerivedFieldsDrawerOpen(false);
+    navigate("/reports/derived-fields");
+  }, [navigate]);
 
   const updateFilter = (filterId: string, updater: (filter: ReportFilter) => ReportFilter) => {
     setDraft((current) => ({
@@ -4074,7 +4213,7 @@ const Reports = (props: GenericPageProps) => {
               <Button
                 leftSection={<IconAdjustments size={16} />}
                 variant="subtle"
-                onClick={() => navigate("/reports/derived-fields")}
+                onClick={() => setDerivedFieldsDrawerOpen(true)}
               >
                 Derived fields
               </Button>
@@ -4112,6 +4251,18 @@ const Reports = (props: GenericPageProps) => {
               </Button>
             </Group>
           </Group>
+          {hasStaleDerivedFields && (
+            <Alert
+              color="red"
+              icon={<IconAlertTriangle size={16} />}
+              variant="light"
+              title="Derived fields need attention"
+            >
+              Resolve stale derived fields
+              {staleDerivedFieldNames ? ` (${staleDerivedFieldNames})` : ""} before running previews or
+              saving this template.
+            </Alert>
+          )}
           {templateError && (
             <Text c="red" mt="sm">
               {templateError}
@@ -5846,6 +5997,139 @@ const Reports = (props: GenericPageProps) => {
           )}
         </Stack>
       </Box>
+
+      <Drawer
+        opened={isDerivedFieldsDrawerOpen}
+        onClose={() => setDerivedFieldsDrawerOpen(false)}
+        position="right"
+        size="lg"
+        title="Derived fields workspace"
+        overlayProps={{ opacity: 0.2, blur: 2 }}
+        withinPortal={false}
+      >
+        <Stack gap="md">
+          <Group justify="space-between" align="flex-start">
+            <div>
+              <Text fw={600}>Cross-model expressions</Text>
+              <Text fz="sm" c="dimmed">
+                Monitor how derived fields interact with the models selected in this template.
+              </Text>
+            </div>
+            <Group gap="xs">
+              <Button
+                variant="light"
+                size="xs"
+                leftSection={<IconRefresh size={14} />}
+                onClick={handleRecheckDerivedFields}
+              >
+                Re-check joins
+              </Button>
+              <Button
+                variant="subtle"
+                size="xs"
+                leftSection={<IconAdjustments size={14} />}
+                onClick={handleOpenDerivedFieldManager}
+              >
+                Full manager
+              </Button>
+            </Group>
+          </Group>
+          <Divider />
+          {draft.derivedFields.length === 0 ? (
+            <Alert color="gray" variant="light">
+              No derived fields added yet. Use the full manager to create reusable expressions, or add
+              them to templates as they become available.
+            </Alert>
+          ) : (
+            <Stack gap="sm">
+              {draft.derivedFields.map((field) => {
+                const missingModels =
+                  field.referencedModels?.filter((modelId) => !draft.models.includes(modelId)) ?? [];
+                return (
+                  <Card key={field.id} withBorder shadow="xs" radius="md">
+                    <Stack gap="sm">
+                      <Group justify="space-between" align="flex-start">
+                        <div>
+                          <Text fw={600}>{field.name}</Text>
+                          <Group gap="xs" mt={4}>
+                            <Badge variant="light">
+                              {field.scope === "workspace" ? "Workspace scope" : "Template scope"}
+                            </Badge>
+                            {field.status === "stale" ? (
+                              <Badge color="red" variant="filled">
+                                Needs attention
+                              </Badge>
+                            ) : (
+                              <Badge color="green" variant="outline">
+                                Ready
+                              </Badge>
+                            )}
+                          </Group>
+                        </div>
+                        <Group gap="xs">
+                          {field.status === "stale" && (
+                            <Button
+                              size="xs"
+                              variant="subtle"
+                              leftSection={<IconRefresh size={14} />}
+                              onClick={handleRecheckDerivedFields}
+                            >
+                              Re-check
+                            </Button>
+                          )}
+                          <ActionIcon
+                            variant="subtle"
+                            color="red"
+                            onClick={() => handleRemoveDerivedField(field.id)}
+                            aria-label={`Remove derived field ${field.name}`}
+                          >
+                            <IconTrash size={16} />
+                          </ActionIcon>
+                        </Group>
+                      </Group>
+                      {field.expression && (
+                        <Text fz="sm" c="dimmed">
+                          {field.expression}
+                        </Text>
+                      )}
+                      {field.referencedFields && Object.keys(field.referencedFields).length > 0 && (
+                        <Stack gap={4}>
+                          {Object.entries(field.referencedFields).map(([modelId, fields]) => (
+                            <Group key={modelId} gap={6} align="flex-start">
+                              <Badge variant="outline" size="sm">
+                                {modelId}
+                              </Badge>
+                              <Group gap={4}>
+                                {fields.map((fieldId) => (
+                                  <Badge key={`${modelId}.${fieldId}`} variant="outline" size="xs">
+                                    {fieldId}
+                                  </Badge>
+                                ))}
+                              </Group>
+                            </Group>
+                          ))}
+                        </Stack>
+                      )}
+                      {field.status === "stale" && missingModels.length > 0 && (
+                        <Alert color="red" variant="light" icon={<IconAlertTriangle size={16} />}>
+                          Re-add these models to resolve: {missingModels.join(", ")}
+                        </Alert>
+                      )}
+                    </Stack>
+                  </Card>
+                );
+              })}
+            </Stack>
+          )}
+          <Button
+            variant="light"
+            leftSection={<IconAdjustments size={16} />}
+            onClick={handleOpenDerivedFieldManager}
+          >
+            Open derived field manager
+          </Button>
+        </Stack>
+      </Drawer>
     </PageAccessGuard>
   );
 };

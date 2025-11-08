@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import type { DerivedFieldExpressionAst, BinaryOperator, UnaryOperator } from "../types/DerivedFieldExpressionAst.js";
 
 type ParsedAst = {
@@ -5,6 +6,7 @@ type ParsedAst = {
   referencedModels: string[];
   referencedFields: Record<string, string[]>;
   joinDependencies: Array<[string, string]>;
+  compiledSqlHash: string | null;
 };
 
 export const BINARY_OPERATORS: ReadonlySet<BinaryOperator> = new Set(["+", "-", "*", "/"]);
@@ -32,11 +34,13 @@ export const normalizeDerivedFieldExpressionAst = (value: unknown): ParsedAst | 
   const referencedModels = new Set<string>();
   const referencedFieldsMap = new Map<string, Set<string>>();
   collectExpressionMetadata(ast, referencedModels, referencedFieldsMap);
+  const compiledSqlHash = hashDerivedFieldExpressionAst(ast);
   return {
     ast,
     referencedModels: Array.from(referencedModels),
     referencedFields: serializeReferencedFields(referencedFieldsMap),
     joinDependencies: buildJoinDependencies(referencedModels),
+    compiledSqlHash,
   };
 };
 
@@ -188,4 +192,53 @@ const buildJoinDependencies = (models: Set<string>): Array<[string, string]> => 
     }
   }
   return dependencies;
+};
+
+const canonicalizeAst = (node: DerivedFieldExpressionAst): unknown => {
+  switch (node.type) {
+    case "column":
+      return {
+        type: "column",
+        modelId: node.modelId,
+        fieldId: node.fieldId,
+      };
+    case "literal":
+      return {
+        type: "literal",
+        valueType: node.valueType,
+        value: node.value,
+      };
+    case "binary":
+      return {
+        type: "binary",
+        operator: node.operator,
+        left: canonicalizeAst(node.left),
+        right: canonicalizeAst(node.right),
+      };
+    case "unary":
+      return {
+        type: "unary",
+        operator: node.operator,
+        argument: canonicalizeAst(node.argument),
+      };
+    case "function":
+      return {
+        type: "function",
+        name: node.name,
+        args: node.args.map((arg) => canonicalizeAst(arg)),
+      };
+    default:
+      return node;
+  }
+};
+
+export const hashDerivedFieldExpressionAst = (
+  ast: DerivedFieldExpressionAst | null | undefined,
+): string | null => {
+  if (!ast) {
+    return null;
+  }
+  const canonical = canonicalizeAst(ast);
+  const payload = JSON.stringify(canonical);
+  return crypto.createHash("sha1").update(payload).digest("hex");
 };

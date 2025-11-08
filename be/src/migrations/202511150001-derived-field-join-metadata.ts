@@ -22,9 +22,15 @@ export async function up({ context }: MigrationParams): Promise<void> {
     type: DataTypes.STRING(128),
     allowNull: true,
   });
+
+  await context.addColumn(TABLE, "compiled_expression_hash", {
+    type: DataTypes.STRING(128),
+    allowNull: true,
+  });
 }
 
 export async function down({ context }: MigrationParams): Promise<void> {
+  await context.removeColumn(TABLE, "compiled_expression_hash");
   await context.removeColumn(TABLE, "model_graph_signature");
   await context.removeColumn(TABLE, "join_dependencies");
   await context.removeColumn(TABLE, "referenced_fields");

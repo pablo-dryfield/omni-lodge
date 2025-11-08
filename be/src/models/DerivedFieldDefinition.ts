@@ -81,6 +81,10 @@ export default class DerivedFieldDefinition extends Model {
   @Column({ type: DataType.JSONB })
   declare metadata: Record<string, unknown>;
 
+  @AllowNull(true)
+  @Column({ field: "compiled_expression_hash", type: DataType.STRING(128) })
+  declare compiledExpressionHash: string | null;
+
   @ForeignKey(() => User)
   @AllowNull(true)
   @Column({ field: "created_by", type: DataType.INTEGER })

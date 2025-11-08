@@ -121,22 +121,26 @@ Deliverables are split across backend services, API contracts, frontend surfaces
   - For every column node in the AST, resolve the column alias using template join aliases; if a referenced model is not present, emit a structured validation error before hitting the database.
   - Teach the planner to request any missing joins required by the derived field by walking `join_dependencies`; if the join graph cannot satisfy the requirement, block execution with a message describing the missing relationship.
   - Cache the compiled SQL fragment per derived field keyed by (field id + model graph signature) to avoid recompiling on every preview run.
-- [ ] Query serialization & hashing
+- [x] Query serialization & hashing
   - Include `derivedFields` payload (id, expression AST, referenced models, join dependencies, compiled SQL hash) in both the template serialization and the query hash input.
   - Update cache invalidation so that a change in the derived field graph or template join graph busts relevant cache entries.
 - [ ] Frontend: template-level derived field workspace
-  - Add a “Derived fields” drawer in the template builder that lists available models/fields based on the current model selection and exposes a chips-based picker to insert column tokens per model.
-  - Surface join coverage: when users reference columns from multiple models, show which joins will be traversed and warn if the join graph is incomplete.
-  - Persist `referencedModels` and derived join hints on save so backend validation can run without re-inferring.
+  - Add a persistent “Derived fields” drawer (right-side panel) in the template builder that lists derived fields, along with CTA buttons for “New” and “Edit.” Drawer hosts a tokenized expression editor (Monaco-lite) with syntax highlighting for functions/operators and in-line validation states.
+  - Introduce a chips-based field palette grouped by model: each chip inserts `modelId.fieldId` tokens; palette should respect current template field selections and grey out fields that aren’t available in the selected models.
+  - Display a “join coverage” callout under the editor that enumerates models referenced in the current AST, the joins currently connecting them, and warnings when coverage is missing (e.g., “Add a join between Bookings and Guests”).
+  - When the expression validates, show a read-only preview table seeded by the first 20 rows of the current models to reinforce cross-model behavior; hide the preview if validation fails.
+  - Persist `referencedModels`, `referencedFields`, `joinDependencies`, and `modelGraphSignature` when saving so the backend no longer needs to re-derive them.
 - [ ] Template model change handling
-  - When a model is removed from the template, automatically flag derived fields that reference it as “disabled” and show inline errors until the expression is updated or the model re-added.
-  - Block template saves and preview runs if disabled derived fields are still marked active, guiding the user to edit or remove them.
+  - Detect model add/remove events in the builder reducer; when a referenced model disappears, mark the affected derived fields with a `status: "stale"` flag, disable them from the preview payload, and surface an inline badge (“Needs model Bookings”) next to each field.
+  - Provide one-click “Resolve” actions that either reopen the editor (to swap columns) or restore the missing model; log the change to analytics so we can see how often users hit this edge case.
+  - Backend preview/query endpoints should reject payloads containing stale derived fields with a structured error (`code: "DERIVED_FIELD_STALE"`) to keep API behavior consistent even if the UI misses a state update.
+  - Saving or running a template with stale derived fields should block the CTA, explaining which models must be re-added or which fields must be edited/removed before proceeding.
 - [x] API DTO & transport updates
   - Update `ui/src/api/reports.ts` types plus backend DTOs so `DerivedFieldDefinitionDto` carries `expressionAst`, `referencedModels`, `joinDependencies`, and `modelGraphSignature`.
   - Ensure preview/run payloads send only the normalized AST plus metadata; backend responds with per-field validation errors when joins/models are missing.
 - [ ] Tests
-  - Backend: add AST validator unit tests that cover multi-model references, missing join coverage, and stale signature detection; add integration tests that execute previews with 2-3 models joined.
-  - Frontend: add React Testing Library coverage for the derived-field drawer (model toggle, join warning chips) and Cypress smoke tests ensuring a multi-model expression can be created, saved, and executed end-to-end.
+  - Backend: expand `derivedFieldExpression` unit tests to snapshot the compiled hash, cover referential metadata extraction, and verify error codes for missing joins/models. Add end-to-end preview tests that simulate template payloads with/without the correct `modelGraphSignature` and ensure cache hashes change when derived fields mutate.
+  - Frontend: add RTL specs for the drawer component (token insertion, stale badge rendering, join coverage hints) plus reducers that handle model removal. Record Cypress flows for: (1) create expression spanning 3 models, (2) remove a model and observe disabled state + blocking save, (3) restore model and confirm preview works.
 
 ### Scheduling & Delivery
 - UI flow to enable schedule: choose cadence, recipients, delivery format (PDF, CSV, Slack message), message template.  
