@@ -215,6 +215,9 @@ export type DerivedFieldDto = {
   metadata: Record<string, unknown>;
   expressionAst?: DerivedFieldExpressionAst | null;
   referencedModels?: string[];
+  referencedFields?: Record<string, string[]>;
+  joinDependencies?: Array<[string, string]>;
+  modelGraphSignature?: string | null;
   createdBy: number | null;
   createdAt: string | null;
   updatedAt: string | null;
@@ -232,6 +235,10 @@ export type DerivedFieldPayload = {
   scope?: "workspace" | "template";
   metadata?: Record<string, unknown>;
   expressionAst?: DerivedFieldExpressionAst | null;
+  referencedModels?: string[];
+  referencedFields?: Record<string, string[]>;
+  joinDependencies?: Array<[string, string]>;
+  modelGraphSignature?: string | null;
 };
 
 export type DerivedFieldDefinitionDto = {
@@ -243,6 +250,9 @@ export type DerivedFieldDefinitionDto = {
   metadata?: Record<string, unknown>;
   expressionAst?: DerivedFieldExpressionAst | null;
   referencedModels?: string[];
+  referencedFields?: Record<string, string[]>;
+  joinDependencies?: Array<[string, string]>;
+  modelGraphSignature?: string | null;
 };
 
 export type MetricSpotlightDefinitionDto = {
@@ -325,6 +335,8 @@ export type ReportPreviewRequest = {
     alias?: string;
     expressionAst: DerivedFieldExpressionAst;
     referencedModels?: string[];
+    joinDependencies?: Array<[string, string]>;
+    modelGraphSignature?: string | null;
   }>;
 };
 

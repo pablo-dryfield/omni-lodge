@@ -64,6 +64,20 @@ export default class DerivedFieldDefinition extends Model {
 
   @AllowNull(false)
   @Default({})
+  @Column({ field: "referenced_fields", type: DataType.JSONB })
+  declare referencedFields: Record<string, string[]>;
+
+  @AllowNull(false)
+  @Default([])
+  @Column({ field: "join_dependencies", type: DataType.JSONB })
+  declare joinDependencies: Array<[string, string]>;
+
+  @AllowNull(true)
+  @Column({ field: "model_graph_signature", type: DataType.STRING(128) })
+  declare modelGraphSignature: string | null;
+
+  @AllowNull(false)
+  @Default({})
   @Column({ type: DataType.JSONB })
   declare metadata: Record<string, unknown>;
 

@@ -112,13 +112,31 @@ Deliverables are split across backend services, API contracts, frontend surfaces
 
 #### Multimodel Derived Fields Enablement
 - [x] Define expression AST schema that supports column references tagged with `modelId`/`fieldId`, arithmetic operators, functions, and constants.
-- [ ] Backend: parse/validate AST when saving derived fields (workspace + template scoped); ensure referenced models exist.
-- [ ] Update `executePreviewQuery`/`executeAggregatedQuery` to resolve derived-field AST into SQL using template join aliases; surface errors if joins missing.
-- [ ] Include derived-field metadata in query hash and serialization.
-- [ ] Frontend: add template-level derived-field panel with modal editor that lists currently selected fields (from all models) and builds AST tokens.
-- [ ] Handle template model changes (disable derived fields referencing removed models until resolved).
-- [ ] Extend `ui/src/api/reports.ts` DTOs + mutations to send/receive AST expressions.
-- [ ] Add unit/integration tests covering multi-model expressions (backend + UI).
+- [x] Backend: model-aware validation & storage
+  - Extend `report_derived_fields` records with `referenced_models` (string[]) and `join_dependencies` (pairs of model ids) derived from the AST.
+  - When a derived field is saved (workspace or template scope) parse the AST, ensure every referenced `modelId` exists in the workspace catalog, and persist a normalized list of fields per model.
+  - Store a `model_graph_signature` hash (sorted model ids + join ids) so we can quickly detect when the template model set changes and mark the derived field as stale.
+- [x] Planner & execution updates
+  - Enhance `executePreviewQuery` / `executeAggregatedQuery` so that, before SQL generation, they reconcile the draft template model list against each derived field’s `referenced_models`.
+  - For every column node in the AST, resolve the column alias using template join aliases; if a referenced model is not present, emit a structured validation error before hitting the database.
+  - Teach the planner to request any missing joins required by the derived field by walking `join_dependencies`; if the join graph cannot satisfy the requirement, block execution with a message describing the missing relationship.
+  - Cache the compiled SQL fragment per derived field keyed by (field id + model graph signature) to avoid recompiling on every preview run.
+- [ ] Query serialization & hashing
+  - Include `derivedFields` payload (id, expression AST, referenced models, join dependencies, compiled SQL hash) in both the template serialization and the query hash input.
+  - Update cache invalidation so that a change in the derived field graph or template join graph busts relevant cache entries.
+- [ ] Frontend: template-level derived field workspace
+  - Add a “Derived fields” drawer in the template builder that lists available models/fields based on the current model selection and exposes a chips-based picker to insert column tokens per model.
+  - Surface join coverage: when users reference columns from multiple models, show which joins will be traversed and warn if the join graph is incomplete.
+  - Persist `referencedModels` and derived join hints on save so backend validation can run without re-inferring.
+- [ ] Template model change handling
+  - When a model is removed from the template, automatically flag derived fields that reference it as “disabled” and show inline errors until the expression is updated or the model re-added.
+  - Block template saves and preview runs if disabled derived fields are still marked active, guiding the user to edit or remove them.
+- [x] API DTO & transport updates
+  - Update `ui/src/api/reports.ts` types plus backend DTOs so `DerivedFieldDefinitionDto` carries `expressionAst`, `referencedModels`, `joinDependencies`, and `modelGraphSignature`.
+  - Ensure preview/run payloads send only the normalized AST plus metadata; backend responds with per-field validation errors when joins/models are missing.
+- [ ] Tests
+  - Backend: add AST validator unit tests that cover multi-model references, missing join coverage, and stale signature detection; add integration tests that execute previews with 2-3 models joined.
+  - Frontend: add React Testing Library coverage for the derived-field drawer (model toggle, join warning chips) and Cypress smoke tests ensuring a multi-model expression can be created, saved, and executed end-to-end.
 
 ### Scheduling & Delivery
 - UI flow to enable schedule: choose cadence, recipients, delivery format (PDF, CSV, Slack message), message template.  

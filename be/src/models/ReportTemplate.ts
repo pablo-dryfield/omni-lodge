@@ -34,6 +34,9 @@ export type ReportTemplateDerivedField = {
   metadata?: Record<string, unknown>;
   expressionAst?: DerivedFieldExpressionAst | null;
   referencedModels?: string[];
+  referencedFields?: Record<string, string[]>;
+  joinDependencies?: Array<[string, string]>;
+  modelGraphSignature?: string | null;
 };
 
 export type ReportTemplateMetricSpotlight = {

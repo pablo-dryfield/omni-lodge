@@ -934,50 +934,96 @@ const normalizeDerivedFields = (candidate: unknown): DerivedFieldDefinitionDto[]
     return [];
   }
 
-  return candidate
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return null;
-      }
-      const record = entry as Record<string, unknown>;
-      const id = typeof record.id === "string" ? record.id.trim() : "";
-      const name = typeof record.name === "string" ? record.name.trim() : "";
-      const expression = typeof record.expression === "string" ? record.expression.trim() : "";
-      const kind = record.kind === "aggregate" ? "aggregate" : record.kind === "row" ? "row" : null;
-      if (!id || !name || !expression || !kind) {
-        return null;
-      }
-      const scope: DerivedFieldDefinitionDto["scope"] =
-        record.scope === "workspace" ? "workspace" : "template";
-      const metadata =
-        record.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata)
-          ? (deepClone(record.metadata) as Record<string, unknown>)
-          : undefined;
-      let expressionAst: DerivedFieldExpressionAst | null | undefined;
-      if (record.expressionAst && typeof record.expressionAst === "object") {
-        expressionAst = deepClone(record.expressionAst) as DerivedFieldExpressionAst;
-      } else if (record.expressionAst === null) {
-        expressionAst = null;
-      } else {
-        expressionAst = undefined;
-      }
-      const referencedModels = Array.isArray(record.referencedModels)
-        ? record.referencedModels.filter(
-            (model): model is string => typeof model === "string" && model.trim().length > 0,
-          )
-        : [];
-      return {
-        id,
-        name,
-        expression,
-        kind,
-        scope,
-        ...(metadata ? { metadata } : {}),
-        ...(expressionAst !== undefined ? { expressionAst } : {}),
-        ...(referencedModels.length > 0 ? { referencedModels } : {}),
-      };
-    })
-    .filter((entry): entry is DerivedFieldDefinitionDto => Boolean(entry));
+  const derived: DerivedFieldDefinitionDto[] = [];
+  candidate.forEach((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id.trim() : "";
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    const expression = typeof record.expression === "string" ? record.expression.trim() : "";
+    const kind = record.kind === "aggregate" ? "aggregate" : record.kind === "row" ? "row" : null;
+    if (!id || !name || !expression || !kind) {
+      return;
+    }
+    const scope: DerivedFieldDefinitionDto["scope"] =
+      record.scope === "workspace" ? "workspace" : "template";
+    const metadata =
+      record.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata)
+        ? (deepClone(record.metadata) as Record<string, unknown>)
+        : undefined;
+    let expressionAst: DerivedFieldExpressionAst | null | undefined;
+    if (record.expressionAst && typeof record.expressionAst === "object") {
+      expressionAst = deepClone(record.expressionAst) as DerivedFieldExpressionAst;
+    } else if (record.expressionAst === null) {
+      expressionAst = null;
+    }
+    const referencedModels = Array.isArray(record.referencedModels)
+      ? record.referencedModels.filter(
+          (model): model is string => typeof model === "string" && model.trim().length > 0,
+        )
+      : undefined;
+    const referencedFields =
+      record.referencedFields && typeof record.referencedFields === "object" && !Array.isArray(record.referencedFields)
+        ? Object.entries(record.referencedFields as Record<string, unknown>).reduce<
+            Record<string, string[]>
+          >((accumulator, [modelId, value]) => {
+            if (typeof modelId !== "string" || !Array.isArray(value)) {
+              return accumulator;
+            }
+            const trimmedModel = modelId.trim();
+            if (!trimmedModel) {
+              return accumulator;
+            }
+            const fields = Array.from(
+              new Set(
+                value
+                  .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+                  .filter((entry) => entry.length > 0),
+              ),
+            );
+            if (fields.length > 0) {
+              accumulator[trimmedModel] = fields;
+            }
+            return accumulator;
+          }, {})
+        : undefined;
+    const joinDependencies =
+      Array.isArray(record.joinDependencies) && record.joinDependencies.length > 0
+        ? record.joinDependencies
+            .map((entry) => {
+              if (!Array.isArray(entry) || entry.length !== 2) {
+                return null;
+              }
+              const left = typeof entry[0] === "string" ? entry[0].trim() : "";
+              const right = typeof entry[1] === "string" ? entry[1].trim() : "";
+              if (!left || !right) {
+                return null;
+              }
+              return [left, right] as [string, string];
+            })
+            .filter((pair): pair is [string, string] => pair !== null)
+        : undefined;
+    const modelGraphSignature =
+      typeof record.modelGraphSignature === "string" && record.modelGraphSignature.trim().length > 0
+        ? record.modelGraphSignature.trim()
+        : undefined;
+    derived.push({
+      id,
+      name,
+      expression,
+      kind,
+      scope,
+      ...(metadata ? { metadata } : {}),
+      ...(expressionAst !== undefined ? { expressionAst } : {}),
+      ...(referencedModels && referencedModels.length > 0 ? { referencedModels } : {}),
+      ...(referencedFields && Object.keys(referencedFields).length > 0 ? { referencedFields } : {}),
+      ...(joinDependencies && joinDependencies.length > 0 ? { joinDependencies } : {}),
+      ...(modelGraphSignature ? { modelGraphSignature } : {}),
+    });
+  });
+  return derived;
 };
 
 const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitionDto[] => {
@@ -3450,6 +3496,8 @@ const Reports = (props: GenericPageProps) => {
           alias: field.id,
           expressionAst: field.expressionAst!,
           referencedModels: field.referencedModels ?? [],
+          joinDependencies: field.joinDependencies ?? [],
+          modelGraphSignature: field.modelGraphSignature ?? null,
         })) ?? [];
 
     const payload: ReportPreviewRequest = {
