@@ -1,4 +1,4 @@
-import { Alert, Center, Loader, Stack, Text } from "@mantine/core";
+import { Center, Loader, Paper, Stack, Text } from "@mantine/core";
 import { ReactNode, useMemo } from "react";
 import { makeSelectIsPageAllowed } from "../../selectors/accessControlSelectors";
 import { useAppSelector } from "../../store/hooks";
@@ -9,26 +9,43 @@ type PageAccessGuardProps = {
   fallback?: ReactNode;
 };
 
-const defaultUnavailable = (message?: string) => (
-  <Alert color="red" title="Permissions unavailable">
+const AlertShell = ({
+  title,
+  tone,
+  children,
+}: {
+  title: string;
+  tone: "red" | "yellow";
+  children: ReactNode;
+}) => (
+  <Paper withBorder radius="md" p="md" shadow="xs" style={{ borderColor: tone === "red" ? "#f03e3e" : "#f59f00" }}>
     <Stack gap={4}>
-      <Text size="sm">We could not confirm your access rights.</Text>
-      {message && (
-        <Text size="sm" c="dimmed">
-          {message}
-        </Text>
-      )}
-      <Text size="sm" c="dimmed">
-        Please retry syncing permissions or refresh the page.
+      <Text fw={600} c={tone} size="sm">
+        {title}
       </Text>
+      {children}
     </Stack>
-  </Alert>
+  </Paper>
+);
+
+const defaultUnavailable = (message?: string) => (
+  <AlertShell title="Permissions unavailable" tone="red">
+    <Text size="sm">We could not confirm your access rights.</Text>
+    {message && (
+      <Text size="sm" c="dimmed">
+        {message}
+      </Text>
+    )}
+    <Text size="sm" c="dimmed">
+      Please retry syncing permissions or refresh the page.
+    </Text>
+  </AlertShell>
 );
 
 const defaultDenied = (
-  <Alert color="yellow" title="No access">
-    You do not have permission to view this page.
-  </Alert>
+  <AlertShell title="No access" tone="yellow">
+    <Text size="sm">You do not have permission to view this page.</Text>
+  </AlertShell>
 );
 
 export const PageAccessGuard = ({ pageSlug, children, fallback }: PageAccessGuardProps) => {
