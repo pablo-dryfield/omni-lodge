@@ -10,6 +10,7 @@
 - [x] Frontend: add dashboards builder/viewer/export flows
 - [x] Cross-cutting: derived field manager, scheduling UI, Google Drive export, notifications
 - [x] QA & rollout: automated tests, monitoring, migration tooling, documentation
+- [ ] Multimodel derived fields: expression AST, planner, template editor
 
 ## Goals & Scope
 - Replace the current preview-only flow with a composable query engine that supports advanced aggregations, comparisons, rolling windows, and caching.
@@ -108,6 +109,16 @@ Deliverables are split across backend services, API contracts, frontend surfaces
 - Separate manager view (global vs template).  
 - Expression builder: syntax highlighting, linting, preview results using current query sample.  
 - Dependency graph anywhere fields are used (visuals, metrics, filters) with safe deletion checks.
+
+#### Multimodel Derived Fields Enablement
+- [x] Define expression AST schema that supports column references tagged with `modelId`/`fieldId`, arithmetic operators, functions, and constants.
+- [ ] Backend: parse/validate AST when saving derived fields (workspace + template scoped); ensure referenced models exist.
+- [ ] Update `executePreviewQuery`/`executeAggregatedQuery` to resolve derived-field AST into SQL using template join aliases; surface errors if joins missing.
+- [ ] Include derived-field metadata in query hash and serialization.
+- [ ] Frontend: add template-level derived-field panel with modal editor that lists currently selected fields (from all models) and builds AST tokens.
+- [ ] Handle template model changes (disable derived fields referencing removed models until resolved).
+- [ ] Extend `ui/src/api/reports.ts` DTOs + mutations to send/receive AST expressions.
+- [ ] Add unit/integration tests covering multi-model expressions (backend + UI).
 
 ### Scheduling & Delivery
 - UI flow to enable schedule: choose cadence, recipients, delivery format (PDF, CSV, Slack message), message template.  

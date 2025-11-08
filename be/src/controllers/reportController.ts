@@ -25,6 +25,7 @@ import {
 } from "../services/reporting/reportQueryService.js";
 import { PreviewQueryError } from "../errors/PreviewQueryError.js";
 import { ensureReportingAccess } from "../utils/reportingAccess.js";
+import { normalizeDerivedFieldExpressionAst } from "../utils/derivedFieldExpression.js";
 
 type CommissionSummary = {
   userId: number;
@@ -388,6 +389,9 @@ const toDerivedFieldArray = (value: unknown): ReportTemplateDerivedField[] => {
       if (!name || !expression) {
         return null;
       }
+      const astResult = normalizeDerivedFieldExpressionAst(candidate.expressionAst);
+      const expressionAst = astResult?.ast ?? null;
+      const referencedModels = astResult?.referencedModels ?? [];
       const id =
         typeof candidate.id === "string" && candidate.id.trim().length > 0
           ? candidate.id.trim()
@@ -407,6 +411,8 @@ const toDerivedFieldArray = (value: unknown): ReportTemplateDerivedField[] => {
         kind,
         scope: "template",
         metadata,
+        expressionAst,
+        referencedModels,
       };
     })
     .filter((entry): entry is ReportTemplateDerivedField => Boolean(entry));
@@ -545,7 +551,14 @@ const serializeReportTemplate = (
     filters: Array.isArray(template.filters) ? template.filters : [],
     options: mergedOptions,
     queryConfig: template.queryConfig ?? null,
-    derivedFields: Array.isArray(template.derivedFields) ? template.derivedFields : [],
+    derivedFields: Array.isArray(template.derivedFields)
+      ? template.derivedFields.map((field, index) => ({
+          ...field,
+          id: field.id ?? `derived-${index}`,
+          expressionAst: field.expressionAst ?? null,
+          referencedModels: Array.isArray(field.referencedModels) ? field.referencedModels : [],
+        }))
+      : [],
     metricsSpotlight: Array.isArray(template.metricsSpotlight) ? template.metricsSpotlight : [],
     columnOrder: [...mergedOptions.columnOrder],
     columnAliases: { ...mergedOptions.columnAliases },

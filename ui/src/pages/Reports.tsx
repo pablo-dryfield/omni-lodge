@@ -97,6 +97,7 @@ import {
   type TemplateSchedulePayload,
   type TemplateScheduleDeliveryTarget,
   type DerivedFieldDefinitionDto,
+  type DerivedFieldExpressionAst,
   type MetricSpotlightDefinitionDto,
   type ReportModelFieldResponse,
   type ReportModelPayload,
@@ -952,6 +953,15 @@ const normalizeDerivedFields = (candidate: unknown): DerivedFieldDefinitionDto[]
         record.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata)
           ? (deepClone(record.metadata) as Record<string, unknown>)
           : undefined;
+      const expressionAst =
+        record.expressionAst && typeof record.expressionAst === "object"
+          ? (deepClone(record.expressionAst) as DerivedFieldExpressionAst | null)
+          : null;
+      const referencedModels = Array.isArray(record.referencedModels)
+        ? record.referencedModels.filter(
+            (model): model is string => typeof model === "string" && model.trim().length > 0,
+          )
+        : [];
       return {
         id,
         name,
@@ -959,6 +969,8 @@ const normalizeDerivedFields = (candidate: unknown): DerivedFieldDefinitionDto[]
         kind,
         scope,
         ...(metadata ? { metadata } : {}),
+        ...(expressionAst ? { expressionAst } : {}),
+        ...(referencedModels.length > 0 ? { referencedModels } : {}),
       };
     })
     .filter((entry): entry is DerivedFieldDefinitionDto => Boolean(entry));

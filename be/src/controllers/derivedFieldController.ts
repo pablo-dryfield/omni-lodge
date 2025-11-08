@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import DerivedFieldDefinition from "../models/DerivedFieldDefinition.js";
 import { AuthenticatedRequest } from "../types/AuthenticatedRequest";
 import { ensureReportingAccess } from "../utils/reportingAccess.js";
+import { normalizeDerivedFieldExpressionAst } from "../utils/derivedFieldExpression.js";
 
 const coerceKind = (value: unknown): "row" | "aggregate" =>
   value === "aggregate" ? "aggregate" : "row";
@@ -30,6 +31,8 @@ export const listDerivedFields = async (req: Request, res: Response): Promise<vo
         name: field.name,
         expression: field.expression,
         kind: field.kind,
+        expressionAst: field.expressionAst ?? null,
+        referencedModels: Array.isArray(field.referencedModels) ? field.referencedModels : [],
         metadata: field.metadata ?? {},
         createdBy: field.createdBy,
         createdAt: field.createdAt?.toISOString() ?? null,
@@ -45,11 +48,15 @@ export const listDerivedFields = async (req: Request, res: Response): Promise<vo
 export const createDerivedField = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     ensureReportingAccess(req);
-    const { templateId, name, expression, kind, scope, metadata } = req.body ?? {};
+    const { templateId, name, expression, kind, scope, metadata, expressionAst } = req.body ?? {};
     if (!name || typeof name !== "string" || !expression || typeof expression !== "string") {
       res.status(400).json({ message: "Name and expression are required." });
       return;
     }
+
+    const astResult = normalizeDerivedFieldExpressionAst(expressionAst);
+    const normalizedAst = astResult?.ast ?? null;
+    const referencedModels = astResult?.referencedModels ?? [];
 
     const field = await DerivedFieldDefinition.create({
       templateId: typeof templateId === "string" && templateId.trim().length > 0 ? templateId.trim() : null,
@@ -58,6 +65,8 @@ export const createDerivedField = async (req: AuthenticatedRequest, res: Respons
       kind: coerceKind(kind),
       scope: coerceScope(scope),
       metadata: metadata && typeof metadata === "object" ? metadata : {},
+      expressionAst: normalizedAst,
+      referencedModels,
       createdBy: req.authContext?.id ?? null,
     });
 
@@ -70,6 +79,8 @@ export const createDerivedField = async (req: AuthenticatedRequest, res: Respons
         name: field.name,
         expression: field.expression,
         kind: field.kind,
+        expressionAst: field.expressionAst ?? null,
+        referencedModels: Array.isArray(field.referencedModels) ? field.referencedModels : [],
         metadata: field.metadata ?? {},
         createdBy: field.createdBy,
         createdAt: field.createdAt?.toISOString() ?? null,
@@ -97,7 +108,7 @@ export const updateDerivedField = async (req: AuthenticatedRequest, res: Respons
       return;
     }
 
-    const { name, expression, kind, metadata } = req.body ?? {};
+    const { name, expression, kind, metadata, expressionAst } = req.body ?? {};
     if (typeof name === "string" && name.trim().length > 0) {
       field.name = name.trim();
     }
@@ -109,6 +120,11 @@ export const updateDerivedField = async (req: AuthenticatedRequest, res: Respons
     }
     if (metadata && typeof metadata === "object") {
       field.metadata = metadata;
+    }
+    if (expressionAst !== undefined) {
+      const astResult = normalizeDerivedFieldExpressionAst(expressionAst);
+      field.expressionAst = astResult?.ast ?? null;
+      field.referencedModels = astResult?.referencedModels ?? [];
     }
 
     await field.save();
@@ -122,6 +138,8 @@ export const updateDerivedField = async (req: AuthenticatedRequest, res: Respons
         name: field.name,
         expression: field.expression,
         kind: field.kind,
+        expressionAst: field.expressionAst ?? null,
+        referencedModels: Array.isArray(field.referencedModels) ? field.referencedModels : [],
         metadata: field.metadata ?? {},
         createdBy: field.createdBy,
         createdAt: field.createdAt?.toISOString() ?? null,
