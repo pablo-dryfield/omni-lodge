@@ -197,6 +197,13 @@ export type DashboardExportResponse = {
   };
 };
 
+export type DerivedFieldExpressionAst =
+  | { type: "column"; modelId: string; fieldId: string }
+  | { type: "literal"; valueType: "number" | "string" | "boolean"; value: number | string | boolean }
+  | { type: "binary"; operator: "+" | "-" | "*" | "/"; left: DerivedFieldExpressionAst; right: DerivedFieldExpressionAst }
+  | { type: "unary"; operator: "+" | "-"; argument: DerivedFieldExpressionAst }
+  | { type: "function"; name: string; args: DerivedFieldExpressionAst[] };
+
 export type DerivedFieldDto = {
   id: string;
   scope: "workspace" | "template";
@@ -206,6 +213,8 @@ export type DerivedFieldDto = {
   expression: string;
   kind: "row" | "aggregate";
   metadata: Record<string, unknown>;
+  expressionAst?: DerivedFieldExpressionAst | null;
+  referencedModels?: string[];
   createdBy: number | null;
   createdAt: string | null;
   updatedAt: string | null;
@@ -222,6 +231,7 @@ export type DerivedFieldPayload = {
   kind?: "row" | "aggregate";
   scope?: "workspace" | "template";
   metadata?: Record<string, unknown>;
+  expressionAst?: DerivedFieldExpressionAst | null;
 };
 
 export type DerivedFieldDefinitionDto = {
@@ -231,6 +241,8 @@ export type DerivedFieldDefinitionDto = {
   kind: "row" | "aggregate";
   scope: "template" | "workspace";
   metadata?: Record<string, unknown>;
+  expressionAst?: DerivedFieldExpressionAst | null;
+  referencedModels?: string[];
 };
 
 export type MetricSpotlightDefinitionDto = {

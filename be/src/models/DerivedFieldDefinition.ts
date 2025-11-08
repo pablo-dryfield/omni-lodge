@@ -12,6 +12,7 @@ import {
 import type { NonAttribute } from "sequelize";
 import ReportTemplate from "./ReportTemplate.js";
 import User from "./User.js";
+import type { DerivedFieldExpressionAst } from "../types/DerivedFieldExpressionAst.js";
 
 @Table({
   tableName: "derived_field_definitions",
@@ -51,6 +52,15 @@ export default class DerivedFieldDefinition extends Model {
   @Default("row")
   @Column({ type: DataType.STRING(32) })
   declare kind: "row" | "aggregate";
+
+  @AllowNull(true)
+  @Column({ field: "expression_ast", type: DataType.JSONB })
+  declare expressionAst: DerivedFieldExpressionAst | null;
+
+  @AllowNull(false)
+  @Default([])
+  @Column({ field: "referenced_models", type: DataType.JSONB })
+  declare referencedModels: string[];
 
   @AllowNull(false)
   @Default({})

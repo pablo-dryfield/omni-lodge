@@ -11,6 +11,7 @@ import {
 } from 'sequelize-typescript';
 import type { NonAttribute } from 'sequelize';
 import User from './User.js';
+import type { DerivedFieldExpressionAst } from "../types/DerivedFieldExpressionAst.js";
 
 export type ReportTemplateFieldSelection = {
   modelId: string;
@@ -31,6 +32,8 @@ export type ReportTemplateDerivedField = {
   kind: "row" | "aggregate";
   scope: "template";
   metadata?: Record<string, unknown>;
+  expressionAst?: DerivedFieldExpressionAst | null;
+  referencedModels?: string[];
 };
 
 export type ReportTemplateMetricSpotlight = {

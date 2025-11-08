@@ -34,6 +34,7 @@ import {
   useUpdateDerivedField,
   useDeleteDerivedField,
   type DerivedFieldDto,
+  type DerivedFieldExpressionAst,
 } from "../api/reports";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
@@ -46,6 +47,7 @@ type DerivedFieldDraft = {
   scope: "workspace" | "template";
   templateId: string | null;
   metadata: Record<string, unknown>;
+  expressionAst?: DerivedFieldExpressionAst | null;
 };
 
 const DEFAULT_DRAFT: DerivedFieldDraft = {
@@ -55,6 +57,7 @@ const DEFAULT_DRAFT: DerivedFieldDraft = {
   scope: "workspace",
   templateId: null,
   metadata: {},
+  expressionAst: null,
 };
 
 const mapDtoToDraft = (field: DerivedFieldDto): DerivedFieldDraft => ({
@@ -65,6 +68,7 @@ const mapDtoToDraft = (field: DerivedFieldDto): DerivedFieldDraft => ({
   scope: field.scope,
   templateId: field.templateId,
   metadata: field.metadata ?? {},
+  expressionAst: field.expressionAst ?? null,
 });
 
 const DerivedFieldsManager = ({ title }: GenericPageProps) => {
@@ -167,6 +171,7 @@ const DerivedFieldsManager = ({ title }: GenericPageProps) => {
       scope: draft.scope,
       templateId: draft.scope === "template" ? draft.templateId ?? null : null,
       metadata: draft.metadata,
+      expressionAst: draft.expressionAst ?? null,
     };
 
     setFeedback(null);

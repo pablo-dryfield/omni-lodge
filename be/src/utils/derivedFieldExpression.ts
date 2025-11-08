@@ -1,0 +1,147 @@
+import type { DerivedFieldExpressionAst, BinaryOperator, UnaryOperator } from "../types/DerivedFieldExpressionAst.js";
+
+type ParsedAst = {
+  ast: DerivedFieldExpressionAst;
+  referencedModels: string[];
+};
+
+const BINARY_OPERATORS: ReadonlySet<BinaryOperator> = new Set(["+", "-", "*", "/"]);
+const UNARY_OPERATORS: ReadonlySet<UnaryOperator> = new Set(["+", "-"]);
+const ALLOWED_FUNCTIONS: ReadonlySet<string> = new Set([
+  "abs",
+  "ceil",
+  "coalesce",
+  "floor",
+  "greatest",
+  "least",
+  "round",
+]);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const toTrimmed = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+
+export const normalizeDerivedFieldExpressionAst = (value: unknown): ParsedAst | null => {
+  const ast = parseNode(value);
+  if (!ast) {
+    return null;
+  }
+  const referenced = new Set<string>();
+  collectReferencedModels(ast, referenced);
+  return {
+    ast,
+    referencedModels: Array.from(referenced),
+  };
+};
+
+const parseNode = (value: unknown): DerivedFieldExpressionAst | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const type = value.type;
+  switch (type) {
+    case "column": {
+      const modelId = toTrimmed(value.modelId);
+      const fieldId = toTrimmed(value.fieldId);
+      if (!modelId || !fieldId) {
+        return null;
+      }
+      return {
+        type: "column",
+        modelId,
+        fieldId,
+      };
+    }
+    case "literal": {
+      const literalValue = value.value;
+      const literalType = value.valueType;
+      if (literalType === "number" && typeof literalValue === "number" && Number.isFinite(literalValue)) {
+        return { type: "literal", value: literalValue, valueType: "number" };
+      }
+      if (literalType === "string" && typeof literalValue === "string") {
+        return { type: "literal", value: literalValue, valueType: "string" };
+      }
+      if (literalType === "boolean" && typeof literalValue === "boolean") {
+        return { type: "literal", value: literalValue, valueType: "boolean" };
+      }
+      return null;
+    }
+    case "binary": {
+      const operator = value.operator;
+      if (typeof operator !== "string" || !BINARY_OPERATORS.has(operator as BinaryOperator)) {
+        return null;
+      }
+      const left = parseNode(value.left);
+      const right = parseNode(value.right);
+      if (!left || !right) {
+        return null;
+      }
+      return {
+        type: "binary",
+        operator: operator as BinaryOperator,
+        left,
+        right,
+      };
+    }
+    case "unary": {
+      const operator = value.operator;
+      if (typeof operator !== "string" || !UNARY_OPERATORS.has(operator as UnaryOperator)) {
+        return null;
+      }
+      const argument = parseNode(value.argument);
+      if (!argument) {
+        return null;
+      }
+      return {
+        type: "unary",
+        operator: operator as UnaryOperator,
+        argument,
+      };
+    }
+    case "function": {
+      const name = toTrimmed(value.name).toLowerCase();
+      if (!name || !ALLOWED_FUNCTIONS.has(name)) {
+        return null;
+      }
+      const argsRaw = Array.isArray(value.args) ? value.args : [];
+      const args: DerivedFieldExpressionAst[] = [];
+      for (const entry of argsRaw) {
+        const parsed = parseNode(entry);
+        if (!parsed) {
+          return null;
+        }
+        args.push(parsed);
+      }
+      return {
+        type: "function",
+        name,
+        args,
+      };
+    }
+    default:
+      return null;
+  }
+};
+
+const collectReferencedModels = (node: DerivedFieldExpressionAst, accumulator: Set<string>) => {
+  switch (node.type) {
+    case "column":
+      accumulator.add(node.modelId);
+      return;
+    case "binary":
+      collectReferencedModels(node.left, accumulator);
+      collectReferencedModels(node.right, accumulator);
+      return;
+    case "unary":
+      collectReferencedModels(node.argument, accumulator);
+      return;
+    case "function":
+      node.args.forEach((arg) => collectReferencedModels(arg, accumulator));
+      return;
+    case "literal":
+    default:
+      return;
+  }
+};
