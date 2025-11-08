@@ -159,6 +159,7 @@ type DerivedFieldQueryPayload = {
   referencedModels?: string[];
   joinDependencies?: Array<[string, string]>;
   modelGraphSignature?: string | null;
+  compiledSqlHash?: string | null;
 };
 
 const formatDerivedFieldLabel = (field: DerivedFieldQueryPayload, index: number): string => {
@@ -245,6 +246,7 @@ export type QueryConfig = {
   dimensions?: QueryConfigDimension[];
   filters?: QueryConfigFilter[];
   orderBy?: QueryConfigOrderBy[];
+  derivedFields?: DerivedFieldQueryPayload[];
   joins?: ReportPreviewRequest["joins"];
   limit?: number;
   options?: QueryConfigOptions;
@@ -565,6 +567,7 @@ const toDerivedFieldArray = (value: unknown): ReportTemplateDerivedField[] => {
         astResult?.referencedFields ?? toReferencedFieldMap(candidate.referencedFields);
       const joinDependencies =
         astResult?.joinDependencies ?? toJoinDependencyPairs(candidate.joinDependencies);
+      const compiledSqlHash = astResult?.compiledSqlHash ?? toTrimmedString(candidate.compiledSqlHash);
       const id =
         typeof candidate.id === "string" && candidate.id.trim().length > 0
           ? candidate.id.trim()
@@ -581,6 +584,8 @@ const toDerivedFieldArray = (value: unknown): ReportTemplateDerivedField[] => {
         typeof candidate.modelGraphSignature === "string" && candidate.modelGraphSignature.trim().length > 0
           ? candidate.modelGraphSignature.trim()
           : null;
+      const status =
+        candidate.status === "stale" ? "stale" : candidate.status === "active" ? "active" : undefined;
       return {
         id,
         name,
@@ -593,6 +598,8 @@ const toDerivedFieldArray = (value: unknown): ReportTemplateDerivedField[] => {
         referencedFields,
         joinDependencies,
         modelGraphSignature,
+        compiledSqlHash: compiledSqlHash || null,
+        ...(status ? { status } : {}),
       };
     })
     .filter((entry): entry is ReportTemplateDerivedField => Boolean(entry));
@@ -755,6 +762,11 @@ const serializeReportTemplate = (
             typeof field.modelGraphSignature === "string" && field.modelGraphSignature.length > 0
               ? field.modelGraphSignature
               : null,
+          compiledSqlHash:
+            typeof field.compiledSqlHash === "string" && field.compiledSqlHash.length > 0
+              ? field.compiledSqlHash
+              : null,
+          status: field.status === "stale" ? "stale" : undefined,
         }))
       : [],
     metricsSpotlight: Array.isArray(template.metricsSpotlight) ? template.metricsSpotlight : [],
@@ -1071,6 +1083,10 @@ const normalizeSelectQueryConfig = (config: QueryConfig): ReportPreviewRequest =
     joins,
     filters: [],
     limit: config.limit,
+    derivedFields:
+      Array.isArray(config.derivedFields) && config.derivedFields.length > 0
+        ? config.derivedFields
+        : undefined,
   };
 };
 

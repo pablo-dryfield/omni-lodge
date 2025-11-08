@@ -114,6 +114,7 @@ export const createDerivedField = async (req: AuthenticatedRequest, res: Respons
     const referencedModels = astResult?.referencedModels ?? [];
     const referencedFields = astResult?.referencedFields ?? {};
     const joinDependencies = astResult?.joinDependencies ?? [];
+    const compiledSqlHash = astResult?.compiledSqlHash ?? null;
     const referenceIssues = collectReferenceIssues(referencedFields);
     if (referenceIssues.missingModels.length > 0 || referenceIssues.missingFields.length > 0) {
       res.status(400).json({
@@ -139,6 +140,7 @@ export const createDerivedField = async (req: AuthenticatedRequest, res: Respons
       referencedFields,
       joinDependencies,
       modelGraphSignature,
+      compiledExpressionHash: compiledSqlHash,
       createdBy: req.authContext?.id ?? null,
     });
 
@@ -159,6 +161,7 @@ export const createDerivedField = async (req: AuthenticatedRequest, res: Respons
             : {},
         joinDependencies: Array.isArray(field.joinDependencies) ? field.joinDependencies : [],
         modelGraphSignature: field.modelGraphSignature ?? null,
+        compiledSqlHash: field.compiledExpressionHash ?? null,
         metadata: field.metadata ?? {},
         createdBy: field.createdBy,
         createdAt: field.createdAt?.toISOString() ?? null,
@@ -205,6 +208,7 @@ export const updateDerivedField = async (req: AuthenticatedRequest, res: Respons
       field.referencedModels = astResult?.referencedModels ?? [];
       field.referencedFields = astResult?.referencedFields ?? {};
       field.joinDependencies = astResult?.joinDependencies ?? [];
+      field.compiledExpressionHash = astResult?.compiledSqlHash ?? null;
       const referenceIssues = collectReferenceIssues(field.referencedFields);
       if (referenceIssues.missingModels.length > 0 || referenceIssues.missingFields.length > 0) {
         res.status(400).json({
@@ -238,6 +242,7 @@ export const updateDerivedField = async (req: AuthenticatedRequest, res: Respons
             : {},
         joinDependencies: Array.isArray(field.joinDependencies) ? field.joinDependencies : [],
         modelGraphSignature: field.modelGraphSignature ?? null,
+        compiledSqlHash: field.compiledExpressionHash ?? null,
         metadata: field.metadata ?? {},
         createdBy: field.createdBy,
         createdAt: field.createdAt?.toISOString() ?? null,

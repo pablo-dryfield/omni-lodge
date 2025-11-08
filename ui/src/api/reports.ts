@@ -48,6 +48,16 @@ export type QueryConfigOrderBy = {
   direction?: "asc" | "desc";
 };
 
+export type QueryConfigDerivedField = {
+  id: string;
+  alias?: string;
+  expressionAst: DerivedFieldExpressionAst;
+  referencedModels?: string[];
+  joinDependencies?: Array<[string, string]>;
+  modelGraphSignature?: string | null;
+  compiledSqlHash?: string | null;
+};
+
 export type QueryConfigTimeRange = {
   field: QueryConfigFieldRef["fieldId"];
   modelId: QueryConfigFieldRef["modelId"];
@@ -80,6 +90,7 @@ export type QueryConfig = {
   dimensions?: QueryConfigDimension[];
   filters?: QueryConfigFilter[];
   orderBy?: QueryConfigOrderBy[];
+  derivedFields?: QueryConfigDerivedField[];
   joins?: Array<{
     id: string;
     leftModel: string;
@@ -218,6 +229,8 @@ export type DerivedFieldDto = {
   referencedFields?: Record<string, string[]>;
   joinDependencies?: Array<[string, string]>;
   modelGraphSignature?: string | null;
+  compiledSqlHash?: string | null;
+  status?: "active" | "stale";
   createdBy: number | null;
   createdAt: string | null;
   updatedAt: string | null;
@@ -239,6 +252,8 @@ export type DerivedFieldPayload = {
   referencedFields?: Record<string, string[]>;
   joinDependencies?: Array<[string, string]>;
   modelGraphSignature?: string | null;
+  compiledSqlHash?: string | null;
+  status?: "active" | "stale";
 };
 
 export type DerivedFieldDefinitionDto = {
@@ -253,6 +268,8 @@ export type DerivedFieldDefinitionDto = {
   referencedFields?: Record<string, string[]>;
   joinDependencies?: Array<[string, string]>;
   modelGraphSignature?: string | null;
+  compiledSqlHash?: string | null;
+  status?: "active" | "stale";
 };
 
 export type MetricSpotlightDefinitionDto = {
@@ -330,14 +347,7 @@ export type ReportPreviewRequest = {
   }>;
   filters?: string[];
   limit?: number;
-  derivedFields?: Array<{
-    id: string;
-    alias?: string;
-    expressionAst: DerivedFieldExpressionAst;
-    referencedModels?: string[];
-    joinDependencies?: Array<[string, string]>;
-    modelGraphSignature?: string | null;
-  }>;
+  derivedFields?: QueryConfigDerivedField[];
 };
 
 export type ReportPreviewResponse = {
@@ -615,3 +625,6 @@ export const useDeleteReportTemplate = () =>
       await axiosInstance.delete(`/reports/templates/${templateId}`);
     },
   });
+
+
+

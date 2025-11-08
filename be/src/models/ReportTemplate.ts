@@ -37,6 +37,8 @@ export type ReportTemplateDerivedField = {
   referencedFields?: Record<string, string[]>;
   joinDependencies?: Array<[string, string]>;
   modelGraphSignature?: string | null;
+  compiledSqlHash?: string | null;
+  status?: "active" | "stale";
 };
 
 export type ReportTemplateMetricSpotlight = {
