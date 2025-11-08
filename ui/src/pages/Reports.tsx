@@ -953,10 +953,14 @@ const normalizeDerivedFields = (candidate: unknown): DerivedFieldDefinitionDto[]
         record.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata)
           ? (deepClone(record.metadata) as Record<string, unknown>)
           : undefined;
-      const expressionAst =
-        record.expressionAst && typeof record.expressionAst === "object"
-          ? (deepClone(record.expressionAst) as DerivedFieldExpressionAst | null)
-          : null;
+      let expressionAst: DerivedFieldExpressionAst | null | undefined;
+      if (record.expressionAst && typeof record.expressionAst === "object") {
+        expressionAst = deepClone(record.expressionAst) as DerivedFieldExpressionAst;
+      } else if (record.expressionAst === null) {
+        expressionAst = null;
+      } else {
+        expressionAst = undefined;
+      }
       const referencedModels = Array.isArray(record.referencedModels)
         ? record.referencedModels.filter(
             (model): model is string => typeof model === "string" && model.trim().length > 0,
@@ -969,7 +973,7 @@ const normalizeDerivedFields = (candidate: unknown): DerivedFieldDefinitionDto[]
         kind,
         scope,
         ...(metadata ? { metadata } : {}),
-        ...(expressionAst ? { expressionAst } : {}),
+        ...(expressionAst !== undefined ? { expressionAst } : {}),
         ...(referencedModels.length > 0 ? { referencedModels } : {}),
       };
     })
@@ -3438,6 +3442,16 @@ const Reports = (props: GenericPageProps) => {
       return;
     }
 
+    const derivedFieldPayloads =
+      draft.derivedFields
+        .filter((field) => field.expressionAst && typeof field.expressionAst === "object")
+        .map((field) => ({
+          id: field.id,
+          alias: field.id,
+          expressionAst: field.expressionAst!,
+          referencedModels: field.referencedModels ?? [],
+        })) ?? [];
+
     const payload: ReportPreviewRequest = {
       models: draft.models,
       fields: sanitizedFields,
@@ -3454,6 +3468,7 @@ const Reports = (props: GenericPageProps) => {
       ),
       filters: filterClauses,
       limit: 500,
+      derivedFields: derivedFieldPayloads,
     };
 
     try {

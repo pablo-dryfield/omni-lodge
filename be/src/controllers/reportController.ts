@@ -14,6 +14,7 @@ import ReportTemplate, {
   ReportTemplateMetricSpotlight,
 } from "../models/ReportTemplate.js";
 import { AuthenticatedRequest } from "../types/AuthenticatedRequest";
+import type { DerivedFieldExpressionAst } from "../types/DerivedFieldExpressionAst.js";
 import sequelize from "../config/database.js";
 import {
   computeQueryHash,
@@ -150,6 +151,13 @@ type ReportModelDescriptor = {
   associations: ReportModelAssociationDescriptor[];
 };
 
+type DerivedFieldQueryPayload = {
+  id: string;
+  alias?: string;
+  expressionAst: DerivedFieldExpressionAst;
+  referencedModels?: string[];
+};
+
 type ReportPreviewRequest = {
   models: string[];
   fields: Array<{ modelId: string; fieldIds: string[] }>;
@@ -164,6 +172,7 @@ type ReportPreviewRequest = {
   }>;
   filters?: string[];
   limit?: number;
+  derivedFields?: DerivedFieldQueryPayload[];
 };
 
 type ReportPreviewResponse = {
@@ -924,6 +933,22 @@ const executePreviewQuery = async (
   if (selectClauses.length === 0) {
     throw new PreviewQueryError("Unable to determine any valid fields to query.");
   }
+
+  const derivedFieldPayloads = Array.isArray(payload.derivedFields) ? payload.derivedFields : [];
+  derivedFieldPayloads.forEach((field, index) => {
+    try {
+      const { clause, alias } = buildDerivedFieldSelectClause(field, aliasMap, index);
+      selectClauses.push(clause);
+      usedFields.add(alias);
+    } catch (error) {
+      if (error instanceof PreviewQueryError) {
+        throw error;
+      }
+      throw new PreviewQueryError(
+        `Derived field ${field.id || `#${index + 1}`} could not be processed.`,
+      );
+    }
+  });
 
   const baseModelId = payload.models[0];
   const baseDescriptor = ensureModelDescriptor(baseModelId);
@@ -1883,6 +1908,81 @@ function ensureModelDescriptor(modelId: string): ReportModelDescriptor | null {
 
   return describeModel(sequelizeModel as ModelCtor<Model>);
 }
+
+const escapeLiteral = (value: string): string => value.replace(/'/g, "''");
+
+const resolveColumnExpression = (
+  modelId: string,
+  fieldId: string,
+  aliasMap: Map<string, string>,
+): string => {
+  const descriptor = ensureModelDescriptor(modelId);
+  const modelAlias = aliasMap.get(modelId);
+  if (!descriptor || !modelAlias) {
+    throw new PreviewQueryError(`Model ${modelId} is not available for derived fields.`);
+  }
+  const field =
+    descriptor.fields.find((candidate) => candidate.fieldName === fieldId) ??
+    descriptor.fields.find((candidate) => candidate.columnName === fieldId);
+  if (!field) {
+    throw new PreviewQueryError(`Field ${fieldId} is not available on model ${modelId}.`);
+  }
+  return `${modelAlias}.${quoteIdentifier(field.columnName)}`;
+};
+
+const renderDerivedFieldExpressionSql = (
+  node: DerivedFieldExpressionAst,
+  aliasMap: Map<string, string>,
+): string => {
+  switch (node.type) {
+    case "column":
+      return resolveColumnExpression(node.modelId, node.fieldId, aliasMap);
+    case "literal":
+      if (node.valueType === "number") {
+        return Number(node.value).toString();
+      }
+      if (node.valueType === "boolean") {
+        return node.value ? "TRUE" : "FALSE";
+      }
+      return `'${escapeLiteral(String(node.value))}'`;
+    case "binary": {
+      const left = renderDerivedFieldExpressionSql(node.left, aliasMap);
+      const right = renderDerivedFieldExpressionSql(node.right, aliasMap);
+      return `(${left} ${node.operator} ${right})`;
+    }
+    case "unary": {
+      const argument = renderDerivedFieldExpressionSql(node.argument, aliasMap);
+      return `${node.operator}(${argument})`;
+    }
+    case "function": {
+      const args = node.args.map((arg) => renderDerivedFieldExpressionSql(arg, aliasMap)).join(", ");
+      return `${node.name}(${args})`;
+    }
+    default:
+      throw new PreviewQueryError("Unsupported derived field expression node.");
+  }
+};
+
+const buildDerivedFieldSelectClause = (
+  field: DerivedFieldQueryPayload,
+  aliasMap: Map<string, string>,
+  index: number,
+): { clause: string; alias: string } => {
+  if (!field.expressionAst) {
+    throw new PreviewQueryError("Derived field expression is missing.");
+  }
+  const expressionSql = renderDerivedFieldExpressionSql(field.expressionAst, aliasMap);
+  const alias =
+    (typeof field.alias === "string" && field.alias.trim().length > 0
+      ? field.alias.trim()
+      : field.id.trim().length > 0
+      ? field.id.trim()
+      : `derived_${index}`) ?? `derived_${index}`;
+  return {
+    clause: `${expressionSql} AS ${quoteIdentifier(alias)}`,
+    alias,
+  };
+};
 
 function buildFromClause(descriptor: ReportModelDescriptor, alias: string): string {
   return `${quoteTable(descriptor)} ${alias}`;
