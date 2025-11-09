@@ -80,10 +80,24 @@ const chartColors = {
   comparison: "#9c27b0",
 };
 
+const DEFAULT_CARD_LAYOUT = {
+  x: 0,
+  y: 0,
+  w: 6,
+  h: 4,
+};
+
 type VisualChartPoint = {
   dimension: string;
   metric: number | null;
   comparison: number | null;
+};
+
+type DashboardCardLayout = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 };
 
 const cloneConfig = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
@@ -307,6 +321,36 @@ const pickColumnKey = (
   }
   return null;
 };
+
+const parseDashboardLayout = (
+  layout: Record<string, unknown> | null | undefined,
+  fallback: DashboardCardLayout = DEFAULT_CARD_LAYOUT,
+): DashboardCardLayout => {
+  const source = layout && typeof layout === "object" ? layout : {};
+  const resolve = (key: string, defaultValue: number): number => {
+    const candidate = source[key as keyof typeof source];
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
+    }
+    if (typeof candidate === "string") {
+      const parsed = Number(candidate);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return defaultValue;
+  };
+  const width = Math.max(1, Math.min(12, resolve("w", fallback.w)));
+  const height = Math.max(1, resolve("h", fallback.h));
+  return {
+    x: Math.max(0, resolve("x", fallback.x)),
+    y: Math.max(0, resolve("y", fallback.y)),
+    w: width,
+    h: height,
+  };
+};
+
+const HOME_GRID_ROW_HEIGHT_PX = 90;
 
 const mapRowsToVisualPoints = (
   rows: Array<Record<string, unknown>>,
@@ -590,6 +634,20 @@ const Home = (props: GenericPageProps) => {
   });
   const activeDashboard = dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null;
   const activeCards = useMemo(() => activeDashboard?.cards ?? [], [activeDashboard]);
+  const orderedActiveCards = useMemo(
+    () =>
+      activeCards
+        .slice()
+        .sort((a, b) => {
+          const layoutA = parseDashboardLayout(a.layout);
+          const layoutB = parseDashboardLayout(b.layout);
+          if (layoutA.y === layoutB.y) {
+            return layoutA.x - layoutB.x;
+          }
+          return layoutA.y - layoutB.y;
+        }),
+    [activeCards],
+  );
   const shouldHydrateLiveData = canUseDashboards && effectiveViewMode === "dashboard";
 
   const cardHydrationDescriptors = useMemo(() => {
@@ -817,11 +875,30 @@ const Home = (props: GenericPageProps) => {
             </Stack>
           </CardContent>
         </Card>
-        <Stack gap={2}>
-          {activeDashboard.cards.map((card) => (
-            <DashboardCard key={card.id} card={card} liveState={liveCardSamples.get(card.id)} />
-          ))}
-        </Stack>
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: "repeat(12, minmax(0, 1fr))",
+            gridAutoRows: `${HOME_GRID_ROW_HEIGHT_PX}px`,
+            gap: 2,
+          }}
+        >
+          {orderedActiveCards.map((card) => {
+            const layout = parseDashboardLayout(card.layout);
+            return (
+              <Box
+                key={card.id}
+                sx={{
+                  gridColumn: `span ${Math.max(1, Math.min(12, layout.w))}`,
+                  gridRow: `span ${Math.max(1, layout.h)}`,
+                  minWidth: 0,
+                }}
+              >
+                <DashboardCard card={card} liveState={liveCardSamples.get(card.id)} />
+              </Box>
+            );
+          })}
+        </Box>
       </Stack>
     );
   };
