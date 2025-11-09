@@ -107,6 +107,8 @@ import {
   useReportDashboards,
   useUpsertDashboardCard,
   type DashboardCardViewConfig,
+  type DashboardSpotlightCardViewConfig,
+  type DashboardVisualCardViewConfig,
   type TemplateScheduleDto,
   type TemplateSchedulePayload,
   type TemplateScheduleDeliveryTarget,
@@ -727,6 +729,31 @@ const formatMetricValue = (
       return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
   }
 };
+
+const isVisualCardViewConfig = (
+  config: DashboardCardViewConfig | null | undefined,
+): config is DashboardVisualCardViewConfig =>
+  Boolean(config && config.mode === "visual" && typeof (config as DashboardVisualCardViewConfig).visual === "object");
+
+const isSpotlightCardViewConfig = (
+  config: DashboardCardViewConfig | null | undefined,
+): config is DashboardSpotlightCardViewConfig =>
+  Boolean(
+    config && config.mode === "spotlight" && typeof (config as DashboardSpotlightCardViewConfig).spotlight === "object",
+  );
+
+const getDashboardCardDescription = (viewConfig: DashboardCardViewConfig | null | undefined): string => {
+  if (!viewConfig || typeof viewConfig !== "object") {
+    return "";
+  }
+  const candidate = (viewConfig as { description?: unknown }).description;
+  return typeof candidate === "string" ? candidate : "";
+};
+
+const hasEditableDashboardViewConfig = (
+  viewConfig: DashboardCardViewConfig | null | undefined,
+): viewConfig is DashboardCardViewConfig & Record<string, unknown> =>
+  Boolean(viewConfig && typeof viewConfig === "object");
 
 const SPOTLIGHT_COMPARISON_OPTIONS: {
   value: NonNullable<MetricSpotlightDefinitionDto["comparison"]>;
@@ -1627,7 +1654,10 @@ const Reports = (props: GenericPageProps) => {
   const { mutateAsync: runPreview, isPending: isPreviewLoading } = useRunReportPreview();
   const { mutateAsync: runAnalyticsQuery, isPending: isAnalyticsMutationPending } = useRunReportQuery();
   const dashboardsQuery = useReportDashboards({ search: "" });
-  const dashboards = dashboardsQuery.data?.dashboards ?? [];
+  const dashboards = useMemo(
+    () => dashboardsQuery.data?.dashboards ?? [],
+    [dashboardsQuery.data?.dashboards],
+  );
   const dashboardOptions = useMemo(
     () =>
       dashboards.map((dashboard) => ({
@@ -4049,7 +4079,14 @@ const Reports = (props: GenericPageProps) => {
       return null;
     }
     const { viewConfig } = dashboardCardDraft;
-    if (viewConfig.mode === "visual") {
+    if (!viewConfig || typeof viewConfig !== "object") {
+      return (
+        <Text fz="sm" c="dimmed">
+          Legacy dashboard card. Save a new visual or spotlight to update the configuration preview.
+        </Text>
+      );
+    }
+    if (isVisualCardViewConfig(viewConfig)) {
       const visual = viewConfig.visual;
       const visualTypeLabel =
         VISUAL_TYPE_OPTIONS.find((option) => option.value === visual.type)?.label ?? visual.type;
@@ -4076,7 +4113,7 @@ const Reports = (props: GenericPageProps) => {
         </Stack>
       );
     }
-    if (viewConfig.mode === "spotlight") {
+    if (isSpotlightCardViewConfig(viewConfig)) {
       const { spotlight } = viewConfig;
       const sampleCard = viewConfig.sample?.cards?.[0];
       return (
@@ -7812,10 +7849,10 @@ const Reports = (props: GenericPageProps) => {
             <Textarea
               label="Description"
               minRows={2}
-              value={dashboardCardDraft.viewConfig.description ?? ""}
+              value={getDashboardCardDescription(dashboardCardDraft.viewConfig)}
               onChange={(event) =>
                 setDashboardCardDraft((current) =>
-                  current
+                  current && hasEditableDashboardViewConfig(current.viewConfig)
                     ? {
                         ...current,
                         viewConfig: {
