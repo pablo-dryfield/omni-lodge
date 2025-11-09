@@ -273,7 +273,6 @@ const SettingsHomeExperience = () => {
               value={selectedUserId ? selectedUserId.toString() : null}
               onChange={(value) => setSelectedUserId(value ? Number(value) : null)}
               searchable
-              nothingFound="No users"
               disabled={usersQuery.isLoading || usersQuery.isError}
               clearable
             />
@@ -344,8 +343,7 @@ const SettingsHomeExperience = () => {
                     value={draft.savedDashboardIds}
                     onChange={handlePinnedDashboardsChange}
                     disabled={dashboardsQuery.isLoading || dashboardsQuery.isError}
-                    maxSelectedValues={MAX_PINNED}
-                    nothingFound="No dashboards"
+                    maxValues={MAX_PINNED}
                   />
                   <Group justify="space-between">
                     <Text size="xs" c="dimmed">

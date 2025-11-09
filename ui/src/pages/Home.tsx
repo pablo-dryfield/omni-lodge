@@ -13,9 +13,7 @@ import {
   Button,
   Card,
   CardContent,
-  Chip,
   CircularProgress,
-  Divider,
   Paper,
   Stack,
   ThemeProvider,
@@ -43,7 +41,7 @@ import {
 import { GenericPageProps } from "../types/general/GenericPageProps";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { navigateToPage } from "../actions/navigationActions";
-import { selectAllowedNavigationPages, selectAllowedPageSlugs } from "../selectors/accessControlSelectors";
+import { selectAllowedNavigationPages } from "../selectors/accessControlSelectors";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import type { NavigationIconKey } from "../types/general/NavigationState";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
@@ -577,12 +575,10 @@ const Home = (props: GenericPageProps) => {
   }, [dispatch, props.title]);
 
   const allowedPages = useAppSelector(selectAllowedNavigationPages);
-  const allowedPageSlugs = useAppSelector(selectAllowedPageSlugs);
   const canUseDashboards = useMemo(
     () => allowedPages.some((page) => page.slug === PAGE_SLUGS.reports),
     [allowedPages],
   );
-  const canManageHomeExperience = allowedPageSlugs.has(PAGE_SLUGS.settingsHomeExperience);
 
   const homePreferenceQuery = useHomeDashboardPreference();
   const dashboardsQuery = useReportDashboards({ search: "", enabled: canUseDashboards });
@@ -598,14 +594,6 @@ const Home = (props: GenericPageProps) => {
   const effectiveViewMode = canUseDashboards ? preference.viewMode : "navigation";
 
   const dashboards = dashboardsQuery.data?.dashboards ?? [];
-  const savedDashboardSummaries = normalizedSavedIds.map((id) => {
-    const dashboard = dashboards.find((entry) => entry.id === id);
-    return {
-      id,
-      name: dashboard?.name ?? "Missing dashboard",
-      missing: !dashboard,
-    };
-  });
   const activeDashboard = dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null;
   const activeCards = useMemo(() => activeDashboard?.cards ?? [], [activeDashboard]);
   const orderedActiveCards = useMemo(
@@ -825,85 +813,6 @@ const Home = (props: GenericPageProps) => {
         <PageWrapper>
           <TilesContainer>
             <Stack gap={3}>
-              <Card variant="outlined">
-                <CardContent>
-                  <Stack gap={2}>
-                    <Stack
-                      direction={{ xs: "column", md: "row" }}
-                      alignItems={{ xs: "flex-start", md: "center" }}
-                      justifyContent="space-between"
-                      gap={2}
-                    >
-                      <Stack gap={0.5}>
-                        <Typography variant="h6">Home experience</Typography>
-                        <Typography variant="body2" color="textSecondary">
-                          Your administrator controls whether Home opens in navigation or dashboards mode.
-                        </Typography>
-                      </Stack>
-                    </Stack>
-                    {homePreferenceQuery.isLoading && (
-                      <Stack direction="row" alignItems="center" gap={1}>
-                        <CircularProgress size={18} />
-                        <Typography variant="body2" color="textSecondary">
-                          Loading your preference...
-                        </Typography>
-                      </Stack>
-                    )}
-                    {homePreferenceQuery.error && (
-                      <Alert severity="error">
-                        {getErrorMessage(homePreferenceQuery.error, "Failed to load home preference.")}
-                      </Alert>
-                    )}
-                    {!homePreferenceQuery.isLoading && !homePreferenceQuery.error && (
-                      <Stack gap={2}>
-                        <Typography variant="body2" color="textSecondary">
-                          Default experience:{" "}
-                          <strong>{effectiveViewMode === "dashboard" ? "Dashboards" : "Navigation"}</strong>
-                        </Typography>
-                        {(canUseDashboards || canManageHomeExperience) && (
-                          <Stack direction={{ xs: "column", sm: "row" }} gap={1}>
-                            {canManageHomeExperience && (
-                              <Button component={RouterLink} to="/settings/home-experience" variant="outlined">
-                                Open Home Experience settings
-                              </Button>
-                            )}
-                            {canUseDashboards && (
-                              <Button component={RouterLink} to="/reports/dashboards" variant="text">
-                                Manage dashboards workspace
-                              </Button>
-                            )}
-                          </Stack>
-                        )}
-                        {canUseDashboards && (
-                          <>
-                            <Divider />
-                            <Stack gap={1}>
-                              <Typography variant="subtitle2">Pinned dashboards</Typography>
-                              {savedDashboardSummaries.length === 0 ? (
-                                <Typography variant="body2" color="textSecondary">
-                                  No dashboards assigned to your home view yet.
-                                </Typography>
-                              ) : (
-                                <Stack direction="row" flexWrap="wrap" gap={1}>
-                                  {savedDashboardSummaries.map((dashboard) => (
-                                    <Chip
-                                      key={dashboard.id}
-                                      label={dashboard.name}
-                                      color={dashboard.id === activeDashboardId ? "primary" : "default"}
-                                      variant={dashboard.id === activeDashboardId ? "filled" : "outlined"}
-                                      sx={{ textTransform: "none" }}
-                                    />
-                                  ))}
-                                </Stack>
-                              )}
-                            </Stack>
-                          </>
-                        )}
-                      </Stack>
-                    )}
-                  </Stack>
-                </CardContent>
-              </Card>
               {effectiveViewMode === "dashboard" ? renderDashboardSummary() : renderNavigationTiles()}
             </Stack>
           </TilesContainer>
