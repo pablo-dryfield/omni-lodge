@@ -69,6 +69,7 @@ import {
   YAxis,
   Legend,
 } from "recharts";
+import type { Formatter, Payload } from "recharts/types/component/DefaultTooltipContent";
 import { useAppDispatch } from "../store/hooks";
 import { navigateToPage } from "../actions/navigationActions";
 import { GenericPageProps } from "../types/general/GenericPageProps";
@@ -2862,8 +2863,19 @@ const Reports = (props: GenericPageProps) => {
 
   const formatNumberForDisplay = useCallback(
     (value: number) =>
-      Number.isFinite(value) ? value.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—",
+      Number.isFinite(value) ? value.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "-",
     [],
+  );
+
+  const tooltipFormatter = useCallback<Formatter<number, string>>(
+    (value, _name, entry) => {
+      const payload = entry as Payload<number, string> | undefined;
+      const dataKey = typeof payload?.dataKey === "string" ? payload.dataKey : "";
+      const label =
+        dataKey === "primary" ? metricDisplayLabel : comparisonDisplayLabel ?? "Comparison";
+      return [formatNumberForDisplay(value ?? 0), label];
+    },
+    [comparisonDisplayLabel, formatNumberForDisplay, metricDisplayLabel],
   );
 
   const aggregationOptions = useMemo(
@@ -6319,12 +6331,7 @@ const Reports = (props: GenericPageProps) => {
                               />
                             )}
                             <RechartsTooltip
-                              formatter={(value: number, _name: string, entry?: { dataKey?: string }) => [
-                                formatNumberForDisplay(value),
-                                entry?.dataKey === "primary"
-                                  ? metricDisplayLabel
-                                  : comparisonDisplayLabel ?? "Comparison",
-                              ]}
+                              formatter={tooltipFormatter}
                               labelFormatter={(label) => `${dimensionLabel}: ${label}`}
                             />
                             <Legend />
@@ -7374,6 +7381,7 @@ const Reports = (props: GenericPageProps) => {
 };
 
 export default Reports;
+
 
 
 
