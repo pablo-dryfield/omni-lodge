@@ -249,6 +249,31 @@ type VisualQueryDescriptor = {
 
 type DerivedFieldStatus = "active" | "stale";
 type ReportDerivedField = DerivedFieldDefinitionDto & { status?: DerivedFieldStatus };
+const DERIVED_FIELD_VISIBILITY_FLAG = "__includeInBuilder";
+
+const isDerivedFieldVisibleInBuilder = (field: DerivedFieldDefinitionDto): boolean => {
+  if (field.status === "stale") {
+    return false;
+  }
+  const rawFlag = field.metadata ? field.metadata[DERIVED_FIELD_VISIBILITY_FLAG] : undefined;
+  return typeof rawFlag === "boolean" ? rawFlag : true;
+};
+
+const applyDerivedFieldVisibility = (field: ReportDerivedField, enabled: boolean): ReportDerivedField => {
+  const metadata = { ...(field.metadata ?? {}) };
+  if (enabled) {
+    if (DERIVED_FIELD_VISIBILITY_FLAG in metadata) {
+      delete metadata[DERIVED_FIELD_VISIBILITY_FLAG];
+    }
+  } else {
+    metadata[DERIVED_FIELD_VISIBILITY_FLAG] = false;
+  }
+  const normalizedMetadata = Object.keys(metadata).length > 0 ? metadata : undefined;
+  return {
+    ...field,
+    metadata: normalizedMetadata,
+  };
+};
 
 type ReportTemplate = {
   id: string;
@@ -1136,7 +1161,9 @@ const buildDerivedFieldPayloads = (
     .map(ensureDerivedFieldMetadata)
     .filter(
       (field) =>
-        field.status !== "stale" && field.expressionAst && typeof field.expressionAst === "object",
+        isDerivedFieldVisibleInBuilder(field) &&
+        field.expressionAst &&
+        typeof field.expressionAst === "object",
     )
     .map((field) => ({
       id: field.id,
@@ -1732,6 +1759,11 @@ const Reports = (props: GenericPageProps) => {
   const derivedFieldMap = useMemo(() => {
     return new Map(draft.derivedFields.map((field) => [field.id, field]));
   }, [draft.derivedFields]);
+  const enabledDerivedFieldCount = useMemo(
+    () => draft.derivedFields.filter((field) => isDerivedFieldVisibleInBuilder(field)).length,
+    [draft.derivedFields],
+  );
+  const totalFieldInventoryCount = selectedFieldDetails.length + enabledDerivedFieldCount;
   const derivedFieldPayloads = useMemo(
     () => buildDerivedFieldPayloads(draft.derivedFields),
     [draft.derivedFields],
@@ -3357,6 +3389,117 @@ const Reports = (props: GenericPageProps) => {
       };
     });
   };
+
+  const handleToggleDerivedFieldVisibility = useCallback((fieldId: string, enabled: boolean) => {
+    setDraft((current) => ({
+      ...current,
+      derivedFields: current.derivedFields.map((field) =>
+        field.id === fieldId ? applyDerivedFieldVisibility(field, enabled) : field,
+      ),
+    }));
+  }, []);
+
+  const renderDerivedFieldInventory = () => (
+    <>
+      <Divider my="sm" />
+      <Stack gap="xs">
+        <Group justify="space-between" align="center">
+          <Text fw={600} fz="sm">
+            Derived fields
+          </Text>
+          <Badge size="xs" variant="light">
+            {draft.derivedFields.length === 0
+              ? "0 created"
+              : `${enabledDerivedFieldCount}/${draft.derivedFields.length} enabled`}
+          </Badge>
+        </Group>
+        {draft.derivedFields.length === 0 ? (
+          <Alert color="gray" variant="light">
+            Create derived fields from the manager to combine metrics across models.
+          </Alert>
+        ) : (
+          <ScrollArea h={200} offsetScrollbars type="always">
+            <Table verticalSpacing="xs" highlightOnHover>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Name</Table.Th>
+                  <Table.Th>Models</Table.Th>
+                  <Table.Th>Status</Table.Th>
+                  <Table.Th align="right">Include</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {draft.derivedFields.map((field) => {
+                  const referencedModels = getEffectiveReferencedModels(field);
+                  const referencedLabels =
+                    referencedModels.length === 0
+                      ? "Detected automatically"
+                      : referencedModels
+                          .map((modelId) => modelMap.get(modelId)?.name ?? modelId)
+                          .join(", ");
+                  const missingModels = referencedModels.filter(
+                    (modelId) => !draft.models.includes(modelId),
+                  );
+                  const isEnabled = isDerivedFieldVisibleInBuilder(field);
+                  const isStale = field.status === "stale";
+                  return (
+                    <Table.Tr key={field.id}>
+                      <Table.Td>
+                        <Text fw={500} fz="sm">
+                          {field.name}
+                        </Text>
+                        <Text fz="xs" c="dimmed">
+                          {field.expression}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td>
+                        <Text fz="xs" c={missingModels.length > 0 ? "red" : "dimmed"}>
+                          {referencedLabels}
+                        </Text>
+                        {missingModels.length > 0 && (
+                          <Text fz="xs" c="red">
+                            Missing:{" "}
+                            {missingModels
+                              .map((modelId) => modelMap.get(modelId)?.name ?? modelId)
+                              .join(", ")}
+                          </Text>
+                        )}
+                      </Table.Td>
+                      <Table.Td>
+                        <Group gap={4}>
+                          <Badge
+                            size="xs"
+                            variant="light"
+                            color={field.kind === "aggregate" ? "violet" : "blue"}
+                          >
+                            {field.kind === "aggregate" ? "Aggregate" : "Row-level"}
+                          </Badge>
+                          <Badge size="xs" variant="light" color={isStale ? "red" : "teal"}>
+                            {isStale ? "Stale" : "Ready"}
+                          </Badge>
+                        </Group>
+                      </Table.Td>
+                      <Table.Td align="right">
+                        <Switch
+                          size="sm"
+                          checked={isEnabled}
+                          onChange={(event) =>
+                            handleToggleDerivedFieldVisibility(field.id, event.currentTarget.checked)
+                          }
+                          disabled={isStale}
+                          aria-label={`Toggle derived field ${field.name}`}
+                        />
+                      </Table.Td>
+                    </Table.Tr>
+                  );
+                })}
+              </Table.Tbody>
+            </Table>
+          </ScrollArea>
+        )}
+      </Stack>
+    </>
+  );
 
   const handleAddSpotlight = () => {
     setTemplateError(null);
@@ -5469,12 +5612,15 @@ const Reports = (props: GenericPageProps) => {
                 <Paper p="md" radius="lg" shadow="xs" withBorder>
                   <Group justify="space-between" mb="md">
                     <Text fw={600}>Field inventory</Text>
-                    <Badge variant="light">{selectedFieldDetails.length} fields</Badge>
+                    <Badge variant="light">{totalFieldInventoryCount} fields</Badge>
                   </Group>
                   {selectedModels.length === 0 ? (
-                    <Text c="dimmed">
-                      Select at least one data model to begin adding fields to your report.
-                    </Text>
+                    <Stack gap="md">
+                      <Text c="dimmed">
+                        Select at least one data model to begin adding fields to your report.
+                      </Text>
+                      {renderDerivedFieldInventory()}
+                    </Stack>
                   ) : (
                     <Stack gap="md">
                       {selectedModels.map((model) => {
@@ -5552,6 +5698,7 @@ const Reports = (props: GenericPageProps) => {
                           </Stack>
                         );
                       })}
+                      {renderDerivedFieldInventory()}
                     </Stack>
                   )}
                 </Paper>
