@@ -197,6 +197,7 @@ export type TemplateSchedulePayload = {
 export type DashboardVisualCardViewConfig = {
   mode: "visual";
   description?: string;
+  queryConfig?: QueryConfig | null;
   visual: {
     id: string;
     name: string;

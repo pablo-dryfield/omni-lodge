@@ -3963,6 +3963,7 @@ const Reports = (props: GenericPageProps) => {
     const viewConfig: DashboardCardViewConfig = {
       mode: "visual",
       description: `Visual: ${metricLabel} vs ${dimensionLabel}`,
+      queryConfig: visualQueryDescriptor.config ? deepClone(visualQueryDescriptor.config) : null,
       visual: {
         id: activeVisual.id,
         name: defaultTitle,
