@@ -17,6 +17,7 @@ import {
   Group,
   Highlight,
   Loader,
+  Modal,
   MultiSelect,
   NumberInput,
   Paper,
@@ -103,6 +104,8 @@ import {
   useDeleteTemplateSchedule,
   useExportReportTemplate,
   useUpdateDerivedField,
+  useReportDashboards,
+  useUpsertDashboardCard,
   type TemplateScheduleDto,
   type TemplateSchedulePayload,
   type TemplateScheduleDeliveryTarget,
@@ -608,6 +611,64 @@ const DEFAULT_VISUAL: VisualDefinition = {
   dimension: "",
   metricAggregation: "sum",
   limit: 100,
+};
+
+const DASHBOARD_CARD_DEFAULT_LAYOUT = {
+  x: 0,
+  y: 0,
+  w: 6,
+  h: 4,
+};
+
+type VisualDashboardCardConfig = {
+  mode: "visual";
+  description: string;
+  visual: {
+    id: string;
+    name: string;
+    type: VisualDefinition["type"];
+    metric: string;
+    metricAggregation: QueryConfigMetric["aggregation"];
+    metricLabel: string;
+    dimension: string;
+    dimensionLabel: string;
+    dimensionBucket?: QueryConfigDimension["bucket"];
+    comparison?: string;
+    comparisonLabel?: string;
+    comparisonAggregation?: QueryConfigMetric["aggregation"];
+    limit?: number | null;
+  };
+  sample?: {
+    rows: Array<Record<string, unknown>>;
+    columns: string[];
+  };
+};
+
+type SpotlightDashboardCardConfig = {
+  mode: "spotlight";
+  description: string;
+  spotlight: MetricSpotlightDefinitionDto & {
+    metricLabel: string;
+  };
+  sample?: {
+    cards: Array<{
+      id: string;
+      label: string;
+      value: string;
+      delta: string;
+      context: string;
+      tone: "positive" | "neutral" | "negative";
+    }>;
+  };
+};
+
+type DashboardCardViewConfig = VisualDashboardCardConfig | SpotlightDashboardCardConfig;
+
+type DashboardCardModalDraft = {
+  templateId: string;
+  title: string;
+  viewConfig: DashboardCardViewConfig;
+  layout: Record<string, unknown>;
 };
 
 const toColumnAlias = (modelId: string, fieldId: string) => `${modelId}__${fieldId}`;
@@ -1608,6 +1669,17 @@ const Reports = (props: GenericPageProps) => {
   const queryClient = useQueryClient();
   const { mutateAsync: runPreview, isPending: isPreviewLoading } = useRunReportPreview();
   const { mutateAsync: runAnalyticsQuery, isPending: isAnalyticsMutationPending } = useRunReportQuery();
+  const dashboardsQuery = useReportDashboards("");
+  const dashboards = dashboardsQuery.data?.dashboards ?? [];
+  const dashboardOptions = useMemo(
+    () =>
+      dashboards.map((dashboard) => ({
+        value: dashboard.id,
+        label: dashboard.name && dashboard.name.trim().length > 0 ? dashboard.name : "Untitled dashboard",
+      })),
+    [dashboards],
+  );
+  const hasDashboardTargets = dashboardOptions.length > 0;
 
   const {
     data: templatesResponse,
@@ -1618,6 +1690,7 @@ const Reports = (props: GenericPageProps) => {
   const saveTemplateMutation = useSaveReportTemplate();
   const deleteTemplateMutation = useDeleteReportTemplate();
   const updateDerivedFieldMutation = useUpdateDerivedField();
+  const upsertDashboardCardMutation = useUpsertDashboardCard();
 
   const [templates, setTemplates] = useState<ReportTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
@@ -1641,6 +1714,11 @@ const Reports = (props: GenericPageProps) => {
   const [templateCategoryFilter, setTemplateCategoryFilter] = useState<string>("all");
   const handleRunAnalysisRef = useRef<() => void>(() => {});
   const autoRunTemplateIdRef = useRef<string | null>(null);
+  const [dashboardCardDraft, setDashboardCardDraft] = useState<DashboardCardModalDraft | null>(null);
+  const [isDashboardModalOpen, setDashboardModalOpen] = useState(false);
+  const [selectedDashboardIdForModal, setSelectedDashboardIdForModal] = useState<string | null>(null);
+  const [dashboardCardTitle, setDashboardCardTitle] = useState("");
+  const [dashboardModalError, setDashboardModalError] = useState<string | null>(null);
   const [templateSuccess, setTemplateSuccess] = useState<string | null>(null);
   const [isDerivedFieldsDrawerOpen, setDerivedFieldsDrawerOpen] = useState(false);
   const [selectedDerivedFieldId, setSelectedDerivedFieldId] = useState<string | null>(() =>
@@ -3844,6 +3922,229 @@ const Reports = (props: GenericPageProps) => {
         },
       ],
     }));
+  };
+
+  const handleCloseDashboardModal = () => {
+    setDashboardModalOpen(false);
+    setDashboardCardDraft(null);
+    setDashboardModalError(null);
+    setDashboardCardTitle("");
+  };
+
+  const handleOpenDashboardModal = (cardDraft: DashboardCardModalDraft) => {
+    setDashboardCardDraft(cardDraft);
+    setDashboardCardTitle(cardDraft.title);
+    setDashboardModalError(null);
+    setSelectedDashboardIdForModal((current) => current ?? dashboardOptions[0]?.value ?? null);
+    setDashboardModalOpen(true);
+  };
+
+  const ensureTemplateReadyForDashboard = () => {
+    if (!isTemplatePersisted || !draft.id) {
+      setTemplateError("Save this template before sending items to dashboards.");
+      setTemplateSuccess(null);
+      return false;
+    }
+    return true;
+  };
+
+  const handleAddVisualToDashboard = () => {
+    if (!ensureTemplateReadyForDashboard()) {
+      return;
+    }
+    if (!activeVisual.metric || !activeVisual.dimension) {
+      setTemplateError("Select both a metric and dimension before adding this visual to a dashboard.");
+      return;
+    }
+    const metricLabel =
+      visualQueryDescriptor.metricLabel ?? getColumnLabel(activeVisual.metric) ?? "Metric";
+    const dimensionLabel =
+      visualQueryDescriptor.dimensionLabel ?? getColumnLabel(activeVisual.dimension) ?? "Dimension";
+    const comparisonLabel =
+      activeVisual.comparison && (visualQueryDescriptor.comparisonLabel ?? getColumnLabel(activeVisual.comparison));
+    const defaultTitle =
+      activeVisual.name && activeVisual.name.trim().length > 0
+        ? activeVisual.name.trim()
+        : `${metricLabel} vs ${dimensionLabel}`;
+    const sample =
+      visualRows.length > 0
+        ? {
+            rows: visualRows.slice(0, 25).map((row) => ({ ...row })),
+            columns: [...visualColumns],
+          }
+        : undefined;
+    const viewConfig: DashboardCardViewConfig = {
+      mode: "visual",
+      description: `Visual: ${metricLabel} vs ${dimensionLabel}`,
+      visual: {
+        id: activeVisual.id,
+        name: defaultTitle,
+        type: activeVisual.type,
+        metric: activeVisual.metric,
+        metricAggregation: activeVisual.metricAggregation ?? "sum",
+        metricLabel,
+        dimension: activeVisual.dimension,
+        dimensionLabel,
+        dimensionBucket: activeVisual.dimensionBucket,
+        comparison: activeVisual.comparison ?? undefined,
+        comparisonLabel: comparisonLabel ?? undefined,
+        comparisonAggregation:
+          activeVisual.comparison && activeVisual.comparisonAggregation
+            ? activeVisual.comparisonAggregation
+            : undefined,
+        limit: activeVisual.limit ?? 100,
+      },
+      sample,
+    };
+    const cardDraft: DashboardCardModalDraft = {
+      templateId: draft.id,
+      title: defaultTitle,
+      viewConfig,
+      layout: { ...DASHBOARD_CARD_DEFAULT_LAYOUT },
+    };
+    handleOpenDashboardModal(cardDraft);
+  };
+
+  const handleAddSpotlightToDashboard = (index: number) => {
+    if (!ensureTemplateReadyForDashboard()) {
+      return;
+    }
+    const spotlight = draft.metricsSpotlight[index];
+    if (!spotlight || !spotlight.metric) {
+      setTemplateError("Choose a metric for this spotlight before adding it to a dashboard.");
+      return;
+    }
+    const metricLabel = getColumnLabel(spotlight.metric);
+    const defaultTitle =
+      spotlight.label && spotlight.label.trim().length > 0 ? spotlight.label.trim() : metricLabel;
+    const spotlightId = spotlight.metric || `spotlight-${index}`;
+    const summaryCard = metricsSummary.find((card) => card.id === spotlightId);
+    const viewConfig: DashboardCardViewConfig = {
+      mode: "spotlight",
+      description: `Spotlight: ${defaultTitle}`,
+      spotlight: {
+        ...spotlight,
+        metricLabel,
+      },
+      sample: summaryCard
+        ? {
+            cards: [
+              {
+                id: summaryCard.id,
+                label: summaryCard.label,
+                value: summaryCard.value,
+                delta: summaryCard.delta,
+                context: summaryCard.context,
+                tone: summaryCard.tone,
+              },
+            ],
+          }
+        : undefined,
+    };
+    const cardDraft: DashboardCardModalDraft = {
+      templateId: draft.id,
+      title: defaultTitle,
+      viewConfig,
+      layout: {
+        ...DASHBOARD_CARD_DEFAULT_LAYOUT,
+        w: 3,
+        h: 3,
+      },
+    };
+    handleOpenDashboardModal(cardDraft);
+  };
+
+  const handleConfirmDashboardCard = async () => {
+    if (!dashboardCardDraft) {
+      setDashboardModalError("Select a visual or spotlight to create a card.");
+      return;
+    }
+    if (!selectedDashboardIdForModal) {
+      setDashboardModalError("Choose a destination dashboard.");
+      return;
+    }
+    const normalizedTitle = dashboardCardTitle.trim();
+    if (normalizedTitle.length === 0) {
+      setDashboardModalError("Enter a title for the dashboard card.");
+      return;
+    }
+    setDashboardModalError(null);
+    try {
+      await upsertDashboardCardMutation.mutateAsync({
+        dashboardId: selectedDashboardIdForModal,
+        payload: {
+          templateId: dashboardCardDraft.templateId,
+          title: normalizedTitle,
+          viewConfig: dashboardCardDraft.viewConfig,
+          layout: dashboardCardDraft.layout,
+        },
+      });
+      await queryClient.invalidateQueries({ queryKey: ["reports", "dashboards"] });
+      setTemplateSuccess("Dashboard card saved.");
+      handleCloseDashboardModal();
+    } catch (error) {
+      setDashboardModalError(extractAxiosErrorMessage(error, "Failed to save dashboard card."));
+    }
+  };
+
+  const renderDashboardCardSummary = () => {
+    if (!dashboardCardDraft) {
+      return null;
+    }
+    const { viewConfig } = dashboardCardDraft;
+    if (viewConfig.mode === "visual") {
+      const visual = viewConfig.visual;
+      const visualTypeLabel =
+        VISUAL_TYPE_OPTIONS.find((option) => option.value === visual.type)?.label ?? visual.type;
+      return (
+        <Stack gap={4}>
+          <Text fw={600} fz="sm">
+            {visual.metricLabel} vs {visual.dimensionLabel}
+          </Text>
+          <Text fz="xs" c="dimmed">
+            {visualTypeLabel} • Aggregation {visual.metricAggregation.toUpperCase()}
+            {visual.dimensionBucket ? ` • Bucket ${visual.dimensionBucket}` : ""}
+            {visual.comparison ? ` • Comparison ${visual.comparisonLabel ?? visual.comparison}` : ""}
+          </Text>
+          {viewConfig.sample?.rows && viewConfig.sample.rows.length > 0 ? (
+            <Text fz="xs" c="dimmed">
+              Captured {viewConfig.sample.rows.length} sample row
+              {viewConfig.sample.rows.length === 1 ? "" : "s"} across {viewConfig.sample.columns.length} columns.
+            </Text>
+          ) : (
+            <Text fz="xs" c="dimmed">
+              Run analytics to capture preview data for this card.
+            </Text>
+          )}
+        </Stack>
+      );
+    }
+    if (viewConfig.mode === "spotlight") {
+      const { spotlight } = viewConfig;
+      const sampleCard = viewConfig.sample?.cards?.[0];
+      return (
+        <Stack gap={4}>
+          <Text fw={600} fz="sm">
+            {spotlight.label?.trim() || spotlight.metricLabel}
+          </Text>
+          <Text fz="xs" c="dimmed">
+            Format: {(spotlight.format ?? "number").toUpperCase()}
+            {typeof spotlight.target === "number" ? ` • Target ${formatMetricValue(spotlight.target, spotlight.format)}` : ""}
+            {spotlight.comparison ? ` • Comparison ${spotlight.comparison.toUpperCase()}` : ""}
+          </Text>
+          {sampleCard ? (
+            <Text fz="xs" c="dimmed">
+              Latest value {sampleCard.value} ({sampleCard.delta}) – {sampleCard.context}.
+            </Text>
+          ) : (
+            <Text fz="xs" c="dimmed">
+              Run analytics to capture sample values for this spotlight.
+            </Text>
+          )}
+        </Stack>
+      );
+    }
+    return null;
   };
 
   const handleSpotlightChange = (
@@ -6268,7 +6569,18 @@ const Reports = (props: GenericPageProps) => {
                       </ThemeIcon>
                       <Text fw={600}>Visuals & analytics</Text>
                     </Group>
-                    <Group gap="xs" align="center">
+                    <Group gap="xs" align="center" wrap="wrap">
+                      <Button
+                        size="xs"
+                        variant="light"
+                        leftSection={<IconLayoutGrid size={14} />}
+                        onClick={handleAddVisualToDashboard}
+                        disabled={
+                          !isTemplatePersisted || !activeVisual.metric || !activeVisual.dimension
+                        }
+                      >
+                        Add to dashboard
+                      </Button>
                       <Badge variant="light">{chartData.length} points</Badge>
                       {visualJobStatusLabel && (
                         <Badge
@@ -6603,6 +6915,17 @@ const Reports = (props: GenericPageProps) => {
                                 style={{ flex: 1, minWidth: 200 }}
                               />
                             </Flex>
+                            <Group justify="flex-end">
+                              <Button
+                                size="xs"
+                                variant="subtle"
+                                leftSection={<IconLayoutGrid size={14} />}
+                                onClick={() => handleAddSpotlightToDashboard(index)}
+                                disabled={!isTemplatePersisted || !spotlight.metric}
+                              >
+                                Add to dashboard
+                              </Button>
+                            </Group>
                           </Stack>
                         </Card>
                       ))
@@ -7479,6 +7802,106 @@ const Reports = (props: GenericPageProps) => {
           </Button>
         </Stack>
       </Drawer>
+      <Modal
+        opened={isDashboardModalOpen}
+        onClose={handleCloseDashboardModal}
+        title="Add to dashboard"
+        size="lg"
+        centered
+      >
+        {dashboardCardDraft ? (
+          <Stack gap="md">
+            {!hasDashboardTargets && !dashboardsQuery.isLoading && (
+              <Alert color="yellow" variant="light" title="No dashboards available">
+                <Stack gap="xs">
+                  <Text fz="sm">
+                    Create a dashboard first, then return here to drop this card onto the grid.
+                  </Text>
+                  <Button
+                    variant="subtle"
+                    size="xs"
+                    leftSection={<IconLayoutGrid size={14} />}
+                    onClick={() => {
+                      navigate("/reports/dashboards");
+                      handleCloseDashboardModal();
+                    }}
+                  >
+                    Open dashboards
+                  </Button>
+                </Stack>
+              </Alert>
+            )}
+            <Select
+              label="Destination dashboard"
+              data={dashboardOptions}
+              value={selectedDashboardIdForModal}
+              onChange={(value) => setSelectedDashboardIdForModal(value)}
+              placeholder={
+                dashboardsQuery.isLoading
+                  ? "Loading dashboards..."
+                  : hasDashboardTargets
+                  ? "Select dashboard"
+                  : "Create a dashboard to continue"
+              }
+              disabled={!hasDashboardTargets}
+              searchable
+            />
+            <TextInput
+              label="Card title"
+              value={dashboardCardTitle}
+              onChange={(event) => setDashboardCardTitle(event.currentTarget.value)}
+              placeholder="Dashboard card title"
+            />
+            <Textarea
+              label="Description"
+              minRows={2}
+              value={dashboardCardDraft.viewConfig.description ?? ""}
+              onChange={(event) =>
+                setDashboardCardDraft((current) =>
+                  current
+                    ? {
+                        ...current,
+                        viewConfig: {
+                          ...current.viewConfig,
+                          description: event.currentTarget.value,
+                        },
+                      }
+                    : current,
+                )
+              }
+              placeholder="Optional note shown with the card."
+            />
+            <Paper withBorder radius="md" p="md">
+              {renderDashboardCardSummary() ?? (
+                <Text fz="sm" c="dimmed">
+                  Select a visual or spotlight to preview its configuration.
+                </Text>
+              )}
+            </Paper>
+            {dashboardModalError && (
+              <Text c="red" fz="sm">
+                {dashboardModalError}
+              </Text>
+            )}
+            <Group justify="flex-end">
+              <Button variant="default" onClick={handleCloseDashboardModal}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleConfirmDashboardCard}
+                loading={upsertDashboardCardMutation.isPending}
+                disabled={!hasDashboardTargets || upsertDashboardCardMutation.isPending}
+              >
+                Save card
+              </Button>
+            </Group>
+          </Stack>
+        ) : (
+          <Text c="dimmed" fz="sm">
+            Select a visual or spotlight to send it to a dashboard.
+          </Text>
+        )}
+      </Modal>
     </PageAccessGuard>
   );
 };
