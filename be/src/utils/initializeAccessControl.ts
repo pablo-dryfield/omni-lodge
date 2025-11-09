@@ -412,11 +412,6 @@ async function seedPubCrawlCatalog(): Promise<void> {
     const productTypeId = referenceProduct?.productTypeId ?? 1;
     const createdBy = referenceProduct?.createdBy ?? 1;
 
-    await Product.update(
-      { status: false },
-      { where: { name: { [Op.ne]: PRODUCT_NAME } }, transaction },
-    );
-
     const [product] = await Product.findOrCreate({
       where: { name: PRODUCT_NAME },
       defaults: {

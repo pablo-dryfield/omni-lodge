@@ -53,6 +53,7 @@ type NightReportPayload = {
 };
 
 const ADMIN_ROLE_SLUGS = new Set(['admin', 'owner', 'super_admin']);
+const DID_NOT_OPERATE_NOTE = 'The activity didn\'t operate.';
 
 const NIGHT_REPORT_COLUMNS = [
   { header: 'ID', accessorKey: 'id', type: 'number' },
@@ -597,8 +598,11 @@ export const submitNightReport = async (req: AuthenticatedRequest, res: Response
       throw new HttpError(400, 'Report is already submitted');
     }
 
+    const normalizedNotes = (report.notes ?? '').trim().toLowerCase();
+    const didNotOperate = normalizedNotes === DID_NOT_OPERATE_NOTE.toLowerCase();
+
     const venues = report.venues ?? [];
-    const hasRecordedVenues = venues.length > 0;
+    const hasRecordedVenues = !didNotOperate && venues.length > 0;
     if (hasRecordedVenues) {
       const openBarVenues = venues.filter((venue) => venue.isOpenBar);
       if (openBarVenues.length !== 1 || venues[0].isOpenBar !== true) {
@@ -619,7 +623,7 @@ export const submitNightReport = async (req: AuthenticatedRequest, res: Response
     }
 
     const photoCount = await NightReportPhoto.count({ where: { reportId } });
-    if (photoCount === 0) {
+    if (photoCount === 0 && !didNotOperate) {
       throw new HttpError(400, 'Upload the signed paper photo before submitting');
     }
 
