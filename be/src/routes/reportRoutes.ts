@@ -3,6 +3,7 @@ import * as reportController from '../controllers/reportController.js'; // Adjus
 import * as derivedFieldController from '../controllers/derivedFieldController.js';
 import * as dashboardController from '../controllers/dashboardController.js';
 import * as templateScheduleController from '../controllers/templateScheduleController.js';
+import * as homePreferenceController from '../controllers/homePreferenceController.js';
 import { check, param, validationResult } from 'express-validator';
 import authMiddleware from '../middleware/authMiddleware.js'; // Adjust the import path as necessary
 
@@ -48,5 +49,7 @@ router.post('/dashboards/:id/cards', authMiddleware, dashboardController.upsertD
 router.put('/dashboards/:id/cards/:cardId', authMiddleware, dashboardController.upsertDashboardCard);
 router.delete('/dashboards/:id/cards/:cardId', authMiddleware, dashboardController.deleteDashboardCard);
 router.post('/dashboards/:id/export', authMiddleware, dashboardController.exportDashboard);
+router.get('/home-preferences', authMiddleware, homePreferenceController.getHomePreference);
+router.put('/home-preferences', authMiddleware, homePreferenceController.updateHomePreference);
 
 export default router;

@@ -194,12 +194,65 @@ export type TemplateSchedulePayload = {
   nextRunAt?: string | null;
 };
 
+export type DashboardVisualCardViewConfig = {
+  mode: "visual";
+  description?: string;
+  visual: {
+    id: string;
+    name: string;
+    type: "line" | "area" | "bar" | "stackedArea" | "stackedBar" | "scatter";
+    metric: string;
+    metricAggregation: QueryConfigMetric["aggregation"];
+    metricLabel: string;
+    dimension: string;
+    dimensionLabel: string;
+    dimensionBucket?: QueryConfigDimension["bucket"];
+    comparison?: string;
+    comparisonLabel?: string;
+    comparisonAggregation?: QueryConfigMetric["aggregation"];
+    limit?: number | null;
+  };
+  sample?: {
+    rows: Array<Record<string, unknown>>;
+    columns: string[];
+  };
+};
+
+export type DashboardSpotlightCardViewConfig = {
+  mode: "spotlight";
+  description?: string;
+  spotlight: MetricSpotlightDefinitionDto & {
+    metricLabel?: string;
+  };
+  sample?: {
+    cards: Array<{
+      id: string;
+      label: string;
+      value: string;
+      delta: string;
+      context: string;
+      tone: "positive" | "neutral" | "negative";
+    }>;
+  };
+};
+
+export type DashboardLegacyCardViewConfig = Record<string, unknown> & {
+  mode?: string;
+};
+
+export type DashboardCardViewConfig =
+  | DashboardVisualCardViewConfig
+  | DashboardSpotlightCardViewConfig
+  | DashboardLegacyCardViewConfig
+  | null
+  | undefined;
+
 export type DashboardCardDto = {
   id: string;
   dashboardId: string;
   templateId: string;
   title: string;
-  viewConfig: Record<string, unknown>;
+  viewConfig: DashboardCardViewConfig;
   layout: Record<string, unknown>;
   createdAt: string | null;
   updatedAt: string | null;
@@ -235,7 +288,7 @@ export type DashboardPayload = {
 export type DashboardCardPayload = {
   templateId: string;
   title: string;
-  viewConfig?: Record<string, unknown>;
+  viewConfig?: DashboardCardViewConfig;
   layout?: Record<string, unknown>;
 };
 
@@ -246,6 +299,18 @@ export type DashboardExportResponse = {
     dashboard: ReportDashboardDto;
   };
 };
+
+export type HomeDashboardPreferenceDto = {
+  viewMode: "navigation" | "dashboard";
+  savedDashboardIds: string[];
+  activeDashboardId: string | null;
+};
+
+export type UpdateHomeDashboardPreferencePayload = Partial<{
+  viewMode: HomeDashboardPreferenceDto["viewMode"];
+  savedDashboardIds: string[];
+  activeDashboardId: string | null;
+}>;
 
 export type DerivedFieldExpressionAst =
   | { type: "column"; modelId: string; fieldId: string }
@@ -471,16 +536,24 @@ export const useExportReportTemplate = () =>
     },
   });
 
-export const useReportDashboards = (search?: string) =>
-  useQuery<DashboardListResponse>({
-    queryKey: ["reports", "dashboards", search ?? "all"],
+export type UseReportDashboardsOptions = {
+  search?: string;
+  enabled?: boolean;
+};
+
+export const useReportDashboards = ({ search = "", enabled = true }: UseReportDashboardsOptions = {}) => {
+  const trimmedSearch = search.trim();
+  return useQuery<DashboardListResponse>({
+    queryKey: ["reports", "dashboards", trimmedSearch.length > 0 ? trimmedSearch : "all"],
     queryFn: async () => {
       const response = await axiosInstance.get("/reports/dashboards", {
-        params: search && search.trim().length > 0 ? { search: search.trim() } : undefined,
+        params: trimmedSearch.length > 0 ? { search: trimmedSearch } : undefined,
       });
       return response.data as DashboardListResponse;
     },
+    enabled,
   });
+};
 
 export const useCreateDashboard = () =>
   useMutation<ReportDashboardDto, AxiosError<{ message?: string }>, DashboardPayload>({
@@ -536,6 +609,28 @@ export const useExportDashboard = () =>
     mutationFn: async (dashboardId: string) => {
       const response = await axiosInstance.post(`/reports/dashboards/${dashboardId}/export`, {});
       return response.data as DashboardExportResponse;
+    },
+  });
+
+export const useHomeDashboardPreference = () =>
+  useQuery<HomeDashboardPreferenceDto>({
+    queryKey: ["reports", "home-preference"],
+    queryFn: async () => {
+      const response = await axiosInstance.get("/reports/home-preferences");
+      return (response.data as { preference: HomeDashboardPreferenceDto }).preference;
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+export const useUpdateHomeDashboardPreference = () =>
+  useMutation<
+    HomeDashboardPreferenceDto,
+    AxiosError<{ message?: string }>,
+    UpdateHomeDashboardPreferencePayload
+  >({
+    mutationFn: async (payload: UpdateHomeDashboardPreferencePayload) => {
+      const response = await axiosInstance.put("/reports/home-preferences", payload);
+      return (response.data as { preference: HomeDashboardPreferenceDto }).preference;
     },
   });
 

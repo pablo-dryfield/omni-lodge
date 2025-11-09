@@ -106,6 +106,7 @@ import {
   useUpdateDerivedField,
   useReportDashboards,
   useUpsertDashboardCard,
+  type DashboardCardViewConfig,
   type TemplateScheduleDto,
   type TemplateSchedulePayload,
   type TemplateScheduleDeliveryTarget,
@@ -619,50 +620,6 @@ const DASHBOARD_CARD_DEFAULT_LAYOUT = {
   w: 6,
   h: 4,
 };
-
-type VisualDashboardCardConfig = {
-  mode: "visual";
-  description: string;
-  visual: {
-    id: string;
-    name: string;
-    type: VisualDefinition["type"];
-    metric: string;
-    metricAggregation: QueryConfigMetric["aggregation"];
-    metricLabel: string;
-    dimension: string;
-    dimensionLabel: string;
-    dimensionBucket?: QueryConfigDimension["bucket"];
-    comparison?: string;
-    comparisonLabel?: string;
-    comparisonAggregation?: QueryConfigMetric["aggregation"];
-    limit?: number | null;
-  };
-  sample?: {
-    rows: Array<Record<string, unknown>>;
-    columns: string[];
-  };
-};
-
-type SpotlightDashboardCardConfig = {
-  mode: "spotlight";
-  description: string;
-  spotlight: MetricSpotlightDefinitionDto & {
-    metricLabel: string;
-  };
-  sample?: {
-    cards: Array<{
-      id: string;
-      label: string;
-      value: string;
-      delta: string;
-      context: string;
-      tone: "positive" | "neutral" | "negative";
-    }>;
-  };
-};
-
-type DashboardCardViewConfig = VisualDashboardCardConfig | SpotlightDashboardCardConfig;
 
 type DashboardCardModalDraft = {
   templateId: string;
@@ -1669,7 +1626,7 @@ const Reports = (props: GenericPageProps) => {
   const queryClient = useQueryClient();
   const { mutateAsync: runPreview, isPending: isPreviewLoading } = useRunReportPreview();
   const { mutateAsync: runAnalyticsQuery, isPending: isAnalyticsMutationPending } = useRunReportQuery();
-  const dashboardsQuery = useReportDashboards("");
+  const dashboardsQuery = useReportDashboards({ search: "" });
   const dashboards = dashboardsQuery.data?.dashboards ?? [];
   const dashboardOptions = useMemo(
     () =>

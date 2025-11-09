@@ -48,6 +48,7 @@ import ReportQueryCacheEntry from "../models/ReportQueryCacheEntry.js";
 import ReportDashboard from "../models/ReportDashboard.js";
 import ReportDashboardCard from "../models/ReportDashboardCard.js";
 import ReportAsyncJob from "../models/ReportAsyncJob.js";
+import UserHomePreference from "../models/UserHomePreference.js";
 import {
   FinanceAccount,
   FinanceAuditLog,
@@ -125,6 +126,7 @@ const sequelize = new Sequelize({
     ReportDashboard,
     ReportDashboardCard,
     ReportAsyncJob,
+    UserHomePreference,
     Export,
     Notification,
     AuditLog,
