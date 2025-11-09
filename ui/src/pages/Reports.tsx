@@ -2832,23 +2832,33 @@ const Reports = (props: GenericPageProps) => {
   );
 
   const metricDisplayLabel = useMemo(() => {
-    const base = getMetricLabel(activeVisual.metric);
-    if (!base) {
-      return metricLabel;
-    }
-    return metricAggregationLabel ? `${base} (${metricAggregationLabel})` : base;
-  }, [activeVisual.metric, getMetricLabel, metricAggregationLabel, metricLabel]);
+    const labelSource =
+      visualQueryDescriptor.metricLabel ?? getMetricLabel(activeVisual.metric) ?? metricLabel;
+    return metricAggregationLabel ? `${labelSource} (${metricAggregationLabel})` : labelSource;
+  }, [
+    activeVisual.metric,
+    getMetricLabel,
+    metricAggregationLabel,
+    metricLabel,
+    visualQueryDescriptor.metricLabel,
+  ]);
 
   const comparisonDisplayLabel = useMemo(() => {
     if (!activeVisual.comparison) {
       return comparisonLabel;
     }
-    const base = getMetricLabel(activeVisual.comparison);
-    if (!base) {
-      return comparisonLabel;
-    }
-    return comparisonAggregationLabel ? `${base} (${comparisonAggregationLabel})` : base;
-  }, [activeVisual.comparison, comparisonAggregationLabel, comparisonLabel, getMetricLabel]);
+    const labelSource =
+      visualQueryDescriptor.comparisonLabel ??
+      getMetricLabel(activeVisual.comparison) ??
+      comparisonLabel;
+    return comparisonAggregationLabel ? `${labelSource} (${comparisonAggregationLabel})` : labelSource;
+  }, [
+    activeVisual.comparison,
+    comparisonAggregationLabel,
+    comparisonLabel,
+    getMetricLabel,
+    visualQueryDescriptor.comparisonLabel,
+  ]);
 
   const formatNumberForDisplay = useCallback(
     (value: number) =>
@@ -6309,9 +6319,9 @@ const Reports = (props: GenericPageProps) => {
                               />
                             )}
                             <RechartsTooltip
-                              formatter={(value: number, dataKey: string) => [
+                              formatter={(value: number, _name: string, entry?: { dataKey?: string }) => [
                                 formatNumberForDisplay(value),
-                                dataKey === "primary"
+                                entry?.dataKey === "primary"
                                   ? metricDisplayLabel
                                   : comparisonDisplayLabel ?? "Comparison",
                               ]}
