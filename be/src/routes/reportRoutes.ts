@@ -6,6 +6,7 @@ import * as templateScheduleController from '../controllers/templateScheduleCont
 import * as homePreferenceController from '../controllers/homePreferenceController.js';
 import { check, param, validationResult } from 'express-validator';
 import authMiddleware from '../middleware/authMiddleware.js'; // Adjust the import path as necessary
+import { requireRoles } from '../middleware/authorizationMiddleware.js';
 
 const router: Router = express.Router();
 
@@ -51,5 +52,17 @@ router.delete('/dashboards/:id/cards/:cardId', authMiddleware, dashboardControll
 router.post('/dashboards/:id/export', authMiddleware, dashboardController.exportDashboard);
 router.get('/home-preferences', authMiddleware, homePreferenceController.getHomePreference);
 router.put('/home-preferences', authMiddleware, homePreferenceController.updateHomePreference);
+router.get(
+  '/home-preferences/:userId',
+  authMiddleware,
+  requireRoles(['admin', 'owner']),
+  homePreferenceController.getHomePreferenceForUser,
+);
+router.put(
+  '/home-preferences/:userId',
+  authMiddleware,
+  requireRoles(['admin', 'owner']),
+  homePreferenceController.updateHomePreferenceForUser,
+);
 
 export default router;

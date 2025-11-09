@@ -79,7 +79,7 @@ const DerivedFieldsManager = ({ title }: GenericPageProps) => {
   }, [dispatch, title]);
 
   const templatesQuery = useReportTemplates();
-  const templates = templatesQuery.data?.templates ?? [];
+  const templates = useMemo(() => templatesQuery.data?.templates ?? [], [templatesQuery.data]);
   const templateOptions = useMemo(
     () =>
       templates.map((template) => ({
@@ -95,7 +95,10 @@ const DerivedFieldsManager = ({ title }: GenericPageProps) => {
   const [debouncedSearch] = useDebouncedValue(search.trim().toLowerCase(), 200);
 
   const derivedFieldsQuery = useDerivedFields(templateFilter ?? undefined);
-  const derivedFields = derivedFieldsQuery.data?.derivedFields ?? [];
+  const derivedFields = useMemo(
+    () => derivedFieldsQuery.data?.derivedFields ?? [],
+    [derivedFieldsQuery.data],
+  );
   const filteredFields = useMemo(() => {
     return derivedFields.filter((field) => {
       if (scopeFilter !== "all" && field.scope !== scopeFilter) {

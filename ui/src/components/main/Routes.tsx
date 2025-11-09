@@ -36,6 +36,7 @@ import SettingsShiftRoles from "../../pages/settings/SettingsShiftRoles";
 import SettingsUserShiftRoles from "../../pages/settings/SettingsUserShiftRoles";
 import SettingsSqlHelper from "../../pages/settings/SettingsSqlHelper";
 import SettingsDbBackups from "../../pages/settings/SettingsDbBackups";
+import SettingsHomeExperience from "../../pages/settings/SettingsHomeExperience";
 import SchedulingLayout from "../../pages/scheduling/SchedulingLayout";
 import AvailabilityPage from "../../pages/scheduling/AvailabilityPage";
 import BuilderPage from "../../pages/scheduling/BuilderPage";
@@ -122,6 +123,7 @@ const Routes = () => {
         <Route path="staff-profiles" element={<SettingsStaffProfiles />} />
         <Route path="shift-roles" element={<SettingsShiftRoles />} />
         <Route path="user-shift-roles" element={<SettingsUserShiftRoles />} />
+        <Route path="home-experience" element={<SettingsHomeExperience />} />
       </Route>
     </ReactRoutes>
   );

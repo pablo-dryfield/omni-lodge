@@ -16,19 +16,15 @@ import {
   Chip,
   CircularProgress,
   Divider,
-  MenuItem,
   Paper,
   Stack,
-  TextField,
   ThemeProvider,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import { styled } from "@mui/material/styles";
 import { createTheme } from "@mui/material/styles";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
+import { useQueries } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import {
   ResponsiveContainer,
@@ -47,14 +43,13 @@ import {
 import { GenericPageProps } from "../types/general/GenericPageProps";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { navigateToPage } from "../actions/navigationActions";
-import { selectAllowedNavigationPages } from "../selectors/accessControlSelectors";
+import { selectAllowedNavigationPages, selectAllowedPageSlugs } from "../selectors/accessControlSelectors";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import type { NavigationIconKey } from "../types/general/NavigationState";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import {
   useReportDashboards,
   useHomeDashboardPreference,
-  useUpdateHomeDashboardPreference,
   runReportQueryWithPolling,
   type DashboardCardDto,
   type DashboardCardViewConfig,
@@ -63,12 +58,10 @@ import {
   type HomeDashboardPreferenceDto,
   type MetricSpotlightDefinitionDto,
   type ReportQuerySuccessResponse,
-  type UpdateHomeDashboardPreferencePayload,
   type QueryConfig,
 } from "../api/reports";
 
 const PAGE_SLUG = PAGE_SLUGS.dashboard;
-const preferenceQueryKey = ["reports", "home-preference"] as const;
 const DEFAULT_HOME_PREFERENCE: HomeDashboardPreferenceDto = {
   viewMode: "navigation",
   savedDashboardIds: [],
@@ -487,23 +480,6 @@ const renderVisualChart = (
   );
 };
 
-const mergePreference = (
-  current: HomeDashboardPreferenceDto,
-  patch: UpdateHomeDashboardPreferencePayload,
-): HomeDashboardPreferenceDto => {
-  const next: HomeDashboardPreferenceDto = { ...current };
-  if (patch.viewMode) {
-    next.viewMode = patch.viewMode;
-  }
-  if (Object.prototype.hasOwnProperty.call(patch, "savedDashboardIds")) {
-    next.savedDashboardIds = patch.savedDashboardIds ?? [];
-  }
-  if (Object.prototype.hasOwnProperty.call(patch, "activeDashboardId")) {
-    next.activeDashboardId = patch.activeDashboardId ?? null;
-  }
-  return next;
-};
-
 const SpotlightTone = {
   positive: "success.main",
   negative: "error.main",
@@ -595,22 +571,20 @@ const buildSpotlightSampleFromResult = (
 
 const Home = (props: GenericPageProps) => {
   const dispatch = useAppDispatch();
-  const queryClient = useQueryClient();
-  const [preferenceError, setPreferenceError] = useState<string | null>(null);
-  const [dashboardToAdd, setDashboardToAdd] = useState("");
 
   useEffect(() => {
     dispatch(navigateToPage(props.title));
   }, [dispatch, props.title]);
 
   const allowedPages = useAppSelector(selectAllowedNavigationPages);
+  const allowedPageSlugs = useAppSelector(selectAllowedPageSlugs);
   const canUseDashboards = useMemo(
     () => allowedPages.some((page) => page.slug === PAGE_SLUGS.reports),
     [allowedPages],
   );
+  const canManageHomeExperience = allowedPageSlugs.has(PAGE_SLUGS.settingsHomeExperience);
 
   const homePreferenceQuery = useHomeDashboardPreference();
-  const updateHomePreferenceMutation = useUpdateHomeDashboardPreference();
   const dashboardsQuery = useReportDashboards({ search: "", enabled: canUseDashboards });
 
   const preference = homePreferenceQuery.data ?? DEFAULT_HOME_PREFERENCE;
@@ -732,64 +706,6 @@ const Home = (props: GenericPageProps) => {
     });
     return map;
   }, [cardHydrationDescriptors, cardLiveQueries, effectiveViewMode, shouldHydrateLiveData]);
-
-  const savedLimitReached = normalizedSavedIds.length >= 12;
-  const addOptions = dashboards.filter((dashboard) => !normalizedSavedIds.includes(dashboard.id));
-  const managerDisabled = homePreferenceQuery.isLoading || updateHomePreferenceMutation.isPending;
-
-  const handlePreferenceUpdate = useCallback(
-    async (patch: UpdateHomeDashboardPreferencePayload) => {
-      const previous =
-        queryClient.getQueryData<HomeDashboardPreferenceDto>(preferenceQueryKey) ?? DEFAULT_HOME_PREFERENCE;
-      const optimistic = mergePreference(previous, patch);
-      queryClient.setQueryData(preferenceQueryKey, optimistic);
-      setPreferenceError(null);
-      try {
-        const updated = await updateHomePreferenceMutation.mutateAsync(patch);
-        queryClient.setQueryData(preferenceQueryKey, updated);
-      } catch (error) {
-        queryClient.setQueryData(preferenceQueryKey, previous);
-        setPreferenceError(getErrorMessage(error, "Failed to save home preference."));
-      }
-    },
-    [queryClient, updateHomePreferenceMutation],
-  );
-
-  const handleViewModeChange = (_event: unknown, nextView: "navigation" | "dashboard" | null) => {
-    if (!nextView || nextView === effectiveViewMode || managerDisabled) {
-      return;
-    }
-    if (nextView === "dashboard" && !canUseDashboards) {
-      return;
-    }
-    handlePreferenceUpdate({ viewMode: nextView });
-  };
-
-  const handleAddDashboard = () => {
-    if (!dashboardToAdd || normalizedSavedIds.includes(dashboardToAdd) || managerDisabled) {
-      return;
-    }
-    const nextIds = [...normalizedSavedIds, dashboardToAdd];
-    const nextActive = activeDashboardId ?? dashboardToAdd;
-    handlePreferenceUpdate({ savedDashboardIds: nextIds, activeDashboardId: nextActive });
-    setDashboardToAdd("");
-  };
-
-  const handleRemoveDashboard = (dashboardId: string) => {
-    if (managerDisabled) {
-      return;
-    }
-    const nextIds = normalizedSavedIds.filter((id) => id !== dashboardId);
-    const nextActive = dashboardId === activeDashboardId ? nextIds[0] ?? null : activeDashboardId;
-    handlePreferenceUpdate({ savedDashboardIds: nextIds, activeDashboardId: nextActive ?? null });
-  };
-
-  const handleSelectActiveDashboard = (dashboardId: string) => {
-    if (dashboardId === activeDashboardId || managerDisabled) {
-      return;
-    }
-    handlePreferenceUpdate({ activeDashboardId: dashboardId });
-  };
 
   const renderNavigationTiles = () => (
     <Card variant="outlined">
@@ -921,22 +837,9 @@ const Home = (props: GenericPageProps) => {
                       <Stack gap={0.5}>
                         <Typography variant="h6">Home experience</Typography>
                         <Typography variant="body2" color="textSecondary">
-                          Choose between the navigation tiles or a dashboard-focused start page.
+                          Your administrator controls whether Home opens in navigation or dashboards mode.
                         </Typography>
                       </Stack>
-                      <ToggleButtonGroup
-                        exclusive
-                        value={effectiveViewMode}
-                        onChange={handleViewModeChange}
-                        size="small"
-                      >
-                        <ToggleButton value="navigation" disabled={managerDisabled}>
-                          Navigation
-                        </ToggleButton>
-                        <ToggleButton value="dashboard" disabled={!canUseDashboards || managerDisabled}>
-                          Dashboards
-                        </ToggleButton>
-                      </ToggleButtonGroup>
                     </Stack>
                     {homePreferenceQuery.isLoading && (
                       <Stack direction="row" alignItems="center" gap={1}>
@@ -951,72 +854,51 @@ const Home = (props: GenericPageProps) => {
                         {getErrorMessage(homePreferenceQuery.error, "Failed to load home preference.")}
                       </Alert>
                     )}
-                    {preferenceError && <Alert severity="error">{preferenceError}</Alert>}
-                    {canUseDashboards && (
+                    {!homePreferenceQuery.isLoading && !homePreferenceQuery.error && (
                       <Stack gap={2}>
-                        <Divider />
-                        <Stack
-                          direction={{ xs: "column", md: "row" }}
-                          alignItems={{ xs: "flex-start", md: "center" }}
-                          gap={2}
-                        >
-                          <TextField
-                            select
-                            label="Add dashboard"
-                            size="small"
-                            sx={{ minWidth: 200 }}
-                            value={dashboardToAdd}
-                            onChange={(event) => setDashboardToAdd(event.target.value)}
-                            disabled={managerDisabled || savedLimitReached || addOptions.length === 0}
-                            helperText={
-                              savedLimitReached
-                                ? "Maximum dashboards pinned."
-                                : addOptions.length === 0
-                                  ? "All dashboards are pinned."
-                                  : undefined
-                            }
-                          >
-                            {addOptions.map((dashboard) => (
-                              <MenuItem key={dashboard.id} value={dashboard.id}>
-                                {dashboard.name}
-                              </MenuItem>
-                            ))}
-                          </TextField>
-                          <Button
-                            variant="contained"
-                            onClick={handleAddDashboard}
-                            disabled={
-                              managerDisabled || savedLimitReached || dashboardToAdd.length === 0 || addOptions.length === 0
-                            }
-                          >
-                            Add
-                          </Button>
-                          <Button component={RouterLink} to="/reports/dashboards" variant="outlined">
-                            Manage dashboards
-                          </Button>
-                        </Stack>
-                        <Stack direction="row" flexWrap="wrap" gap={1}>
-                          {savedDashboardSummaries.length === 0 ? (
-                            <Typography variant="body2" color="textSecondary">
-                              No dashboards pinned yet.
-                            </Typography>
-                          ) : (
-                            savedDashboardSummaries.map((dashboard) => (
-                              <Chip
-                                key={dashboard.id}
-                                label={dashboard.name}
-                                color={dashboard.id === activeDashboardId ? "primary" : "default"}
-                                variant={dashboard.id === activeDashboardId ? "filled" : "outlined"}
-                                disabled={managerDisabled}
-                                onClick={() => handleSelectActiveDashboard(dashboard.id)}
-                                onDelete={
-                                  managerDisabled ? undefined : () => handleRemoveDashboard(dashboard.id)
-                                }
-                                sx={{ textTransform: "none" }}
-                              />
-                            ))
-                          )}
-                        </Stack>
+                        <Typography variant="body2" color="textSecondary">
+                          Default experience:{" "}
+                          <strong>{effectiveViewMode === "dashboard" ? "Dashboards" : "Navigation"}</strong>
+                        </Typography>
+                        {(canUseDashboards || canManageHomeExperience) && (
+                          <Stack direction={{ xs: "column", sm: "row" }} gap={1}>
+                            {canManageHomeExperience && (
+                              <Button component={RouterLink} to="/settings/home-experience" variant="outlined">
+                                Open Home Experience settings
+                              </Button>
+                            )}
+                            {canUseDashboards && (
+                              <Button component={RouterLink} to="/reports/dashboards" variant="text">
+                                Manage dashboards workspace
+                              </Button>
+                            )}
+                          </Stack>
+                        )}
+                        {canUseDashboards && (
+                          <>
+                            <Divider />
+                            <Stack gap={1}>
+                              <Typography variant="subtitle2">Pinned dashboards</Typography>
+                              {savedDashboardSummaries.length === 0 ? (
+                                <Typography variant="body2" color="textSecondary">
+                                  No dashboards assigned to your home view yet.
+                                </Typography>
+                              ) : (
+                                <Stack direction="row" flexWrap="wrap" gap={1}>
+                                  {savedDashboardSummaries.map((dashboard) => (
+                                    <Chip
+                                      key={dashboard.id}
+                                      label={dashboard.name}
+                                      color={dashboard.id === activeDashboardId ? "primary" : "default"}
+                                      variant={dashboard.id === activeDashboardId ? "filled" : "outlined"}
+                                      sx={{ textTransform: "none" }}
+                                    />
+                                  ))}
+                                </Stack>
+                              )}
+                            </Stack>
+                          </>
+                        )}
                       </Stack>
                     )}
                   </Stack>
