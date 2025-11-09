@@ -765,6 +765,63 @@ export const useDeleteReportTemplate = () =>
     },
   });
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isReportQuerySuccessResponse = (
+  result: ReportQueryResult,
+): result is ReportQuerySuccessResponse => {
+  return Boolean(
+    result &&
+      typeof result === "object" &&
+      Array.isArray((result as ReportQuerySuccessResponse).rows) &&
+      Array.isArray((result as ReportQuerySuccessResponse).columns),
+  );
+};
+
+const isReportQueryJobResponse = (result: ReportQueryResult): result is ReportQueryJobResponse => {
+  return Boolean(result && typeof result === "object" && "jobId" in result);
+};
+
+type ResolveQueryOptions = {
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+};
+
+export const resolveReportQueryResult = async (
+  result: ReportQueryResult,
+  { pollIntervalMs = 1500, timeoutMs = 60_000 }: ResolveQueryOptions = {},
+): Promise<ReportQuerySuccessResponse> => {
+  if (isReportQuerySuccessResponse(result)) {
+    return result;
+  }
+  if (!isReportQueryJobResponse(result)) {
+    throw new Error("Unexpected report query response.");
+  }
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    await sleep(pollIntervalMs);
+    const next = await getReportQueryJob(result.jobId);
+    if (isReportQuerySuccessResponse(next)) {
+      return next;
+    }
+    if (isReportQueryJobResponse(next) && next.status === "failed") {
+      const message =
+        (next.error && typeof next.error === "object" && (next.error as { message?: string }).message) ||
+        "Dashboard query failed.";
+      throw new Error(message);
+    }
+  }
+  throw new Error("Timed out while loading dashboard data.");
+};
+
+export const runReportQueryWithPolling = async (
+  payload: QueryConfig,
+  options?: ResolveQueryOptions,
+): Promise<ReportQuerySuccessResponse> => {
+  const response = await axiosInstance.post("/reports/query", payload);
+  return resolveReportQueryResult(response.data as ReportQueryResult, options);
+};
+
 
 
 

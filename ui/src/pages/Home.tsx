@@ -28,7 +28,7 @@ import {
 import { styled } from "@mui/material/styles";
 import { createTheme } from "@mui/material/styles";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import {
   ResponsiveContainer,
@@ -55,12 +55,18 @@ import {
   useReportDashboards,
   useHomeDashboardPreference,
   useUpdateHomeDashboardPreference,
+  useReportTemplates,
+  runReportQueryWithPolling,
   type DashboardCardDto,
   type DashboardCardViewConfig,
   type DashboardSpotlightCardViewConfig,
   type DashboardVisualCardViewConfig,
   type HomeDashboardPreferenceDto,
+  type MetricSpotlightDefinitionDto,
+  type ReportTemplateDto,
+  type ReportQuerySuccessResponse,
   type UpdateHomeDashboardPreferencePayload,
+  type QueryConfig,
 } from "../api/reports";
 
 const PAGE_SLUG = PAGE_SLUGS.dashboard;
@@ -74,6 +80,66 @@ const DEFAULT_HOME_PREFERENCE: HomeDashboardPreferenceDto = {
 const chartColors = {
   metric: "#1976d2",
   comparison: "#9c27b0",
+};
+
+type VisualChartPoint = {
+  dimension: string;
+  metric: number | null;
+  comparison: number | null;
+};
+
+const useTemplateLookup = (templates: ReportTemplateDto[]) => {
+  return useMemo(() => {
+    const map = new Map<string, ReportTemplateDto>();
+    templates.forEach((template) => {
+      if (template.id) {
+        map.set(template.id, template);
+      }
+    });
+    return map;
+  }, [templates]);
+};
+
+const formatMetricValue = (
+  value: number,
+  format: MetricSpotlightDefinitionDto["format"] = "number",
+): string => {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+
+  switch (format) {
+    case "currency":
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 2,
+      }).format(value);
+    case "percentage":
+      return `${value.toFixed(2)}%`;
+    default:
+      return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  }
+};
+
+const coerceNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+};
+
+type DashboardCardLiveState = {
+  status: "idle" | "loading" | "error" | "success";
+  visualSample?: VisualChartPoint[];
+  spotlightSample?: DashboardSpotlightCardViewConfig["sample"];
+  error?: string | null;
 };
 
 const isVisualCardViewConfig = (
@@ -220,13 +286,15 @@ const formatDimensionValue = (value: unknown): string => {
     return value;
   }
   if (value === null || value === undefined) {
-    return "—";
+    return "-";
   }
   return JSON.stringify(value);
 };
 
-const buildVisualSample = (config: DashboardVisualCardViewConfig) => {
-  const rows = config.sample?.rows ?? [];
+const mapRowsToVisualPoints = (
+  rows: Array<Record<string, unknown>>,
+  config: DashboardVisualCardViewConfig,
+): VisualChartPoint[] => {
   return rows
     .map((row) => {
       const dimensionRaw = row[config.visual.dimension];
@@ -243,12 +311,17 @@ const buildVisualSample = (config: DashboardVisualCardViewConfig) => {
         comparison,
       };
     })
-    .filter((entry): entry is { dimension: string; metric: number | null; comparison: number | null } => entry !== null);
+    .filter((entry): entry is VisualChartPoint => entry !== null);
+};
+
+const buildVisualSample = (config: DashboardVisualCardViewConfig): VisualChartPoint[] => {
+  const rows = Array.isArray(config.sample?.rows) ? config.sample.rows : [];
+  return mapRowsToVisualPoints(rows, config);
 };
 
 const renderVisualChart = (
   config: DashboardVisualCardViewConfig,
-  data: Array<{ dimension: string; metric: number | null; comparison: number | null }>,
+  data: VisualChartPoint[],
 ) => {
   if (config.visual.type === "scatter") {
     return (
@@ -338,6 +411,89 @@ const SpotlightTone = {
   neutral: "text.primary",
 } as const;
 
+const computeLiveCardState = (
+  card: DashboardCardDto,
+  templateState?: { data?: ReportQuerySuccessResponse; isLoading: boolean; error?: string | null },
+): DashboardCardLiveState => {
+  if (!templateState) {
+    return { status: "loading" };
+  }
+  if (templateState.isLoading) {
+    return { status: "loading" };
+  }
+  if (templateState.error) {
+    return { status: "error", error: templateState.error };
+  }
+  if (!templateState.data) {
+    return { status: "idle" };
+  }
+  const viewConfig = card.viewConfig as DashboardCardViewConfig;
+  if (isVisualCardViewConfig(viewConfig)) {
+    const sample = buildVisualSampleFromResult(viewConfig, templateState.data);
+    return { status: "success", visualSample: sample };
+  }
+  if (isSpotlightCardViewConfig(viewConfig)) {
+    const sample = buildSpotlightSampleFromResult(viewConfig, templateState.data);
+    return { status: "success", spotlightSample: sample };
+  }
+  return { status: "success" };
+};
+
+const buildVisualSampleFromResult = (
+  config: DashboardVisualCardViewConfig,
+  result?: ReportQuerySuccessResponse,
+): VisualChartPoint[] => {
+  if (!result || !Array.isArray(result.rows)) {
+    return [];
+  }
+  const limit = Math.max(1, Math.min(config.visual.limit ?? 100, 200));
+  const rows = result.rows.slice(0, limit);
+  return mapRowsToVisualPoints(rows, config);
+};
+
+const buildSpotlightSampleFromResult = (
+  config: DashboardSpotlightCardViewConfig,
+  result?: ReportQuerySuccessResponse,
+): DashboardSpotlightCardViewConfig["sample"] | undefined => {
+  if (!result || !Array.isArray(result.rows) || result.rows.length === 0) {
+    return undefined;
+  }
+  const metricAlias = config.spotlight.metric;
+  if (!metricAlias) {
+    return undefined;
+  }
+  const values = result.rows
+    .map((row) => coerceNumber(row[metricAlias]))
+    .filter((value): value is number => value !== null);
+  if (values.length === 0) {
+    return undefined;
+  }
+  const aggregatedValue = values.reduce((total, value) => total + value, 0);
+  const formattedValue = formatMetricValue(aggregatedValue, config.spotlight.format);
+  let delta = "-";
+  let tone: "positive" | "neutral" | "negative" = "neutral";
+  const contextParts: string[] = [];
+
+  if (typeof config.spotlight.target === "number") {
+    const difference = aggregatedValue - config.spotlight.target;
+    tone = difference >= 0 ? "positive" : "negative";
+    delta = `${difference >= 0 ? "+" : ""}${formatMetricValue(difference, config.spotlight.format)}`;
+    contextParts.push(`Target ${formatMetricValue(config.spotlight.target, config.spotlight.format)}`);
+  }
+
+  const cards = [
+    {
+      id: metricAlias,
+      label: config.spotlight.label?.trim() || config.spotlight.metricLabel || metricAlias,
+      value: formattedValue,
+      delta,
+      context: contextParts.join(" - ") || "Live dashboard value",
+      tone,
+    },
+  ];
+  return { cards };
+};
+
 const Home = (props: GenericPageProps) => {
   const dispatch = useAppDispatch();
   const queryClient = useQueryClient();
@@ -357,6 +513,9 @@ const Home = (props: GenericPageProps) => {
   const homePreferenceQuery = useHomeDashboardPreference();
   const updateHomePreferenceMutation = useUpdateHomeDashboardPreference();
   const dashboardsQuery = useReportDashboards({ search: "", enabled: canUseDashboards });
+  const templatesQuery = useReportTemplates();
+  const templates = templatesQuery.data?.templates ?? [];
+  const templateLookup = useTemplateLookup(templates);
 
   const preference = homePreferenceQuery.data ?? DEFAULT_HOME_PREFERENCE;
   const normalizedSavedIds = preference.savedDashboardIds.filter((id) => typeof id === "string" && id.length > 0);
@@ -366,6 +525,7 @@ const Home = (props: GenericPageProps) => {
     }
     return normalizedSavedIds[0] ?? null;
   }, [preference.activeDashboardId, normalizedSavedIds]);
+  const effectiveViewMode = canUseDashboards ? preference.viewMode : "navigation";
 
   const dashboards = dashboardsQuery.data?.dashboards ?? [];
   const savedDashboardSummaries = normalizedSavedIds.map((id) => {
@@ -377,8 +537,80 @@ const Home = (props: GenericPageProps) => {
     };
   });
   const activeDashboard = dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null;
+  const activeCards = activeDashboard?.cards ?? [];
+  const shouldHydrateLiveData = canUseDashboards && effectiveViewMode === "dashboard";
+  const requiredTemplateIds = useMemo(() => {
+    if (!shouldHydrateLiveData || activeCards.length === 0) {
+      return [];
+    }
+    const ids = new Set<string>();
+    activeCards.forEach((card) => {
+      if (card.templateId) {
+        ids.add(card.templateId);
+      }
+    });
+    return Array.from(ids);
+  }, [activeCards, shouldHydrateLiveData]);
 
-  const effectiveViewMode = canUseDashboards ? preference.viewMode : "navigation";
+  const templateLiveQueries = useQueries({
+    queries: requiredTemplateIds.map((templateId) => {
+      const template = templateLookup.get(templateId);
+      return {
+        queryKey: ["reports", "templates", templateId, "live-data", template?.updatedAt ?? "unknown"],
+        enabled:
+          shouldHydrateLiveData && Boolean(template?.queryConfig && template.queryConfig.models?.length > 0),
+        queryFn: async () => {
+          if (!template || !template.queryConfig) {
+            throw new Error("Template is missing a query configuration.");
+          }
+          const payload: QueryConfig = {
+            ...template.queryConfig,
+            options: {
+              ...template.queryConfig.options,
+              templateId: template.id,
+              allowAsync: true,
+              cacheTtlSeconds: 120,
+            },
+          };
+          return runReportQueryWithPolling(payload, { pollIntervalMs: 1500, timeoutMs: 45_000 });
+        },
+        staleTime: 30 * 1000,
+      };
+    }),
+  });
+
+  const liveTemplateResults = useMemo(() => {
+    const map = new Map<
+      string,
+      { data?: ReportQuerySuccessResponse; isLoading: boolean; error?: string | null }
+    >();
+    requiredTemplateIds.forEach((templateId, index) => {
+      const query = templateLiveQueries[index];
+      if (!query) {
+        map.set(templateId, { data: undefined, isLoading: false });
+        return;
+      }
+      map.set(templateId, {
+        data: query.data,
+        isLoading: query.isLoading || query.isFetching,
+        error: query.error ? getErrorMessage(query.error, "Failed to refresh dashboard data.") : null,
+      });
+    });
+    return map;
+  }, [requiredTemplateIds, templateLiveQueries]);
+
+  const liveCardSamples = useMemo(() => {
+    if (!shouldHydrateLiveData) {
+      return new Map<string, DashboardCardLiveState>();
+    }
+    const map = new Map<string, DashboardCardLiveState>();
+    activeCards.forEach((card) => {
+      const templateState = liveTemplateResults.get(card.templateId);
+      map.set(card.id, computeLiveCardState(card, templateState));
+    });
+    return map;
+  }, [activeCards, liveTemplateResults, shouldHydrateLiveData]);
+
   const savedLimitReached = normalizedSavedIds.length >= 12;
   const addOptions = dashboards.filter((dashboard) => !normalizedSavedIds.includes(dashboard.id));
   const managerDisabled = homePreferenceQuery.isLoading || updateHomePreferenceMutation.isPending;
@@ -523,7 +755,7 @@ const Home = (props: GenericPageProps) => {
         </Card>
         <Stack gap={2}>
           {activeDashboard.cards.map((card) => (
-            <DashboardCard key={card.id} card={card} />
+            <DashboardCard key={card.id} card={card} liveState={liveCardSamples.get(card.id)} />
           ))}
         </Stack>
       </Stack>
@@ -658,7 +890,7 @@ const Home = (props: GenericPageProps) => {
   );
 };
 
-const DashboardCard = ({ card }: { card: DashboardCardDto }) => {
+const DashboardCard = ({ card, liveState }: { card: DashboardCardDto; liveState?: DashboardCardLiveState }) => {
   const viewConfig = card.viewConfig as DashboardCardViewConfig;
   if (!viewConfig || typeof viewConfig !== "object") {
     return (
@@ -674,11 +906,13 @@ const DashboardCard = ({ card }: { card: DashboardCardDto }) => {
   }
 
   if (isVisualCardViewConfig(viewConfig)) {
-    return <VisualDashboardCard card={card} config={viewConfig} />;
+    return <VisualDashboardCard card={card} config={viewConfig} liveState={liveState ?? { status: "idle" }} />;
   }
 
   if (isSpotlightCardViewConfig(viewConfig)) {
-    return <SpotlightDashboardCard card={card} config={viewConfig} />;
+    return (
+      <SpotlightDashboardCard card={card} config={viewConfig} liveState={liveState ?? { status: "idle" }} />
+    );
   }
 
   return (
@@ -704,11 +938,15 @@ const DashboardCard = ({ card }: { card: DashboardCardDto }) => {
 const VisualDashboardCard = ({
   card,
   config,
+  liveState,
 }: {
   card: DashboardCardDto;
   config: DashboardVisualCardViewConfig;
+  liveState: DashboardCardLiveState;
 }) => {
-  const sample = buildVisualSample(config);
+  const sample = liveState.visualSample ?? buildVisualSample(config);
+  const isLoading = liveState.status === "loading";
+  const error = liveState.status === "error" ? liveState.error : null;
   return (
     <Card variant="outlined">
       <CardContent>
@@ -719,12 +957,25 @@ const VisualDashboardCard = ({
               {config.description}
             </Typography>
           )}
+          {isLoading && (
+            <Stack direction="row" gap={1} alignItems="center">
+              <CircularProgress size={16} />
+              <Typography variant="body2" color="textSecondary">
+                Refreshing data…
+              </Typography>
+            </Stack>
+          )}
+          {error && (
+            <Alert severity="error">
+              {error}
+            </Alert>
+          )}
           <Box sx={{ height: sample.length > 0 ? 240 : "auto" }}>
             {sample.length > 0 ? (
               renderVisualChart(config, sample)
             ) : (
               <Typography variant="body2" color="textSecondary">
-                Run the source template to capture sample data for this visual.
+                {isLoading ? "Loading chart data…" : "No data returned. Adjust the template filters to see values."}
               </Typography>
             )}
           </Box>
@@ -740,11 +991,15 @@ const VisualDashboardCard = ({
 const SpotlightDashboardCard = ({
   card,
   config,
+  liveState,
 }: {
   card: DashboardCardDto;
   config: DashboardSpotlightCardViewConfig;
+  liveState: DashboardCardLiveState;
 }) => {
-  const sampleCards = config.sample?.cards ?? [];
+  const sampleCards = liveState.spotlightSample?.cards ?? config.sample?.cards ?? [];
+  const isLoading = liveState.status === "loading";
+  const error = liveState.status === "error" ? liveState.error : null;
   return (
     <Card variant="outlined">
       <CardContent>
@@ -754,6 +1009,19 @@ const SpotlightDashboardCard = ({
             <Typography variant="body2" color="textSecondary">
               {config.description}
             </Typography>
+          )}
+          {isLoading && (
+            <Stack direction="row" gap={1} alignItems="center">
+              <CircularProgress size={16} />
+              <Typography variant="body2" color="textSecondary">
+                Refreshing data…
+              </Typography>
+            </Stack>
+          )}
+          {error && (
+            <Alert severity="error">
+              {error}
+            </Alert>
           )}
           {sampleCards.length > 0 ? (
             <Stack direction={{ xs: "column", md: "row" }} gap={2}>
@@ -778,7 +1046,7 @@ const SpotlightDashboardCard = ({
             </Stack>
           ) : (
             <Typography variant="body2" color="textSecondary">
-              Run the analytics template to capture sample spotlight values.
+              {isLoading ? "Loading spotlight values…" : "No spotlight values returned for this template."}
             </Typography>
           )}
           <Button component={RouterLink} to={`/reports?templateId=${card.templateId}`} size="small">
