@@ -60,10 +60,12 @@ import {
 } from "@tabler/icons-react";
 import {
   Area,
+  Bar,
   CartesianGrid,
   ComposedChart,
   Line,
   ResponsiveContainer,
+  Scatter,
   Tooltip as RechartsTooltip,
   XAxis,
   YAxis,
@@ -197,7 +199,7 @@ type ManualJoinDraft = {
 type VisualDefinition = {
   id: string;
   name: string;
-  type: "line" | "area";
+  type: "line" | "area" | "bar" | "stackedArea" | "stackedBar" | "scatter";
   metric: string;
   metricAggregation?: QueryConfigMetric["aggregation"];
   dimension: string;
@@ -909,6 +911,17 @@ const CATEGORY_OPTIONS = [
   { value: "Custom", label: "Custom" },
 ];
 
+const VISUAL_TYPE_OPTIONS: Array<{ value: VisualDefinition["type"]; label: string }> = [
+  { value: "line", label: "Line" },
+  { value: "area", label: "Area" },
+  { value: "bar", label: "Column" },
+  { value: "stackedArea", label: "Stacked area" },
+  { value: "stackedBar", label: "Stacked column" },
+  { value: "scatter", label: "Scatter" },
+];
+
+const VISUAL_TYPE_SET = new Set(VISUAL_TYPE_OPTIONS.map((option) => option.value));
+
 const SCHEDULE_OPTIONS = [
   { value: "Manual", label: "Manual run" },
   { value: "Daily 06:00", label: "Daily - 06:00" },
@@ -1454,7 +1467,9 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
             typeof candidate.comparison === "string" && candidate.comparison.trim().length > 0
               ? candidate.comparison.trim()
               : undefined;
-          const typeCandidate = candidate.type === "area" ? "area" : "line";
+        const typeCandidate = VISUAL_TYPE_SET.has(candidate.type as VisualDefinition["type"])
+          ? (candidate.type as VisualDefinition["type"])
+          : "line";
           const metricAggregationCandidate =
             typeof candidate.metricAggregation === "string"
               ? (candidate.metricAggregation as QueryConfigMetric["aggregation"])
@@ -2440,7 +2455,9 @@ const Reports = (props: GenericPageProps) => {
           visual.comparison !== metricAlias
             ? visual.comparison
             : undefined;
-        const type: VisualDefinition["type"] = visual.type === "area" ? "area" : "line";
+        const normalizedType = VISUAL_TYPE_SET.has(visual.type as VisualDefinition["type"])
+          ? (visual.type as VisualDefinition["type"])
+          : "line";
         const name = visual.name && visual.name.trim().length > 0 ? visual.name : `Visual ${index + 1}`;
         const id = visual.id && visual.id.trim().length > 0 ? visual.id : `visual-${index}`;
         const metricAggregation =
@@ -2463,7 +2480,7 @@ const Reports = (props: GenericPageProps) => {
         const nextVisual: VisualDefinition = {
           id,
           name,
-          type,
+          type: normalizedType,
           metric: metricAlias,
           dimension: dimensionAlias,
           metricAggregation,
@@ -2481,7 +2498,7 @@ const Reports = (props: GenericPageProps) => {
           metricAlias !== visual.metric ||
           dimensionAlias !== visual.dimension ||
           comparisonAlias !== visual.comparison ||
-          type !== visual.type ||
+          normalizedType !== visual.type ||
           name !== visual.name ||
           id !== visual.id ||
           nextVisual.metricAggregation !== visual.metricAggregation ||
@@ -2877,6 +2894,119 @@ const Reports = (props: GenericPageProps) => {
     },
     [comparisonDisplayLabel, formatNumberForDisplay, metricDisplayLabel],
   );
+
+  const isStackedVisualization =
+    activeVisual.type === "stackedArea" || activeVisual.type === "stackedBar";
+
+  const renderPrimarySeries = () => {
+    switch (activeVisual.type) {
+      case "area":
+      case "stackedArea":
+        return (
+          <Area
+            type="monotone"
+            dataKey="primary"
+            stroke="#1c7ed6"
+            fill="#a5d8ff"
+            name={metricDisplayLabel}
+            yAxisId="left"
+            stackId={activeVisual.type === "stackedArea" ? "stack" : undefined}
+          />
+        );
+      case "bar":
+      case "stackedBar":
+        return (
+          <Bar
+            dataKey="primary"
+            fill="#228be6"
+            barSize={26}
+            name={metricDisplayLabel}
+            yAxisId="left"
+            stackId={activeVisual.type === "stackedBar" ? "stack" : undefined}
+          />
+        );
+      case "scatter":
+        return (
+          <Scatter
+            dataKey="primary"
+            fill="#1c7ed6"
+            name={metricDisplayLabel}
+            yAxisId="left"
+            line
+          />
+        );
+      case "line":
+      default:
+        return (
+          <Line
+            type="monotone"
+            dataKey="primary"
+            stroke="#1c7ed6"
+            strokeWidth={2}
+            dot={false}
+            name={metricDisplayLabel}
+            yAxisId="left"
+          />
+        );
+    }
+  };
+
+  const renderComparisonSeries = () => {
+    if (!chartComparisonAlias) {
+      return null;
+    }
+    const comparisonYAxisId = isStackedVisualization ? "left" : "right";
+    const name = comparisonDisplayLabel ?? "Comparison";
+    switch (activeVisual.type) {
+      case "area":
+      case "stackedArea":
+        return (
+          <Area
+            type="monotone"
+            dataKey="secondary"
+            stroke="#2b8a3e"
+            fill="#d3f9d8"
+            name={name}
+            yAxisId={comparisonYAxisId}
+            stackId={activeVisual.type === "stackedArea" ? "stack" : undefined}
+          />
+        );
+      case "bar":
+      case "stackedBar":
+        return (
+          <Bar
+            dataKey="secondary"
+            fill="#82c91e"
+            barSize={26}
+            name={name}
+            yAxisId={comparisonYAxisId}
+            stackId={activeVisual.type === "stackedBar" ? "stack" : undefined}
+          />
+        );
+      case "scatter":
+        return (
+          <Scatter
+            dataKey="secondary"
+            fill="#2b8a3e"
+            name={name}
+            yAxisId={comparisonYAxisId}
+          />
+        );
+      case "line":
+      default:
+        return (
+          <Line
+            type="monotone"
+            dataKey="secondary"
+            stroke="#2b8a3e"
+            strokeWidth={2}
+            dot={false}
+            name={name}
+            yAxisId={comparisonYAxisId}
+          />
+        );
+    }
+  };
 
   const aggregationOptions = useMemo(
     () =>
@@ -6162,14 +6292,16 @@ const Reports = (props: GenericPageProps) => {
                   </Group>
                   <Flex gap="lg" align="flex-start" wrap="wrap">
                     <Stack gap="sm" style={{ minWidth: 260, flex: "0 0 260px" }}>
-                      <SegmentedControl
-                        data={[
-                          { value: "line", label: "Line" },
-                          { value: "area", label: "Area" },
-                        ]}
+                      <Select
+                        label="Visualization type"
+                        data={VISUAL_TYPE_OPTIONS}
                         value={activeVisual.type}
                         onChange={(value) =>
-                          handleVisualChange({ type: value as VisualDefinition["type"] })
+                          handleVisualChange({
+                            type: VISUAL_TYPE_SET.has(value as VisualDefinition["type"])
+                              ? (value as VisualDefinition["type"])
+                              : "line",
+                          })
                         }
                       />
                       <Select
@@ -6322,7 +6454,7 @@ const Reports = (props: GenericPageProps) => {
                             <CartesianGrid stroke="#f1f3f5" strokeDasharray="4 4" />
                             <XAxis dataKey="dimension" tick={{ fontSize: 12 }} />
                             <YAxis yAxisId="left" tick={{ fontSize: 12 }} stroke="#1c7ed6" />
-                            {chartComparisonAlias && (
+                            {chartComparisonAlias && !isStackedVisualization && (
                               <YAxis
                                 yAxisId="right"
                                 orientation="right"
@@ -6335,37 +6467,8 @@ const Reports = (props: GenericPageProps) => {
                               labelFormatter={(label) => `${dimensionLabel}: ${label}`}
                             />
                             <Legend />
-                            {activeVisual.type === "line" ? (
-                              <Line
-                                type="monotone"
-                                dataKey="primary"
-                                stroke="#1c7ed6"
-                               strokeWidth={2}
-                               dot={false}
-                                name={metricDisplayLabel}
-                                yAxisId="left"
-                              />
-                            ) : (
-                              <Area
-                                type="monotone"
-                                dataKey="primary"
-                               stroke="#1c7ed6"
-                               fill="#a5d8ff"
-                                name={metricDisplayLabel}
-                                yAxisId="left"
-                              />
-                            )}
-                            {chartComparisonAlias && (
-                              <Line
-                                type="monotone"
-                                dataKey="secondary"
-                                stroke="#2b8a3e"
-                                strokeWidth={2}
-                                dot={false}
-                                name={comparisonDisplayLabel ?? "Comparison"}
-                                yAxisId={chartComparisonAlias ? "right" : "left"}
-                              />
-                            )}
+                            {renderPrimarySeries()}
+                            {renderComparisonSeries()}
                           </ComposedChart>
                         </ResponsiveContainer>
                       ) : (
