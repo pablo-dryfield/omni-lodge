@@ -266,7 +266,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
 
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebouncedValue(search, 250);
-  const dashboardsQuery = useReportDashboards(debouncedSearch.trim());
+  const dashboardsQuery = useReportDashboards({ search: debouncedSearch.trim() });
   const templatesQuery = useReportTemplates();
 
   const dashboards = dashboardsQuery.data?.dashboards ?? [];

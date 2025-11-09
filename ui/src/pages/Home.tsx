@@ -1,147 +1,644 @@
-import { Link } from 'react-router-dom';
-import EventAvailableIcon from '@mui/icons-material/EventAvailable';
-import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
-import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
-import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
-import FormatListNumberedIcon from '@mui/icons-material/FormatListNumbered';
-import PersonIcon from '@mui/icons-material/Person';
-import SettingsIcon from '@mui/icons-material/Settings';
-import Grid from '@mui/material/Grid';
-import { Paper, Typography, ThemeProvider } from '@mui/material';
-import { styled } from '@mui/material/styles';
-import { createTheme } from '@mui/material/styles';
-import { GenericPageProps } from '../types/general/GenericPageProps';
-import { useAppDispatch, useAppSelector } from '../store/hooks';
-import { navigateToPage } from '../actions/navigationActions';
-import { selectAllowedNavigationPages } from '../selectors/accessControlSelectors';
-import { useEffect } from 'react';
-import { PageAccessGuard } from '../components/access/PageAccessGuard';
-import type { NavigationIconKey } from '../types/general/NavigationState';
-import { PAGE_SLUGS } from '../constants/pageSlugs';
+import { Link as RouterLink } from "react-router-dom";
+import EventAvailableIcon from "@mui/icons-material/EventAvailable";
+import AssignmentTurnedInIcon from "@mui/icons-material/AssignmentTurnedIn";
+import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
+import AccountBalanceIcon from "@mui/icons-material/AccountBalance";
+import FormatListNumberedIcon from "@mui/icons-material/FormatListNumbered";
+import PersonIcon from "@mui/icons-material/Person";
+import SettingsIcon from "@mui/icons-material/Settings";
+import Grid from "@mui/material/Grid";
+import {
+  Alert,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Chip,
+  CircularProgress,
+  Divider,
+  MenuItem,
+  Paper,
+  Stack,
+  TextField,
+  ThemeProvider,
+  ToggleButton,
+  ToggleButtonGroup,
+  Typography,
+} from "@mui/material";
+import { styled } from "@mui/material/styles";
+import { createTheme } from "@mui/material/styles";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import type { AxiosError } from "axios";
+import {
+  ResponsiveContainer,
+  ComposedChart,
+  ScatterChart,
+  Scatter,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip as ChartTooltip,
+  Legend,
+  Line,
+  Area,
+  Bar,
+} from "recharts";
+import { GenericPageProps } from "../types/general/GenericPageProps";
+import { useAppDispatch, useAppSelector } from "../store/hooks";
+import { navigateToPage } from "../actions/navigationActions";
+import { selectAllowedNavigationPages } from "../selectors/accessControlSelectors";
+import { PageAccessGuard } from "../components/access/PageAccessGuard";
+import type { NavigationIconKey } from "../types/general/NavigationState";
+import { PAGE_SLUGS } from "../constants/pageSlugs";
+import {
+  useReportDashboards,
+  useHomeDashboardPreference,
+  useUpdateHomeDashboardPreference,
+  type DashboardCardDto,
+  type DashboardCardViewConfig,
+  type DashboardSpotlightCardViewConfig,
+  type DashboardVisualCardViewConfig,
+  type HomeDashboardPreferenceDto,
+  type UpdateHomeDashboardPreferencePayload,
+} from "../api/reports";
 
 const PAGE_SLUG = PAGE_SLUGS.dashboard;
+const preferenceQueryKey = ["reports", "home-preference"] as const;
+const DEFAULT_HOME_PREFERENCE: HomeDashboardPreferenceDto = {
+  viewMode: "navigation",
+  savedDashboardIds: [],
+  activeDashboardId: null,
+};
+
+const chartColors = {
+  metric: "#1976d2",
+  comparison: "#9c27b0",
+};
 
 const theme = createTheme();
 
 const renderNavigationIcon = (icon: NavigationIconKey) => {
   switch (icon) {
-    case 'eventAvailable':
+    case "eventAvailable":
       return <EventAvailableIcon fontSize="large" />;
-    case 'assignmentTurnedIn':
+    case "assignmentTurnedIn":
       return <AssignmentTurnedInIcon fontSize="large" />;
-    case 'calendarMonth':
+    case "calendarMonth":
       return <CalendarMonthIcon fontSize="large" />;
-    case 'accountBalance':
+    case "accountBalance":
       return <AccountBalanceIcon fontSize="large" />;
-    case 'formatListNumbered':
+    case "formatListNumbered":
       return <FormatListNumberedIcon fontSize="large" />;
-    case 'person':
+    case "person":
       return <PersonIcon fontSize="large" />;
-    case 'settings':
+    case "settings":
       return <SettingsIcon fontSize="large" />;
     default:
       return <PersonIcon fontSize="large" />;
   }
 };
 
-const PageWrapper = styled('div')(({ theme }) => ({
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  minHeight: 'calc(100vh - 120px)',
-  padding: theme.spacing(6, 3),
-  [theme.breakpoints.down('md')]: {
-    padding: theme.spacing(4, 3),
+const PageWrapper = styled("div")(({ theme: muiTheme }) => ({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  minHeight: "calc(100vh - 120px)",
+  padding: muiTheme.spacing(6, 3),
+  [muiTheme.breakpoints.down("md")]: {
+    padding: muiTheme.spacing(4, 3),
   },
-  [theme.breakpoints.down('sm')]: {
-    padding: theme.spacing(3, 2),
-    minHeight: 'auto',
+  [muiTheme.breakpoints.down("sm")]: {
+    padding: muiTheme.spacing(3, 2),
+    minHeight: "auto",
   },
 }));
 
-const TilesContainer = styled('div')({
-  width: '100%',
-  maxWidth: 1080,
-  margin: '0 auto',
+const TilesContainer = styled("div")({
+  width: "100%",
+  maxWidth: 1260,
+  margin: "0 auto",
 });
 
-const TileLink = styled(Link)(({ theme }) => ({
-  display: 'flex',
-  justifyContent: 'center',
-  textDecoration: 'none',
-  width: '100%',
-  paddingTop: theme.spacing(1),
-  paddingBottom: theme.spacing(1),
+const TileLink = styled(RouterLink)(({ theme: muiTheme }) => ({
+  display: "flex",
+  justifyContent: "center",
+  textDecoration: "none",
+  width: "100%",
+  paddingTop: muiTheme.spacing(1),
+  paddingBottom: muiTheme.spacing(1),
 }));
 
-const LogoTile = styled(Paper)(({ theme }) => ({
-  width: 'clamp(140px, 28vw, 200px)',
-  height: 'clamp(140px, 28vw, 200px)',
-  backgroundColor: theme.palette.grey[100],
-  borderRadius: '50%',
-  display: 'flex',
-  flexDirection: 'column',
-  justifyContent: 'center',
-  alignItems: 'center',
-  gap: theme.spacing(1),
-  textAlign: 'center',
-  transition: theme.transitions.create(['background-color', 'transform'], {
-    duration: theme.transitions.duration.shorter,
+const LogoTile = styled(Paper)(({ theme: muiTheme }) => ({
+  width: "clamp(140px, 28vw, 200px)",
+  height: "clamp(140px, 28vw, 200px)",
+  backgroundColor: muiTheme.palette.grey[100],
+  borderRadius: "50%",
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "center",
+  alignItems: "center",
+  gap: muiTheme.spacing(1),
+  textAlign: "center",
+  transition: muiTheme.transitions.create(["background-color", "transform"], {
+    duration: muiTheme.transitions.duration.shorter,
   }),
-  [theme.breakpoints.down('sm')]: {
-    width: 'min(240px, 70vw)',
-    height: 'min(240px, 70vw)',
+  [muiTheme.breakpoints.down("sm")]: {
+    width: "min(240px, 70vw)",
+    height: "min(240px, 70vw)",
   },
-  '&:hover': {
-    backgroundColor: theme.palette.grey[200],
-    transform: 'translateY(-4px)',
+  "&:hover": {
+    backgroundColor: muiTheme.palette.grey[200],
+    transform: "translateY(-4px)",
   },
-  '&:active': {
-    backgroundColor: theme.palette.grey[300],
-    transform: 'translateY(-1px)',
+  "&:active": {
+    backgroundColor: muiTheme.palette.grey[300],
+    transform: "translateY(-1px)",
   },
 }));
 
-const PageName = styled(Typography)(({ theme }) => ({
-  color: theme.palette.text.primary,
-  textDecoration: 'none',
-  marginTop: theme.spacing(1),
+const PageName = styled(Typography)(({ theme: muiTheme }) => ({
+  color: muiTheme.palette.text.primary,
+  textDecoration: "none",
+  marginTop: muiTheme.spacing(1),
 }));
+
+const getErrorMessage = (error: unknown, fallback: string): string => {
+  if (typeof error === "string" && error.length > 0) {
+    return error;
+  }
+  const axiosError = error as AxiosError<{ message?: string }>;
+  const responseMessage = axiosError?.response?.data?.message;
+  if (typeof responseMessage === "string" && responseMessage.length > 0) {
+    return responseMessage;
+  }
+  if (axiosError?.message) {
+    return axiosError.message;
+  }
+  if (error && typeof error === "object" && "message" in error) {
+    const candidate = (error as { message?: string }).message;
+    if (typeof candidate === "string" && candidate.length > 0) {
+      return candidate;
+    }
+  }
+  return fallback;
+};
+
+const toNumeric = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+};
+
+const formatDimensionValue = (value: unknown): string => {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value.toString();
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === null || value === undefined) {
+    return "—";
+  }
+  return JSON.stringify(value);
+};
+
+const buildVisualSample = (config: DashboardVisualCardViewConfig) => {
+  const rows = config.sample?.rows ?? [];
+  return rows
+    .map((row) => {
+      const dimensionRaw = row[config.visual.dimension];
+      const metricRaw = row[config.visual.metric];
+      const comparisonRaw = config.visual.comparison ? row[config.visual.comparison] : undefined;
+      const metric = toNumeric(metricRaw);
+      const comparison = config.visual.comparison ? toNumeric(comparisonRaw) : null;
+      if (metric === null && comparison === null) {
+        return null;
+      }
+      return {
+        dimension: formatDimensionValue(dimensionRaw),
+        metric,
+        comparison,
+      };
+    })
+    .filter((entry): entry is { dimension: string; metric: number | null; comparison: number | null } => entry !== null);
+};
+
+const renderVisualChart = (
+  config: DashboardVisualCardViewConfig,
+  data: Array<{ dimension: string; metric: number | null; comparison: number | null }>,
+) => {
+  if (config.visual.type === "scatter") {
+    return (
+      <ResponsiveContainer width="100%" height="100%">
+        <ScatterChart>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="dimension" name={config.visual.dimensionLabel} />
+          <YAxis name={config.visual.metricLabel} />
+          <ChartTooltip />
+          <Legend />
+          <Scatter
+            name={config.visual.metricLabel ?? "Metric"}
+            data={data}
+            fill={chartColors.metric}
+            line={{ stroke: chartColors.metric }}
+          />
+        </ScatterChart>
+      </ResponsiveContainer>
+    );
+  }
+
+  const metricLabel = config.visual.metricLabel ?? "Metric";
+  const primaryElement =
+    config.visual.type === "bar" || config.visual.type === "stackedBar" ? (
+      <Bar
+        dataKey="metric"
+        name={metricLabel}
+        fill={chartColors.metric}
+        stackId={config.visual.type === "stackedBar" ? "stack" : undefined}
+      />
+    ) : config.visual.type === "area" || config.visual.type === "stackedArea" ? (
+      <Area
+        type="monotone"
+        dataKey="metric"
+        name={metricLabel}
+        stroke={chartColors.metric}
+        fill={chartColors.metric}
+        stackId={config.visual.type === "stackedArea" ? "stack" : undefined}
+      />
+    ) : (
+      <Line type="monotone" dataKey="metric" name={metricLabel} stroke={chartColors.metric} dot={false} />
+    );
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <ComposedChart data={data}>
+        <CartesianGrid strokeDasharray="3 3" />
+        <XAxis dataKey="dimension" />
+        <YAxis />
+        <ChartTooltip />
+        <Legend />
+        {primaryElement}
+        {config.visual.comparison && (
+          <Line
+            type="monotone"
+            dataKey="comparison"
+            name={config.visual.comparisonLabel ?? "Comparison"}
+            stroke={chartColors.comparison}
+            dot={false}
+          />
+        )}
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+};
+
+const mergePreference = (
+  current: HomeDashboardPreferenceDto,
+  patch: UpdateHomeDashboardPreferencePayload,
+): HomeDashboardPreferenceDto => {
+  const next: HomeDashboardPreferenceDto = { ...current };
+  if (patch.viewMode) {
+    next.viewMode = patch.viewMode;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "savedDashboardIds")) {
+    next.savedDashboardIds = patch.savedDashboardIds ?? [];
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "activeDashboardId")) {
+    next.activeDashboardId = patch.activeDashboardId ?? null;
+  }
+  return next;
+};
+
+const SpotlightTone = {
+  positive: "success.main",
+  negative: "error.main",
+  neutral: "text.primary",
+} as const;
 
 const Home = (props: GenericPageProps) => {
   const dispatch = useAppDispatch();
+  const queryClient = useQueryClient();
+  const [preferenceError, setPreferenceError] = useState<string | null>(null);
+  const [dashboardToAdd, setDashboardToAdd] = useState("");
 
   useEffect(() => {
     dispatch(navigateToPage(props.title));
   }, [dispatch, props.title]);
 
   const allowedPages = useAppSelector(selectAllowedNavigationPages);
+  const canUseDashboards = useMemo(
+    () => allowedPages.some((page) => page.slug === PAGE_SLUGS.reports),
+    [allowedPages],
+  );
+
+  const homePreferenceQuery = useHomeDashboardPreference();
+  const updateHomePreferenceMutation = useUpdateHomeDashboardPreference();
+  const dashboardsQuery = useReportDashboards({ search: "", enabled: canUseDashboards });
+
+  const preference = homePreferenceQuery.data ?? DEFAULT_HOME_PREFERENCE;
+  const normalizedSavedIds = preference.savedDashboardIds.filter((id) => typeof id === "string" && id.length > 0);
+  const activeDashboardId = useMemo(() => {
+    if (preference.activeDashboardId && normalizedSavedIds.includes(preference.activeDashboardId)) {
+      return preference.activeDashboardId;
+    }
+    return normalizedSavedIds[0] ?? null;
+  }, [preference.activeDashboardId, normalizedSavedIds]);
+
+  const dashboards = dashboardsQuery.data?.dashboards ?? [];
+  const savedDashboardSummaries = normalizedSavedIds.map((id) => {
+    const dashboard = dashboards.find((entry) => entry.id === id);
+    return {
+      id,
+      name: dashboard?.name ?? "Missing dashboard",
+      missing: !dashboard,
+    };
+  });
+  const activeDashboard = dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null;
+
+  const effectiveViewMode = canUseDashboards ? preference.viewMode : "navigation";
+  const savedLimitReached = normalizedSavedIds.length >= 12;
+  const addOptions = dashboards.filter((dashboard) => !normalizedSavedIds.includes(dashboard.id));
+  const managerDisabled = homePreferenceQuery.isLoading || updateHomePreferenceMutation.isPending;
+
+  const handlePreferenceUpdate = useCallback(
+    async (patch: UpdateHomeDashboardPreferencePayload) => {
+      const previous =
+        queryClient.getQueryData<HomeDashboardPreferenceDto>(preferenceQueryKey) ?? DEFAULT_HOME_PREFERENCE;
+      const optimistic = mergePreference(previous, patch);
+      queryClient.setQueryData(preferenceQueryKey, optimistic);
+      setPreferenceError(null);
+      try {
+        const updated = await updateHomePreferenceMutation.mutateAsync(patch);
+        queryClient.setQueryData(preferenceQueryKey, updated);
+      } catch (error) {
+        queryClient.setQueryData(preferenceQueryKey, previous);
+        setPreferenceError(getErrorMessage(error, "Failed to save home preference."));
+      }
+    },
+    [queryClient, updateHomePreferenceMutation],
+  );
+
+  const handleViewModeChange = (_event: unknown, nextView: "navigation" | "dashboard" | null) => {
+    if (!nextView || nextView === effectiveViewMode || managerDisabled) {
+      return;
+    }
+    if (nextView === "dashboard" && !canUseDashboards) {
+      return;
+    }
+    handlePreferenceUpdate({ viewMode: nextView });
+  };
+
+  const handleAddDashboard = () => {
+    if (!dashboardToAdd || normalizedSavedIds.includes(dashboardToAdd) || managerDisabled) {
+      return;
+    }
+    const nextIds = [...normalizedSavedIds, dashboardToAdd];
+    const nextActive = activeDashboardId ?? dashboardToAdd;
+    handlePreferenceUpdate({ savedDashboardIds: nextIds, activeDashboardId: nextActive });
+    setDashboardToAdd("");
+  };
+
+  const handleRemoveDashboard = (dashboardId: string) => {
+    if (managerDisabled) {
+      return;
+    }
+    const nextIds = normalizedSavedIds.filter((id) => id !== dashboardId);
+    const nextActive = dashboardId === activeDashboardId ? nextIds[0] ?? null : activeDashboardId;
+    handlePreferenceUpdate({ savedDashboardIds: nextIds, activeDashboardId: nextActive ?? null });
+  };
+
+  const handleSelectActiveDashboard = (dashboardId: string) => {
+    if (dashboardId === activeDashboardId || managerDisabled) {
+      return;
+    }
+    handlePreferenceUpdate({ activeDashboardId: dashboardId });
+  };
+
+  const renderNavigationTiles = () => (
+    <Card variant="outlined">
+      <CardContent>
+        <Typography variant="h6" gutterBottom>
+          Navigation
+        </Typography>
+        <Grid container spacing={{ xs: 3, sm: 4, md: 5 }} justifyContent="center">
+          {allowedPages.length === 0 ? (
+            <Grid size={{ xs: 12 }}>
+              <Typography variant="subtitle1" color="textSecondary">
+                You do not have access to any sections yet.
+              </Typography>
+            </Grid>
+          ) : (
+            allowedPages.map((page) => (
+              <Grid key={page.name} size={{ xs: 12, sm: 6, md: 4, lg: 3 }}>
+                <TileLink to={page.path} aria-label={`Go to ${page.name}`}>
+                  <LogoTile elevation={3}>
+                    {renderNavigationIcon(page.icon)}
+                    <PageName variant="subtitle1">{page.name}</PageName>
+                  </LogoTile>
+                </TileLink>
+              </Grid>
+            ))
+          )}
+        </Grid>
+      </CardContent>
+    </Card>
+  );
+
+  const renderDashboardSummary = () => {
+    if (!canUseDashboards) {
+      return (
+        <Alert severity="info">
+          Dashboards require Reports access. Contact an administrator if you need this permission.
+        </Alert>
+      );
+    }
+    if (dashboardsQuery.error) {
+      return <Alert severity="error">{getErrorMessage(dashboardsQuery.error, "Failed to load dashboards.")}</Alert>;
+    }
+    if (dashboardsQuery.isLoading) {
+      return (
+        <Stack direction="row" alignItems="center" gap={1}>
+          <CircularProgress size={18} />
+          <Typography variant="body2" color="textSecondary">
+            Loading dashboards...
+          </Typography>
+        </Stack>
+      );
+    }
+    if (normalizedSavedIds.length === 0) {
+      return (
+        <Typography variant="body2" color="textSecondary">
+          Pin dashboards to show them on the home page. Your pinned dashboards appear here for quick switching.
+        </Typography>
+      );
+    }
+    if (!activeDashboard) {
+      return (
+        <Alert severity="warning">
+          The active dashboard is no longer available. Remove it or pick another dashboard to continue.
+        </Alert>
+      );
+    }
+    if (activeDashboard.cards.length === 0) {
+      return (
+        <Alert severity="info">
+          This dashboard does not have any cards yet. Add cards from the Reports workspace to populate it.
+        </Alert>
+      );
+    }
+    return (
+      <Stack gap={2}>
+        <Card variant="outlined">
+          <CardContent>
+            <Stack gap={1}>
+              <Typography variant="h6">{activeDashboard.name}</Typography>
+              <Typography variant="body2" color="textSecondary">
+                {activeDashboard.description ?? "Display saved visuals and spotlights from your reporting templates."}
+              </Typography>
+            </Stack>
+          </CardContent>
+        </Card>
+        <Stack gap={2}>
+          {activeDashboard.cards.map((card) => (
+            <DashboardCard key={card.id} card={card} />
+          ))}
+        </Stack>
+      </Stack>
+    );
+  };
 
   return (
     <PageAccessGuard pageSlug={PAGE_SLUG}>
       <ThemeProvider theme={theme}>
         <PageWrapper>
           <TilesContainer>
-            <Grid container spacing={{ xs: 3, sm: 4, md: 5 }} justifyContent="center">
-              {allowedPages.length === 0 ? (
-                <Grid size={{ xs: 12 }}>
-                  <Typography variant="subtitle1" color="textSecondary">
-                    You do not have access to any sections yet.
-                  </Typography>
-                </Grid>
-              ) : (
-                allowedPages.map((page) => (
-                  <Grid key={page.name} size={{ xs: 12, sm: 6, md: 4, lg: 3 }}>
-                    <TileLink to={page.path} aria-label={`Go to ${page.name}`}>
-                      <LogoTile elevation={3}>
-                        {renderNavigationIcon(page.icon)}
-                        <PageName variant="subtitle1">{page.name}</PageName>
-                      </LogoTile>
-                    </TileLink>
-                  </Grid>
-                ))
-              )}
-            </Grid>
+            <Stack gap={3}>
+              <Card variant="outlined">
+                <CardContent>
+                  <Stack gap={2}>
+                    <Stack
+                      direction={{ xs: "column", md: "row" }}
+                      alignItems={{ xs: "flex-start", md: "center" }}
+                      justifyContent="space-between"
+                      gap={2}
+                    >
+                      <Stack gap={0.5}>
+                        <Typography variant="h6">Home experience</Typography>
+                        <Typography variant="body2" color="textSecondary">
+                          Choose between the navigation tiles or a dashboard-focused start page.
+                        </Typography>
+                      </Stack>
+                      <ToggleButtonGroup
+                        exclusive
+                        value={effectiveViewMode}
+                        onChange={handleViewModeChange}
+                        size="small"
+                      >
+                        <ToggleButton value="navigation" disabled={managerDisabled}>
+                          Navigation
+                        </ToggleButton>
+                        <ToggleButton value="dashboard" disabled={!canUseDashboards || managerDisabled}>
+                          Dashboards
+                        </ToggleButton>
+                      </ToggleButtonGroup>
+                    </Stack>
+                    {homePreferenceQuery.isLoading && (
+                      <Stack direction="row" alignItems="center" gap={1}>
+                        <CircularProgress size={18} />
+                        <Typography variant="body2" color="textSecondary">
+                          Loading your preference...
+                        </Typography>
+                      </Stack>
+                    )}
+                    {homePreferenceQuery.error && (
+                      <Alert severity="error">
+                        {getErrorMessage(homePreferenceQuery.error, "Failed to load home preference.")}
+                      </Alert>
+                    )}
+                    {preferenceError && <Alert severity="error">{preferenceError}</Alert>}
+                    {canUseDashboards && (
+                      <Stack gap={2}>
+                        <Divider />
+                        <Stack
+                          direction={{ xs: "column", md: "row" }}
+                          alignItems={{ xs: "flex-start", md: "center" }}
+                          gap={2}
+                        >
+                          <TextField
+                            select
+                            label="Add dashboard"
+                            size="small"
+                            sx={{ minWidth: 200 }}
+                            value={dashboardToAdd}
+                            onChange={(event) => setDashboardToAdd(event.target.value)}
+                            disabled={managerDisabled || savedLimitReached || addOptions.length === 0}
+                            helperText={
+                              savedLimitReached
+                                ? "Maximum dashboards pinned."
+                                : addOptions.length === 0
+                                  ? "All dashboards are pinned."
+                                  : undefined
+                            }
+                          >
+                            {addOptions.map((dashboard) => (
+                              <MenuItem key={dashboard.id} value={dashboard.id}>
+                                {dashboard.name}
+                              </MenuItem>
+                            ))}
+                          </TextField>
+                          <Button
+                            variant="contained"
+                            onClick={handleAddDashboard}
+                            disabled={
+                              managerDisabled || savedLimitReached || dashboardToAdd.length === 0 || addOptions.length === 0
+                            }
+                          >
+                            Add
+                          </Button>
+                          <Button component={RouterLink} to="/reports/dashboards" variant="outlined">
+                            Manage dashboards
+                          </Button>
+                        </Stack>
+                        <Stack direction="row" flexWrap="wrap" gap={1}>
+                          {savedDashboardSummaries.length === 0 ? (
+                            <Typography variant="body2" color="textSecondary">
+                              No dashboards pinned yet.
+                            </Typography>
+                          ) : (
+                            savedDashboardSummaries.map((dashboard) => (
+                              <Chip
+                                key={dashboard.id}
+                                label={dashboard.name}
+                                color={dashboard.id === activeDashboardId ? "primary" : "default"}
+                                variant={dashboard.id === activeDashboardId ? "filled" : "outlined"}
+                                disabled={managerDisabled}
+                                onClick={() => handleSelectActiveDashboard(dashboard.id)}
+                                onDelete={
+                                  managerDisabled ? undefined : () => handleRemoveDashboard(dashboard.id)
+                                }
+                                sx={{ textTransform: "none" }}
+                              />
+                            ))
+                          )}
+                        </Stack>
+                      </Stack>
+                    )}
+                  </Stack>
+                </CardContent>
+              </Card>
+              {effectiveViewMode === "dashboard" ? renderDashboardSummary() : renderNavigationTiles()}
+            </Stack>
           </TilesContainer>
         </PageWrapper>
       </ThemeProvider>
@@ -149,8 +646,136 @@ const Home = (props: GenericPageProps) => {
   );
 };
 
+const DashboardCard = ({ card }: { card: DashboardCardDto }) => {
+  const viewConfig = card.viewConfig as DashboardCardViewConfig;
+  if (!viewConfig || typeof viewConfig !== "object") {
+    return (
+      <Card variant="outlined">
+        <CardContent>
+          <Typography variant="subtitle1">{card.title}</Typography>
+          <Typography variant="body2" color="textSecondary">
+            This card does not have a saved configuration.
+          </Typography>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (viewConfig.mode === "visual") {
+    return <VisualDashboardCard card={card} config={viewConfig} />;
+  }
+
+  if (viewConfig.mode === "spotlight") {
+    return <SpotlightDashboardCard card={card} config={viewConfig} />;
+  }
+
+  return (
+    <Card variant="outlined">
+      <CardContent>
+        <Stack gap={1}>
+          <Typography variant="subtitle1">{card.title}</Typography>
+          <Typography variant="body2" color="textSecondary">
+            Legacy dashboard card format. Open the template to refresh this card.
+          </Typography>
+          <Box component="pre" sx={{ bgcolor: "grey.100", p: 2, borderRadius: 1, overflowX: "auto" }}>
+            {JSON.stringify(viewConfig, null, 2)}
+          </Box>
+          <Button component={RouterLink} to={`/reports?templateId=${card.templateId}`} size="small">
+            Open template
+          </Button>
+        </Stack>
+      </CardContent>
+    </Card>
+  );
+};
+
+const VisualDashboardCard = ({
+  card,
+  config,
+}: {
+  card: DashboardCardDto;
+  config: DashboardVisualCardViewConfig;
+}) => {
+  const sample = buildVisualSample(config);
+  return (
+    <Card variant="outlined">
+      <CardContent>
+        <Stack gap={1.5}>
+          <Typography variant="subtitle1">{card.title}</Typography>
+          {config.description && (
+            <Typography variant="body2" color="textSecondary">
+              {config.description}
+            </Typography>
+          )}
+          <Box sx={{ height: sample.length > 0 ? 240 : "auto" }}>
+            {sample.length > 0 ? (
+              renderVisualChart(config, sample)
+            ) : (
+              <Typography variant="body2" color="textSecondary">
+                Run the source template to capture sample data for this visual.
+              </Typography>
+            )}
+          </Box>
+          <Button component={RouterLink} to={`/reports?templateId=${card.templateId}`} size="small">
+            Open template
+          </Button>
+        </Stack>
+      </CardContent>
+    </Card>
+  );
+};
+
+const SpotlightDashboardCard = ({
+  card,
+  config,
+}: {
+  card: DashboardCardDto;
+  config: DashboardSpotlightCardViewConfig;
+}) => {
+  const sampleCards = config.sample?.cards ?? [];
+  return (
+    <Card variant="outlined">
+      <CardContent>
+        <Stack gap={1.5}>
+          <Typography variant="subtitle1">{card.title}</Typography>
+          {config.description && (
+            <Typography variant="body2" color="textSecondary">
+              {config.description}
+            </Typography>
+          )}
+          {sampleCards.length > 0 ? (
+            <Stack direction={{ xs: "column", md: "row" }} gap={2}>
+              {sampleCards.slice(0, 4).map((sampleCard) => (
+                <Paper key={sampleCard.id} variant="outlined" sx={{ p: 2, flex: 1, minWidth: 180 }}>
+                  <Stack gap={0.5}>
+                    <Typography variant="subtitle2">{sampleCard.label}</Typography>
+                    <Typography variant="h5">{sampleCard.value}</Typography>
+                    {sampleCard.delta && (
+                      <Typography variant="body2" sx={{ color: SpotlightTone[sampleCard.tone] ?? "text.primary" }}>
+                        {sampleCard.delta} vs prior
+                      </Typography>
+                    )}
+                    {sampleCard.context && (
+                      <Typography variant="caption" color="textSecondary">
+                        {sampleCard.context}
+                      </Typography>
+                    )}
+                  </Stack>
+                </Paper>
+              ))}
+            </Stack>
+          ) : (
+            <Typography variant="body2" color="textSecondary">
+              Run the analytics template to capture sample spotlight values.
+            </Typography>
+          )}
+          <Button component={RouterLink} to={`/reports?templateId=${card.templateId}`} size="small">
+            Open template
+          </Button>
+        </Stack>
+      </CardContent>
+    </Card>
+  );
+};
+
 export default Home;
-
-
-
-
