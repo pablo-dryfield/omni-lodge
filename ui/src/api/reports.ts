@@ -198,6 +198,9 @@ export type DashboardVisualCardViewConfig = {
   mode: "visual";
   description?: string;
   queryConfig?: QueryConfig | null;
+  metricAlias?: string;
+  dimensionAlias?: string;
+  comparisonAlias?: string;
   visual: {
     id: string;
     name: string;

@@ -3964,6 +3964,9 @@ const Reports = (props: GenericPageProps) => {
       mode: "visual",
       description: `Visual: ${metricLabel} vs ${dimensionLabel}`,
       queryConfig: visualQueryDescriptor.config ? deepClone(visualQueryDescriptor.config) : null,
+      metricAlias: visualQueryDescriptor.metricAlias ?? undefined,
+      dimensionAlias: visualQueryDescriptor.dimensionAlias ?? undefined,
+      comparisonAlias: visualQueryDescriptor.comparisonAlias ?? undefined,
       visual: {
         id: activeVisual.id,
         name: defaultTitle,
