@@ -269,8 +269,14 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
   const dashboardsQuery = useReportDashboards({ search: debouncedSearch.trim() });
   const templatesQuery = useReportTemplates();
 
-  const dashboards = dashboardsQuery.data?.dashboards ?? [];
-  const templates = templatesQuery.data?.templates ?? [];
+  const dashboards = useMemo(
+    () => dashboardsQuery.data?.dashboards ?? [],
+    [dashboardsQuery.data?.dashboards],
+  );
+  const templates = useMemo(
+    () => templatesQuery.data?.templates ?? [],
+    [templatesQuery.data?.templates],
+  );
   const templateLookup = useTemplateLookup(templates);
   const templateOptions = useMemo(
     () =>

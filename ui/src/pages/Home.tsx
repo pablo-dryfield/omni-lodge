@@ -76,6 +76,18 @@ const chartColors = {
   comparison: "#9c27b0",
 };
 
+const isVisualCardViewConfig = (
+  config: DashboardCardViewConfig | null | undefined,
+): config is DashboardVisualCardViewConfig =>
+  Boolean(config && config.mode === "visual" && typeof (config as DashboardVisualCardViewConfig).visual === "object");
+
+const isSpotlightCardViewConfig = (
+  config: DashboardCardViewConfig | null | undefined,
+): config is DashboardSpotlightCardViewConfig =>
+  Boolean(
+    config && config.mode === "spotlight" && typeof (config as DashboardSpotlightCardViewConfig).spotlight === "object",
+  );
+
 const theme = createTheme();
 
 const renderNavigationIcon = (icon: NavigationIconKey) => {
@@ -661,11 +673,11 @@ const DashboardCard = ({ card }: { card: DashboardCardDto }) => {
     );
   }
 
-  if (viewConfig.mode === "visual") {
+  if (isVisualCardViewConfig(viewConfig)) {
     return <VisualDashboardCard card={card} config={viewConfig} />;
   }
 
-  if (viewConfig.mode === "spotlight") {
+  if (isSpotlightCardViewConfig(viewConfig)) {
     return <SpotlightDashboardCard card={card} config={viewConfig} />;
   }
 

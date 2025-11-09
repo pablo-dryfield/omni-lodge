@@ -60,7 +60,7 @@ export function defineAssociations() {
   User.hasOne(UserHomePreference, { foreignKey: 'userId', as: 'homePreference' });
   ReportTemplate.belongsTo(User, { foreignKey: 'userId', as: 'reportOwner' });
   ReportDashboard.belongsTo(User, { foreignKey: 'ownerId', as: 'dashboardOwner' });
-  UserHomePreference.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+  UserHomePreference.belongsTo(User, { foreignKey: 'userId', as: 'userHome' });
 
   // UserType Associations
   UserType.hasMany(User, { foreignKey: 'userTypeId', as: 'users' });
