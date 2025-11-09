@@ -55,7 +55,6 @@ import {
   useReportDashboards,
   useHomeDashboardPreference,
   useUpdateHomeDashboardPreference,
-  useReportTemplates,
   runReportQueryWithPolling,
   type DashboardCardDto,
   type DashboardCardViewConfig,
@@ -63,7 +62,6 @@ import {
   type DashboardVisualCardViewConfig,
   type HomeDashboardPreferenceDto,
   type MetricSpotlightDefinitionDto,
-  type ReportTemplateDto, 
   type ReportQuerySuccessResponse,
   type UpdateHomeDashboardPreferencePayload,
   type QueryConfig,
@@ -282,13 +280,76 @@ const formatDimensionValue = (value: unknown): string => {
   return JSON.stringify(value);
 };
 
+const collectColumnKeys = (rows: Array<Record<string, unknown>>): Set<string> => {
+  const keys = new Set<string>();
+  rows.forEach((row) => {
+    if (row && typeof row === "object") {
+      Object.keys(row).forEach((key) => keys.add(key));
+    }
+  });
+  return keys;
+};
+
+const pickColumnKey = (
+  columns: Set<string>,
+  candidates: Array<string | null | undefined>,
+  exclude: Set<string>,
+): string | null => {
+  for (const candidate of candidates) {
+    if (candidate && columns.has(candidate) && !exclude.has(candidate)) {
+      return candidate;
+    }
+  }
+  for (const key of columns) {
+    if (!exclude.has(key)) {
+      return key;
+    }
+  }
+  return null;
+};
+
 const mapRowsToVisualPoints = (
   rows: Array<Record<string, unknown>>,
   config: DashboardVisualCardViewConfig,
 ): VisualChartPoint[] => {
-  const metricKey = config.metricAlias ?? config.visual.metric;
-  const dimensionKey = config.dimensionAlias ?? config.visual.dimension;
-  const comparisonKey = config.comparisonAlias ?? config.visual.comparison;
+  if (!rows || rows.length === 0) {
+    return [];
+  }
+  const columns = collectColumnKeys(rows);
+  if (columns.size === 0) {
+    return [];
+  }
+  const dimensionKey =
+    pickColumnKey(
+      columns,
+      [config.dimensionAlias, config.queryConfig?.dimensions?.[0]?.alias, config.visual.dimension],
+      new Set(),
+    ) ?? null;
+  const metricExclude = new Set<string>();
+  if (dimensionKey) {
+    metricExclude.add(dimensionKey);
+  }
+  const metricKey =
+    pickColumnKey(
+      columns,
+      [config.metricAlias, config.queryConfig?.metrics?.[0]?.alias, config.visual.metric],
+      metricExclude,
+    ) ?? null;
+  const comparisonExclude = new Set<string>(metricExclude);
+  if (metricKey) {
+    comparisonExclude.add(metricKey);
+  }
+  const comparisonKey =
+    pickColumnKey(
+      columns,
+      [config.comparisonAlias, config.queryConfig?.metrics?.[1]?.alias, config.visual.comparison],
+      comparisonExclude,
+    ) ?? null;
+
+  if (!dimensionKey || !metricKey) {
+    return [];
+  }
+
   return rows
     .map((row) => {
       const dimensionRaw = row[dimensionKey];
@@ -507,16 +568,6 @@ const Home = (props: GenericPageProps) => {
   const homePreferenceQuery = useHomeDashboardPreference();
   const updateHomePreferenceMutation = useUpdateHomeDashboardPreference();
   const dashboardsQuery = useReportDashboards({ search: "", enabled: canUseDashboards });
-  const templatesQuery = useReportTemplates();
-  const templatesById = useMemo(() => {
-    const map = new Map<string, ReportTemplateDto>();
-    templatesQuery.data?.templates.forEach((template) => {
-      if (template.id) {
-        map.set(template.id, template);
-      }
-    });
-    return map;
-  }, [templatesQuery.data?.templates]);
 
   const preference = homePreferenceQuery.data ?? DEFAULT_HOME_PREFERENCE;
   const normalizedSavedIds = preference.savedDashboardIds.filter((id) => typeof id === "string" && id.length > 0);
