@@ -43,6 +43,45 @@ export type QueryConfigFilter = QueryConfigFieldRef & {
   joinWith?: "and" | "or";
 };
 
+export type PreviewFilterClausePayload = {
+  leftModelId: string;
+  leftFieldId: string;
+  operator:
+    | "eq"
+    | "neq"
+    | "gt"
+    | "gte"
+    | "lt"
+    | "lte"
+    | "contains"
+    | "starts_with"
+    | "ends_with"
+    | "is_null"
+    | "is_not_null"
+    | "is_true"
+    | "is_false";
+  rightType: "value" | "field";
+  rightModelId?: string;
+  rightFieldId?: string;
+  value?: string | number | boolean | null;
+  valueKind?: "string" | "number" | "date" | "boolean";
+};
+
+export type PreviewOrderRuleDto = {
+  id: string;
+  source: "model" | "derived";
+  modelId?: string | null;
+  fieldId: string;
+  direction: "asc" | "desc";
+};
+
+export type PreviewOrderClausePayload = {
+  source: "model" | "derived";
+  modelId?: string | null;
+  fieldId: string;
+  direction?: "asc" | "desc";
+};
+
 export type QueryConfigOrderBy = {
   alias: string;
   direction?: "asc" | "desc";
@@ -572,7 +611,6 @@ export type ReportTemplateDto = {
   updatedAt: string;
   columnOrder: string[];
   columnAliases: Record<string, string>;
-  previewOrder: PreviewOrderRuleDto[];
 };
 
 export type ReportTemplateListResponse = {

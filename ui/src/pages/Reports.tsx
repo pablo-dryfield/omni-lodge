@@ -110,6 +110,7 @@ import {
   type ReportModelPayload,
   type ReportPreviewRequest,
   type ReportPreviewResponse,
+  type PreviewOrderClausePayload,
   type ReportTemplateDto,
   type ReportTemplateListResponse,
   type SaveReportTemplateRequest,
@@ -1380,7 +1381,9 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
   const previewOrder =
     Array.isArray(template.previewOrder) && template.previewOrder.length > 0
       ? normalizePreviewOrderRules(template.previewOrder)
-      : normalizePreviewOrderRules(rawOptions.previewOrder);
+      : Array.isArray(template.options?.previewOrder)
+      ? normalizePreviewOrderRules(template.options.previewOrder)
+      : [];
 
   const columnOrder = rawColumnOrder.filter(
     (alias): alias is string => typeof alias === "string" && alias.length > 0,
@@ -4205,35 +4208,28 @@ const Reports = (props: GenericPageProps) => {
       return;
     }
 
-    const orderByPayload = draft.previewOrder
-      .map((rule) => {
+    const orderByPayload = draft.previewOrder.reduce<PreviewOrderClausePayload[]>(
+      (accumulator, rule) => {
         if (rule.source === "derived") {
-          return {
-            source: "derived" as const,
+          accumulator.push({
+            source: "derived",
             fieldId: rule.fieldId,
             direction: rule.direction,
-          };
+          });
+          return accumulator;
         }
-        if (!rule.modelId) {
-          return null;
+        if (rule.modelId) {
+          accumulator.push({
+            source: "model",
+            modelId: rule.modelId,
+            fieldId: rule.fieldId,
+            direction: rule.direction,
+          });
         }
-        return {
-          source: "model" as const,
-          modelId: rule.modelId,
-          fieldId: rule.fieldId,
-          direction: rule.direction,
-        };
-      })
-      .filter(
-        (
-          entry,
-        ): entry is {
-          source: "model" | "derived";
-          modelId?: string;
-          fieldId: string;
-          direction: "asc" | "desc";
-        } => Boolean(entry),
-      );
+        return accumulator;
+      },
+      [],
+    );
 
     const payload: ReportPreviewRequest = {
       models: draft.models,

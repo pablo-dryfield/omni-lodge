@@ -376,6 +376,7 @@ type TemplateOptionsInput = {
   notifyTeam?: unknown;
   columnOrder?: unknown;
   columnAliases?: unknown;
+  previewOrder?: unknown;
 };
 
 type TemplatePayloadInput = {
@@ -392,6 +393,7 @@ type TemplatePayloadInput = {
   options?: TemplateOptionsInput | null;
   columnOrder?: unknown;
   columnAliases?: unknown;
+  previewOrder?: unknown;
   queryConfig?: unknown;
   derivedFields?: unknown;
   metricsSpotlight?: unknown;
@@ -871,6 +873,7 @@ const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
     queryConfig: input.queryConfig && typeof input.queryConfig === "object" ? input.queryConfig : null,
     derivedFields,
     metricsSpotlight: toMetricsSpotlightArray(input.metricsSpotlight),
+    previewOrder,
     options,
   };
 };
@@ -945,7 +948,10 @@ const serializeReportTemplate = (
     metricsSpotlight: Array.isArray(template.metricsSpotlight) ? template.metricsSpotlight : [],
     columnOrder: [...mergedOptions.columnOrder],
     columnAliases: { ...mergedOptions.columnAliases },
-    previewOrder: [...mergedOptions.previewOrder],
+    previewOrder:
+      Array.isArray(template.previewOrder) && template.previewOrder.length > 0
+        ? toPreviewOrderRules(template.previewOrder)
+        : [...mergedOptions.previewOrder],
     owner: {
       id: template.userId ?? null,
       name: ownerName.length > 0 ? ownerName : "Shared",
