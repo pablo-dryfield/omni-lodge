@@ -55,7 +55,6 @@ import {
   useReportDashboards,
   useHomeDashboardPreference,
   useUpdateHomeDashboardPreference,
-  useReportTemplates,
   runReportQueryWithPolling,
   type DashboardCardDto,
   type DashboardCardViewConfig,
@@ -63,7 +62,6 @@ import {
   type DashboardVisualCardViewConfig,
   type HomeDashboardPreferenceDto,
   type MetricSpotlightDefinitionDto,
-  type ReportTemplateDto,
   type ReportQuerySuccessResponse,
   type UpdateHomeDashboardPreferencePayload,
   type QueryConfig,
@@ -88,17 +86,7 @@ type VisualChartPoint = {
   comparison: number | null;
 };
 
-const useTemplateLookup = (templates: ReportTemplateDto[]) => {
-  return useMemo(() => {
-    const map = new Map<string, ReportTemplateDto>();
-    templates.forEach((template) => {
-      if (template.id) {
-        map.set(template.id, template);
-      }
-    });
-    return map;
-  }, [templates]);
-};
+const cloneConfig = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 
 const formatMetricValue = (
   value: number,
@@ -140,6 +128,7 @@ type DashboardCardLiveState = {
   visualSample?: VisualChartPoint[];
   spotlightSample?: DashboardSpotlightCardViewConfig["sample"];
   error?: string | null;
+  warning?: string | null;
 };
 
 const isVisualCardViewConfig = (
@@ -413,6 +402,7 @@ const SpotlightTone = {
 
 const computeLiveCardState = (
   card: DashboardCardDto,
+  viewConfig: DashboardCardViewConfig | null | undefined,
   templateState?: { data?: ReportQuerySuccessResponse; isLoading: boolean; error?: string | null },
 ): DashboardCardLiveState => {
   if (!templateState) {
@@ -424,10 +414,9 @@ const computeLiveCardState = (
   if (templateState.error) {
     return { status: "error", error: templateState.error };
   }
-  if (!templateState.data) {
+  if (!templateState.data || !viewConfig || typeof viewConfig !== "object") {
     return { status: "idle" };
   }
-  const viewConfig = card.viewConfig as DashboardCardViewConfig;
   if (isVisualCardViewConfig(viewConfig)) {
     const sample = buildVisualSampleFromResult(viewConfig, templateState.data);
     return { status: "success", visualSample: sample };
@@ -487,7 +476,7 @@ const buildSpotlightSampleFromResult = (
       label: config.spotlight.label?.trim() || config.spotlight.metricLabel || metricAlias,
       value: formattedValue,
       delta,
-      context: contextParts.join(" - ") || "Live dashboard value",
+      context: contextParts.join(" • ") || "Live dashboard value",
       tone,
     },
   ];
@@ -513,9 +502,6 @@ const Home = (props: GenericPageProps) => {
   const homePreferenceQuery = useHomeDashboardPreference();
   const updateHomePreferenceMutation = useUpdateHomeDashboardPreference();
   const dashboardsQuery = useReportDashboards({ search: "", enabled: canUseDashboards });
-  const templatesQuery = useReportTemplates();
-  const templates = templatesQuery.data?.templates ?? [];
-  const templateLookup = useTemplateLookup(templates);
 
   const preference = homePreferenceQuery.data ?? DEFAULT_HOME_PREFERENCE;
   const normalizedSavedIds = preference.savedDashboardIds.filter((id) => typeof id === "string" && id.length > 0);
@@ -537,79 +523,91 @@ const Home = (props: GenericPageProps) => {
     };
   });
   const activeDashboard = dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null;
-  const activeCards = activeDashboard?.cards ?? [];
+  const activeCards = useMemo(() => activeDashboard?.cards ?? [], [activeDashboard]);
   const shouldHydrateLiveData = canUseDashboards && effectiveViewMode === "dashboard";
-  const requiredTemplateIds = useMemo(() => {
+
+  const cardHydrationDescriptors = useMemo(() => {
     if (!shouldHydrateLiveData || activeCards.length === 0) {
       return [];
     }
-    const ids = new Set<string>();
-    activeCards.forEach((card) => {
-      if (card.templateId) {
-        ids.add(card.templateId);
+    return activeCards.map((card) => {
+      const viewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
+      let queryConfig: QueryConfig | null = null;
+      if (isVisualCardViewConfig(viewConfig) && viewConfig.queryConfig) {
+        queryConfig = cloneConfig(viewConfig.queryConfig);
       }
+      if (queryConfig) {
+        queryConfig.options = {
+          ...queryConfig.options,
+          templateId: card.templateId || queryConfig.options?.templateId || null,
+          allowAsync: true,
+        };
+      }
+      return {
+        card,
+        viewConfig,
+        queryConfig,
+        cacheKey: queryConfig ? JSON.stringify(queryConfig) : "missing",
+      };
     });
-    return Array.from(ids);
   }, [activeCards, shouldHydrateLiveData]);
 
-  const templateLiveQueries = useQueries({
-    queries: requiredTemplateIds.map((templateId) => {
-      const template = templateLookup.get(templateId);
-      return {
-        queryKey: ["reports", "templates", templateId, "live-data", template?.updatedAt ?? "unknown"],
-        enabled:
-          shouldHydrateLiveData && Boolean(template?.queryConfig && template.queryConfig.models?.length > 0),
-        queryFn: async () => {
-          if (!template || !template.queryConfig) {
-            throw new Error("Template is missing a query configuration.");
-          }
-          const payload: QueryConfig = {
-            ...template.queryConfig,
-            options: {
-              ...template.queryConfig.options,
-              templateId: template.id,
-              allowAsync: true,
-              cacheTtlSeconds: 120,
-            },
-          };
-          return runReportQueryWithPolling(payload, { pollIntervalMs: 1500, timeoutMs: 45_000 });
-        },
-        staleTime: 30 * 1000,
-      };
-    }),
+  const cardLiveQueries = useQueries({
+    queries: cardHydrationDescriptors.map(({ card, queryConfig, cacheKey }) => ({
+      queryKey: ["reports", "dashboard-card", card.id, cacheKey],
+      enabled: shouldHydrateLiveData && Boolean(queryConfig),
+      queryFn: async () => {
+        if (!queryConfig) {
+          return null;
+        }
+        return runReportQueryWithPolling(queryConfig, { pollIntervalMs: 1500, timeoutMs: 45_000 });
+      },
+      staleTime: 30 * 1000,
+    })),
   });
-
-  const liveTemplateResults = useMemo(() => {
-    const map = new Map<
-      string,
-      { data?: ReportQuerySuccessResponse; isLoading: boolean; error?: string | null }
-    >();
-    requiredTemplateIds.forEach((templateId, index) => {
-      const query = templateLiveQueries[index];
-      if (!query) {
-        map.set(templateId, { data: undefined, isLoading: false });
-        return;
-      }
-      map.set(templateId, {
-        data: query.data,
-        isLoading: query.isLoading || query.isFetching,
-        error: query.error ? getErrorMessage(query.error, "Failed to refresh dashboard data.") : null,
-      });
-    });
-    return map;
-  }, [requiredTemplateIds, templateLiveQueries]);
 
   const liveCardSamples = useMemo(() => {
     if (!shouldHydrateLiveData) {
       return new Map<string, DashboardCardLiveState>();
     }
     const map = new Map<string, DashboardCardLiveState>();
-    activeCards.forEach((card) => {
-      const templateState = liveTemplateResults.get(card.templateId);
-      map.set(card.id, computeLiveCardState(card, templateState));
+    if (cardHydrationDescriptors.length === 0) {
+      return map;
+    }
+    cardHydrationDescriptors.forEach(({ card, viewConfig, queryConfig }, index) => {
+      const queryResult = cardLiveQueries[index];
+      if (!queryConfig) {
+        const warning =
+          isVisualCardViewConfig(viewConfig) && effectiveViewMode === "dashboard"
+            ? "Open this template in Reports and re-save the card to enable live data."
+            : null;
+        map.set(card.id, { status: "idle", warning });
+        return;
+      }
+      if (!queryResult) {
+        map.set(card.id, { status: "idle" });
+        return;
+      }
+      if (queryResult.isLoading || queryResult.isFetching) {
+        map.set(card.id, { status: "loading" });
+        return;
+      }
+      if (queryResult.error) {
+        map.set(card.id, {
+          status: "error",
+          error: getErrorMessage(queryResult.error, "Failed to refresh dashboard data."),
+        });
+        return;
+      }
+      const data = queryResult.data as ReportQuerySuccessResponse | null;
+      if (!data) {
+        map.set(card.id, { status: "idle" });
+        return;
+      }
+      map.set(card.id, computeLiveCardState(card, viewConfig, { data, isLoading: false }));
     });
     return map;
-  }, [activeCards, liveTemplateResults, shouldHydrateLiveData]);
+  }, [cardHydrationDescriptors, cardLiveQueries, effectiveViewMode, shouldHydrateLiveData]);
 
   const savedLimitReached = normalizedSavedIds.length >= 12;
   const addOptions = dashboards.filter((dashboard) => !normalizedSavedIds.includes(dashboard.id));
@@ -957,6 +955,9 @@ const VisualDashboardCard = ({
               {config.description}
             </Typography>
           )}
+          {liveState.warning && (
+            <Alert severity="warning">{liveState.warning}</Alert>
+          )}
           {isLoading && (
             <Stack direction="row" gap={1} alignItems="center">
               <CircularProgress size={16} />
@@ -1009,6 +1010,9 @@ const SpotlightDashboardCard = ({
             <Typography variant="body2" color="textSecondary">
               {config.description}
             </Typography>
+          )}
+          {liveState.warning && (
+            <Alert severity="warning">{liveState.warning}</Alert>
           )}
           {isLoading && (
             <Stack direction="row" gap={1} alignItems="center">
