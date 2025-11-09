@@ -55,6 +55,7 @@ import {
   useReportDashboards,
   useHomeDashboardPreference,
   useUpdateHomeDashboardPreference,
+  useReportTemplates,
   runReportQueryWithPolling,
   type DashboardCardDto,
   type DashboardCardViewConfig,
@@ -62,6 +63,7 @@ import {
   type DashboardVisualCardViewConfig,
   type HomeDashboardPreferenceDto,
   type MetricSpotlightDefinitionDto,
+  type ReportTemplateDto, 
   type ReportQuerySuccessResponse,
   type UpdateHomeDashboardPreferencePayload,
   type QueryConfig,
@@ -505,6 +507,16 @@ const Home = (props: GenericPageProps) => {
   const homePreferenceQuery = useHomeDashboardPreference();
   const updateHomePreferenceMutation = useUpdateHomeDashboardPreference();
   const dashboardsQuery = useReportDashboards({ search: "", enabled: canUseDashboards });
+  const templatesQuery = useReportTemplates();
+  const templatesById = useMemo(() => {
+    const map = new Map<string, ReportTemplateDto>();
+    templatesQuery.data?.templates.forEach((template) => {
+      if (template.id) {
+        map.set(template.id, template);
+      }
+    });
+    return map;
+  }, [templatesQuery.data?.templates]);
 
   const preference = homePreferenceQuery.data ?? DEFAULT_HOME_PREFERENCE;
   const normalizedSavedIds = preference.savedDashboardIds.filter((id) => typeof id === "string" && id.length > 0);
