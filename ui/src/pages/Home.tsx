@@ -284,13 +284,16 @@ const mapRowsToVisualPoints = (
   rows: Array<Record<string, unknown>>,
   config: DashboardVisualCardViewConfig,
 ): VisualChartPoint[] => {
+  const metricKey = config.metricAlias ?? config.visual.metric;
+  const dimensionKey = config.dimensionAlias ?? config.visual.dimension;
+  const comparisonKey = config.comparisonAlias ?? config.visual.comparison;
   return rows
     .map((row) => {
-      const dimensionRaw = row[config.visual.dimension];
-      const metricRaw = row[config.visual.metric];
-      const comparisonRaw = config.visual.comparison ? row[config.visual.comparison] : undefined;
+      const dimensionRaw = row[dimensionKey];
+      const metricRaw = row[metricKey];
+      const comparisonRaw = comparisonKey ? row[comparisonKey] : undefined;
       const metric = toNumeric(metricRaw);
-      const comparison = config.visual.comparison ? toNumeric(comparisonRaw) : null;
+      const comparison = comparisonKey ? toNumeric(comparisonRaw) : null;
       if (metric === null && comparison === null) {
         return null;
       }
