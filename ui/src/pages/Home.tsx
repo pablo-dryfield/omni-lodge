@@ -21,6 +21,7 @@ import {
 } from "@mui/material";
 import { styled } from "@mui/material/styles";
 import { createTheme } from "@mui/material/styles";
+import useMediaQuery from "@mui/material/useMediaQuery";
 import { useEffect, useMemo } from "react";
 import { useQueries } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
@@ -173,7 +174,7 @@ const renderNavigationIcon = (icon: NavigationIconKey) => {
 
 const PageWrapper = styled("div")(({ theme: muiTheme }) => ({
   display: "flex",
-  alignItems: "center",
+  alignItems: "flex-start",
   justifyContent: "center",
   minHeight: "calc(100vh - 120px)",
   padding: muiTheme.spacing(6, 3),
@@ -610,6 +611,12 @@ const Home = (props: GenericPageProps) => {
         }),
     [activeCards],
   );
+  const isMediumScreen = useMediaQuery(theme.breakpoints.down("md"));
+  const isSmallScreen = useMediaQuery(theme.breakpoints.down("sm"));
+  const gridColumns = isSmallScreen ? 1 : isMediumScreen ? 6 : 12;
+  const gridRowHeight = isSmallScreen ? 0 : isMediumScreen ? 120 : HOME_GRID_ROW_HEIGHT_PX;
+  const gridGap = isSmallScreen ? 1 : 2;
+  const useAutoRows = gridColumns === 1;
   const shouldHydrateLiveData = canUseDashboards && effectiveViewMode === "dashboard";
 
   const cardHydrationDescriptors = useMemo(() => {
@@ -768,42 +775,40 @@ const Home = (props: GenericPageProps) => {
       );
     }
     return (
-      <Stack gap={2}>
-        <Card variant="outlined">
-          <CardContent>
-            <Stack gap={1}>
-              <Typography variant="h6">{activeDashboard.name}</Typography>
-              <Typography variant="body2" color="textSecondary">
-                {activeDashboard.description ?? "Display saved visuals and spotlights from your reporting templates."}
-              </Typography>
-            </Stack>
-          </CardContent>
-        </Card>
-        <Box
-          sx={{
-            display: "grid",
-            gridTemplateColumns: "repeat(12, minmax(0, 1fr))",
-            gridAutoRows: `${HOME_GRID_ROW_HEIGHT_PX}px`,
-            gap: 2,
-          }}
-        >
-          {orderedActiveCards.map((card) => {
-            const layout = parseDashboardLayout(card.layout);
-            return (
-              <Box
-                key={card.id}
-                sx={{
-                  gridColumn: `span ${Math.max(1, Math.min(12, layout.w))}`,
-                  gridRow: `span ${Math.max(1, layout.h)}`,
-                  minWidth: 0,
-                }}
-              >
-                <DashboardCard card={card} liveState={liveCardSamples.get(card.id)} />
-              </Box>
-            );
-          })}
-        </Box>
-      </Stack>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`,
+          gridAutoRows: useAutoRows ? "auto" : `${gridRowHeight}px`,
+          gap: gridGap,
+        }}
+      >
+        {orderedActiveCards.map((card) => {
+          const layout = parseDashboardLayout(card.layout);
+          let columnSpan = Math.max(1, Math.min(gridColumns, layout.w));
+          let rowSpan = Math.max(1, layout.h);
+
+          if (isSmallScreen) {
+            columnSpan = gridColumns;
+          } else if (isMediumScreen) {
+            columnSpan = Math.min(gridColumns, Math.max(1, Math.ceil(layout.w / 2)));
+            rowSpan = Math.max(1, Math.ceil(rowSpan / 2));
+          }
+
+          return (
+            <Box
+              key={card.id}
+              sx={{
+                gridColumn: `span ${columnSpan}`,
+                gridRow: useAutoRows ? "auto" : `span ${rowSpan}`,
+                minWidth: 0,
+              }}
+            >
+              <DashboardCard card={card} liveState={liveCardSamples.get(card.id)} />
+            </Box>
+          );
+        })}
+      </Box>
     );
   };
 
@@ -828,7 +833,6 @@ const DashboardCard = ({ card, liveState }: { card: DashboardCardDto; liveState?
     return (
       <Card variant="outlined">
         <CardContent>
-          <Typography variant="subtitle1">{card.title}</Typography>
           <Typography variant="body2" color="textSecondary">
             This card does not have a saved configuration.
           </Typography>
@@ -850,18 +854,12 @@ const DashboardCard = ({ card, liveState }: { card: DashboardCardDto; liveState?
   return (
     <Card variant="outlined">
       <CardContent>
-        <Stack gap={1}>
-          <Typography variant="subtitle1">{card.title}</Typography>
-          <Typography variant="body2" color="textSecondary">
-            Legacy dashboard card format. Open the template to refresh this card.
-          </Typography>
-          <Box component="pre" sx={{ bgcolor: "grey.100", p: 2, borderRadius: 1, overflowX: "auto" }}>
-            {JSON.stringify(viewConfig, null, 2)}
-          </Box>
-          <Button component={RouterLink} to={`/reports?templateId=${card.templateId}`} size="small">
-            Open template
-          </Button>
-        </Stack>
+        <Typography variant="body2" color="textSecondary">
+          Legacy dashboard card format. Open the template to refresh this card.
+        </Typography>
+        <Box component="pre" sx={{ bgcolor: "grey.100", p: 2, borderRadius: 1, overflowX: "auto" }}>
+          {JSON.stringify(viewConfig, null, 2)}
+        </Box>
       </CardContent>
     </Card>
   );
@@ -914,9 +912,6 @@ const VisualDashboardCard = ({
               </Typography>
             )}
           </Box>
-          <Button component={RouterLink} to={`/reports?templateId=${card.templateId}`} size="small">
-            Open template
-          </Button>
         </Stack>
       </CardContent>
     </Card>
@@ -987,9 +982,6 @@ const SpotlightDashboardCard = ({
               {isLoading ? "Loading spotlight values…" : "No spotlight values returned for this template."}
             </Typography>
           )}
-          <Button component={RouterLink} to={`/reports?templateId=${card.templateId}`} size="small">
-            Open template
-          </Button>
         </Stack>
       </CardContent>
     </Card>
