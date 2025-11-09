@@ -104,6 +104,7 @@ Deliverables are split across backend services, API contracts, frontend surfaces
 - Export: render dashboard as PNG/PDF (html2canvas + jsPDF or server-side via headless browser).  
 - Sharing: generate signed URLs with optional expiry, enforce RBAC.  
 - Dashboard list page with search, owners, last updated.
+- Template builder bridge: allow sending the active visualization or any metrics spotlight card straight into a dashboard card (captures metadata + latest sample output).
 
 ### Derived Fields & Library
 - Separate manager view (global vs template).  
