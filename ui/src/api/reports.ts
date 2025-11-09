@@ -584,6 +584,7 @@ export type ReportTemplateOptionsDto = {
   columnOrder: string[];
   columnAliases: Record<string, string>;
   previewOrder: PreviewOrderRuleDto[];
+  autoRunOnOpen: boolean;
 };
 
 export type ReportTemplateDto = {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
@@ -99,6 +99,7 @@ import {
   useUpdateTemplateSchedule,
   useDeleteTemplateSchedule,
   useExportReportTemplate,
+  useUpdateDerivedField,
   type TemplateScheduleDto,
   type TemplateSchedulePayload,
   type TemplateScheduleDeliveryTarget,
@@ -302,6 +303,7 @@ type ReportTemplate = {
   owner: string;
   autoDistribution: boolean;
   notifyTeam: boolean;
+  autoRunOnOpen: boolean;
   models: string[];
   fields: Array<{ modelId: string; fieldIds: string[] }>;
   joins: JoinCondition[];
@@ -495,6 +497,7 @@ const createEmptyTemplate = (): ReportTemplate => ({
   owner: "You",
   autoDistribution: true,
   notifyTeam: true,
+  autoRunOnOpen: false,
   models: [],
   fields: [],
   joins: [],
@@ -1521,8 +1524,9 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
     schedule: template.schedule ?? "Manual",
     lastUpdated: formatLastUpdatedLabel(template.updatedAt),
     owner: template.owner?.name ?? "Shared",
-    autoDistribution: template.options?.autoDistribution ?? true,
-    notifyTeam: template.options?.notifyTeam ?? true,
+  autoDistribution: template.options?.autoDistribution ?? true,
+  notifyTeam: template.options?.notifyTeam ?? true,
+  autoRunOnOpen: template.options?.autoRunOnOpen ?? false,
     models: Array.isArray(template.models) ? template.models : [],
     fields: mappedFields,
     joins: Array.isArray(template.joins) ? (template.joins as JoinCondition[]) : [],
@@ -1597,6 +1601,7 @@ const Reports = (props: GenericPageProps) => {
 
   const saveTemplateMutation = useSaveReportTemplate();
   const deleteTemplateMutation = useDeleteReportTemplate();
+  const updateDerivedFieldMutation = useUpdateDerivedField();
 
   const [templates, setTemplates] = useState<ReportTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
@@ -1618,6 +1623,8 @@ const Reports = (props: GenericPageProps) => {
   const [templateSearch, setTemplateSearch] = useState<string>("");
   const [debouncedTemplateSearch] = useDebouncedValue(templateSearch, 250);
   const [templateCategoryFilter, setTemplateCategoryFilter] = useState<string>("all");
+  const handleRunAnalysisRef = useRef<() => void>(() => {});
+  const autoRunTemplateIdRef = useRef<string | null>(null);
   const [templateSuccess, setTemplateSuccess] = useState<string | null>(null);
   const [isDerivedFieldsDrawerOpen, setDerivedFieldsDrawerOpen] = useState(false);
   const [selectedDerivedFieldId, setSelectedDerivedFieldId] = useState<string | null>(() =>
@@ -3534,14 +3541,35 @@ const Reports = (props: GenericPageProps) => {
     });
   };
 
-  const handleToggleDerivedFieldVisibility = useCallback((fieldId: string, enabled: boolean) => {
-    setDraft((current) => ({
-      ...current,
-      derivedFields: current.derivedFields.map((field) =>
-        field.id === fieldId ? applyDerivedFieldVisibility(field, enabled) : field,
-      ),
-    }));
-  }, []);
+  const handleToggleDerivedFieldVisibility = useCallback(
+    (fieldId: string, enabled: boolean) => {
+      const currentField = draft.derivedFields.find((field) => field.id === fieldId);
+      const nextField = currentField ? applyDerivedFieldVisibility(currentField, enabled) : null;
+
+      setDraft((current) => ({
+        ...current,
+        derivedFields: current.derivedFields.map((field) =>
+          field.id === fieldId ? applyDerivedFieldVisibility(field, enabled) : field,
+        ),
+      }));
+
+      if (
+        nextField &&
+        nextField.scope === "template" &&
+        fieldId &&
+        !fieldId.startsWith("derived-") &&
+        !fieldId.startsWith("temp")
+      ) {
+        updateDerivedFieldMutation.mutate({
+          id: fieldId,
+          payload: {
+            metadata: nextField.metadata ?? {},
+          },
+        });
+      }
+    },
+    [draft.derivedFields, updateDerivedFieldMutation],
+  );
 
   const renderDerivedFieldInventory = () => (
     <>
@@ -3869,20 +3897,21 @@ const Reports = (props: GenericPageProps) => {
       visuals: deepClone(draft.visuals),
       metrics: [...draft.metrics],
       filters: deepClone(draft.filters),
-    options: {
-      autoDistribution: draft.autoDistribution,
-      notifyTeam: draft.notifyTeam,
+      options: {
+        autoDistribution: draft.autoDistribution,
+        notifyTeam: draft.notifyTeam,
+        columnOrder: [...draft.columnOrder],
+        columnAliases: { ...draft.columnAliases },
+        previewOrder: draft.previewOrder.map((rule) => ({ ...rule })),
+        autoRunOnOpen: draft.autoRunOnOpen,
+      },
+      queryConfig: draft.queryConfig ? deepClone(draft.queryConfig) : null,
+      derivedFields: deepClone(draft.derivedFields),
+      metricsSpotlight: deepClone(draft.metricsSpotlight),
       columnOrder: [...draft.columnOrder],
       columnAliases: { ...draft.columnAliases },
       previewOrder: draft.previewOrder.map((rule) => ({ ...rule })),
-    },
-    queryConfig: draft.queryConfig ? deepClone(draft.queryConfig) : null,
-    derivedFields: deepClone(draft.derivedFields),
-    metricsSpotlight: deepClone(draft.metricsSpotlight),
-    columnOrder: [...draft.columnOrder],
-    columnAliases: { ...draft.columnAliases },
-    previewOrder: draft.previewOrder.map((rule) => ({ ...rule })),
-  };
+    };
 
     try {
       const saved = await saveTemplateMutation.mutateAsync(payload);
@@ -3895,6 +3924,7 @@ const Reports = (props: GenericPageProps) => {
               ...mapped,
               columnOrder: [...draft.columnOrder],
               columnAliases: { ...draft.columnAliases },
+              autoRunOnOpen: draft.autoRunOnOpen,
               previewOrder: [...draft.previewOrder],
             };
       setTemplates((current) => {
@@ -3942,6 +3972,7 @@ const Reports = (props: GenericPageProps) => {
         columnOrder: [],
         columnAliases: {},
         previewOrder: [],
+        autoRunOnOpen: false,
       },
       queryConfig: null,
       derivedFields: [],
@@ -3962,6 +3993,7 @@ const Reports = (props: GenericPageProps) => {
               ...mapped,
               columnOrder: [],
               columnAliases: {},
+              autoRunOnOpen: false,
               previewOrder: [],
             };
       setTemplates((current) => [...current, mergedTemplate]);
@@ -3998,6 +4030,7 @@ const Reports = (props: GenericPageProps) => {
         columnOrder: [...selectedTemplate.columnOrder],
         columnAliases: { ...selectedTemplate.columnAliases },
         previewOrder: selectedTemplate.previewOrder.map((rule) => ({ ...rule })),
+        autoRunOnOpen: selectedTemplate.autoRunOnOpen,
       },
       queryConfig: selectedTemplate.queryConfig
         ? deepClone(selectedTemplate.queryConfig)
@@ -4020,6 +4053,7 @@ const Reports = (props: GenericPageProps) => {
               ...mapped,
               columnOrder: [...selectedTemplate.columnOrder],
               columnAliases: { ...selectedTemplate.columnAliases },
+              autoRunOnOpen: selectedTemplate.autoRunOnOpen,
               previewOrder: [...selectedTemplate.previewOrder],
             };
       setTemplates((current) => [...current, mergedTemplate]);
@@ -4429,6 +4463,32 @@ const Reports = (props: GenericPageProps) => {
       filters: current.filters.filter((filter) => filter.id !== filterId),
     }));
   };
+
+  useEffect(() => {
+    handleRunAnalysisRef.current = handleRunAnalysis;
+  });
+
+  useEffect(() => {
+    if (!draft.autoRunOnOpen) {
+      autoRunTemplateIdRef.current = null;
+      return;
+    }
+    if (isPreviewLoading || hasStaleDerivedFields) {
+      return;
+    }
+    if (draft.models.length === 0) {
+      return;
+    }
+    const hasSelectedFields = draft.fields.some((entry) => entry.fieldIds.some((fieldId) => Boolean(fieldId)));
+    if (!hasSelectedFields) {
+      return;
+    }
+    if (autoRunTemplateIdRef.current === draft.id) {
+      return;
+    }
+    autoRunTemplateIdRef.current = draft.id;
+    handleRunAnalysisRef.current();
+  }, [draft.autoRunOnOpen, draft.id, draft.models, draft.fields, isPreviewLoading, hasStaleDerivedFields]);
 
   const createPreviewOrderRuleFromOption = (option: FilterFieldOption): PreviewOrderRule => ({
     id: `order-${Date.now()}`,
@@ -5515,6 +5575,17 @@ const Reports = (props: GenericPageProps) => {
                       placeholder={metricOptions.length === 0 ? "Add numeric fields" : "Select metrics"}
                       searchable
                       disabled={metricOptions.length === 0}
+                    />
+                    <Switch
+                      label="Auto-run preview on open"
+                      description="Automatically refresh the preview when this template loads."
+                      checked={draft.autoRunOnOpen}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          autoRunOnOpen: event.currentTarget.checked,
+                        }))
+                      }
                     />
                   </Stack>
                 </Paper>

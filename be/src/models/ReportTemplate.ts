@@ -32,6 +32,7 @@ export type ReportTemplateOptions = {
   columnOrder: string[];
   columnAliases: Record<string, string>;
   previewOrder: PreviewOrderRule[];
+  autoRunOnOpen: boolean;
 };
 
 export type ReportTemplateDerivedField = {
@@ -128,6 +129,7 @@ export default class ReportTemplate extends Model {
     columnOrder: [],
     columnAliases: {},
     previewOrder: [],
+    autoRunOnOpen: false,
   })
   @Column({ type: DataType.JSONB })
   declare options: ReportTemplateOptions;
@@ -145,6 +147,11 @@ export default class ReportTemplate extends Model {
   @Default([])
   @Column({ field: 'metrics_spotlight', type: DataType.JSONB })
   declare metricsSpotlight: ReportTemplateMetricSpotlight[];
+
+  @AllowNull(false)
+  @Default([])
+  @Column({ field: 'preview_order', type: DataType.JSONB })
+  declare previewOrder: PreviewOrderRule[];
 
   @BelongsTo(() => User, { foreignKey: 'userId', as: 'owner' })
   declare owner?: NonAttribute<User | null>;
