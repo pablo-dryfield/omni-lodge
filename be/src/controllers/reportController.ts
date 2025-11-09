@@ -13,6 +13,7 @@ import ReportTemplate, {
   ReportTemplateOptions,
   ReportTemplateDerivedField,
   ReportTemplateMetricSpotlight,
+  PreviewOrderRule,
 } from "../models/ReportTemplate.js";
 import { AuthenticatedRequest } from "../types/AuthenticatedRequest";
 import type { DerivedFieldExpressionAst } from "../types/DerivedFieldExpressionAst.js";
@@ -162,6 +163,39 @@ type DerivedFieldQueryPayload = {
   compiledSqlHash?: string | null;
 };
 
+type FilterOperator =
+  | "eq"
+  | "neq"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "contains"
+  | "starts_with"
+  | "ends_with"
+  | "is_null"
+  | "is_not_null"
+  | "is_true"
+  | "is_false";
+
+type PreviewFilterClausePayload = {
+  leftModelId: string;
+  leftFieldId: string;
+  operator: FilterOperator;
+  rightType: "value" | "field";
+  rightModelId?: string;
+  rightFieldId?: string;
+  value?: string | number | boolean | null;
+  valueKind?: "string" | "number" | "date" | "boolean";
+};
+
+type PreviewOrderClausePayload = {
+  source: "model" | "derived";
+  modelId?: string | null;
+  fieldId: string;
+  direction?: "asc" | "desc";
+};
+
 const DERIVED_FIELD_SENTINEL = "__derived__";
 
 const formatDerivedFieldLabel = (field: DerivedFieldQueryPayload, index: number): string => {
@@ -268,7 +302,8 @@ type ReportPreviewRequest = {
     joinType?: "inner" | "left" | "right" | "full";
     description?: string;
   }>;
-  filters?: string[];
+  filters?: Array<string | PreviewFilterClausePayload>;
+  orderBy?: PreviewOrderClausePayload[];
   limit?: number;
   derivedFields?: DerivedFieldQueryPayload[];
 };
@@ -380,6 +415,7 @@ type SerializedReportTemplate = {
   metricsSpotlight: ReportTemplateMetricSpotlight[];
   columnOrder: string[];
   columnAliases: Record<string, string>;
+  previewOrder: PreviewOrderRule[];
   owner: {
     id: number | null;
     name: string;
@@ -393,6 +429,7 @@ const DEFAULT_TEMPLATE_OPTIONS: ReportTemplateOptions = {
   notifyTeam: true,
   columnOrder: [],
   columnAliases: {},
+  previewOrder: [],
 };
 
 const modelDescriptorCache = new Map<string, ReportModelDescriptor>();
@@ -485,6 +522,43 @@ const toColumnAliasMap = (value: unknown): Record<string, string> => {
     }
   });
   return aliases;
+};
+
+const toPreviewOrderRules = (value: unknown): PreviewOrderRule[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const rules: PreviewOrderRule[] = [];
+  value.forEach((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const id =
+      typeof record.id === "string" && record.id.trim().length > 0
+        ? record.id.trim()
+        : `order-${index}`;
+    const direction = record.direction === "desc" ? "desc" : "asc";
+    const source = record.source === "derived" ? "derived" : "model";
+    const fieldId = typeof record.fieldId === "string" ? record.fieldId.trim() : "";
+    if (!fieldId) {
+      return;
+    }
+    const modelId =
+      source === "derived"
+        ? null
+        : typeof record.modelId === "string" && record.modelId.trim().length > 0
+        ? record.modelId.trim()
+        : null;
+    rules.push({
+      id,
+      source,
+      modelId,
+      fieldId,
+      direction,
+    });
+  });
+  return rules;
 };
 
 const toReferencedFieldMap = (value: unknown): Record<string, string[]> => {
@@ -753,6 +827,9 @@ const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
   const columnAliases = toColumnAliasMap(
     input.columnAliases !== undefined ? input.columnAliases : optionsCandidate?.columnAliases,
   );
+  const previewOrderInput =
+    input.previewOrder !== undefined ? input.previewOrder : optionsCandidate?.previewOrder;
+  const previewOrder = toPreviewOrderRules(previewOrderInput);
 
   const options: ReportTemplateOptions = {
     autoDistribution:
@@ -765,6 +842,7 @@ const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
         : DEFAULT_TEMPLATE_OPTIONS.notifyTeam,
     columnOrder,
     columnAliases,
+    previewOrder,
   };
 
   const models = toStringArray(input.models);
@@ -818,6 +896,10 @@ const serializeReportTemplate = (
     columnAliases: toColumnAliasMap(
       rawOptions.columnAliases !== undefined ? rawOptions.columnAliases : DEFAULT_TEMPLATE_OPTIONS.columnAliases,
     ),
+    previewOrder:
+      Array.isArray(rawOptions.previewOrder) && rawOptions.previewOrder.length > 0
+        ? toPreviewOrderRules(rawOptions.previewOrder)
+        : [],
   };
 
   return {
@@ -863,6 +945,7 @@ const serializeReportTemplate = (
     metricsSpotlight: Array.isArray(template.metricsSpotlight) ? template.metricsSpotlight : [],
     columnOrder: [...mergedOptions.columnOrder],
     columnAliases: { ...mergedOptions.columnAliases },
+    previewOrder: [...mergedOptions.previewOrder],
     owner: {
       id: template.userId ?? null,
       name: ownerName.length > 0 ? ownerName : "Shared",
@@ -1232,6 +1315,9 @@ const executePreviewQuery = async (
 
   const derivedFieldPayloads = Array.isArray(payload.derivedFields) ? payload.derivedFields : [];
   validateDerivedFieldGraph(derivedFieldPayloads, payload.models, payload.joins ?? [], aliasMap);
+  const derivedFieldLookup = new Map<string, DerivedFieldQueryPayload>(
+    derivedFieldPayloads.map((field) => [field.id, field]),
+  );
   derivedFieldPayloads.forEach((field, index) => {
     try {
       const { clause, alias } = buildDerivedFieldSelectClause(field, aliasMap, index);
@@ -1275,7 +1361,8 @@ const executePreviewQuery = async (
 
   validateDerivedFieldJoinCoverage(derivedFieldPayloads, joinedModels);
 
-  const whereClauses = buildWhereClauses(payload.filters ?? []);
+  const whereClauses = buildWhereClauses(payload.filters ?? [], aliasMap, derivedFieldLookup);
+  const orderByClauses = buildOrderByClauses(payload.orderBy ?? [], aliasMap, derivedFieldLookup);
 
   const limitValue = Math.min(Math.max(Number(payload.limit ?? 200) || 200, 1), 1000);
 
@@ -1284,6 +1371,7 @@ const executePreviewQuery = async (
     `FROM ${fromClause}`,
     ...joinClauses,
     whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "",
+    orderByClauses.length > 0 ? `ORDER BY ${orderByClauses.join(", ")}` : "",
     `LIMIT :limit`,
   ].filter(Boolean);
 
@@ -2424,10 +2512,208 @@ function buildJoinClauses(
   return { clauses, joinedModels: joined, unresolvedJoins: unresolved };
 }
 
-function buildWhereClauses(filters: string[]): string[] {
-  return filters
-    .map((filter) => (typeof filter === "string" ? filter.trim() : ""))
-    .filter((filter) => filter.length > 0 && !filter.includes(";") && !filter.includes("--"));
+function buildWhereClauses(
+  filters: Array<string | PreviewFilterClausePayload>,
+  aliasMap: Map<string, string>,
+  derivedFieldLookup: Map<string, DerivedFieldQueryPayload>,
+): string[] {
+  if (!filters || filters.length === 0) {
+    return [];
+  }
+  const clauses: string[] = [];
+  filters.forEach((filter) => {
+    if (typeof filter === "string") {
+      const trimmed = filter.trim();
+      if (trimmed.length > 0 && !trimmed.includes(";") && !trimmed.includes("--")) {
+        clauses.push(trimmed);
+      }
+      return;
+    }
+    clauses.push(renderPreviewFilterClause(filter, aliasMap, derivedFieldLookup));
+  });
+  return clauses;
+}
+
+function renderPreviewFilterClause(
+  clause: PreviewFilterClausePayload,
+  aliasMap: Map<string, string>,
+  derivedFieldLookup: Map<string, DerivedFieldQueryPayload>,
+): string {
+  const operator = clause.operator;
+  const leftExpression =
+    clause.leftModelId === DERIVED_FIELD_SENTINEL
+      ? renderDerivedFieldFilterExpression(clause.leftFieldId, aliasMap, derivedFieldLookup)
+      : resolveColumnExpression(clause.leftModelId, clause.leftFieldId, aliasMap);
+
+  const requiresValue = !["is_null", "is_not_null", "is_true", "is_false"].includes(operator);
+  const allowFieldComparison = ["eq", "neq", "gt", "gte", "lt", "lte"].includes(operator);
+
+  if (!requiresValue) {
+    switch (operator) {
+      case "is_null":
+        return `${leftExpression} IS NULL`;
+      case "is_not_null":
+        return `${leftExpression} IS NOT NULL`;
+      case "is_true":
+        return `${leftExpression} IS TRUE`;
+      case "is_false":
+        return `${leftExpression} IS FALSE`;
+      default:
+        return `${leftExpression} IS NULL`;
+    }
+  }
+
+  if (clause.rightType === "field") {
+    if (!allowFieldComparison) {
+      throw new PreviewQueryError("This operator does not support comparing against another field.");
+    }
+    if (!clause.rightModelId || !clause.rightFieldId) {
+      throw new PreviewQueryError("Select a comparison field for this filter.");
+    }
+    const rightExpression =
+      clause.rightModelId === DERIVED_FIELD_SENTINEL
+        ? renderDerivedFieldFilterExpression(clause.rightFieldId, aliasMap, derivedFieldLookup)
+        : resolveColumnExpression(clause.rightModelId, clause.rightFieldId, aliasMap);
+    const operatorSqlMap: Partial<Record<FilterOperator, string>> = {
+      eq: "=",
+      neq: "<>",
+      gt: ">",
+      gte: ">=",
+      lt: "<",
+      lte: "<=",
+    };
+    const sqlOperator = operatorSqlMap[operator];
+    if (!sqlOperator) {
+      throw new PreviewQueryError("The selected operator requires a literal value.");
+    }
+    return `${leftExpression} ${sqlOperator} ${rightExpression}`;
+  }
+
+  switch (operator) {
+    case "eq":
+    case "neq":
+    case "gt":
+    case "gte":
+    case "lt":
+    case "lte":
+      const literal = buildFilterLiteral(
+        clause.valueKind ?? "string",
+        clause.value,
+        `Filter ${clause.leftFieldId}`,
+      );
+      if (operator === "eq") {
+        return `${leftExpression} = ${literal}`;
+      }
+      if (operator === "neq") {
+        return `${leftExpression} <> ${literal}`;
+      }
+      if (operator === "gt") {
+        return `${leftExpression} > ${literal}`;
+      }
+      if (operator === "gte") {
+        return `${leftExpression} >= ${literal}`;
+      }
+      if (operator === "lt") {
+        return `${leftExpression} < ${literal}`;
+      }
+      return `${leftExpression} <= ${literal}`;
+    case "contains": {
+      const value = typeof clause.value === "string" ? clause.value.trim() : "";
+      if (!value) {
+        throw new PreviewQueryError("Provide a value for contains filters.");
+      }
+      const literalValue = `'${`%${escapeLiteral(value)}%`}'`;
+      return `${leftExpression} ILIKE ${literalValue}`;
+    }
+    case "starts_with": {
+      const value = typeof clause.value === "string" ? clause.value.trim() : "";
+      if (!value) {
+        throw new PreviewQueryError("Provide a value for starts with filters.");
+      }
+      const literalValue = `'${`${escapeLiteral(value)}%`}'`;
+      return `${leftExpression} ILIKE ${literalValue}`;
+    }
+    case "ends_with": {
+      const value = typeof clause.value === "string" ? clause.value.trim() : "";
+      if (!value) {
+        throw new PreviewQueryError("Provide a value for ends with filters.");
+      }
+      const literalValue = `'${`%${escapeLiteral(value)}`}'`;
+      return `${leftExpression} ILIKE ${literalValue}`;
+    }
+    default:
+      throw new PreviewQueryError("Unsupported filter operator.");
+  }
+}
+
+function renderDerivedFieldFilterExpression(
+  fieldId: string,
+  aliasMap: Map<string, string>,
+  derivedFieldLookup: Map<string, DerivedFieldQueryPayload>,
+): string {
+  const derivedField = derivedFieldLookup.get(fieldId);
+  if (!derivedField || !derivedField.expressionAst) {
+    throw new PreviewQueryError(`Derived field ${fieldId} is not available for this template.`);
+  }
+  return renderDerivedFieldExpressionSql(derivedField.expressionAst, aliasMap);
+}
+
+function buildFilterLiteral(
+  kind: PreviewFilterClausePayload["valueKind"],
+  value: string | number | boolean | null | undefined,
+  label: string,
+): string {
+  if (kind === "number") {
+    const numeric = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(numeric)) {
+      throw new PreviewQueryError(`Enter a valid number for ${label}.`);
+    }
+    return String(numeric);
+  }
+  if (kind === "boolean") {
+    const normalized =
+      typeof value === "boolean" ? (value ? "true" : "false") : String(value ?? "").toLowerCase();
+    if (normalized !== "true" && normalized !== "false") {
+      throw new PreviewQueryError(`Select true or false for ${label}.`);
+    }
+    return normalized === "true" ? "TRUE" : "FALSE";
+  }
+  if (typeof value !== "string") {
+    throw new PreviewQueryError(`Provide a value for ${label}.`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new PreviewQueryError(`Provide a value for ${label}.`);
+  }
+  if (kind === "string" && trimmed.length > 0) {
+    return `'${escapeLiteral(trimmed)}'`;
+  }
+  if (kind === "date") {
+    return `'${escapeLiteral(trimmed)}'`;
+  }
+  return `'${escapeLiteral(trimmed)}'`;
+}
+
+function buildOrderByClauses(
+  orderBy: PreviewOrderClausePayload[],
+  aliasMap: Map<string, string>,
+  derivedFieldLookup: Map<string, DerivedFieldQueryPayload>,
+): string[] {
+  if (!orderBy || orderBy.length === 0) {
+    return [];
+  }
+  return orderBy.map((clause) => {
+    const direction = clause.direction?.toUpperCase() === "DESC" ? "DESC" : "ASC";
+    if (clause.source === "derived") {
+      const expression = renderDerivedFieldFilterExpression(clause.fieldId, aliasMap, derivedFieldLookup);
+      return `${expression} ${direction}`;
+    }
+    if (!clause.modelId) {
+      throw new PreviewQueryError("Order by clause is missing a model reference.");
+    }
+    const expression = resolveColumnExpression(clause.modelId, clause.fieldId, aliasMap);
+    return `${expression} ${direction}`;
+  });
 }
 
 function quoteTable(descriptor: ReportModelDescriptor): string {

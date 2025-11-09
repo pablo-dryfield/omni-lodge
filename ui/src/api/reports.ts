@@ -345,7 +345,8 @@ export type ReportPreviewRequest = {
     joinType?: "inner" | "left" | "right" | "full";
     description?: string;
   }>;
-  filters?: string[];
+  filters?: Array<string | PreviewFilterClausePayload>;
+  orderBy?: PreviewOrderClausePayload[];
   limit?: number;
   derivedFields?: QueryConfigDerivedField[];
 };
@@ -543,6 +544,7 @@ export type ReportTemplateOptionsDto = {
   notifyTeam: boolean;
   columnOrder: string[];
   columnAliases: Record<string, string>;
+  previewOrder: PreviewOrderRuleDto[];
 };
 
 export type ReportTemplateDto = {
@@ -561,6 +563,7 @@ export type ReportTemplateDto = {
   queryConfig: QueryConfig | null;
   derivedFields: DerivedFieldDefinitionDto[];
   metricsSpotlight: MetricSpotlightDefinitionDto[];
+  previewOrder: PreviewOrderRuleDto[];
   owner: {
     id: number | null;
     name: string;
@@ -569,6 +572,7 @@ export type ReportTemplateDto = {
   updatedAt: string;
   columnOrder: string[];
   columnAliases: Record<string, string>;
+  previewOrder: PreviewOrderRuleDto[];
 };
 
 export type ReportTemplateListResponse = {
@@ -593,6 +597,7 @@ export type SaveReportTemplateRequest = {
   metricsSpotlight?: MetricSpotlightDefinitionDto[];
   columnOrder?: string[];
   columnAliases?: Record<string, string>;
+  previewOrder?: PreviewOrderRuleDto[];
 };
 
 export const useReportTemplates = () =>
@@ -625,6 +630,9 @@ export const useDeleteReportTemplate = () =>
       await axiosInstance.delete(`/reports/templates/${templateId}`);
     },
   });
+
+
+
 
 
 
