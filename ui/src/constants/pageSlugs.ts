@@ -58,6 +58,7 @@ export const PAGE_SLUGS = {
   settingsShiftRoles: "settings-shift-roles",
   settingsUserShiftRoles: "settings-user-shift-roles",
   settingsDbBackups: "settings-db-backups",
+  settingsHomeExperience: "settings-home-experience",
 };
 
 export type PageSlugKey = keyof typeof PAGE_SLUGS;

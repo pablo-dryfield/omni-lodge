@@ -57,6 +57,7 @@ const defaultPages = [
   { slug: 'settings-shift-roles', name: 'Shift Roles', description: 'Manage scheduling shift role definitions', sortOrder: 19 },
   { slug: 'settings-user-shift-roles', name: 'User Shift Roles', description: 'Assign shift roles to users', sortOrder: 20 },
   { slug: 'settings-db-backups', name: 'Database Backups', description: 'Review and manage PostgreSQL backups', sortOrder: 21 },
+  { slug: 'settings-home-experience', name: 'Home Experience', description: 'Assign default home modules per user', sortOrder: 22 },
 ];
 
 const defaultModules = [
@@ -97,7 +98,8 @@ const defaultModules = [
   { slug: 'action-registry', name: 'Action Registry', pageSlug: 'settings-actions', description: 'Maintain action catalog', componentRef: 'ActionRegistry', sortOrder: 1 },
   { slug: 'staff-profile-directory', name: 'Staff Profile Directory', pageSlug: 'settings-staff-profiles', description: 'Maintain staff profile metadata', componentRef: 'StaffProfileDirectory', sortOrder: 1 },
   { slug: 'shift-role-directory', name: 'Shift Role Directory', pageSlug: 'settings-shift-roles', description: 'Manage scheduling shift role definitions', componentRef: 'ShiftRoleDirectory', sortOrder: 1 },
-  { slug: 'user-shift-role-directory', name: 'User Shift Role Directory', pageSlug: 'settings-user-shift-roles', description: 'Assign shift roles to users', componentRef: 'UserShiftRoleDirectory', sortOrder: 1 },
+    { slug: 'user-shift-role-directory', name: 'User Shift Role Directory', pageSlug: 'settings-user-shift-roles', description: 'Assign shift roles to users', componentRef: 'UserShiftRoleDirectory', sortOrder: 1 },
+    { slug: 'settings-home', name: 'Home Experience', pageSlug: 'settings-home-experience', description: 'Set default home experiences for users', componentRef: 'SettingsHomeExperience', sortOrder: 1 },
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
@@ -112,8 +114,9 @@ const rolePageMatrix: Record<string, string[]> = {
 'settings-staff-profiles',
 'settings-shift-roles',
 'settings-user-shift-roles',
-'settings-db-backups'],
-  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles'],
+'settings-db-backups',
+'settings-home-experience'],
+  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-home-experience'],
   manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling'],
   'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling'],
   guide: ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'pays', 'scheduling'],
@@ -177,6 +180,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'staff-profile-directory': ['view', 'create', 'update', 'delete'],
     'shift-role-directory': ['view', 'create', 'update', 'delete'],
     'user-shift-role-directory': ['view', 'create', 'update', 'delete'],
+    'settings-home': ['view', 'create', 'update', 'delete'],
       reporting: ['view', 'create', 'update', 'delete'],
       'venue-numbers-management': ['view', 'create', 'update'],
       'staff-payouts-all': ['view'],

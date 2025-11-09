@@ -9,6 +9,7 @@ import {
   IconAddressBook,
   IconHierarchy3,
   IconUserCog,
+  IconLayoutDashboard,
 } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import { useAppSelector } from "../../store/hooks";
@@ -52,6 +53,13 @@ const sections: SettingsSection[] = [
     icon: IconUserCog,
     to: "/settings/user-shift-roles",
     pageSlug: PAGE_SLUGS.settingsUserShiftRoles,
+  },
+  {
+    label: "Home Experience",
+    description: "Assign each user to navigation or dashboard-first home modules.",
+    icon: IconLayoutDashboard,
+    to: "/settings/home-experience",
+    pageSlug: PAGE_SLUGS.settingsHomeExperience,
   },
   {
     label: "User Types",

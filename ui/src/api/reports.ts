@@ -638,6 +638,32 @@ export const useUpdateHomeDashboardPreference = () =>
     },
   });
 
+export const useHomeDashboardPreferenceAdmin = (userId?: number | null) =>
+  useQuery<HomeDashboardPreferenceDto>({
+    queryKey: ["reports", "home-preference", "admin", userId ?? "none"],
+    enabled: typeof userId === "number" && Number.isFinite(userId) && userId > 0,
+    queryFn: async () => {
+      if (!userId) {
+        throw new Error("User id is required");
+      }
+      const response = await axiosInstance.get(`/reports/home-preferences/${userId}`);
+      return (response.data as { preference: HomeDashboardPreferenceDto }).preference;
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+export const useUpdateHomeDashboardPreferenceAdmin = () =>
+  useMutation<
+    HomeDashboardPreferenceDto,
+    AxiosError<{ message?: string }>,
+    { userId: number; payload: UpdateHomeDashboardPreferencePayload }
+  >({
+    mutationFn: async ({ userId, payload }) => {
+      const response = await axiosInstance.put(`/reports/home-preferences/${userId}`, payload);
+      return (response.data as { preference: HomeDashboardPreferenceDto }).preference;
+    },
+  });
+
 export const useDerivedFields = (templateId?: string) =>
   useQuery<DerivedFieldListResponse>({
     queryKey: ["reports", "derived-fields", templateId ?? "workspace"],
