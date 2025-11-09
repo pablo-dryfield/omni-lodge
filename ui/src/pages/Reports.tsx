@@ -116,6 +116,7 @@ import {
 } from "../api/reports";
 
 const PAGE_SLUG = PAGE_SLUGS.reports;
+const DERIVED_FIELD_SENTINEL = "__derived__";
 type DataField = {
   id: string;
   label: string;
@@ -164,7 +165,13 @@ type PreviewColumnMeta = {
   sourceColumn?: string;
 };
 
-type SelectedFieldDetail = DataField & { modelId: string; modelName: string; alias?: string };
+type SelectedFieldDetail = DataField & {
+  modelId: string;
+  modelName: string;
+  alias?: string;
+  source?: "model" | "derived";
+  derivedFieldId?: string;
+};
 
 type JoinCondition = {
   id: string;
@@ -1736,6 +1743,7 @@ const Reports = (props: GenericPageProps) => {
           ...field,
           modelId: model.id,
           modelName: model.name,
+          source: "model",
         };
 
         if (aliasValue !== undefined) {
@@ -1754,8 +1762,27 @@ const Reports = (props: GenericPageProps) => {
     selectedFieldDetails.forEach((detail) => {
       map.set(toColumnAlias(detail.modelId, detail.id), detail);
     });
+    draft.derivedFields.forEach((field) => {
+      if (!isDerivedFieldVisibleInBuilder(field)) {
+        map.delete(field.id);
+        return;
+      }
+      if (map.has(field.id)) {
+        return;
+      }
+      map.set(field.id, {
+        id: field.id,
+        label: field.name,
+        type: "number",
+        modelId: DERIVED_FIELD_SENTINEL,
+        modelName: field.scope === "workspace" ? "Workspace derived field" : "Template derived field",
+        sourceColumn: field.expression,
+        source: "derived",
+        derivedFieldId: field.id,
+      });
+    });
     return map;
-  }, [selectedFieldDetails]);
+  }, [draft.derivedFields, selectedFieldDetails]);
   const derivedFieldMap = useMemo(() => {
     return new Map(draft.derivedFields.map((field) => [field.id, field]));
   }, [draft.derivedFields]);
@@ -2420,6 +2447,26 @@ const Reports = (props: GenericPageProps) => {
       return emptyDescriptor;
     }
 
+    const resolveFieldReference = (
+      alias: string,
+    ): ({ kind: "model"; modelId: string; fieldId: string } | { kind: "derived"; fieldId: string }) | null => {
+      if (!alias) {
+        return null;
+      }
+      const detail = fieldDetailByAlias.get(alias);
+      if (!detail) {
+        return null;
+      }
+      if (detail.source === "derived" || detail.derivedFieldId) {
+        return { kind: "derived", fieldId: detail.derivedFieldId ?? detail.id };
+      }
+      const parsed = parseColumnAlias(alias);
+      if (!parsed) {
+        return null;
+      }
+      return { kind: "model", ...parsed };
+    };
+
     const metricDetail = fieldDetailByAlias.get(metricBaseAlias);
     const dimensionDetail = fieldDetailByAlias.get(dimensionBaseAlias);
 
@@ -2435,11 +2482,16 @@ const Reports = (props: GenericPageProps) => {
       return { ...emptyDescriptor, warnings };
     }
 
-    const metricReference = parseColumnAlias(metricBaseAlias);
-    const dimensionReference = parseColumnAlias(dimensionBaseAlias);
+    const metricReference = resolveFieldReference(metricBaseAlias);
+    const dimensionReference = resolveFieldReference(dimensionBaseAlias);
 
     if (!metricReference || !dimensionReference) {
       warnings.push("Unable to determine metric/dimension columns for analytics.");
+      return { ...emptyDescriptor, warnings };
+    }
+
+    if (dimensionReference.kind === "derived") {
+      warnings.push("Derived fields cannot be used as dimensions yet.");
       return { ...emptyDescriptor, warnings };
     }
 
@@ -2457,12 +2509,19 @@ const Reports = (props: GenericPageProps) => {
     const dimensionAlias = buildDimensionAlias(dimensionBaseAlias, dimensionBucket);
 
     const metrics: QueryConfigMetric[] = [
-      {
-        modelId: metricReference.modelId,
-        fieldId: metricReference.fieldId,
-        aggregation: metricAggregation,
-        alias: metricAlias,
-      },
+      metricReference.kind === "derived"
+        ? {
+            modelId: DERIVED_FIELD_SENTINEL,
+            fieldId: metricReference.fieldId,
+            aggregation: metricAggregation,
+            alias: metricAlias,
+          }
+        : {
+            modelId: metricReference.modelId,
+            fieldId: metricReference.fieldId,
+            aggregation: metricAggregation,
+            alias: metricAlias,
+          },
     ];
 
     let comparisonAlias: string | null = null;
@@ -2470,23 +2529,29 @@ const Reports = (props: GenericPageProps) => {
       const comparisonBaseAlias = activeVisual.comparison;
       const comparisonDetail = fieldDetailByAlias.get(comparisonBaseAlias);
       if (comparisonDetail) {
-        const comparisonReference = parseColumnAlias(comparisonBaseAlias);
+        const comparisonReference = resolveFieldReference(comparisonBaseAlias);
         if (comparisonReference) {
           const comparisonAggregation =
             activeVisual.comparisonAggregation &&
             METRIC_AGGREGATIONS.includes(activeVisual.comparisonAggregation)
               ? activeVisual.comparisonAggregation
               : metricAggregation;
-          comparisonAlias = buildMetricAggregationAlias(
-            comparisonBaseAlias,
-            comparisonAggregation,
+          comparisonAlias = buildMetricAggregationAlias(comparisonBaseAlias, comparisonAggregation);
+          metrics.push(
+            comparisonReference.kind === "derived"
+              ? {
+                  modelId: DERIVED_FIELD_SENTINEL,
+                  fieldId: comparisonReference.fieldId,
+                  aggregation: comparisonAggregation,
+                  alias: comparisonAlias,
+                }
+              : {
+                  modelId: comparisonReference.modelId,
+                  fieldId: comparisonReference.fieldId,
+                  aggregation: comparisonAggregation,
+                  alias: comparisonAlias,
+                },
           );
-          metrics.push({
-            modelId: comparisonReference.modelId,
-            fieldId: comparisonReference.fieldId,
-            aggregation: comparisonAggregation,
-            alias: comparisonAlias,
-          });
         } else {
           warnings.push(
             `Comparison series ${comparisonBaseAlias} could not be resolved and was skipped.`,

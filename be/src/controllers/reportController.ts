@@ -162,6 +162,8 @@ type DerivedFieldQueryPayload = {
   compiledSqlHash?: string | null;
 };
 
+const DERIVED_FIELD_SENTINEL = "__derived__";
+
 const formatDerivedFieldLabel = (field: DerivedFieldQueryPayload, index: number): string => {
   if (field.alias && field.alias.trim().length > 0) {
     return field.alias.trim();
@@ -833,23 +835,30 @@ const serializeReportTemplate = (
     options: mergedOptions,
     queryConfig: template.queryConfig ?? null,
     derivedFields: Array.isArray(template.derivedFields)
-      ? template.derivedFields.map((field, index) => ({
-          ...field,
-          id: field.id ?? `derived-${index}`,
-          expressionAst: field.expressionAst ?? null,
-          referencedModels: Array.isArray(field.referencedModels) ? field.referencedModels : [],
-          referencedFields: toReferencedFieldMap(field.referencedFields),
-          joinDependencies: toJoinDependencyPairs(field.joinDependencies),
-          modelGraphSignature:
-            typeof field.modelGraphSignature === "string" && field.modelGraphSignature.length > 0
-              ? field.modelGraphSignature
-              : null,
-          compiledSqlHash:
-            typeof field.compiledSqlHash === "string" && field.compiledSqlHash.length > 0
-              ? field.compiledSqlHash
-              : null,
-          status: field.status === "stale" ? "stale" : undefined,
-        }))
+      ? template.derivedFields.map((field, index) => {
+          const metadata =
+            field.metadata && typeof field.metadata === "object" && !Array.isArray(field.metadata)
+              ? field.metadata
+              : undefined;
+          return {
+            ...field,
+            id: field.id ?? `derived-${index}`,
+            expressionAst: field.expressionAst ?? null,
+            referencedModels: Array.isArray(field.referencedModels) ? field.referencedModels : [],
+            referencedFields: toReferencedFieldMap(field.referencedFields),
+            joinDependencies: toJoinDependencyPairs(field.joinDependencies),
+            modelGraphSignature:
+              typeof field.modelGraphSignature === "string" && field.modelGraphSignature.length > 0
+                ? field.modelGraphSignature
+                : null,
+            compiledSqlHash:
+              typeof field.compiledSqlHash === "string" && field.compiledSqlHash.length > 0
+                ? field.compiledSqlHash
+                : null,
+            status: field.status === "stale" ? "stale" : undefined,
+            ...(metadata ? { metadata } : {}),
+          };
+        })
       : [],
     metricsSpotlight: Array.isArray(template.metricsSpotlight) ? template.metricsSpotlight : [],
     columnOrder: [...mergedOptions.columnOrder],
@@ -1343,6 +1352,9 @@ const executeAggregatedQuery = async (
 
   const derivedFieldPayloads = Array.isArray(config.derivedFields) ? config.derivedFields : [];
   validateDerivedFieldGraph(derivedFieldPayloads, config.models, config.joins ?? [], aliasMap);
+  const derivedFieldLookup = new Map<string, DerivedFieldQueryPayload>(
+    derivedFieldPayloads.map((field) => [field.id, field]),
+  );
 
   const allowedBuckets = new Set(["hour", "day", "week", "month", "quarter", "year"]);
 
@@ -1397,6 +1409,34 @@ const executeAggregatedQuery = async (
 
   metrics.forEach((metric, index) => {
     const modelId = metric.modelId.trim();
+    const aggregationKey = metric.aggregation;
+    const sqlAggregation = aggregationMap[aggregationKey];
+    if (!sqlAggregation) {
+      throw new PreviewQueryError(`Unsupported aggregation: ${aggregationKey}`);
+    }
+
+    if (modelId === DERIVED_FIELD_SENTINEL) {
+      const derivedFieldId = metric.fieldId?.trim() ?? "";
+      const derivedField = derivedFieldLookup.get(derivedFieldId);
+      if (!derivedField || !derivedField.expressionAst) {
+        throw new PreviewQueryError(
+          `Derived field ${derivedFieldId || metric.alias || `#${index + 1}`} is not available for analytics.`,
+        );
+      }
+      const expressionSql = renderDerivedFieldExpressionSql(derivedField.expressionAst, aliasMap);
+      const aliasValue =
+        metric.alias && metric.alias.trim().length > 0
+          ? metric.alias.trim()
+          : `${derivedField.id}_${aggregationKey}_${index}`;
+      const aggregationExpression =
+        aggregationKey === "count_distinct"
+          ? `${sqlAggregation}(DISTINCT (${expressionSql}))`
+          : `${sqlAggregation}(${expressionSql})`;
+      metricSelectClauses.push(`${aggregationExpression} AS ${quoteIdentifier(aliasValue)}`);
+      resolvedMetrics.push(aliasValue);
+      return;
+    }
+
     const descriptor = ensureModelDescriptor(modelId);
     const modelAlias = aliasMap.get(modelId);
     if (!descriptor || !modelAlias) {
@@ -1409,11 +1449,6 @@ const executeAggregatedQuery = async (
       );
     }
     const baseExpression = `${modelAlias}.${quoteIdentifier(field.columnName)}`;
-    const aggregationKey = metric.aggregation;
-    const sqlAggregation = aggregationMap[aggregationKey];
-    if (!sqlAggregation) {
-      throw new PreviewQueryError(`Unsupported aggregation: ${aggregationKey}`);
-    }
     const alias =
       metric.alias && metric.alias.trim().length > 0
         ? metric.alias.trim()
