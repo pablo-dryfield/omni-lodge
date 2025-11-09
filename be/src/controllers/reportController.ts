@@ -377,6 +377,7 @@ type TemplateOptionsInput = {
   columnOrder?: unknown;
   columnAliases?: unknown;
   previewOrder?: unknown;
+  autoRunOnOpen?: unknown;
 };
 
 type TemplatePayloadInput = {
@@ -418,6 +419,7 @@ type SerializedReportTemplate = {
   columnOrder: string[];
   columnAliases: Record<string, string>;
   previewOrder: PreviewOrderRule[];
+  autoRunOnOpen: boolean;
   owner: {
     id: number | null;
     name: string;
@@ -432,6 +434,7 @@ const DEFAULT_TEMPLATE_OPTIONS: ReportTemplateOptions = {
   columnOrder: [],
   columnAliases: {},
   previewOrder: [],
+  autoRunOnOpen: false,
 };
 
 const modelDescriptorCache = new Map<string, ReportModelDescriptor>();
@@ -832,6 +835,10 @@ const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
   const previewOrderInput =
     input.previewOrder !== undefined ? input.previewOrder : optionsCandidate?.previewOrder;
   const previewOrder = toPreviewOrderRules(previewOrderInput);
+  const autoRunOnOpen =
+    typeof optionsCandidate?.autoRunOnOpen === "boolean"
+      ? optionsCandidate.autoRunOnOpen
+      : DEFAULT_TEMPLATE_OPTIONS.autoRunOnOpen;
 
   const options: ReportTemplateOptions = {
     autoDistribution:
@@ -845,6 +852,7 @@ const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
     columnOrder,
     columnAliases,
     previewOrder,
+    autoRunOnOpen,
   };
 
   const models = toStringArray(input.models);
@@ -884,6 +892,10 @@ const serializeReportTemplate = (
   const owner = template.owner ?? null;
   const ownerName = owner ? `${owner.firstName} ${owner.lastName}`.trim() : "Shared";
   const rawOptions = template.options ?? DEFAULT_TEMPLATE_OPTIONS;
+  const templatePreviewOrder =
+    Array.isArray(template.previewOrder) && template.previewOrder.length > 0
+      ? toPreviewOrderRules(template.previewOrder)
+      : [];
   const mergedOptions: ReportTemplateOptions = {
     autoDistribution:
       typeof rawOptions.autoDistribution === "boolean"
@@ -900,10 +912,19 @@ const serializeReportTemplate = (
       rawOptions.columnAliases !== undefined ? rawOptions.columnAliases : DEFAULT_TEMPLATE_OPTIONS.columnAliases,
     ),
     previewOrder:
-      Array.isArray(rawOptions.previewOrder) && rawOptions.previewOrder.length > 0
+      templatePreviewOrder.length > 0
+        ? templatePreviewOrder
+        : Array.isArray(rawOptions.previewOrder) && rawOptions.previewOrder.length > 0
         ? toPreviewOrderRules(rawOptions.previewOrder)
         : [],
+    autoRunOnOpen:
+      typeof rawOptions.autoRunOnOpen === "boolean"
+        ? rawOptions.autoRunOnOpen
+        : DEFAULT_TEMPLATE_OPTIONS.autoRunOnOpen,
   };
+
+  const serializedPreviewOrder =
+    templatePreviewOrder.length > 0 ? templatePreviewOrder : mergedOptions.previewOrder;
 
   return {
     id: template.id,
@@ -948,10 +969,8 @@ const serializeReportTemplate = (
     metricsSpotlight: Array.isArray(template.metricsSpotlight) ? template.metricsSpotlight : [],
     columnOrder: [...mergedOptions.columnOrder],
     columnAliases: { ...mergedOptions.columnAliases },
-    previewOrder:
-      Array.isArray(template.previewOrder) && template.previewOrder.length > 0
-        ? toPreviewOrderRules(template.previewOrder)
-        : [...mergedOptions.previewOrder],
+    previewOrder: serializedPreviewOrder,
+    autoRunOnOpen: mergedOptions.autoRunOnOpen,
     owner: {
       id: template.userId ?? null,
       name: ownerName.length > 0 ? ownerName : "Shared",
@@ -1975,6 +1994,7 @@ export const createReportTemplate = async (req: AuthenticatedRequest, res: Respo
       queryConfig: payload.queryConfig,
       derivedFields: payload.derivedFields,
       metricsSpotlight: payload.metricsSpotlight,
+      previewOrder: payload.previewOrder,
       options: payload.options,
     });
 
@@ -2050,6 +2070,7 @@ export const updateReportTemplate = async (req: AuthenticatedRequest, res: Respo
     template.queryConfig = payload.queryConfig;
     template.derivedFields = payload.derivedFields;
     template.metricsSpotlight = payload.metricsSpotlight;
+    template.previewOrder = payload.previewOrder;
     template.options = payload.options;
 
     await template.save();
