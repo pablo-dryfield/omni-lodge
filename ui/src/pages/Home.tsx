@@ -230,6 +230,37 @@ const LogoTile = styled(Paper)(({ theme: muiTheme }) => ({
   },
 }));
 
+const StyledDashboardCard = styled(Card)(({ theme: muiTheme }) => ({
+  height: "100%",
+  borderRadius: 18,
+  borderColor: muiTheme.palette.mode === "dark" ? "rgba(255,255,255,0.12)" : "rgba(15,23,42,0.08)",
+  background: muiTheme.palette.mode === "dark" ? "rgba(15,23,42,0.85)" : "linear-gradient(180deg,#ffffff 0%,#f7f9fc 100%)",
+  boxShadow:
+    "0 8px 24px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.5)",
+  display: "flex",
+  flexDirection: "column",
+}));
+
+const CardAccent = styled("div")(({ theme: muiTheme }) => ({
+  width: "100%",
+  height: 4,
+  borderRadius: "999px",
+  background: `linear-gradient(90deg, ${muiTheme.palette.primary.main}, ${muiTheme.palette.secondary.main})`,
+  opacity: 0.7,
+}));
+
+const CardTitle = styled(Typography)(({ theme: muiTheme }) => ({
+  fontWeight: 600,
+  letterSpacing: 0.2,
+  color: muiTheme.palette.text.primary,
+}));
+
+const CardSubtitle = styled(Typography)(({ theme: muiTheme }) => ({
+  color: muiTheme.palette.text.secondary,
+  fontSize: 13,
+  lineHeight: 1.5,
+}));
+
 const PageName = styled(Typography)(({ theme: muiTheme }) => ({
   color: muiTheme.palette.text.primary,
   textDecoration: "none",
@@ -831,13 +862,14 @@ const DashboardCard = ({ card, liveState }: { card: DashboardCardDto; liveState?
   const viewConfig = card.viewConfig as DashboardCardViewConfig;
   if (!viewConfig || typeof viewConfig !== "object") {
     return (
-      <Card variant="outlined">
-        <CardContent>
-          <Typography variant="body2" color="textSecondary">
-            This card does not have a saved configuration.
+      <StyledDashboardCard variant="outlined">
+        <CardAccent />
+        <CardContent sx={{ flexGrow: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <Typography variant="body2" color="textSecondary" align="center">
+            This card does not have a saved configuration yet.
           </Typography>
         </CardContent>
-      </Card>
+      </StyledDashboardCard>
     );
   }
 
@@ -852,16 +884,20 @@ const DashboardCard = ({ card, liveState }: { card: DashboardCardDto; liveState?
   }
 
   return (
-    <Card variant="outlined">
-      <CardContent>
-        <Typography variant="body2" color="textSecondary">
-          Legacy dashboard card format. Open the template to refresh this card.
-        </Typography>
-        <Box component="pre" sx={{ bgcolor: "grey.100", p: 2, borderRadius: 1, overflowX: "auto" }}>
-          {JSON.stringify(viewConfig, null, 2)}
-        </Box>
+    <StyledDashboardCard variant="outlined">
+      <CardAccent />
+      <CardContent sx={{ flexGrow: 1 }}>
+        <Stack gap={1.5}>
+          <CardTitle variant="subtitle1">{card.title}</CardTitle>
+          <CardSubtitle variant="body2">
+            Legacy dashboard card format. Open the template and re-save the card to modernize it.
+          </CardSubtitle>
+          <Box component="pre" sx={{ bgcolor: "grey.100", p: 2, borderRadius: 2, overflowX: "auto", fontSize: 12 }}>
+            {JSON.stringify(viewConfig, null, 2)}
+          </Box>
+        </Stack>
       </CardContent>
-    </Card>
+    </StyledDashboardCard>
   );
 };
 
@@ -878,47 +914,34 @@ const VisualDashboardCard = ({
   const isLoading = liveState.status === "loading";
   const error = liveState.status === "error" ? liveState.error : null;
   return (
-    <Card variant="outlined">
-      <CardContent>
-        <Stack gap={1.5}>
-          <Typography variant="subtitle1">{card.title}</Typography>
-          {config.description && (
-            <Typography variant="body2" color="textSecondary">
-              {config.description}
-            </Typography>
-          )}
-          {liveState.warning && (
-            <Alert severity="warning">{liveState.warning}</Alert>
-          )}
-          {isLoading && (
-            <Stack direction="row" gap={1} alignItems="center">
-              <CircularProgress size={16} />
-              <Typography variant="body2" color="textSecondary">
-                Refreshing data…
-              </Typography>
-            </Stack>
-          )}
-          {error && (
-            <Alert severity="error">
-              {error}
-            </Alert>
-          )}
-          <Box sx={{ height: sample.length > 0 ? 240 : "auto" }}>
-            {sample.length > 0 ? (
-              renderVisualChart(config, sample)
-            ) : (
-              <Typography variant="body2" color="textSecondary">
-                {isLoading ? "Loading chart data…" : "No data returned. Adjust the template filters to see values."}
-              </Typography>
-            )}
-          </Box>
+    <StyledDashboardCard variant="outlined">
+      <CardAccent />
+      <CardContent sx={{ flexGrow: 1, display: "flex", flexDirection: "column", gap: 1.5 }}>
+        <Stack gap={0.5}>
+          <CardTitle variant="subtitle1">{card.title}</CardTitle>
+          {config.description && <CardSubtitle variant="body2">{config.description}</CardSubtitle>}
         </Stack>
+        {liveState.warning && <Alert severity="warning">{liveState.warning}</Alert>}
+        {isLoading && (
+          <Stack direction="row" gap={1} alignItems="center">
+            <CircularProgress size={16} />
+            <CardSubtitle variant="body2">Refreshing data...</CardSubtitle>
+          </Stack>
+        )}
+        {error && <Alert severity="error">{error}</Alert>}
+        <Box sx={{ height: sample.length > 0 ? 240 : "auto" }}>
+          {sample.length > 0 ? (
+            renderVisualChart(config, sample)
+          ) : (
+            <CardSubtitle variant="body2">
+              {isLoading ? "Loading chart data..." : "No data returned. Adjust the template filters to see values."}
+            </CardSubtitle>
+          )}
+        </Box>
       </CardContent>
-    </Card>
+    </StyledDashboardCard>
   );
-};
-
-const SpotlightDashboardCard = ({
+};const SpotlightDashboardCard = ({
   card,
   config,
   liveState,
@@ -931,61 +954,58 @@ const SpotlightDashboardCard = ({
   const isLoading = liveState.status === "loading";
   const error = liveState.status === "error" ? liveState.error : null;
   return (
-    <Card variant="outlined">
-      <CardContent>
-        <Stack gap={1.5}>
-          <Typography variant="subtitle1">{card.title}</Typography>
-          {config.description && (
-            <Typography variant="body2" color="textSecondary">
-              {config.description}
-            </Typography>
-          )}
-          {liveState.warning && (
-            <Alert severity="warning">{liveState.warning}</Alert>
-          )}
-          {isLoading && (
-            <Stack direction="row" gap={1} alignItems="center">
-              <CircularProgress size={16} />
-              <Typography variant="body2" color="textSecondary">
-                Refreshing data…
-              </Typography>
-            </Stack>
-          )}
-          {error && (
-            <Alert severity="error">
-              {error}
-            </Alert>
-          )}
-          {sampleCards.length > 0 ? (
-            <Stack direction={{ xs: "column", md: "row" }} gap={2}>
-              {sampleCards.slice(0, 4).map((sampleCard) => (
-                <Paper key={sampleCard.id} variant="outlined" sx={{ p: 2, flex: 1, minWidth: 180 }}>
-                  <Stack gap={0.5}>
-                    <Typography variant="subtitle2">{sampleCard.label}</Typography>
-                    <Typography variant="h5">{sampleCard.value}</Typography>
-                    {sampleCard.delta && (
-                      <Typography variant="body2" sx={{ color: SpotlightTone[sampleCard.tone] ?? "text.primary" }}>
-                        {sampleCard.delta} vs prior
-                      </Typography>
-                    )}
-                    {sampleCard.context && (
-                      <Typography variant="caption" color="textSecondary">
-                        {sampleCard.context}
-                      </Typography>
-                    )}
-                  </Stack>
-                </Paper>
-              ))}
-            </Stack>
-          ) : (
-            <Typography variant="body2" color="textSecondary">
-              {isLoading ? "Loading spotlight values…" : "No spotlight values returned for this template."}
-            </Typography>
-          )}
+    <StyledDashboardCard variant="outlined">
+      <CardAccent />
+      <CardContent sx={{ flexGrow: 1, display: "flex", flexDirection: "column", gap: 1.5 }}>
+        <Stack gap={0.5}>
+          <CardTitle variant="subtitle1">{card.title}</CardTitle>
+          {config.description && <CardSubtitle variant="body2">{config.description}</CardSubtitle>}
         </Stack>
+        {liveState.warning && <Alert severity="warning">{liveState.warning}</Alert>}
+        {isLoading && (
+          <Stack direction="row" gap={1} alignItems="center">
+            <CircularProgress size={16} />
+            <CardSubtitle variant="body2">Refreshing data...</CardSubtitle>
+          </Stack>
+        )}
+        {error && <Alert severity="error">{error}</Alert>}
+        {sampleCards.length > 0 ? (
+          <Stack direction={{ xs: "column", md: "row" }} gap={2}>
+            {sampleCards.slice(0, 4).map((sampleCard) => (
+              <Paper
+                key={sampleCard.id}
+                variant="outlined"
+                sx={{ p: 2, flex: 1, minWidth: 180, borderRadius: 12, borderColor: "rgba(15, 23, 42, 0.12)" }}
+              >
+                <Stack gap={0.5}>
+                  <Typography variant="subtitle2" fontWeight={600}>
+                    {sampleCard.label}
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700}>
+                    {sampleCard.value}
+                  </Typography>
+                  {sampleCard.delta && (
+                    <Typography variant="body2" sx={{ color: SpotlightTone[sampleCard.tone] ?? "text.primary" }}>
+                      {sampleCard.delta} vs prior
+                    </Typography>
+                  )}
+                  {sampleCard.context && (
+                    <CardSubtitle variant="caption">{sampleCard.context}</CardSubtitle>
+                  )}
+                </Stack>
+              </Paper>
+            ))}
+          </Stack>
+        ) : (
+          <CardSubtitle variant="body2">
+            {isLoading ? "Loading spotlight values..." : "No spotlight values returned for this template."}
+          </CardSubtitle>
+        )}
       </CardContent>
-    </Card>
+    </StyledDashboardCard>
   );
-};
+};export default Home;
 
-export default Home;
+
+
+
