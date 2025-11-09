@@ -75,6 +75,7 @@ import { GenericPageProps } from "../types/general/GenericPageProps";
 import GoogleReviews from "../components/reports/GoogleReviews";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
+import { parseDerivedFieldExpression } from "../utils/derivedFieldParser";
 import {
   useReportModels,
   useReportTemplates,
@@ -469,6 +470,34 @@ const buildJoinKey = (left: string, right: string) => {
   return normalized.join("::");
 };
 
+const inferReferencedModelsFromExpression = (expression: string | undefined): string[] => {
+  if (!expression || typeof expression !== "string") {
+    return [];
+  }
+  const tokens = expression.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\.[A-Za-z_][A-Za-z0-9_]*/g);
+  const set = new Set<string>();
+  for (const match of tokens) {
+    if (match[1]) {
+      set.add(match[1]);
+    }
+  }
+  return Array.from(set);
+};
+
+const getEffectiveReferencedModels = (
+  field: Pick<DerivedFieldDefinitionDto, "referencedModels" | "expression">,
+): string[] => {
+  if (Array.isArray(field.referencedModels) && field.referencedModels.length > 0) {
+    return field.referencedModels;
+  }
+  try {
+    const parsed = parseDerivedFieldExpression(field.expression);
+    return parsed.referencedModels;
+  } catch {
+    return inferReferencedModelsFromExpression(field.expression);
+  }
+};
+
 const buildModelPairs = (models: string[] | undefined): Array<[string, string]> => {
   if (!Array.isArray(models) || models.length < 2) {
     return [];
@@ -495,7 +524,7 @@ const reconcileDerivedFieldStatuses = <T extends DerivedFieldDefinitionDto>(
   const modelSet = new Set(models);
   let mutated = false;
   const next = fields.map((field) => {
-    const referenced = Array.isArray(field.referencedModels) ? field.referencedModels : [];
+    const referenced = getEffectiveReferencedModels(field as ReportDerivedField);
     if (referenced.length === 0) {
       if (!field.status) {
         return field;
@@ -1104,6 +1133,7 @@ const buildDerivedFieldPayloads = (
   fields: DerivedFieldDefinitionDto[],
 ): QueryConfigDerivedField[] => {
   return fields
+    .map(ensureDerivedFieldMetadata)
     .filter(
       (field) =>
         field.status !== "stale" && field.expressionAst && typeof field.expressionAst === "object",
@@ -1123,10 +1153,11 @@ const evaluateJoinCoverage = (
   field: ReportDerivedField,
   joinLookup: ReadonlySet<string>,
 ): Array<{ pair: [string, string]; satisfied: boolean }> => {
+  const referencedModels = getEffectiveReferencedModels(field);
   const dependencies =
     field.joinDependencies && field.joinDependencies.length > 0
       ? field.joinDependencies
-      : buildModelPairs(field.referencedModels);
+      : buildModelPairs(referencedModels);
   if (!dependencies || dependencies.length === 0) {
     return [];
   }
@@ -1140,15 +1171,36 @@ const validateDerivedFieldExpression = (value: string): string | null => {
   if (!value || value.trim().length === 0) {
     return "Expression is required.";
   }
-  const openParen = (value.match(/\(/g) ?? []).length;
-  const closeParen = (value.match(/\)/g) ?? []).length;
-  if (openParen !== closeParen) {
-    return "Unbalanced parentheses detected.";
+  try {
+    parseDerivedFieldExpression(value);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : "Invalid expression.";
   }
-  if (value.includes(";")) {
-    return "Expressions cannot contain semicolons.";
+};
+
+const ensureDerivedFieldMetadata = (field: ReportDerivedField): ReportDerivedField => {
+  if (field.expressionAst && field.referencedModels && field.referencedModels.length > 0) {
+    return field;
   }
-  return null;
+  try {
+    const parsed = parseDerivedFieldExpression(field.expression);
+    return {
+      ...field,
+      expressionAst: parsed.ast,
+      referencedModels: parsed.referencedModels,
+      referencedFields:
+        field.referencedFields && Object.keys(field.referencedFields).length > 0
+          ? field.referencedFields
+          : parsed.referencedFields,
+      joinDependencies:
+        field.joinDependencies && field.joinDependencies.length > 0
+          ? field.joinDependencies
+          : buildModelPairs(parsed.referencedModels),
+    };
+  } catch {
+    return field;
+  }
 };
 
 const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitionDto[] => {
@@ -1233,7 +1285,9 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
 
   const queryConfig = normalizeQueryConfig(template.queryConfig);
   const derivedFields = reconcileDerivedFieldStatuses(
-    normalizeDerivedFields(template.derivedFields),
+    normalizeDerivedFields(template.derivedFields).map((field) =>
+      ensureDerivedFieldMetadata(field as ReportDerivedField),
+    ),
     Array.isArray(template.models) ? template.models : [],
   );
   const metricsSpotlight = normalizeMetricSpotlights(template.metricsSpotlight);
@@ -1395,21 +1449,22 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
   };
 };
 
-const mapDerivedFieldDtoToReportField = (field: DerivedFieldDto): ReportDerivedField => ({
-  id: field.id,
-  name: field.name,
-  expression: field.expression,
-  kind: field.kind,
-  scope: field.scope,
-  metadata: field.metadata ?? {},
-  expressionAst: field.expressionAst ?? undefined,
-  referencedModels: field.referencedModels ?? [],
-  referencedFields: field.referencedFields ?? {},
-  joinDependencies: field.joinDependencies ?? [],
-  modelGraphSignature: field.modelGraphSignature ?? null,
-  compiledSqlHash: field.compiledSqlHash ?? null,
-  status: field.status,
-});
+const mapDerivedFieldDtoToReportField = (field: DerivedFieldDto): ReportDerivedField =>
+  ensureDerivedFieldMetadata({
+    id: field.id,
+    name: field.name,
+    expression: field.expression,
+    kind: field.kind,
+    scope: field.scope,
+    metadata: field.metadata ?? {},
+    expressionAst: field.expressionAst ?? undefined,
+    referencedModels: field.referencedModels ?? [],
+    referencedFields: field.referencedFields ?? {},
+    joinDependencies: field.joinDependencies ?? [],
+    modelGraphSignature: field.modelGraphSignature ?? null,
+    compiledSqlHash: field.compiledSqlHash ?? null,
+    status: field.status,
+  });
 
 const extractAxiosErrorMessage = (error: unknown, fallback: string): string => {
   const axiosError = error as AxiosError<{ error?: string; message?: string }> | undefined;
@@ -1674,6 +1729,9 @@ const Reports = (props: GenericPageProps) => {
     });
     return map;
   }, [selectedFieldDetails]);
+  const derivedFieldMap = useMemo(() => {
+    return new Map(draft.derivedFields.map((field) => [field.id, field]));
+  }, [draft.derivedFields]);
   const derivedFieldPayloads = useMemo(
     () => buildDerivedFieldPayloads(draft.derivedFields),
     [draft.derivedFields],
@@ -1720,17 +1778,17 @@ const Reports = (props: GenericPageProps) => {
     if (!derivedFieldsTemplateId || !templateDerivedFieldsQuery.data?.derivedFields) {
       return;
     }
+    const fetchedMap = new Map(
+      templateDerivedFieldsQuery.data.derivedFields.map((dto) => [
+        dto.id,
+        mapDerivedFieldDtoToReportField(dto),
+      ]),
+    );
+    if (fetchedMap.size === 0) {
+      return;
+    }
     setDraft((current) => {
       if (current.id !== derivedFieldsTemplateId) {
-        return current;
-      }
-      const fetchedMap = new Map(
-        templateDerivedFieldsQuery.data.derivedFields.map((dto) => [
-          dto.id,
-          mapDerivedFieldDtoToReportField(dto),
-        ]),
-      );
-      if (fetchedMap.size === 0) {
         return current;
       }
       let mutated = false;
@@ -1748,7 +1806,7 @@ const Reports = (props: GenericPageProps) => {
             (remote.expressionAst ? JSON.stringify(remote.expressionAst) : null);
         if (hasChanged) {
           mutated = true;
-          return { ...field, ...remote };
+          return remote;
         }
         return field;
       });
@@ -1764,7 +1822,7 @@ const Reports = (props: GenericPageProps) => {
         derivedFields: reconcileDerivedFieldStatuses(merged, current.models),
       };
     });
-  }, [derivedFieldsTemplateId, templateDerivedFieldsQuery.data, setDraft]);
+  }, [derivedFieldsTemplateId, templateDerivedFieldsQuery.data]);
   const joinCoverageLookup = useMemo(() => {
     const lookup = new Set<string>();
     draft.joins.forEach((join) => {
@@ -2075,6 +2133,19 @@ const Reports = (props: GenericPageProps) => {
   const previewColumnMetadata = useMemo(() => {
     return new Map<string, PreviewColumnMeta>(
       previewColumns.map((alias) => {
+        const derivedField = derivedFieldMap.get(alias);
+        if (derivedField) {
+          return [
+            alias,
+            {
+              alias,
+              fieldLabel: derivedField.name || humanizeAlias(alias),
+              customLabel: draft.columnAliases[alias],
+              modelName: derivedField.scope === "workspace" ? "Workspace derived field" : "Template derived field",
+              sourceColumn: derivedField.expression,
+            },
+          ];
+        }
         const [rawModelId, rawFieldId] = alias.split("__");
         const fieldId = rawFieldId && rawFieldId.length > 0 ? rawFieldId : undefined;
         const modelId = fieldId ? rawModelId : undefined;
@@ -2095,7 +2166,7 @@ const Reports = (props: GenericPageProps) => {
         ];
       }),
     );
-  }, [draft.columnAliases, modelMap, previewColumns]);
+  }, [derivedFieldMap, draft.columnAliases, modelMap, previewColumns]);
 
   const getColumnLabel = useCallback(
     (alias: string) => {
@@ -3979,10 +4050,30 @@ const Reports = (props: GenericPageProps) => {
     if (!selectedDerivedField || derivedFieldDraft.error) {
       return;
     }
+    let parsed;
+    try {
+      parsed = parseDerivedFieldExpression(derivedFieldDraft.expression);
+    } catch (error) {
+      setDerivedFieldDraft((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : "Invalid expression.",
+      }));
+      return;
+    }
     setDraft((current) => {
       const nextFields = current.derivedFields.map((field) =>
         field.id === selectedDerivedField.id
-          ? { ...field, expression: derivedFieldDraft.expression }
+          ? {
+              ...field,
+              expression: derivedFieldDraft.expression,
+              expressionAst: parsed.ast,
+              referencedModels: parsed.referencedModels,
+              referencedFields: parsed.referencedFields,
+              joinDependencies:
+                field.joinDependencies && field.joinDependencies.length > 0
+                  ? field.joinDependencies
+                  : buildModelPairs(parsed.referencedModels),
+            }
           : field,
       );
       return {
@@ -6370,8 +6461,9 @@ const Reports = (props: GenericPageProps) => {
             <Flex gap="lg" align="flex-start" wrap="wrap">
               <Stack gap="sm" style={{ flex: "1 1 280px" }}>
                 {draft.derivedFields.map((field) => {
-                  const missingModels =
-                    field.referencedModels?.filter((modelId) => !draft.models.includes(modelId)) ?? [];
+                const missingModels = getEffectiveReferencedModels(field).filter(
+                  (modelId) => !draft.models.includes(modelId),
+                );
                   const isSelected = selectedDerivedField?.id === field.id;
                   return (
                     <Card
@@ -6528,10 +6620,9 @@ const Reports = (props: GenericPageProps) => {
                     </Stack>
                     {selectedDerivedField?.status === "stale" && (
                       (() => {
-                        const missingModels =
-                          selectedDerivedField.referencedModels?.filter(
-                            (modelId) => !draft.models.includes(modelId),
-                          ) ?? [];
+                        const missingModels = getEffectiveReferencedModels(selectedDerivedField).filter(
+                          (modelId) => !draft.models.includes(modelId),
+                        );
                         if (missingModels.length === 0) {
                           return null;
                         }
