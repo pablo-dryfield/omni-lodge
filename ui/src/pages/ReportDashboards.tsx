@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDebouncedValue } from "@mantine/hooks";
 import { useQueryClient } from "@tanstack/react-query";
+import ReactGridLayout, { type Layout, WidthProvider } from "react-grid-layout";
+import "react-grid-layout/css/styles.css";
+import "react-resizable/css/styles.css";
 import {
   ActionIcon,
   Badge,
@@ -17,7 +20,6 @@ import {
   Paper,
   ScrollArea,
   Select,
-  SimpleGrid,
   Stack,
   Text,
   Textarea,
@@ -28,6 +30,7 @@ import {
   IconAdjustments,
   IconArrowLeft,
   IconDeviceFloppy,
+  IconGripVertical,
   IconLayoutGrid,
   IconPlus,
   IconSearch,
@@ -77,6 +80,8 @@ const DEFAULT_CARD_LAYOUT: DashboardCardLayout = {
   h: 4,
 };
 
+const GridLayout = WidthProvider(ReactGridLayout);
+
 const deepClone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 
 const parseLayout = (layout: Record<string, unknown> | undefined | null): DashboardCardLayout => {
@@ -103,6 +108,16 @@ const parseLayout = (layout: Record<string, unknown> | undefined | null): Dashbo
     h: height,
   };
 };
+
+const normalizeGridItem = (item: Layout): DashboardCardLayout => ({
+  x: Math.max(0, item.x),
+  y: Math.max(0, item.y),
+  w: Math.max(1, Math.min(12, item.w)),
+  h: Math.max(1, item.h),
+});
+
+const layoutsAreEqual = (a: DashboardCardLayout, b: DashboardCardLayout): boolean =>
+  a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 
 const downloadDashboardExport = (payload: DashboardExportResponse, filename: string) => {
   const blob = new Blob([JSON.stringify(payload.export, null, 2)], {
@@ -173,11 +188,13 @@ const DashboardCardGrid = ({
   templateLookup,
   onEdit,
   onRemove,
+  onLayoutCommit,
 }: {
   cards: DashboardCardDto[];
   templateLookup: Map<string, ReportTemplateDto>;
   onEdit: (card: DashboardCardDto) => void;
   onRemove: (card: DashboardCardDto) => void;
+  onLayoutCommit: (layout: Layout[]) => void;
 }) => {
   if (cards.length === 0) {
     return (
@@ -190,42 +207,60 @@ const DashboardCardGrid = ({
     );
   }
 
+  const layout = cards.map((card) => {
+    const parsed = parseLayout(card.layout);
+    return {
+      i: card.id,
+      x: parsed.x,
+      y: parsed.y,
+      w: parsed.w,
+      h: parsed.h,
+      minW: 2,
+      minH: 2,
+    };
+  });
+
   return (
-    <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
-      {cards
-        .slice()
-        .sort((a, b) => {
-          const layoutA = parseLayout(a.layout);
-          const layoutB = parseLayout(b.layout);
-          if (layoutA.y === layoutB.y) {
-            return layoutA.x - layoutB.x;
-          }
-          return layoutA.y - layoutB.y;
-        })
-        .map((card) => {
-          const template = templateLookup.get(card.templateId);
-          return (
-            <Card key={card.id} withBorder radius="md" padding="md" shadow="xs">
-              <Stack gap="sm">
-                <DashboardCardSummary card={card} template={template} />
-                <Group justify="flex-end" gap="xs">
-                  <Button variant="light" size="xs" onClick={() => onEdit(card)}>
-                    Edit card
-                  </Button>
-                  <ActionIcon
-                    variant="subtle"
-                    color="red"
-                    onClick={() => onRemove(card)}
-                    aria-label="Remove card"
-                  >
-                    <IconTrash size={16} />
-                  </ActionIcon>
+    <GridLayout
+      className="dashboard-layout-grid"
+      cols={12}
+      rowHeight={48}
+      margin={[16, 16]}
+      compactType={null}
+      layout={layout}
+      onLayoutChange={onLayoutCommit}
+      draggableHandle=".dashboard-card-drag-handle"
+      draggableCancel=".dashboard-card-actions"
+    >
+      {cards.map((card) => {
+        const template = templateLookup.get(card.templateId);
+        return (
+          <div key={card.id}>
+            <Card withBorder radius="md" padding="md" shadow="sm" h="100%">
+              <Stack gap="sm" h="100%">
+                <Group justify="space-between" align="center">
+                  <Group gap={6} align="center" className="dashboard-card-drag-handle" style={{ cursor: "grab" }}>
+                    <IconGripVertical size={16} stroke={1.5} />
+                    <Text fz="xs" c="dimmed">
+                      Drag
+                    </Text>
+                  </Group>
+                  <Group gap="xs" className="dashboard-card-actions">
+                    <Button variant="light" size="xs" onClick={() => onEdit(card)}>
+                      Edit
+                    </Button>
+                    <ActionIcon variant="subtle" color="red" onClick={() => onRemove(card)} aria-label="Remove card">
+                      <IconTrash size={16} />
+                    </ActionIcon>
+                  </Group>
                 </Group>
+                <DashboardCardSummary card={card} template={template} />
               </Stack>
             </Card>
-          );
-        })}
-    </SimpleGrid>
+          </div>
+        );
+      })}
+    </GridLayout>
   );
 };
 
@@ -293,6 +328,8 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
   const [cardDraft, setCardDraft] = useState<CardDraft | null>(null);
   const [cardMode, setCardMode] = useState<"create" | "edit">("create");
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [pendingLayoutChanges, setPendingLayoutChanges] = useState<Record<string, DashboardCardLayout>>({});
+  const [isSavingLayout, setIsSavingLayout] = useState(false);
 
   useEffect(() => {
     if (!selectedDashboardId && dashboards.length > 0) {
@@ -312,6 +349,10 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
       setDashboardDraft(null);
     }
   }, [selectedDashboard]);
+
+  useEffect(() => {
+    setPendingLayoutChanges({});
+  }, [selectedDashboardId]);
 
   const createDashboardMutation = useCreateDashboard();
   const updateDashboardMutation = useUpdateDashboard();
@@ -411,6 +452,92 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     }
   };
 
+  const handleLayoutCommit = (nextLayout: Layout[]) => {
+    if (!dashboardDraft || nextLayout.length === 0) {
+      return;
+    }
+    const normalized = new Map<string, DashboardCardLayout>();
+    nextLayout.forEach((item) => {
+      normalized.set(item.i, normalizeGridItem(item));
+    });
+
+    setDashboardDraft((current) => {
+      if (!current) {
+        return current;
+      }
+      const nextCards = current.cards.map((card) => {
+        const layout = normalized.get(card.id);
+        if (!layout) {
+          return card;
+        }
+        return {
+          ...card,
+          layout: {
+            x: layout.x,
+            y: layout.y,
+            w: layout.w,
+            h: layout.h,
+          },
+        };
+      });
+      return { ...current, cards: nextCards };
+    });
+
+    setPendingLayoutChanges((current) => {
+      const nextChanges = { ...current };
+      normalized.forEach((layout, cardId) => {
+        const baselineCard = selectedDashboard?.cards?.find((card) => card.id === cardId);
+        const baselineLayout = baselineCard ? parseLayout(baselineCard.layout) : layout;
+        if (layoutsAreEqual(layout, baselineLayout)) {
+          delete nextChanges[cardId];
+        } else {
+          nextChanges[cardId] = layout;
+        }
+      });
+      return nextChanges;
+    });
+  };
+
+  const handleSaveLayoutChanges = async () => {
+    if (!dashboardDraft) {
+      return;
+    }
+    const entries = Object.entries(pendingLayoutChanges);
+    if (entries.length === 0) {
+      return;
+    }
+    setIsSavingLayout(true);
+    setFeedback(null);
+    try {
+      await Promise.all(
+        entries.map(([cardId, layout]) => {
+          const card = dashboardDraft.cards.find((candidate) => candidate.id === cardId);
+          if (!card) {
+            return null;
+          }
+          return upsertCardMutation.mutateAsync({
+            dashboardId: dashboardDraft.id,
+            cardId,
+            payload: {
+              templateId: card.templateId,
+              title: card.title,
+              viewConfig: card.viewConfig as Record<string, unknown>,
+              layout,
+            },
+          });
+        }),
+      );
+      setPendingLayoutChanges({});
+      await queryClient.invalidateQueries({ queryKey: ["reports", "dashboards"] });
+      setFeedback({ type: "success", message: "Layout saved." });
+    } catch (error) {
+      console.error("Failed to save layout", error);
+      setFeedback({ type: "error", message: "Failed to save layout." });
+    } finally {
+      setIsSavingLayout(false);
+    }
+  };
+
   const handleSaveCard = async () => {
     if (!dashboardDraft || !cardDraft) {
       return;
@@ -477,7 +604,9 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     deleteCardMutation.isPending ||
     exportDashboardMutation.isPending;
 
-  const selectedDashboardCards = selectedDashboard?.cards ?? [];
+  const pendingLayoutCount = Object.keys(pendingLayoutChanges).length;
+
+  const selectedDashboardCards = dashboardDraft?.cards ?? selectedDashboard?.cards ?? [];
 
   return (
     <PageAccessGuard pageSlug={PAGE_SLUGS.reports}>
@@ -649,14 +778,25 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
 
                     <Group justify="space-between" align="center">
                       <Text fw={600}>Dashboard cards</Text>
-                      <Button
-                        variant="light"
-                        leftSection={<IconPlus size={16} />}
-                        onClick={handleOpenCreateCard}
-                        disabled={templates.length === 0}
-                      >
-                        Add card
-                      </Button>
+                      <Group gap="sm">
+                        <Button
+                          variant="light"
+                          leftSection={<IconDeviceFloppy size={16} />}
+                          onClick={handleSaveLayoutChanges}
+                          disabled={pendingLayoutCount === 0 || isSavingLayout}
+                          loading={isSavingLayout}
+                        >
+                          Save layout
+                        </Button>
+                        <Button
+                          variant="light"
+                          leftSection={<IconPlus size={16} />}
+                          onClick={handleOpenCreateCard}
+                          disabled={templates.length === 0}
+                        >
+                          Add card
+                        </Button>
+                      </Group>
                     </Group>
 
                     <DashboardCardGrid
@@ -664,6 +804,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                       templateLookup={templateLookup}
                       onEdit={handleOpenEditCard}
                       onRemove={handleRemoveCard}
+                      onLayoutCommit={handleLayoutCommit}
                     />
                   </Stack>
                 )}
