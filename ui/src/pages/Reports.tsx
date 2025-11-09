@@ -239,6 +239,7 @@ type FilterFieldOption = {
   modelId: string;
   fieldId: string;
   field: DataField;
+  source?: "model" | "derived";
 };
 
 type VisualQueryDescriptor = {
@@ -252,6 +253,14 @@ type VisualQueryDescriptor = {
   dimensionLabel: string;
   comparisonLabel?: string;
   warnings: string[];
+};
+
+type PreviewOrderRule = {
+  id: string;
+  source: "model" | "derived";
+  modelId?: string;
+  fieldId: string;
+  direction: "asc" | "desc";
 };
 
 type DerivedFieldStatus = "active" | "stale";
@@ -303,6 +312,7 @@ type ReportTemplate = {
   queryConfig: QueryConfig | null;
   derivedFields: ReportDerivedField[];
   metricsSpotlight: MetricSpotlightDefinitionDto[];
+  previewOrder: PreviewOrderRule[];
 };
 
 const DEFAULT_CONNECTION_LABEL = "OmniLodge core database";
@@ -495,6 +505,7 @@ const createEmptyTemplate = (): ReportTemplate => ({
   queryConfig: null,
   derivedFields: [],
   metricsSpotlight: [],
+  previewOrder: [],
 });
 
 const buildJoinKey = (left: string, right: string) => {
@@ -727,6 +738,12 @@ const normalizeFiltersForQuery = (
   const warnings: string[] = [];
 
   filters.forEach((filter) => {
+    if (filter.leftModelId === DERIVED_FIELD_SENTINEL) {
+      warnings.push(
+        `Filter on derived field ${filter.leftFieldId} is only supported in previews and was skipped for analytics.`,
+      );
+      return;
+    }
     if (filter.rightType === "field") {
       warnings.push(
         `Filter on ${filter.leftModelId}.${filter.leftFieldId} compares to another field and was skipped for analytics.`,
@@ -1161,6 +1178,41 @@ const normalizeDerivedFields = (candidate: unknown): DerivedFieldDefinitionDto[]
   return derived;
 };
 
+const normalizePreviewOrderRules = (value: unknown): PreviewOrderRule[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const rules: PreviewOrderRule[] = [];
+  value.forEach((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const id =
+      typeof record.id === "string" && record.id.trim().length > 0
+        ? record.id.trim()
+        : `order-${index}`;
+    const direction = record.direction === "desc" ? "desc" : "asc";
+    const source = record.source === "derived" ? "derived" : "model";
+    const fieldId = typeof record.fieldId === "string" ? record.fieldId.trim() : "";
+    if (!fieldId) {
+      return;
+    }
+    const modelIdCandidate =
+      typeof record.modelId === "string" && record.modelId.trim().length > 0
+        ? record.modelId.trim()
+        : undefined;
+    rules.push({
+      id,
+      source,
+      modelId: source === "derived" ? undefined : modelIdCandidate,
+      fieldId,
+      direction,
+    });
+  });
+  return rules;
+};
+
 const buildDerivedFieldPayloads = (
   fields: DerivedFieldDefinitionDto[],
 ): QueryConfigDerivedField[] => {
@@ -1325,6 +1377,10 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
     Array.isArray(template.models) ? template.models : [],
   );
   const metricsSpotlight = normalizeMetricSpotlights(template.metricsSpotlight);
+  const previewOrder =
+    Array.isArray(template.previewOrder) && template.previewOrder.length > 0
+      ? normalizePreviewOrderRules(template.previewOrder)
+      : normalizePreviewOrderRules(rawOptions.previewOrder);
 
   const columnOrder = rawColumnOrder.filter(
     (alias): alias is string => typeof alias === "string" && alias.length > 0,
@@ -1480,6 +1536,7 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
     queryConfig,
     derivedFields,
     metricsSpotlight,
+    previewOrder,
   };
 };
 
@@ -2040,7 +2097,7 @@ const Reports = (props: GenericPageProps) => {
     Boolean(manualJoinDraft.rightFieldId);
 
   const filterFieldOptions = useMemo<FilterFieldOption[]>(() => {
-    return draft.models.flatMap((modelId) => {
+    const baseOptions = draft.models.flatMap((modelId) => {
       const model = modelMap.get(modelId);
       if (!model) {
         return [];
@@ -2051,9 +2108,28 @@ const Reports = (props: GenericPageProps) => {
         modelId: model.id,
         fieldId: field.id,
         field,
+        source: "model" as const,
       }));
     });
-  }, [draft.models, modelMap]);
+
+    const derivedOptions = draft.derivedFields
+      .filter((field) => isDerivedFieldVisibleInBuilder(field))
+      .map((field) => ({
+        value: buildFilterOptionKey(DERIVED_FIELD_SENTINEL, field.id),
+        label: `Derived • ${field.name}`,
+        modelId: DERIVED_FIELD_SENTINEL,
+        fieldId: field.id,
+        field: {
+          id: field.id,
+          label: field.name,
+          type: "number",
+          sourceColumn: field.expression,
+        } as DataField,
+        source: "derived" as const,
+      }));
+
+    return [...baseOptions, ...derivedOptions];
+  }, [draft.derivedFields, draft.models, modelMap]);
 
   const filterFieldLookup = useMemo(() => {
     const lookup = new Map<string, FilterFieldOption>();
@@ -3790,18 +3866,20 @@ const Reports = (props: GenericPageProps) => {
       visuals: deepClone(draft.visuals),
       metrics: [...draft.metrics],
       filters: deepClone(draft.filters),
-      options: {
-        autoDistribution: draft.autoDistribution,
-        notifyTeam: draft.notifyTeam,
-        columnOrder: [...draft.columnOrder],
-        columnAliases: { ...draft.columnAliases },
-      },
-      queryConfig: draft.queryConfig ? deepClone(draft.queryConfig) : null,
-      derivedFields: deepClone(draft.derivedFields),
-      metricsSpotlight: deepClone(draft.metricsSpotlight),
+    options: {
+      autoDistribution: draft.autoDistribution,
+      notifyTeam: draft.notifyTeam,
       columnOrder: [...draft.columnOrder],
       columnAliases: { ...draft.columnAliases },
-    };
+      previewOrder: draft.previewOrder.map((rule) => ({ ...rule })),
+    },
+    queryConfig: draft.queryConfig ? deepClone(draft.queryConfig) : null,
+    derivedFields: deepClone(draft.derivedFields),
+    metricsSpotlight: deepClone(draft.metricsSpotlight),
+    columnOrder: [...draft.columnOrder],
+    columnAliases: { ...draft.columnAliases },
+    previewOrder: draft.previewOrder.map((rule) => ({ ...rule })),
+  };
 
     try {
       const saved = await saveTemplateMutation.mutateAsync(payload);
@@ -3814,6 +3892,7 @@ const Reports = (props: GenericPageProps) => {
               ...mapped,
               columnOrder: [...draft.columnOrder],
               columnAliases: { ...draft.columnAliases },
+              previewOrder: [...draft.previewOrder],
             };
       setTemplates((current) => {
         const exists = current.some((template) => template.id === mergedTemplate.id);
@@ -3859,12 +3938,14 @@ const Reports = (props: GenericPageProps) => {
         notifyTeam: true,
         columnOrder: [],
         columnAliases: {},
+        previewOrder: [],
       },
       queryConfig: null,
       derivedFields: [],
       metricsSpotlight: [],
       columnOrder: [],
       columnAliases: {},
+      previewOrder: [],
     };
 
     try {
@@ -3878,6 +3959,7 @@ const Reports = (props: GenericPageProps) => {
               ...mapped,
               columnOrder: [],
               columnAliases: {},
+              previewOrder: [],
             };
       setTemplates((current) => [...current, mergedTemplate]);
       setSelectedTemplateId(mergedTemplate.id);
@@ -3912,6 +3994,7 @@ const Reports = (props: GenericPageProps) => {
         notifyTeam: selectedTemplate.notifyTeam,
         columnOrder: [...selectedTemplate.columnOrder],
         columnAliases: { ...selectedTemplate.columnAliases },
+        previewOrder: selectedTemplate.previewOrder.map((rule) => ({ ...rule })),
       },
       queryConfig: selectedTemplate.queryConfig
         ? deepClone(selectedTemplate.queryConfig)
@@ -3920,6 +4003,7 @@ const Reports = (props: GenericPageProps) => {
       metricsSpotlight: deepClone(selectedTemplate.metricsSpotlight),
       columnOrder: [...selectedTemplate.columnOrder],
       columnAliases: { ...selectedTemplate.columnAliases },
+      previewOrder: selectedTemplate.previewOrder.map((rule) => ({ ...rule })),
     };
 
     try {
@@ -3933,6 +4017,7 @@ const Reports = (props: GenericPageProps) => {
               ...mapped,
               columnOrder: [...selectedTemplate.columnOrder],
               columnAliases: { ...selectedTemplate.columnAliases },
+              previewOrder: [...selectedTemplate.previewOrder],
             };
       setTemplates((current) => [...current, mergedTemplate]);
       setSelectedTemplateId(mergedTemplate.id);
@@ -4120,6 +4205,36 @@ const Reports = (props: GenericPageProps) => {
       return;
     }
 
+    const orderByPayload = draft.previewOrder
+      .map((rule) => {
+        if (rule.source === "derived") {
+          return {
+            source: "derived" as const,
+            fieldId: rule.fieldId,
+            direction: rule.direction,
+          };
+        }
+        if (!rule.modelId) {
+          return null;
+        }
+        return {
+          source: "model" as const,
+          modelId: rule.modelId,
+          fieldId: rule.fieldId,
+          direction: rule.direction,
+        };
+      })
+      .filter(
+        (
+          entry,
+        ): entry is {
+          source: "model" | "derived";
+          modelId?: string;
+          fieldId: string;
+          direction: "asc" | "desc";
+        } => Boolean(entry),
+      );
+
     const payload: ReportPreviewRequest = {
       models: draft.models,
       fields: sanitizedFields,
@@ -4135,6 +4250,7 @@ const Reports = (props: GenericPageProps) => {
         }),
       ),
       filters: filterClauses,
+      orderBy: orderByPayload.length > 0 ? orderByPayload : undefined,
       limit: 500,
       derivedFields: derivedFieldPayloads.length > 0 ? derivedFieldPayloads : undefined,
     };
@@ -4315,6 +4431,69 @@ const Reports = (props: GenericPageProps) => {
     setDraft((current) => ({
       ...current,
       filters: current.filters.filter((filter) => filter.id !== filterId),
+    }));
+  };
+
+  const createPreviewOrderRuleFromOption = (option: FilterFieldOption): PreviewOrderRule => ({
+    id: `order-${Date.now()}`,
+    source: option.source === "derived" ? "derived" : "model",
+    modelId: option.source === "derived" ? undefined : option.modelId,
+    fieldId: option.fieldId,
+    direction: "desc",
+  });
+
+  const handleAddPreviewOrderRule = () => {
+    const defaultOption = filterFieldOptions[0];
+    if (!defaultOption) {
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      previewOrder: [...current.previewOrder, createPreviewOrderRuleFromOption(defaultOption)],
+    }));
+  };
+
+  const handlePreviewOrderFieldChange = (ruleId: string, optionValue: string | null) => {
+    if (!optionValue) {
+      return;
+    }
+    const option = filterFieldOptions.find((candidate) => candidate.value === optionValue);
+    if (!option) {
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      previewOrder: current.previewOrder.map((rule) =>
+        rule.id === ruleId
+          ? {
+              ...rule,
+              source: option.source === "derived" ? "derived" : "model",
+              modelId: option.source === "derived" ? undefined : option.modelId,
+              fieldId: option.fieldId,
+            }
+          : rule,
+      ),
+    }));
+  };
+
+  const handlePreviewOrderDirectionChange = (ruleId: string, direction: "asc" | "desc") => {
+    setDraft((current) => ({
+      ...current,
+      previewOrder: current.previewOrder.map((rule) =>
+        rule.id === ruleId
+          ? {
+              ...rule,
+              direction,
+            }
+          : rule,
+      ),
+    }));
+  };
+
+  const handleRemovePreviewOrderRule = (ruleId: string) => {
+    setDraft((current) => ({
+      ...current,
+      previewOrder: current.previewOrder.filter((rule) => rule.id !== ruleId),
     }));
   };
 
@@ -4633,172 +4812,266 @@ const Reports = (props: GenericPageProps) => {
     });
   }, [filterFieldLookup, filterFieldOptions]);
 
+  useEffect(() => {
+    setDraft((current) => {
+      if (current.previewOrder.length === 0) {
+        return current;
+      }
+      const validKeys = new Set(filterFieldOptions.map((option) => option.value));
+      const nextOrder = current.previewOrder.filter((rule) => {
+        const key =
+          rule.source === "derived"
+            ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, rule.fieldId)
+            : rule.modelId
+            ? buildFilterOptionKey(rule.modelId, rule.fieldId)
+            : "";
+        return key.length > 0 && validKeys.has(key);
+      });
+      if (nextOrder.length === current.previewOrder.length) {
+        return current;
+      }
+      return {
+        ...current,
+        previewOrder: nextOrder,
+      };
+    });
+  }, [filterFieldOptions]);
+
   const buildFilterClausesForRequest = useCallback(
-    (filters: ReportFilter[], aliasLookup: Map<string, string>) => {
-      const clauses: string[] = [];
-      const errors: string[] = [];
+  (filters: ReportFilter[], aliasLookup: Map<string, string>) => {
+    const clauses: string[] = [];
+    const errors: string[] = [];
 
-      filters.forEach((filter) => {
-        const leftOption = filterFieldLookup.get(
-          buildFilterOptionKey(filter.leftModelId, filter.leftFieldId),
+    const resolveColumnExpressionForFilter = (modelId: string, fieldId: string): string | null => {
+      const alias = aliasLookup.get(modelId);
+      const model = modelMap.get(modelId);
+      if (!alias || !model) {
+        return null;
+      }
+      const field = model.fields.find((candidate) => candidate.id === fieldId);
+      if (!field) {
+        return null;
+      }
+      const column = field.sourceColumn ?? field.id;
+      return `${alias}.${quoteIdentifier(column)}`;
+    };
+
+    const buildDerivedExpressionSql = (fieldId: string): string | null => {
+      const derivedField = derivedFieldMap.get(fieldId);
+      if (!derivedField || !derivedField.expressionAst) {
+        return null;
+      }
+
+      const renderNode = (node: DerivedFieldExpressionAst): string | null => {
+        switch (node.type) {
+          case "column":
+            return resolveColumnExpressionForFilter(node.modelId, node.fieldId);
+          case "literal":
+            if (node.valueType === "number") {
+              return Number(node.value).toString();
+            }
+            if (node.valueType === "boolean") {
+              return node.value ? "TRUE" : "FALSE";
+            }
+            return `'${escapeSqlLiteral(String(node.value ?? ""))}'`;
+          case "binary": {
+            const left = renderNode(node.left);
+            const right = renderNode(node.right);
+            if (!left || !right) {
+              return null;
+            }
+            return `(${left} ${node.operator} ${right})`;
+          }
+          case "unary": {
+            const argument = renderNode(node.argument);
+            if (!argument) {
+              return null;
+            }
+            return `${node.operator}(${argument})`;
+          }
+          case "function": {
+            const args = node.args.map((arg) => renderNode(arg));
+            if (args.some((arg) => !arg)) {
+              return null;
+            }
+            return `${node.name}(${args.join(", ")})`;
+          }
+          default:
+            return null;
+        }
+      };
+
+      return renderNode(derivedField.expressionAst);
+    };
+
+    const resolveFieldExpression = (option: FilterFieldOption): string | null => {
+      if (option.modelId === DERIVED_FIELD_SENTINEL) {
+        return buildDerivedExpressionSql(option.fieldId);
+      }
+      return resolveColumnExpressionForFilter(option.modelId, option.fieldId);
+    };
+
+    filters.forEach((filter) => {
+      const leftOption = filterFieldLookup.get(
+        buildFilterOptionKey(filter.leftModelId, filter.leftFieldId),
+      );
+      if (!leftOption) {
+        errors.push("A filter references a field that is no longer available.");
+        return;
+      }
+
+      const operatorDefinition = FILTER_OPERATOR_LOOKUP.get(filter.operator);
+      if (!operatorDefinition) {
+        return;
+      }
+
+      const leftExpression = resolveFieldExpression(leftOption);
+      if (!leftExpression) {
+        errors.push(`"${leftOption.label}" is not available in the current preview.`);
+        return;
+      }
+
+      const requiresValue = operatorDefinition.requiresValue;
+      const allowFieldComparison = operatorDefinition.allowFieldComparison ?? false;
+      const fieldLabel = leftOption.label;
+
+      if (!requiresValue) {
+        switch (filter.operator) {
+          case "is_null":
+            clauses.push(`${leftExpression} IS NULL`);
+            break;
+          case "is_not_null":
+            clauses.push(`${leftExpression} IS NOT NULL`);
+            break;
+          case "is_true":
+            clauses.push(`${leftExpression} IS TRUE`);
+            break;
+          case "is_false":
+            clauses.push(`${leftExpression} IS FALSE`);
+            break;
+          default:
+            break;
+        }
+        return;
+      }
+
+      if (filter.rightType === "field") {
+        if (!allowFieldComparison) {
+          errors.push(`The operator on "${fieldLabel}" does not support comparing against a field.`);
+          return;
+        }
+        if (!filter.rightModelId || !filter.rightFieldId) {
+          errors.push(`Select a comparison field for "${fieldLabel}".`);
+          return;
+        }
+        const rightOption = filterFieldLookup.get(
+          buildFilterOptionKey(filter.rightModelId, filter.rightFieldId),
         );
-        if (!leftOption) {
-          errors.push("A filter references a field that is no longer available.");
+        if (!rightOption) {
+          errors.push("The comparison field is no longer available.");
           return;
         }
-
-        const leftAlias = aliasLookup.get(filter.leftModelId);
-        if (!leftAlias) {
-          errors.push(`Model ${filter.leftModelId} is not included in the current preview.`);
+        const rightExpression = resolveFieldExpression(rightOption);
+        if (!rightExpression) {
+          errors.push("The comparison field is not available in the current preview.");
           return;
         }
-
-        const operatorDefinition = FILTER_OPERATOR_LOOKUP.get(filter.operator);
-        if (!operatorDefinition) {
+        const operatorSqlMap: Partial<Record<FilterOperator, string>> = {
+          eq: "=",
+          neq: "<>",
+          gt: ">",
+          gte: ">=",
+          lt: "<",
+          lte: "<=",
+        };
+        const sqlOperator = operatorSqlMap[filter.operator];
+        if (!sqlOperator) {
+          errors.push(`"${fieldLabel}" operator requires a literal value.`);
           return;
         }
+        clauses.push(`${leftExpression} ${sqlOperator} ${rightExpression}`);
+        return;
+      }
 
-        const leftColumn = leftOption.field.sourceColumn ?? leftOption.field.id;
-        const leftExpression = `${leftAlias}.${quoteIdentifier(leftColumn)}`;
-        const requiresValue = operatorDefinition.requiresValue;
-        const allowFieldComparison = operatorDefinition.allowFieldComparison ?? false;
-        const fieldLabel = leftOption.label;
+      const trimmedValue = (filter.value ?? "").trim();
+      if (filter.valueKind !== "boolean" && trimmedValue.length === 0) {
+        errors.push(`Provide a value for the filter on "${fieldLabel}".`);
+        return;
+      }
 
-        if (!requiresValue) {
-          switch (filter.operator) {
-            case "is_null":
-              clauses.push(`${leftExpression} IS NULL`);
-              break;
-            case "is_not_null":
-              clauses.push(`${leftExpression} IS NOT NULL`);
-              break;
-            case "is_true":
-              clauses.push(`${leftExpression} IS TRUE`);
-              break;
-            case "is_false":
-              clauses.push(`${leftExpression} IS FALSE`);
-              break;
-            default:
-              break;
+      const buildLiteral = (kind: FilterValueKind, value: string): string | null => {
+        if (kind === "number") {
+          const numeric = Number(value);
+          if (!Number.isFinite(numeric)) {
+            errors.push(`Enter a valid number for "${fieldLabel}".`);
+            return null;
           }
-          return;
+          return String(numeric);
         }
+        if (kind === "boolean") {
+          const normalized = value.toLowerCase();
+          if (normalized !== "true" && normalized !== "false") {
+            errors.push(`Select true or false for "${fieldLabel}".`);
+            return null;
+          }
+          return normalized === "true" ? "TRUE" : "FALSE";
+        }
+        return `'${escapeSqlLiteral(value)}'`;
+      };
 
-        if (filter.rightType === "field") {
-          if (!allowFieldComparison) {
-            errors.push(`The operator on "${fieldLabel}" does not support comparing against a field.`);
-            return;
-          }
-          if (!filter.rightModelId || !filter.rightFieldId) {
-            errors.push(`Select a comparison field for "${fieldLabel}".`);
-            return;
-          }
-          const rightAlias = aliasLookup.get(filter.rightModelId);
-          const rightOption = filterFieldLookup.get(
-            buildFilterOptionKey(filter.rightModelId, filter.rightFieldId),
-          );
-          if (!rightAlias || !rightOption) {
-            errors.push("The comparison field is no longer available.");
-            return;
-          }
-          const rightColumn = rightOption.field.sourceColumn ?? rightOption.field.id;
-          const rightExpression = `${rightAlias}.${quoteIdentifier(rightColumn)}`;
-          const operatorSqlMap: Partial<Record<FilterOperator, string>> = {
+      switch (filter.operator) {
+        case "eq":
+        case "neq":
+        case "gt":
+        case "gte":
+        case "lt":
+        case "lte": {
+          const operatorSqlMap: Record<FilterOperator, string> = {
             eq: "=",
             neq: "<>",
             gt: ">",
             gte: ">=",
             lt: "<",
             lte: "<=",
+            contains: "",
+            starts_with: "",
+            ends_with: "",
+            is_null: "IS NULL",
+            is_not_null: "IS NOT NULL",
+            is_true: "IS TRUE",
+            is_false: "IS FALSE",
           };
-          const sqlOperator = operatorSqlMap[filter.operator];
-          if (!sqlOperator) {
-            errors.push(`"${fieldLabel}" operator requires a literal value.`);
+          const literal = buildLiteral(filter.valueKind, trimmedValue);
+          if (!literal) {
             return;
           }
-          clauses.push(`${leftExpression} ${sqlOperator} ${rightExpression}`);
-          return;
+          clauses.push(`${leftExpression} ${operatorSqlMap[filter.operator]} ${literal}`);
+          break;
         }
-
-        const trimmedValue = (filter.value ?? "").trim();
-        if (filter.valueKind !== "boolean" && trimmedValue.length === 0) {
-          errors.push(`Provide a value for the filter on "${fieldLabel}".`);
-          return;
+        case "contains": {
+          const literal = `'${`%${escapeSqlLiteral(trimmedValue)}%`}'`;
+          clauses.push(`${leftExpression} ILIKE ${literal}`);
+          break;
         }
-
-        const buildLiteral = (kind: FilterValueKind, value: string): string | null => {
-          if (kind === "number") {
-            const numeric = Number(value);
-            if (!Number.isFinite(numeric)) {
-              errors.push(`Enter a valid number for "${fieldLabel}".`);
-              return null;
-            }
-            return String(numeric);
-          }
-          if (kind === "boolean") {
-            const normalized = value.toLowerCase();
-            if (normalized !== "true" && normalized !== "false") {
-              errors.push(`Select true or false for "${fieldLabel}".`);
-              return null;
-            }
-            return normalized === "true" ? "TRUE" : "FALSE";
-          }
-          return `'${escapeSqlLiteral(value)}'`;
-        };
-
-        switch (filter.operator) {
-          case "eq":
-          case "neq":
-          case "gt":
-          case "gte":
-          case "lt":
-          case "lte": {
-            const operatorSqlMap: Record<FilterOperator, string> = {
-              eq: "=",
-              neq: "<>",
-              gt: ">",
-              gte: ">=",
-              lt: "<",
-              lte: "<=",
-              contains: "",
-              starts_with: "",
-              ends_with: "",
-              is_null: "",
-              is_not_null: "",
-              is_true: "",
-              is_false: "",
-            };
-            const literal = buildLiteral(filter.valueKind, trimmedValue);
-            if (!literal) {
-              return;
-            }
-            clauses.push(`${leftExpression} ${operatorSqlMap[filter.operator]} ${literal}`);
-            break;
-          }
-          case "contains": {
-            const literal = `'${`%${escapeSqlLiteral(trimmedValue)}%`}'`;
-            clauses.push(`${leftExpression} ILIKE ${literal}`);
-            break;
-          }
-          case "starts_with": {
-            const literal = `'${`${escapeSqlLiteral(trimmedValue)}%`}'`;
-            clauses.push(`${leftExpression} ILIKE ${literal}`);
-            break;
-          }
-          case "ends_with": {
-            const literal = `'${`%${escapeSqlLiteral(trimmedValue)}`}'`;
-            clauses.push(`${leftExpression} ILIKE ${literal}`);
-            break;
-          }
-          default:
-            break;
+        case "starts_with": {
+          const literal = `'${`${escapeSqlLiteral(trimmedValue)}%`}'`;
+          clauses.push(`${leftExpression} ILIKE ${literal}`);
+          break;
         }
-      });
+        case "ends_with": {
+          const literal = `'${`%${escapeSqlLiteral(trimmedValue)}`}'`;
+          clauses.push(`${leftExpression} ILIKE ${literal}`);
+          break;
+        }
+        default:
+          break;
+      }
+    });
 
-      return { clauses, errors };
-    },
-    [filterFieldLookup],
-  );
+    return { clauses, errors };
+  },
+  [derivedFieldMap, filterFieldLookup, modelMap],
+);
 
 
   const builderLoaded = dataModels.length > 0 && !isTemplatesLoading && !isTemplatesError;
@@ -6418,6 +6691,84 @@ const Reports = (props: GenericPageProps) => {
                       Add condition
                     </Button>
                     <Divider my="sm" />
+                    <Stack gap="xs">
+                      <Group justify="space-between" align="center">
+                        <Text fw={600} fz="sm">
+                          Preview order
+                        </Text>
+                        <Button
+                          variant="subtle"
+                          size="xs"
+                          leftSection={<IconPlus size={12} />}
+                          onClick={handleAddPreviewOrderRule}
+                          disabled={filterFieldOptions.length === 0}
+                        >
+                          Add sort rule
+                        </Button>
+                      </Group>
+                      {draft.previewOrder.length === 0 ? (
+                        <Text c="dimmed" fz="sm">
+                          No ordering applied. Rows will follow the default database ordering.
+                        </Text>
+                      ) : (
+                        draft.previewOrder.map((rule) => {
+                          const optionKey =
+                            rule.source === "derived"
+                              ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, rule.fieldId)
+                              : rule.modelId
+                              ? buildFilterOptionKey(rule.modelId, rule.fieldId)
+                              : "";
+                          const optionMissing = !optionKey || !filterFieldLookup.has(optionKey);
+                          return (
+                            <Paper key={rule.id} withBorder radius="md" p="sm">
+                              <Stack gap="xs">
+                                <Group align="flex-end" gap="sm" wrap="wrap">
+                                  <Select
+                                    label="Field"
+                                    data={filterFieldOptions.map((option) => ({
+                                      value: option.value,
+                                      label: option.label,
+                                    }))}
+                                    value={optionMissing ? null : optionKey}
+                                    onChange={(value) => handlePreviewOrderFieldChange(rule.id, value)}
+                                    placeholder="Select field"
+                                    searchable
+                                    style={{ flex: 1, minWidth: 220 }}
+                                  />
+                                  <SegmentedControl
+                                    value={rule.direction}
+                                    onChange={(value) =>
+                                      handlePreviewOrderDirectionChange(
+                                        rule.id,
+                                        (value as "asc" | "desc") ?? "asc",
+                                      )
+                                    }
+                                    data={[
+                                      { value: "asc", label: "Asc" },
+                                      { value: "desc", label: "Desc" },
+                                    ]}
+                                  />
+                                  <ActionIcon
+                                    variant="subtle"
+                                    color="red"
+                                    onClick={() => handleRemovePreviewOrderRule(rule.id)}
+                                    aria-label="Remove sort rule"
+                                  >
+                                    <IconTrash size={16} />
+                                  </ActionIcon>
+                                </Group>
+                                {optionMissing && (
+                                  <Text fz="xs" c="red">
+                                    Field is no longer available. Select another column to keep this rule.
+                                  </Text>
+                                )}
+                              </Stack>
+                            </Paper>
+                          );
+                        })
+                      )}
+                    </Stack>
+                    <Divider my="sm" />
                     <Checkbox
                       label="Auto-publish PDF package to leadership workspace"
                       checked={draft.autoDistribution}
@@ -6946,6 +7297,7 @@ const Reports = (props: GenericPageProps) => {
 };
 
 export default Reports;
+
 
 
 

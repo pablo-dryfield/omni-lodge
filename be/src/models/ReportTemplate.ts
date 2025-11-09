@@ -18,11 +18,20 @@ export type ReportTemplateFieldSelection = {
   fieldIds: string[];
 };
 
+export type PreviewOrderRule = {
+  id: string;
+  source: "model" | "derived";
+  modelId?: string | null;
+  fieldId: string;
+  direction: "asc" | "desc";
+};
+
 export type ReportTemplateOptions = {
   autoDistribution: boolean;
   notifyTeam: boolean;
   columnOrder: string[];
   columnAliases: Record<string, string>;
+  previewOrder: PreviewOrderRule[];
 };
 
 export type ReportTemplateDerivedField = {
@@ -113,7 +122,13 @@ export default class ReportTemplate extends Model {
   declare filters: unknown[];
 
   @AllowNull(false)
-  @Default({ autoDistribution: true, notifyTeam: true, columnOrder: [], columnAliases: {} })
+  @Default({
+    autoDistribution: true,
+    notifyTeam: true,
+    columnOrder: [],
+    columnAliases: {},
+    previewOrder: [],
+  })
   @Column({ type: DataType.JSONB })
   declare options: ReportTemplateOptions;
 
