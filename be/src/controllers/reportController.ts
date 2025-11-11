@@ -29,17 +29,32 @@ import {
 import { PreviewQueryError } from "../errors/PreviewQueryError.js";
 import { ensureReportingAccess } from "../utils/reportingAccess.js";
 import { normalizeDerivedFieldExpressionAst } from "../utils/derivedFieldExpression.js";
+import CompensationComponent, {
+  type CompensationCalculationMethod,
+  type CompensationComponentCategory,
+} from "../models/CompensationComponent.js";
+import CompensationComponentAssignment from "../models/CompensationComponentAssignment.js";
 
 type CommissionSummary = {
   userId: number;
   firstName: string;
   totalCommission: number;
+  totalCustomers: number;
   breakdown: Array<{
     date: string;
     commission: number;
     customers: number;
     guidesCount: number;
   }>;
+  componentTotals: Array<{
+    componentId: number;
+    name: string;
+    category: CompensationComponentCategory;
+    calculationMethod: CompensationCalculationMethod;
+    amount: number;
+  }>;
+  bucketTotals: Record<string, number>;
+  totalPayout: number;
 };
 
 type GuideDailyBreakdown = {
@@ -1116,7 +1131,11 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           userId,
           firstName,
           totalCommission: 0,
+          totalCustomers: 0,
           breakdown: [],
+          componentTotals: [],
+          bucketTotals: { commission: 0 },
+          totalPayout: 0,
         });
       }
     });
@@ -1158,12 +1177,13 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
 
       staffForCounter.forEach((staff) => {
         const userId = staff.userId;
-        const commissionSummary = commissionDataByUser.get(userId);
-        if (!commissionSummary) {
-          return;
-        }
+    const commissionSummary = commissionDataByUser.get(userId);
+    if (!commissionSummary) {
+      return;
+    }
 
-        commissionSummary.totalCommission += commissionPerStaff;
+    commissionSummary.totalCommission += commissionPerStaff;
+    commissionSummary.totalCustomers += customers;
 
         const guideBreakdown = aggregate.guides.get(userId) ?? {
           userId,
@@ -1181,13 +1201,45 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
 
     aggregateDailyBreakdownByUser(dailyAggregates, commissionDataByUser);
 
+    const activeComponents = await CompensationComponent.findAll({
+      where: { isActive: true },
+      include: [
+        {
+          model: CompensationComponentAssignment,
+          as: "assignments",
+          where: { isActive: true },
+          required: false,
+        },
+      ],
+      order: [
+        ["category", "ASC"],
+        ["name", "ASC"],
+      ],
+    });
+
+    applyCompensationComponents(
+      commissionDataByUser,
+      activeComponents as Array<CompensationComponent & { assignments?: CompensationComponentAssignment[] }>,
+      start,
+      end,
+    );
+
     const allSummaries = Array.from(commissionDataByUser.values()).map((entry) => ({
       ...entry,
       totalCommission: Number(entry.totalCommission.toFixed(2)),
+      totalCustomers: entry.totalCustomers,
       breakdown: entry.breakdown.map((item) => ({
         ...item,
         commission: Number(item.commission.toFixed(2)),
       })),
+      componentTotals: entry.componentTotals.map((component) => ({
+        ...component,
+        amount: Number(component.amount.toFixed(2)),
+      })),
+      bucketTotals: Object.fromEntries(
+        Object.entries(entry.bucketTotals).map(([key, value]) => [key, Number(value.toFixed(2))]),
+      ),
+      totalPayout: Number(entry.totalPayout.toFixed(2)),
     }));
 
     const authRequest = req as AuthenticatedRequest;
@@ -2187,6 +2239,98 @@ function describeModel(model: ModelCtor<Model>): ReportModelDescriptor {
 
   return descriptor;
 }
+
+const isAssignmentEffectiveForRange = (
+  assignment: CompensationComponentAssignment,
+  rangeStart: dayjs.Dayjs,
+  rangeEnd: dayjs.Dayjs,
+) => {
+  const effectiveStart = assignment.effectiveStart ? dayjs(assignment.effectiveStart) : null;
+  const effectiveEnd = assignment.effectiveEnd ? dayjs(assignment.effectiveEnd) : null;
+  if (effectiveStart && effectiveStart.isAfter(rangeEnd, "day")) {
+    return false;
+  }
+  if (effectiveEnd && effectiveEnd.isBefore(rangeStart, "day")) {
+    return false;
+  }
+  return true;
+};
+
+const assignmentAppliesToUser = (assignment: CompensationComponentAssignment, userId: number): boolean => {
+  if (assignment.targetScope === "global") {
+    return true;
+  }
+  if (assignment.targetScope === "user") {
+    return assignment.userId === userId;
+  }
+  // TODO: support shift_role, user_type, staff_type targets once requisite context is available.
+  return false;
+};
+
+const computeAssignmentAmount = (
+  component: CompensationComponent,
+  assignment: CompensationComponentAssignment,
+  summary: CommissionSummary,
+) => {
+  const baseAmount = Number(assignment.baseAmount ?? 0);
+  const unitAmount = Number(assignment.unitAmount ?? 0);
+  let total = baseAmount;
+
+  if (!Number.isNaN(unitAmount) && unitAmount !== 0) {
+    if (component.calculationMethod === "per_unit") {
+      total += unitAmount * summary.totalCustomers;
+    } else if (component.calculationMethod === "percentage") {
+      total += (unitAmount / 100) * summary.totalCommission;
+    }
+  }
+
+  return total;
+};
+
+const applyCompensationComponents = (
+  summaries: Map<number, CommissionSummary>,
+  components: Array<CompensationComponent & { assignments?: CompensationComponentAssignment[] }>,
+  rangeStart: dayjs.Dayjs,
+  rangeEnd: dayjs.Dayjs,
+) => {
+  summaries.forEach((summary) => {
+    summary.componentTotals = [];
+    summary.bucketTotals = { commission: summary.totalCommission };
+    summary.totalPayout = summary.totalCommission;
+  });
+
+  components.forEach((component) => {
+    const assignments = component.assignments ?? [];
+    if (assignments.length === 0) {
+      return;
+    }
+
+    summaries.forEach((summary) => {
+      const amount = assignments.reduce((acc, assignment) => {
+        if (
+          !assignment.isActive ||
+          !isAssignmentEffectiveForRange(assignment, rangeStart, rangeEnd) ||
+          !assignmentAppliesToUser(assignment, summary.userId)
+        ) {
+          return acc;
+        }
+        return acc + computeAssignmentAmount(component, assignment, summary);
+      }, 0);
+
+      if (amount !== 0) {
+        summary.componentTotals.push({
+          componentId: component.id,
+          name: component.name,
+          category: component.category,
+          calculationMethod: component.calculationMethod,
+          amount,
+        });
+        summary.bucketTotals[component.category] = (summary.bucketTotals[component.category] ?? 0) + amount;
+        summary.totalPayout += amount;
+      }
+    });
+  });
+};
 
 function describeField(
   fieldName: string,

@@ -34,6 +34,7 @@ import financeReducer from '../reducers/financeReducer';
 import staffProfileReducer from '../reducers/staffProfileReducer';
 import reviewPlatformReducer from '../reducers/reviewPlatformReducer';
 import compensationComponentReducer from '../reducers/compensationComponentReducer';
+import assistantManagerTaskReducer from '../reducers/assistantManagerTaskReducer';
 import reviewCounterReducer from '../reducers/reviewCounterReducer';
 
 const reducer = {
@@ -72,6 +73,7 @@ const reducer = {
   staffProfiles: staffProfileReducer,
   reviewPlatforms: reviewPlatformReducer,
   compensationComponents: compensationComponentReducer,
+  assistantManagerTasks: assistantManagerTaskReducer,
   reviewCounters: reviewCounterReducer,
 };
 

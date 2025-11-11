@@ -54,6 +54,9 @@ import ReviewCounterEntry from "../models/ReviewCounterEntry.js";
 import ReviewPlatform from "../models/ReviewPlatform.js";
 import CompensationComponent from "../models/CompensationComponent.js";
 import CompensationComponentAssignment from "../models/CompensationComponentAssignment.js";
+import AssistantManagerTaskTemplate from "../models/AssistantManagerTaskTemplate.js";
+import AssistantManagerTaskAssignment from "../models/AssistantManagerTaskAssignment.js";
+import AssistantManagerTaskLog from "../models/AssistantManagerTaskLog.js";
 import {
   FinanceAccount,
   FinanceAuditLog,
@@ -109,6 +112,9 @@ const sequelize = new Sequelize({
     ReviewPlatform,
     CompensationComponent,
     CompensationComponentAssignment,
+    AssistantManagerTaskTemplate,
+    AssistantManagerTaskAssignment,
+    AssistantManagerTaskLog,
     Counter,
     CounterProduct,
     CounterUser,

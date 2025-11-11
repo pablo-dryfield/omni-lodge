@@ -54,6 +54,9 @@ import ReportDashboardCard from './ReportDashboardCard.js';
 import UserHomePreference from './UserHomePreference.js';
 import CompensationComponent from './CompensationComponent.js';
 import CompensationComponentAssignment from './CompensationComponentAssignment.js';
+import AssistantManagerTaskTemplate from './AssistantManagerTaskTemplate.js';
+import AssistantManagerTaskAssignment from './AssistantManagerTaskAssignment.js';
+import AssistantManagerTaskLog from './AssistantManagerTaskLog.js';
 
 export function defineAssociations() {
   // User Associations
@@ -117,6 +120,15 @@ export function defineAssociations() {
   CompensationComponentAssignment.belongsTo(ShiftRole, { foreignKey: 'shift_role_id', as: 'shiftRoleCompensation' });
   UserType.hasMany(CompensationComponentAssignment, { foreignKey: 'user_type_id', as: 'userTypeCompensationAssignments' });
   CompensationComponentAssignment.belongsTo(UserType, { foreignKey: 'user_type_id', as: 'userTypeCompensation' });
+
+  AssistantManagerTaskTemplate.hasMany(AssistantManagerTaskAssignment, { foreignKey: 'template_id', as: 'taskAssignments' });
+  AssistantManagerTaskAssignment.belongsTo(AssistantManagerTaskTemplate, { foreignKey: 'template_id', as: 'templateTask' });
+  AssistantManagerTaskTemplate.hasMany(AssistantManagerTaskLog, { foreignKey: 'template_id', as: 'taskLogs' });
+  AssistantManagerTaskLog.belongsTo(AssistantManagerTaskTemplate, { foreignKey: 'template_id', as: 'templateTaskLog' });
+  User.hasMany(AssistantManagerTaskAssignment, { foreignKey: 'user_id', as: 'assistantManagerTaskAssignments' });
+  AssistantManagerTaskAssignment.belongsTo(User, { foreignKey: 'user_id', as: 'assignmentUser' });
+  User.hasMany(AssistantManagerTaskLog, { foreignKey: 'user_id', as: 'assistantManagerTaskLogs' });
+  AssistantManagerTaskLog.belongsTo(User, { foreignKey: 'user_id', as: 'logUser' });
 
   // Product Associations
   Product.belongsTo(ProductType, { foreignKey: 'productTypeId' });
