@@ -8,6 +8,7 @@ import User from '../models/User.js';
 import HttpError from '../errors/HttpError.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import logger from '../utils/logger.js';
+import { DID_NOT_OPERATE_NOTE } from '../constants/nightReports.js';
 import {
   ensureNightReportStorage,
   storeNightReportPhoto,
@@ -53,7 +54,6 @@ type NightReportPayload = {
 };
 
 const ADMIN_ROLE_SLUGS = new Set(['admin', 'owner', 'super_admin']);
-const DID_NOT_OPERATE_NOTE = 'The activity didn\'t operate.';
 
 const NIGHT_REPORT_COLUMNS = [
   { header: 'ID', accessorKey: 'id', type: 'number' },
@@ -602,6 +602,9 @@ export const submitNightReport = async (req: AuthenticatedRequest, res: Response
     const didNotOperate = normalizedNotes === DID_NOT_OPERATE_NOTE.toLowerCase();
 
     const venues = report.venues ?? [];
+    const noVenueAttendance =
+      venues.length === 0 ||
+      venues.every((venue) => Math.max(0, Number(venue.totalPeople ?? 0)) === 0);
     const hasRecordedVenues = !didNotOperate && venues.length > 0;
     if (hasRecordedVenues) {
       const openBarVenues = venues.filter((venue) => venue.isOpenBar);
@@ -623,7 +626,7 @@ export const submitNightReport = async (req: AuthenticatedRequest, res: Response
     }
 
     const photoCount = await NightReportPhoto.count({ where: { reportId } });
-    if (photoCount === 0 && !didNotOperate) {
+    if (photoCount === 0 && !didNotOperate && !noVenueAttendance) {
       throw new HttpError(400, 'Upload the signed paper photo before submitting');
     }
 

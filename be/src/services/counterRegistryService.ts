@@ -14,6 +14,8 @@ import ChannelProductPrice from '../models/ChannelProductPrice.js';
 import User from '../models/User.js';
 import UserType from '../models/UserType.js';
 import HttpError from '../errors/HttpError.js';
+import NightReport from '../models/NightReport.js';
+import { DID_NOT_OPERATE_NOTE } from '../constants/nightReports.js';
 import {
   buildMetricKey,
   computeSummary,
@@ -833,7 +835,7 @@ export default class CounterRegistryService {
       ? { id: counter.product.id, name: counter.product.name }
       : null;
 
-    return {
+    const payload: CounterRegistryPayload = {
       counter: {
         id: counter.id,
         date: counter.date,
@@ -852,6 +854,68 @@ export default class CounterRegistryService {
       addons,
       channels,
     };
+
+    await CounterRegistryService.ensureNightReportForCounter(counter, summary);
+
+    return payload;
+  }
+
+  private static async ensureNightReportForCounter(
+    counter: Counter,
+    summary: CounterSummary,
+  ): Promise<void> {
+    const totals = summary?.totals?.people ?? {
+      bookedBefore: 0,
+      bookedAfter: 0,
+      attended: 0,
+      nonShow: 0,
+    };
+    const zeroAttendance =
+      Math.max(0, totals.attended ?? 0) === 0 &&
+      Math.max(0, totals.bookedBefore ?? 0) === 0 &&
+      Math.max(0, totals.bookedAfter ?? 0) === 0;
+
+    let normalizedNotes = (counter.notes ?? '').trim().toLowerCase();
+    let didNotOperate = normalizedNotes === DID_NOT_OPERATE_NOTE.toLowerCase();
+
+    if (!didNotOperate && zeroAttendance) {
+      await Counter.update(
+        {
+          notes: DID_NOT_OPERATE_NOTE,
+          updatedBy: counter.updatedBy ?? counter.createdBy ?? counter.userId,
+        },
+        { where: { id: counter.id } },
+      );
+      counter.notes = DID_NOT_OPERATE_NOTE;
+      normalizedNotes = DID_NOT_OPERATE_NOTE.toLowerCase();
+      didNotOperate = true;
+    }
+
+    if (!didNotOperate) {
+      return;
+    }
+
+    const existing = await NightReport.findOne({ where: { counterId: counter.id } });
+    if (existing) {
+      if (existing.status !== 'submitted') {
+        existing.notes = DID_NOT_OPERATE_NOTE;
+        existing.status = 'submitted';
+        existing.submittedAt = new Date();
+        await existing.save();
+      }
+      return;
+    }
+
+    await NightReport.create({
+      counterId: counter.id,
+      leaderId: counter.userId,
+      activityDate: counter.date,
+      status: 'submitted',
+      notes: DID_NOT_OPERATE_NOTE,
+      createdBy: counter.createdBy ?? counter.userId,
+      updatedBy: counter.updatedBy ?? counter.userId,
+      submittedAt: new Date(),
+    });
   }
 }
 

@@ -44,7 +44,7 @@ import useMediaQuery from '@mui/material/useMediaQuery';
 import { Link } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { deleteCounter, fetchCounters } from '../actions/counterActions';
-import { createNightReport, fetchNightReports, updateNightReport } from '../actions/nightReportActions';
+import { createNightReport, fetchNightReports, submitNightReport, updateNightReport } from '../actions/nightReportActions';
 import { navigateToPage } from '../actions/navigationActions';
 import { GenericPageProps } from '../types/general/GenericPageProps';
 import { loadCatalog, selectCatalog } from '../store/catalogSlice';
@@ -78,6 +78,7 @@ import {
   StaffOption,
 } from '../types/counters/CounterRegistry';
 import { buildMetricKey } from '../utils/counterMetrics';
+import { DID_NOT_OPERATE_NOTE } from '../constants/nightReports';
 import type { Counter } from '../types/counters/Counter';
 import axiosInstance from '../utils/axiosInstance';
 import type { ServerResponse } from '../types/general/ServerResponse';
@@ -3961,7 +3962,13 @@ useEffect(() => {
   const ensureNightReportFromSummary = useCallback(async () => {
     const counterRecord = registry.counter?.counter;
     const summary = registry.summary;
-    if (!counterRecord || !summary) {
+    if (!counterRecord) {
+      return;
+    }
+    if (!summary) {
+      if ((counterNotes ?? '').trim() === DID_NOT_OPERATE_NOTE) {
+        await ensureDidNotOperateNightReport();
+      }
       return;
     }
     const leaderId = counterRecord.userId;
@@ -4020,6 +4027,64 @@ useEffect(() => {
       return;
     }
 
+    const existingSummary =
+      nightReportSummaries.find((report) => report.counterId === counterRecord.id) ?? null;
+    let reportId = existingSummary?.id ?? null;
+    let creationErrorMessage: string | null = null;
+
+    const ensureDidNotOperateNightReport = async (): Promise<void> => {
+      try {
+        if ((counterNotes ?? '').trim() !== DID_NOT_OPERATE_NOTE) {
+          await dispatch(
+            updateCounterNotes({
+              counterId: counterRecord.id,
+              notes: DID_NOT_OPERATE_NOTE,
+            }),
+          ).unwrap();
+          setShouldRefreshCounterList(true);
+        }
+
+        if (!reportId) {
+          const createdReport = await dispatch(
+            createNightReport({
+              counterId: counterRecord.id,
+              leaderId,
+              activityDate: counterRecord.date,
+              notes: DID_NOT_OPERATE_NOTE,
+              venues: [],
+            }),
+          ).unwrap();
+          reportId = createdReport.id;
+        } else {
+          await dispatch(
+            updateNightReport({
+              reportId,
+              payload: {
+                leaderId,
+                activityDate: counterRecord.date,
+                notes: DID_NOT_OPERATE_NOTE,
+                venues: [],
+              },
+            }),
+          ).unwrap();
+        }
+
+        if (reportId) {
+          await dispatch(submitNightReport(reportId)).unwrap();
+        }
+        await dispatch(fetchNightReports());
+      } catch (error) {
+        const message = typeof error === 'string' ? error : (error as Error)?.message ?? '';
+        // eslint-disable-next-line no-console
+        console.warn('Failed to auto-create did-not-operate night report:', message || error);
+      }
+    };
+
+    if (computedTotalPeople === 0) {
+      await ensureDidNotOperateNightReport();
+      return;
+    }
+
     const baseVenue = {
       orderIndex: 1,
       venueName: 'Select Open Bar',
@@ -4036,11 +4101,6 @@ useEffect(() => {
       activityDate: counterRecord.date,
       venues: [baseVenue],
     };
-
-    const existingSummary =
-      nightReportSummaries.find((report) => report.counterId === counterRecord.id) ?? null;
-    let reportId = existingSummary?.id ?? null;
-    let creationErrorMessage: string | null = null;
 
     if (!reportId) {
       try {
@@ -4130,6 +4190,8 @@ useEffect(() => {
     registry.counter,
     registry.summary,
     totalFreePeople,
+    counterNotes,
+    setShouldRefreshCounterList,
   ]);
 
   const handleSaveAndExit = useCallback(async () => {
