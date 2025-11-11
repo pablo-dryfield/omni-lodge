@@ -1003,19 +1003,62 @@ const VenueNumbersList = () => {
   };
 
   const handleViewFullSize = useCallback(
-    (photo: NightReportPhoto, previewUrl?: string, downloadHref?: string) => {
-      const source = downloadHref || previewUrl;
-      if (!source) {
-        setValidationError("Unable to open this photo preview. Please download the file instead.");
+    async (photo: NightReportPhoto, previewUrl?: string, downloadHref?: string) => {
+      const openWithSource = (source: string) => {
+        setPhotoZoom(1);
+        setActivePhotoPreview({
+          src: source,
+          name: photo.originalName,
+          capturedAt: photo.capturedAt,
+          downloadHref,
+        });
+      };
+
+      if (previewUrl) {
+        openWithSource(previewUrl);
         return;
       }
-      setPhotoZoom(1);
-      setActivePhotoPreview({
-        src: source,
-        name: photo.originalName,
-        capturedAt: photo.capturedAt,
-        downloadHref,
-      });
+
+      if (downloadHref) {
+        const hadRequest = requestedPhotoIds.current.has(photo.id);
+        if (!hadRequest) {
+          requestedPhotoIds.current.add(photo.id);
+        }
+        try {
+          const response = await axiosInstance.get(downloadHref, {
+            responseType: "blob",
+            withCredentials: true,
+            baseURL: undefined,
+          });
+          const objectUrl = URL.createObjectURL(response.data);
+          setPhotoPreviewErrors((prev) => {
+            if (!prev[photo.id]) {
+              return prev;
+            }
+            const next = { ...prev };
+            delete next[photo.id];
+            return next;
+          });
+          setPhotoPreviews((prev) => {
+            const previousUrl = prev[photo.id];
+            if (previousUrl) {
+              URL.revokeObjectURL(previousUrl);
+            }
+            return { ...prev, [photo.id]: objectUrl };
+          });
+          openWithSource(objectUrl);
+          return;
+        } catch (error) {
+          console.error("Failed to fetch full-size night report photo", error);
+          if (!hadRequest) {
+            requestedPhotoIds.current.delete(photo.id);
+          }
+          setValidationError("Unable to open this photo preview. Please download the file instead.");
+          return;
+        }
+      }
+
+      setValidationError("Unable to open this photo preview. Please download the file instead.");
     },
     [setValidationError],
   );
