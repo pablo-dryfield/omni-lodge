@@ -49,6 +49,9 @@ import ReportDashboard from "../models/ReportDashboard.js";
 import ReportDashboardCard from "../models/ReportDashboardCard.js";
 import ReportAsyncJob from "../models/ReportAsyncJob.js";
 import UserHomePreference from "../models/UserHomePreference.js";
+import ReviewCounter from "../models/ReviewCounter.js";
+import ReviewCounterEntry from "../models/ReviewCounterEntry.js";
+import ReviewPlatform from "../models/ReviewPlatform.js";
 import {
   FinanceAccount,
   FinanceAuditLog,
@@ -99,6 +102,9 @@ const sequelize = new Sequelize({
     ChannelProductPrice,
     Guest,
     Review,
+    ReviewCounter,
+    ReviewCounterEntry,
+    ReviewPlatform,
     Counter,
     CounterProduct,
     CounterUser,

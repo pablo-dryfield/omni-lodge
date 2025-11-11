@@ -8,6 +8,7 @@ import AvailabilityCalendar from "../../pages/AvailabilityCalendar";
 import Counters from "../../pages/Counters";
 import VenueNumbers from "../../pages/VenueNumbers";
 import Pays from "../../pages/Pays";
+import ReviewCounters from "../../pages/ReviewCounters";
 import Reports from "../../pages/Reports";
 import DerivedFieldsManager from "../../pages/DerivedFieldsManager";
 import ReportDashboards from "../../pages/ReportDashboards";
@@ -37,6 +38,7 @@ import SettingsUserShiftRoles from "../../pages/settings/SettingsUserShiftRoles"
 import SettingsSqlHelper from "../../pages/settings/SettingsSqlHelper";
 import SettingsDbBackups from "../../pages/settings/SettingsDbBackups";
 import SettingsHomeExperience from "../../pages/settings/SettingsHomeExperience";
+import SettingsReviewPlatforms from "../../pages/settings/SettingsReviewPlatforms";
 import SchedulingLayout from "../../pages/scheduling/SchedulingLayout";
 import AvailabilityPage from "../../pages/scheduling/AvailabilityPage";
 import BuilderPage from "../../pages/scheduling/BuilderPage";
@@ -69,6 +71,7 @@ const Routes = () => {
       <Route path="/calendar" element={<AvailabilityCalendar />} />
       <Route path="/counters" element={<Counters title="Counters" />} />
       <Route path="/venueNumbers" element={<VenueNumbers title="Venue Numbers" />} />
+      <Route path="/reviews" element={<ReviewCounters />} />
       <Route path="/pays" element={<Pays />} />
       <Route path="/reports" element={<Reports title={"Reports"} />} />
       <Route path="/reports/derived-fields" element={<DerivedFieldsManager title="Derived fields" />} />
@@ -123,6 +126,7 @@ const Routes = () => {
         <Route path="staff-profiles" element={<SettingsStaffProfiles />} />
         <Route path="shift-roles" element={<SettingsShiftRoles />} />
         <Route path="user-shift-roles" element={<SettingsUserShiftRoles />} />
+        <Route path="review-platforms" element={<SettingsReviewPlatforms />} />
         <Route path="home-experience" element={<SettingsHomeExperience />} />
       </Route>
     </ReactRoutes>

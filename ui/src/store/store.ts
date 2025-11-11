@@ -32,6 +32,8 @@ import channelProductPriceReducer from '../reducers/channelProductPriceReducer';
 import venueReducer from '../reducers/venueReducer';
 import financeReducer from '../reducers/financeReducer';
 import staffProfileReducer from '../reducers/staffProfileReducer';
+import reviewPlatformReducer from '../reducers/reviewPlatformReducer';
+import reviewCounterReducer from '../reducers/reviewCounterReducer';
 
 const reducer = {
   guests: guestReducer,
@@ -67,6 +69,8 @@ const reducer = {
   accessControl: accessControlReducer,
   finance: financeReducer,
   staffProfiles: staffProfileReducer,
+  reviewPlatforms: reviewPlatformReducer,
+  reviewCounters: reviewCounterReducer,
 };
 
 export const store = configureStore({
