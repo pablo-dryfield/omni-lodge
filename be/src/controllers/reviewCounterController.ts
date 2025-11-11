@@ -2,7 +2,7 @@ import { Op } from 'sequelize';
 import type { Request, Response } from 'express';
 import dayjs from 'dayjs';
 import ReviewCounter from '../models/ReviewCounter.js';
-import ReviewCounterEntry from '../models/ReviewCounterEntry.js';
+import ReviewCounterEntry, { type ReviewCounterEntryCategory } from '../models/ReviewCounterEntry.js';
 import User from '../models/User.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 
@@ -255,6 +255,8 @@ export const createReviewCounter = async (req: AuthenticatedRequest, res: Respon
       updatedBy: actorId,
     });
 
+    await createDefaultEntriesForCounter(record.id, actorId ?? null);
+
     const withRelations = await ReviewCounter.findByPk(record.id, {
       include: [
         { model: ReviewCounterEntry, as: 'entries', include: [{ model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] }] },
@@ -430,5 +432,57 @@ export const deleteReviewCounterEntry = async (req: Request, res: Response): Pro
   } catch (error) {
     console.error('Failed to delete review counter entry', error);
     res.status(500).json([{ message: 'Failed to delete entry' }]);
+  }
+};
+const createDefaultEntriesForCounter = async (counterId: number, actorId: number | null) => {
+  const activeUsers = await User.findAll({
+    where: { status: true },
+    attributes: ['id', 'firstName', 'lastName'],
+    order: [
+      ['firstName', 'ASC'],
+      ['lastName', 'ASC'],
+    ],
+  });
+
+  const buildDisplayName = (user: { firstName?: string | null; lastName?: string | null; id: number }) => {
+    const composed = `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim();
+    return composed.length > 0 ? composed : `User #${user.id}`;
+  };
+
+  const entryPayloads: Array<Partial<ReviewCounterEntry>> = [
+    ...activeUsers.map((user) => ({
+      counterId,
+      userId: user.id,
+      displayName: buildDisplayName(user),
+      category: 'staff' as ReviewCounterEntryCategory,
+      rawCount: 0,
+      roundedCount: 0,
+      createdBy: actorId,
+      updatedBy: actorId,
+    })),
+    {
+      counterId,
+      userId: null,
+      displayName: 'No Name',
+      category: 'no_name',
+      rawCount: 0,
+      roundedCount: 0,
+      createdBy: actorId,
+      updatedBy: actorId,
+    },
+    {
+      counterId,
+      userId: null,
+      displayName: 'Bad Review',
+      category: 'bad',
+      rawCount: 0,
+      roundedCount: 0,
+      createdBy: actorId,
+      updatedBy: actorId,
+    },
+  ];
+
+  if (entryPayloads.length > 0) {
+    await ReviewCounterEntry.bulkCreate(entryPayloads);
   }
 };
