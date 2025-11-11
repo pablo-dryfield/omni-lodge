@@ -24,6 +24,7 @@ import {
   IconUserCog,
   IconDatabase,
   IconCloudDownload,
+  IconCoin,
 } from "@tabler/icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ActiveNavLink } from "./ActiveNavLink";
@@ -154,6 +155,17 @@ const settingsNav: SettingsNavSection[] = [
         to: "/settings/channel-commissions",
         slug: PAGE_SLUGS.settingsChannelCommissions,
         icon: <IconPercentage size={20} />,
+      },
+    ],
+  },
+  {
+    title: "Compensation",
+    links: [
+      {
+        label: "Components",
+        to: "/settings/compensation-components",
+        slug: PAGE_SLUGS.settingsCompensationComponents,
+        icon: <IconCoin size={20} />,
       },
     ],
   },
