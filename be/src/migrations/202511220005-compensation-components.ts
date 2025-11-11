@@ -34,7 +34,7 @@ export async function up({ context }: MigrationParams): Promise<void> {
       defaultValue: "base",
     },
     calculation_method: {
-      type: DataTypes.ENUM("flat", "per_unit", "tiered", "percentage", "task_score", "hybrid"),
+      type: DataTypes.ENUM("flat", "per_unit", "tiered", "percentage", "task_score", "hybrid", "night_report"),
       allowNull: false,
       defaultValue: "flat",
     },

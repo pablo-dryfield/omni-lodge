@@ -9,7 +9,15 @@ import UserType from '../models/UserType.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 
 const CATEGORY_VALUES = new Set(['base', 'commission', 'incentive', 'bonus', 'review', 'deduction', 'adjustment']);
-const CALCULATION_METHOD_VALUES = new Set(['flat', 'per_unit', 'tiered', 'percentage', 'task_score', 'hybrid']);
+const CALCULATION_METHOD_VALUES = new Set([
+  'flat',
+  'per_unit',
+  'tiered',
+  'percentage',
+  'task_score',
+  'hybrid',
+  'night_report',
+]);
 const TARGET_SCOPE_VALUES = new Set(['global', 'shift_role', 'user', 'user_type', 'staff_type']);
 
 const slugify = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');

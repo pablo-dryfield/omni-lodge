@@ -27,7 +27,7 @@ export type CompensationComponent = {
   name: string;
   slug: string;
   category: 'base' | 'commission' | 'incentive' | 'bonus' | 'review' | 'deduction' | 'adjustment';
-  calculationMethod: 'flat' | 'per_unit' | 'tiered' | 'percentage' | 'task_score' | 'hybrid';
+  calculationMethod: 'flat' | 'per_unit' | 'tiered' | 'percentage' | 'task_score' | 'hybrid' | 'night_report';
   description?: string | null;
   config: Record<string, unknown>;
   currencyCode: string;

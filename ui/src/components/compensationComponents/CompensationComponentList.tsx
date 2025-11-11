@@ -53,6 +53,7 @@ const CALCULATION_METHOD_OPTIONS = [
   { value: 'percentage', label: 'Percentage' },
   { value: 'task_score', label: 'Task Score' },
   { value: 'hybrid', label: 'Hybrid' },
+  { value: 'night_report', label: 'Night Report' },
 ];
 
 const TARGET_SCOPE_OPTIONS = [
