@@ -53,6 +53,7 @@ export const PAGE_SLUGS = {
   settingsPaymentMethods: "settings-payment-methods",
   settingsChannelProductPrices: "settings-channel-product-prices",
   settingsChannelCommissions: "settings-channel-commissions",
+  settingsCompensationComponents: "settings-compensation-components",
   settingsReviewPlatforms: "settings-review-platforms",
   settingsActions: "settings-actions",
   settingsChannels: "settings-channels",

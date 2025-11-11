@@ -33,6 +33,7 @@ import venueReducer from '../reducers/venueReducer';
 import financeReducer from '../reducers/financeReducer';
 import staffProfileReducer from '../reducers/staffProfileReducer';
 import reviewPlatformReducer from '../reducers/reviewPlatformReducer';
+import compensationComponentReducer from '../reducers/compensationComponentReducer';
 import reviewCounterReducer from '../reducers/reviewCounterReducer';
 
 const reducer = {
@@ -70,6 +71,7 @@ const reducer = {
   finance: financeReducer,
   staffProfiles: staffProfileReducer,
   reviewPlatforms: reviewPlatformReducer,
+  compensationComponents: compensationComponentReducer,
   reviewCounters: reviewCounterReducer,
 };
 

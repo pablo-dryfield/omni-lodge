@@ -13,7 +13,7 @@ Progress tracker for the end-to-end redesign of staff payments, review handling,
 
 ## In Progress / Next Steps
 
-- [ ] (7) Implement compensation component models (base, bonuses, commissions, incentives) — component + assignment tables are scaffolded; need APIs + UI management.
+- [ ] (7) Implement compensation component models (base, bonuses, commissions, incentives) — API + settings UI for component/assignment management live; next hook values into payout calculations.
 - [ ] (8) Build task logging + base salary proration logic for assistant managers (planner-style to-do list with calendar support for daily/weekly/biweekly/every-two-weeks/monthly tasks).
 - [ ] (9) Integrate night report metrics for leader incentives & staff-of-month.
 - [ ] (10) Enhance reviews dashboard with historical analytics.
@@ -24,5 +24,5 @@ Progress tracker for the end-to-end redesign of staff payments, review handling,
 - Keep backend responsible for entry provisioning to avoid noisy client traffic.
 - Tier-1 payouts (1-15 reviews) auto-lock until the 15th review lands unless an admin/owner/manager records an under-minimum approval in the entries panel.
 - Review platforms now capture weight, source key, base URL, and alias metadata so review counters and payout rules know how to treat each source.
-- Compensation component scaffolding introduced (`compensation_components` + `compensation_component_assignments`) to model base pay, commissions, incentives, and bonuses before wiring APIs/UI.
+- Compensation component scaffolding + management UI/API (`/compensationComponents`) now enable defining components and assignments; payout engine still needs to consume them.
 - Future API changes should be reflected here with a short summary + checklist updates.

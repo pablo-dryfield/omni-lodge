@@ -11,6 +11,7 @@ import {
   IconUserCog,
   IconLayoutDashboard,
   IconStars,
+  IconCoin,
 } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import { useAppSelector } from "../../store/hooks";
@@ -61,6 +62,13 @@ const sections: SettingsSection[] = [
     icon: IconStars,
     to: "/settings/review-platforms",
     pageSlug: PAGE_SLUGS.settingsReviewPlatforms,
+  },
+  {
+    label: "Compensation Components",
+    description: "Configure salary, commission, and incentive components plus assignments.",
+    icon: IconCoin,
+    to: "/settings/compensation-components",
+    pageSlug: PAGE_SLUGS.settingsCompensationComponents,
   },
   {
     label: "Home Experience",
