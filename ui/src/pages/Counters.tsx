@@ -1026,7 +1026,7 @@ const Counters = (props: GenericPageProps) => {
   const [summaryPreviewTitle, setSummaryPreviewTitle] = useState<string>('');
   const computeReservationHoldActive = useCallback(() => {
     const now = dayjs();
-    const holdStart = now.set('hour', 0).set('minute', 0).set('second', 0).set('millisecond', 0);
+    const holdStart = now.set('hour', 21).set('minute', 0).set('second', 0).set('millisecond', 0);
     const holdEnd = holdStart.add(15, 'minute');
     return !now.isBefore(holdStart) && now.isBefore(holdEnd);
   }, []);
@@ -4018,6 +4018,9 @@ useEffect(() => {
     const counterRecord = registry.counter?.counter;
     const summary = registry.summary;
     if (!counterRecord) {
+      return;
+    }
+    if (counterRecord.status !== 'final') {
       return;
     }
     const leaderId = counterRecord.userId;
