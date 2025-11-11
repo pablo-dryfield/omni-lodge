@@ -15,9 +15,11 @@ import {
   Badge,
   Title,
   useMantineTheme,
+  Card,
+  SimpleGrid,
 } from '@mantine/core';
 import { DatePicker } from '@mui/x-date-pickers';
-import { Dayjs } from 'dayjs';
+import dayjs, { Dayjs } from 'dayjs';
 import { type Pay, type PayBreakdown, type PayComponentSummary } from '../types/pays/Pay';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { fetchPays } from '../actions/payActions';
@@ -25,6 +27,18 @@ import { useModuleAccess } from '../hooks/useModuleAccess';
 import { PageAccessGuard } from '../components/access/PageAccessGuard';
 import { PAGE_SLUGS } from '../constants/pageSlugs';
 import { useMediaQuery } from '@mantine/hooks';
+import {
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+} from 'recharts';
 
 const formatCurrency = (value: number | undefined): string => {
   const numberPart = (value ?? 0).toLocaleString('en-US', {
@@ -140,14 +154,78 @@ const Pays: React.FC = () => {
   const payState = useAppSelector((state) => state.pays)[0];
   const { data: responseData, loading, error } = payState;
 
-  const [startDate, setStartDate] = useState<Dayjs | null>(null);
-  const [endDate, setEndDate] = useState<Dayjs | null>(null);
+  const today = dayjs();
+  const [startDate, setStartDate] = useState<Dayjs | null>(today.startOf('month'));
+  const [endDate, setEndDate] = useState<Dayjs | null>(today.endOf('month'));
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
 
   const fullAccess = useModuleAccess(FULL_ACCESS_MODULE);
   const selfAccess = useModuleAccess(SELF_ACCESS_MODULE);
 
   const summaries: Pay[] = useMemo(() => responseData?.[0]?.data ?? [], [responseData]);
+
+  const aggregatedBucketData = useMemo(() => {
+    const map = new Map<string, number>();
+    summaries.forEach((summary) => {
+      Object.entries(summary.bucketTotals ?? {}).forEach(([bucket, amount]) => {
+        map.set(bucket, (map.get(bucket) ?? 0) + amount);
+      });
+    });
+    return Array.from(map.entries())
+      .map(([bucket, amount]) => ({ bucket, amount }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [summaries]);
+
+  const aggregatedComponentData = useMemo(() => {
+    const map = new Map<string, number>();
+    summaries.forEach((summary) => {
+      (summary.componentTotals ?? []).forEach((component) => {
+        map.set(component.name, (map.get(component.name) ?? 0) + component.amount);
+      });
+    });
+    return Array.from(map.entries())
+      .map(([name, amount]) => ({ name, amount }))
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 6);
+  }, [summaries]);
+
+  const dailyTrendData = useMemo(() => {
+    const map = new Map<string, { commission: number; payout: number }>();
+    summaries.forEach((summary) => {
+      summary.breakdown.forEach((entry) => {
+        if (!map.has(entry.date)) {
+          map.set(entry.date, { commission: 0, payout: 0 });
+        }
+        const record = map.get(entry.date)!;
+        record.commission += entry.commission;
+        record.payout += entry.commission;
+      });
+      const difference = (summary.totalPayout ?? summary.totalCommission) - summary.totalCommission;
+      if (difference !== 0 && summary.breakdown.length > 0) {
+        const lastDate = summary.breakdown[summary.breakdown.length - 1].date;
+        const record = map.get(lastDate) ?? { commission: 0, payout: 0 };
+        record.payout += difference;
+        map.set(lastDate, record);
+      }
+    });
+    return Array.from(map.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, values]) => ({
+        date,
+        commission: Number(values.commission.toFixed(2)),
+        payout: Number(values.payout.toFixed(2)),
+      }));
+  }, [summaries]);
+
+  const totalCommission = useMemo(
+    () => summaries.reduce((sum, item) => sum + item.totalCommission, 0),
+    [summaries],
+  );
+  const totalPayout = useMemo(
+    () => summaries.reduce((sum, item) => sum + normalizeTotal(item), 0),
+    [summaries],
+  );
+  const totalGuides = summaries.length;
 
   const permissionsReady = fullAccess.ready || selfAccess.ready;
   const permissionsLoading = fullAccess.loading || selfAccess.loading;
@@ -179,6 +257,155 @@ const Pays: React.FC = () => {
 
   const theme = useMantineTheme();
   const isDesktop = useMediaQuery(`(min-width: ${theme.breakpoints.md})`);
+
+  const bucketChartColors = aggregatedBucketData.map(
+    (data) => theme.colors[getComponentColor(data.bucket) as keyof typeof theme.colors]?.[5] ?? theme.colors.blue[6],
+  );
+
+  const renderSummaryBoard = () => (
+    <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }}>
+      <Card withBorder>
+        <Text size="sm" c="dimmed">
+          Total payout
+        </Text>
+        <Title order={4}>{formatCurrency(totalPayout)}</Title>
+        <Text size="xs" c="dimmed">
+          Across {totalGuides} guide{totalGuides === 1 ? '' : 's'}
+        </Text>
+      </Card>
+      <Card withBorder>
+        <Text size="sm" c="dimmed">
+          Commission
+        </Text>
+        <Title order={4}>{formatCurrency(totalCommission)}</Title>
+        <Text size="xs" c="dimmed">
+          Direct commission earned
+        </Text>
+      </Card>
+      <Card withBorder>
+        <Text size="sm" c="dimmed">
+          Incentives & bonuses
+        </Text>
+        <Title order={4}>
+          {formatCurrency(
+            aggregatedBucketData
+              .filter((bucket) => bucket.bucket !== 'commission')
+              .reduce((sum, bucket) => sum + bucket.amount, 0),
+          )}
+        </Title>
+        <Text size="xs" c="dimmed">
+          Additional payouts (base, incentives, reviews)
+        </Text>
+      </Card>
+      <Card withBorder>
+        <Text size="sm" c="dimmed">
+          Range
+        </Text>
+        <Title order={5}>
+          {startDate?.format('MMM D, YYYY')} - {endDate?.format('MMM D, YYYY')}
+        </Title>
+        <Text size="xs" c="dimmed">
+          Updated from counter data
+        </Text>
+      </Card>
+    </SimpleGrid>
+  );
+
+  const renderCharts = () => {
+    if (aggregatedBucketData.length === 0 && dailyTrendData.length === 0 && aggregatedComponentData.length === 0) {
+      return null;
+    }
+    return (
+      <SimpleGrid cols={{ base: 1, md: 2 }}>
+        <Card withBorder padding="md">
+          <Group justify="space-between" mb="sm">
+            <Text fw={600}>Bucket distribution</Text>
+            <Badge>{aggregatedBucketData.length} buckets</Badge>
+          </Group>
+          {aggregatedBucketData.length === 0 ? (
+            <Text size="sm" c="dimmed">
+              No bucket adjustments recorded for this range.
+            </Text>
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
+              <PieChart>
+                <Tooltip
+                  formatter={(value: number, name: string) => [formatCurrency(value), name]}
+                  labelFormatter={(label) => label}
+                />
+                <Pie
+                  data={aggregatedBucketData}
+                  dataKey="amount"
+                  nameKey="bucket"
+                  outerRadius={90}
+                  innerRadius={40}
+                  labelLine={false}
+                  label={(entry) => `${entry.bucket} ${(entry.amount / (totalPayout || 1) * 100).toFixed(1)}%`}
+                >
+                  {aggregatedBucketData.map((entry, index) => (
+                    <Cell
+                      key={entry.bucket}
+                      fill={
+                        bucketChartColors[index] ??
+                        theme.colors[getComponentColor(entry.bucket) as keyof typeof theme.colors]?.[6] ??
+                        theme.colors.gray[5]
+                      }
+                    />
+                  ))}
+                </Pie>
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </Card>
+
+        <Card withBorder padding="md">
+          <Group justify="space-between" mb="sm">
+            <Text fw={600}>Daily trend</Text>
+            <Badge>{dailyTrendData.length} days</Badge>
+          </Group>
+          {dailyTrendData.length === 0 ? (
+            <Text size="sm" c="dimmed">
+              No daily breakdown available for this range.
+            </Text>
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={dailyTrendData} margin={{ top: 5, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" tickFormatter={(value) => dayjs(value).format('MM/DD')} />
+                <YAxis tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} />
+                <Tooltip
+                  formatter={(value: number, name: string) => [formatCurrency(value), name]}
+                  labelFormatter={(value) => dayjs(value).format('MMM D, YYYY')}
+                />
+                <Bar dataKey="commission" name="Commission" fill={theme.colors.green[6]} />
+                <Bar dataKey="payout" name="Total payout" fill={theme.colors.blue[6]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </Card>
+        {aggregatedComponentData.length > 0 && (
+          <Card withBorder padding="md">
+            <Group justify="space-between" mb="sm">
+              <Text fw={600}>Top components</Text>
+              <Badge>{aggregatedComponentData.length}</Badge>
+            </Group>
+            <Stack gap="xs">
+              {aggregatedComponentData.map((component) => (
+                <Group key={component.name} justify="space-between">
+                  <Group gap="xs">
+                    <Badge variant="light" color="violet">
+                      {component.name}
+                    </Badge>
+                  </Group>
+                  <Text fw={600}>{formatCurrency(component.amount)}</Text>
+                </Group>
+              ))}
+            </Stack>
+          </Card>
+        )}
+      </SimpleGrid>
+    );
+  };
 
   const renderMobileCards = () => (
     <Stack gap="md">
@@ -229,8 +456,8 @@ const Pays: React.FC = () => {
   );
 
   const renderDesktopTable = () => {
-    const totalCommission = summaries.reduce((sum, item) => sum + item.totalCommission, 0);
-    const totalPayout = summaries.reduce((sum, item) => sum + normalizeTotal(item), 0);
+    const tableCommissionTotal = summaries.reduce((sum, item) => sum + item.totalCommission, 0);
+    const tablePayoutTotal = summaries.reduce((sum, item) => sum + normalizeTotal(item), 0);
     return (
       <ScrollArea>
         <Table striped highlightOnHover withRowBorders style={{ minWidth: 640 }}>
@@ -275,10 +502,10 @@ const Pays: React.FC = () => {
                 <strong>Total</strong>
               </td>
               <td style={{ padding: 12 }}>
-                <strong>{formatCurrency(totalCommission)}</strong>
+                <strong>{formatCurrency(tableCommissionTotal)}</strong>
               </td>
               <td style={{ padding: 12 }}>
-                <strong>{formatCurrency(totalPayout)}</strong>
+                <strong>{formatCurrency(tablePayoutTotal)}</strong>
               </td>
               <td />
             </tr>
@@ -322,20 +549,22 @@ const Pays: React.FC = () => {
                 gap={isDesktop ? 'lg' : 'sm'}
                 wrap="wrap"
               >
-                <DatePicker
-                  label="Start Date"
-                  format="YYYY-MM-DD"
-                  value={startDate}
-                  onChange={(newValue: Dayjs | null) => setStartDate(newValue)}
-                  style={{ flex: isDesktop ? 1 : 'unset', width: isDesktop ? 'auto' : '100%' }}
-                />
-                <DatePicker
-                  label="End Date"
-                  format="YYYY-MM-DD"
-                  value={endDate}
-                  onChange={(newValue: Dayjs | null) => setEndDate(newValue)}
-                  style={{ flex: isDesktop ? 1 : 'unset', width: isDesktop ? 'auto' : '100%' }}
-                />
+                <Box style={{ flex: isDesktop ? 1 : 'unset', width: isDesktop ? 'auto' : '100%' }}>
+                  <DatePicker
+                    label="Start Date"
+                    format="YYYY-MM-DD"
+                    value={startDate}
+                    onChange={(newValue: Dayjs | null) => setStartDate(newValue)}
+                  />
+                </Box>
+                <Box style={{ flex: isDesktop ? 1 : 'unset', width: isDesktop ? 'auto' : '100%' }}>
+                  <DatePicker
+                    label="End Date"
+                    format="YYYY-MM-DD"
+                    value={endDate}
+                    onChange={(newValue: Dayjs | null) => setEndDate(newValue)}
+                  />
+                </Box>
               </Group>
 
               {loading && (
@@ -350,7 +579,13 @@ const Pays: React.FC = () => {
                 </Text>
               )}
 
-              {!loading && !error && summaries.length > 0 && (isDesktop ? renderDesktopTable() : renderMobileCards())}
+              {!loading && !error && summaries.length > 0 && (
+                <Stack gap="lg">
+                  {renderSummaryBoard()}
+                  {renderCharts()}
+                  {isDesktop ? renderDesktopTable() : renderMobileCards()}
+                </Stack>
+              )}
 
               {!loading && !error && summaries.length === 0 && (
                 <Text ta="center">No data available for the selected dates.</Text>

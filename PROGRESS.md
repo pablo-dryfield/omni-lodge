@@ -14,10 +14,10 @@ Progress tracker for the end-to-end redesign of staff payments, review handling,
 - [x] (8) Build task logging + base salary proration logic for assistant managers (planner-style to-do list with calendar support for daily/weekly/biweekly/every-two-weeks/monthly tasks).
 - [x] (9) Integrate night report metrics for leader incentives & staff-of-month.
 - [x] (10) Enhance reviews dashboard with historical analytics.
+- [x] (11) Replace legacy staff payment page with the new multi-bucket summary.
 
 ## In Progress / Next Steps
 
-- [ ] (11) Replace legacy staff payment page with the new multi-bucket summary.
 
 ## Notes
 
