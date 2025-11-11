@@ -41,6 +41,7 @@ import { fetchCounters } from "../../actions/counterActions";
 import { fetchVenues } from "../../actions/venueActions";
 import { loadCatalog, selectCatalog } from "../../store/catalogSlice";
 import axiosInstance from "../../utils/axiosInstance";
+import { compressImageFile } from "../../utils/imageCompression";
 
 import type { NightReport, NightReportSummary, NightReportVenueInput } from "../../types/nightReports/NightReport";
 import type { Counter } from "../../types/counters/Counter";
@@ -249,6 +250,7 @@ const VenueNumbersList = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [photoPreviews, setPhotoPreviews] = useState<Record<number, string>>({});
   const [photoPreviewErrors, setPhotoPreviewErrors] = useState<Record<number, boolean>>({});
+  const [preparingPhoto, setPreparingPhoto] = useState(false);
   const requestedPhotoIds = useRef<Set<number>>(new Set());
   const photoPreviewUrlsRef = useRef<Record<number, string>>({});
   const modeRequestRef = useRef<"view" | "edit" | null>(null);
@@ -895,15 +897,37 @@ const VenueNumbersList = () => {
     fileInputRef.current?.click();
   };
 
-  const handlePhotoFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.target;
     const file = input.files?.[0];
+    input.value = "";
     if (!file || !selectedReportId || photoLimitReached) {
-      input.value = "";
       return;
     }
-    dispatch(uploadNightReportPhoto({ reportId: selectedReportId, file }));
-    input.value = "";
+
+    setValidationError(null);
+    const activeReportId = selectedReportId;
+    let preparedFile = file;
+
+    try {
+      setPreparingPhoto(true);
+      preparedFile = await compressImageFile(file, {
+        maxWidth: 1600,
+        maxHeight: 1600,
+        quality: 0.8,
+        maxSizeBytes: 700 * 1024,
+      });
+    } catch (compressionError) {
+      console.error("Failed to compress image before upload", compressionError);
+    } finally {
+      setPreparingPhoto(false);
+    }
+
+    if (photoLimitReached) {
+      return;
+    }
+
+    dispatch(uploadNightReportPhoto({ reportId: activeReportId, file: preparedFile }));
   };
 
   const handleDidNotOperateToggle = () => {
@@ -1038,6 +1062,7 @@ const VenueNumbersList = () => {
   const detailLoading = nightReportDetail.loading;
   const submitting = nightReportUi.submitting;
   const uploadingPhoto = nightReportUi.uploadingPhoto;
+  const photoUploadBusy = uploadingPhoto || preparingPhoto;
   const currentStatus = nightReportDetail.data?.status ?? "draft";
   const isSubmittedReport = currentStatus === "submitted";
   const submitButtonLabel = isSubmittedReport ? "Save Changes" : "Submit Report";
@@ -1870,7 +1895,7 @@ const VenueNumbersList = () => {
                 size="small"
                 startIcon={<UploadFile />}
                 onClick={handlePhotoUploadClick}
-                disabled={!selectedReportId || uploadingPhoto || photoLimitReached}
+                disabled={!selectedReportId || photoUploadBusy || photoLimitReached}
               >
                 Upload Photo
               </Button>
@@ -1888,7 +1913,7 @@ const VenueNumbersList = () => {
             style={{ display: "none" }}
             onChange={handlePhotoFileChange}
           />
-          {uploadingPhoto && <CircularProgress size={20} />}
+          {photoUploadBusy && <CircularProgress size={20} />}
           {photos.length === 0 ? (
             <Box
               sx={{
@@ -1957,7 +1982,7 @@ const VenueNumbersList = () => {
                                     size="small"
                                     aria-label="Delete photo"
                                     onClick={() => handleDeletePhoto(photo.id)}
-                                    disabled={uploadingPhoto}
+                                    disabled={photoUploadBusy}
                                     sx={{
                                       position: "absolute",
                                       top: 8,

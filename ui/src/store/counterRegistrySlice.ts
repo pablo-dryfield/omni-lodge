@@ -1,4 +1,5 @@
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { isAxiosError } from 'axios';
 
 import axiosInstance from '../utils/axiosInstance';
 import { buildMetricKey, normalizeMetric } from '../utils/counterMetrics';
@@ -75,6 +76,31 @@ type CounterRegistryError = {
   notFound?: boolean;
 };
 
+const buildRejectValue = (error: unknown, fallback: string): CounterRegistryError => {
+  if (isAxiosError(error)) {
+    const responseMessage =
+      typeof error.response?.data === 'string'
+        ? error.response.data
+        : typeof error.response?.data?.message === 'string'
+          ? error.response.data.message
+          : undefined;
+    return {
+      message: responseMessage ?? error.message ?? fallback,
+      notFound: error.response?.status === 404,
+    };
+  }
+
+  if (error instanceof Error) {
+    return { message: error.message };
+  }
+
+  if (typeof error === 'string') {
+    return { message: error };
+  }
+
+  return { message: fallback };
+};
+
 
 const initialState: CounterRegistryState = {
   loading: false,
@@ -129,10 +155,7 @@ export const ensureCounterForDate = createAsyncThunk<
     );
     return response.data;
   } catch (error) {
-    if (error instanceof Error) {
-      return rejectWithValue(error.message);
-    }
-    return rejectWithValue('Failed to ensure counter for date');
+    return rejectWithValue(buildRejectValue(error, 'Failed to ensure counter for date'));
   }
 });
 
@@ -152,10 +175,23 @@ export const fetchCounterByDate = createAsyncThunk<
     });
     return response.data;
   } catch (error) {
-    if (error instanceof Error) {
-      return rejectWithValue(error.message);
-    }
-    return rejectWithValue('Failed to load counter for date');
+    return rejectWithValue(buildRejectValue(error, 'Failed to load counter for date'));
+  }
+});
+
+export const fetchCounterById = createAsyncThunk<
+  CounterRegistryPayload,
+  number,
+  { rejectValue: CounterRegistryError }
+>('counterRegistry/fetchCounterById', async (counterId, { rejectWithValue }) => {
+  try {
+    const response = await axiosInstance.get<CounterRegistryPayload>(`/counters/${counterId}`, {
+      params: { format: 'registry' },
+      withCredentials: true,
+    });
+    return response.data;
+  } catch (error) {
+    return rejectWithValue(buildRejectValue(error, 'Failed to load counter'));
   }
 });
 
@@ -172,10 +208,7 @@ export const updateCounterProduct = createAsyncThunk<
     );
     return response.data;
   } catch (error) {
-    if (error instanceof Error) {
-      return rejectWithValue(error.message);
-    }
-    return rejectWithValue('Failed to update product');
+    return rejectWithValue(buildRejectValue(error, 'Failed to update product'));
   }
 });
 
@@ -192,10 +225,7 @@ export const updateCounterManager = createAsyncThunk<
     );
     return response.data;
   } catch (error) {
-    if (error instanceof Error) {
-      return rejectWithValue(error.message);
-    }
-    return rejectWithValue('Failed to update manager');
+    return rejectWithValue(buildRejectValue(error, 'Failed to update manager'));
   }
 });
 
@@ -212,10 +242,7 @@ export const updateCounterStatus = createAsyncThunk<
     );
     return response.data;
   } catch (error) {
-    if (error instanceof Error) {
-      return rejectWithValue(error.message);
-    }
-    return rejectWithValue('Failed to update counter status');
+    return rejectWithValue(buildRejectValue(error, 'Failed to update counter status'));
   }
 });
 
@@ -232,10 +259,7 @@ export const updateCounterNotes = createAsyncThunk<
     );
     return response.data;
   } catch (error) {
-    if (error instanceof Error) {
-      return rejectWithValue(error.message);
-    }
-    return rejectWithValue('Failed to update counter notes');
+    return rejectWithValue(buildRejectValue(error, 'Failed to update counter notes'));
   }
 });
 
@@ -252,10 +276,7 @@ export const updateCounterStaff = createAsyncThunk<
     );
     return response.data;
   } catch (error) {
-    if (error instanceof Error) {
-      return rejectWithValue(error.message);
-    }
-    return rejectWithValue('Failed to update counter staff');
+    return rejectWithValue(buildRejectValue(error, 'Failed to update counter staff'));
   }
 });
 
@@ -396,7 +417,7 @@ const counterRegistrySlice = createSlice({
       })
       .addCase(ensureCounterForDate.rejected, (state, action) => {
         state.loading = false;
-        state.error = action.payload ?? action.error.message ?? 'Failed to ensure counter';
+        state.error = action.payload?.message ?? action.error.message ?? 'Failed to ensure counter';
       })
       .addCase(fetchCounterByDate.pending, (state) => {
         state.loading = true;
@@ -408,7 +429,19 @@ const counterRegistrySlice = createSlice({
       })
       .addCase(fetchCounterByDate.rejected, (state, action) => {
         state.loading = false;
-        state.error = action.payload ?? action.error.message ?? 'Failed to load counter';
+        state.error = action.payload?.message ?? action.error.message ?? 'Failed to load counter';
+      })
+      .addCase(fetchCounterById.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(fetchCounterById.fulfilled, (state, action) => {
+        state.loading = false;
+        ingestPayload(state, action.payload);
+      })
+      .addCase(fetchCounterById.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload?.message ?? action.error.message ?? 'Failed to load counter';
       })
       .addCase(updateCounterProduct.pending, (state) => {
         state.savingProduct = true;
@@ -420,7 +453,7 @@ const counterRegistrySlice = createSlice({
       })
       .addCase(updateCounterProduct.rejected, (state, action) => {
         state.savingProduct = false;
-        state.error = action.payload ?? action.error.message ?? 'Failed to update product';
+        state.error = action.payload?.message ?? action.error.message ?? 'Failed to update product';
       })
       .addCase(updateCounterManager.pending, (state) => {
         state.loading = true;
@@ -431,7 +464,7 @@ const counterRegistrySlice = createSlice({
       })
       .addCase(updateCounterManager.rejected, (state, action) => {
         state.loading = false;
-        state.error = action.payload ?? action.error.message ?? 'Failed to update manager';
+        state.error = action.payload?.message ?? action.error.message ?? 'Failed to update manager';
       })
       .addCase(updateCounterStatus.pending, (state) => {
         state.savingStatus = true;
@@ -442,7 +475,7 @@ const counterRegistrySlice = createSlice({
       })
       .addCase(updateCounterStatus.rejected, (state, action) => {
         state.savingStatus = false;
-        state.error = action.payload ?? action.error.message ?? 'Failed to update status';
+        state.error = action.payload?.message ?? action.error.message ?? 'Failed to update status';
       })
       .addCase(updateCounterNotes.pending, (state) => {
         state.savingNotes = true;
@@ -453,7 +486,7 @@ const counterRegistrySlice = createSlice({
       })
       .addCase(updateCounterNotes.rejected, (state, action) => {
         state.savingNotes = false;
-        state.error = action.payload ?? action.error.message ?? 'Failed to update notes';
+        state.error = action.payload?.message ?? action.error.message ?? 'Failed to update notes';
       })
       .addCase(updateCounterStaff.pending, (state) => {
         state.savingStaff = true;
@@ -464,7 +497,7 @@ const counterRegistrySlice = createSlice({
       })
       .addCase(updateCounterStaff.rejected, (state, action) => {
         state.savingStaff = false;
-        state.error = action.payload ?? action.error.message ?? 'Failed to update staff';
+        state.error = action.payload?.message ?? action.error.message ?? 'Failed to update staff';
       })
       .addCase(flushDirtyMetrics.pending, (state) => {
         state.savingMetrics = true;

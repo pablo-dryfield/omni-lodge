@@ -53,6 +53,7 @@ import {
   clearCounter,
   ensureCounterForDate,
   fetchCounterByDate,
+  fetchCounterById,
   flushDirtyMetrics,
   selectCounterRegistry,
   setMetric,
@@ -1305,13 +1306,48 @@ const loadCounterForDate = useCallback(
       return;
     }
     const resolvedProductId = productId ?? null;
-    const requestKey = `${formattedDate}|${resolvedProductId ?? 'null'}`;
+    const requestKey = `date:${formattedDate}|${resolvedProductId ?? 'null'}`;
     if (fetchCounterRequestRef.current === requestKey) {
       return;
     }
     fetchCounterRequestRef.current = requestKey;
     try {
       await dispatch(fetchCounterByDate({ date: formattedDate, productId: resolvedProductId })).unwrap();
+    } catch (error) {
+      const notFound =
+        error != null &&
+        typeof error === 'object' &&
+        'notFound' in error &&
+        Boolean((error as { notFound?: boolean }).notFound);
+      if (!notFound) {
+        const message =
+          typeof error === 'string'
+            ? error
+            : error instanceof Error
+              ? error.message
+              : 'Failed to load counter';
+        setCounterListError(message);
+      } else {
+        setCounterListError(null);
+      }
+      fetchCounterRequestRef.current = null;
+    }
+  },
+  [dispatch],
+);
+
+const loadCounterById = useCallback(
+  async (counterId: number | null | undefined) => {
+    if (!counterId) {
+      return;
+    }
+    const requestKey = `id:${counterId}`;
+    if (fetchCounterRequestRef.current === requestKey) {
+      return;
+    }
+    fetchCounterRequestRef.current = requestKey;
+    try {
+      await dispatch(fetchCounterById(counterId)).unwrap();
     } catch (error) {
       const notFound =
         error != null &&
@@ -3212,28 +3248,20 @@ const loadCounterForDate = useCallback(
       if (mode === 'create') {
         setActiveRegistryStep('details');
       } else if (mode === 'update') {
-        const formatted = selectedDate.format(COUNTER_DATE_FORMAT);
-        const currentDate = registry.counter?.counter.date ?? null;
-        const currentUserId = registry.counter?.counter.userId ?? null;
-        const currentCounterProductId = registry.counter?.counter.productId ?? null;
-        const shouldFetch =
-          formatted !== currentDate ||
-          (selectedManagerId != null && selectedManagerId !== currentUserId) ||
-          (currentProductId ?? null) !== currentCounterProductId;
-        if (shouldFetch) {
-          fetchCounterRequestRef.current = null;
-          void loadCounterForDate(formatted, currentProductId ?? null);
+        if (selectedCounterId != null) {
+          const currentCounterId = registry.counter?.counter.id ?? null;
+          if (currentCounterId !== selectedCounterId) {
+            fetchCounterRequestRef.current = null;
+            void loadCounterById(selectedCounterId);
+          }
         }
       }
       setIsModalOpen(true);
     },
     [
-      currentProductId,
-      loadCounterForDate,
+      loadCounterById,
       registry.counter,
       selectedCounterId,
-      selectedDate,
-      selectedManagerId,
       setActiveRegistryStep,
     ],
   );
@@ -3255,30 +3283,38 @@ const loadCounterForDate = useCallback(
     return undefined;
   }, [catalog.loaded, catalog.loading, dispatch, isModalOpen]);
 
-const handleCounterSelect = useCallback((counterSummary: Partial<Counter>) => {
-  const nextCounterId = counterSummary.id ?? null;
+const handleCounterSelect = useCallback(
+  (counterSummary: Partial<Counter>) => {
+    const nextCounterId = counterSummary.id ?? null;
 
-  window.setTimeout(() => {
-    startTransition(() => {
-      setCounterListError(null);
-      fetchCounterRequestRef.current = null;
+    window.setTimeout(() => {
+      startTransition(() => {
+        setCounterListError(null);
+        fetchCounterRequestRef.current = null;
 
-      const nextUserId = counterSummary.userId ?? null;
-      if (nextUserId) {
-        setSelectedManagerId(nextUserId);
-      }
-
-      if (counterSummary.date) {
-        const parsed = dayjs(counterSummary.date);
-        if (parsed.isValid()) {
-          setSelectedDate(parsed);
+        const nextUserId = counterSummary.userId ?? null;
+        if (nextUserId) {
+          setSelectedManagerId(nextUserId);
         }
-      }
 
-      setSelectedCounterId(nextCounterId);
-    });
-  }, 0);
-}, []);
+        if (counterSummary.date) {
+          const parsed = dayjs(counterSummary.date);
+          if (parsed.isValid()) {
+            setSelectedDate(parsed);
+          }
+        }
+
+        setSelectedCounterId(nextCounterId);
+        setActiveRegistryStep('details');
+
+        if (nextCounterId) {
+          void loadCounterById(nextCounterId);
+        }
+      });
+    }, 0);
+  },
+  [loadCounterById, setActiveRegistryStep],
+);
 
 const handleViewSummary = useCallback(
   async (counterSummary: Partial<Counter>) => {
