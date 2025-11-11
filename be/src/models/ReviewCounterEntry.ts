@@ -55,6 +55,16 @@ export default class ReviewCounterEntry extends Model {
   @Column({ type: DataType.JSONB })
   declare meta: Record<string, unknown>;
 
+  @AllowNull(false)
+  @Default(false)
+  @Column({ field: 'under_minimum_approved', type: DataType.BOOLEAN })
+  declare underMinimumApproved: boolean;
+
+  @ForeignKey(() => User)
+  @AllowNull(true)
+  @Column({ field: 'under_minimum_approved_by', type: DataType.INTEGER })
+  declare underMinimumApprovedBy: number | null;
+
   @ForeignKey(() => User)
   @AllowNull(true)
   @Column({ field: 'created_by', type: DataType.INTEGER })
@@ -76,4 +86,7 @@ export default class ReviewCounterEntry extends Model {
 
   @BelongsTo(() => User, { foreignKey: 'updated_by', as: 'updatedByUser' })
   declare updatedByUser?: NonAttribute<User | null>;
+
+  @BelongsTo(() => User, { foreignKey: 'under_minimum_approved_by', as: 'underMinimumApprovedByUser' })
+  declare underMinimumApprovedByUser?: NonAttribute<User | null>;
 }

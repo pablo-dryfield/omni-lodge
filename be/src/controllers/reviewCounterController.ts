@@ -22,6 +22,48 @@ const REVIEW_COUNTER_COLUMNS = [
 ];
 
 const FLOAT_TOLERANCE = 1e-9;
+const MINIMUM_REVIEWS_FOR_PAYMENT = 15;
+const UNDER_MINIMUM_APPROVER_ROLES = new Set(['admin', 'owner', 'manager']);
+
+const normalizeRoleSlug = (value?: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return null;
+  }
+  const withHyphens = trimmed.replace(/[\s_]+/g, '-');
+  const collapsed = withHyphens.replace(/-/g, '');
+  if (collapsed === 'administrator') {
+    return 'admin';
+  }
+  if (collapsed === 'assistantmanager' || collapsed === 'assistmanager') {
+    return 'assistant-manager';
+  }
+  if (collapsed === 'mgr' || collapsed === 'manager') {
+    return 'manager';
+  }
+  return withHyphens;
+};
+
+const canApproveUnderMinimum = (role?: string | null): boolean => {
+  const normalized = normalizeRoleSlug(role);
+  if (!normalized) {
+    return false;
+  }
+  return UNDER_MINIMUM_APPROVER_ROLES.has(normalized);
+};
+
+const resolveApprovalFlag = (source: Record<string, unknown>): boolean | null => {
+  if (typeof source.underMinimumApproved === 'boolean') {
+    return source.underMinimumApproved;
+  }
+  if (typeof (source as Record<string, unknown>).under_minimum_approved === 'boolean') {
+    return (source as { under_minimum_approved: boolean }).under_minimum_approved;
+  }
+  return null;
+};
 
 const toNumber = (value: unknown): number => {
   if (value == null) {
@@ -167,7 +209,7 @@ const sanitizeEntryPayload = async (payload: Record<string, unknown>) => {
   return entry;
 };
 
-const formatEntryRecord = (entry: ReviewCounterEntry & { user?: User | null }) => ({
+const formatEntryRecord = (entry: ReviewCounterEntry & { user?: User | null; underMinimumApprovedByUser?: User | null }) => ({
   id: entry.id,
   counterId: entry.counterId,
   userId: entry.userId,
@@ -178,6 +220,11 @@ const formatEntryRecord = (entry: ReviewCounterEntry & { user?: User | null }) =
   notes: entry.notes ?? null,
   meta: entry.meta ?? {},
   userName: entry.user ? `${entry.user.firstName ?? ''} ${entry.user.lastName ?? ''}`.trim() || null : null,
+  underMinimumApproved: entry.underMinimumApproved ?? false,
+  underMinimumApprovedBy: entry.underMinimumApprovedBy ?? null,
+  underMinimumApprovedByName: entry.underMinimumApprovedByUser
+    ? `${entry.underMinimumApprovedByUser.firstName ?? ''} ${entry.underMinimumApprovedByUser.lastName ?? ''}`.trim() || null
+    : null,
 });
 
 const formatCounterRecord = (counter: ReviewCounter & { entries?: ReviewCounterEntry[]; createdByUser?: User | null; updatedByUser?: User | null }) => ({
@@ -220,7 +267,14 @@ export const listReviewCounters = async (req: Request, res: Response): Promise<v
     const counters = await ReviewCounter.findAll({
       where,
       include: [
-        { model: ReviewCounterEntry, as: 'entries', include: [{ model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] }] },
+        {
+          model: ReviewCounterEntry,
+          as: 'entries',
+          include: [
+            { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
+            { model: User, as: 'underMinimumApprovedByUser', attributes: ['id', 'firstName', 'lastName'] },
+          ],
+        },
         { model: User, as: 'createdByUser', attributes: ['id', 'firstName', 'lastName'] },
         { model: User, as: 'updatedByUser', attributes: ['id', 'firstName', 'lastName'] },
       ],
@@ -259,7 +313,14 @@ export const createReviewCounter = async (req: AuthenticatedRequest, res: Respon
 
     const withRelations = await ReviewCounter.findByPk(record.id, {
       include: [
-        { model: ReviewCounterEntry, as: 'entries', include: [{ model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] }] },
+        {
+          model: ReviewCounterEntry,
+          as: 'entries',
+          include: [
+            { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
+            { model: User, as: 'underMinimumApprovedByUser', attributes: ['id', 'firstName', 'lastName'] },
+          ],
+        },
         { model: User, as: 'createdByUser', attributes: ['id', 'firstName', 'lastName'] },
         { model: User, as: 'updatedByUser', attributes: ['id', 'firstName', 'lastName'] },
       ],
@@ -291,7 +352,14 @@ export const updateReviewCounter = async (req: AuthenticatedRequest, res: Respon
 
     const refreshed = await ReviewCounter.findByPk(id, {
       include: [
-        { model: ReviewCounterEntry, as: 'entries', include: [{ model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] }] },
+        {
+          model: ReviewCounterEntry,
+          as: 'entries',
+          include: [
+            { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
+            { model: User, as: 'underMinimumApprovedByUser', attributes: ['id', 'firstName', 'lastName'] },
+          ],
+        },
         { model: User, as: 'createdByUser', attributes: ['id', 'firstName', 'lastName'] },
         { model: User, as: 'updatedByUser', attributes: ['id', 'firstName', 'lastName'] },
       ],
@@ -335,7 +403,10 @@ export const listReviewCounterEntries = async (req: Request, res: Response): Pro
 
     const entries = await ReviewCounterEntry.findAll({
       where: { counterId },
-      include: [{ model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] }],
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
+        { model: User, as: 'underMinimumApprovedByUser', attributes: ['id', 'firstName', 'lastName'] },
+      ],
       order: [
         ['category', 'ASC'],
         ['displayName', 'ASC'],
@@ -368,10 +439,39 @@ export const createReviewCounterEntry = async (req: AuthenticatedRequest, res: R
     payload.counterId = counterId;
     payload.createdBy = actorId;
     payload.updatedBy = actorId;
+    const requestedApproval = resolveApprovalFlag(req.body ?? {});
+    const nextRawCount = toNumber(payload.rawCount ?? 0);
+    let nextApproval = false;
+    let approvalBy: number | null = null;
+
+    if (nextRawCount >= MINIMUM_REVIEWS_FOR_PAYMENT) {
+      nextApproval = false;
+      approvalBy = null;
+    } else if (requestedApproval === true) {
+      if (!canApproveUnderMinimum(req.authContext?.roleSlug)) {
+        res.status(403).json([{ message: 'Only managers, admins, or owners can approve under 15 reviews' }]);
+        return;
+      }
+      if (!actorId) {
+        res.status(403).json([{ message: 'Unable to approve under minimum without an authenticated user' }]);
+        return;
+      }
+      nextApproval = true;
+      approvalBy = actorId;
+    } else if (requestedApproval === false) {
+      nextApproval = false;
+      approvalBy = null;
+    }
+
+    payload.underMinimumApproved = nextApproval;
+    payload.underMinimumApprovedBy = approvalBy;
 
     const created = await ReviewCounterEntry.create(payload);
     const withUser = await ReviewCounterEntry.findByPk(created.id, {
-      include: [{ model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] }],
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
+        { model: User, as: 'underMinimumApprovedByUser', attributes: ['id', 'firstName', 'lastName'] },
+      ],
     });
 
     res.status(201).json([{ data: withUser ? [formatEntryRecord(withUser as ReviewCounterEntry & { user?: User | null })] : [] }]);
@@ -399,11 +499,40 @@ export const updateReviewCounterEntry = async (req: AuthenticatedRequest, res: R
     const actorId = getActorId(req);
     const payload = await sanitizeEntryPayload({ ...existing.get(), ...req.body });
     payload.updatedBy = actorId;
+    const requestedApproval = resolveApprovalFlag(req.body ?? {});
+    const nextRawCount = toNumber(payload.rawCount ?? existing.rawCount ?? 0);
+    let nextApproval = Boolean(existing.underMinimumApproved);
+    let approvalBy: number | null = existing.underMinimumApprovedBy ?? null;
+
+    if (nextRawCount >= MINIMUM_REVIEWS_FOR_PAYMENT) {
+      nextApproval = false;
+      approvalBy = null;
+    } else if (requestedApproval === true) {
+      if (!canApproveUnderMinimum(req.authContext?.roleSlug)) {
+        res.status(403).json([{ message: 'Only managers, admins, or owners can approve under 15 reviews' }]);
+        return;
+      }
+      if (!actorId) {
+        res.status(403).json([{ message: 'Unable to approve under minimum without an authenticated user' }]);
+        return;
+      }
+      nextApproval = true;
+      approvalBy = actorId;
+    } else if (requestedApproval === false) {
+      nextApproval = false;
+      approvalBy = null;
+    }
+
+    payload.underMinimumApproved = nextApproval;
+    payload.underMinimumApprovedBy = approvalBy;
 
     await ReviewCounterEntry.update(payload, { where: { id: entryId, counterId } });
 
     const refreshed = await ReviewCounterEntry.findByPk(entryId, {
-      include: [{ model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] }],
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
+        { model: User, as: 'underMinimumApprovedByUser', attributes: ['id', 'firstName', 'lastName'] },
+      ],
     });
 
     res.status(200).json([{ data: refreshed ? [formatEntryRecord(refreshed as ReviewCounterEntry & { user?: User | null })] : [] }]);
@@ -457,6 +586,8 @@ const createDefaultEntriesForCounter = async (counterId: number, actorId: number
       category: 'staff' as ReviewCounterEntryCategory,
       rawCount: 0,
       roundedCount: 0,
+      underMinimumApproved: false,
+      underMinimumApprovedBy: null,
       createdBy: actorId,
       updatedBy: actorId,
     })),
@@ -467,6 +598,8 @@ const createDefaultEntriesForCounter = async (counterId: number, actorId: number
       category: 'no_name',
       rawCount: 0,
       roundedCount: 0,
+      underMinimumApproved: false,
+      underMinimumApprovedBy: null,
       createdBy: actorId,
       updatedBy: actorId,
     },
@@ -477,6 +610,8 @@ const createDefaultEntriesForCounter = async (counterId: number, actorId: number
       category: 'bad',
       rawCount: 0,
       roundedCount: 0,
+      underMinimumApproved: false,
+      underMinimumApprovedBy: null,
       createdBy: actorId,
       updatedBy: actorId,
     },
@@ -486,3 +621,4 @@ const createDefaultEntriesForCounter = async (counterId: number, actorId: number
     await ReviewCounterEntry.bulkCreate(entryPayloads);
   }
 };
+

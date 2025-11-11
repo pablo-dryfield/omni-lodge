@@ -9,6 +9,9 @@ export type ReviewCounterEntry = {
   notes: string | null;
   meta: Record<string, unknown>;
   userName: string | null;
+  underMinimumApproved: boolean;
+  underMinimumApprovedBy?: number | null;
+  underMinimumApprovedByName?: string | null;
 };
 
 export type ReviewCounter = {
@@ -52,4 +55,5 @@ export type ReviewCounterEntryPayload = {
   category?: ReviewCounterEntry['category'];
   rawCount: number;
   notes?: string | null;
+  underMinimumApproved?: boolean;
 };

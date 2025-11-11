@@ -14,8 +14,42 @@ const buildColumns = () => {
 
 const slugify = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
-const sanitizePayload = (payload: Partial<ReviewPlatform>) => {
-  const next: Partial<ReviewPlatform> = {};
+const toNumber = (value: unknown, fallback: number): number => {
+  if (value == null) {
+    return fallback;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return numeric;
+};
+
+const normalizeUrl = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const sanitizeAliasList = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter((item) => item.length > 0);
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(/[\n,]+/)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+  }
+  return [];
+};
+
+const sanitizePayload = (payload: Record<string, unknown>): Partial<ReviewPlatform> => {
+  const next: Partial<ReviewPlatform> & { aliases?: string[] } = {};
   if (typeof payload.name === 'string') {
     next.name = payload.name.trim();
   }
@@ -32,6 +66,25 @@ const sanitizePayload = (payload: Partial<ReviewPlatform>) => {
   }
   if (payload.isActive != null) {
     next.isActive = Boolean(payload.isActive);
+  }
+  if (payload.weight != null) {
+    const parsedWeight = Math.max(0, toNumber(payload.weight, 1));
+    next.weight = parsedWeight === 0 ? 0 : Number(parsedWeight.toFixed(2));
+  }
+  if ('sourceKey' in payload || 'source_key' in payload) {
+    const raw = (payload.sourceKey ?? payload.source_key) as unknown;
+    if (typeof raw === 'string') {
+      next.sourceKey = raw.trim() || null;
+    } else if (raw == null) {
+      next.sourceKey = null;
+    }
+  }
+  if ('platformUrl' in payload || 'platform_url' in payload) {
+    const normalized = normalizeUrl(payload.platformUrl ?? payload.platform_url);
+    next.platformUrl = normalized;
+  }
+  if ('aliases' in payload) {
+    next.aliases = sanitizeAliasList(payload.aliases);
   }
   return next;
 };

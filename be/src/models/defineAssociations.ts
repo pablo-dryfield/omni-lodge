@@ -52,6 +52,8 @@ import DerivedFieldDefinition from './DerivedFieldDefinition.js';
 import ReportDashboard from './ReportDashboard.js';
 import ReportDashboardCard from './ReportDashboardCard.js';
 import UserHomePreference from './UserHomePreference.js';
+import CompensationComponent from './CompensationComponent.js';
+import CompensationComponentAssignment from './CompensationComponentAssignment.js';
 
 export function defineAssociations() {
   // User Associations
@@ -63,6 +65,10 @@ export function defineAssociations() {
   ReportTemplate.belongsTo(User, { foreignKey: 'userId', as: 'reportOwner' });
   ReportDashboard.belongsTo(User, { foreignKey: 'ownerId', as: 'dashboardOwner' });
   UserHomePreference.belongsTo(User, { foreignKey: 'userId', as: 'userHome' });
+  User.hasMany(CompensationComponent, { foreignKey: 'created_by', as: 'compensationComponentsCreated' });
+  User.hasMany(CompensationComponent, { foreignKey: 'updated_by', as: 'compensationComponentsUpdated' });
+  User.hasMany(CompensationComponentAssignment, { foreignKey: 'user_id', as: 'compensationAssignments' });
+  CompensationComponentAssignment.belongsTo(User, { foreignKey: 'user_id', as: 'userCompensation' });
 
   // UserType Associations
   UserType.hasMany(User, { foreignKey: 'userTypeId', as: 'users' });
@@ -103,6 +109,14 @@ export function defineAssociations() {
   RoleModulePermission.belongsTo(Action, { foreignKey: 'actionId', as: 'action' });
   RoleModulePermission.belongsTo(User, { foreignKey: 'createdBy', as: 'createdByUser' });
   RoleModulePermission.belongsTo(User, { foreignKey: 'updatedBy', as: 'updatedByUser' });
+
+  // Compensation components
+  CompensationComponent.hasMany(CompensationComponentAssignment, { foreignKey: 'component_id', as: 'assignmentsCompensation' });
+  CompensationComponentAssignment.belongsTo(CompensationComponent, { foreignKey: 'component_id', as: 'componentCompensation' });
+  ShiftRole.hasMany(CompensationComponentAssignment, { foreignKey: 'shift_role_id', as: 'shiftRoleCompensationAssignments' });
+  CompensationComponentAssignment.belongsTo(ShiftRole, { foreignKey: 'shift_role_id', as: 'shiftRoleCompensation' });
+  UserType.hasMany(CompensationComponentAssignment, { foreignKey: 'user_type_id', as: 'userTypeCompensationAssignments' });
+  CompensationComponentAssignment.belongsTo(UserType, { foreignKey: 'user_type_id', as: 'userTypeCompensation' });
 
   // Product Associations
   Product.belongsTo(ProductType, { foreignKey: 'productTypeId' });
