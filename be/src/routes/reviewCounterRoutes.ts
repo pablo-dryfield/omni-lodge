@@ -10,6 +10,7 @@ import {
   createReviewCounterEntry,
   updateReviewCounterEntry,
   deleteReviewCounterEntry,
+  getReviewCounterAnalytics,
 } from '../controllers/reviewCounterController.js';
 
 const router: Router = express.Router();
@@ -17,6 +18,7 @@ const router: Router = express.Router();
 const roleGuard = requireRoles(['admin', 'owner', 'manager', 'assistant-manager']);
 
 router.get('/', authMiddleware, roleGuard, listReviewCounters);
+router.get('/analytics', authMiddleware, roleGuard, getReviewCounterAnalytics);
 router.post('/', authMiddleware, roleGuard, createReviewCounter);
 router.put('/:id', authMiddleware, roleGuard, updateReviewCounter);
 router.delete('/:id', authMiddleware, roleGuard, deleteReviewCounter);

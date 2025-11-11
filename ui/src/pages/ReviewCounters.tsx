@@ -2,6 +2,7 @@ import { Stack, Title, Text } from '@mantine/core';
 import { PageAccessGuard } from '../components/access/PageAccessGuard';
 import { PAGE_SLUGS } from '../constants/pageSlugs';
 import ReviewCounterList from '../components/reviewCounters/ReviewCounterList';
+import ReviewAnalyticsPanel from '../components/reviewCounters/ReviewAnalyticsPanel';
 
 const ReviewCounters = () => {
   return (
@@ -13,6 +14,7 @@ const ReviewCounters = () => {
             Track monthly review totals, reviewer order, and staff credit allocations across platforms.
           </Text>
         </div>
+        <ReviewAnalyticsPanel />
         <ReviewCounterList />
       </Stack>
     </PageAccessGuard>
