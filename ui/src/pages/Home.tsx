@@ -739,11 +739,8 @@ const Home = (props: GenericPageProps) => {
   }, [cardHydrationDescriptors, cardLiveQueries, effectiveViewMode, shouldHydrateLiveData]);
 
   const renderNavigationTiles = () => (
-    <Card variant="outlined">
+    <Card sx={{backgroundColor: 'transparent', boxShadow: 'none'}}>
       <CardContent>
-        <Typography variant="h6" gutterBottom>
-          Navigation
-        </Typography>
         <Grid container spacing={{ xs: 3, sm: 4, md: 5 }} justifyContent="center">
           {allowedPages.length === 0 ? (
             <Grid size={{ xs: 12 }}>
