@@ -1,4 +1,4 @@
-import React, { Fragment, useEffect, useMemo, useState } from 'react';
+﻿import React, { Fragment, useEffect, useMemo, useState } from 'react';
 import {
   Paper,
   Container,
@@ -12,34 +12,128 @@ import {
   Stack,
   Group,
   ScrollArea,
-  Divider,
   Badge,
-  Collapse,
   Title,
   useMantineTheme,
 } from '@mantine/core';
 import { DatePicker } from '@mui/x-date-pickers';
 import { Dayjs } from 'dayjs';
-import { type Pay, type PayBreakdown } from '../types/pays/Pay';
+import { type Pay, type PayBreakdown, type PayComponentSummary } from '../types/pays/Pay';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { fetchPays } from '../actions/payActions';
 import { useModuleAccess } from '../hooks/useModuleAccess';
 import { PageAccessGuard } from '../components/access/PageAccessGuard';
 import { PAGE_SLUGS } from '../constants/pageSlugs';
 import { useMediaQuery } from '@mantine/hooks';
-import { Bold } from 'lucide-react';
 
 const formatCurrency = (value: number | undefined): string => {
-  const numberPart = (value ?? 0).toLocaleString("en-US", {
+  const numberPart = (value ?? 0).toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
   return `${numberPart} zł`;
 };
 
+const getComponentColor = (category: string) => {
+  switch (category) {
+    case 'base':
+      return 'blue';
+    case 'commission':
+      return 'green';
+    case 'incentive':
+      return 'violet';
+    case 'bonus':
+      return 'grape';
+    case 'review':
+      return 'teal';
+    case 'adjustment':
+      return 'yellow';
+    case 'deduction':
+      return 'red';
+    default:
+      return 'gray';
+  }
+};
+
+const normalizeTotal = (summary: Pay) => summary.totalPayout ?? summary.totalCommission;
+
 const FULL_ACCESS_MODULE = 'staff-payouts-all';
 const SELF_ACCESS_MODULE = 'staff-payouts-self';
 const PAGE_SLUG = PAGE_SLUGS.pays;
+
+const renderComponentList = (components?: PayComponentSummary[]) => {
+  if (!components || components.length === 0) {
+    return null;
+  }
+  return (
+    <Stack gap="xs">
+      <Text size="sm" fw={600}>
+        Components
+      </Text>
+      <Stack gap={4}>
+        {components.map((component) => (
+          <Group key={component.componentId} justify="space-between" gap="xs">
+            <Group gap={6}>
+              <Badge color={getComponentColor(component.category)} variant="light">
+                {component.category}
+              </Badge>
+              <Text size="sm">{component.name}</Text>
+            </Group>
+            <Text size="sm" fw={600}>
+              {formatCurrency(component.amount)}
+            </Text>
+          </Group>
+        ))}
+      </Stack>
+    </Stack>
+  );
+};
+
+const renderBucketTotals = (bucketTotals?: Record<string, number>) => {
+  if (!bucketTotals || Object.keys(bucketTotals).length === 0) {
+    return null;
+  }
+  return (
+    <Stack gap="xs">
+      <Text size="sm" fw={600}>
+        Bucket totals
+      </Text>
+      <Stack gap={4}>
+        {Object.entries(bucketTotals).map(([bucket, amount]) => (
+          <Group key={bucket} justify="space-between">
+            <Badge variant="outline" color={getComponentColor(bucket)}>
+              {bucket}
+            </Badge>
+            <Text size="sm">{formatCurrency(amount)}</Text>
+          </Group>
+        ))}
+      </Stack>
+    </Stack>
+  );
+};
+
+const renderBreakdownTable = (items: PayBreakdown[]) => (
+  <Table style={{ width: '100%', borderCollapse: 'collapse' }}>
+    <thead>
+      <tr>
+        <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'left' }}>Date</th>
+        <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Customers</th>
+        <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Guides</th>
+        <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Commission</th>
+      </tr>
+    </thead>
+    <tbody>
+      {items.map((entry) => (
+        <tr key={`${entry.date}-${entry.guidesCount}`}>
+          <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>{entry.date}</td>
+          <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{entry.customers}</td>
+          <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{entry.guidesCount}</td>
+          <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{formatCurrency(entry.commission)}</td>
+        </tr>
+      ))}
+    </tbody>
+  </Table>
+);
 
 const Pays: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -86,38 +180,11 @@ const Pays: React.FC = () => {
   const theme = useMantineTheme();
   const isDesktop = useMediaQuery(`(min-width: ${theme.breakpoints.md})`);
 
-  const renderBreakdownTable = (items: PayBreakdown[]) => (
-    <Table
-      style={{
-        width: '100%',
-        borderCollapse: 'collapse',
-      }}
-    >
-      <thead>
-        <tr>
-          <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'left' }}>Date</th>
-          <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Customers</th>
-          <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Guides</th>
-          <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Commission</th>
-        </tr>
-      </thead>
-      <tbody>
-        {items.map((entry) => (
-          <tr key={`${entry.date}-${entry.guidesCount}`}>
-            <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>{entry.date}</td>
-            <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{entry.customers}</td>
-            <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{entry.guidesCount}</td>
-            <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{formatCurrency(entry.commission)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </Table>
-  );
-
   const renderMobileCards = () => (
     <Stack gap="md">
       {summaries.map((item, index) => {
         const expanded = expandedRow === index;
+        const total = normalizeTotal(item);
         return (
           <Paper key={item.userId ?? index} shadow="sm" radius="lg" p="md" withBorder>
             <Stack gap="sm">
@@ -125,115 +192,101 @@ const Pays: React.FC = () => {
                 <div>
                   <Title order={4}>{item.firstName}</Title>
                   <Text size="sm" c="dimmed">
-                    Total Commission
+                    Total payout
                   </Text>
-                  <Text fw={600} size="lg">
-                    {formatCurrency(item.totalCommission)}
-                  </Text>
+                  <Title order={5}>{formatCurrency(total)}</Title>
                 </div>
                 <Badge color="blue" variant="light">
                   {item.breakdown.length} {item.breakdown.length === 1 ? 'entry' : 'entries'}
                 </Badge>
               </Group>
 
-              <Button
-                variant="light"
-                color={expanded ? 'blue' : 'gray'}
-                radius="md"
-                size="sm"
-                onClick={() => toggleRow(index)}
-              >
-                {expanded ? 'Hide breakdown' : 'Show breakdown'}
-              </Button>
+              <Stack gap="xs">
+                <Group justify="space-between">
+                  <Text size="sm" c="dimmed">
+                    Commission
+                  </Text>
+                  <Text fw={600}>{formatCurrency(item.totalCommission)}</Text>
+                </Group>
+                {renderComponentList(item.componentTotals)}
+                {renderBucketTotals(item.bucketTotals)}
+              </Stack>
 
-              <Collapse in={expanded} transitionDuration={180}>
-                <Stack gap="sm" mt="xs">
-                  {item.breakdown.map((entry) => (
-                    <Paper key={`${entry.date}-${entry.guidesCount}`} withBorder radius="md" p="sm">
-                      <Stack gap={4}>
-                        <Group justify="space-between">
-                          <Text fw={600}>{entry.date}</Text>
-                          <Text fw={600}>{formatCurrency(entry.commission)}</Text>
-                        </Group>
-                        <Group justify="space-between" gap="xs">
-                          <Text size="xs" c="dimmed">
-                            Customers: {entry.customers}
-                          </Text>
-                          <Divider orientation="vertical" h={16} mx={4} />
-                          <Text size="xs" c="dimmed">
-                            Guides: {entry.guidesCount}
-                          </Text>
-                        </Group>
-                      </Stack>
-                    </Paper>
-                  ))}
-                </Stack>
-              </Collapse>
+              {item.breakdown.length > 0 && (
+                <Button variant="subtle" size="xs" onClick={() => toggleRow(index)}>
+                  {expanded ? 'Hide breakdown' : 'Show breakdown'}
+                </Button>
+              )}
+
+              {expanded && item.breakdown.length > 0 && (
+                <Box pt="xs">{renderBreakdownTable(item.breakdown)}</Box>
+              )}
             </Stack>
           </Paper>
         );
       })}
-      <Paper key={9999999} shadow="sm" radius="lg" p="md" withBorder>
-        <Stack gap="sm">
-          <Group justify="space-between" align="flex-start">
-            <div>
-              <Title order={4}>Total: </Title>
-              <Text fw={600} size="lg">
-                {formatCurrency(summaries.reduce((a, item) => item.totalCommission + a, 0))}
-              </Text>
-            </div>
-          </Group>
-        </Stack>
-      </Paper>
     </Stack>
   );
 
-  const renderDesktopTable = () => (
-    <ScrollArea>
-      <Table
-        striped
-        highlightOnHover
-        withRowBorders
-        style={{ minWidth: 520 }}
-      >
-        <thead>
-          <tr>
-            <th style={{ padding: 12 }}>Name</th>
-            <th style={{ padding: 12 }}>Total Commission</th>
-            <th style={{ padding: 12 }}></th>
-          </tr>
-        </thead>
-        <tbody>
-          {summaries.map((item, index) => (
-            <Fragment key={item.userId ?? index}>
-              <tr>
-                <td style={{ padding: 12 }}>{item.firstName}</td>
-                <td style={{ padding: 12 }}>{formatCurrency(item.totalCommission)}</td>
-                <td style={{ padding: 12, textAlign: 'right' }}>
-                  {item.breakdown.length > 0 && (
-                    <Button variant="subtle" size="xs" onClick={() => toggleRow(index)}>
-                      {expandedRow === index ? 'Hide breakdown' : 'Show breakdown'}
-                    </Button>
-                  )}
-                </td>
-              </tr>
-              {expandedRow === index && item.breakdown.length > 0 && (
+  const renderDesktopTable = () => {
+    const totalCommission = summaries.reduce((sum, item) => sum + item.totalCommission, 0);
+    const totalPayout = summaries.reduce((sum, item) => sum + normalizeTotal(item), 0);
+    return (
+      <ScrollArea>
+        <Table striped highlightOnHover withRowBorders style={{ minWidth: 640 }}>
+          <thead>
+            <tr>
+              <th style={{ padding: 12 }}>Name</th>
+              <th style={{ padding: 12 }}>Commission</th>
+              <th style={{ padding: 12 }}>Total payout</th>
+              <th style={{ padding: 12 }} />
+            </tr>
+          </thead>
+          <tbody>
+            {summaries.map((item, index) => (
+              <Fragment key={item.userId ?? index}>
                 <tr>
-                  <td colSpan={3} style={{ backgroundColor: '#fafafa', padding: '12px 8px' }}>
-                    {renderBreakdownTable(item.breakdown)}
+                  <td style={{ padding: 12 }}>{item.firstName}</td>
+                  <td style={{ padding: 12 }}>{formatCurrency(item.totalCommission)}</td>
+                  <td style={{ padding: 12 }}>{formatCurrency(normalizeTotal(item))}</td>
+                  <td style={{ padding: 12, textAlign: 'right' }}>
+                    {item.breakdown.length > 0 && (
+                      <Button variant="subtle" size="xs" onClick={() => toggleRow(index)}>
+                        {expandedRow === index ? 'Hide breakdown' : 'Show breakdown'}
+                      </Button>
+                    )}
                   </td>
                 </tr>
-              )}
-            </Fragment>
-          ))}
-          <tr>
-            <td style={{ padding: 12 }}><h4><b>Total:</b></h4></td>
-            <td style={{ padding: 12 }}><h4>{formatCurrency(summaries.reduce((a, item) => item.totalCommission + a, 0))}</h4></td>
-          </tr>
-        </tbody>
-      </Table>
-    </ScrollArea>
-  );
+                {expandedRow === index && (
+                  <tr>
+                    <td colSpan={4} style={{ backgroundColor: '#fafafa', padding: '12px 8px' }}>
+                      <Stack gap="md">
+                        {renderBucketTotals(item.bucketTotals)}
+                        {renderComponentList(item.componentTotals)}
+                        {item.breakdown.length > 0 && renderBreakdownTable(item.breakdown)}
+                      </Stack>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+            <tr>
+              <td style={{ padding: 12 }}>
+                <strong>Total</strong>
+              </td>
+              <td style={{ padding: 12 }}>
+                <strong>{formatCurrency(totalCommission)}</strong>
+              </td>
+              <td style={{ padding: 12 }}>
+                <strong>{formatCurrency(totalPayout)}</strong>
+              </td>
+              <td />
+            </tr>
+          </tbody>
+        </Table>
+      </ScrollArea>
+    );
+  };
 
   let content: React.ReactNode;
 
@@ -253,7 +306,7 @@ const Pays: React.FC = () => {
     );
   } else {
     content = (
-      <Container fluid={!isDesktop} size={isDesktop ? 720 : undefined} my={isDesktop ? 40 : 16} px={isDesktop ? 'md' : 'sm'}>
+      <Container fluid={!isDesktop} size={isDesktop ? 780 : undefined} my={isDesktop ? 40 : 16} px={isDesktop ? 'md' : 'sm'}>
         <Paper radius={isDesktop ? 12 : 'lg'} p={isDesktop ? 'xl' : 'md'} withBorder>
           <Stack gap="md">
             {usingSelfScope && (
@@ -297,14 +350,10 @@ const Pays: React.FC = () => {
                 </Text>
               )}
 
-              {!loading && !error && summaries.length > 0 && (
-                isDesktop ? renderDesktopTable() : renderMobileCards()
-              )}
+              {!loading && !error && summaries.length > 0 && (isDesktop ? renderDesktopTable() : renderMobileCards())}
 
               {!loading && !error && summaries.length === 0 && (
-                <Text ta="center">
-                  No data available for the selected dates.
-                </Text>
+                <Text ta="center">No data available for the selected dates.</Text>
               )}
             </Stack>
           </Stack>
