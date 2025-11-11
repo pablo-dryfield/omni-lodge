@@ -40,6 +40,7 @@ import SettingsDbBackups from "../../pages/settings/SettingsDbBackups";
 import SettingsHomeExperience from "../../pages/settings/SettingsHomeExperience";
 import SettingsReviewPlatforms from "../../pages/settings/SettingsReviewPlatforms";
 import SettingsCompensationComponents from "../../pages/settings/SettingsCompensationComponents";
+import SettingsAssistantManagerTasks from "../../pages/settings/SettingsAssistantManagerTasks";
 import SchedulingLayout from "../../pages/scheduling/SchedulingLayout";
 import AvailabilityPage from "../../pages/scheduling/AvailabilityPage";
 import BuilderPage from "../../pages/scheduling/BuilderPage";
@@ -129,6 +130,7 @@ const Routes = () => {
         <Route path="user-shift-roles" element={<SettingsUserShiftRoles />} />
         <Route path="review-platforms" element={<SettingsReviewPlatforms />} />
         <Route path="compensation-components" element={<SettingsCompensationComponents />} />
+        <Route path="assistant-manager-tasks" element={<SettingsAssistantManagerTasks />} />
         <Route path="home-experience" element={<SettingsHomeExperience />} />
       </Route>
     </ReactRoutes>

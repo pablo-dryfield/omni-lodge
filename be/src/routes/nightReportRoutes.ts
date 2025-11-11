@@ -11,6 +11,7 @@ import {
   uploadNightReportPhoto,
   deleteNightReportPhoto,
   downloadNightReportPhoto,
+  getNightReportLeaderMetrics,
 } from '../controllers/nightReportController.js';
 
 const router = Router();
@@ -22,6 +23,7 @@ const upload = multer({
 });
 
 router.get('/', authMiddleware, listNightReports);
+router.get('/metrics/leader-performance', authMiddleware, getNightReportLeaderMetrics);
 router.post('/', authMiddleware, createNightReport);
 router.get('/:id', authMiddleware, getNightReport);
 router.patch('/:id', authMiddleware, updateNightReport);

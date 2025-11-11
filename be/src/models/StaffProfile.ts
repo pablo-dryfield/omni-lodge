@@ -12,7 +12,7 @@ import {
 import type { NonAttribute } from 'sequelize';
 import User from './User.js';
 
-export type StaffType = 'volunteer' | 'long_term';
+export type StaffType = 'volunteer' | 'long_term' | 'assistant_manager' | 'manager' | 'guide';
 
 @Table({
   tableName: 'staff_profiles',
@@ -26,7 +26,10 @@ export default class StaffProfile extends Model {
   declare userId: number;
 
   @AllowNull(false)
-  @Column({ field: 'staff_type', type: DataType.ENUM('volunteer', 'long_term') })
+  @Column({
+    field: 'staff_type',
+    type: DataType.ENUM('volunteer', 'long_term', 'assistant_manager', 'manager', 'guide'),
+  })
   declare staffType: StaffType;
 
   @AllowNull(false)

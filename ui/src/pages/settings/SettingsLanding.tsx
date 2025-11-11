@@ -12,6 +12,7 @@ import {
   IconLayoutDashboard,
   IconStars,
   IconCoin,
+  IconCalendar,
 } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import { useAppSelector } from "../../store/hooks";
@@ -62,6 +63,13 @@ const sections: SettingsSection[] = [
     icon: IconStars,
     to: "/settings/review-platforms",
     pageSlug: PAGE_SLUGS.settingsReviewPlatforms,
+  },
+  {
+    label: "Assistant Manager Tasks",
+    description: "Set up AM task checklists and planners for base salary proration.",
+    icon: IconCalendar,
+    to: "/settings/assistant-manager-tasks",
+    pageSlug: PAGE_SLUGS.settingsAssistantManagerTasks,
   },
   {
     label: "Compensation Components",

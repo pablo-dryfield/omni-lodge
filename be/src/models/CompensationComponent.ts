@@ -24,7 +24,14 @@ export type CompensationComponentCategory =
   | 'deduction'
   | 'adjustment';
 
-export type CompensationCalculationMethod = 'flat' | 'per_unit' | 'tiered' | 'percentage' | 'task_score' | 'hybrid';
+export type CompensationCalculationMethod =
+  | 'flat'
+  | 'per_unit'
+  | 'tiered'
+  | 'percentage'
+  | 'task_score'
+  | 'hybrid'
+  | 'night_report';
 
 @Table({
   tableName: 'compensation_components',
@@ -55,7 +62,7 @@ export default class CompensationComponent extends Model {
   @Default('flat')
   @Column({
     field: 'calculation_method',
-    type: DataType.ENUM('flat', 'per_unit', 'tiered', 'percentage', 'task_score', 'hybrid'),
+    type: DataType.ENUM('flat', 'per_unit', 'tiered', 'percentage', 'task_score', 'hybrid', 'night_report'),
   })
   declare calculationMethod: CompensationCalculationMethod;
 

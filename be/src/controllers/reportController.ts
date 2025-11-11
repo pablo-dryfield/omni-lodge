@@ -8,6 +8,8 @@ import CounterChannelMetric from "../models/CounterChannelMetric.js";
 import CounterProduct from "../models/CounterProduct.js";
 import CounterUser from "../models/CounterUser.js";
 import User from "../models/User.js";
+import StaffProfile from "../models/StaffProfile.js";
+import UserShiftRole from "../models/UserShiftRole.js";
 import ReportTemplate, {
   ReportTemplateFieldSelection,
   ReportTemplateOptions,
@@ -34,6 +36,8 @@ import CompensationComponent, {
   type CompensationComponentCategory,
 } from "../models/CompensationComponent.js";
 import CompensationComponentAssignment from "../models/CompensationComponentAssignment.js";
+import AssistantManagerTaskLog, { type AssistantManagerTaskStatus } from "../models/AssistantManagerTaskLog.js";
+import { fetchLeaderNightReportStats, type NightReportStatsMap } from "../services/nightReportMetricsService.js";
 
 type CommissionSummary = {
   userId: number;
@@ -1217,11 +1221,36 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       ],
     });
 
+    const typedComponents = activeComponents as Array<
+      CompensationComponent & { assignments?: CompensationComponentAssignment[] }
+    >;
+
+    const assignmentTargets = await resolveAssignmentTargets(commissionDataByUser, typedComponents);
+    const requiresTaskScores = typedComponents.some(
+      (component) =>
+        component.calculationMethod === "task_score" &&
+        (component.assignments?.some((assignment) => assignment.isActive) ?? false),
+    );
+    const taskScoreLookup: TaskScoreLookup = requiresTaskScores
+      ? await buildTaskScoreLookup(start, end)
+      : new Map();
+    const requiresNightReportMetrics = typedComponents.some(
+      (component) =>
+        component.calculationMethod === "night_report" &&
+        (component.assignments?.some((assignment) => assignment.isActive) ?? false),
+    );
+    const nightReportStats: NightReportStatsMap = requiresNightReportMetrics
+      ? await fetchLeaderNightReportStats(start, end)
+      : new Map();
+
     applyCompensationComponents(
       commissionDataByUser,
-      activeComponents as Array<CompensationComponent & { assignments?: CompensationComponentAssignment[] }>,
+      typedComponents,
       start,
       end,
+      assignmentTargets,
+      taskScoreLookup,
+      nightReportStats,
     );
 
     const allSummaries = Array.from(commissionDataByUser.values()).map((entry) => ({
@@ -2256,14 +2285,38 @@ const isAssignmentEffectiveForRange = (
   return true;
 };
 
-const assignmentAppliesToUser = (assignment: CompensationComponentAssignment, userId: number): boolean => {
+type AssignmentTargetMap = Map<number, number[]>;
+
+type TaskLogStatusBucket = {
+  total: number;
+  completed: number;
+  waived: number;
+  missed: number;
+  pending: number;
+};
+
+type TaskLogSummary = {
+  overall: TaskLogStatusBucket;
+  byTemplate: Map<number, TaskLogStatusBucket>;
+};
+
+type TaskScoreLookup = Map<number, TaskLogSummary>;
+
+const assignmentAppliesToUser = (
+  assignment: CompensationComponentAssignment,
+  userId: number,
+  targetsByAssignment: AssignmentTargetMap,
+): boolean => {
   if (assignment.targetScope === "global") {
     return true;
   }
-  if (assignment.targetScope === "user") {
+  const targetUserIds = targetsByAssignment.get(assignment.id);
+  if (targetUserIds && targetUserIds.includes(userId)) {
+    return true;
+  }
+  if (assignment.targetScope === "user" && assignment.userId) {
     return assignment.userId === userId;
   }
-  // TODO: support shift_role, user_type, staff_type targets once requisite context is available.
   return false;
 };
 
@@ -2271,7 +2324,23 @@ const computeAssignmentAmount = (
   component: CompensationComponent,
   assignment: CompensationComponentAssignment,
   summary: CommissionSummary,
+  taskScoreLookup: TaskScoreLookup,
+  nightReportStats: NightReportStatsMap,
+  nightReportBestCache: Map<string, NightReportBestCacheEntry>,
 ) => {
+  if (component.calculationMethod === "task_score") {
+    return computeTaskScorePayout(component, assignment, summary, taskScoreLookup);
+  }
+  if (component.calculationMethod === "night_report") {
+    return computeNightReportIncentive(
+      component,
+      assignment,
+      summary,
+      nightReportStats,
+      nightReportBestCache,
+    );
+  }
+
   const baseAmount = Number(assignment.baseAmount ?? 0);
   const unitAmount = Number(assignment.unitAmount ?? 0);
   let total = baseAmount;
@@ -2292,7 +2361,11 @@ const applyCompensationComponents = (
   components: Array<CompensationComponent & { assignments?: CompensationComponentAssignment[] }>,
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
+  assignmentTargets: AssignmentTargetMap,
+  taskScoreLookup: TaskScoreLookup,
+  nightReportStats: NightReportStatsMap,
 ) => {
+  const nightReportBestCache = new Map<string, NightReportBestCacheEntry>();
   summaries.forEach((summary) => {
     summary.componentTotals = [];
     summary.bucketTotals = { commission: summary.totalCommission };
@@ -2310,11 +2383,21 @@ const applyCompensationComponents = (
         if (
           !assignment.isActive ||
           !isAssignmentEffectiveForRange(assignment, rangeStart, rangeEnd) ||
-          !assignmentAppliesToUser(assignment, summary.userId)
+          !assignmentAppliesToUser(assignment, summary.userId, assignmentTargets)
         ) {
           return acc;
         }
-        return acc + computeAssignmentAmount(component, assignment, summary);
+        return (
+          acc +
+          computeAssignmentAmount(
+            component,
+            assignment,
+            summary,
+            taskScoreLookup,
+            nightReportStats,
+            nightReportBestCache,
+          )
+        );
       }, 0);
 
       if (amount !== 0) {
@@ -2330,6 +2413,644 @@ const applyCompensationComponents = (
       }
     });
   });
+};
+
+type TaskScoreSettings = {
+  templateIds?: number[];
+  minimumMultiplier: number;
+  maximumMultiplier: number;
+  treatWaivedAsComplete: boolean;
+  treatPendingAsComplete: boolean;
+};
+
+const createStatusBucket = (): TaskLogStatusBucket => ({
+  total: 0,
+  completed: 0,
+  waived: 0,
+  missed: 0,
+  pending: 0,
+});
+
+const incrementStatusBucket = (bucket: TaskLogStatusBucket, status: AssistantManagerTaskStatus) => {
+  bucket.total += 1;
+  if (status === "completed") {
+    bucket.completed += 1;
+  } else if (status === "waived") {
+    bucket.waived += 1;
+  } else if (status === "missed") {
+    bucket.missed += 1;
+  } else {
+    bucket.pending += 1;
+  }
+};
+
+const selectTaskBucket = (
+  summary: TaskLogSummary | undefined,
+  templateIds?: number[],
+): TaskLogStatusBucket | null => {
+  if (!summary) {
+    return null;
+  }
+  if (!templateIds || templateIds.length === 0) {
+    return summary.overall;
+  }
+  const aggregate = createStatusBucket();
+  templateIds.forEach((templateId) => {
+    const bucket = summary.byTemplate.get(templateId);
+    if (bucket) {
+      aggregate.total += bucket.total;
+      aggregate.completed += bucket.completed;
+      aggregate.waived += bucket.waived;
+      aggregate.missed += bucket.missed;
+      aggregate.pending += bucket.pending;
+    }
+  });
+  if (aggregate.total === 0) {
+    return summary.overall;
+  }
+  return aggregate;
+};
+
+const readNumeric = (value: unknown): number | undefined => {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : undefined;
+  }
+  return undefined;
+};
+
+const readBoolean = (value: unknown): boolean | undefined => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+  return undefined;
+};
+
+const normalizeTaskScoreSettings = (config: unknown): Partial<TaskScoreSettings> => {
+  if (!config || typeof config !== "object") {
+    return {};
+  }
+  const record = config as Record<string, unknown>;
+  const candidate =
+    typeof record.taskScore === "object"
+      ? (record.taskScore as Record<string, unknown>)
+      : typeof record.task_score === "object"
+      ? (record.task_score as Record<string, unknown>)
+      : record;
+  if (!candidate || typeof candidate !== "object") {
+    return {};
+  }
+
+  const templateIdsRaw = (candidate.templateIds ?? candidate.template_ids) as unknown;
+  const templateIds = Array.isArray(templateIdsRaw)
+    ? Array.from(
+        new Set(
+          templateIdsRaw
+            .map((entry) => Number(entry))
+            .filter((entry) => Number.isInteger(entry) && entry > 0),
+        ),
+      )
+    : undefined;
+
+  const minimumMultiplier =
+    readNumeric(
+      candidate.minimumMultiplier ??
+        candidate.minimum_multiplier ??
+        candidate.minimumCompletionRate ??
+        candidate.minimum_completion_rate,
+    ) ?? undefined;
+
+  const maximumMultiplier =
+    readNumeric(
+      candidate.maximumMultiplier ??
+        candidate.maximum_multiplier ??
+        candidate.maximumCompletionRate ??
+        candidate.maximum_completion_rate,
+    ) ?? undefined;
+
+  const treatWaivedAsComplete =
+    readBoolean(
+      candidate.treatWaivedAsComplete ??
+        candidate.waivedCountsAsComplete ??
+        candidate.includeWaived,
+    ) ?? undefined;
+
+  const treatPendingAsComplete =
+    readBoolean(
+      candidate.treatPendingAsComplete ??
+        candidate.pendingCountsAsComplete ??
+        candidate.includePending,
+    ) ?? undefined;
+
+  const settings: Partial<TaskScoreSettings> = {};
+  if (templateIds && templateIds.length > 0) {
+    settings.templateIds = templateIds;
+  }
+  if (minimumMultiplier !== undefined) {
+    settings.minimumMultiplier = Number(minimumMultiplier);
+  }
+  if (maximumMultiplier !== undefined) {
+    settings.maximumMultiplier = Number(maximumMultiplier);
+  }
+  if (treatWaivedAsComplete !== undefined) {
+    settings.treatWaivedAsComplete = treatWaivedAsComplete;
+  }
+  if (treatPendingAsComplete !== undefined) {
+    settings.treatPendingAsComplete = treatPendingAsComplete;
+  }
+  return settings;
+};
+
+const resolveTaskScoreSettings = (
+  component: CompensationComponent,
+  assignment: CompensationComponentAssignment,
+): TaskScoreSettings => {
+  const componentSettings = normalizeTaskScoreSettings(component.config);
+  const assignmentSettings = normalizeTaskScoreSettings(assignment.config);
+
+  const merged: TaskScoreSettings = {
+    templateIds: assignmentSettings.templateIds ?? componentSettings.templateIds,
+    minimumMultiplier:
+      assignmentSettings.minimumMultiplier ??
+      componentSettings.minimumMultiplier ??
+      0,
+    maximumMultiplier:
+      assignmentSettings.maximumMultiplier ??
+      componentSettings.maximumMultiplier ??
+      1,
+    treatWaivedAsComplete:
+      assignmentSettings.treatWaivedAsComplete ??
+      componentSettings.treatWaivedAsComplete ??
+      true,
+    treatPendingAsComplete:
+      assignmentSettings.treatPendingAsComplete ??
+      componentSettings.treatPendingAsComplete ??
+      false,
+  };
+
+  if (!merged.templateIds || merged.templateIds.length === 0) {
+    merged.templateIds = undefined;
+  }
+
+  if (!Number.isFinite(merged.minimumMultiplier) || merged.minimumMultiplier < 0) {
+    merged.minimumMultiplier = 0;
+  }
+  if (!Number.isFinite(merged.maximumMultiplier)) {
+    merged.maximumMultiplier = 1;
+  }
+  if (merged.maximumMultiplier < merged.minimumMultiplier) {
+    merged.maximumMultiplier = merged.minimumMultiplier;
+  }
+
+  return merged;
+};
+
+const clampValue = (value: number, min: number, max: number) =>
+  Math.min(Math.max(value, min), max);
+
+const computeTaskScorePayout = (
+  component: CompensationComponent,
+  assignment: CompensationComponentAssignment,
+  summary: CommissionSummary,
+  taskScoreLookup: TaskScoreLookup,
+) => {
+  const baseAmount = Number(assignment.baseAmount ?? 0);
+  if (baseAmount === 0) {
+    return 0;
+  }
+
+  const userSummary = taskScoreLookup.get(summary.userId);
+  if (!userSummary) {
+    return baseAmount;
+  }
+
+  const settings = resolveTaskScoreSettings(component, assignment);
+  const bucket = selectTaskBucket(userSummary, settings.templateIds);
+  if (!bucket || bucket.total === 0) {
+    return baseAmount;
+  }
+
+  const completedCount =
+    bucket.completed +
+    (settings.treatWaivedAsComplete ? bucket.waived : 0) +
+    (settings.treatPendingAsComplete ? bucket.pending : 0);
+
+  const completionRatio = bucket.total > 0 ? completedCount / bucket.total : 1;
+  const multiplier = clampValue(
+    completionRatio,
+    settings.minimumMultiplier,
+    settings.maximumMultiplier,
+  );
+
+  let total = baseAmount * multiplier;
+  const unitAmount = Number(assignment.unitAmount ?? 0);
+  if (!Number.isNaN(unitAmount) && unitAmount !== 0) {
+    total += unitAmount * completedCount;
+  }
+
+  return total;
+};
+
+const buildTaskScoreLookup = async (
+  rangeStart: dayjs.Dayjs,
+  rangeEnd: dayjs.Dayjs,
+): Promise<TaskScoreLookup> => {
+  const logs = await AssistantManagerTaskLog.findAll({
+    attributes: ["userId", "templateId", "status"],
+    where: {
+      taskDate: {
+        [Op.between]: [rangeStart.format("YYYY-MM-DD"), rangeEnd.format("YYYY-MM-DD")],
+      },
+    },
+  });
+
+  const summaryByUser = new Map<number, TaskLogSummary>();
+
+  logs.forEach((log) => {
+    const userId = log.getDataValue("userId");
+    if (!userId) {
+      return;
+    }
+    const templateId = log.getDataValue("templateId");
+    const status = log.getDataValue("status") as AssistantManagerTaskStatus;
+
+    let userSummary = summaryByUser.get(userId);
+    if (!userSummary) {
+      userSummary = {
+        overall: createStatusBucket(),
+        byTemplate: new Map<number, TaskLogStatusBucket>(),
+      };
+      summaryByUser.set(userId, userSummary);
+    }
+
+    incrementStatusBucket(userSummary.overall, status);
+    if (templateId) {
+      let templateSummary = userSummary.byTemplate.get(templateId);
+      if (!templateSummary) {
+        templateSummary = createStatusBucket();
+        userSummary.byTemplate.set(templateId, templateSummary);
+      }
+      incrementStatusBucket(templateSummary, status);
+    }
+  });
+
+  return summaryByUser;
+};
+
+type NightReportIncentiveSettings = {
+  minAttendance: number;
+  minReports: number;
+  retentionThreshold: number;
+  payoutPerQualifiedReport: number;
+  retentionBonusPerDay: number;
+  bestOfRangeBonus: number;
+};
+
+type NightReportBestCacheEntry = {
+  topUserIds: Set<number>;
+  topHits: number;
+};
+
+const normalizeNightReportConfig = (config: unknown): Partial<NightReportIncentiveSettings> => {
+  if (!config || typeof config !== "object") {
+    return {};
+  }
+  const record = config as Record<string, unknown>;
+  const candidate =
+    typeof record.nightReport === "object"
+      ? (record.nightReport as Record<string, unknown>)
+      : typeof record.night_report === "object"
+      ? (record.night_report as Record<string, unknown>)
+      : record;
+  if (!candidate || typeof candidate !== "object") {
+    return {};
+  }
+
+  const settings: Partial<NightReportIncentiveSettings> = {};
+
+  const minAttendance =
+    readNumeric(candidate.minAttendance ?? candidate.min_attendance ?? candidate.minimumAttendance) ??
+    undefined;
+  if (minAttendance !== undefined) {
+    settings.minAttendance = minAttendance;
+  }
+
+  const minReports =
+    readNumeric(candidate.minReports ?? candidate.min_reports ?? candidate.minimumReports) ?? undefined;
+  if (minReports !== undefined) {
+    settings.minReports = minReports;
+  }
+
+  const retentionThreshold =
+    readNumeric(
+      candidate.retentionThreshold ??
+        candidate.retention_threshold ??
+        candidate.retentionTarget ??
+        candidate.retention_target,
+    ) ?? undefined;
+  if (retentionThreshold !== undefined) {
+    settings.retentionThreshold = retentionThreshold;
+  }
+
+  const payoutPerQualifiedReport =
+    readNumeric(
+      candidate.payoutPerQualifiedReport ??
+        candidate.payout_per_qualified_report ??
+        candidate.payoutPerReport ??
+        candidate.payout_per_report,
+    ) ?? undefined;
+  if (payoutPerQualifiedReport !== undefined) {
+    settings.payoutPerQualifiedReport = payoutPerQualifiedReport;
+  }
+
+  const retentionBonusPerDay =
+    readNumeric(
+      candidate.retentionBonusPerDay ??
+        candidate.retention_bonus_per_day ??
+        candidate.retentionBonus ??
+        candidate.retention_bonus,
+    ) ?? undefined;
+  if (retentionBonusPerDay !== undefined) {
+    settings.retentionBonusPerDay = retentionBonusPerDay;
+  }
+
+  const bestOfRangeBonus =
+    readNumeric(
+      candidate.bestOfRangeBonus ??
+        candidate.best_of_range_bonus ??
+        candidate.bestStaffBonus ??
+        candidate.best_staff_bonus,
+    ) ?? undefined;
+  if (bestOfRangeBonus !== undefined) {
+    settings.bestOfRangeBonus = bestOfRangeBonus;
+  }
+
+  return settings;
+};
+
+const resolveNightReportSettings = (
+  component: CompensationComponent,
+  assignment: CompensationComponentAssignment,
+): NightReportIncentiveSettings => {
+  const componentSettings = normalizeNightReportConfig(component.config ?? {});
+  const assignmentSettings = normalizeNightReportConfig(assignment.config ?? {});
+  const merged: NightReportIncentiveSettings = {
+    minAttendance: assignmentSettings.minAttendance ?? componentSettings.minAttendance ?? 0,
+    minReports: assignmentSettings.minReports ?? componentSettings.minReports ?? 0,
+    retentionThreshold:
+      assignmentSettings.retentionThreshold ?? componentSettings.retentionThreshold ?? 0,
+    payoutPerQualifiedReport:
+      assignmentSettings.payoutPerQualifiedReport ??
+      componentSettings.payoutPerQualifiedReport ??
+      Number(assignment.baseAmount ?? 0),
+    retentionBonusPerDay:
+      assignmentSettings.retentionBonusPerDay ??
+      componentSettings.retentionBonusPerDay ??
+      Number(assignment.unitAmount ?? 0),
+    bestOfRangeBonus:
+      assignmentSettings.bestOfRangeBonus ?? componentSettings.bestOfRangeBonus ?? 0,
+  };
+
+  if (!Number.isFinite(merged.minAttendance) || merged.minAttendance < 0) {
+    merged.minAttendance = 0;
+  }
+  if (!Number.isFinite(merged.minReports) || merged.minReports < 0) {
+    merged.minReports = 0;
+  }
+  if (!Number.isFinite(merged.retentionThreshold)) {
+    merged.retentionThreshold = 0;
+  } else if (merged.retentionThreshold > 1) {
+    merged.retentionThreshold = 1;
+  } else if (merged.retentionThreshold < 0) {
+    merged.retentionThreshold = 0;
+  }
+  if (!Number.isFinite(merged.payoutPerQualifiedReport)) {
+    merged.payoutPerQualifiedReport = 0;
+  }
+  if (!Number.isFinite(merged.retentionBonusPerDay)) {
+    merged.retentionBonusPerDay = 0;
+  }
+  if (!Number.isFinite(merged.bestOfRangeBonus)) {
+    merged.bestOfRangeBonus = 0;
+  }
+
+  return merged;
+};
+
+const computeNightReportIncentive = (
+  component: CompensationComponent,
+  assignment: CompensationComponentAssignment,
+  summary: CommissionSummary,
+  nightReportStats: NightReportStatsMap,
+  nightReportBestCache: Map<string, NightReportBestCacheEntry>,
+) => {
+  const leaderStats = nightReportStats.get(summary.userId);
+  if (!leaderStats) {
+    return 0;
+  }
+
+  const settings = resolveNightReportSettings(component, assignment);
+  const qualifiedReports = leaderStats.reports.filter(
+    (report) => report.totalPeople >= settings.minAttendance,
+  );
+
+  if (qualifiedReports.length < settings.minReports) {
+    return 0;
+  }
+
+  const retentionHits = qualifiedReports.filter(
+    (report) => report.retentionRatio >= settings.retentionThreshold,
+  ).length;
+
+  let total = settings.payoutPerQualifiedReport * qualifiedReports.length;
+  total += settings.retentionBonusPerDay * retentionHits;
+
+  if (settings.bestOfRangeBonus > 0) {
+    const bestEntry = getNightReportBestEntry(
+      nightReportBestCache,
+      settings,
+      nightReportStats,
+    );
+    if (bestEntry.topHits > 0 && bestEntry.topUserIds.has(summary.userId)) {
+      total += settings.bestOfRangeBonus;
+    }
+  }
+
+  return total;
+};
+
+const getNightReportBestEntry = (
+  cache: Map<string, NightReportBestCacheEntry>,
+  settings: NightReportIncentiveSettings,
+  nightReportStats: NightReportStatsMap,
+): NightReportBestCacheEntry => {
+  const cacheKey = [
+    settings.minAttendance,
+    settings.minReports,
+    settings.retentionThreshold,
+  ].join("|");
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  let topHits = 0;
+  const topUserIds = new Set<number>();
+
+  nightReportStats.forEach((summary, userId) => {
+    const qualifiedReports = summary.reports.filter(
+      (report) => report.totalPeople >= settings.minAttendance,
+    );
+    if (qualifiedReports.length < settings.minReports) {
+      return;
+    }
+    const retentionHits = qualifiedReports.filter(
+      (report) => report.retentionRatio >= settings.retentionThreshold,
+    ).length;
+    if (retentionHits > topHits) {
+      topHits = retentionHits;
+      topUserIds.clear();
+      topUserIds.add(userId);
+    } else if (retentionHits === topHits && retentionHits > 0) {
+      topUserIds.add(userId);
+    }
+  });
+
+  const entry: NightReportBestCacheEntry = { topHits, topUserIds };
+  cache.set(cacheKey, entry);
+  return entry;
+};
+
+const resolveAssignmentTargets = async (
+  summaries: Map<number, CommissionSummary>,
+  components: Array<CompensationComponent & { assignments?: CompensationComponentAssignment[] }>,
+): Promise<AssignmentTargetMap> => {
+  const targets = new Map<number, number[]>();
+  const staffTypeCache = new Map<string, number[]>();
+  const shiftRoleCache = new Map<number, number[]>();
+  const userTypeCache = new Map<number, number[]>();
+  const missingUserIds = new Set<number>();
+
+  for (const component of components) {
+    for (const assignment of component.assignments ?? []) {
+      let userIds: number[] = [];
+      if (assignment.targetScope === "user" && assignment.userId) {
+        userIds = [assignment.userId];
+      } else if (assignment.targetScope === "staff_type" && assignment.staffType) {
+        userIds = await fetchStaffTypeUserIds(assignment.staffType, staffTypeCache);
+      } else if (assignment.targetScope === "shift_role" && assignment.shiftRoleId) {
+        userIds = await fetchShiftRoleUserIds(assignment.shiftRoleId, shiftRoleCache);
+      } else if (assignment.targetScope === "user_type" && assignment.userTypeId) {
+        userIds = await fetchUserTypeUserIds(assignment.userTypeId, userTypeCache);
+      }
+
+      if (userIds.length > 0) {
+        targets.set(assignment.id, userIds);
+      }
+
+      userIds.forEach((userId) => {
+        if (!summaries.has(userId)) {
+          missingUserIds.add(userId);
+        }
+      });
+    }
+  }
+
+  if (missingUserIds.size > 0) {
+    const users = await User.findAll({
+      where: {
+        id: { [Op.in]: Array.from(missingUserIds) },
+        status: true,
+      },
+      attributes: ["id", "firstName"],
+    });
+
+    users.forEach((user) => {
+      if (!summaries.has(user.id)) {
+        summaries.set(user.id, {
+          userId: user.id,
+          firstName: user.firstName ?? `User ${user.id}`,
+          totalCommission: 0,
+          totalCustomers: 0,
+          breakdown: [],
+          componentTotals: [],
+          bucketTotals: { commission: 0 },
+          totalPayout: 0,
+        });
+      }
+    });
+  }
+
+  return targets;
+};
+
+const fetchStaffTypeUserIds = async (
+  staffType: string,
+  cache: Map<string, number[]>,
+): Promise<number[]> => {
+  if (!staffType) {
+    return [];
+  }
+  if (cache.has(staffType)) {
+    return cache.get(staffType) ?? [];
+  }
+  const profiles = await StaffProfile.findAll({
+    where: { staffType, active: true },
+    attributes: ["userId"],
+  });
+  const userIds = profiles.map((profile) => profile.userId);
+  cache.set(staffType, userIds);
+  return userIds;
+};
+
+const fetchShiftRoleUserIds = async (
+  shiftRoleId: number,
+  cache: Map<number, number[]>,
+): Promise<number[]> => {
+  if (!shiftRoleId) {
+    return [];
+  }
+  if (cache.has(shiftRoleId)) {
+    return cache.get(shiftRoleId) ?? [];
+  }
+  const rows = await UserShiftRole.findAll({
+    where: { shiftRoleId },
+    attributes: ["userId"],
+  });
+  const userIds = rows.map((row) => row.userId);
+  cache.set(shiftRoleId, userIds);
+  return userIds;
+};
+
+const fetchUserTypeUserIds = async (
+  userTypeId: number,
+  cache: Map<number, number[]>,
+): Promise<number[]> => {
+  if (!userTypeId) {
+    return [];
+  }
+  if (cache.has(userTypeId)) {
+    return cache.get(userTypeId) ?? [];
+  }
+  const users = await User.findAll({
+    where: { userTypeId, status: true },
+    attributes: ["id"],
+  });
+  const userIds = users.map((user) => user.id);
+  cache.set(userTypeId, userIds);
+  return userIds;
 };
 
 function describeField(

@@ -1,5 +1,6 @@
 import type { Response } from 'express';
 import { Op } from 'sequelize';
+import dayjs from 'dayjs';
 import Counter from '../models/Counter.js';
 import NightReport, { type NightReportStatus } from '../models/NightReport.js';
 import NightReportVenue from '../models/NightReportVenue.js';
@@ -15,6 +16,7 @@ import {
   deleteNightReportPhoto as removePhotoFromDisk,
   openNightReportPhotoStream,
 } from '../services/nightReportStorageService.js';
+import { fetchLeaderNightReportStats } from '../services/nightReportMetricsService.js';
 
 type NightReportPayload = {
   id: number;
@@ -699,6 +701,136 @@ export const deleteNightReport = async (req: AuthenticatedRequest, res: Response
     }
     logger.error('Failed to delete night report', error);
     res.status(500).json([{ message: 'Failed to delete night report' }]);
+  }
+};
+
+export const getNightReportLeaderMetrics = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { startDate, endDate } = req.query;
+    if (typeof startDate !== 'string' || !startDate) {
+      res.status(400).json([{ message: 'startDate is required' }]);
+      return;
+    }
+
+    const start = dayjs(startDate).startOf('day');
+    const end = typeof endDate === 'string' && endDate ? dayjs(endDate).endOf('day') : start.endOf('day');
+    if (!start.isValid() || !end.isValid() || end.isBefore(start)) {
+      res.status(400).json([{ message: 'Provide a valid date range' }]);
+      return;
+    }
+
+    const minAttendanceValue = Math.max(Number(req.query.minAttendance ?? 0) || 0, 0);
+    const minReportsValue = Math.max(Number(req.query.minReports ?? 0) || 0, 0);
+    const retentionThresholdRaw = Number(req.query.retentionThreshold ?? 0);
+    const retentionThresholdValue = Number.isFinite(retentionThresholdRaw)
+      ? Math.min(Math.max(retentionThresholdRaw, 0), 1)
+      : 0;
+
+    const stats = await fetchLeaderNightReportStats(start, end);
+    if (stats.size === 0) {
+      res.status(200).json([
+        {
+          data: {
+            range: { startDate: start.format('YYYY-MM-DD'), endDate: end.format('YYYY-MM-DD') },
+            thresholds: {
+              minAttendance: minAttendanceValue,
+              minReports: minReportsValue,
+              retentionThreshold: retentionThresholdValue,
+            },
+            leaders: [],
+            bestStaff: { userIds: [], retentionHits: 0 },
+          },
+          columns: [],
+        },
+      ]);
+      return;
+    }
+
+    const userIds = Array.from(stats.keys());
+    const users = await User.findAll({
+      where: { id: { [Op.in]: userIds } },
+      attributes: ['id', 'firstName', 'lastName'],
+    });
+    const nameMap = new Map<number, string>();
+    users.forEach((user) => {
+      const fullName = `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim();
+      nameMap.set(user.id, fullName.length > 0 ? fullName : `User #${user.id}`);
+    });
+
+    let bestRetentionHits = 0;
+    const bestStaffIds = new Set<number>();
+
+    const leaders = Array.from(stats.entries()).map(([userId, summary]) => {
+      const totalReports = summary.reports.length;
+      const totalPeople = summary.reports.reduce((sum, report) => sum + report.totalPeople, 0);
+      const totalVenues = summary.reports.reduce((sum, report) => sum + report.venuesCount, 0);
+      const totalRetention = summary.reports.reduce((sum, report) => sum + report.retentionRatio, 0);
+      const qualifiedReports = summary.reports.filter(
+        (report) => report.totalPeople >= minAttendanceValue,
+      );
+      const retentionHits = qualifiedReports.filter(
+        (report) => report.retentionRatio >= retentionThresholdValue,
+      ).length;
+
+      const meetsMinReports = qualifiedReports.length >= minReportsValue;
+      if (meetsMinReports) {
+        if (retentionHits > bestRetentionHits) {
+          bestRetentionHits = retentionHits;
+          bestStaffIds.clear();
+          if (retentionHits > 0) {
+            bestStaffIds.add(userId);
+          }
+        } else if (retentionHits === bestRetentionHits && retentionHits > 0) {
+          bestStaffIds.add(userId);
+        }
+      }
+
+      return {
+        userId,
+        leaderName: nameMap.get(userId) ?? `User #${userId}`,
+        totalReports,
+        totalPeople,
+        totalVenues,
+        averageAttendance: totalReports ? totalPeople / totalReports : 0,
+        averageVenues: totalReports ? totalVenues / totalReports : 0,
+        averageRetention: totalReports ? totalRetention / totalReports : 0,
+        qualifiedReports: qualifiedReports.length,
+        retentionHits,
+        meetsMinimumReports: meetsMinReports,
+        dailyReports: summary.reports.map((report) => ({
+          ...report,
+          meetsAttendance: report.totalPeople >= minAttendanceValue,
+          meetsRetention:
+            report.totalPeople >= minAttendanceValue && report.retentionRatio >= retentionThresholdValue,
+        })),
+      };
+    });
+
+    leaders.sort((a, b) => {
+      if (b.retentionHits !== a.retentionHits) {
+        return b.retentionHits - a.retentionHits;
+      }
+      return b.qualifiedReports - a.qualifiedReports;
+    });
+
+    res.status(200).json([
+      {
+        data: {
+          range: { startDate: start.format('YYYY-MM-DD'), endDate: end.format('YYYY-MM-DD') },
+          thresholds: {
+            minAttendance: minAttendanceValue,
+            minReports: minReportsValue,
+            retentionThreshold: retentionThresholdValue,
+          },
+          leaders,
+          bestStaff: { userIds: Array.from(bestStaffIds), retentionHits: bestRetentionHits },
+        },
+        columns: [],
+      },
+    ]);
+  } catch (error) {
+    logger.error('Failed to calculate night report leader metrics', error);
+    res.status(500).json([{ message: 'Failed to load leader metrics' }]);
   }
 };
 
