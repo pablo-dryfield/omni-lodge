@@ -1,24 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import dayjs from 'dayjs';
-import {
-  ActionIcon,
-  Alert,
-  Badge,
-  Button,
-  Card,
-  Center,
-  Collapse,
-  Group,
-  Modal,
-  Select,
-  Stack,
-  Text,
-  Textarea,
-  TextInput,
-  Tooltip,
-} from '@mantine/core';
+import { ActionIcon, Alert, Badge, Button, Card, Center, Group, Modal, Select, Stack, Text, Textarea, TextInput, Tooltip } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
-import { IconCheck, IconCircle, IconCircleX, IconLoader2, IconAdjustments, IconNotes, IconCalendar, IconRefresh, IconPencil } from '@tabler/icons-react';
+import { IconCheck, IconCircleX, IconLoader2, IconAdjustments, IconCalendar, IconRefresh, IconPencil } from '@tabler/icons-react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { useModuleAccess } from '../../hooks/useModuleAccess';
 import {
@@ -68,11 +52,18 @@ const defaultAssignmentFormState: AssignmentFormState = {
   effectiveEnd: '',
 };
 
-const TASK_STATUS_OPTIONS = [
+const TASK_STATUS_OPTIONS: { value: AssistantManagerTaskLog['status']; label: string }[] = [
   { value: 'pending', label: 'Pending' },
   { value: 'completed', label: 'Completed' },
   { value: 'missed', label: 'Missed' },
   { value: 'waived', label: 'Waived' },
+];
+
+type TaskStatusFilterValue = AssistantManagerTaskLog['status'] | 'all';
+
+const STATUS_FILTER_OPTIONS: { value: TaskStatusFilterValue; label: string }[] = [
+  { value: 'all', label: 'All statuses' },
+  ...TASK_STATUS_OPTIONS,
 ];
 
 const CADENCE_LABELS: Record<AssistantManagerTaskCadence, string> = {
@@ -104,10 +95,11 @@ const AssistantManagerTaskPlanner = () => {
   const [assignmentFormState, setAssignmentFormState] = useState<AssignmentFormState>(defaultAssignmentFormState);
   const [assignmentSubmitting, setAssignmentSubmitting] = useState(false);
   const [editingAssignment, setEditingAssignment] = useState<AssistantManagerTaskAssignment | null>(null);
+  const [assignmentFormError, setAssignmentFormError] = useState<string | null>(null);
 
   const [logDateRange, setLogDateRange] = useState<[Date | null, Date | null]>([new Date(), dayjs().add(6, 'day').toDate()]);
   const [logScope, setLogScope] = useState<'self' | 'all'>('all');
-  const [logFilterStatus, setLogFilterStatus] = useState<string | null>(null);
+  const [logFilterStatus, setLogFilterStatus] = useState<TaskStatusFilterValue>('all');
 
   useEffect(() => {
     dispatch(fetchAmTaskTemplates());
@@ -207,6 +199,7 @@ const AssistantManagerTaskPlanner = () => {
         effectiveEnd: '',
       });
     }
+    setAssignmentFormError(null);
     setAssignmentModalOpen(true);
   }, []);
 
@@ -217,18 +210,20 @@ const AssistantManagerTaskPlanner = () => {
     setAssignmentModalOpen(false);
     setEditingAssignment(null);
     setAssignmentFormState(defaultAssignmentFormState);
+    setAssignmentFormError(null);
   }, [assignmentSubmitting]);
 
   const handleAssignmentSubmit = useCallback(async () => {
     if (!selectedTemplateId) {
       return;
     }
+    setAssignmentFormError(null);
     if (assignmentFormState.targetScope === 'user' && !assignmentFormState.userId.trim()) {
-      setTemplateFormError('User ID is required when target scope is user');
+      setAssignmentFormError('User ID is required when target scope is user');
       return;
     }
     if (assignmentFormState.targetScope === 'staff_type' && !assignmentFormState.staffType.trim()) {
-      setTemplateFormError('Staff type is required when target scope is staff type');
+      setAssignmentFormError('Staff type is required when target scope is staff type');
       return;
     }
     setAssignmentSubmitting(true);
@@ -254,11 +249,18 @@ const AssistantManagerTaskPlanner = () => {
       await dispatch(fetchAmTaskTemplates());
       closeAssignmentModal();
     } catch (error) {
-      setTemplateFormError(error instanceof Error ? error.message : 'Failed to save assignment');
+      setAssignmentFormError(error instanceof Error ? error.message : 'Failed to save assignment');
     } finally {
       setAssignmentSubmitting(false);
     }
   }, [assignmentFormState, selectedTemplateId, editingAssignment, dispatch, closeAssignmentModal]);
+
+  const handleAssignmentDateChange = useCallback((key: 'effectiveStart' | 'effectiveEnd', date: Date | null) => {
+    setAssignmentFormState((prev) => ({
+      ...prev,
+      [key]: date ? dayjs(date).format('YYYY-MM-DD') : '',
+    }));
+  }, []);
 
   const handleAssignmentDelete = useCallback(
     async (templateId: number, assignmentId: number) => {
@@ -290,7 +292,7 @@ const AssistantManagerTaskPlanner = () => {
   );
 
   const filteredLogs = useMemo(() => {
-    if (!logFilterStatus) {
+    if (logFilterStatus === 'all') {
       return logs;
     }
     return logs.filter((log) => log.status === logFilterStatus);
@@ -428,10 +430,9 @@ const AssistantManagerTaskPlanner = () => {
               />
               <Select
                 placeholder="Status"
-                data={[{ value: null, label: 'All statuses' }, ...TASK_STATUS_OPTIONS]}
+                data={STATUS_FILTER_OPTIONS}
                 value={logFilterStatus}
-                onChange={(value) => setLogFilterStatus(value)}
-                allowDeselect
+                onChange={(value) => setLogFilterStatus((value as TaskStatusFilterValue) ?? 'all')}
               />
             </Group>
           </Group>
@@ -532,3 +533,97 @@ const AssistantManagerTaskPlanner = () => {
             minRows={3}
             value={templateFormState.scheduleConfigText}
             onChange={(event) => setTemplateFormState((prev) => ({ ...prev, scheduleConfigText: event.currentTarget.value }))}
+          />
+          {templateFormError && (
+            <Alert color="red" title="Unable to save">
+              {templateFormError}
+            </Alert>
+          )}
+          <Group justify="flex-end" gap="sm">
+            <Button variant="default" onClick={closeTemplateModal} disabled={templateSubmitting}>
+              Cancel
+            </Button>
+            <Button onClick={handleTemplateSubmit} loading={templateSubmitting}>
+              {editingTemplate ? 'Save Changes' : 'Create Template'}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={assignmentModalOpen}
+        onClose={closeAssignmentModal}
+        title={editingAssignment ? 'Edit Assignment' : 'New Assignment'}
+        centered
+      >
+        <Stack gap="md">
+          {selectedTemplateId && (
+            <Text size="sm" c="dimmed">
+              Template: {templates.find((tpl) => tpl.id === selectedTemplateId)?.name ?? `#${selectedTemplateId}`}
+            </Text>
+          )}
+          <Select
+            label="Target Scope"
+            data={[
+              { value: 'staff_type', label: 'Staff Type' },
+              { value: 'user', label: 'Specific User' },
+            ]}
+            value={assignmentFormState.targetScope}
+            onChange={(value) =>
+              setAssignmentFormState((prev) => ({
+                ...prev,
+                targetScope: (value as AssignmentFormState['targetScope']) ?? prev.targetScope,
+              }))
+            }
+          />
+          {assignmentFormState.targetScope === 'staff_type' ? (
+            <TextInput
+              label="Staff Type"
+              required
+              value={assignmentFormState.staffType}
+              onChange={(event) => setAssignmentFormState((prev) => ({ ...prev, staffType: event.currentTarget.value }))}
+            />
+          ) : (
+            <TextInput
+              label="User ID"
+              required
+              value={assignmentFormState.userId}
+              onChange={(event) => setAssignmentFormState((prev) => ({ ...prev, userId: event.currentTarget.value }))}
+            />
+          )}
+          <DatePickerInput
+            label="Effective Start"
+            value={assignmentFormState.effectiveStart ? dayjs(assignmentFormState.effectiveStart).toDate() : null}
+            onChange={(value) => handleAssignmentDateChange('effectiveStart', value)}
+            valueFormat="YYYY-MM-DD"
+            clearable
+          />
+          <DatePickerInput
+            label="Effective End"
+            value={assignmentFormState.effectiveEnd ? dayjs(assignmentFormState.effectiveEnd).toDate() : null}
+            onChange={(value) => handleAssignmentDateChange('effectiveEnd', value)}
+            valueFormat="YYYY-MM-DD"
+            placeholder="Leave empty for open-ended"
+            clearable
+          />
+          {assignmentFormError && (
+            <Alert color="red" title="Unable to save">
+              {assignmentFormError}
+            </Alert>
+          )}
+          <Group justify="flex-end" gap="sm">
+            <Button variant="default" onClick={closeAssignmentModal} disabled={assignmentSubmitting}>
+              Cancel
+            </Button>
+            <Button onClick={handleAssignmentSubmit} loading={assignmentSubmitting}>
+              {editingAssignment ? 'Save Assignment' : 'Create Assignment'}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+    </Stack>
+  );
+};
+
+export default AssistantManagerTaskPlanner;
