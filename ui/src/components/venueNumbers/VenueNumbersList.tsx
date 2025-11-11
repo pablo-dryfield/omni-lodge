@@ -47,6 +47,7 @@ import type { Counter } from "../../types/counters/Counter";
 import type { StaffOption } from "../../types/counters/CounterRegistry";
 import type { User } from "../../types/users/User";
 import type { Venue } from "../../types/venues/Venue";
+import { DID_NOT_OPERATE_NOTE } from "../../constants/nightReports";
 
 type EditableVenue = {
   tempKey: string;
@@ -81,7 +82,6 @@ const createEmptyVenue = (): EditableVenue => ({
   brunchCount: "",
 });
 
-const DID_NOT_OPERATE_NOTE = "The activity didn't operate.";
 const SELECT_OPEN_BAR_PLACEHOLDER = "Select Open Bar";
 
 type OpenBarMode = "default" | "pubCrawl" | "bottomlessBrunch";
