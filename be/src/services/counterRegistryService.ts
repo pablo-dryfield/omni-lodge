@@ -864,6 +864,9 @@ export default class CounterRegistryService {
     counter: Counter,
     summary: CounterSummary,
   ): Promise<void> {
+    if (counter.status !== 'final') {
+      return;
+    }
     const totals = summary?.totals?.people ?? {
       bookedBefore: 0,
       bookedAfter: 0,
