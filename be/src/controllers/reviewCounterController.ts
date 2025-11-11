@@ -24,6 +24,35 @@ const REVIEW_COUNTER_COLUMNS = [
 const FLOAT_TOLERANCE = 1e-9;
 const MINIMUM_REVIEWS_FOR_PAYMENT = 15;
 const UNDER_MINIMUM_APPROVER_ROLES = new Set(['admin', 'owner', 'manager']);
+const DEFAULT_ANALYTICS_WINDOW_DAYS = 90;
+const ANALYTICS_GROUP_VALUES = new Set(['day', 'week', 'month']);
+
+type AnalyticsGroupBy = 'day' | 'week' | 'month';
+
+type TimelineBucket = {
+  key: string;
+  label: string;
+  startDate: string;
+  totalReviews: number;
+  badReviews: number;
+  noNameReviews: number;
+};
+
+type PlatformAggregate = {
+  platform: string;
+  totalReviews: number;
+  badReviews: number;
+  noNameReviews: number;
+  counters: number;
+};
+
+type ContributorAggregate = {
+  userId: number | null;
+  displayName: string;
+  rawCount: number;
+  roundedCount: number;
+  counters: number;
+};
 
 const normalizeRoleSlug = (value?: string | null): string | null => {
   if (!value) {
@@ -46,6 +75,49 @@ const normalizeRoleSlug = (value?: string | null): string | null => {
   }
   return withHyphens;
 };
+
+const parseGroupByParam = (raw: unknown): AnalyticsGroupBy => {
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    if (ANALYTICS_GROUP_VALUES.has(normalized)) {
+      return normalized as AnalyticsGroupBy;
+    }
+  }
+  return 'month';
+};
+
+const buildTimelineKey = (dateValue: string | Date, groupBy: AnalyticsGroupBy) => {
+  const date = dayjs(dateValue);
+  const start = groupBy === 'day' ? date.startOf('day') : groupBy === 'week' ? date.startOf('week') : date.startOf('month');
+  const label =
+    groupBy === 'day'
+      ? start.format('MMM D')
+      : groupBy === 'week'
+      ? `${start.format('MMM D')} - ${start.endOf('week').format('MMM D')}`
+      : start.format('MMM YYYY');
+  const key =
+    groupBy === 'day'
+      ? start.format('YYYY-MM-DD')
+      : groupBy === 'week'
+      ? `week-${start.format('YYYY-MM-DD')}`
+      : start.format('YYYY-MM');
+  return { key, label, startDate: start.format('YYYY-MM-DD') };
+};
+
+const summarizeEntriesTotals = (entries?: ReviewCounterEntry[]) =>
+  (entries ?? []).reduce(
+    (acc, entry) => {
+      const amount = toNumber(entry.rawCount);
+      acc.total += amount;
+      if (entry.category === 'bad') {
+        acc.bad += amount;
+      } else if (entry.category === 'no_name') {
+        acc.noName += amount;
+      }
+      return acc;
+    },
+    { total: 0, bad: 0, noName: 0 },
+  );
 
 const canApproveUnderMinimum = (role?: string | null): boolean => {
   const normalized = normalizeRoleSlug(role);
@@ -563,6 +635,187 @@ export const deleteReviewCounterEntry = async (req: Request, res: Response): Pro
     res.status(500).json([{ message: 'Failed to delete entry' }]);
   }
 };
+
+export const getReviewCounterAnalytics = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { startDate: startParam, endDate: endParam, platform } = req.query;
+    const groupBy = parseGroupByParam(req.query.groupBy);
+    const platformFilter =
+      typeof platform === 'string' && platform.trim().length > 0 ? platform.trim() : null;
+
+    const defaultEnd = dayjs().endOf('day');
+    const defaultStart = defaultEnd.subtract(DEFAULT_ANALYTICS_WINDOW_DAYS, 'day').startOf('day');
+
+    const start = typeof startParam === 'string' && startParam ? dayjs(startParam).startOf('day') : defaultStart;
+    const end = typeof endParam === 'string' && endParam ? dayjs(endParam).endOf('day') : defaultEnd;
+
+    if (!start.isValid() || !end.isValid() || end.isBefore(start)) {
+      res.status(400).json([{ message: 'Provide a valid startDate and endDate range' }]);
+      return;
+    }
+
+    const whereClause: Record<string, unknown> = {
+      periodStart: {
+        [Op.between]: [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')],
+      },
+    };
+    if (platformFilter) {
+      whereClause.platform = platformFilter;
+    }
+
+    const counters = await ReviewCounter.findAll({
+      where: whereClause,
+      include: [{ model: ReviewCounterEntry, as: 'entries' }],
+      order: [
+        ['periodStart', 'ASC'],
+        ['platform', 'ASC'],
+      ],
+    });
+
+    if (counters.length === 0) {
+      res.status(200).json([
+        {
+          data: [
+            {
+              range: {
+                startDate: start.format('YYYY-MM-DD'),
+                endDate: end.format('YYYY-MM-DD'),
+                groupBy,
+                platform: platformFilter,
+              },
+              totals: {
+                totalReviews: 0,
+                badReviews: 0,
+                noNameReviews: 0,
+                counters: 0,
+                platforms: 0,
+                contributors: 0,
+              },
+              platforms: [],
+              timeline: [],
+              topContributors: [],
+            },
+          ],
+          columns: [],
+        },
+      ]);
+      return;
+    }
+
+    const totals = {
+      totalReviews: 0,
+      badReviews: 0,
+      noNameReviews: 0,
+      counters: 0,
+    };
+    const platformTotals = new Map<string, PlatformAggregate>();
+    const timelineMap = new Map<string, TimelineBucket>();
+    const contributorMap = new Map<string, ContributorAggregate>();
+    const platformsSeen = new Set<string>();
+
+    counters.forEach((counter) => {
+      totals.counters += 1;
+      const counterTotal = toNumber(counter.totalReviews);
+      const counterBad = toNumber(counter.badReviewCount);
+      const counterNoName = toNumber(counter.noNameReviewCount);
+
+      totals.totalReviews += counterTotal;
+      totals.badReviews += counterBad;
+      totals.noNameReviews += counterNoName;
+      platformsSeen.add(counter.platform);
+
+      const platformKey = counter.platform;
+      if (!platformTotals.has(platformKey)) {
+        platformTotals.set(platformKey, {
+          platform: platformKey,
+          totalReviews: 0,
+          badReviews: 0,
+          noNameReviews: 0,
+          counters: 0,
+        });
+      }
+      const platformAggregate = platformTotals.get(platformKey)!;
+      platformAggregate.totalReviews += counterTotal;
+      platformAggregate.badReviews += counterBad;
+      platformAggregate.noNameReviews += counterNoName;
+      platformAggregate.counters += 1;
+
+      const { key, label, startDate } = buildTimelineKey(counter.periodStart, groupBy);
+      if (!timelineMap.has(key)) {
+        timelineMap.set(key, {
+          key,
+          label,
+          startDate,
+          totalReviews: 0,
+          badReviews: 0,
+          noNameReviews: 0,
+        });
+      }
+      const bucket = timelineMap.get(key)!;
+      bucket.totalReviews += counterTotal;
+      bucket.badReviews += counterBad;
+      bucket.noNameReviews += counterNoName;
+
+      (counter.entries ?? []).forEach((entry) => {
+        if (entry.category !== 'staff') {
+          return;
+        }
+        const contributorKey =
+          entry.userId != null ? `user:${entry.userId}` : `anon:${entry.displayName ?? 'Unknown'}`;
+        if (!contributorMap.has(contributorKey)) {
+          contributorMap.set(contributorKey, {
+            userId: entry.userId ?? null,
+            displayName: entry.displayName ?? `User #${entry.userId ?? 'N/A'}`,
+            rawCount: 0,
+            roundedCount: 0,
+            counters: 0,
+          });
+        }
+        const contributor = contributorMap.get(contributorKey)!;
+        contributor.rawCount += toNumber(entry.rawCount);
+        contributor.roundedCount += toNumber(entry.roundedCount);
+        contributor.counters += 1;
+      });
+    });
+
+    const platforms = Array.from(platformTotals.values()).sort((a, b) => b.totalReviews - a.totalReviews);
+    const timeline = Array.from(timelineMap.values()).sort((a, b) => a.startDate.localeCompare(b.startDate));
+    const topContributors = Array.from(contributorMap.values())
+      .sort((a, b) => b.rawCount - a.rawCount)
+      .slice(0, 10);
+
+    res.status(200).json([
+      {
+        data: [
+          {
+            range: {
+              startDate: start.format('YYYY-MM-DD'),
+              endDate: end.format('YYYY-MM-DD'),
+              groupBy,
+              platform: platformFilter,
+            },
+            totals: {
+              totalReviews: totals.totalReviews,
+              badReviews: totals.badReviews,
+              noNameReviews: totals.noNameReviews,
+              counters: totals.counters,
+              platforms: platformsSeen.size,
+              contributors: contributorMap.size,
+            },
+            platforms,
+            timeline,
+            topContributors,
+          },
+        ],
+        columns: [],
+      },
+    ]);
+  } catch (error) {
+    console.error('Failed to build review analytics', error);
+    res.status(500).json([{ message: 'Failed to load review analytics' }]);
+  }
+};
+
 const createDefaultEntriesForCounter = async (counterId: number, actorId: number | null) => {
   const activeUsers = await User.findAll({
     where: { status: true },
