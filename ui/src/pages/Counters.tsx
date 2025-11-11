@@ -1024,6 +1024,25 @@ const Counters = (props: GenericPageProps) => {
   const [summaryPreviewOpen, setSummaryPreviewOpen] = useState(false);
   const [summaryPreviewLoading, setSummaryPreviewLoading] = useState(false);
   const [summaryPreviewTitle, setSummaryPreviewTitle] = useState<string>('');
+  const computeReservationHoldActive = useCallback(() => {
+    const now = dayjs();
+    const holdStart = now.set('hour', 0).set('minute', 0).set('second', 0).set('millisecond', 0);
+    const holdEnd = holdStart.add(15, 'minute');
+    return !now.isBefore(holdStart) && now.isBefore(holdEnd);
+  }, []);
+  const [reservationHoldActive, setReservationHoldActive] = useState<boolean>(() => computeReservationHoldActive());
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      setReservationHoldActive(computeReservationHoldActive());
+    }, 15_000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [computeReservationHoldActive]);
 
   const formatAutoCashString = useCallback((value: number) => {
     const normalized = Math.max(0, Math.round(value * 100) / 100);
@@ -4001,65 +4020,8 @@ useEffect(() => {
     if (!counterRecord) {
       return;
     }
-    if (!summary) {
-      if ((counterNotes ?? '').trim() === DID_NOT_OPERATE_NOTE) {
-        await ensureDidNotOperateNightReport();
-      }
-      return;
-    }
     const leaderId = counterRecord.userId;
     if (!leaderId) {
-      return;
-    }
-
-    const peopleAttended = Math.max(0, Math.round(summary.totals?.people?.attended ?? 0));
-    const productNameNormalized = (counterRecord.product?.name ?? DEFAULT_PRODUCT_NAME).trim().toLowerCase();
-    const isBottomlessBrunchProduct = productNameNormalized.includes('bottomless brunch');
-
-    let cocktailsAttended = 0;
-    let brunchAttended = 0;
-    let hasBrunchData = false;
-
-    if (isBottomlessBrunchProduct) {
-      brunchAttended = peopleAttended;
-      hasBrunchData = true;
-    } else {
-      const cocktailsAddonKey =
-        registry.addons.find((addon) => {
-          const nameLower = addon.name?.toLowerCase() ?? '';
-          const keyLower = addon.key?.toLowerCase() ?? '';
-          return nameLower.includes('cocktail') || keyLower.includes('cocktail');
-        })?.key ?? 'cocktails';
-      cocktailsAttended = Math.max(
-        0,
-        Math.round(summary.totals?.addons?.[cocktailsAddonKey]?.attended ?? 0),
-      );
-
-      const brunchAddonLookup = registry.addons.find((addon) => {
-        const nameLower = addon.name?.toLowerCase() ?? '';
-        const keyLower = addon.key?.toLowerCase() ?? '';
-        return nameLower.includes('brunch') || keyLower.includes('brunch');
-      });
-      const brunchAddonKey = brunchAddonLookup?.key ?? 'brunch';
-      const brunchBucket = summary.totals?.addons?.[brunchAddonKey];
-      hasBrunchData = brunchBucket != null;
-      brunchAttended = hasBrunchData ? Math.max(0, Math.round(brunchBucket.attended ?? 0)) : 0;
-    }
-
-    const cocktailsCountWithFree = Math.max(0, Math.round(cocktailsAttended + freeCocktailTotal));
-    const brunchCountWithFree = Math.max(
-      0,
-      Math.round((hasBrunchData ? brunchAttended : 0) + freeBrunchTotal),
-    );
-    const totalPeopleWithFree = Math.max(0, Math.round(peopleAttended + totalFreePeople));
-    const normalCount = Math.max(0, totalPeopleWithFree - cocktailsCountWithFree - brunchCountWithFree);
-    const computedTotalPeople = normalCount + cocktailsCountWithFree + brunchCountWithFree;
-
-    if (
-      computedTotalPeople === 0 &&
-      summary.totals?.people?.bookedBefore === 0 &&
-      summary.totals?.people?.bookedAfter === 0
-    ) {
       return;
     }
 
@@ -4115,6 +4077,64 @@ useEffect(() => {
         console.warn('Failed to auto-create did-not-operate night report:', message || error);
       }
     };
+
+    if (!summary) {
+      if ((counterNotes ?? '').trim() === DID_NOT_OPERATE_NOTE) {
+        await ensureDidNotOperateNightReport();
+      }
+      return;
+    }
+
+    const peopleAttended = Math.max(0, Math.round(summary.totals?.people?.attended ?? 0));
+    const productNameNormalized = (counterRecord.product?.name ?? DEFAULT_PRODUCT_NAME).trim().toLowerCase();
+    const isBottomlessBrunchProduct = productNameNormalized.includes('bottomless brunch');
+
+    let cocktailsAttended = 0;
+    let brunchAttended = 0;
+    let hasBrunchData = false;
+
+    if (isBottomlessBrunchProduct) {
+      brunchAttended = peopleAttended;
+      hasBrunchData = true;
+    } else {
+      const cocktailsAddonKey =
+        registry.addons.find((addon) => {
+          const nameLower = addon.name?.toLowerCase() ?? '';
+          const keyLower = addon.key?.toLowerCase() ?? '';
+          return nameLower.includes('cocktail') || keyLower.includes('cocktail');
+        })?.key ?? 'cocktails';
+      cocktailsAttended = Math.max(
+        0,
+        Math.round(summary.totals?.addons?.[cocktailsAddonKey]?.attended ?? 0),
+      );
+
+      const brunchAddonLookup = registry.addons.find((addon) => {
+        const nameLower = addon.name?.toLowerCase() ?? '';
+        const keyLower = addon.key?.toLowerCase() ?? '';
+        return nameLower.includes('brunch') || keyLower.includes('brunch');
+      });
+      const brunchAddonKey = brunchAddonLookup?.key ?? 'brunch';
+      const brunchBucket = summary.totals?.addons?.[brunchAddonKey];
+      hasBrunchData = brunchBucket != null;
+      brunchAttended = hasBrunchData ? Math.max(0, Math.round(brunchBucket.attended ?? 0)) : 0;
+    }
+
+    const cocktailsCountWithFree = Math.max(0, Math.round(cocktailsAttended + freeCocktailTotal));
+    const brunchCountWithFree = Math.max(
+      0,
+      Math.round((hasBrunchData ? brunchAttended : 0) + freeBrunchTotal),
+    );
+    const totalPeopleWithFree = Math.max(0, Math.round(peopleAttended + totalFreePeople));
+    const normalCount = Math.max(0, totalPeopleWithFree - cocktailsCountWithFree - brunchCountWithFree);
+    const computedTotalPeople = normalCount + cocktailsCountWithFree + brunchCountWithFree;
+
+    if (
+      computedTotalPeople === 0 &&
+      summary.totals?.people?.bookedBefore === 0 &&
+      summary.totals?.people?.bookedAfter === 0
+    ) {
+      return;
+    }
 
     if (computedTotalPeople === 0) {
       await ensureDidNotOperateNightReport();
@@ -5782,6 +5802,11 @@ useEffect(() => {
     }
 
     if (activeRegistryStep === 'reservations') {
+      const summaryStepBlocked = reservationHoldActive && activeRegistryStep === 'reservations';
+      const proceedDisabled = disableNav || summaryStepBlocked;
+      const proceedButtonTitle = summaryStepBlocked
+        ? 'Proceed to Summary is unavailable between 9:00 PM and 9:15 PM.'
+        : undefined;
       if (isMobileScreen) {
         return (
           <Stack direction="row" spacing={1} alignItems="center">
@@ -5806,7 +5831,8 @@ useEffect(() => {
               onClick={() => {
                 void handleProceedToSummary();
               }}
-              disabled={disableNav}
+              disabled={proceedDisabled}
+              title={proceedButtonTitle}
               sx={{
                 textTransform: 'none',
                 minWidth: 'auto',
@@ -5837,7 +5863,8 @@ useEffect(() => {
             onClick={() => {
               void handleProceedToSummary();
             }}
-            disabled={disableNav}
+            disabled={proceedDisabled}
+            title={proceedButtonTitle}
           >
             Proceed to Summary
           </Button>
@@ -6426,7 +6453,13 @@ type SummaryRowOptions = {
                       ensuringCounter ||
                       (!registry.counter && step.key !== 'details') ||
                       registry.savingMetrics ||
-                      confirmingMetrics
+                      confirmingMetrics ||
+                      (reservationHoldActive && activeRegistryStep === 'reservations' && step.key === 'summary')
+                    }
+                    title={
+                      reservationHoldActive && activeRegistryStep === 'reservations' && step.key === 'summary'
+                        ? 'Summary step is unavailable between 9:00 PM and 9:15 PM.'
+                        : undefined
                     }
                   >
                     {step.label}
