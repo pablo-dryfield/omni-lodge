@@ -53,6 +53,7 @@ const defaultPages = [
   { slug: 'settings-channel-product-prices', name: 'Channel Product Prices', description: 'Override per-channel pricing', sortOrder: 14 },
   { slug: 'settings-channel-commissions', name: 'Channel Commissions', description: 'Track commission rates by channel', sortOrder: 15 },
   { slug: 'settings-review-platforms', name: 'Review Platforms', description: 'Configure review platforms and metadata', sortOrder: 16 },
+  { slug: 'settings-compensation-components', name: 'Compensation Components', description: 'Manage compensation component definitions and assignments', sortOrder: 17 },
   { slug: 'settings-actions', name: 'Actions', description: 'Manage access control actions', sortOrder: 17 },
   { slug: 'settings-channels', name: 'Channels', description: 'Manage booking channels and integrations', sortOrder: 18 },
   { slug: 'settings-staff-profiles', name: 'Staff Profiles', description: 'Maintain staff profile metadata', sortOrder: 19 },
@@ -97,6 +98,7 @@ const defaultModules = [
   { slug: 'channel-product-price-management', name: 'Channel Product Prices', pageSlug: 'settings-channel-product-prices', description: 'Override per-channel pricing', componentRef: 'ChannelProductPriceManagement', sortOrder: 1 },
   { slug: 'channel-commission-management', name: 'Channel Commissions', pageSlug: 'settings-channel-commissions', description: 'Maintain commission agreements', componentRef: 'ChannelCommissionManagement', sortOrder: 1 },
   { slug: 'review-platform-management', name: 'Review Platforms', pageSlug: 'settings-review-platforms', description: 'Maintain review platforms', componentRef: 'ReviewPlatformManagement', sortOrder: 1 },
+  { slug: 'compensation-component-management', name: 'Compensation Components', pageSlug: 'settings-compensation-components', description: 'Manage compensation component definitions and assignments', componentRef: 'CompensationComponentManagement', sortOrder: 1 },
   { slug: 'review-counter-management', name: 'Review Counters', pageSlug: 'reviews', description: 'Maintain platform review credit tracking', componentRef: 'ReviewCounterManagement', sortOrder: 1 },
   { slug: 'channel-console', name: 'Channel Console', pageSlug: 'settings-channels', description: 'Manage booking channels and integrations', componentRef: 'ChannelConsole', sortOrder: 1 },
   { slug: 'action-registry', name: 'Action Registry', pageSlug: 'settings-actions', description: 'Maintain action catalog', componentRef: 'ActionRegistry', sortOrder: 1 },
@@ -107,7 +109,7 @@ const defaultModules = [
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
-  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'settings-products', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-actions', 'settings-channels', 'settings',
+  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'settings-products', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-compensation-components', 'settings-actions', 'settings-channels', 'settings',
 'settings-users',
 'settings-user-types',
 'settings-pages',
@@ -120,7 +122,7 @@ const rolePageMatrix: Record<string, string[]> = {
 'settings-user-shift-roles',
 'settings-db-backups',
 'settings-home-experience'],
-  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-review-platforms', 'settings-home-experience'],
+  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-review-platforms', 'settings-compensation-components', 'settings-home-experience'],
   manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'reviews', 'finance', 'pays', 'scheduling'],
   'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'reviews', 'finance', 'pays', 'scheduling'],
   guide: ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'pays', 'scheduling'],
@@ -175,6 +177,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'channel-product-price-management': ['view', 'create', 'update', 'delete'],
     'channel-commission-management': ['view', 'create', 'update', 'delete'],
     'review-platform-management': ['view', 'create', 'update', 'delete'],
+    'compensation-component-management': ['view', 'create', 'update', 'delete'],
     'review-counter-management': ['view', 'create', 'update', 'delete'],
     'channel-console': ['view', 'create', 'update', 'delete'],
   },
@@ -207,6 +210,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'finance-files': ['view', 'create', 'update', 'delete'],
     'finance-reports': ['view', 'create', 'update', 'delete'],
     'review-platform-management': ['view', 'create', 'update', 'delete'],
+    'compensation-component-management': ['view', 'create', 'update', 'delete'],
     'review-counter-management': ['view', 'create', 'update', 'delete'],
   },
   manager: {

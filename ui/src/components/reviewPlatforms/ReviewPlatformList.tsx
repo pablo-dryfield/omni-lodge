@@ -9,6 +9,7 @@ import {
   Group,
   Loader,
   Modal,
+  NumberInput,
   Stack,
   Switch,
   Text,
@@ -34,6 +35,10 @@ type FormState = {
   slug: string;
   description: string;
   isActive: boolean;
+  weight: number;
+  sourceKey: string;
+  platformUrl: string;
+  aliases: string;
 };
 
 const initialFormState: FormState = {
@@ -41,6 +46,10 @@ const initialFormState: FormState = {
   slug: '',
   description: '',
   isActive: true,
+  weight: 1,
+  sourceKey: '',
+  platformUrl: '',
+  aliases: '',
 };
 
 const ReviewPlatformList = () => {
@@ -81,6 +90,10 @@ const ReviewPlatformList = () => {
       slug: platform.slug ?? '',
       description: platform.description ?? '',
       isActive: platform.isActive !== false,
+      weight: Number(platform.weight ?? 1) || 1,
+      sourceKey: platform.sourceKey ?? '',
+      platformUrl: platform.platformUrl ?? '',
+      aliases: (platform.aliases ?? []).join('\n'),
     });
     setFormOpen(true);
   };
@@ -107,11 +120,20 @@ const ReviewPlatformList = () => {
     }
 
     const normalizedSlug = formState.slug.trim() ? slugify(formState.slug) : slugify(formState.name);
+    const aliasList = formState.aliases
+      .split(/[\n,]+/)
+      .map((alias) => alias.trim())
+      .filter((alias) => alias.length > 0);
+    const sanitizedWeight = Math.max(0, Number.isFinite(formState.weight) ? Number(formState.weight) : 1);
     const payload = {
       name: formState.name.trim(),
       slug: normalizedSlug,
       description: formState.description.trim() || null,
       isActive: formState.isActive,
+      weight: Number(sanitizedWeight.toFixed(2)),
+      sourceKey: formState.sourceKey.trim() || null,
+      platformUrl: formState.platformUrl.trim() || null,
+      aliases: aliasList,
     };
 
     setSubmitting(true);
@@ -133,13 +155,21 @@ const ReviewPlatformList = () => {
   };
 
   const handleTextChange = useCallback(
-    (field: keyof Pick<FormState, 'name' | 'slug' | 'description'>) =>
+    (field: keyof Pick<FormState, 'name' | 'slug' | 'description' | 'sourceKey' | 'platformUrl' | 'aliases'>) =>
       (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const { value } = event.currentTarget;
         setFormState((prev) => ({ ...prev, [field]: value }));
       },
     [],
   );
+
+  const handleWeightChange = (value: string | number) => {
+    const numericValue = typeof value === 'number' ? value : Number(value);
+    setFormState((prev) => ({
+      ...prev,
+      weight: Number.isFinite(numericValue) ? numericValue : prev.weight,
+    }));
+  };
 
   const handleSwitchChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const { checked } = event.currentTarget;
@@ -206,6 +236,35 @@ const ReviewPlatformList = () => {
                   <Text size="sm" c="dimmed">
                     Slug: {platform.slug}
                   </Text>
+                  <Group gap="xs">
+                    <Badge variant="light" color="violet">
+                      Weight x{Number(platform.weight ?? 1).toFixed(2)}
+                    </Badge>
+                    {platform.sourceKey && (
+                      <Badge variant="light" color="gray">
+                        {platform.sourceKey}
+                      </Badge>
+                    )}
+                  </Group>
+                  {platform.platformUrl && (
+                    <Text size="xs" c="dimmed">
+                      URL:{' '}
+                      <Text
+                        component="a"
+                        href={platform.platformUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        size="xs"
+                      >
+                        {platform.platformUrl}
+                      </Text>
+                    </Text>
+                  )}
+                  {platform.aliases && platform.aliases.length > 0 && (
+                    <Text size="xs" c="dimmed">
+                      Aliases: {platform.aliases.join(', ')}
+                    </Text>
+                  )}
                   {platform.description && (
                     <Text size="sm">{platform.description}</Text>
                   )}
@@ -256,6 +315,35 @@ const ReviewPlatformList = () => {
             minRows={3}
             value={formState.description}
             onChange={handleTextChange('description')}
+          />
+          <NumberInput
+            label="Weight (multiplier)"
+            min={0}
+            step={0.1}
+            value={formState.weight}
+            onChange={handleWeightChange}
+            description="How much this platform should weigh when rolling up review totals."
+          />
+          <TextInput
+            label="Source key"
+            placeholder="e.g., google, tripadvisor"
+            value={formState.sourceKey}
+            onChange={handleTextChange('sourceKey')}
+            description="Identifier used when mapping imported reviews to this platform."
+          />
+          <TextInput
+            label="Platform URL"
+            placeholder="https://maps.app.goo.gl/... "
+            value={formState.platformUrl}
+            onChange={handleTextChange('platformUrl')}
+          />
+          <Textarea
+            label="Aliases / mapping keys"
+            minRows={2}
+            placeholder="Comma or line separated list of alternate names"
+            value={formState.aliases}
+            onChange={handleTextChange('aliases')}
+            description="Used for fuzzy matching (e.g., Google Maps label, TripAdvisor short codes)."
           />
           <Switch
             label="Platform is active"

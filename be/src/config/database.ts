@@ -52,6 +52,8 @@ import UserHomePreference from "../models/UserHomePreference.js";
 import ReviewCounter from "../models/ReviewCounter.js";
 import ReviewCounterEntry from "../models/ReviewCounterEntry.js";
 import ReviewPlatform from "../models/ReviewPlatform.js";
+import CompensationComponent from "../models/CompensationComponent.js";
+import CompensationComponentAssignment from "../models/CompensationComponentAssignment.js";
 import {
   FinanceAccount,
   FinanceAuditLog,
@@ -105,6 +107,8 @@ const sequelize = new Sequelize({
     ReviewCounter,
     ReviewCounterEntry,
     ReviewPlatform,
+    CompensationComponent,
+    CompensationComponentAssignment,
     Counter,
     CounterProduct,
     CounterUser,
