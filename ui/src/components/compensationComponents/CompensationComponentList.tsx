@@ -771,7 +771,6 @@ const CompensationComponentList = () => {
                       baseAmount: typeof value === 'number' ? value : prev.baseAmount,
                     }))
                   }
-                  precision={2}
                   min={0}
                 />
                 <NumberInput
@@ -783,7 +782,6 @@ const CompensationComponentList = () => {
                       unitAmount: typeof value === 'number' ? value : prev.unitAmount,
                     }))
                   }
-                  precision={4}
                   min={0}
                 />
               </Group>

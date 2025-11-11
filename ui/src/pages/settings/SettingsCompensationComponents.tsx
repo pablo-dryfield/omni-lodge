@@ -3,7 +3,7 @@ import CompensationComponentList from '../../components/compensationComponents/C
 import { PAGE_SLUGS } from '../../constants/pageSlugs';
 
 const SettingsCompensationComponents = () => (
-  <PageAccessGuard slug={PAGE_SLUGS.settingsCompensationComponents}>
+  <PageAccessGuard pageSlug={PAGE_SLUGS.settingsCompensationComponents}>
     <CompensationComponentList />
   </PageAccessGuard>
 );
