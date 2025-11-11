@@ -39,9 +39,10 @@ const defaultPages = [
   { slug: 'users', name: 'Users', description: 'User administration', sortOrder: 3 },
   { slug: 'reports', name: 'Reports', description: 'Analytics and reports', sortOrder: 4 },
   { slug: 'venue-numbers', name: 'Venue Numbers', description: 'Nightly venue headcounts and open bar metrics', sortOrder: 5 },
-  { slug: 'pays', name: 'Staff Payment', description: 'Staff commission overview', sortOrder: 6 },
-  { slug: 'scheduling', name: 'Scheduling', description: 'Manage weekly staff scheduling', sortOrder: 6 },
-  { slug: 'finance', name: 'Finance', description: 'Finance operations and reporting', sortOrder: 6 },
+  { slug: 'reviews', name: 'Reviews', description: 'Track review credits and staff allocations', sortOrder: 6 },
+  { slug: 'pays', name: 'Staff Payment', description: 'Staff commission overview', sortOrder: 7 },
+  { slug: 'scheduling', name: 'Scheduling', description: 'Manage weekly staff scheduling', sortOrder: 8 },
+  { slug: 'finance', name: 'Finance', description: 'Finance operations and reporting', sortOrder: 9 },
   { slug: 'settings-products', name: 'Products', description: 'Manage saleable products', sortOrder: 7 },
   { slug: 'settings-product-types', name: 'Product Types', description: 'Group products into categories', sortOrder: 8 },
   { slug: 'settings-product-prices', name: 'Product Prices', description: 'Schedule base product prices', sortOrder: 9 },
@@ -51,13 +52,14 @@ const defaultPages = [
   { slug: 'settings-payment-methods', name: 'Payment Methods', description: 'Manage accepted payment methods', sortOrder: 13 },
   { slug: 'settings-channel-product-prices', name: 'Channel Product Prices', description: 'Override per-channel pricing', sortOrder: 14 },
   { slug: 'settings-channel-commissions', name: 'Channel Commissions', description: 'Track commission rates by channel', sortOrder: 15 },
-  { slug: 'settings-actions', name: 'Actions', description: 'Manage access control actions', sortOrder: 16 },
-  { slug: 'settings-channels', name: 'Channels', description: 'Manage booking channels and integrations', sortOrder: 17 },
-  { slug: 'settings-staff-profiles', name: 'Staff Profiles', description: 'Maintain staff profile metadata', sortOrder: 18 },
-  { slug: 'settings-shift-roles', name: 'Shift Roles', description: 'Manage scheduling shift role definitions', sortOrder: 19 },
-  { slug: 'settings-user-shift-roles', name: 'User Shift Roles', description: 'Assign shift roles to users', sortOrder: 20 },
-  { slug: 'settings-db-backups', name: 'Database Backups', description: 'Review and manage PostgreSQL backups', sortOrder: 21 },
-  { slug: 'settings-home-experience', name: 'Home Experience', description: 'Assign default home modules per user', sortOrder: 22 },
+  { slug: 'settings-review-platforms', name: 'Review Platforms', description: 'Configure review platforms and metadata', sortOrder: 16 },
+  { slug: 'settings-actions', name: 'Actions', description: 'Manage access control actions', sortOrder: 17 },
+  { slug: 'settings-channels', name: 'Channels', description: 'Manage booking channels and integrations', sortOrder: 18 },
+  { slug: 'settings-staff-profiles', name: 'Staff Profiles', description: 'Maintain staff profile metadata', sortOrder: 19 },
+  { slug: 'settings-shift-roles', name: 'Shift Roles', description: 'Manage scheduling shift role definitions', sortOrder: 20 },
+  { slug: 'settings-user-shift-roles', name: 'User Shift Roles', description: 'Assign shift roles to users', sortOrder: 21 },
+  { slug: 'settings-db-backups', name: 'Database Backups', description: 'Review and manage PostgreSQL backups', sortOrder: 22 },
+  { slug: 'settings-home-experience', name: 'Home Experience', description: 'Assign default home modules per user', sortOrder: 23 },
 ];
 
 const defaultModules = [
@@ -94,6 +96,8 @@ const defaultModules = [
   { slug: 'payment-method-management', name: 'Payment Method Management', pageSlug: 'settings-payment-methods', description: 'Manage accepted payment methods', componentRef: 'PaymentMethodManagement', sortOrder: 1 },
   { slug: 'channel-product-price-management', name: 'Channel Product Prices', pageSlug: 'settings-channel-product-prices', description: 'Override per-channel pricing', componentRef: 'ChannelProductPriceManagement', sortOrder: 1 },
   { slug: 'channel-commission-management', name: 'Channel Commissions', pageSlug: 'settings-channel-commissions', description: 'Maintain commission agreements', componentRef: 'ChannelCommissionManagement', sortOrder: 1 },
+  { slug: 'review-platform-management', name: 'Review Platforms', pageSlug: 'settings-review-platforms', description: 'Maintain review platforms', componentRef: 'ReviewPlatformManagement', sortOrder: 1 },
+  { slug: 'review-counter-management', name: 'Review Counters', pageSlug: 'reviews', description: 'Maintain platform review credit tracking', componentRef: 'ReviewCounterManagement', sortOrder: 1 },
   { slug: 'channel-console', name: 'Channel Console', pageSlug: 'settings-channels', description: 'Manage booking channels and integrations', componentRef: 'ChannelConsole', sortOrder: 1 },
   { slug: 'action-registry', name: 'Action Registry', pageSlug: 'settings-actions', description: 'Maintain action catalog', componentRef: 'ActionRegistry', sortOrder: 1 },
   { slug: 'staff-profile-directory', name: 'Staff Profile Directory', pageSlug: 'settings-staff-profiles', description: 'Maintain staff profile metadata', componentRef: 'StaffProfileDirectory', sortOrder: 1 },
@@ -103,7 +107,7 @@ const defaultModules = [
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
-  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling', 'settings-products', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-actions', 'settings-channels', 'settings',
+  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'settings-products', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-actions', 'settings-channels', 'settings',
 'settings-users',
 'settings-user-types',
 'settings-pages',
@@ -116,9 +120,9 @@ const rolePageMatrix: Record<string, string[]> = {
 'settings-user-shift-roles',
 'settings-db-backups',
 'settings-home-experience'],
-  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-home-experience'],
-  manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling'],
-  'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'finance', 'pays', 'scheduling'],
+  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-review-platforms', 'settings-home-experience'],
+  manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'reviews', 'finance', 'pays', 'scheduling'],
+  'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'reviews', 'finance', 'pays', 'scheduling'],
   guide: ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'pays', 'scheduling'],
 };
 
@@ -170,6 +174,8 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'product-addon-management': ['view', 'create', 'update', 'delete'],
     'channel-product-price-management': ['view', 'create', 'update', 'delete'],
     'channel-commission-management': ['view', 'create', 'update', 'delete'],
+    'review-platform-management': ['view', 'create', 'update', 'delete'],
+    'review-counter-management': ['view', 'create', 'update', 'delete'],
     'channel-console': ['view', 'create', 'update', 'delete'],
   },
   owner: {
@@ -200,6 +206,8 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'finance-management-requests': ['view', 'create', 'update', 'delete'],
     'finance-files': ['view', 'create', 'update', 'delete'],
     'finance-reports': ['view', 'create', 'update', 'delete'],
+    'review-platform-management': ['view', 'create', 'update', 'delete'],
+    'review-counter-management': ['view', 'create', 'update', 'delete'],
   },
   manager: {
     'dashboard-overview': ['view'],
@@ -224,6 +232,8 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'finance-management-requests': ['view', 'create', 'update', 'delete'],
     'finance-files': ['view', 'create', 'update', 'delete'],
     'finance-reports': ['view', 'create', 'update', 'delete'],
+    'review-counter-management': ['view'],
+    'review-platform-management': ['view'],
   },
   'assistant-manager': {
     'dashboard-overview': ['view'],
@@ -248,6 +258,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'finance-management-requests': ['view', 'create', 'update', 'delete'],
     'finance-files': ['view', 'create', 'update', 'delete'],
     'finance-reports': ['view', 'create', 'update', 'delete'],
+    'review-counter-management': ['view'],
   },
   guide: {
     'dashboard-overview': ['view'],

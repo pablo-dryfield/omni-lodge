@@ -10,6 +10,7 @@ import {
   IconHierarchy3,
   IconUserCog,
   IconLayoutDashboard,
+  IconStars,
 } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import { useAppSelector } from "../../store/hooks";
@@ -53,6 +54,13 @@ const sections: SettingsSection[] = [
     icon: IconUserCog,
     to: "/settings/user-shift-roles",
     pageSlug: PAGE_SLUGS.settingsUserShiftRoles,
+  },
+  {
+    label: "Review Platforms",
+    description: "Define and manage review platforms used across the system.",
+    icon: IconStars,
+    to: "/settings/review-platforms",
+    pageSlug: PAGE_SLUGS.settingsReviewPlatforms,
   },
   {
     label: "Home Experience",

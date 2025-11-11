@@ -7,6 +7,8 @@ import Guest from './Guest.js';
 import Product from './Product.js';
 import ProductType from './ProductType.js';
 import Review from './Review.js';
+import ReviewCounter from './ReviewCounter.js';
+import ReviewCounterEntry from './ReviewCounterEntry.js';
 import User from './User.js';
 import UserType from './UserType.js';
 import Page from './Page.js';
@@ -130,6 +132,13 @@ export function defineAssociations() {
   // Review Associations
   Review.belongsTo(User, { foreignKey: 'createdBy' });
   Review.belongsTo(User, { foreignKey: 'updatedBy' });
+  ReviewCounter.belongsTo(User, { foreignKey: 'created_by', as: 'createdByUserReview' });
+  ReviewCounter.belongsTo(User, { foreignKey: 'updated_by', as: 'updatedByUserReview' });
+  ReviewCounter.hasMany(ReviewCounterEntry, { foreignKey: 'counter_id', as: 'entriesReviewCounters' });
+  ReviewCounterEntry.belongsTo(ReviewCounter, { foreignKey: 'counter_id', as: 'counterReviewCounters' });
+  ReviewCounterEntry.belongsTo(User, { foreignKey: 'user_id', as: 'userReviewCounters' });
+  ReviewCounterEntry.belongsTo(User, { foreignKey: 'created_by', as: 'createdByUserReviewCounters' });
+  ReviewCounterEntry.belongsTo(User, { foreignKey: 'updated_by', as: 'updatedByUserReviewCounters' });
 
   // Booking Associations
   Booking.belongsTo(Guest, { foreignKey: 'guestId' });
