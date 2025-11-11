@@ -21,9 +21,22 @@ import {
 } from "@mui/material";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { LocalizationProvider } from "@mui/x-date-pickers";
-import { ArrowBack, Add, Close, Delete, Edit, Save, Send, UploadFile, Visibility } from "@mui/icons-material";
+import {
+  ArrowBack,
+  Add,
+  Close,
+  Delete,
+  Download,
+  Edit,
+  Save,
+  Send,
+  UploadFile,
+  Visibility,
+  ZoomIn,
+  ZoomOut,
+} from "@mui/icons-material";
 import dayjs from "dayjs";
-import { ChangeEvent, Fragment, SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, Fragment, SyntheticEvent, WheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { alpha, useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
@@ -43,7 +56,7 @@ import { loadCatalog, selectCatalog } from "../../store/catalogSlice";
 import axiosInstance from "../../utils/axiosInstance";
 import { compressImageFile } from "../../utils/imageCompression";
 
-import type { NightReport, NightReportSummary, NightReportVenueInput } from "../../types/nightReports/NightReport";
+import type { NightReport, NightReportPhoto, NightReportSummary, NightReportVenueInput } from "../../types/nightReports/NightReport";
 import type { Counter } from "../../types/counters/Counter";
 import type { StaffOption } from "../../types/counters/CounterRegistry";
 import type { User } from "../../types/users/User";
@@ -86,6 +99,45 @@ const createEmptyVenue = (): EditableVenue => ({
 const SELECT_OPEN_BAR_PLACEHOLDER = "Select Open Bar";
 
 type OpenBarMode = "default" | "pubCrawl" | "bottomlessBrunch";
+
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 4;
+const ZOOM_STEP = 0.25;
+const NIGHT_REPORT_FILE_PREFIX = "night_report";
+const FALLBACK_PRODUCT_SEGMENT = "general";
+
+const clampZoom = (value: number) => Math.min(Math.max(value, MIN_ZOOM), MAX_ZOOM);
+
+const sanitizeProductSegment = (name: string | null | undefined): string => {
+  if (!name) {
+    return FALLBACK_PRODUCT_SEGMENT;
+  }
+  const normalized = name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized || FALLBACK_PRODUCT_SEGMENT;
+};
+
+const extractFileExtension = (fileName: string): string | null => {
+  const match = /\.([a-zA-Z0-9]+)$/.exec(fileName);
+  return match ? match[1].toLowerCase() : null;
+};
+
+const buildNightReportPhotoFileName = (
+  activityDate: string | null | undefined,
+  productName: string | null | undefined,
+  originalName: string,
+): string => {
+  const parsedDate = activityDate ? dayjs(activityDate) : dayjs();
+  const dateSegment = parsedDate.isValid() ? parsedDate.format("YYYYMMDD") : dayjs().format("YYYYMMDD");
+  const productSegment = sanitizeProductSegment(productName);
+  const extension = extractFileExtension(originalName) ?? "jpg";
+  const base = `${NIGHT_REPORT_FILE_PREFIX}_${dateSegment}_${productSegment}`;
+  return `${base}.${extension}`;
+};
 
 const resolveOpenBarMode = (productName: string | null | undefined): OpenBarMode => {
   const normalized = productName?.trim().toLowerCase() ?? "";
@@ -258,6 +310,13 @@ const VenueNumbersList = () => {
   const previousVenuesRef = useRef<EditableVenue[] | null>(null);
   const previousNotesRef = useRef<string | null>(null);
   const previousEditableVenueKeysRef = useRef<Set<string> | null>(null);
+  const [activePhotoPreview, setActivePhotoPreview] = useState<{
+    src: string;
+    name: string;
+    capturedAt: string | null;
+    downloadHref?: string;
+  } | null>(null);
+  const [photoZoom, setPhotoZoom] = useState(1);
 
   const requestedCounterId = useMemo(() => {
     const raw = searchParams.get("counterId");
@@ -316,6 +375,13 @@ const VenueNumbersList = () => {
   );
   const isPubCrawlProduct = openBarMode === "pubCrawl";
   const isBottomlessBrunchProduct = openBarMode === "bottomlessBrunch";
+  const activePhotoCapturedAtLabel = useMemo(
+    () =>
+      activePhotoPreview?.capturedAt
+        ? dayjs(activePhotoPreview.capturedAt).format("MMM D, YYYY h:mm A")
+        : null,
+    [activePhotoPreview?.capturedAt],
+  );
 
   useEffect(() => {
     if (selectedReportId == null) {
@@ -907,11 +973,17 @@ const VenueNumbersList = () => {
 
     setValidationError(null);
     const activeReportId = selectedReportId;
-    let preparedFile = file;
+    const productNameForFile = currentCounter?.product?.name ?? null;
+    const renamedOriginalFile = new File(
+      [file],
+      buildNightReportPhotoFileName(formState.activityDate, productNameForFile, file.name),
+      { type: file.type, lastModified: file.lastModified },
+    );
+    let preparedFile: File = renamedOriginalFile;
 
     try {
       setPreparingPhoto(true);
-      preparedFile = await compressImageFile(file, {
+      preparedFile = await compressImageFile(renamedOriginalFile, {
         maxWidth: 1600,
         maxHeight: 1600,
         quality: 0.8,
@@ -929,6 +1001,53 @@ const VenueNumbersList = () => {
 
     dispatch(uploadNightReportPhoto({ reportId: activeReportId, file: preparedFile }));
   };
+
+  const handleViewFullSize = useCallback(
+    (photo: NightReportPhoto, previewUrl?: string, downloadHref?: string) => {
+      const source = downloadHref || previewUrl;
+      if (!source) {
+        setValidationError("Unable to open this photo preview. Please download the file instead.");
+        return;
+      }
+      setPhotoZoom(1);
+      setActivePhotoPreview({
+        src: source,
+        name: photo.originalName,
+        capturedAt: photo.capturedAt,
+        downloadHref,
+      });
+    },
+    [setValidationError],
+  );
+
+  const handleClosePhotoPreview = useCallback(() => {
+    setActivePhotoPreview(null);
+    setPhotoZoom(1);
+  }, []);
+
+  const handleZoomIn = useCallback(() => {
+    setPhotoZoom((prev) => clampZoom(prev + ZOOM_STEP));
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    setPhotoZoom((prev) => clampZoom(prev - ZOOM_STEP));
+  }, []);
+
+  const handleZoomReset = useCallback(() => {
+    setPhotoZoom(1);
+  }, []);
+
+  const handlePhotoWheelZoom = useCallback(
+    (event: WheelEvent<HTMLDivElement>) => {
+      if (!event.ctrlKey) {
+        return;
+      }
+      event.preventDefault();
+      const delta = event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+      setPhotoZoom((prev) => clampZoom(prev + delta));
+    },
+    [],
+  );
 
   const handleDidNotOperateToggle = () => {
     setValidationError(null);
@@ -1063,6 +1182,8 @@ const VenueNumbersList = () => {
   const submitting = nightReportUi.submitting;
   const uploadingPhoto = nightReportUi.uploadingPhoto;
   const photoUploadBusy = uploadingPhoto || preparingPhoto;
+  const zoomInDisabled = photoZoom >= MAX_ZOOM - 0.001;
+  const zoomOutDisabled = photoZoom <= MIN_ZOOM + 0.001;
   const currentStatus = nightReportDetail.data?.status ?? "draft";
   const isSubmittedReport = currentStatus === "submitted";
   const submitButtonLabel = isSubmittedReport ? "Save Changes" : "Submit Report";
@@ -1528,6 +1649,7 @@ const VenueNumbersList = () => {
                   const previewUrl = photoPreviews[photo.id];
                   const previewError = photoPreviewErrors[photo.id];
                   const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl);
+                  const canViewPhoto = Boolean(downloadHref || previewUrl);
                   return (
                     <Grid size={{ xs: 12, sm: 6, md: 4 }} key={photo.id}>
                       <Card variant="outlined">
@@ -1582,10 +1704,8 @@ const VenueNumbersList = () => {
                             <Button
                               variant="outlined"
                               size="small"
-                              component="a"
-                              href={downloadHref}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                              onClick={() => handleViewFullSize(photo, previewUrl, downloadHref)}
+                              disabled={!canViewPhoto}
                             >
                               View Full Size
                             </Button>
@@ -1941,6 +2061,7 @@ const VenueNumbersList = () => {
                 const previewUrl = photoPreviews[photo.id];
                 const previewError = photoPreviewErrors[photo.id];
                 const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl);
+                const canViewPhoto = Boolean(downloadHref || previewUrl);
                 return (
                   <Grid size={{ xs: 12, sm: 6, md: 4 }} key={photo.id}>
                     <Card variant="outlined">
@@ -2020,10 +2141,8 @@ const VenueNumbersList = () => {
                           <Button
                             variant="outlined"
                             size="small"
-                            component="a"
-                            href={downloadHref}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                            onClick={() => handleViewFullSize(photo, previewUrl, downloadHref)}
+                            disabled={!canViewPhoto}
                           >
                             View Full Size
                           </Button>
@@ -2355,6 +2474,142 @@ const VenueNumbersList = () => {
         </Stack>
         <DialogContent dividers sx={{ p: { xs: 2, sm: 3 } }}>{detailContent}</DialogContent>
       </Dialog>
+      {activePhotoPreview && (
+        <Dialog
+          open
+          onClose={handleClosePhotoPreview}
+          fullScreen
+          PaperProps={{ sx: { bgcolor: "black" } }}
+        >
+          <Box
+            sx={{
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+              bgcolor: "black",
+              color: "common.white",
+            }}
+          >
+            <Stack
+              direction="row"
+              alignItems="center"
+              justifyContent="space-between"
+              spacing={2}
+              sx={{ px: { xs: 2, md: 4 }, py: 2 }}
+            >
+              <Box>
+                <Typography variant="subtitle1" fontWeight={600} noWrap>
+                  {activePhotoPreview.name}
+                </Typography>
+                {activePhotoCapturedAtLabel && (
+                  <Typography variant="body2" color="grey.400">
+                    {activePhotoCapturedAtLabel}
+                  </Typography>
+                )}
+              </Box>
+              <IconButton
+                onClick={handleClosePhotoPreview}
+                aria-label="Close photo preview"
+                sx={{
+                  color: "common.white",
+                  bgcolor: "rgba(255,255,255,0.1)",
+                  "&:hover": { bgcolor: "rgba(255,255,255,0.2)" },
+                }}
+              >
+                <Close />
+              </IconButton>
+            </Stack>
+            <Box
+              sx={{
+                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                overflow: "auto",
+                px: { xs: 2, md: 6 },
+                pb: 6,
+              }}
+              onWheel={handlePhotoWheelZoom}
+            >
+              <Box
+                component="img"
+                src={activePhotoPreview.src}
+                alt={activePhotoPreview.name}
+                sx={{
+                  maxWidth: "100%",
+                  maxHeight: "100%",
+                  objectFit: "contain",
+                  transform: `scale(${photoZoom})`,
+                  transformOrigin: "center",
+                  transition: "transform 120ms ease",
+                  userSelect: "none",
+                }}
+              />
+            </Box>
+            <Stack
+              direction={{ xs: "column", sm: "row" }}
+              spacing={2}
+              alignItems="center"
+              justifyContent="space-between"
+              sx={{ px: { xs: 2, md: 4 }, pb: { xs: 3, md: 4 } }}
+            >
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Tooltip title="Zoom out">
+                  <span>
+                    <IconButton
+                      onClick={handleZoomOut}
+                      aria-label="Zoom out"
+                      disabled={zoomOutDisabled}
+                      sx={{
+                        color: "common.white",
+                        bgcolor: "rgba(255,255,255,0.1)",
+                        "&:hover": { bgcolor: "rgba(255,255,255,0.2)" },
+                      }}
+                    >
+                      <ZoomOut />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Typography variant="body2" fontWeight={600}>
+                  {Math.round(photoZoom * 100)}%
+                </Typography>
+                <Tooltip title="Zoom in">
+                  <span>
+                    <IconButton
+                      onClick={handleZoomIn}
+                      aria-label="Zoom in"
+                      disabled={zoomInDisabled}
+                      sx={{
+                        color: "common.white",
+                        bgcolor: "rgba(255,255,255,0.1)",
+                        "&:hover": { bgcolor: "rgba(255,255,255,0.2)" },
+                      }}
+                    >
+                      <ZoomIn />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Button variant="text" color="inherit" onClick={handleZoomReset}>
+                  Reset
+                </Button>
+              </Stack>
+              {activePhotoPreview.downloadHref && (
+                <Button
+                  variant="contained"
+                  color="primary"
+                  startIcon={<Download />}
+                  component="a"
+                  href={activePhotoPreview.downloadHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Download
+                </Button>
+              )}
+            </Stack>
+          </Box>
+        </Dialog>
+      )}
     </LocalizationProvider>
   );
 };
