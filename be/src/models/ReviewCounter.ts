@@ -95,6 +95,6 @@ export default class ReviewCounter extends Model {
   @BelongsTo(() => User, { foreignKey: 'updated_by', as: 'updatedByUser' })
   declare updatedByUser?: NonAttribute<User | null>;
 
-  @HasMany(() => ReviewCounterEntry, { foreignKey: 'counter_id', as: 'entries' })
+  @HasMany(() => ReviewCounterEntry, { foreignKey: 'counter_id', as: 'entries', onDelete: 'CASCADE', hooks: true })
   declare entries?: NonAttribute<ReviewCounterEntry[]>;
 }
