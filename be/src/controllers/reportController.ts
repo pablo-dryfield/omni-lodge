@@ -62,6 +62,14 @@ type PlatformGuestTotals = {
   totalAttended: number;
 };
 
+type PlatformGuestTierBreakdown = {
+  tierIndex: number;
+  rate: number;
+  units: number;
+  amount: number;
+  cumulativeGuests: number;
+};
+
 type ProductComponentTotal = {
   componentId: number;
   amount: number;
@@ -96,6 +104,7 @@ type CommissionSummary = {
   counterIncentiveTotals: Record<string, number>;
   reviewTotals: ReviewTotals;
   platformGuestTotals: PlatformGuestTotals;
+  platformGuestBreakdowns: Record<number, PlatformGuestTierBreakdown[]>;
 };
 
 type GuideDailyBreakdown = {
@@ -1408,6 +1417,17 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         ),
         totalPayout: Number(entry.totalPayout.toFixed(2)),
         productTotals,
+        reviewTotals: entry.reviewTotals,
+        platformGuestTotals: entry.platformGuestTotals,
+        platformGuestBreakdowns: Object.fromEntries(
+          Object.entries(entry.platformGuestBreakdowns ?? {}).map(([componentId, tiers]) => [
+            componentId,
+            tiers.map((tier) => ({
+              ...tier,
+              amount: Number(tier.amount.toFixed(2)),
+            })),
+          ]),
+        ),
       };
     });
 
@@ -2431,6 +2451,7 @@ const createEmptySummary = (userId: number, firstName: string): CommissionSummar
   counterIncentiveTotals: {},
   reviewTotals: { totalEligibleReviews: 0 },
   platformGuestTotals: { totalGuests: 0, totalBooked: 0, totalAttended: 0 },
+  platformGuestBreakdowns: {},
 });
 
 const recordCounterIncentiveMarker = (
@@ -2716,7 +2737,7 @@ const computeAssignmentAmount = (
 
   const platformGuestSettings = resolvePlatformGuestSettings(component, assignment);
   if (platformGuestSettings) {
-    return computePlatformGuestPayout(summary, platformGuestSettings);
+    return computePlatformGuestPayout(summary, platformGuestSettings, component.id);
   }
 
   const baseAmount = Number(assignment.baseAmount ?? 0);
@@ -3566,14 +3587,21 @@ const resolvePlatformGuestSettings = (
   };
 };
 
-const computePlatformGuestPayout = (summary: CommissionSummary, settings: PlatformGuestSettings): number => {
+const computePlatformGuestPayout = (
+  summary: CommissionSummary,
+  settings: PlatformGuestSettings,
+  componentId: number,
+): number => {
   const totalGuests = summary.platformGuestTotals?.totalGuests ?? 0;
   if (totalGuests < settings.minimumGuests || totalGuests <= 0) {
+    delete summary.platformGuestBreakdowns[componentId];
     return 0;
   }
 
   let remaining = totalGuests;
   let total = 0;
+  let processed = 0;
+  const breakdownEntries: PlatformGuestTierBreakdown[] = [];
   for (const tier of settings.tiers) {
     const tierSize = tier.size ?? remaining;
     if (tierSize <= 0) {
@@ -3584,10 +3612,24 @@ const computePlatformGuestPayout = (summary: CommissionSummary, settings: Platfo
       break;
     }
     total += units * tier.rate;
+    processed += units;
+    breakdownEntries.push({
+      tierIndex: breakdownEntries.length,
+      rate: tier.rate,
+      units,
+      amount: units * tier.rate,
+      cumulativeGuests: processed,
+    });
     remaining -= units;
     if (remaining <= 0) {
       break;
     }
+  }
+
+  if (breakdownEntries.length > 0) {
+    summary.platformGuestBreakdowns[componentId] = breakdownEntries;
+  } else {
+    delete summary.platformGuestBreakdowns[componentId];
   }
 
   return total;
