@@ -16,6 +16,14 @@ export type PayComponentSummary = {
   amount: number;
 };
 
+export type PlatformGuestTierBreakdown = {
+  tierIndex: number;
+  rate: number;
+  units: number;
+  amount: number;
+  cumulativeGuests: number;
+};
+
 export type Pay = {
   userId?: number;
   firstName: string;
@@ -42,5 +50,6 @@ export type Pay = {
     totalBooked: number;
     totalAttended: number;
   };
+  platformGuestBreakdowns?: Record<string, PlatformGuestTierBreakdown[]>;
   breakdown: PayBreakdown[];
 };

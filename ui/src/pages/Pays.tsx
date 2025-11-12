@@ -20,7 +20,12 @@ import {
 } from '@mantine/core';
 import { DatePicker } from '@mui/x-date-pickers';
 import dayjs, { Dayjs } from 'dayjs';
-import { type Pay, type PayBreakdown, type PayComponentSummary } from '../types/pays/Pay';
+import {
+  type Pay,
+  type PayBreakdown,
+  type PayComponentSummary,
+  type PlatformGuestTierBreakdown,
+} from '../types/pays/Pay';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { fetchPays } from '../actions/payActions';
 import { useModuleAccess } from '../hooks/useModuleAccess';
@@ -80,7 +85,11 @@ const FULL_ACCESS_MODULE = 'staff-payouts-all';
 const SELF_ACCESS_MODULE = 'staff-payouts-self';
 const PAGE_SLUG = PAGE_SLUGS.pays;
 
-const renderComponentList = (components?: PayComponentSummary[]) => {
+const renderComponentList = (
+  components?: PayComponentSummary[],
+  platformGuestBreakdowns?: Record<string, PlatformGuestTierBreakdown[]>,
+  platformGuestTotals?: { totalGuests: number; totalBooked: number; totalAttended: number },
+) => {
   if (!components || components.length === 0) {
     return null;
   }
@@ -90,18 +99,50 @@ const renderComponentList = (components?: PayComponentSummary[]) => {
         Breakdown
       </Text>
       <Stack gap={4}>
-        {components.map((component) => (
-          <Group key={component.componentId} justify="space-between" gap="xs">
-            <Group gap={6}>
-              <Badge color={getComponentColor(component.category)} variant="light">
-                {component.category}
-              </Badge>
-              <Text size="sm">{component.name}</Text>
-            </Group>
-            <Text size="sm" fw={600}>
-              {formatCurrency(component.amount)}
-            </Text>
-          </Group>
+        {components.map((component) => {
+          const breakdown = platformGuestBreakdowns?.[String(component.componentId)] ?? [];
+          const showPlatformTotals =
+            component.name?.toLowerCase().includes('platform') &&
+            platformGuestTotals &&
+            platformGuestTotals.totalGuests > 0;
+          const showBreakdown = breakdown.length > 0;
+          return (
+            <Stack key={component.componentId} gap={4}>
+              <Group justify="space-between" gap="xs">
+                <Group gap={6}>
+                  <Badge color={getComponentColor(component.category)} variant="light">
+                    {component.category}
+                  </Badge>
+                  <Text size="sm">{component.name}</Text>
+                </Group>
+                <Text size="sm" fw={600}>
+                  {formatCurrency(component.amount)}
+                </Text>
+              </Group>
+                {showPlatformTotals && (
+                  <Text size="xs" c="dimmed">
+                    Total guests: {platformGuestTotals.totalGuests} (Booked {platformGuestTotals.totalBooked}, Attended{' '}
+                    {platformGuestTotals.totalAttended})
+                  </Text>
+                )}
+              {showBreakdown && (
+                <Stack gap={2} pl="md">
+                  {breakdown.map((tier) => (
+                    <Group key={`${component.componentId}-${tier.tierIndex}`} justify="space-between">
+                      <Text size="xs" c="dimmed">
+                        {tier.cumulativeGuests - tier.units + 1}–
+                        {tier.cumulativeGuests}
+                        {' guests @ '}
+                        {tier.rate.toFixed(2)} zł
+                      </Text>
+                      <Text size="xs" fw={600}>
+                        {formatCurrency(tier.amount)}
+                      </Text>
+                    </Group>
+                  ))}
+                </Stack>
+              )}
+          </Stack>
         ))}
       </Stack>
     </Stack>
@@ -152,6 +193,11 @@ const buildIncentiveLookup = (summary: Pay): Map<number, string[]> => {
   });
   return map;
 };
+
+const hasPlatformGuestDetails = (summary: Pay): boolean =>
+  Object.values(summary.platformGuestBreakdowns ?? {}).some(
+    (tiers) => Array.isArray(tiers) && tiers.length > 0,
+  );
 
 const getCounterIncentiveAmount = (summary: Pay, counterId?: number | null) => {
   if (!counterId || counterId <= 0) {
@@ -580,7 +626,9 @@ const Pays: React.FC = () => {
         const expanded = expandedRow === index;
         const total = normalizeTotal(item);
         const hasDetails =
-          (item.productTotals && item.productTotals.length > 0) || item.breakdown.length > 0;
+          (item.productTotals && item.productTotals.length > 0) ||
+          item.breakdown.length > 0 ||
+          hasPlatformGuestDetails(item);
         return (
           <Paper key={item.userId ?? index} shadow="sm" radius="lg" p="md" withBorder>
             <Stack gap="sm">
@@ -598,7 +646,11 @@ const Pays: React.FC = () => {
               </Group>
 
               <Stack gap="xs">
-                {renderComponentList(item.componentTotals)}
+                {renderComponentList(
+                  item.componentTotals,
+                  item.platformGuestBreakdowns,
+                  item.platformGuestTotals,
+                )}
                 {renderBucketTotals(item.bucketTotals)}
               </Stack>
 
@@ -641,7 +693,9 @@ const Pays: React.FC = () => {
           <tbody>
             {summaries.map((item, index) => {
               const rowHasDetails =
-                (item.productTotals && item.productTotals.length > 0) || item.breakdown.length > 0;
+                (item.productTotals && item.productTotals.length > 0) ||
+                item.breakdown.length > 0 ||
+                hasPlatformGuestDetails(item);
               const incentiveAmount = calculateIncentiveTotal(item);
               return (
                 <Fragment key={item.userId ?? index}>
@@ -663,7 +717,11 @@ const Pays: React.FC = () => {
                       <td colSpan={4} style={{ backgroundColor: '#fafafa', padding: '12px 8px' }}>
                         <Stack gap="md">
                           {renderBucketTotals(item.bucketTotals)}
-                          {renderComponentList(item.componentTotals)}
+                        {renderComponentList(
+                          item.componentTotals,
+                          item.platformGuestBreakdowns,
+                          item.platformGuestTotals,
+                        )}
                         {renderProductTotals(item.productTotals, item.componentTotals)}
                         {item.breakdown.length > 0 &&
                           renderBreakdownTable(item, item.breakdown, buildIncentiveLookup(item))}
