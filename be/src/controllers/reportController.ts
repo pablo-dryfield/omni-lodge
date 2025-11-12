@@ -151,7 +151,7 @@ const FULL_ACCESS_ROLE_SLUGS = new Set([
 ]);
 
 const COMMISSION_RATE_PER_ATTENDEE = 6;
-const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-08");
+const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-01");
 const REVIEW_MINIMUM_THRESHOLD = 15;
 
 type DialectQuoter = {
