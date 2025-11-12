@@ -1,6 +1,7 @@
 {
     "version": "0.2.0",
     "configurations": [
+
         {
             "type": "chrome",
             "request": "launch",
@@ -10,9 +11,9 @@
         },
         {
             "type": "node-terminal",
-            "name": "Run Script: start:prod",
+            "name": "Run Script: start:dev",
             "request": "launch",
-            "command": "npm run start:prod",
+            "command": "npm run start:dev",
             "cwd": "${workspaceFolder}\\be"
         }
     ]

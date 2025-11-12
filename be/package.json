@@ -13,7 +13,7 @@
         "start:dev": "cross-env NODE_ENV=development npm run build && cross-env NODE_ENV=development node dist/app.js",
         "sync:access-control": "npm run build:clean && tsc && node dist/scripts/syncAccessControl.js",
         "postinstall": "tsc",
-        "dev": "nodemon src/app.ts",
+        "dev": "cross-env NODE_OPTIONS=--loader=ts-node/esm nodemon src/app.ts",
         "test": "jest",
         "migrate": "cross-env NODE_OPTIONS=--max-old-space-size=4096 npm run build && cross-env NODE_OPTIONS=--max-old-space-size=4096 node dist/scripts/runMigrations.js",
         "migrate:undo": "cross-env NODE_OPTIONS=--max-old-space-size=4096 npm run build && cross-env NODE_OPTIONS=--max-old-space-size=4096 node dist/scripts/runMigrations.js --undo"
