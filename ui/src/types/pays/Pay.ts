@@ -32,5 +32,6 @@ export type Pay = {
     totalCommission: number;
     componentTotals: Array<{ componentId: number; amount: number }>;
   }>;
+  counterIncentiveMarkers?: Record<string, string[]>;
   breakdown: PayBreakdown[];
 };

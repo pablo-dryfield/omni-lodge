@@ -80,6 +80,7 @@ type CommissionSummary = {
   bucketTotals: Record<string, number>;
   totalPayout: number;
   productTotals: ProductPayoutSummary[];
+  counterIncentiveMarkers: Record<string, string[]>;
 };
 
 type GuideDailyBreakdown = {
@@ -1220,6 +1221,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           bucketTotals: { commission: 0 },
           totalPayout: 0,
           productTotals: [],
+          counterIncentiveMarkers: {},
         });
       }
     });
@@ -2390,6 +2392,22 @@ const allocateComponentToProduct = (
   bucket.componentTotals.set(componentId, current + amount);
 };
 
+const recordCounterIncentiveMarker = (
+  summary: CommissionSummary,
+  counterId: number | null | undefined,
+  componentName: string,
+) => {
+  if (!counterId || counterId <= 0) {
+    return;
+  }
+  const key = String(counterId);
+  const letter = componentName?.trim().charAt(0)?.toUpperCase() ?? "I";
+  const existing = summary.counterIncentiveMarkers[key] ?? [];
+  if (!existing.includes(letter)) {
+    summary.counterIncentiveMarkers[key] = [...existing, letter];
+  }
+};
+
 function describeModel(model: ModelCtor<Model>): ReportModelDescriptor {
   const attributes = model.getAttributes();
   const fields = Object.entries(attributes).map(([fieldName, attribute]) =>
@@ -3174,10 +3192,16 @@ const computeNightReportIncentive = (
     if (!reportMatchesProductFilter(report, productFilter)) {
       return false;
     }
+    const baseCount = report.postOpenBarPeople ?? 0;
+    const hasDynamic = settings.dynamicMinAttendanceMultiplier > 0;
     const dynamicTarget =
-      (report.postOpenBarPeople ?? 0) * settings.dynamicMinAttendanceMultiplier;
-    const target = dynamicTarget > 0 ? dynamicTarget : settings.minAttendance;
-    return report.totalPeople >= target;
+      hasDynamic && baseCount > 0 ? baseCount * settings.dynamicMinAttendanceMultiplier : null;
+    if (hasDynamic && baseCount <= 0 && (!settings.minAttendance || settings.minAttendance <= 0)) {
+      return false;
+    }
+    const target =
+      dynamicTarget !== null && dynamicTarget > 0 ? dynamicTarget : settings.minAttendance;
+    return target > 0 ? report.totalPeople >= target : report.totalPeople > 0;
   });
 
   if (qualifiedReports.length < settings.minReports) {
@@ -3202,6 +3226,7 @@ const computeNightReportIncentive = (
     }
     const entry = productAmountMap.get(key)!;
     entry.amount += amount;
+    recordCounterIncentiveMarker(summary, report.counterId, component.name ?? component.id.toString());
   };
 
   if (settings.payoutPerQualifiedReport !== 0) {
@@ -3289,10 +3314,16 @@ const getNightReportBestEntry = (
       if (!reportMatchesProductFilter(report, productFilter)) {
         return false;
       }
+      const baseCount = report.postOpenBarPeople ?? 0;
+      const hasDynamic = settings.dynamicMinAttendanceMultiplier > 0;
       const dynamicTarget =
-        (report.postOpenBarPeople ?? 0) * settings.dynamicMinAttendanceMultiplier;
-      const target = dynamicTarget > 0 ? dynamicTarget : settings.minAttendance;
-      return report.totalPeople >= target;
+        hasDynamic && baseCount > 0 ? baseCount * settings.dynamicMinAttendanceMultiplier : null;
+      if (hasDynamic && baseCount <= 0 && (!settings.minAttendance || settings.minAttendance <= 0)) {
+        return false;
+      }
+      const target =
+        dynamicTarget !== null && dynamicTarget > 0 ? dynamicTarget : settings.minAttendance;
+      return target > 0 ? report.totalPeople >= target : report.totalPeople > 0;
     });
     if (qualifiedReports.length < settings.minReports) {
       return;
@@ -3370,6 +3401,7 @@ const resolveAssignmentTargets = async (
           bucketTotals: { commission: 0 },
           totalPayout: 0,
           productTotals: [],
+          counterIncentiveMarkers: {},
         });
       }
     });
