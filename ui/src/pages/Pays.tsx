@@ -131,7 +131,29 @@ const renderBucketTotals = (bucketTotals?: Record<string, number>) => {
   );
 };
 
-const renderBreakdownTable = (items: PayBreakdown[]) => {
+const buildIncentiveLookup = (summary: Pay): Map<number, string[]> => {
+  const map = new Map<number, string[]>();
+  const markers = summary.counterIncentiveMarkers ?? {};
+  Object.entries(markers).forEach(([counterIdKey, letters]) => {
+    const counterId = Number(counterIdKey);
+    if (!Number.isFinite(counterId) || counterId <= 0 || !Array.isArray(letters)) {
+      return;
+    }
+    const normalized = Array.from(
+      new Set(
+        letters
+          .map((letter) => (typeof letter === 'string' && letter.trim().length > 0 ? letter.trim()[0].toUpperCase() : null))
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+    if (normalized.length > 0) {
+      map.set(counterId, normalized);
+    }
+  });
+  return map;
+};
+
+const renderBreakdownTable = (items: PayBreakdown[], incentiveLookup?: Map<number, string[]>) => {
   const hasProduct = items.some((entry) => Boolean(entry.productName));
   return (
     <Table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -147,7 +169,37 @@ const renderBreakdownTable = (items: PayBreakdown[]) => {
       <tbody>
         {items.map((entry, index) => (
           <tr key={`${entry.date}-${index}`}>
-            <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>{entry.date}</td>
+            <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>
+              {entry.date}
+              {entry.counterId !== undefined &&
+                entry.counterId !== null &&
+                incentiveLookup?.get(entry.counterId) &&
+                incentiveLookup.get(entry.counterId)!.length > 0 && (
+                  <span style={{ marginLeft: 6, display: 'inline-flex', gap: 4 }}>
+                    {incentiveLookup
+                      .get(entry.counterId)!
+                      .map((letter) => (
+                        <span
+                          key={`${entry.counterId}-${letter}`}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            width: 16,
+                            height: 16,
+                            borderRadius: '50%',
+                            backgroundColor: '#edf2ff',
+                            color: '#3b5bdb',
+                            fontSize: 10,
+                            fontWeight: 700,
+                          }}
+                        >
+                          {letter}
+                        </span>
+                      ))}
+                  </span>
+                )}
+            </td>
             {hasProduct && (
               <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>{entry.productName ?? '—'}</td>
             )}
@@ -549,7 +601,7 @@ const Pays: React.FC = () => {
               {expanded && (
                 <Stack gap="sm" pt="xs">
                   {renderProductTotals(item.productTotals, item.componentTotals)}
-                  {item.breakdown.length > 0 && renderBreakdownTable(item.breakdown)}
+                  {item.breakdown.length > 0 && renderBreakdownTable(item.breakdown, buildIncentiveLookup(item))}
                 </Stack>
               )}
             </Stack>
@@ -601,8 +653,9 @@ const Pays: React.FC = () => {
                         <Stack gap="md">
                           {renderBucketTotals(item.bucketTotals)}
                           {renderComponentList(item.componentTotals)}
-                          {renderProductTotals(item.productTotals, item.componentTotals)}
-                          {item.breakdown.length > 0 && renderBreakdownTable(item.breakdown)}
+                        {renderProductTotals(item.productTotals, item.componentTotals)}
+                        {item.breakdown.length > 0 &&
+                          renderBreakdownTable(item.breakdown, buildIncentiveLookup(item))}
                         </Stack>
                       </td>
                     </tr>
