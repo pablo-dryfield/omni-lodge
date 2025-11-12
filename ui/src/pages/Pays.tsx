@@ -70,6 +70,11 @@ const getComponentColor = (category: string) => {
 };
 
 const normalizeTotal = (summary: Pay) => summary.totalPayout ?? summary.totalCommission;
+const calculateIncentiveTotal = (summary: Pay) =>
+  (summary.componentTotals ?? []).reduce(
+    (sum, component) => (component.category === 'incentive' ? sum + component.amount : sum),
+    0,
+  );
 
 const FULL_ACCESS_MODULE = 'staff-payouts-all';
 const SELF_ACCESS_MODULE = 'staff-payouts-self';
@@ -128,14 +133,12 @@ const renderBucketTotals = (bucketTotals?: Record<string, number>) => {
 
 const renderBreakdownTable = (items: PayBreakdown[]) => {
   const hasProduct = items.some((entry) => Boolean(entry.productName));
-  const hasCounter = items.some((entry) => typeof entry.counterId === 'number');
   return (
     <Table style={{ width: '100%', borderCollapse: 'collapse' }}>
       <thead>
         <tr>
           <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'left' }}>Date</th>
           {hasProduct && <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'left' }}>Product</th>}
-          {hasCounter && <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'left' }}>Counter</th>}
           <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Customers</th>
           <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Guides</th>
           <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Commission</th>
@@ -143,15 +146,10 @@ const renderBreakdownTable = (items: PayBreakdown[]) => {
       </thead>
       <tbody>
         {items.map((entry, index) => (
-          <tr key={`${entry.date}-${entry.counterId ?? 'na'}-${index}`}>
+          <tr key={`${entry.date}-${index}`}>
             <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>{entry.date}</td>
             {hasProduct && (
               <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>{entry.productName ?? '—'}</td>
-            )}
-            {hasCounter && (
-              <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>
-                {typeof entry.counterId === 'number' ? `#${entry.counterId}` : '—'}
-              </td>
             )}
             <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{entry.customers}</td>
             <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{entry.guidesCount}</td>
@@ -190,27 +188,30 @@ const renderProductTotals = (
           const payoutTotal = product.totalCommission + incentiveTotal;
           return (
             <Card key={`${product.productId ?? 'legacy'}-${index}`} withBorder padding="sm" radius="md">
-              <Stack gap={6}>
-                <Group justify="space-between" align="flex-start">
+              <Stack gap="xs">
+                <Group justify="space-between" align="center">
                   <div>
                     <Text fw={600}>{product.productName}</Text>
-                    <Text size="xs" c="dimmed">
-                      {product.counterIds.length} {product.counterIds.length === 1 ? 'counter' : 'counters'}
-                    </Text>
+                    {componentBreakdown.length > 0 && (
+                      <Text size="xs" c="dimmed">
+                        {componentBreakdown.length}{' '}
+                        {componentBreakdown.length === 1 ? 'incentive' : 'incentives'}
+                      </Text>
+                    )}
                   </div>
-                  <Stack gap={2} align="flex-end">
+                  <Stack gap={0} align="flex-end">
                     <Text size="xs" c="dimmed">
-                      Commission
+                      Total payout
                     </Text>
-                    <Text fw={600}>{formatCurrency(product.totalCommission)}</Text>
+                    <Text fw={700}>{formatCurrency(payoutTotal)}</Text>
                   </Stack>
                 </Group>
-                <Group gap="xl" wrap="wrap">
-                  <Text size="sm">
-                    Customers: <strong>{product.totalCustomers}</strong>
+                <Group justify="space-between">
+                  <Text size="xs" c="dimmed">
+                    Commission share
                   </Text>
-                  <Text size="sm">
-                    Total payout: <strong>{formatCurrency(payoutTotal)}</strong>
+                  <Text size="sm" fw={600}>
+                    {formatCurrency(product.totalCommission)}
                   </Text>
                 </Group>
                 {componentBreakdown.length > 0 && (
@@ -237,11 +238,6 @@ const renderProductTotals = (
                       );
                     })}
                   </Stack>
-                )}
-                {product.counterIds.length > 0 && (
-                  <Text size="xs" c="dimmed">
-                    Counters: #{product.counterIds.join(', #')}
-                  </Text>
                 )}
               </Stack>
             </Card>
@@ -566,6 +562,7 @@ const Pays: React.FC = () => {
   const renderDesktopTable = () => {
     const tableCommissionTotal = summaries.reduce((sum, item) => sum + item.totalCommission, 0);
     const tablePayoutTotal = summaries.reduce((sum, item) => sum + normalizeTotal(item), 0);
+    const tableIncentiveTotal = summaries.reduce((sum, item) => sum + calculateIncentiveTotal(item), 0);
     return (
       <ScrollArea>
         <Table striped highlightOnHover withRowBorders style={{ minWidth: 640 }}>
@@ -573,6 +570,7 @@ const Pays: React.FC = () => {
             <tr>
               <th style={{ padding: 12 }}>Name</th>
               <th style={{ padding: 12 }}>Commission</th>
+              <th style={{ padding: 12 }}>Incentives</th>
               <th style={{ padding: 12 }}>Total payout</th>
               <th style={{ padding: 12 }} />
             </tr>
@@ -581,11 +579,13 @@ const Pays: React.FC = () => {
             {summaries.map((item, index) => {
               const rowHasDetails =
                 (item.productTotals && item.productTotals.length > 0) || item.breakdown.length > 0;
+              const incentiveAmount = calculateIncentiveTotal(item);
               return (
                 <Fragment key={item.userId ?? index}>
                   <tr>
                     <td style={{ padding: 12 }}>{item.firstName}</td>
                     <td style={{ padding: 12 }}>{formatCurrency(item.totalCommission)}</td>
+                    <td style={{ padding: 12 }}>{formatCurrency(incentiveAmount)}</td>
                     <td style={{ padding: 12 }}>{formatCurrency(normalizeTotal(item))}</td>
                     <td style={{ padding: 12, textAlign: 'right' }}>
                       {rowHasDetails && (
@@ -616,6 +616,9 @@ const Pays: React.FC = () => {
               </td>
               <td style={{ padding: 12 }}>
                 <strong>{formatCurrency(tableCommissionTotal)}</strong>
+              </td>
+              <td style={{ padding: 12 }}>
+                <strong>{formatCurrency(tableIncentiveTotal)}</strong>
               </td>
               <td style={{ padding: 12 }}>
                 <strong>{formatCurrency(tablePayoutTotal)}</strong>

@@ -2647,6 +2647,46 @@ const readNumeric = (value: unknown): number | undefined => {
   return undefined;
 };
 
+const readNumericArray = (value: unknown): number[] | undefined => {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  const appendParsed = (input: unknown, target: number[]) => {
+    if (typeof input === "object" && input !== null && "id" in input) {
+      appendParsed((input as { id: unknown }).id, target);
+      return;
+    }
+
+    const parsed = readNumeric(input);
+    if (parsed === undefined) {
+      return;
+    }
+    const normalized = Math.trunc(parsed);
+    if (Number.isFinite(normalized)) {
+      target.push(normalized);
+    }
+  };
+
+  const collected: number[] = [];
+  if (Array.isArray(value)) {
+    value.forEach((entry) => appendParsed(entry, collected));
+  } else if (typeof value === "string") {
+    value
+      .split(/[,;\s]+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 0)
+      .forEach((token) => appendParsed(token, collected));
+  } else {
+    appendParsed(value, collected);
+  }
+
+  const deduped = Array.from(
+    new Set(collected.filter((id) => Number.isInteger(id) && id >= 0)),
+  );
+  return deduped.length > 0 ? deduped : undefined;
+};
+
 const readBoolean = (value: unknown): boolean | undefined => {
   if (typeof value === "boolean") {
     return value;
@@ -2884,11 +2924,32 @@ type NightReportIncentiveSettings = {
   perCustomerRate: number;
   perCustomerSource: 'total' | 'open_bar';
   dynamicMinAttendanceMultiplier: number;
+  allowedProductIds: number[] | null;
 };
 
 type NightReportBestCacheEntry = {
   topUserIds: Set<number>;
   topHits: number;
+};
+
+const buildProductFilterSet = (productIds: number[] | null): Set<number> | null => {
+  if (!productIds || productIds.length === 0) {
+    return null;
+  }
+  return new Set(productIds);
+};
+
+const reportMatchesProductFilter = (
+  report: { productId: number | null },
+  filter: Set<number> | null,
+): boolean => {
+  if (!filter) {
+    return true;
+  }
+  if (report.productId === null || report.productId === undefined) {
+    return false;
+  }
+  return filter.has(report.productId);
 };
 
 const normalizeNightReportConfig = (config: unknown): Partial<NightReportIncentiveSettings> => {
@@ -2997,6 +3058,20 @@ const normalizeNightReportConfig = (config: unknown): Partial<NightReportIncenti
     settings.dynamicMinAttendanceMultiplier = dynamicMultiplier;
   }
 
+  const allowedProducts =
+    readNumericArray(
+      candidate.allowedProductIds ??
+        candidate.allowed_product_ids ??
+        candidate.productIds ??
+        candidate.product_ids ??
+        candidate.products ??
+        candidate.productFilter ??
+        candidate.product_filter,
+    ) ?? undefined;
+  if (allowedProducts !== undefined) {
+    settings.allowedProductIds = allowedProducts;
+  }
+
   return settings;
 };
 
@@ -3029,6 +3104,10 @@ const resolveNightReportSettings = (
       assignmentSettings.dynamicMinAttendanceMultiplier ??
       componentSettings.dynamicMinAttendanceMultiplier ??
       4,
+    allowedProductIds:
+      assignmentSettings.allowedProductIds ??
+      componentSettings.allowedProductIds ??
+      null,
   };
 
   if (!Number.isFinite(merged.minAttendance) || merged.minAttendance < 0) {
@@ -3062,6 +3141,16 @@ const resolveNightReportSettings = (
   if (!Number.isFinite(merged.dynamicMinAttendanceMultiplier) || merged.dynamicMinAttendanceMultiplier <= 0) {
     merged.dynamicMinAttendanceMultiplier = 4;
   }
+  if (merged.allowedProductIds && merged.allowedProductIds.length > 0) {
+    const sanitized = Array.from(
+      new Set(
+        merged.allowedProductIds.filter((id) => Number.isInteger(id) && id >= 0),
+      ),
+    ).sort((a, b) => a - b);
+    merged.allowedProductIds = sanitized.length > 0 ? sanitized : null;
+  } else {
+    merged.allowedProductIds = null;
+  }
 
   return merged;
 };
@@ -3080,7 +3169,11 @@ const computeNightReportIncentive = (
   }
 
   const settings = resolveNightReportSettings(component, assignment);
+  const productFilter = buildProductFilterSet(settings.allowedProductIds);
   const qualifiedReports = leaderStats.reports.filter((report) => {
+    if (!reportMatchesProductFilter(report, productFilter)) {
+      return false;
+    }
     const dynamicTarget =
       (report.postOpenBarPeople ?? 0) * settings.dynamicMinAttendanceMultiplier;
     const target = dynamicTarget > 0 ? dynamicTarget : settings.minAttendance;
@@ -3171,11 +3264,17 @@ const getNightReportBestEntry = (
   settings: NightReportIncentiveSettings,
   nightReportStats: NightReportStatsMap,
 ): NightReportBestCacheEntry => {
+  const productFilter = buildProductFilterSet(settings.allowedProductIds);
+  const productKey =
+    settings.allowedProductIds && settings.allowedProductIds.length > 0
+      ? settings.allowedProductIds.join(",")
+      : "*";
   const cacheKey = [
     settings.minAttendance,
     settings.minReports,
     settings.retentionThreshold,
     settings.dynamicMinAttendanceMultiplier,
+    productKey,
   ].join("|");
   const cached = cache.get(cacheKey);
   if (cached) {
@@ -3187,6 +3286,9 @@ const getNightReportBestEntry = (
 
   nightReportStats.forEach((summary, userId) => {
     const qualifiedReports = summary.reports.filter((report) => {
+      if (!reportMatchesProductFilter(report, productFilter)) {
+        return false;
+      }
       const dynamicTarget =
         (report.postOpenBarPeople ?? 0) * settings.dynamicMinAttendanceMultiplier;
       const target = dynamicTarget > 0 ? dynamicTarget : settings.minAttendance;
