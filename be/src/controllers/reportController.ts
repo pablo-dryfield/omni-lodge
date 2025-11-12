@@ -56,6 +56,12 @@ type ReviewTotals = {
   totalEligibleReviews: number;
 };
 
+type PlatformGuestTotals = {
+  totalGuests: number;
+  totalBooked: number;
+  totalAttended: number;
+};
+
 type ProductComponentTotal = {
   componentId: number;
   amount: number;
@@ -89,6 +95,7 @@ type CommissionSummary = {
   counterIncentiveMarkers: Record<string, string[]>;
   counterIncentiveTotals: Record<string, number>;
   reviewTotals: ReviewTotals;
+  platformGuestTotals: PlatformGuestTotals;
 };
 
 type GuideDailyBreakdown = {
@@ -1224,6 +1231,11 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       }
     });
 
+    const platformGuestTotals = await computePlatformGuestTotals(counterIds);
+    commissionDataByUser.forEach((summary) => {
+      summary.platformGuestTotals = platformGuestTotals;
+    });
+
     const dailyAggregates = new Map<number, DailyAggregate>();
 
     const getOrCreateDailyAggregate = (counterId: number, meta: CounterMeta): DailyAggregate => {
@@ -1306,6 +1318,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         const summary = commissionDataByUser.get(userId);
         if (summary) {
           summary.reviewTotals = stats;
+          summary.platformGuestTotals = platformGuestTotals;
         }
       });
     }
@@ -1331,6 +1344,9 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     >;
 
     const assignmentTargets = await resolveAssignmentTargets(commissionDataByUser, typedComponents);
+    commissionDataByUser.forEach((summary) => {
+      summary.platformGuestTotals = platformGuestTotals;
+    });
     const requiresTaskScores = typedComponents.some(
       (component) =>
         component.calculationMethod === "task_score" &&
@@ -2414,6 +2430,7 @@ const createEmptySummary = (userId: number, firstName: string): CommissionSummar
   counterIncentiveMarkers: {},
   counterIncentiveTotals: {},
   reviewTotals: { totalEligibleReviews: 0 },
+  platformGuestTotals: { totalGuests: 0, totalBooked: 0, totalAttended: 0 },
 });
 
 const recordCounterIncentiveMarker = (
@@ -2539,6 +2556,45 @@ const fetchReviewStats = async (
   return stats;
 };
 
+const computePlatformGuestTotals = async (counterIds: number[]): Promise<PlatformGuestTotals> => {
+  if (!counterIds || counterIds.length === 0) {
+    return { totalGuests: 0, totalBooked: 0, totalAttended: 0 };
+  }
+
+  const rows = await CounterChannelMetric.findAll({
+    attributes: ["tallyType", [Sequelize.fn("SUM", Sequelize.col("qty")), "totalQty"]],
+    where: {
+      counterId: { [Op.in]: counterIds },
+      kind: "people",
+      tallyType: { [Op.in]: ["booked", "attended"] },
+    },
+    group: ["tallyType"],
+  });
+
+  let totalBooked = 0;
+  let totalAttended = 0;
+  rows.forEach((row) => {
+    const tallyType = row.getDataValue("tallyType") as string;
+    const qty = Number(row.get("totalQty") ?? 0);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      return;
+    }
+    if (tallyType === "booked") {
+      totalBooked += qty;
+    } else if (tallyType === "attended") {
+      totalAttended += qty;
+    }
+  });
+
+  const noShows = Math.max(totalBooked - totalAttended, 0);
+  const totalGuests = totalAttended + noShows;
+  return {
+    totalGuests,
+    totalBooked,
+    totalAttended,
+  };
+};
+
 function describeModel(model: ModelCtor<Model>): ReportModelDescriptor {
   const attributes = model.getAttributes();
   const fields = Object.entries(attributes).map(([fieldName, attribute]) =>
@@ -2656,6 +2712,11 @@ const computeAssignmentAmount = (
   const reviewSettings = resolveReviewPayoutSettings(component, assignment);
   if (reviewSettings) {
     return computeReviewPayoutAmount(summary, reviewSettings);
+  }
+
+  const platformGuestSettings = resolvePlatformGuestSettings(component, assignment);
+  if (platformGuestSettings) {
+    return computePlatformGuestPayout(summary, platformGuestSettings);
   }
 
   const baseAmount = Number(assignment.baseAmount ?? 0);
@@ -3092,6 +3153,16 @@ type ReviewPayoutSettings = {
   rate: number;
 };
 
+type PlatformGuestTier = {
+  size: number | null;
+  rate: number;
+};
+
+type PlatformGuestSettings = {
+  minimumGuests: number;
+  tiers: PlatformGuestTier[];
+};
+
 const buildProductFilterSet = (productIds: number[] | null): Set<number> | null => {
   if (!productIds || productIds.length === 0) {
     return null;
@@ -3283,6 +3354,54 @@ const normalizeReviewPayoutConfig = (config: unknown): Partial<ReviewPayoutSetti
   return settings;
 };
 
+const normalizePlatformGuestConfig = (config: unknown): Partial<PlatformGuestSettings> => {
+  if (!config || typeof config !== "object") {
+    return {};
+  }
+  const record = config as Record<string, unknown>;
+  const candidate =
+    typeof record.platformGuests === "object"
+      ? (record.platformGuests as Record<string, unknown>)
+      : typeof record.platform_guests === "object"
+      ? (record.platform_guests as Record<string, unknown>)
+      : record;
+  if (!candidate || typeof candidate !== "object") {
+    return {};
+  }
+
+  const tiersRaw = Array.isArray(candidate.tiers) ? candidate.tiers : [];
+  const tiers: PlatformGuestTier[] = [];
+  tiersRaw.forEach((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const bucket = entry as Record<string, unknown>;
+    const sizeRaw = readNumeric(bucket.size ?? bucket.block ?? bucket.units ?? bucket.limit);
+    const rateRaw = readNumeric(bucket.rate ?? bucket.amount ?? bucket.unitAmount ?? bucket.unit_amount);
+    if (!Number.isFinite(rateRaw) || rateRaw === undefined || rateRaw === null) {
+      return;
+    }
+    const normalizedSize =
+      sizeRaw !== undefined && sizeRaw !== null
+        ? Math.max(1, Math.floor(sizeRaw))
+        : null;
+    tiers.push({
+      size: normalizedSize,
+      rate: rateRaw,
+    });
+  });
+
+  const minimumGuests =
+    readNumeric(candidate.minimumGuests ?? candidate.minimum_guests) ??
+    (tiers.length > 0 && tiers[0].size ? tiers[0].size : 0) ??
+    0;
+
+  return {
+    minimumGuests: Math.max(0, Math.floor(minimumGuests)),
+    tiers,
+  };
+};
+
 const resolveNightReportSettings = (
   component: CompensationComponent,
   assignment: CompensationComponentAssignment,
@@ -3418,6 +3537,60 @@ const computeReviewPayoutAmount = (
   }
 
   return units * settings.rate;
+};
+
+const resolvePlatformGuestSettings = (
+  component: CompensationComponent,
+  assignment: CompensationComponentAssignment,
+): PlatformGuestSettings | null => {
+  const componentSettings = normalizePlatformGuestConfig(component.config ?? {});
+  const assignmentSettings = normalizePlatformGuestConfig(assignment.config ?? {});
+
+  const tiers = (assignmentSettings.tiers ?? componentSettings.tiers ?? []).filter(
+    (tier): tier is PlatformGuestTier =>
+      !!tier && Number.isFinite(tier.rate) && tier.rate !== 0 && (tier.size === null || tier.size > 0),
+  );
+
+  if (tiers.length === 0) {
+    return null;
+  }
+
+  const minimumGuests =
+    assignmentSettings.minimumGuests ??
+    componentSettings.minimumGuests ??
+    (tiers[0].size ?? 0);
+
+  return {
+    minimumGuests: Math.max(0, Math.floor(minimumGuests)),
+    tiers,
+  };
+};
+
+const computePlatformGuestPayout = (summary: CommissionSummary, settings: PlatformGuestSettings): number => {
+  const totalGuests = summary.platformGuestTotals?.totalGuests ?? 0;
+  if (totalGuests < settings.minimumGuests || totalGuests <= 0) {
+    return 0;
+  }
+
+  let remaining = totalGuests;
+  let total = 0;
+  for (const tier of settings.tiers) {
+    const tierSize = tier.size ?? remaining;
+    if (tierSize <= 0) {
+      continue;
+    }
+    const units = Math.min(remaining, tierSize);
+    if (units <= 0) {
+      break;
+    }
+    total += units * tier.rate;
+    remaining -= units;
+    if (remaining <= 0) {
+      break;
+    }
+  }
+
+  return total;
 };
 
 const computeNightReportIncentive = (

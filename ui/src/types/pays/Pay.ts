@@ -37,5 +37,10 @@ export type Pay = {
   reviewTotals?: {
     totalEligibleReviews: number;
   };
+  platformGuestTotals?: {
+    totalGuests: number;
+    totalBooked: number;
+    totalAttended: number;
+  };
   breakdown: PayBreakdown[];
 };

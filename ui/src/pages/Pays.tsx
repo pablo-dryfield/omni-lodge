@@ -87,7 +87,7 @@ const renderComponentList = (components?: PayComponentSummary[]) => {
   return (
     <Stack gap="xs">
       <Text size="sm" fw={600}>
-        Extras
+        Breakdown
       </Text>
       <Stack gap={4}>
         {components.map((component) => (
@@ -598,12 +598,6 @@ const Pays: React.FC = () => {
               </Group>
 
               <Stack gap="xs">
-                <Group justify="space-between">
-                  <Text size="sm" c="dimmed">
-                    Commission
-                  </Text>
-                  <Text fw={600}>{formatCurrency(item.totalCommission)}</Text>
-                </Group>
                 {renderComponentList(item.componentTotals)}
                 {renderBucketTotals(item.bucketTotals)}
               </Stack>
