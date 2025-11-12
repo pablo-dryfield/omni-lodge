@@ -3,6 +3,9 @@ export type PayBreakdown = {
   commission: number;
   customers: number;
   guidesCount: number;
+  counterId?: number;
+  productId?: number | null;
+  productName?: string;
 };
 
 export type PayComponentSummary = {
@@ -21,5 +24,13 @@ export type Pay = {
   totalCustomers?: number;
   bucketTotals?: Record<string, number>;
   componentTotals?: PayComponentSummary[];
+  productTotals?: Array<{
+    productId: number | null;
+    productName: string;
+    counterIds: number[];
+    totalCustomers: number;
+    totalCommission: number;
+    componentTotals: Array<{ componentId: number; amount: number }>;
+  }>;
   breakdown: PayBreakdown[];
 };

@@ -2,9 +2,14 @@ import dayjs from "dayjs";
 import { Op } from "sequelize";
 import NightReport from "../models/NightReport.js";
 import NightReportVenue from "../models/NightReportVenue.js";
+import Counter from "../models/Counter.js";
+import Product from "../models/Product.js";
 
 export type NightReportDailyReport = {
   reportId: number;
+  counterId: number | null;
+  productId: number | null;
+  productName: string;
   date: string;
   totalPeople: number;
   postOpenBarPeople: number;
@@ -35,6 +40,20 @@ export const fetchLeaderNightReportStats = async (
         model: NightReportVenue,
         as: "venues",
         required: false,
+      },
+      {
+        model: Counter,
+        as: "counter",
+        required: false,
+        attributes: ["id", "productId"],
+        include: [
+          {
+            model: Product,
+            as: "product",
+            required: false,
+            attributes: ["id", "name"],
+          },
+        ],
       },
     ],
     order: [
@@ -72,9 +91,16 @@ export const fetchLeaderNightReportStats = async (
     const firstCount = venues[0]?.totalPeople ?? 0;
     const lastCount = venues[venues.length - 1]?.totalPeople ?? firstCount;
     const retentionRatio = firstCount > 0 ? Math.max(0, Math.min(lastCount / firstCount, 1)) : 0;
+    const counterId = report.counterId ?? null;
+    const productId = report.counter?.productId ?? null;
+    const productName =
+      report.counter?.product?.name ?? (productId !== null ? `Product ${productId}` : "Unassigned Product");
 
     const entry: NightReportDailyReport = {
       reportId: report.id,
+      counterId,
+      productId,
+      productName,
       date: report.activityDate,
       totalPeople,
       postOpenBarPeople,
