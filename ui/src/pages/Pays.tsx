@@ -143,7 +143,7 @@ const renderComponentList = (
                 </Stack>
               )}
           </Stack>
-        ))}
+        )})}
       </Stack>
     </Stack>
   );
@@ -839,3 +839,4 @@ const Pays: React.FC = () => {
 };
 
 export default Pays;
+
