@@ -7,6 +7,8 @@ export type NightReportDailyReport = {
   reportId: number;
   date: string;
   totalPeople: number;
+  postOpenBarPeople: number;
+  openBarPeople: number;
   venuesCount: number;
   retentionRatio: number;
 };
@@ -53,6 +55,16 @@ export const fetchLeaderNightReportStats = async (
       .slice()
       .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
     const totalPeople = venues.reduce((sum, venue) => sum + (venue.totalPeople ?? 0), 0);
+    const openBarPeople = venues
+      .filter((venue) => venue.isOpenBar)
+      .reduce((sum, venue) => sum + (venue.totalPeople ?? 0), 0);
+    let postOpenBarPeople = 0;
+    const openBarIndex = venues.findIndex((venue) => venue.isOpenBar);
+    if (openBarIndex >= 0 && openBarIndex + 1 < venues.length) {
+      postOpenBarPeople = venues[openBarIndex + 1]?.totalPeople ?? 0;
+    } else if (openBarIndex === -1 && venues.length >= 2) {
+      postOpenBarPeople = venues[1]?.totalPeople ?? 0;
+    }
     const venuesCount = venues.length;
     const firstCount = venues[0]?.totalPeople ?? 0;
     const lastCount = venues[venues.length - 1]?.totalPeople ?? firstCount;
@@ -62,6 +74,8 @@ export const fetchLeaderNightReportStats = async (
       reportId: report.id,
       date: report.activityDate,
       totalPeople,
+      postOpenBarPeople,
+      openBarPeople,
       venuesCount,
       retentionRatio,
     };

@@ -2716,6 +2716,9 @@ type NightReportIncentiveSettings = {
   payoutPerQualifiedReport: number;
   retentionBonusPerDay: number;
   bestOfRangeBonus: number;
+  perCustomerRate: number;
+  perCustomerSource: 'total' | 'open_bar';
+  dynamicMinAttendanceMultiplier: number;
 };
 
 type NightReportBestCacheEntry = {
@@ -2797,6 +2800,38 @@ const normalizeNightReportConfig = (config: unknown): Partial<NightReportIncenti
     settings.bestOfRangeBonus = bestOfRangeBonus;
   }
 
+  const perCustomerRate =
+    readNumeric(
+      candidate.perCustomerRate ??
+        candidate.per_customer_rate ??
+        candidate.perAttendeeRate ??
+        candidate.per_attendee_rate,
+    ) ?? undefined;
+  if (perCustomerRate !== undefined) {
+    settings.perCustomerRate = perCustomerRate;
+  }
+
+  const perCustomerSourceRaw =
+    (candidate.perCustomerSource ??
+      candidate.per_customer_source ??
+      candidate.attendanceSource ??
+      candidate.attendance_source) ?? 'total';
+  if (typeof perCustomerSourceRaw === 'string') {
+    const normalized = perCustomerSourceRaw.trim().toLowerCase();
+    settings.perCustomerSource = normalized === 'open_bar' || normalized === 'openbar' ? 'open_bar' : 'total';
+  }
+
+  const dynamicMultiplier =
+    readNumeric(
+      candidate.dynamicMinAttendanceMultiplier ??
+        candidate.dynamic_min_attendance_multiplier ??
+        candidate.attendanceMultiplier ??
+        candidate.attendance_multiplier,
+    ) ?? undefined;
+  if (dynamicMultiplier !== undefined) {
+    settings.dynamicMinAttendanceMultiplier = dynamicMultiplier;
+  }
+
   return settings;
 };
 
@@ -2821,6 +2856,14 @@ const resolveNightReportSettings = (
       Number(assignment.unitAmount ?? 0),
     bestOfRangeBonus:
       assignmentSettings.bestOfRangeBonus ?? componentSettings.bestOfRangeBonus ?? 0,
+    perCustomerRate:
+      assignmentSettings.perCustomerRate ?? componentSettings.perCustomerRate ?? 0,
+    perCustomerSource:
+      assignmentSettings.perCustomerSource ?? componentSettings.perCustomerSource ?? 'total',
+    dynamicMinAttendanceMultiplier:
+      assignmentSettings.dynamicMinAttendanceMultiplier ??
+      componentSettings.dynamicMinAttendanceMultiplier ??
+      4,
   };
 
   if (!Number.isFinite(merged.minAttendance) || merged.minAttendance < 0) {
@@ -2845,6 +2888,15 @@ const resolveNightReportSettings = (
   if (!Number.isFinite(merged.bestOfRangeBonus)) {
     merged.bestOfRangeBonus = 0;
   }
+  if (!Number.isFinite(merged.perCustomerRate) || merged.perCustomerRate < 0) {
+    merged.perCustomerRate = 0;
+  }
+  if (merged.perCustomerSource !== 'open_bar') {
+    merged.perCustomerSource = 'total';
+  }
+  if (!Number.isFinite(merged.dynamicMinAttendanceMultiplier) || merged.dynamicMinAttendanceMultiplier <= 0) {
+    merged.dynamicMinAttendanceMultiplier = 4;
+  }
 
   return merged;
 };
@@ -2862,9 +2914,12 @@ const computeNightReportIncentive = (
   }
 
   const settings = resolveNightReportSettings(component, assignment);
-  const qualifiedReports = leaderStats.reports.filter(
-    (report) => report.totalPeople >= settings.minAttendance,
-  );
+  const qualifiedReports = leaderStats.reports.filter((report) => {
+    const dynamicTarget =
+      (report.postOpenBarPeople ?? 0) * settings.dynamicMinAttendanceMultiplier;
+    const target = dynamicTarget > 0 ? dynamicTarget : settings.minAttendance;
+    return report.totalPeople >= target;
+  });
 
   if (qualifiedReports.length < settings.minReports) {
     return 0;
@@ -2876,6 +2931,17 @@ const computeNightReportIncentive = (
 
   let total = settings.payoutPerQualifiedReport * qualifiedReports.length;
   total += settings.retentionBonusPerDay * retentionHits;
+
+  if (settings.perCustomerRate > 0) {
+    const perCustomerTotal = qualifiedReports.reduce((acc, report) => {
+      const attendance =
+        settings.perCustomerSource === 'open_bar'
+          ? report.openBarPeople ?? 0
+          : report.totalPeople ?? 0;
+      return acc + attendance * settings.perCustomerRate;
+    }, 0);
+    total += perCustomerTotal;
+  }
 
   if (settings.bestOfRangeBonus > 0) {
     const bestEntry = getNightReportBestEntry(
@@ -2900,6 +2966,7 @@ const getNightReportBestEntry = (
     settings.minAttendance,
     settings.minReports,
     settings.retentionThreshold,
+    settings.dynamicMinAttendanceMultiplier,
   ].join("|");
   const cached = cache.get(cacheKey);
   if (cached) {
@@ -2910,9 +2977,12 @@ const getNightReportBestEntry = (
   const topUserIds = new Set<number>();
 
   nightReportStats.forEach((summary, userId) => {
-    const qualifiedReports = summary.reports.filter(
-      (report) => report.totalPeople >= settings.minAttendance,
-    );
+    const qualifiedReports = summary.reports.filter((report) => {
+      const dynamicTarget =
+        (report.postOpenBarPeople ?? 0) * settings.dynamicMinAttendanceMultiplier;
+      const target = dynamicTarget > 0 ? dynamicTarget : settings.minAttendance;
+      return report.totalPeople >= target;
+    });
     if (qualifiedReports.length < settings.minReports) {
       return;
     }
