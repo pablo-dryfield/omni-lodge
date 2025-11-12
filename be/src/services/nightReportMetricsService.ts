@@ -54,7 +54,10 @@ export const fetchLeaderNightReportStats = async (
     const venues = (report.venues ?? [])
       .slice()
       .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
-    const totalPeople = venues.reduce((sum, venue) => sum + (venue.totalPeople ?? 0), 0);
+    const totalPeople = venues.reduce(
+      (sum, venue) => sum + (venue.isOpenBar ? 0 : venue.totalPeople ?? 0),
+      0,
+    );
     const openBarPeople = venues
       .filter((venue) => venue.isOpenBar)
       .reduce((sum, venue) => sum + (venue.totalPeople ?? 0), 0);
