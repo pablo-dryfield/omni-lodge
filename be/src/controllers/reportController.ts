@@ -10,6 +10,8 @@ import CounterUser from "../models/CounterUser.js";
 import User from "../models/User.js";
 import StaffProfile from "../models/StaffProfile.js";
 import UserShiftRole from "../models/UserShiftRole.js";
+import ReviewCounter from "../models/ReviewCounter.js";
+import ReviewCounterEntry from "../models/ReviewCounterEntry.js";
 import ReportTemplate, {
   ReportTemplateFieldSelection,
   ReportTemplateOptions,
@@ -50,6 +52,10 @@ type CommissionBreakdownEntry = {
   productName: string;
 };
 
+type ReviewTotals = {
+  totalEligibleReviews: number;
+};
+
 type ProductComponentTotal = {
   componentId: number;
   amount: number;
@@ -81,6 +87,8 @@ type CommissionSummary = {
   totalPayout: number;
   productTotals: ProductPayoutSummary[];
   counterIncentiveMarkers: Record<string, string[]>;
+  counterIncentiveTotals: Record<string, number>;
+  reviewTotals: ReviewTotals;
 };
 
 type GuideDailyBreakdown = {
@@ -128,6 +136,7 @@ const FULL_ACCESS_ROLE_SLUGS = new Set([
 
 const COMMISSION_RATE_PER_ATTENDEE = 6;
 const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-08");
+const REVIEW_MINIMUM_THRESHOLD = 15;
 
 type DialectQuoter = {
   quoteTable: (value: string | { tableName: string; schema?: string }) => string;
@@ -1211,18 +1220,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       const firstName = staff.counterUser?.firstName ?? `User ${userId}`;
 
       if (!commissionDataByUser.has(userId)) {
-        commissionDataByUser.set(userId, {
-          userId,
-          firstName,
-          totalCommission: 0,
-          totalCustomers: 0,
-          breakdown: [],
-          componentTotals: [],
-          bucketTotals: { commission: 0 },
-          totalPayout: 0,
-          productTotals: [],
-          counterIncentiveMarkers: {},
-        });
+        commissionDataByUser.set(userId, createEmptySummary(userId, firstName));
       }
     });
 
@@ -1300,6 +1298,17 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     });
 
     aggregateDailyBreakdownByUser(dailyAggregates, commissionDataByUser);
+
+    const reviewStatsByUser = await fetchReviewStats(start, end);
+    if (reviewStatsByUser.size > 0) {
+      await ensureSummariesForUserIds(reviewStatsByUser.keys(), commissionDataByUser);
+      reviewStatsByUser.forEach((stats, userId) => {
+        const summary = commissionDataByUser.get(userId);
+        if (summary) {
+          summary.reviewTotals = stats;
+        }
+      });
+    }
 
     const activeComponents = await CompensationComponent.findAll({
       where: { isActive: true },
@@ -2392,6 +2401,21 @@ const allocateComponentToProduct = (
   bucket.componentTotals.set(componentId, current + amount);
 };
 
+const createEmptySummary = (userId: number, firstName: string): CommissionSummary => ({
+  userId,
+  firstName,
+  totalCommission: 0,
+  totalCustomers: 0,
+  breakdown: [],
+  componentTotals: [],
+  bucketTotals: { commission: 0 },
+  totalPayout: 0,
+  productTotals: [],
+  counterIncentiveMarkers: {},
+  counterIncentiveTotals: {},
+  reviewTotals: { totalEligibleReviews: 0 },
+});
+
 const recordCounterIncentiveMarker = (
   summary: CommissionSummary,
   counterId: number | null | undefined,
@@ -2406,6 +2430,113 @@ const recordCounterIncentiveMarker = (
   if (!existing.includes(letter)) {
     summary.counterIncentiveMarkers[key] = [...existing, letter];
   }
+};
+
+const recordCounterIncentiveTotal = (
+  summary: CommissionSummary,
+  counterId: number | null | undefined,
+  amount: number,
+) => {
+  if (!counterId || counterId <= 0 || !amount) {
+    return;
+  }
+  const key = String(counterId);
+  summary.counterIncentiveTotals[key] = (summary.counterIncentiveTotals[key] ?? 0) + amount;
+};
+
+const ensureSummariesForUserIds = async (
+  userIds: Iterable<number>,
+  summaries: Map<number, CommissionSummary>,
+): Promise<void> => {
+  const missingIds = Array.from(new Set(Array.from(userIds).filter((userId) => !summaries.has(userId))));
+  if (missingIds.length === 0) {
+    return;
+  }
+
+  const users = await User.findAll({
+    where: { id: { [Op.in]: missingIds }, status: true },
+    attributes: ["id", "firstName"],
+  });
+
+  users.forEach((user) => {
+    if (!summaries.has(user.id)) {
+      summaries.set(user.id, createEmptySummary(user.id, user.firstName ?? `User ${user.id}`));
+    }
+  });
+};
+
+const fetchReviewStats = async (
+  rangeStart: dayjs.Dayjs,
+  rangeEnd: dayjs.Dayjs,
+): Promise<Map<number, ReviewTotals>> => {
+  const startIso = rangeStart.format("YYYY-MM-DD");
+  const endIso = rangeEnd.format("YYYY-MM-DD");
+
+  const counters = await ReviewCounter.findAll({
+    attributes: ["id", "periodStart", "periodEnd"],
+    where: {
+      [Op.or]: [
+        {
+          periodStart: {
+            [Op.between]: [startIso, endIso],
+          },
+        },
+        {
+          periodEnd: {
+            [Op.between]: [startIso, endIso],
+          },
+        },
+        {
+          [Op.and]: [
+            { periodStart: { [Op.lte]: startIso } },
+            {
+              [Op.or]: [
+                { periodEnd: { [Op.gte]: endIso } },
+                { periodEnd: null },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  if (counters.length === 0) {
+    return new Map();
+  }
+
+  const counterIds = counters.map((counter) => counter.id);
+
+  const entries = await ReviewCounterEntry.findAll({
+    attributes: ["counterId", "userId", "roundedCount", "underMinimumApproved"],
+    where: {
+      counterId: { [Op.in]: counterIds },
+      category: "staff",
+      userId: { [Op.ne]: null },
+    },
+  });
+
+  const stats = new Map<number, ReviewTotals>();
+  entries.forEach((entry) => {
+    const userId = entry.getDataValue("userId");
+    if (!userId) {
+      return;
+    }
+    const roundedCountRaw = entry.get("roundedCount");
+    const roundedCount = Number(roundedCountRaw ?? 0);
+    if (!Number.isFinite(roundedCount) || roundedCount <= 0) {
+      return;
+    }
+    const approved = Boolean(entry.getDataValue("underMinimumApproved"));
+    if (roundedCount < REVIEW_MINIMUM_THRESHOLD && !approved) {
+      return;
+    }
+    const current = stats.get(userId) ?? { totalEligibleReviews: 0 };
+    current.totalEligibleReviews += roundedCount;
+    stats.set(userId, current);
+  });
+
+  return stats;
 };
 
 function describeModel(model: ModelCtor<Model>): ReportModelDescriptor {
@@ -2520,6 +2651,11 @@ const computeAssignmentAmount = (
       nightReportBestCache,
       productBucketsByUser,
     );
+  }
+
+  const reviewSettings = resolveReviewPayoutSettings(component, assignment);
+  if (reviewSettings) {
+    return computeReviewPayoutAmount(summary, reviewSettings);
   }
 
   const baseAmount = Number(assignment.baseAmount ?? 0);
@@ -2950,6 +3086,12 @@ type NightReportBestCacheEntry = {
   topHits: number;
 };
 
+type ReviewPayoutSettings = {
+  minReviews: number;
+  maxReviews: number | null;
+  rate: number;
+};
+
 const buildProductFilterSet = (productIds: number[] | null): Set<number> | null => {
   if (!productIds || productIds.length === 0) {
     return null;
@@ -3093,6 +3235,54 @@ const normalizeNightReportConfig = (config: unknown): Partial<NightReportIncenti
   return settings;
 };
 
+const normalizeReviewPayoutConfig = (config: unknown): Partial<ReviewPayoutSettings> => {
+  if (!config || typeof config !== "object") {
+    return {};
+  }
+  const record = config as Record<string, unknown>;
+  const candidate =
+    typeof record.reviewPayout === "object"
+      ? (record.reviewPayout as Record<string, unknown>)
+      : typeof record.review_payout === "object"
+      ? (record.review_payout as Record<string, unknown>)
+      : record;
+  if (!candidate || typeof candidate !== "object") {
+    return {};
+  }
+
+  const settings: Partial<ReviewPayoutSettings> = {};
+  const minReviews =
+    readNumeric(
+      candidate.minReviews ??
+        candidate.min_reviews ??
+        candidate.minimumReviews ??
+        candidate.minimum_reviews,
+    ) ?? undefined;
+  if (minReviews !== undefined) {
+    settings.minReviews = Math.max(1, Math.floor(minReviews));
+  }
+
+  const maxReviews =
+    readNumeric(
+      candidate.maxReviews ??
+        candidate.max_reviews ??
+        candidate.maximumReviews ??
+        candidate.maximum_reviews,
+    ) ?? undefined;
+  if (maxReviews !== undefined) {
+    settings.maxReviews = Math.max(1, Math.floor(maxReviews));
+  }
+
+  const rate =
+    readNumeric(candidate.rate ?? candidate.amount ?? candidate.unitAmount ?? candidate.unit_amount) ??
+    undefined;
+  if (rate !== undefined) {
+    settings.rate = rate;
+  }
+
+  return settings;
+};
+
 const resolveNightReportSettings = (
   component: CompensationComponent,
   assignment: CompensationComponentAssignment,
@@ -3173,6 +3363,63 @@ const resolveNightReportSettings = (
   return merged;
 };
 
+const resolveReviewPayoutSettings = (
+  component: CompensationComponent,
+  assignment: CompensationComponentAssignment,
+): ReviewPayoutSettings | null => {
+  const componentSettings = normalizeReviewPayoutConfig(component.config ?? {});
+  const assignmentSettings = normalizeReviewPayoutConfig(assignment.config ?? {});
+
+  const minReviewsCandidate =
+    assignmentSettings.minReviews ?? componentSettings.minReviews ?? 1;
+  const maxReviewsCandidate =
+    assignmentSettings.maxReviews ?? componentSettings.maxReviews ?? null;
+  const rateCandidate =
+    assignmentSettings.rate ??
+    componentSettings.rate ??
+    Number(assignment.unitAmount ?? 0);
+
+  if (!Number.isFinite(rateCandidate) || rateCandidate === 0) {
+    return null;
+  }
+
+  const minReviews = Math.max(1, Math.floor(minReviewsCandidate));
+  let maxReviews: number | null = null;
+  if (maxReviewsCandidate !== null && maxReviewsCandidate !== undefined) {
+    const normalizedMax = Math.max(minReviews, Math.floor(maxReviewsCandidate));
+    maxReviews = normalizedMax;
+  }
+
+  return {
+    minReviews,
+    maxReviews,
+    rate: rateCandidate,
+  };
+};
+
+const computeReviewPayoutAmount = (
+  summary: CommissionSummary,
+  settings: ReviewPayoutSettings,
+): number => {
+  const eligibleReviews = summary.reviewTotals?.totalEligibleReviews ?? 0;
+  if (eligibleReviews < settings.minReviews) {
+    return 0;
+  }
+
+  const upperBound = settings.maxReviews ?? eligibleReviews;
+  const cappedUpper = Math.min(eligibleReviews, upperBound);
+  if (cappedUpper < settings.minReviews) {
+    return 0;
+  }
+
+  const units = cappedUpper - settings.minReviews + 1;
+  if (units <= 0) {
+    return 0;
+  }
+
+  return units * settings.rate;
+};
+
 const computeNightReportIncentive = (
   component: CompensationComponent,
   assignment: CompensationComponentAssignment,
@@ -3227,6 +3474,7 @@ const computeNightReportIncentive = (
     const entry = productAmountMap.get(key)!;
     entry.amount += amount;
     recordCounterIncentiveMarker(summary, report.counterId, component.name ?? component.id.toString());
+    recordCounterIncentiveTotal(summary, report.counterId, amount);
   };
 
   if (settings.payoutPerQualifiedReport !== 0) {
@@ -3391,18 +3639,7 @@ const resolveAssignmentTargets = async (
 
     users.forEach((user) => {
       if (!summaries.has(user.id)) {
-        summaries.set(user.id, {
-          userId: user.id,
-          firstName: user.firstName ?? `User ${user.id}`,
-          totalCommission: 0,
-          totalCustomers: 0,
-          breakdown: [],
-          componentTotals: [],
-          bucketTotals: { commission: 0 },
-          totalPayout: 0,
-          productTotals: [],
-          counterIncentiveMarkers: {},
-        });
+        summaries.set(user.id, createEmptySummary(user.id, user.firstName ?? `User ${user.id}`));
       }
     });
   }

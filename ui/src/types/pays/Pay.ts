@@ -33,5 +33,9 @@ export type Pay = {
     componentTotals: Array<{ componentId: number; amount: number }>;
   }>;
   counterIncentiveMarkers?: Record<string, string[]>;
+  counterIncentiveTotals?: Record<string, number>;
+  reviewTotals?: {
+    totalEligibleReviews: number;
+  };
   breakdown: PayBreakdown[];
 };

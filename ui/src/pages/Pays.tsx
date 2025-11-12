@@ -87,7 +87,7 @@ const renderComponentList = (components?: PayComponentSummary[]) => {
   return (
     <Stack gap="xs">
       <Text size="sm" fw={600}>
-        Components
+        Extras
       </Text>
       <Stack gap={4}>
         {components.map((component) => (
@@ -115,7 +115,7 @@ const renderBucketTotals = (bucketTotals?: Record<string, number>) => {
   return (
     <Stack gap="xs">
       <Text size="sm" fw={600}>
-        Bucket totals
+        Payments
       </Text>
       <Stack gap={4}>
         {Object.entries(bucketTotals).map(([bucket, amount]) => (
@@ -153,7 +153,19 @@ const buildIncentiveLookup = (summary: Pay): Map<number, string[]> => {
   return map;
 };
 
-const renderBreakdownTable = (items: PayBreakdown[], incentiveLookup?: Map<number, string[]>) => {
+const getCounterIncentiveAmount = (summary: Pay, counterId?: number | null) => {
+  if (!counterId || counterId <= 0) {
+    return 0;
+  }
+  const key = String(counterId);
+  return summary.counterIncentiveTotals?.[key] ?? 0;
+};
+
+const renderBreakdownTable = (
+  summary: Pay,
+  items: PayBreakdown[],
+  incentiveLookup?: Map<number, string[]>,
+) => {
   const hasProduct = items.some((entry) => Boolean(entry.productName));
   return (
     <Table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -163,6 +175,7 @@ const renderBreakdownTable = (items: PayBreakdown[], incentiveLookup?: Map<numbe
           {hasProduct && <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'left' }}>Product</th>}
           <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Customers</th>
           <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Guides</th>
+          <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Incentives</th>
           <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Commission</th>
         </tr>
       </thead>
@@ -206,6 +219,9 @@ const renderBreakdownTable = (items: PayBreakdown[], incentiveLookup?: Map<numbe
             <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{entry.customers}</td>
             <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{entry.guidesCount}</td>
             <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>
+              {formatCurrency(getCounterIncentiveAmount(summary, entry.counterId))}
+            </td>
+            <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>
               {formatCurrency(entry.commission)}
             </td>
           </tr>
@@ -231,7 +247,7 @@ const renderProductTotals = (
   return (
     <Stack gap="xs">
       <Text size="sm" fw={600}>
-        Product payouts
+        Payout Details
       </Text>
       <Stack gap="sm">
         {productTotals.map((product, index) => {
@@ -601,7 +617,8 @@ const Pays: React.FC = () => {
               {expanded && (
                 <Stack gap="sm" pt="xs">
                   {renderProductTotals(item.productTotals, item.componentTotals)}
-                  {item.breakdown.length > 0 && renderBreakdownTable(item.breakdown, buildIncentiveLookup(item))}
+                  {item.breakdown.length > 0 &&
+                    renderBreakdownTable(item, item.breakdown, buildIncentiveLookup(item))}
                 </Stack>
               )}
             </Stack>
@@ -655,7 +672,7 @@ const Pays: React.FC = () => {
                           {renderComponentList(item.componentTotals)}
                         {renderProductTotals(item.productTotals, item.componentTotals)}
                         {item.breakdown.length > 0 &&
-                          renderBreakdownTable(item.breakdown, buildIncentiveLookup(item))}
+                          renderBreakdownTable(item, item.breakdown, buildIncentiveLookup(item))}
                         </Stack>
                       </td>
                     </tr>
