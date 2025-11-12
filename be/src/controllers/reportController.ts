@@ -2812,10 +2812,10 @@ const normalizeNightReportConfig = (config: unknown): Partial<NightReportIncenti
   }
 
   const perCustomerSourceRaw =
-    (candidate.perCustomerSource ??
-      candidate.per_customer_source ??
-      candidate.attendanceSource ??
-      candidate.attendance_source) ?? 'total';
+    candidate.perCustomerSource ??
+    candidate.per_customer_source ??
+    candidate.attendanceSource ??
+    candidate.attendance_source;
   if (typeof perCustomerSourceRaw === 'string') {
     const normalized = perCustomerSourceRaw.trim().toLowerCase();
     settings.perCustomerSource = normalized === 'open_bar' || normalized === 'openbar' ? 'open_bar' : 'total';
