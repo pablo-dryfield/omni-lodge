@@ -38,18 +38,38 @@ import CompensationComponent, {
 import CompensationComponentAssignment from "../models/CompensationComponentAssignment.js";
 import AssistantManagerTaskLog, { type AssistantManagerTaskStatus } from "../models/AssistantManagerTaskLog.js";
 import { fetchLeaderNightReportStats, type NightReportStatsMap } from "../services/nightReportMetricsService.js";
+import Product from "../models/Product.js";
+
+type CommissionBreakdownEntry = {
+  date: string;
+  commission: number;
+  customers: number;
+  guidesCount: number;
+  counterId: number;
+  productId: number | null;
+  productName: string;
+};
+
+type ProductComponentTotal = {
+  componentId: number;
+  amount: number;
+};
+
+type ProductPayoutSummary = {
+  productId: number | null;
+  productName: string;
+  counterIds: number[];
+  totalCustomers: number;
+  totalCommission: number;
+  componentTotals: ProductComponentTotal[];
+};
 
 type CommissionSummary = {
   userId: number;
   firstName: string;
   totalCommission: number;
   totalCustomers: number;
-  breakdown: Array<{
-    date: string;
-    commission: number;
-    customers: number;
-    guidesCount: number;
-  }>;
+  breakdown: CommissionBreakdownEntry[];
   componentTotals: Array<{
     componentId: number;
     name: string;
@@ -59,6 +79,7 @@ type CommissionSummary = {
   }>;
   bucketTotals: Record<string, number>;
   totalPayout: number;
+  productTotals: ProductPayoutSummary[];
 };
 
 type GuideDailyBreakdown = {
@@ -69,9 +90,31 @@ type GuideDailyBreakdown = {
 };
 
 type DailyAggregate = {
+  dateKey: string;
+  counterId: number;
+  productId: number | null;
+  productName: string;
   totalCustomers: number;
   guides: Map<number, GuideDailyBreakdown>;
 };
+
+type CounterMeta = {
+  dateKey: string;
+  isNewSystem: boolean;
+  productId: number | null;
+  productName: string;
+};
+
+type ProductBucket = {
+  productId: number | null;
+  productName: string;
+  counterIds: Set<number>;
+  totalCustomers: number;
+  totalCommission: number;
+  componentTotals: Map<number, number>;
+};
+
+type ProductBucketLookup = Map<number, Map<string, ProductBucket>>;
 
 const FULL_ACCESS_ROLE_SLUGS = new Set([
   "admin",
@@ -1012,7 +1055,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     const end = dayjs(endDate as string).endOf("day");
 
     const counters = await Counter.findAll({
-      attributes: ["id", "date"],
+      attributes: ["id", "date", "productId"],
       where: {
         date: {
           [Op.between]: [start.toDate(), end.toDate()],
@@ -1026,9 +1069,10 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       return;
     }
 
-    const counterMetaById = new Map<number, { dateKey: string; isNewSystem: boolean }>();
+    const counterMetaById = new Map<number, CounterMeta>();
     const legacyCounterIds: number[] = [];
     const newSystemCounterIds: number[] = [];
+    const productIdsToResolve = new Set<number>();
 
     counters.forEach((counter) => {
       const rawDate = counter.getDataValue("date");
@@ -1039,8 +1083,17 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       const counterDate = dayjs(rawDate);
       const dateKey = counterDate.format("YYYY-MM-DD");
       const isNewSystem = !counterDate.isBefore(NEW_COUNTER_SYSTEM_START, "day");
+      const productId = isNewSystem ? counter.getDataValue("productId") ?? null : null;
+      if (isNewSystem && productId !== null) {
+        productIdsToResolve.add(productId);
+      }
 
-      counterMetaById.set(counter.id, { dateKey, isNewSystem });
+      counterMetaById.set(counter.id, {
+        dateKey,
+        isNewSystem,
+        productId,
+        productName: "",
+      });
 
       if (isNewSystem) {
         newSystemCounterIds.push(counter.id);
@@ -1095,6 +1148,31 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       });
     }
 
+    const productNameById = new Map<number, string>();
+    if (productIdsToResolve.size > 0) {
+      const products = await Product.findAll({
+        where: {
+          id: {
+            [Op.in]: Array.from(productIdsToResolve),
+          },
+        },
+        attributes: ["id", "name"],
+      });
+      products.forEach((product) => {
+        productNameById.set(product.id, product.name ?? `Product ${product.id}`);
+      });
+    }
+
+    counterMetaById.forEach((meta) => {
+      if (meta.productId !== null) {
+        meta.productName = productNameById.get(meta.productId) ?? `Product ${meta.productId}`;
+      } else if (meta.isNewSystem) {
+        meta.productName = "Unassigned Product";
+      } else {
+        meta.productName = "Legacy Counter";
+      }
+    });
+
     const counterIds = counters.map((counter) => counter.id);
     const staffRecords = await CounterUser.findAll({
       attributes: ["counterId", "userId", "role"],
@@ -1118,6 +1196,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     }
 
     const commissionDataByUser = new Map<number, CommissionSummary>();
+    const productBucketsByUser: ProductBucketLookup = new Map();
     const staffByCounter = new Map<number, CounterUser[]>();
 
     staffRecords.forEach((staff) => {
@@ -1140,20 +1219,25 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           componentTotals: [],
           bucketTotals: { commission: 0 },
           totalPayout: 0,
+          productTotals: [],
         });
       }
     });
 
-    const dailyAggregates = new Map<string, DailyAggregate>();
+    const dailyAggregates = new Map<number, DailyAggregate>();
 
-    const getOrCreateDailyAggregate = (dateKey: string): DailyAggregate => {
-      let aggregate = dailyAggregates.get(dateKey);
+    const getOrCreateDailyAggregate = (counterId: number, meta: CounterMeta): DailyAggregate => {
+      let aggregate = dailyAggregates.get(counterId);
       if (!aggregate) {
         aggregate = {
+          dateKey: meta.dateKey,
+          counterId,
+          productId: meta.productId,
+          productName: meta.productName,
           totalCustomers: 0,
           guides: new Map<number, GuideDailyBreakdown>(),
         };
-        dailyAggregates.set(dateKey, aggregate);
+        dailyAggregates.set(counterId, aggregate);
       }
       return aggregate;
     };
@@ -1168,7 +1252,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         ? newSystemTotalsByCounter.get(counter.id) ?? 0
         : legacyTotalsByCounter.get(counter.id) ?? 0;
 
-      const aggregate = getOrCreateDailyAggregate(meta.dateKey);
+      const aggregate = getOrCreateDailyAggregate(counter.id, meta);
       aggregate.totalCustomers += customers;
 
       const staffForCounter = staffByCounter.get(counter.id) ?? [];
@@ -1186,8 +1270,18 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       return;
     }
 
-    commissionSummary.totalCommission += commissionPerStaff;
-    commissionSummary.totalCustomers += customers;
+        commissionSummary.totalCommission += commissionPerStaff;
+        commissionSummary.totalCustomers += customers;
+
+        const productBucket = getOrCreateProductBucket(
+          productBucketsByUser,
+          userId,
+          meta.productId,
+          meta.productName,
+        );
+        productBucket.counterIds.add(counter.id);
+        productBucket.totalCustomers += customers;
+        productBucket.totalCommission += commissionPerStaff;
 
         const guideBreakdown = aggregate.guides.get(userId) ?? {
           userId,
@@ -1251,25 +1345,44 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       assignmentTargets,
       taskScoreLookup,
       nightReportStats,
+      productBucketsByUser,
     );
 
-    const allSummaries = Array.from(commissionDataByUser.values()).map((entry) => ({
-      ...entry,
-      totalCommission: Number(entry.totalCommission.toFixed(2)),
-      totalCustomers: entry.totalCustomers,
-      breakdown: entry.breakdown.map((item) => ({
-        ...item,
-        commission: Number(item.commission.toFixed(2)),
-      })),
-      componentTotals: entry.componentTotals.map((component) => ({
-        ...component,
-        amount: Number(component.amount.toFixed(2)),
-      })),
-      bucketTotals: Object.fromEntries(
-        Object.entries(entry.bucketTotals).map(([key, value]) => [key, Number(value.toFixed(2))]),
-      ),
-      totalPayout: Number(entry.totalPayout.toFixed(2)),
-    }));
+    const allSummaries = Array.from(commissionDataByUser.values()).map((entry) => {
+      const productBuckets = productBucketsByUser.get(entry.userId);
+      const productTotals = productBuckets
+        ? Array.from(productBuckets.values()).map((bucket) => ({
+            productId: bucket.productId,
+            productName: bucket.productName,
+            counterIds: Array.from(bucket.counterIds.values()),
+            totalCustomers: bucket.totalCustomers,
+            totalCommission: Number(bucket.totalCommission.toFixed(2)),
+            componentTotals: Array.from(bucket.componentTotals.entries()).map(([componentId, amount]) => ({
+              componentId,
+              amount: Number(amount.toFixed(2)),
+            })),
+          }))
+        : [];
+
+      return {
+        ...entry,
+        totalCommission: Number(entry.totalCommission.toFixed(2)),
+        totalCustomers: entry.totalCustomers,
+        breakdown: entry.breakdown.map((item) => ({
+          ...item,
+          commission: Number(item.commission.toFixed(2)),
+        })),
+        componentTotals: entry.componentTotals.map((component) => ({
+          ...component,
+          amount: Number(component.amount.toFixed(2)),
+        })),
+        bucketTotals: Object.fromEntries(
+          Object.entries(entry.bucketTotals).map(([key, value]) => [key, Number(value.toFixed(2))]),
+        ),
+        totalPayout: Number(entry.totalPayout.toFixed(2)),
+        productTotals,
+      };
+    });
 
     const authRequest = req as AuthenticatedRequest;
     const requesterId = authRequest.authContext?.id ?? null;
@@ -2207,10 +2320,10 @@ export const deleteReportTemplate = async (req: AuthenticatedRequest, res: Respo
 };
 
 function aggregateDailyBreakdownByUser(
-  dailyAggregates: Map<string, DailyAggregate>,
+  dailyAggregates: Map<number, DailyAggregate>,
   commissionDataByUser: Map<number, CommissionSummary>,
 ) {
-  dailyAggregates.forEach((aggregate, dateKey) => {
+  dailyAggregates.forEach((aggregate) => {
     const guidesCount = aggregate.guides.size;
 
     aggregate.guides.forEach((guide) => {
@@ -2220,14 +2333,62 @@ function aggregateDailyBreakdownByUser(
       }
 
       summary.breakdown.push({
-        date: dateKey,
+        date: aggregate.dateKey,
         commission: guide.commission,
         customers: guide.customers,
         guidesCount,
+        counterId: aggregate.counterId,
+        productId: aggregate.productId,
+        productName: aggregate.productName,
       });
     });
   });
 }
+
+const getOrCreateProductBucket = (
+  lookup: ProductBucketLookup,
+  userId: number,
+  productId: number | null,
+  productName: string,
+): ProductBucket => {
+  let userBuckets = lookup.get(userId);
+  if (!userBuckets) {
+    userBuckets = new Map<string, ProductBucket>();
+    lookup.set(userId, userBuckets);
+  }
+  const key = productId === null ? "__null__" : `${productId}`;
+  let bucket = userBuckets.get(key);
+  if (!bucket) {
+    bucket = {
+      productId,
+      productName,
+      counterIds: new Set<number>(),
+      totalCustomers: 0,
+      totalCommission: 0,
+      componentTotals: new Map<number, number>(),
+    };
+    userBuckets.set(key, bucket);
+  } else if (productName && productName !== bucket.productName) {
+    bucket.productName = productName;
+  }
+  return bucket;
+};
+
+const allocateComponentToProduct = (
+  lookup: ProductBucketLookup,
+  userId: number,
+  productId: number | null,
+  productName: string,
+  componentId: number,
+  amount: number,
+) => {
+  if (!amount) {
+    return;
+  }
+  const bucket = getOrCreateProductBucket(lookup, userId, productId, productName);
+  const current = bucket.componentTotals.get(componentId) ?? 0;
+  bucket.componentTotals.set(componentId, current + amount);
+};
 
 function describeModel(model: ModelCtor<Model>): ReportModelDescriptor {
   const attributes = model.getAttributes();
@@ -2327,6 +2488,7 @@ const computeAssignmentAmount = (
   taskScoreLookup: TaskScoreLookup,
   nightReportStats: NightReportStatsMap,
   nightReportBestCache: Map<string, NightReportBestCacheEntry>,
+  productBucketsByUser: ProductBucketLookup,
 ) => {
   if (component.calculationMethod === "task_score") {
     return computeTaskScorePayout(component, assignment, summary, taskScoreLookup);
@@ -2338,6 +2500,7 @@ const computeAssignmentAmount = (
       summary,
       nightReportStats,
       nightReportBestCache,
+      productBucketsByUser,
     );
   }
 
@@ -2364,6 +2527,7 @@ const applyCompensationComponents = (
   assignmentTargets: AssignmentTargetMap,
   taskScoreLookup: TaskScoreLookup,
   nightReportStats: NightReportStatsMap,
+  productBucketsByUser: ProductBucketLookup,
 ) => {
   const nightReportBestCache = new Map<string, NightReportBestCacheEntry>();
   summaries.forEach((summary) => {
@@ -2396,6 +2560,7 @@ const applyCompensationComponents = (
             taskScoreLookup,
             nightReportStats,
             nightReportBestCache,
+            productBucketsByUser,
           )
         );
       }, 0);
@@ -2907,6 +3072,7 @@ const computeNightReportIncentive = (
   summary: CommissionSummary,
   nightReportStats: NightReportStatsMap,
   nightReportBestCache: Map<string, NightReportBestCacheEntry>,
+  productBucketsByUser: ProductBucketLookup,
 ) => {
   const leaderStats = nightReportStats.get(summary.userId);
   if (!leaderStats) {
@@ -2925,34 +3091,77 @@ const computeNightReportIncentive = (
     return 0;
   }
 
-  const retentionHits = qualifiedReports.filter(
-    (report) => report.retentionRatio >= settings.retentionThreshold,
-  ).length;
+  const productAmountMap = new Map<
+    string,
+    { productId: number | null; productName: string; amount: number }
+  >();
 
-  let total = settings.payoutPerQualifiedReport * qualifiedReports.length;
-  total += settings.retentionBonusPerDay * retentionHits;
+  const creditReportAmount = (report: typeof qualifiedReports[number] | null, amount: number) => {
+    if (!report || !amount) {
+      return;
+    }
+    const productId = report.productId ?? null;
+    const productName =
+      report.productName ?? (productId !== null ? `Product ${productId}` : "Unassigned Product");
+    const key = productId === null ? "__null__" : `${productId}`;
+    if (!productAmountMap.has(key)) {
+      productAmountMap.set(key, { productId, productName, amount: 0 });
+    }
+    const entry = productAmountMap.get(key)!;
+    entry.amount += amount;
+  };
+
+  if (settings.payoutPerQualifiedReport !== 0) {
+    qualifiedReports.forEach((report) => {
+      creditReportAmount(report, settings.payoutPerQualifiedReport);
+    });
+  }
+
+  if (settings.retentionBonusPerDay !== 0) {
+    qualifiedReports.forEach((report) => {
+      if (report.retentionRatio >= settings.retentionThreshold) {
+        creditReportAmount(report, settings.retentionBonusPerDay);
+      }
+    });
+  }
 
   if (settings.perCustomerRate > 0) {
-    const perCustomerTotal = qualifiedReports.reduce((acc, report) => {
+    qualifiedReports.forEach((report) => {
       const attendance =
-        settings.perCustomerSource === 'open_bar'
+        settings.perCustomerSource === "open_bar"
           ? report.openBarPeople ?? 0
           : report.totalPeople ?? 0;
-      return acc + attendance * settings.perCustomerRate;
-    }, 0);
-    total += perCustomerTotal;
+      if (attendance > 0) {
+        creditReportAmount(report, attendance * settings.perCustomerRate);
+      }
+    });
   }
 
   if (settings.bestOfRangeBonus > 0) {
-    const bestEntry = getNightReportBestEntry(
-      nightReportBestCache,
-      settings,
-      nightReportStats,
-    );
+    const bestEntry = getNightReportBestEntry(nightReportBestCache, settings, nightReportStats);
     if (bestEntry.topHits > 0 && bestEntry.topUserIds.has(summary.userId)) {
-      total += settings.bestOfRangeBonus;
+      let bestReport: (typeof qualifiedReports)[number] | null = null;
+      qualifiedReports.forEach((candidate) => {
+        if (!bestReport || candidate.retentionRatio > bestReport.retentionRatio) {
+          bestReport = candidate;
+        }
+      });
+      creditReportAmount(bestReport, settings.bestOfRangeBonus);
     }
   }
+
+  let total = 0;
+  productAmountMap.forEach((entry) => {
+    total += entry.amount;
+    allocateComponentToProduct(
+      productBucketsByUser,
+      summary.userId,
+      entry.productId,
+      entry.productName,
+      component.id,
+      entry.amount,
+    );
+  });
 
   return total;
 };
@@ -3058,6 +3267,7 @@ const resolveAssignmentTargets = async (
           componentTotals: [],
           bucketTotals: { commission: 0 },
           totalPayout: 0,
+          productTotals: [],
         });
       }
     });

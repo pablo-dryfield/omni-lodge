@@ -126,28 +126,131 @@ const renderBucketTotals = (bucketTotals?: Record<string, number>) => {
   );
 };
 
-const renderBreakdownTable = (items: PayBreakdown[]) => (
-  <Table style={{ width: '100%', borderCollapse: 'collapse' }}>
-    <thead>
-      <tr>
-        <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'left' }}>Date</th>
-        <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Customers</th>
-        <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Guides</th>
-        <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Commission</th>
-      </tr>
-    </thead>
-    <tbody>
-      {items.map((entry) => (
-        <tr key={`${entry.date}-${entry.guidesCount}`}>
-          <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>{entry.date}</td>
-          <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{entry.customers}</td>
-          <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{entry.guidesCount}</td>
-          <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{formatCurrency(entry.commission)}</td>
+const renderBreakdownTable = (items: PayBreakdown[]) => {
+  const hasProduct = items.some((entry) => Boolean(entry.productName));
+  const hasCounter = items.some((entry) => typeof entry.counterId === 'number');
+  return (
+    <Table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <thead>
+        <tr>
+          <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'left' }}>Date</th>
+          {hasProduct && <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'left' }}>Product</th>}
+          {hasCounter && <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'left' }}>Counter</th>}
+          <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Customers</th>
+          <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Guides</th>
+          <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Commission</th>
         </tr>
-      ))}
-    </tbody>
-  </Table>
-);
+      </thead>
+      <tbody>
+        {items.map((entry, index) => (
+          <tr key={`${entry.date}-${entry.counterId ?? 'na'}-${index}`}>
+            <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>{entry.date}</td>
+            {hasProduct && (
+              <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>{entry.productName ?? '—'}</td>
+            )}
+            {hasCounter && (
+              <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>
+                {typeof entry.counterId === 'number' ? `#${entry.counterId}` : '—'}
+              </td>
+            )}
+            <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{entry.customers}</td>
+            <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{entry.guidesCount}</td>
+            <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>
+              {formatCurrency(entry.commission)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </Table>
+  );
+};
+
+const renderProductTotals = (
+  productTotals?: Pay['productTotals'],
+  componentSummaries?: PayComponentSummary[],
+) => {
+  if (!productTotals || productTotals.length === 0) {
+    return null;
+  }
+
+  const componentLookup = new Map<number, PayComponentSummary>();
+  componentSummaries?.forEach((component) => {
+    componentLookup.set(component.componentId, component);
+  });
+
+  return (
+    <Stack gap="xs">
+      <Text size="sm" fw={600}>
+        Product payouts
+      </Text>
+      <Stack gap="sm">
+        {productTotals.map((product, index) => {
+          const componentBreakdown = product.componentTotals ?? [];
+          const incentiveTotal = componentBreakdown.reduce((sum, component) => sum + component.amount, 0);
+          const payoutTotal = product.totalCommission + incentiveTotal;
+          return (
+            <Card key={`${product.productId ?? 'legacy'}-${index}`} withBorder padding="sm" radius="md">
+              <Stack gap={6}>
+                <Group justify="space-between" align="flex-start">
+                  <div>
+                    <Text fw={600}>{product.productName}</Text>
+                    <Text size="xs" c="dimmed">
+                      {product.counterIds.length} {product.counterIds.length === 1 ? 'counter' : 'counters'}
+                    </Text>
+                  </div>
+                  <Stack gap={2} align="flex-end">
+                    <Text size="xs" c="dimmed">
+                      Commission
+                    </Text>
+                    <Text fw={600}>{formatCurrency(product.totalCommission)}</Text>
+                  </Stack>
+                </Group>
+                <Group gap="xl" wrap="wrap">
+                  <Text size="sm">
+                    Customers: <strong>{product.totalCustomers}</strong>
+                  </Text>
+                  <Text size="sm">
+                    Total payout: <strong>{formatCurrency(payoutTotal)}</strong>
+                  </Text>
+                </Group>
+                {componentBreakdown.length > 0 && (
+                  <Stack gap={4}>
+                    <Text size="xs" c="dimmed">
+                      Incentives
+                    </Text>
+                    {componentBreakdown.map((component) => {
+                      const meta = componentLookup.get(component.componentId);
+                      return (
+                        <Group key={`${product.productId ?? 'legacy'}-${component.componentId}`} justify="space-between">
+                          <Group gap={6}>
+                            {meta && (
+                              <Badge size="xs" variant="light" color={getComponentColor(meta.category)}>
+                                {meta.category}
+                              </Badge>
+                            )}
+                            <Text size="sm">{meta?.name ?? `Component #${component.componentId}`}</Text>
+                          </Group>
+                          <Text size="sm" fw={600}>
+                            {formatCurrency(component.amount)}
+                          </Text>
+                        </Group>
+                      );
+                    })}
+                  </Stack>
+                )}
+                {product.counterIds.length > 0 && (
+                  <Text size="xs" c="dimmed">
+                    Counters: #{product.counterIds.join(', #')}
+                  </Text>
+                )}
+              </Stack>
+            </Card>
+          );
+        })}
+      </Stack>
+    </Stack>
+  );
+};
 
 const Pays: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -412,6 +515,8 @@ const Pays: React.FC = () => {
       {summaries.map((item, index) => {
         const expanded = expandedRow === index;
         const total = normalizeTotal(item);
+        const hasDetails =
+          (item.productTotals && item.productTotals.length > 0) || item.breakdown.length > 0;
         return (
           <Paper key={item.userId ?? index} shadow="sm" radius="lg" p="md" withBorder>
             <Stack gap="sm">
@@ -439,14 +544,17 @@ const Pays: React.FC = () => {
                 {renderBucketTotals(item.bucketTotals)}
               </Stack>
 
-              {item.breakdown.length > 0 && (
+              {hasDetails && (
                 <Button variant="subtle" size="xs" onClick={() => toggleRow(index)}>
-                  {expanded ? 'Hide breakdown' : 'Show breakdown'}
+                  {expanded ? 'Hide details' : 'Show details'}
                 </Button>
               )}
 
-              {expanded && item.breakdown.length > 0 && (
-                <Box pt="xs">{renderBreakdownTable(item.breakdown)}</Box>
+              {expanded && (
+                <Stack gap="sm" pt="xs">
+                  {renderProductTotals(item.productTotals, item.componentTotals)}
+                  {item.breakdown.length > 0 && renderBreakdownTable(item.breakdown)}
+                </Stack>
               )}
             </Stack>
           </Paper>
@@ -470,33 +578,38 @@ const Pays: React.FC = () => {
             </tr>
           </thead>
           <tbody>
-            {summaries.map((item, index) => (
-              <Fragment key={item.userId ?? index}>
-                <tr>
-                  <td style={{ padding: 12 }}>{item.firstName}</td>
-                  <td style={{ padding: 12 }}>{formatCurrency(item.totalCommission)}</td>
-                  <td style={{ padding: 12 }}>{formatCurrency(normalizeTotal(item))}</td>
-                  <td style={{ padding: 12, textAlign: 'right' }}>
-                    {item.breakdown.length > 0 && (
-                      <Button variant="subtle" size="xs" onClick={() => toggleRow(index)}>
-                        {expandedRow === index ? 'Hide breakdown' : 'Show breakdown'}
-                      </Button>
-                    )}
-                  </td>
-                </tr>
-                {expandedRow === index && (
+            {summaries.map((item, index) => {
+              const rowHasDetails =
+                (item.productTotals && item.productTotals.length > 0) || item.breakdown.length > 0;
+              return (
+                <Fragment key={item.userId ?? index}>
                   <tr>
-                    <td colSpan={4} style={{ backgroundColor: '#fafafa', padding: '12px 8px' }}>
-                      <Stack gap="md">
-                        {renderBucketTotals(item.bucketTotals)}
-                        {renderComponentList(item.componentTotals)}
-                        {item.breakdown.length > 0 && renderBreakdownTable(item.breakdown)}
-                      </Stack>
+                    <td style={{ padding: 12 }}>{item.firstName}</td>
+                    <td style={{ padding: 12 }}>{formatCurrency(item.totalCommission)}</td>
+                    <td style={{ padding: 12 }}>{formatCurrency(normalizeTotal(item))}</td>
+                    <td style={{ padding: 12, textAlign: 'right' }}>
+                      {rowHasDetails && (
+                        <Button variant="subtle" size="xs" onClick={() => toggleRow(index)}>
+                          {expandedRow === index ? 'Hide details' : 'Show details'}
+                        </Button>
+                      )}
                     </td>
                   </tr>
-                )}
-              </Fragment>
-            ))}
+                  {expandedRow === index && (
+                    <tr>
+                      <td colSpan={4} style={{ backgroundColor: '#fafafa', padding: '12px 8px' }}>
+                        <Stack gap="md">
+                          {renderBucketTotals(item.bucketTotals)}
+                          {renderComponentList(item.componentTotals)}
+                          {renderProductTotals(item.productTotals, item.componentTotals)}
+                          {item.breakdown.length > 0 && renderBreakdownTable(item.breakdown)}
+                        </Stack>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
             <tr>
               <td style={{ padding: 12 }}>
                 <strong>Total</strong>
