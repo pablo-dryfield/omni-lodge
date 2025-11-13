@@ -157,7 +157,7 @@ const renderComponentList = (
             Incentives locked by review target
           </Text>
           {lockedList.map((entry, index) => (
-            <Group key={`${entry.componentId}-${index}`}justify="space-between">
+            <Group key={`${entry.componentId}-${index}`} justify="space-between">
               <Group gap={6}>
                 <Badge color="red" variant="light">
                   {entry.category}
@@ -333,25 +333,20 @@ const renderProductTotals = (
           const componentBreakdown = product.componentTotals ?? [];
           const incentiveTotal = componentBreakdown.reduce((sum, component) => sum + component.amount, 0);
           const payoutTotal = product.totalCommission + incentiveTotal;
+          const hasUnlockedComponent =
+            componentBreakdown.some(
+              (component) =>
+                !lockedComponents?.some((entry) => entry.componentId === component.componentId)
+            );
           return (
             <Card key={`${product.productId ?? 'legacy'}-${index}`} withBorder padding="sm" radius="md">
-              <Stack gap="xs">
-                <Group justify="space-between" align="center">
-                  <div>
-                    <Text fw={600}>{product.productName}</Text>
-                    {componentBreakdown.length > 0 && (
-                      <Text size="xs" c="dimmed">
-                        {componentBreakdown.length}{' '}
-                        {componentBreakdown.length === 1 ? 'incentive' : 'incentives'}
-                      </Text>
-                    )}
-                  </div>
-                  <Stack gap={0} align="flex-end">
+              <Stack gap="0">
+                <Text fw={600}>{product.productName}</Text>
+                <Group justify="space-between" align="center"> 
                     <Text size="xs" c="dimmed">
                       Total payout
                     </Text>
                     <Text fw={700}>{formatCurrency(payoutTotal)}</Text>
-                  </Stack>
                 </Group>
                 <Group justify="space-between">
                   <Text size="xs" c="dimmed">
@@ -365,16 +360,19 @@ const renderProductTotals = (
                   <Stack gap={4}>
                     {componentBreakdown.length > 0 && (
                       <>
-                        <Text size="xs" c="dimmed">
-                          Incentives
-                        </Text>
+                        {hasUnlockedComponent && (
+                          <Text size="xs" c="dimmed">
+                            Incentives
+                          </Text>
+                        )}
                         {componentBreakdown.map((component) => {
                           const meta = componentLookup.get(component.componentId);
+                          const isLocked = lockedComponents?.some((entry) => entry.componentId === component.componentId);
+                          if (isLocked) {
+                            return null;
+                          }
                           return (
-                            <Group
-                              key={`${product.productId ?? 'legacy'}-${component.componentId}`}
-                              justify="space-between"
-                            >
+                            <Group key={`${product.productId ?? 'legacy'}-${component.componentId}`} justify="space-between">
                               <Group gap={6}>
                                 {meta && (
                                   <Badge size="xs" variant="light" color={getComponentColor(meta.category)}>
@@ -782,24 +780,24 @@ const Pays: React.FC = () => {
                     </td>
                   </tr>
                   {expandedRow === index && (
-                  <tr>
-                    <td colSpan={4} style={{ backgroundColor: '#fafafa', padding: '12px 8px' }}>
-                      <Stack gap="md">
-                        {renderBucketTotals(item.bucketTotals)}
-                        {renderComponentList(
-                          item.componentTotals,
-                          item.platformGuestBreakdowns,
-                          item.platformGuestTotals,
-                          item.lockedComponents,
-                        )}
-                        {renderProductTotals(item.productTotals, item.componentTotals, item.lockedComponents)}
-                        {item.breakdown.length > 0 &&
-                          renderBreakdownTable(item, item.breakdown, buildIncentiveLookup(item))}
-                      </Stack>
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
+                    <tr>
+                      <td colSpan={4} style={{ backgroundColor: '#fafafa', padding: '12px 8px' }}>
+                        <Stack gap="md">
+                          {renderBucketTotals(item.bucketTotals)}
+                          {renderComponentList(
+                            item.componentTotals,
+                            item.platformGuestBreakdowns,
+                            item.platformGuestTotals,
+                            item.lockedComponents,
+                          )}
+                          {renderProductTotals(item.productTotals, item.componentTotals, item.lockedComponents)}
+                          {item.breakdown.length > 0 &&
+                            renderBreakdownTable(item, item.breakdown, buildIncentiveLookup(item))}
+                        </Stack>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               );
             })}
             <tr>
