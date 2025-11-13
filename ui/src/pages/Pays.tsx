@@ -333,11 +333,13 @@ const renderProductTotals = (
           const componentBreakdown = product.componentTotals ?? [];
           const incentiveTotal = componentBreakdown.reduce((sum, component) => sum + component.amount, 0);
           const payoutTotal = product.totalCommission + incentiveTotal;
-          const hasUnlockedComponent =
-            componentBreakdown.some(
-              (component) =>
-                !lockedComponents?.some((entry) => entry.componentId === component.componentId)
-            );
+          const lockedForProduct =
+            lockedComponents?.filter((entry) =>
+              componentBreakdown.some((component) => component.componentId === entry.componentId),
+            ) ?? [];
+          const hasUnlockedComponent = componentBreakdown.some(
+            (component) => !lockedForProduct.some((entry) => entry.componentId === component.componentId),
+          );
           return (
             <Card key={`${product.productId ?? 'legacy'}-${index}`} withBorder padding="sm" radius="md">
               <Stack gap="0">
@@ -389,12 +391,12 @@ const renderProductTotals = (
                         })}
                       </>
                     )}
-                    {lockedComponents && lockedComponents.length > 0 && (
+                    {lockedForProduct.length > 0 && (
                       <Stack gap={2} pt="xs">
                         <Text size="xs" c="red" fw={600}>
                           Locked incentives
                         </Text>
-                        {lockedComponents.map((entry, lockedIdx) => (
+                        {lockedForProduct.map((entry, lockedIdx) => (
                           <Group key={`${entry.componentId}-locked-${lockedIdx}`} justify="space-between">
                             <Group gap={6}>
                               <Badge size="xs" variant="light" color="red">
