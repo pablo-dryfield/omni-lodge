@@ -340,6 +340,9 @@ const renderProductTotals = (
           const hasUnlockedComponent = componentBreakdown.some(
             (component) => !lockedForProduct.some((entry) => entry.componentId === component.componentId),
           );
+          if (payoutTotal === 0) {
+            return null;
+          }
           return (
             <Card key={`${product.productId ?? 'legacy'}-${index}`} withBorder padding="sm" radius="md">
               <Stack gap="0">
