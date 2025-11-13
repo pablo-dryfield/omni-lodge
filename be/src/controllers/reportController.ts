@@ -2593,10 +2593,12 @@ const incrementMonthlyManagerShiftCount = (summary: CommissionSummary, dateKey: 
     daySet = new Set<string>();
     monthMap.set(monthKey, daySet);
   }
-  if (!daySet.has(dateKey)) {
-    daySet.add(dateKey);
-    summary.managerMonthlyShiftCounts[monthKey] = (summary.managerMonthlyShiftCounts[monthKey] ?? 0) + 1;
+  const normalizedDayKey = parsed.format("YYYY-MM-DD");
+  if (daySet.has(normalizedDayKey)) {
+    return;
   }
+  daySet.add(normalizedDayKey);
+  summary.managerMonthlyShiftCounts[monthKey] = (summary.managerMonthlyShiftCounts[monthKey] ?? 0) + 1;
 };
 
 const recordLockedComponent = (
