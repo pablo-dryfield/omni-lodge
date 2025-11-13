@@ -70,6 +70,21 @@ type PlatformGuestTierBreakdown = {
   cumulativeGuests: number;
 };
 
+type LockedComponentRequirement = {
+  type: "review_target";
+  minReviews: number;
+  actualReviews: number;
+};
+
+type LockedComponentEntry = {
+  componentId: number;
+  name: string;
+  category: CompensationComponentCategory;
+  calculationMethod: CompensationCalculationMethod;
+  amount: number;
+  requirement: LockedComponentRequirement;
+};
+
 type ProductComponentTotal = {
   componentId: number;
   amount: number;
@@ -105,6 +120,7 @@ type CommissionSummary = {
   reviewTotals: ReviewTotals;
   platformGuestTotals: PlatformGuestTotals;
   platformGuestBreakdowns: Record<number, PlatformGuestTierBreakdown[]>;
+  lockedComponents: LockedComponentEntry[];
 };
 
 type GuideDailyBreakdown = {
@@ -1428,6 +1444,10 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             })),
           ]),
         ),
+        lockedComponents: entry.lockedComponents.map((locked) => ({
+          ...locked,
+          amount: Number(locked.amount.toFixed(2)),
+        })),
       };
     });
 
@@ -2452,6 +2472,7 @@ const createEmptySummary = (userId: number, firstName: string): CommissionSummar
   reviewTotals: { totalEligibleReviews: 0 },
   platformGuestTotals: { totalGuests: 0, totalBooked: 0, totalAttended: 0 },
   platformGuestBreakdowns: {},
+  lockedComponents: [],
 });
 
 const recordCounterIncentiveMarker = (
@@ -2480,6 +2501,25 @@ const recordCounterIncentiveTotal = (
   }
   const key = String(counterId);
   summary.counterIncentiveTotals[key] = (summary.counterIncentiveTotals[key] ?? 0) + amount;
+};
+
+const recordLockedComponent = (
+  summary: CommissionSummary,
+  component: CompensationComponent,
+  amount: number,
+  requirement: LockedComponentRequirement,
+) => {
+  if (!amount) {
+    return;
+  }
+  summary.lockedComponents.push({
+    componentId: component.id,
+    name: component.name,
+    category: component.category,
+    calculationMethod: component.calculationMethod,
+    amount,
+    requirement,
+  });
 };
 
 const ensureSummariesForUserIds = async (
@@ -2716,28 +2756,51 @@ const computeAssignmentAmount = (
   nightReportBestCache: Map<string, NightReportBestCacheEntry>,
   productBucketsByUser: ProductBucketLookup,
 ) => {
+  const reviewRequirement = resolveReviewTargetRequirement(component, assignment);
+  const totalEligibleReviews = summary.reviewTotals?.totalEligibleReviews ?? 0;
+  const applyReviewRequirement = (amount: number): number => {
+    if (!amount) {
+      return 0;
+    }
+    if (reviewRequirement && totalEligibleReviews < reviewRequirement.minReviews) {
+      recordLockedComponent(summary, component, amount, {
+        type: "review_target",
+        minReviews: reviewRequirement.minReviews,
+        actualReviews: totalEligibleReviews,
+      });
+      return 0;
+    }
+    return amount;
+  };
+
   if (component.calculationMethod === "task_score") {
-    return computeTaskScorePayout(component, assignment, summary, taskScoreLookup);
+    return applyReviewRequirement(
+      computeTaskScorePayout(component, assignment, summary, taskScoreLookup),
+    );
   }
   if (component.calculationMethod === "night_report") {
-    return computeNightReportIncentive(
-      component,
-      assignment,
-      summary,
-      nightReportStats,
-      nightReportBestCache,
-      productBucketsByUser,
+    return applyReviewRequirement(
+      computeNightReportIncentive(
+        component,
+        assignment,
+        summary,
+        nightReportStats,
+        nightReportBestCache,
+        productBucketsByUser,
+      ),
     );
   }
 
   const reviewSettings = resolveReviewPayoutSettings(component, assignment);
   if (reviewSettings) {
-    return computeReviewPayoutAmount(summary, reviewSettings);
+    return applyReviewRequirement(computeReviewPayoutAmount(summary, reviewSettings));
   }
 
   const platformGuestSettings = resolvePlatformGuestSettings(component, assignment);
   if (platformGuestSettings) {
-    return computePlatformGuestPayout(summary, platformGuestSettings, component.id);
+    return applyReviewRequirement(
+      computePlatformGuestPayout(summary, platformGuestSettings, component.id),
+    );
   }
 
   const baseAmount = Number(assignment.baseAmount ?? 0);
@@ -2752,7 +2815,7 @@ const computeAssignmentAmount = (
     }
   }
 
-  return total;
+  return applyReviewRequirement(total);
 };
 
 const applyCompensationComponents = (
@@ -2770,6 +2833,7 @@ const applyCompensationComponents = (
     summary.componentTotals = [];
     summary.bucketTotals = { commission: summary.totalCommission };
     summary.totalPayout = summary.totalCommission;
+    summary.lockedComponents = [];
   });
 
   components.forEach((component) => {
@@ -3375,6 +3439,38 @@ const normalizeReviewPayoutConfig = (config: unknown): Partial<ReviewPayoutSetti
   return settings;
 };
 
+type ReviewTargetRequirement = {
+  minReviews: number;
+};
+
+const normalizeReviewRequirementConfig = (config: unknown): Partial<ReviewTargetRequirement> => {
+  if (!config || typeof config !== "object") {
+    return {};
+  }
+  const record = config as Record<string, unknown>;
+  const candidate =
+    typeof record.requiresReviewTarget === "object"
+      ? (record.requiresReviewTarget as Record<string, unknown>)
+      : typeof record.requires_review_target === "object"
+      ? (record.requires_review_target as Record<string, unknown>)
+      : record;
+  if (!candidate || typeof candidate !== "object") {
+    return {};
+  }
+
+  const minReviews =
+    readNumeric(
+      candidate.minReviews ??
+        candidate.min_reviews ??
+        candidate.minimumReviews ??
+        candidate.minimum_reviews,
+    ) ?? undefined;
+  if (minReviews === undefined) {
+    return {};
+  }
+  return { minReviews: Math.max(1, Math.floor(minReviews)) };
+};
+
 const normalizePlatformGuestConfig = (config: unknown): Partial<PlatformGuestSettings> => {
   if (!config || typeof config !== "object") {
     return {};
@@ -3535,6 +3631,23 @@ const resolveReviewPayoutSettings = (
     maxReviews,
     rate: rateCandidate,
   };
+};
+
+const resolveReviewTargetRequirement = (
+  component: CompensationComponent,
+  assignment: CompensationComponentAssignment,
+): ReviewTargetRequirement | null => {
+  const componentRequirement = normalizeReviewRequirementConfig(component.config ?? {});
+  const assignmentRequirement = normalizeReviewRequirementConfig(assignment.config ?? {});
+
+  const minReviews =
+    assignmentRequirement.minReviews ?? componentRequirement.minReviews ?? null;
+
+  if (minReviews === null || minReviews <= 0) {
+    return null;
+  }
+
+  return { minReviews };
 };
 
 const computeReviewPayoutAmount = (
