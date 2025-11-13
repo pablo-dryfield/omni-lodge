@@ -16,6 +16,21 @@ export type PayComponentSummary = {
   amount: number;
 };
 
+export type LockedComponentRequirement = {
+  type: 'review_target';
+  minReviews: number;
+  actualReviews: number;
+};
+
+export type LockedComponentSummary = {
+  componentId: number;
+  name: string;
+  category: string;
+  calculationMethod: string;
+  amount: number;
+  requirement: LockedComponentRequirement;
+};
+
 export type PlatformGuestTierBreakdown = {
   tierIndex: number;
   rate: number;
@@ -51,5 +66,6 @@ export type Pay = {
     totalAttended: number;
   };
   platformGuestBreakdowns?: Record<string, PlatformGuestTierBreakdown[]>;
+  lockedComponents?: LockedComponentSummary[];
   breakdown: PayBreakdown[];
 };
