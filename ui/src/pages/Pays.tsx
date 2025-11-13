@@ -557,6 +557,7 @@ const Pays: React.FC = () => {
     initialRange.end.toDate(),
   ]);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
+  const friendlyError = error ? humanizeErrorMessage(error) : null;
 
   useEffect(() => {
     if (datePreset === 'custom') {
@@ -1027,7 +1028,7 @@ const Pays: React.FC = () => {
                     </Box>
                   )}
                 </Group>
-                <Text size="sm" c="dimmed">
+                <Text size="sm" c="dimmed" ta="center">
                   {startDate && endDate
                     ? `${startDate.format('MMM D, YYYY')} → ${endDate.format('MMM D, YYYY')}`
                     : 'Select a date range'}
@@ -1040,10 +1041,15 @@ const Pays: React.FC = () => {
                 </Center>
               )}
 
-              {error && (
-                <Text c="red" ta="center">
-                  {error}
-                </Text>
+              {friendlyError && (
+                <Alert color="red" title={friendlyError.title} variant="light">
+                  <Text size="sm">{friendlyError.description}</Text>
+                  {friendlyError.details && (
+                    <Text size="xs" c="dimmed" mt={4}>
+                      Details: {friendlyError.details}
+                    </Text>
+                  )}
+                </Alert>
               )}
 
               {!loading && !error && summaries.length > 0 && (

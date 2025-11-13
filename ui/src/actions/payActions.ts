@@ -1,4 +1,5 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
+import axios from 'axios';
 import axiosInstance from './../utils/axiosInstance';
 import { type Pay } from '../types/pays/Pay';
 import { type ServerResponse } from '../types/general/ServerResponse';
@@ -19,6 +20,22 @@ export const fetchPays = createAsyncThunk(
       );
       return response.data;
     } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const responseData = error.response?.data as
+          | Array<{ message?: string }>
+          | { message?: string }
+          | string
+          | undefined;
+        let serverMessage: string | undefined;
+        if (Array.isArray(responseData)) {
+          serverMessage = responseData[0]?.message;
+        } else if (responseData && typeof responseData === 'object') {
+          serverMessage = responseData.message;
+        } else if (typeof responseData === 'string') {
+          serverMessage = responseData;
+        }
+        return rejectWithValue(serverMessage ?? error.message ?? 'Request failed');
+      }
       if (error instanceof Error) {
         return rejectWithValue(error.message);
       }
