@@ -3,7 +3,7 @@ import { Request, Response } from "express";
 import { Association, ModelAttributeColumnOptions, Op, QueryTypes, type ModelAttributeColumnReferencesOptions } from "sequelize";
 import { Model, ModelCtor, Sequelize } from "sequelize-typescript";
 import dayjs from "dayjs";
-import Counter from "../models/Counter.js";
+import Counter, { type CounterStatus } from "../models/Counter.js";
 import CounterChannelMetric from "../models/CounterChannelMetric.js";
 import CounterProduct from "../models/CounterProduct.js";
 import CounterUser from "../models/CounterUser.js";
@@ -84,6 +84,7 @@ type MonthlyBaseSettings =
       thirtyOneDayPattern?: number[];
       proRateByCompletion: boolean;
       unitAmountOverride?: number;
+      countSource: "staff_assignments" | "counter_manager";
     };
 
 type LockedComponentRequirement = {
@@ -138,6 +139,7 @@ type CommissionSummary = {
   platformGuestBreakdowns: Record<number, PlatformGuestTierBreakdown[]>;
   lockedComponents: LockedComponentEntry[];
   monthlyShiftCounts: Record<string, number>;
+  managerMonthlyShiftCounts: Record<string, number>;
 };
 
 type GuideDailyBreakdown = {
@@ -161,6 +163,8 @@ type CounterMeta = {
   isNewSystem: boolean;
   productId: number | null;
   productName: string;
+  managerId: number | null;
+  status: CounterStatus | null;
 };
 
 type ProductBucket = {
@@ -1120,7 +1124,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     const end = dayjs(endDate as string).endOf("day");
 
     const counters = await Counter.findAll({
-      attributes: ["id", "date", "productId"],
+      attributes: ["id", "date", "productId", "userId", "status"],
       where: {
         date: {
           [Op.between]: [start.toDate(), end.toDate()],
@@ -1153,11 +1157,16 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         productIdsToResolve.add(productId);
       }
 
+      const managerId = counter.getDataValue("userId") ?? null;
+      const status = counter.getDataValue("status") ?? null;
+
       counterMetaById.set(counter.id, {
         dateKey,
         isNewSystem,
         productId,
         productName: "",
+        managerId,
+        status,
       });
 
       if (isNewSystem) {
@@ -1279,6 +1288,18 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       }
     });
 
+    const managerUserIds = new Set<number>();
+    counters.forEach((counter) => {
+      const meta = counterMetaById.get(counter.id);
+      const managerId = meta?.managerId;
+      if (managerId) {
+        managerUserIds.add(managerId);
+      }
+    });
+    if (managerUserIds.size > 0) {
+      await ensureSummariesForUserIds(managerUserIds, commissionDataByUser);
+    }
+
     const activeComponents = await CompensationComponent.findAll({
       where: { isActive: true },
       include: [
@@ -1333,13 +1354,21 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         ? newSystemTotalsByCounter.get(counter.id) ?? 0
         : legacyTotalsByCounter.get(counter.id) ?? 0;
 
+      const managerId = meta.managerId;
+      if (managerId && meta.status === "final") {
+        const managerSummary = commissionDataByUser.get(managerId);
+        if (managerSummary) {
+          incrementMonthlyManagerShiftCount(managerSummary, meta.dateKey);
+        }
+      }
+
       const aggregate = getOrCreateDailyAggregate(counter.id, meta);
       aggregate.totalCustomers += customers;
 
       const staffForCounter = staffByCounter.get(counter.id) ?? [];
       if (staffForCounter.length === 0 || customers === 0) {
-        return;
-      }
+      return;
+    }
 
       const commissionRate = resolveGuideCommissionRate(guideCommissionRates, meta.productId);
       const totalCommissionForCounter = customers * commissionRate;
@@ -2500,7 +2529,10 @@ const createEmptySummary = (userId: number, firstName: string): CommissionSummar
   platformGuestBreakdowns: {},
   lockedComponents: [],
   monthlyShiftCounts: {},
+  managerMonthlyShiftCounts: {},
 });
+
+const managerShiftDayTracker = new WeakMap<CommissionSummary, Map<string, Set<string>>>();
 
 const recordCounterIncentiveMarker = (
   summary: CommissionSummary,
@@ -2540,6 +2572,31 @@ const incrementMonthlyShiftCount = (summary: CommissionSummary, dateKey: string 
   }
   const monthKey = parsed.format("YYYY-MM");
   summary.monthlyShiftCounts[monthKey] = (summary.monthlyShiftCounts[monthKey] ?? 0) + 1;
+};
+
+const incrementMonthlyManagerShiftCount = (summary: CommissionSummary, dateKey: string | null | undefined) => {
+  if (!dateKey) {
+    return;
+  }
+  const parsed = dayjs(dateKey);
+  if (!parsed.isValid()) {
+    return;
+  }
+  const monthKey = parsed.format("YYYY-MM");
+  let monthMap = managerShiftDayTracker.get(summary);
+  if (!monthMap) {
+    monthMap = new Map<string, Set<string>>();
+    managerShiftDayTracker.set(summary, monthMap);
+  }
+  let daySet = monthMap.get(monthKey);
+  if (!daySet) {
+    daySet = new Set<string>();
+    monthMap.set(monthKey, daySet);
+  }
+  if (!daySet.has(dateKey)) {
+    daySet.add(dateKey);
+    summary.managerMonthlyShiftCounts[monthKey] = (summary.managerMonthlyShiftCounts[monthKey] ?? 0) + 1;
+  }
 };
 
 const recordLockedComponent = (
@@ -4145,6 +4202,12 @@ const normalizeMonthlyBaseConfig = (config: unknown): MonthlyBaseSettings | null
     );
     const proRate = readBoolean(record.proRateByCompletion ?? record.pro_rate_by_completion);
 
+    const countSourceRaw = typeof record.countSource === "string" ? record.countSource.trim().toLowerCase() : null;
+    const countSource: "staff_assignments" | "counter_manager" =
+      countSourceRaw === "counter_manager" || countSourceRaw === "manager"
+        ? "counter_manager"
+        : "staff_assignments";
+
     return {
       mode: "shift_quota",
       defaultShiftsPerMonth: defaultShifts,
@@ -4162,6 +4225,7 @@ const normalizeMonthlyBaseConfig = (config: unknown): MonthlyBaseSettings | null
       thirtyOneDayPattern: extractPattern(record.thirtyOneDayPattern ?? record.thirty_one_day_pattern),
       proRateByCompletion: proRate ?? true,
       unitAmountOverride: unitOverride !== undefined && Number.isFinite(unitOverride) ? unitOverride : undefined,
+      countSource,
     };
   }
 
@@ -4191,6 +4255,7 @@ const mergeMonthlyBaseSettings = (
       thirtyOneDayPattern: override.thirtyOneDayPattern ?? base.thirtyOneDayPattern,
       proRateByCompletion: override.proRateByCompletion ?? base.proRateByCompletion,
       unitAmountOverride: override.unitAmountOverride ?? base.unitAmountOverride,
+      countSource: override.countSource ?? base.countSource ?? "staff_assignments",
     };
   }
   return override;
@@ -4279,7 +4344,10 @@ const computeShiftQuotaBaseAmount = (
     }
 
     const monthKey = cursor.format("YYYY-MM");
-    const worked = summary.monthlyShiftCounts[monthKey] ?? 0;
+    const worked =
+      settings.countSource === "counter_manager"
+        ? summary.managerMonthlyShiftCounts[monthKey] ?? 0
+        : summary.monthlyShiftCounts[monthKey] ?? 0;
     if (worked <= 0) {
       cursor = cursor.add(1, "month");
       continue;
