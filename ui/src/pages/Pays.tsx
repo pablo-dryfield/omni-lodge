@@ -245,6 +245,13 @@ const renderBreakdownTable = (
   incentiveLookup?: Map<number, string[]>,
 ) => {
   const hasProduct = items.some((entry) => Boolean(entry.productName));
+  const filteredItems = items.filter((entry) => {
+    const incentiveAmount = getCounterIncentiveAmount(summary, entry.counterId);
+    return incentiveAmount !== 0 || entry.commission !== 0;
+  });
+  if (filteredItems.length === 0) {
+    return null;
+  }
   return (
     <Table style={{ width: '100%', borderCollapse: 'collapse' }}>
       <thead>
@@ -258,7 +265,7 @@ const renderBreakdownTable = (
         </tr>
       </thead>
       <tbody>
-        {items.map((entry, index) => (
+        {filteredItems.map((entry, index) => (
           <tr key={`${entry.date}-${index}`}>
             <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>
               {entry.date}
