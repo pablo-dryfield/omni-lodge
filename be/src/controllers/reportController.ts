@@ -157,6 +157,11 @@ type ProductBucket = {
 
 type ProductBucketLookup = Map<number, Map<string, ProductBucket>>;
 
+type GuideCommissionRateLookup = {
+  defaultRate: number;
+  ratesByProduct: Map<string, number>;
+};
+
 const FULL_ACCESS_ROLE_SLUGS = new Set([
   "admin",
   "owner",
@@ -166,7 +171,8 @@ const FULL_ACCESS_ROLE_SLUGS = new Set([
   "assistantmanager",
 ]);
 
-const COMMISSION_RATE_PER_ATTENDEE = 6;
+// Default commission is zero unless overridden via compensation components.
+const COMMISSION_RATE_PER_ATTENDEE = 0;
 const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-01");
 const REVIEW_MINIMUM_THRESHOLD = 15;
 
@@ -1256,6 +1262,27 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       }
     });
 
+    const activeComponents = await CompensationComponent.findAll({
+      where: { isActive: true },
+      include: [
+        {
+          model: CompensationComponentAssignment,
+          as: "assignments",
+          where: { isActive: true },
+          required: false,
+        },
+      ],
+      order: [
+        ["category", "ASC"],
+        ["name", "ASC"],
+      ],
+    });
+
+    const typedComponents = activeComponents as Array<
+      CompensationComponent & { assignments?: CompensationComponentAssignment[] }
+    >;
+    const guideCommissionRates = buildGuideCommissionRateLookup(typedComponents);
+
     const platformGuestTotals = await computePlatformGuestTotals(counterIds);
     commissionDataByUser.forEach((summary) => {
       summary.platformGuestTotals = platformGuestTotals;
@@ -1297,7 +1324,8 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         return;
       }
 
-      const totalCommissionForCounter = customers * COMMISSION_RATE_PER_ATTENDEE;
+      const commissionRate = resolveGuideCommissionRate(guideCommissionRates, meta.productId);
+      const totalCommissionForCounter = customers * commissionRate;
       const commissionPerStaff = totalCommissionForCounter / staffForCounter.length;
 
       staffForCounter.forEach((staff) => {
@@ -1347,26 +1375,6 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         }
       });
     }
-
-    const activeComponents = await CompensationComponent.findAll({
-      where: { isActive: true },
-      include: [
-        {
-          model: CompensationComponentAssignment,
-          as: "assignments",
-          where: { isActive: true },
-          required: false,
-        },
-      ],
-      order: [
-        ["category", "ASC"],
-        ["name", "ASC"],
-      ],
-    });
-
-    const typedComponents = activeComponents as Array<
-      CompensationComponent & { assignments?: CompensationComponentAssignment[] }
-    >;
 
     const assignmentTargets = await resolveAssignmentTargets(commissionDataByUser, typedComponents);
     commissionDataByUser.forEach((summary) => {
@@ -3001,6 +3009,249 @@ const readBoolean = (value: unknown): boolean | undefined => {
     }
   }
   return undefined;
+};
+
+type GuideCommissionProductEntry = {
+  productId: number | null;
+  rate: number;
+};
+
+type GuideCommissionConfig = {
+  defaultRate: number | null;
+  entries: GuideCommissionProductEntry[];
+};
+
+function buildGuideCommissionRateLookup(
+  components: Array<CompensationComponent & { assignments?: CompensationComponentAssignment[] }>,
+): GuideCommissionRateLookup {
+  const ratesByProduct = new Map<string, number>();
+  let defaultRate = COMMISSION_RATE_PER_ATTENDEE;
+
+  const applyConfig = (config: GuideCommissionConfig | null) => {
+    if (!config) {
+      return;
+    }
+    if (config.defaultRate !== null && config.defaultRate !== undefined && Number.isFinite(config.defaultRate)) {
+      defaultRate = config.defaultRate;
+    }
+    config.entries.forEach((entry) => {
+      if (!Number.isFinite(entry.rate)) {
+        return;
+      }
+      const key = entry.productId === null ? "__null__" : `${entry.productId}`;
+      ratesByProduct.set(key, entry.rate);
+    });
+  };
+
+  components.forEach((component) => {
+    applyConfig(normalizeGuideCommissionConfig(component.config ?? {}));
+    component.assignments?.forEach((assignment) => {
+      if (!assignment.isActive) {
+        return;
+      }
+      applyConfig(normalizeGuideCommissionConfig(assignment.config ?? {}));
+    });
+  });
+
+  return {
+    defaultRate,
+    ratesByProduct,
+  };
+}
+
+function resolveGuideCommissionRate(lookup: GuideCommissionRateLookup, productId: number | null): number {
+  const key = productId === null ? "__null__" : `${productId}`;
+  return lookup.ratesByProduct.get(key) ?? lookup.defaultRate;
+}
+
+const GUIDE_COMMISSION_CANDIDATE_KEYS = [
+  "guideCommission",
+  "guide_commission",
+  "guideCommissionRates",
+  "guide_commission_rates",
+  "productCommission",
+  "product_commission",
+  "productCommissionRates",
+  "product_commission_rates",
+  "commissionRates",
+  "commission_rates",
+];
+
+const collectGuideCommissionProductIds = (value: unknown): Array<number | null> => {
+  if (value === undefined) {
+    return [];
+  }
+  if (value === null) {
+    return [null];
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => parseGuideCommissionProductId(entry))
+      .filter((entry): entry is number | null => entry !== undefined);
+  }
+  if (typeof value === "string") {
+    const tokens = value
+      .split(/[,;\s]+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 0);
+    if (tokens.length > 1) {
+      return tokens
+        .map((token) => parseGuideCommissionProductId(token))
+        .filter((entry): entry is number | null => entry !== undefined);
+    }
+  }
+  const parsed = parseGuideCommissionProductId(value);
+  return parsed === undefined ? [] : [parsed];
+};
+
+const parseGuideCommissionProductId = (value: unknown): number | null | undefined => {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "null" || normalized === "legacy" || normalized === "none") {
+      return null;
+    }
+  }
+  const numeric = readNumeric(value);
+  if (numeric === undefined) {
+    return undefined;
+  }
+  const rounded = Math.trunc(numeric);
+  if (!Number.isFinite(rounded)) {
+    return undefined;
+  }
+  return rounded;
+};
+
+const extractGuideCommissionConfigCandidate = (config: unknown): Record<string, unknown> | null => {
+  if (!config || typeof config !== "object") {
+    return null;
+  }
+  const record = config as Record<string, unknown>;
+  for (const key of GUIDE_COMMISSION_CANDIDATE_KEYS) {
+    const candidate = record[key];
+    if (candidate && typeof candidate === "object") {
+      return candidate as Record<string, unknown>;
+    }
+  }
+  if (
+    "defaultRate" in record ||
+    "default_rate" in record ||
+    "productRate" in record ||
+    "product_rate" in record ||
+    "products" in record ||
+    "productIds" in record ||
+    "product_ids" in record
+  ) {
+    return record;
+  }
+  return null;
+};
+
+const normalizeGuideCommissionConfig = (config: unknown): GuideCommissionConfig | null => {
+  const candidate = extractGuideCommissionConfigCandidate(config);
+  if (!candidate) {
+    return null;
+  }
+
+  const defaultRateCandidate = readNumeric(
+    candidate["defaultRate"] ??
+      candidate["default_rate"] ??
+      candidate["rate"] ??
+      candidate["unitAmount"] ??
+      candidate["unit_amount"] ??
+      candidate["baseRate"] ??
+      candidate["base_rate"],
+  );
+
+  const entries: GuideCommissionProductEntry[] = [];
+
+  const rawProducts =
+    candidate["products"] ??
+    candidate["productRates"] ??
+    candidate["product_rates"] ??
+    candidate["entries"] ??
+    candidate["items"];
+
+  if (Array.isArray(rawProducts)) {
+    rawProducts.forEach((rawEntry) => {
+      if (!rawEntry || typeof rawEntry !== "object") {
+        return;
+      }
+      const record = rawEntry as Record<string, unknown>;
+      const rate = readNumeric(
+        record["rate"] ?? record["amount"] ?? record["value"] ?? record["unitAmount"] ?? record["unit_amount"],
+      );
+      if (rate === undefined) {
+        return;
+      }
+      const ids =
+        collectGuideCommissionProductIds(
+          record["productIds"] ??
+            record["product_ids"] ??
+            record["products"] ??
+            record["productList"] ??
+            record["product_list"],
+        );
+      if (ids.length > 0) {
+        ids.forEach((productId) => entries.push({ productId, rate }));
+        return;
+      }
+      const singleIds = collectGuideCommissionProductIds(
+        record["productId"] ??
+          record["product_id"] ??
+          record["id"] ??
+          record["counterProductId"] ??
+          record["counter_product_id"],
+      );
+      if (singleIds.length === 0) {
+        return;
+      }
+      singleIds.forEach((productId) => entries.push({ productId, rate }));
+    });
+  } else {
+    const rate = readNumeric(
+      candidate["productRate"] ??
+        candidate["product_rate"] ??
+        candidate["rate"] ??
+        candidate["amount"] ??
+        candidate["value"] ??
+        candidate["unitAmount"] ??
+        candidate["unit_amount"],
+    );
+    const ids =
+      collectGuideCommissionProductIds(
+        candidate["productIds"] ??
+          candidate["product_ids"] ??
+          candidate["products"] ??
+          candidate["productList"] ??
+          candidate["product_list"],
+      ) ??
+      collectGuideCommissionProductIds(
+        candidate["productId"] ??
+          candidate["product_id"] ??
+          candidate["id"] ??
+          candidate["counterProductId"] ??
+          candidate["counter_product_id"],
+      );
+    if (rate !== undefined && ids.length > 0) {
+      ids.forEach((productId) => entries.push({ productId, rate }));
+    }
+  }
+
+  if (entries.length === 0 && (defaultRateCandidate === undefined || Number.isNaN(defaultRateCandidate))) {
+    return null;
+  }
+
+  return {
+    defaultRate:
+      defaultRateCandidate !== undefined && Number.isFinite(defaultRateCandidate)
+        ? defaultRateCandidate
+        : null,
+    entries,
+  };
 };
 
 const normalizeTaskScoreSettings = (config: unknown): Partial<TaskScoreSettings> => {
