@@ -140,6 +140,7 @@ type CommissionSummary = {
   lockedComponents: LockedComponentEntry[];
   monthlyShiftCounts: Record<string, number>;
   managerMonthlyShiftCounts: Record<string, number>;
+  managerShiftDayIndex: Map<string, Set<string>>;
 };
 
 type GuideDailyBreakdown = {
@@ -2530,9 +2531,8 @@ const createEmptySummary = (userId: number, firstName: string): CommissionSummar
   lockedComponents: [],
   monthlyShiftCounts: {},
   managerMonthlyShiftCounts: {},
+  managerShiftDayIndex: new Map<string, Set<string>>(),
 });
-
-const managerShiftDayTracker = new WeakMap<CommissionSummary, Map<string, Set<string>>>();
 
 const recordCounterIncentiveMarker = (
   summary: CommissionSummary,
@@ -2583,15 +2583,10 @@ const incrementMonthlyManagerShiftCount = (summary: CommissionSummary, dateKey: 
     return;
   }
   const monthKey = parsed.format("YYYY-MM");
-  let monthMap = managerShiftDayTracker.get(summary);
-  if (!monthMap) {
-    monthMap = new Map<string, Set<string>>();
-    managerShiftDayTracker.set(summary, monthMap);
-  }
-  let daySet = monthMap.get(monthKey);
+  let daySet = summary.managerShiftDayIndex.get(monthKey);
   if (!daySet) {
     daySet = new Set<string>();
-    monthMap.set(monthKey, daySet);
+    summary.managerShiftDayIndex.set(monthKey, daySet);
   }
   const normalizedDayKey = parsed.format("YYYY-MM-DD");
   if (daySet.has(normalizedDayKey)) {
@@ -4346,10 +4341,17 @@ const computeShiftQuotaBaseAmount = (
     }
 
     const monthKey = cursor.format("YYYY-MM");
-    const worked =
-      settings.countSource === "counter_manager"
-        ? summary.managerMonthlyShiftCounts[monthKey] ?? 0
-        : summary.monthlyShiftCounts[monthKey] ?? 0;
+    let worked: number;
+    if (settings.countSource === "counter_manager") {
+      if (summary.managerShiftDayIndex.has(monthKey)) {
+        const daySet = summary.managerShiftDayIndex.get(monthKey)!;
+        worked = countDaysWithinRange(daySet, overlap.start, overlap.end);
+      } else {
+        worked = summary.managerMonthlyShiftCounts[monthKey] ?? 0;
+      }
+    } else {
+      worked = summary.monthlyShiftCounts[monthKey] ?? 0;
+    }
     if (worked <= 0) {
       cursor = cursor.add(1, "month");
       continue;
@@ -4409,6 +4411,20 @@ const getThirtyOneMonthOrdinal = (monthRef: dayjs.Dayjs): number => {
   const ordinalWithinYear = THIRTY_ONE_DAY_MONTHS.filter((entry) => entry <= monthIndex).length;
   const yearsDiff = monthRef.year() - 2000;
   return yearsDiff * THIRTY_ONE_MONTHS_PER_YEAR + ordinalWithinYear;
+};
+
+const countDaysWithinRange = (daySet: Set<string>, start: dayjs.Dayjs, end: dayjs.Dayjs): number => {
+  if (daySet.size === 0) {
+    return 0;
+  }
+  let count = 0;
+  daySet.forEach((dayKey) => {
+    const day = dayjs(dayKey);
+    if (day.isValid() && (day.isSame(start, "day") || (day.isAfter(start, "day") && (day.isBefore(end, "day") || day.isSame(end, "day"))))) {
+      count += 1;
+    }
+  });
+  return count;
 };
 
 const getAssignmentOverlapRange = (
