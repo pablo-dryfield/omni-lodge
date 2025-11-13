@@ -185,13 +185,17 @@ const renderBucketTotals = (bucketTotals?: Record<string, number>) => {
   if (!bucketTotals || Object.keys(bucketTotals).length === 0) {
     return null;
   }
+  const entries = Object.entries(bucketTotals).filter(([, amount]) => amount !== 0);
+  if (entries.length === 0) {
+    return null;
+  }
   return (
     <Stack gap="xs">
       <Text size="sm" fw={600}>
         Payments
       </Text>
       <Stack gap={4}>
-        {Object.entries(bucketTotals).map(([bucket, amount]) => (
+        {entries.map(([bucket, amount]) => (
           <Group key={bucket} justify="space-between">
             <Badge variant="outline" color={getComponentColor(bucket)}>
               {bucket}
@@ -774,7 +778,8 @@ const Pays: React.FC = () => {
                 (item.productTotals && item.productTotals.length > 0) ||
                 item.breakdown.length > 0 ||
                 hasPlatformGuestDetails(item) ||
-                (item.lockedComponents && item.lockedComponents.length > 0);
+                (item.lockedComponents && item.lockedComponents.length > 0) ||
+                (item.componentTotals && item.componentTotals.length > 0);
               const incentiveAmount = calculateIncentiveTotal(item);
               return (
                 <Fragment key={item.userId ?? index}>
