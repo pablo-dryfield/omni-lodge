@@ -17,8 +17,9 @@ import {
   useMantineTheme,
   Card,
   SimpleGrid,
+  Select,
 } from '@mantine/core';
-import { DatePicker } from '@mui/x-date-pickers';
+import { DatePickerInput } from '@mantine/dates';
 import dayjs, { Dayjs } from 'dayjs';
 import {
   type Pay,
@@ -45,6 +46,29 @@ import {
   CartesianGrid,
   Tooltip,
 } from 'recharts';
+
+const EARLIEST_DATA_DATE = dayjs('2020-01-01');
+
+type DatePreset =
+  | 'today'
+  | 'last_7_days'
+  | 'last_week'
+  | 'last_2_weeks'
+  | 'this_month'
+  | 'last_month'
+  | 'all_time'
+  | 'custom';
+
+const DATE_PRESET_OPTIONS: Array<{ value: DatePreset; label: string }> = [
+  { value: 'today', label: 'Today' },
+  { value: 'last_7_days', label: 'Last 7 days' },
+  { value: 'last_week', label: 'Last week' },
+  { value: 'last_2_weeks', label: 'Last 2 weeks' },
+  { value: 'this_month', label: 'This month' },
+  { value: 'last_month', label: 'Last month' },
+  { value: 'all_time', label: 'All time' },
+  { value: 'custom', label: 'Custom range' },
+];
 
 const formatCurrency = (value: number | undefined): string => {
   const numberPart = (value ?? 0).toLocaleString('en-US', {
@@ -81,6 +105,82 @@ const calculateIncentiveTotal = (summary: Pay) =>
     (sum, component) => (component.category === 'incentive' ? sum + component.amount : sum),
     0,
   );
+
+const humanizeErrorMessage = (rawMessage?: string | null): { title: string; description: string; details?: string } => {
+  const defaultDescription = 'Please adjust the selected period or try again in a moment.';
+  if (!rawMessage) {
+    return {
+      title: 'Unable to load payouts',
+      description: defaultDescription,
+    };
+  }
+  const normalized = rawMessage.toLowerCase();
+  if (normalized.includes('forbidden') || normalized.includes('unauthorized') || normalized.includes('401') || normalized.includes('403')) {
+    return {
+      title: 'Access restricted',
+      description: 'You do not have permission to view payouts for this range. Switch to the self scope or contact an administrator.',
+      details: rawMessage,
+    };
+  }
+  if (normalized.includes('network') || normalized.includes('timeout')) {
+    return {
+      title: 'Network error',
+      description: 'We could not reach the server. Check your connection and try again.',
+      details: rawMessage,
+    };
+  }
+  if (normalized.includes('not found')) {
+    return {
+      title: 'No data available',
+      description: 'We could not find payouts for the selected dates.',
+      details: rawMessage,
+    };
+  }
+  return {
+    title: 'Unable to load payouts',
+    description: defaultDescription,
+    details: rawMessage,
+  };
+};
+
+const calculatePresetRange = (preset: DatePreset, reference: Dayjs = dayjs()): { start: Dayjs; end: Dayjs } => {
+  const today = reference.endOf('day');
+  const startOfToday = today.startOf('day');
+  const clampStart = (value: Dayjs) => (value.isBefore(EARLIEST_DATA_DATE) ? EARLIEST_DATA_DATE.startOf('day') : value);
+
+  const getLastWeekRange = () => {
+    const daysSinceMonday = (today.day() + 6) % 7;
+    const start = today.subtract(daysSinceMonday + 7, 'day').startOf('day');
+    const end = start.add(6, 'day').endOf('day');
+    return { start, end };
+  };
+
+  switch (preset) {
+    case 'today':
+      return { start: clampStart(startOfToday), end: today };
+    case 'last_7_days':
+      return { start: clampStart(today.subtract(6, 'day').startOf('day')), end: today };
+    case 'last_week': {
+      const range = getLastWeekRange();
+      return { start: clampStart(range.start), end: range.end };
+    }
+    case 'last_2_weeks': {
+      const lastWeek = getLastWeekRange();
+      const start = lastWeek.start.subtract(7, 'day');
+      return { start: clampStart(start), end: lastWeek.end };
+    }
+    case 'last_month': {
+      const start = today.subtract(1, 'month').startOf('month');
+      return { start: clampStart(start), end: start.endOf('month') };
+    }
+    case 'all_time': {
+      return { start: clampStart(EARLIEST_DATA_DATE.startOf('day')), end: today };
+    }
+    case 'this_month':
+    default:
+      return { start: clampStart(today.startOf('month')), end: today.endOf('month') };
+  }
+};
 
 const FULL_ACCESS_MODULE = 'staff-payouts-all';
 const SELF_ACCESS_MODULE = 'staff-payouts-self';
@@ -448,9 +548,40 @@ const Pays: React.FC = () => {
   const { data: responseData, loading, error } = payState;
 
   const today = dayjs();
-  const [startDate, setStartDate] = useState<Dayjs | null>(today.startOf('month'));
-  const [endDate, setEndDate] = useState<Dayjs | null>(today.endOf('month'));
+  const initialRange = calculatePresetRange('this_month', today);
+  const [datePreset, setDatePreset] = useState<DatePreset>('this_month');
+  const [startDate, setStartDate] = useState<Dayjs | null>(initialRange.start);
+  const [endDate, setEndDate] = useState<Dayjs | null>(initialRange.end);
+  const [customRangeValue, setCustomRangeValue] = useState<[Date | null, Date | null]>([
+    initialRange.start.toDate(),
+    initialRange.end.toDate(),
+  ]);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (datePreset === 'custom') {
+      const [start, end] = customRangeValue;
+      if (start && end) {
+        setStartDate(dayjs(start).startOf('day'));
+        setEndDate(dayjs(end).endOf('day'));
+      }
+      return;
+    }
+    const range = calculatePresetRange(datePreset);
+    setStartDate(range.start);
+    setEndDate(range.end);
+  }, [datePreset, customRangeValue]);
+
+  const handlePresetChange = (value: string | null) => {
+    if (!value) {
+      return;
+    }
+    setDatePreset(value as DatePreset);
+  };
+
+  const handleCustomRangeChange = (value: [Date | null, Date | null] | null) => {
+    setCustomRangeValue(value ?? [null, null]);
+  };
 
   const fullAccess = useModuleAccess(FULL_ACCESS_MODULE);
   const selfAccess = useModuleAccess(SELF_ACCESS_MODULE);
@@ -866,29 +997,42 @@ const Pays: React.FC = () => {
             )}
 
             <Stack gap={isDesktop ? 'lg' : 'sm'}>
-              <Group
-                justify={isDesktop ? 'space-between' : 'flex-start'}
-                align={isDesktop ? 'center' : 'stretch'}
-                gap={isDesktop ? 'lg' : 'sm'}
-                wrap="wrap"
-              >
-                <Box style={{ flex: isDesktop ? 1 : 'unset', width: isDesktop ? 'auto' : '100%' }}>
-                  <DatePicker
-                    label="Start Date"
-                    format="YYYY-MM-DD"
-                    value={startDate}
-                    onChange={(newValue: Dayjs | null) => setStartDate(newValue)}
-                  />
-                </Box>
-                <Box style={{ flex: isDesktop ? 1 : 'unset', width: isDesktop ? 'auto' : '100%' }}>
-                  <DatePicker
-                    label="End Date"
-                    format="YYYY-MM-DD"
-                    value={endDate}
-                    onChange={(newValue: Dayjs | null) => setEndDate(newValue)}
-                  />
-                </Box>
-              </Group>
+              <Stack gap="xs">
+                <Group
+                  justify={isDesktop ? 'space-between' : 'flex-start'}
+                  align={isDesktop ? 'end' : 'stretch'}
+                  gap={isDesktop ? 'lg' : 'sm'}
+                  wrap="wrap"
+                >
+                  <Box style={{ flex: isDesktop ? 1 : 'unset', width: isDesktop ? 'auto' : '100%' }}>
+                    <Select
+                      label="Period"
+                      data={DATE_PRESET_OPTIONS}
+                      value={datePreset}
+                      onChange={(value) => handlePresetChange(value)}
+                    />
+                  </Box>
+                  {datePreset === 'custom' && (
+                    <Box style={{ flex: isDesktop ? 1 : 'unset', width: isDesktop ? 'auto' : '100%' }}>
+                      <DatePickerInput
+                        label="Custom range"
+                        type="range"
+                        value={customRangeValue}
+                        onChange={handleCustomRangeChange}
+                        valueFormat="MMM DD, YYYY"
+                        allowSingleDateInRange
+                        minDate={EARLIEST_DATA_DATE.toDate()}
+                        maxDate={today.toDate()}
+                      />
+                    </Box>
+                  )}
+                </Group>
+                <Text size="sm" c="dimmed">
+                  {startDate && endDate
+                    ? `${startDate.format('MMM D, YYYY')} → ${endDate.format('MMM D, YYYY')}`
+                    : 'Select a date range'}
+                </Text>
+              </Stack>
 
               {loading && (
                 <Center>
