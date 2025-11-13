@@ -70,6 +70,22 @@ type PlatformGuestTierBreakdown = {
   cumulativeGuests: number;
 };
 
+type MonthlyBaseSettings =
+  | {
+      mode: "calendar_days";
+      amountOverride?: number;
+    }
+  | {
+      mode: "shift_quota";
+      defaultShiftsPerMonth: number;
+      shiftsFor28?: number;
+      shiftsFor29?: number;
+      shiftsFor30?: number;
+      thirtyOneDayPattern?: number[];
+      proRateByCompletion: boolean;
+      unitAmountOverride?: number;
+    };
+
 type LockedComponentRequirement = {
   type: "review_target";
   minReviews: number;
@@ -121,6 +137,7 @@ type CommissionSummary = {
   platformGuestTotals: PlatformGuestTotals;
   platformGuestBreakdowns: Record<number, PlatformGuestTierBreakdown[]>;
   lockedComponents: LockedComponentEntry[];
+  monthlyShiftCounts: Record<string, number>;
 };
 
 type GuideDailyBreakdown = {
@@ -1334,6 +1351,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     if (!commissionSummary) {
       return;
     }
+        incrementMonthlyShiftCount(commissionSummary, meta.dateKey);
 
         commissionSummary.totalCommission += commissionPerStaff;
         commissionSummary.totalCustomers += customers;
@@ -2481,6 +2499,7 @@ const createEmptySummary = (userId: number, firstName: string): CommissionSummar
   platformGuestTotals: { totalGuests: 0, totalBooked: 0, totalAttended: 0 },
   platformGuestBreakdowns: {},
   lockedComponents: [],
+  monthlyShiftCounts: {},
 });
 
 const recordCounterIncentiveMarker = (
@@ -2509,6 +2528,18 @@ const recordCounterIncentiveTotal = (
   }
   const key = String(counterId);
   summary.counterIncentiveTotals[key] = (summary.counterIncentiveTotals[key] ?? 0) + amount;
+};
+
+const incrementMonthlyShiftCount = (summary: CommissionSummary, dateKey: string | null | undefined) => {
+  if (!dateKey) {
+    return;
+  }
+  const parsed = dayjs(dateKey);
+  if (!parsed.isValid()) {
+    return;
+  }
+  const monthKey = parsed.format("YYYY-MM");
+  summary.monthlyShiftCounts[monthKey] = (summary.monthlyShiftCounts[monthKey] ?? 0) + 1;
 };
 
 const recordLockedComponent = (
@@ -2763,6 +2794,8 @@ const computeAssignmentAmount = (
   nightReportStats: NightReportStatsMap,
   nightReportBestCache: Map<string, NightReportBestCacheEntry>,
   productBucketsByUser: ProductBucketLookup,
+  rangeStart: dayjs.Dayjs,
+  rangeEnd: dayjs.Dayjs,
 ) => {
   const reviewRequirement = resolveReviewTargetRequirement(component, assignment);
   const totalEligibleReviews = summary.reviewTotals?.totalEligibleReviews ?? 0;
@@ -2808,6 +2841,28 @@ const computeAssignmentAmount = (
   if (platformGuestSettings) {
     return applyReviewRequirement(
       computePlatformGuestPayout(summary, platformGuestSettings, component.id),
+    );
+  }
+
+  const monthlyBaseSettings = resolveMonthlyBaseSettings(component, assignment);
+  if (component.calculationMethod === "flat" && monthlyBaseSettings?.mode === "calendar_days") {
+    const proratedAmount = computeCalendarDayBaseAmount(
+      assignment,
+      monthlyBaseSettings,
+      rangeStart,
+      rangeEnd,
+    );
+    return applyReviewRequirement(proratedAmount);
+  }
+  if (component.calculationMethod === "per_unit" && monthlyBaseSettings?.mode === "shift_quota") {
+    return applyReviewRequirement(
+      computeShiftQuotaBaseAmount(
+        assignment,
+        monthlyBaseSettings,
+        summary,
+        rangeStart,
+        rangeEnd,
+      ),
     );
   }
 
@@ -2869,6 +2924,8 @@ const applyCompensationComponents = (
             nightReportStats,
             nightReportBestCache,
             productBucketsByUser,
+            rangeStart,
+            rangeEnd,
           )
         );
       }, 0);
@@ -3997,6 +4054,316 @@ const computePlatformGuestPayout = (
   }
 
   return total;
+};
+
+const MONTHLY_BASE_CONFIG_KEYS = [
+  "monthlyBase",
+  "monthly_base",
+  "monthlySalary",
+  "monthly_salary",
+  "baseSalary",
+  "base_salary",
+  "salary",
+];
+
+const resolveMonthlyBaseSettings = (
+  component: CompensationComponent,
+  assignment: CompensationComponentAssignment,
+): MonthlyBaseSettings | null => {
+  const componentSettings = normalizeMonthlyBaseConfig(component.config ?? {});
+  const assignmentSettings = normalizeMonthlyBaseConfig(assignment.config ?? {});
+  if (!assignmentSettings && !componentSettings) {
+    return null;
+  }
+  if (!assignmentSettings) {
+    return componentSettings;
+  }
+  if (!componentSettings) {
+    return assignmentSettings;
+  }
+  if (assignmentSettings.mode !== componentSettings.mode) {
+    return assignmentSettings;
+  }
+  return mergeMonthlyBaseSettings(componentSettings, assignmentSettings);
+};
+
+const normalizeMonthlyBaseConfig = (config: unknown): MonthlyBaseSettings | null => {
+  if (!config || typeof config !== "object") {
+    return null;
+  }
+  const record = extractMonthlyBaseConfigCandidate(config);
+  if (!record) {
+    return null;
+  }
+  const typeCandidate = typeof record.type === "string" ? record.type.trim().toLowerCase() : "calendar_days";
+  if (typeCandidate === "calendar_days" || typeCandidate === "calendar-days") {
+    const amountOverride = readNumeric(
+      record.monthlyAmount ??
+        record.monthly_amount ??
+        record.amount ??
+        record.value ??
+        record.salary ??
+        record.baseAmount ??
+        record.base_amount,
+    );
+    return {
+      mode: "calendar_days",
+      amountOverride: amountOverride ?? undefined,
+    };
+  }
+
+  if (typeCandidate === "shift_quota" || typeCandidate === "shift-quota") {
+    const defaultShiftsRaw =
+      readNumeric(record.defaultShiftsPerMonth ?? record.default_shifts_per_month ?? record.defaultShifts);
+    const defaultShifts =
+      defaultShiftsRaw !== undefined && Number.isFinite(defaultShiftsRaw) ? Math.max(1, Math.trunc(defaultShiftsRaw)) : null;
+    if (!defaultShifts) {
+      return null;
+    }
+
+    const readShiftCount = (value: unknown): number | undefined => {
+      const parsed = readNumeric(value);
+      if (parsed === undefined || !Number.isFinite(parsed)) {
+        return undefined;
+      }
+      const normalized = Math.max(0, Math.trunc(parsed));
+      return normalized > 0 ? normalized : undefined;
+    };
+
+    const extractPattern = (value: unknown): number[] | undefined => {
+      if (!Array.isArray(value)) {
+        return undefined;
+      }
+      const normalized = value
+        .map((entry) => readShiftCount(entry))
+        .filter((entry): entry is number => entry !== undefined && entry > 0);
+      return normalized.length > 0 ? normalized : undefined;
+    };
+
+    const unitOverride = readNumeric(
+      record.unitAmountOverride ?? record.unit_amount_override ?? record.unitAmount ?? record.unit_amount ?? record.rate,
+    );
+    const proRate = readBoolean(record.proRateByCompletion ?? record.pro_rate_by_completion);
+
+    return {
+      mode: "shift_quota",
+      defaultShiftsPerMonth: defaultShifts,
+      shiftsFor28: readShiftCount(
+        record.twentyEightDayMonths ??
+          record.twenty_eight_day_months ??
+          record.february ??
+          record.februaryStandard ??
+          record.february_standard,
+      ),
+      shiftsFor29: readShiftCount(
+        record.twentyNineDayMonths ?? record.twenty_nine_day_months ?? record.leapYearFebruary ?? record.leap_year_february,
+      ),
+      shiftsFor30: readShiftCount(record.thirtyDayMonths ?? record.thirty_day_months),
+      thirtyOneDayPattern: extractPattern(record.thirtyOneDayPattern ?? record.thirty_one_day_pattern),
+      proRateByCompletion: proRate ?? true,
+      unitAmountOverride: unitOverride !== undefined && Number.isFinite(unitOverride) ? unitOverride : undefined,
+    };
+  }
+
+  return null;
+};
+
+const mergeMonthlyBaseSettings = (
+  base: MonthlyBaseSettings,
+  override: MonthlyBaseSettings,
+): MonthlyBaseSettings => {
+  if (override.mode !== base.mode) {
+    return override;
+  }
+  if (override.mode === "calendar_days" && base.mode === "calendar_days") {
+    return {
+      mode: "calendar_days",
+      amountOverride: override.amountOverride ?? base.amountOverride,
+    };
+  }
+  if (override.mode === "shift_quota" && base.mode === "shift_quota") {
+    return {
+      mode: "shift_quota",
+      defaultShiftsPerMonth: override.defaultShiftsPerMonth ?? base.defaultShiftsPerMonth,
+      shiftsFor28: override.shiftsFor28 ?? base.shiftsFor28,
+      shiftsFor29: override.shiftsFor29 ?? base.shiftsFor29,
+      shiftsFor30: override.shiftsFor30 ?? base.shiftsFor30,
+      thirtyOneDayPattern: override.thirtyOneDayPattern ?? base.thirtyOneDayPattern,
+      proRateByCompletion: override.proRateByCompletion ?? base.proRateByCompletion,
+      unitAmountOverride: override.unitAmountOverride ?? base.unitAmountOverride,
+    };
+  }
+  return override;
+};
+
+const extractMonthlyBaseConfigCandidate = (config: unknown): Record<string, unknown> | null => {
+  if (!config || typeof config !== "object") {
+    return null;
+  }
+  const record = config as Record<string, unknown>;
+  for (const key of MONTHLY_BASE_CONFIG_KEYS) {
+    const candidate = record[key];
+    if (candidate && typeof candidate === "object") {
+      return candidate as Record<string, unknown>;
+    }
+  }
+  if ("type" in record || "monthlyAmount" in record || "monthly_amount" in record) {
+    return record;
+  }
+  return null;
+};
+
+const computeCalendarDayBaseAmount = (
+  assignment: CompensationComponentAssignment,
+  settings: Extract<MonthlyBaseSettings, { mode: "calendar_days" }>,
+  rangeStart: dayjs.Dayjs,
+  rangeEnd: dayjs.Dayjs,
+): number => {
+  const monthlyAmount = settings.amountOverride ?? Number(assignment.baseAmount ?? 0);
+  if (!Number.isFinite(monthlyAmount) || monthlyAmount === 0) {
+    return 0;
+  }
+  const overlap = getAssignmentOverlapRange(assignment, rangeStart, rangeEnd);
+  if (!overlap) {
+    return 0;
+  }
+  let total = 0;
+  let cursor = overlap.start.startOf("day");
+  const finalDay = overlap.end.startOf("day");
+  while (!cursor.isAfter(finalDay, "day")) {
+    const monthStart = cursor.startOf("month");
+    const monthEnd = cursor.endOf("month").startOf("day");
+    const sliceEnd = monthEnd.isBefore(finalDay) ? monthEnd : finalDay;
+    const daysCovered = sliceEnd.diff(cursor, "day") + 1;
+    const daysInMonth = monthEnd.diff(monthStart.startOf("day"), "day") + 1;
+    if (daysCovered > 0 && daysInMonth > 0) {
+      total += monthlyAmount * (daysCovered / daysInMonth);
+    }
+    cursor = sliceEnd.add(1, "day").startOf("day");
+  }
+  return total;
+};
+
+const computeShiftQuotaBaseAmount = (
+  assignment: CompensationComponentAssignment,
+  settings: Extract<MonthlyBaseSettings, { mode: "shift_quota" }>,
+  summary: CommissionSummary,
+  rangeStart: dayjs.Dayjs,
+  rangeEnd: dayjs.Dayjs,
+): number => {
+  const unitAmount = settings.unitAmountOverride ?? Number(assignment.unitAmount ?? 0);
+  if (!Number.isFinite(unitAmount) || unitAmount === 0) {
+    return 0;
+  }
+  const overlap = getAssignmentOverlapRange(assignment, rangeStart, rangeEnd);
+  if (!overlap) {
+    return 0;
+  }
+
+  let total = 0;
+  let cursor = overlap.start.startOf("month");
+  const lastMonth = overlap.end.startOf("month");
+
+  while (!cursor.isAfter(lastMonth, "month")) {
+    const monthStart = cursor.startOf("month");
+    const monthEnd = cursor.endOf("month");
+    if (monthEnd.isBefore(overlap.start) || monthStart.isAfter(overlap.end)) {
+      cursor = cursor.add(1, "month");
+      continue;
+    }
+
+    const quota = determineShiftQuotaForMonth(cursor, settings);
+    if (quota <= 0) {
+      cursor = cursor.add(1, "month");
+      continue;
+    }
+
+    const monthKey = cursor.format("YYYY-MM");
+    const worked = summary.monthlyShiftCounts[monthKey] ?? 0;
+    if (worked <= 0) {
+      cursor = cursor.add(1, "month");
+      continue;
+    }
+
+    let creditedUnits = 0;
+    if (settings.proRateByCompletion) {
+      creditedUnits = Math.min(worked, quota);
+    } else if (worked >= quota) {
+      creditedUnits = quota;
+    }
+
+    if (creditedUnits > 0) {
+      total += creditedUnits * unitAmount;
+    }
+
+    cursor = cursor.add(1, "month");
+  }
+
+  return total;
+};
+
+const THIRTY_ONE_DAY_MONTHS = [0, 2, 4, 6, 7, 9, 11];
+const THIRTY_ONE_MONTHS_PER_YEAR = THIRTY_ONE_DAY_MONTHS.length;
+
+const determineShiftQuotaForMonth = (
+  monthRef: dayjs.Dayjs,
+  settings: Extract<MonthlyBaseSettings, { mode: "shift_quota" }>,
+): number => {
+  const daysInMonth = monthRef.daysInMonth();
+  if (daysInMonth === 28) {
+    return settings.shiftsFor28 ?? settings.defaultShiftsPerMonth;
+  }
+  if (daysInMonth === 29) {
+    return settings.shiftsFor29 ?? settings.defaultShiftsPerMonth;
+  }
+  if (daysInMonth === 30) {
+    return settings.shiftsFor30 ?? settings.defaultShiftsPerMonth;
+  }
+  if (daysInMonth === 31) {
+    if (settings.thirtyOneDayPattern && settings.thirtyOneDayPattern.length > 0) {
+      const ordinal = getThirtyOneMonthOrdinal(monthRef);
+      const patternLength = settings.thirtyOneDayPattern.length;
+      const index = ((ordinal - 1) % patternLength + patternLength) % patternLength;
+      return settings.thirtyOneDayPattern[index] ?? settings.defaultShiftsPerMonth;
+    }
+    return settings.defaultShiftsPerMonth;
+  }
+  return settings.defaultShiftsPerMonth;
+};
+
+const getThirtyOneMonthOrdinal = (monthRef: dayjs.Dayjs): number => {
+  const monthIndex = monthRef.month();
+  if (!THIRTY_ONE_DAY_MONTHS.includes(monthIndex)) {
+    return 0;
+  }
+  const ordinalWithinYear = THIRTY_ONE_DAY_MONTHS.filter((entry) => entry <= monthIndex).length;
+  const yearsDiff = monthRef.year() - 2000;
+  return yearsDiff * THIRTY_ONE_MONTHS_PER_YEAR + ordinalWithinYear;
+};
+
+const getAssignmentOverlapRange = (
+  assignment: CompensationComponentAssignment,
+  rangeStart: dayjs.Dayjs,
+  rangeEnd: dayjs.Dayjs,
+): { start: dayjs.Dayjs; end: dayjs.Dayjs } | null => {
+  let start = rangeStart;
+  if (assignment.effectiveStart) {
+    const candidate = dayjs(assignment.effectiveStart);
+    if (candidate.isAfter(start)) {
+      start = candidate;
+    }
+  }
+  let end = rangeEnd;
+  if (assignment.effectiveEnd) {
+    const candidate = dayjs(assignment.effectiveEnd);
+    if (candidate.isBefore(end)) {
+      end = candidate;
+    }
+  }
+  if (end.isBefore(start, "day")) {
+    return null;
+  }
+  return { start, end };
 };
 
 const computeNightReportIncentive = (

@@ -33,7 +33,8 @@ const paySlice = createSlice({
       })
       .addCase(fetchPays.rejected, (state, action) => {
         state[0].loading = false;
-        state[0].error = action.error.message ?? 'Failed to fetch pays';
+        const payloadMessage = (action.payload as string) ?? null;
+        state[0].error = payloadMessage ?? action.error.message ?? 'Failed to fetch pays';
       });
   },
 });
