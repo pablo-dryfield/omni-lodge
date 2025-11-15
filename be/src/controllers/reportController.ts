@@ -123,11 +123,13 @@ type ComponentTotalEntry = {
   calculationMethod: CompensationCalculationMethod;
   amount: number;
   baseDaysCount?: number;
+  baseDays?: string[];
 };
 
 type ComponentComputationResult = {
   amount: number;
   baseDaysCount?: number;
+  baseDays?: string[];
 };
 
 type CommissionSummary = {
@@ -148,6 +150,7 @@ type CommissionSummary = {
   lockedComponents: LockedComponentEntry[];
   monthlyShiftCounts: Record<string, number>;
   managerMonthlyShiftCounts: Record<string, number>;
+  shiftDayIndex: Map<string, string[]>;
   managerShiftDayIndex: Map<string, Set<string>>;
 };
 
@@ -2539,6 +2542,7 @@ const createEmptySummary = (userId: number, firstName: string): CommissionSummar
   lockedComponents: [],
   monthlyShiftCounts: {},
   managerMonthlyShiftCounts: {},
+  shiftDayIndex: new Map<string, string[]>(),
   managerShiftDayIndex: new Map<string, Set<string>>(),
 });
 
@@ -2580,6 +2584,12 @@ const incrementMonthlyShiftCount = (summary: CommissionSummary, dateKey: string 
   }
   const monthKey = parsed.format("YYYY-MM");
   summary.monthlyShiftCounts[monthKey] = (summary.monthlyShiftCounts[monthKey] ?? 0) + 1;
+  let dayEntries = summary.shiftDayIndex.get(monthKey);
+  if (!dayEntries) {
+    dayEntries = [];
+    summary.shiftDayIndex.set(monthKey, dayEntries);
+  }
+  dayEntries.push(parsed.format("YYYY-MM-DD"));
 };
 
 const incrementMonthlyManagerShiftCount = (summary: CommissionSummary, dateKey: string | null | undefined) => {
@@ -2864,6 +2874,7 @@ const computeAssignmentAmount = (
   const applyReviewRequirement = (
     amount: number,
     baseDaysCount?: number,
+    baseDays?: string[],
   ): ComponentComputationResult => {
     if (!amount) {
       return { amount: 0 };
@@ -2876,7 +2887,7 @@ const computeAssignmentAmount = (
       });
       return { amount: 0 };
     }
-    return { amount, baseDaysCount };
+    return { amount, baseDaysCount, baseDays };
   };
 
   if (component.calculationMethod === "task_score") {
@@ -2911,23 +2922,23 @@ const computeAssignmentAmount = (
 
   const monthlyBaseSettings = resolveMonthlyBaseSettings(component, assignment);
   if (component.calculationMethod === "flat" && monthlyBaseSettings?.mode === "calendar_days") {
-    const { amount: proratedAmount, creditedUnits } = computeCalendarDayBaseAmount(
+    const { amount: proratedAmount, creditedUnits, creditedDates } = computeCalendarDayBaseAmount(
       assignment,
       monthlyBaseSettings,
       rangeStart,
       rangeEnd,
     );
-    return applyReviewRequirement(proratedAmount, creditedUnits);
+    return applyReviewRequirement(proratedAmount, creditedUnits, creditedDates);
   }
   if (component.calculationMethod === "per_unit" && monthlyBaseSettings?.mode === "shift_quota") {
-    const { amount, creditedUnits } = computeShiftQuotaBaseAmount(
+    const { amount, creditedUnits, creditedDates } = computeShiftQuotaBaseAmount(
       assignment,
       monthlyBaseSettings,
       summary,
       rangeStart,
       rangeEnd,
     );
-    return applyReviewRequirement(amount, creditedUnits);
+    return applyReviewRequirement(amount, creditedUnits, creditedDates);
   }
 
   const baseAmount = Number(assignment.baseAmount ?? 0);
@@ -2994,6 +3005,10 @@ const applyCompensationComponents = (
           if (computation.baseDaysCount !== undefined) {
             acc.baseDaysCount = (acc.baseDaysCount ?? 0) + computation.baseDaysCount;
           }
+          if (computation.baseDays && computation.baseDays.length > 0) {
+            acc.baseDays = acc.baseDays ?? [];
+            acc.baseDays.push(...computation.baseDays);
+          }
           return acc;
         },
         { amount: 0 },
@@ -3007,6 +3022,9 @@ const applyCompensationComponents = (
           calculationMethod: component.calculationMethod,
           amount: aggregate.amount,
           ...(aggregate.baseDaysCount !== undefined ? { baseDaysCount: aggregate.baseDaysCount } : {}),
+          ...(aggregate.baseDays && aggregate.baseDays.length > 0
+            ? { baseDays: [...aggregate.baseDays].sort((a, b) => a.localeCompare(b)) }
+            : {}),
         });
         summary.bucketTotals[component.category] = (summary.bucketTotals[component.category] ?? 0) + aggregate.amount;
         summary.totalPayout += aggregate.amount;
@@ -4294,17 +4312,18 @@ const computeCalendarDayBaseAmount = (
   settings: Extract<MonthlyBaseSettings, { mode: "calendar_days" }>,
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
-): { amount: number; creditedUnits: number } => {
+): { amount: number; creditedUnits: number; creditedDates: string[] } => {
   const monthlyAmount = settings.amountOverride ?? Number(assignment.baseAmount ?? 0);
   if (!Number.isFinite(monthlyAmount) || monthlyAmount === 0) {
-    return { amount: 0, creditedUnits: 0 };
+    return { amount: 0, creditedUnits: 0, creditedDates: [] };
   }
   const overlap = getAssignmentOverlapRange(assignment, rangeStart, rangeEnd);
   if (!overlap) {
-    return { amount: 0, creditedUnits: 0 };
+    return { amount: 0, creditedUnits: 0, creditedDates: [] };
   }
   let total = 0;
   let creditedUnits = 0;
+  const creditedDates: string[] = [];
   let cursor = overlap.start.startOf("day");
   const finalDay = overlap.end.startOf("day");
   while (!cursor.isAfter(finalDay, "day")) {
@@ -4316,10 +4335,15 @@ const computeCalendarDayBaseAmount = (
     if (daysCovered > 0 && daysInMonth > 0) {
       total += monthlyAmount * (daysCovered / daysInMonth);
       creditedUnits += daysCovered;
+      let dayCursor = cursor.clone();
+      while (!dayCursor.isAfter(sliceEnd, "day")) {
+        creditedDates.push(dayCursor.format("YYYY-MM-DD"));
+        dayCursor = dayCursor.add(1, "day");
+      }
     }
     cursor = sliceEnd.add(1, "day").startOf("day");
   }
-  return { amount: total, creditedUnits };
+  return { amount: total, creditedUnits, creditedDates };
 };
 
 const computeShiftQuotaBaseAmount = (
@@ -4328,20 +4352,46 @@ const computeShiftQuotaBaseAmount = (
   summary: CommissionSummary,
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
-): { amount: number; creditedUnits: number } => {
+): { amount: number; creditedUnits: number; creditedDates: string[] } => {
   const unitAmount = settings.unitAmountOverride ?? Number(assignment.unitAmount ?? 0);
   if (!Number.isFinite(unitAmount) || unitAmount === 0) {
-    return { amount: 0, creditedUnits: 0 };
+    return { amount: 0, creditedUnits: 0, creditedDates: [] };
   }
   const overlap = getAssignmentOverlapRange(assignment, rangeStart, rangeEnd);
   if (!overlap) {
-    return { amount: 0, creditedUnits: 0 };
+    return { amount: 0, creditedUnits: 0, creditedDates: [] };
   }
 
   let total = 0;
   let creditedUnitsTotal = 0;
+  const creditedDates: string[] = [];
   let cursor = overlap.start.startOf("month");
   const lastMonth = overlap.end.startOf("month");
+
+  const collectRecordedDays = (monthKey: string): string[] => {
+    if (settings.countSource === "counter_manager") {
+      const daySet = summary.managerShiftDayIndex.get(monthKey);
+      return daySet ? Array.from(daySet) : [];
+    }
+    const entries = summary.shiftDayIndex.get(monthKey);
+    return entries ? [...entries] : [];
+  };
+
+  const normalizeDaysForOverlap = (days: string[]): string[] => {
+    if (days.length === 0) {
+      return [];
+    }
+    return days
+      .map((value) => dayjs(value))
+      .filter(
+        (day) =>
+          day.isValid() &&
+          (day.isSame(overlap.start, "day") || day.isAfter(overlap.start, "day")) &&
+          (day.isSame(overlap.end, "day") || day.isBefore(overlap.end, "day")),
+      )
+      .sort((a, b) => a.valueOf() - b.valueOf())
+      .map((day) => day.format("YYYY-MM-DD"));
+  };
 
   while (!cursor.isAfter(lastMonth, "month")) {
     const monthStart = cursor.startOf("month");
@@ -4384,12 +4434,17 @@ const computeShiftQuotaBaseAmount = (
     if (creditedUnits > 0) {
       total += creditedUnits * unitAmount;
       creditedUnitsTotal += creditedUnits;
+      const normalizedDays = normalizeDaysForOverlap(collectRecordedDays(monthKey));
+      if (normalizedDays.length > 0) {
+        const limit = Math.min(creditedUnits, normalizedDays.length);
+        creditedDates.push(...normalizedDays.slice(0, limit));
+      }
     }
 
     cursor = cursor.add(1, "month");
   }
 
-  return { amount: total, creditedUnits: creditedUnitsTotal };
+  return { amount: total, creditedUnits: creditedUnitsTotal, creditedDates };
 };
 
 const THIRTY_ONE_DAY_MONTHS = [0, 2, 4, 6, 7, 9, 11];
