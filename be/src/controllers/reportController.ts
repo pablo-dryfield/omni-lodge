@@ -74,6 +74,7 @@ type MonthlyBaseSettings =
   | {
       mode: "calendar_days";
       amountOverride?: number;
+      monthlyCap?: number;
     }
   | {
       mode: "shift_quota";
@@ -85,6 +86,7 @@ type MonthlyBaseSettings =
       proRateByCompletion: boolean;
       unitAmountOverride?: number;
       countSource: "staff_assignments" | "counter_manager";
+      monthlyCap?: number;
     };
 
 type LockedComponentRequirement = {
@@ -4245,9 +4247,19 @@ const normalizeMonthlyBaseConfig = (config: unknown): MonthlyBaseSettings | null
         record.baseAmount ??
         record.base_amount,
     );
+    const monthlyCap = readNumeric(
+      record.maximumAmount ??
+        record.maximum_amount ??
+        record.maxAmount ??
+        record.max_amount ??
+        record.monthlyCap ??
+        record.monthly_cap ??
+        record.cap,
+    );
     return {
       mode: "calendar_days",
       amountOverride: amountOverride ?? undefined,
+      monthlyCap: monthlyCap !== undefined && monthlyCap > 0 ? monthlyCap : undefined,
     };
   }
 
@@ -4283,6 +4295,15 @@ const normalizeMonthlyBaseConfig = (config: unknown): MonthlyBaseSettings | null
       record.unitAmountOverride ?? record.unit_amount_override ?? record.unitAmount ?? record.unit_amount ?? record.rate,
     );
     const proRate = readBoolean(record.proRateByCompletion ?? record.pro_rate_by_completion);
+    const monthlyCap = readNumeric(
+      record.maximumAmount ??
+        record.maximum_amount ??
+        record.maxAmount ??
+        record.max_amount ??
+        record.monthlyCap ??
+        record.monthly_cap ??
+        record.cap,
+    );
 
     const countSourceRaw = typeof record.countSource === "string" ? record.countSource.trim().toLowerCase() : null;
     const countSource: "staff_assignments" | "counter_manager" =
@@ -4308,6 +4329,7 @@ const normalizeMonthlyBaseConfig = (config: unknown): MonthlyBaseSettings | null
       proRateByCompletion: proRate ?? true,
       unitAmountOverride: unitOverride !== undefined && Number.isFinite(unitOverride) ? unitOverride : undefined,
       countSource,
+      monthlyCap: monthlyCap !== undefined && monthlyCap > 0 ? monthlyCap : undefined,
     };
   }
 
@@ -4325,6 +4347,7 @@ const mergeMonthlyBaseSettings = (
     return {
       mode: "calendar_days",
       amountOverride: override.amountOverride ?? base.amountOverride,
+      monthlyCap: override.monthlyCap ?? base.monthlyCap,
     };
   }
   if (override.mode === "shift_quota" && base.mode === "shift_quota") {
@@ -4338,6 +4361,7 @@ const mergeMonthlyBaseSettings = (
       proRateByCompletion: override.proRateByCompletion ?? base.proRateByCompletion,
       unitAmountOverride: override.unitAmountOverride ?? base.unitAmountOverride,
       countSource: override.countSource ?? base.countSource ?? "staff_assignments",
+      monthlyCap: override.monthlyCap ?? base.monthlyCap,
     };
   }
   return override;
@@ -4377,6 +4401,7 @@ const computeCalendarDayBaseAmount = (
   let total = 0;
   let creditedUnits = 0;
   const creditedDates: string[] = [];
+  const monthlyCap = settings.monthlyCap ?? null;
   let cursor = overlap.start.startOf("day");
   const finalDay = overlap.end.startOf("day");
   while (!cursor.isAfter(finalDay, "day")) {
@@ -4386,7 +4411,9 @@ const computeCalendarDayBaseAmount = (
     const daysCovered = sliceEnd.diff(cursor, "day") + 1;
     const daysInMonth = monthEnd.diff(monthStart.startOf("day"), "day") + 1;
     if (daysCovered > 0 && daysInMonth > 0) {
-      total += monthlyAmount * (daysCovered / daysInMonth);
+      const prorated = monthlyAmount * (daysCovered / daysInMonth);
+      const capped = monthlyCap !== null && monthlyCap > 0 ? Math.min(prorated, monthlyCap) : prorated;
+      total += capped;
       creditedUnits += daysCovered;
       let dayCursor = cursor.clone();
       while (!dayCursor.isAfter(sliceEnd, "day")) {
@@ -4418,6 +4445,7 @@ const computeShiftQuotaBaseAmount = (
   let total = 0;
   let creditedUnitsTotal = 0;
   const creditedDaySet = new Set<string>();
+  const monthlyCap = settings.monthlyCap ?? null;
   let cursor = overlap.start.startOf("month");
   const lastMonth = overlap.end.startOf("month");
 
@@ -4487,7 +4515,11 @@ const computeShiftQuotaBaseAmount = (
     const normalizedDays = normalizeDaysForOverlap(collectRecordedDays(monthKey));
 
     if (creditedUnits > 0) {
-      total += creditedUnits * unitAmount;
+      let monthAmount = creditedUnits * unitAmount;
+      if (monthlyCap !== null && monthlyCap > 0) {
+        monthAmount = Math.min(monthAmount, monthlyCap);
+      }
+      total += monthAmount;
       creditedUnitsTotal += creditedUnits;
       normalizedDays.forEach((day) => creditedDaySet.add(day));
     } else if (normalizedDays.length > 0) {
