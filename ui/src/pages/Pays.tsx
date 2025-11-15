@@ -211,6 +211,17 @@ const renderComponentList = (
               component.name?.toLowerCase().includes('platform') &&
               platformGuestTotals &&
               platformGuestTotals.totalGuests > 0;
+            const baseDaysValue =
+              component.baseDaysCount !== undefined && component.baseDaysCount > 0
+                ? component.baseDaysCount
+                : null;
+            const showBaseDays = component.category === 'base' && baseDaysValue !== null;
+            const formattedBaseDays =
+              showBaseDays && baseDaysValue !== null
+                ? Number.isInteger(baseDaysValue)
+                  ? baseDaysValue.toString()
+                  : baseDaysValue.toFixed(2)
+                : null;
 
             return (
               <Stack key={component.componentId} gap={4}>
@@ -219,7 +230,15 @@ const renderComponentList = (
                     <Badge color={getComponentColor(component.category)} variant="light">
                       {component.category}
                     </Badge>
-                    <Text size="sm">{component.name}</Text>
+                    <Text size="sm">
+                      {component.name}
+                      {showBaseDays && formattedBaseDays !== null && baseDaysValue !== null && (
+                        <Text component="span" size="xs" c="dimmed">
+                          {' '}
+                          ({formattedBaseDays} {baseDaysValue === 1 ? 'day' : 'days'} counted)
+                        </Text>
+                      )}
+                    </Text>
                   </Group>
                   <Text size="sm" fw={600}>
                     {formatCurrency(component.amount)}

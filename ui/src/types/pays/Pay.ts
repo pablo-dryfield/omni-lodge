@@ -14,6 +14,7 @@ export type PayComponentSummary = {
   category: string;
   calculationMethod: string;
   amount: number;
+  baseDaysCount?: number;
 };
 
 export type LockedComponentRequirement = {
