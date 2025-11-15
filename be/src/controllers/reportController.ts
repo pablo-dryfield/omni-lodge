@@ -204,6 +204,52 @@ const FULL_ACCESS_ROLE_SLUGS = new Set([
   "assistantmanager",
 ]);
 
+const MANAGER_ROLE_SLUGS = new Set(["manager", "assistant-manager", "assistant_manager", "assistantmanager"]);
+
+const normalizeUserId = (value: unknown): number | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+  }
+  return null;
+};
+
+const normalizeRoleSlug = (role: unknown): string | null => {
+  if (!role || typeof role !== "string") {
+    return null;
+  }
+  return role.trim().toLowerCase().replace(/[\s-]+/g, "_");
+};
+
+const resolveCounterManagerId = (
+  meta: CounterMeta | undefined,
+  staff: CounterUser[] | undefined,
+): number | null => {
+  const metaManager = normalizeUserId(meta?.managerId ?? null);
+  if (metaManager) {
+    return metaManager;
+  }
+  if (!staff || staff.length === 0) {
+    return null;
+  }
+  for (const member of staff) {
+    const role = normalizeRoleSlug(member.role);
+    if (role && MANAGER_ROLE_SLUGS.has(role)) {
+      const fallbackId = normalizeUserId(member.userId);
+      if (fallbackId) {
+        return fallbackId;
+      }
+    }
+  }
+  return null;
+};
+
 // Default commission is zero unless overridden via compensation components.
 const COMMISSION_RATE_PER_ATTENDEE = 0;
 const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-01");
@@ -1169,7 +1215,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         productIdsToResolve.add(productId);
       }
 
-      const managerId = counter.getDataValue("userId") ?? null;
+      const managerId = normalizeUserId(counter.getDataValue("userId"));
       const status = counter.getDataValue("status") ?? null;
 
       counterMetaById.set(counter.id, {
@@ -1292,7 +1338,10 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       }
       staffByCounter.get(counterId)!.push(staff);
 
-      const userId = staff.userId;
+      const userId = normalizeUserId(staff.userId);
+      if (!userId) {
+        return;
+      }
       const firstName = staff.counterUser?.firstName ?? `User ${userId}`;
 
       if (!commissionDataByUser.has(userId)) {
@@ -1303,7 +1352,8 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     const managerUserIds = new Set<number>();
     counters.forEach((counter) => {
       const meta = counterMetaById.get(counter.id);
-      const managerId = meta?.managerId;
+      const staffForCounter = staffByCounter.get(counter.id);
+      const managerId = resolveCounterManagerId(meta, staffForCounter);
       if (managerId) {
         managerUserIds.add(managerId);
       }
@@ -1361,12 +1411,13 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       if (!meta) {
         return;
       }
+      const staffForCounter = staffByCounter.get(counter.id) ?? [];
 
       const customers = meta.isNewSystem
         ? newSystemTotalsByCounter.get(counter.id) ?? 0
         : legacyTotalsByCounter.get(counter.id) ?? 0;
 
-      const managerId = meta.managerId;
+      const managerId = resolveCounterManagerId(meta, staffForCounter);
       if (managerId && meta.status === "final") {
         const managerSummary = commissionDataByUser.get(managerId);
         if (managerSummary) {
@@ -1377,21 +1428,23 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       const aggregate = getOrCreateDailyAggregate(counter.id, meta);
       aggregate.totalCustomers += customers;
 
-      const staffForCounter = staffByCounter.get(counter.id) ?? [];
       if (staffForCounter.length === 0 || customers === 0) {
-      return;
-    }
+        return;
+      }
 
       const commissionRate = resolveGuideCommissionRate(guideCommissionRates, meta.productId);
       const totalCommissionForCounter = customers * commissionRate;
       const commissionPerStaff = totalCommissionForCounter / staffForCounter.length;
 
       staffForCounter.forEach((staff) => {
-        const userId = staff.userId;
-    const commissionSummary = commissionDataByUser.get(userId);
-    if (!commissionSummary) {
-      return;
-    }
+        const userId = normalizeUserId(staff.userId);
+        if (!userId) {
+          return;
+        }
+        const commissionSummary = commissionDataByUser.get(userId);
+        if (!commissionSummary) {
+          return;
+        }
         incrementMonthlyShiftCount(commissionSummary, meta.dateKey);
 
         commissionSummary.totalCommission += commissionPerStaff;
@@ -4364,7 +4417,7 @@ const computeShiftQuotaBaseAmount = (
 
   let total = 0;
   let creditedUnitsTotal = 0;
-  const creditedDates: string[] = [];
+  const creditedDaySet = new Set<string>();
   let cursor = overlap.start.startOf("month");
   const lastMonth = overlap.end.startOf("month");
 
@@ -4431,19 +4484,20 @@ const computeShiftQuotaBaseAmount = (
       creditedUnits = quota;
     }
 
+    const normalizedDays = normalizeDaysForOverlap(collectRecordedDays(monthKey));
+
     if (creditedUnits > 0) {
       total += creditedUnits * unitAmount;
       creditedUnitsTotal += creditedUnits;
-      const normalizedDays = normalizeDaysForOverlap(collectRecordedDays(monthKey));
-      if (normalizedDays.length > 0) {
-        const limit = Math.min(creditedUnits, normalizedDays.length);
-        creditedDates.push(...normalizedDays.slice(0, limit));
-      }
+      normalizedDays.forEach((day) => creditedDaySet.add(day));
+    } else if (normalizedDays.length > 0) {
+      normalizedDays.forEach((day) => creditedDaySet.add(day));
     }
 
     cursor = cursor.add(1, "month");
   }
 
+  const creditedDates = Array.from(creditedDaySet).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return { amount: total, creditedUnits: creditedUnitsTotal, creditedDates };
 };
 

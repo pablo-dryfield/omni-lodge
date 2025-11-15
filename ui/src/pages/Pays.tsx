@@ -77,7 +77,7 @@ const formatCurrency = (value: number | undefined): string => {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
-  return `${numberPart} z\u0142`;
+  return `${numberPart} zł`;
 };
 
 const getComponentColor = (category: string) => {
@@ -202,17 +202,22 @@ const ComponentListItem: React.FC<ComponentListItemProps> = ({
   platformGuestTotals,
 }) => {
   const [showBaseDays, setShowBaseDays] = useState(false);
-  const baseDaysCount =
-    component.category === 'base' && typeof component.baseDaysCount === 'number' && component.baseDaysCount > 0
+  const isBaseComponent = component.category === 'base';
+  const explicitBaseDays =
+    isBaseComponent && Array.isArray(component.baseDays) ? component.baseDays.filter(Boolean) : [];
+  const computedBaseDayCount =
+    isBaseComponent && explicitBaseDays.length > 0
+      ? explicitBaseDays.length
+      : isBaseComponent && typeof component.baseDaysCount === 'number' && component.baseDaysCount > 0
       ? component.baseDaysCount
       : null;
   const formattedBaseDays =
-    baseDaysCount !== null
-      ? Number.isInteger(baseDaysCount)
-        ? baseDaysCount.toString()
-        : baseDaysCount.toFixed(2)
+    computedBaseDayCount !== null
+      ? Number.isInteger(computedBaseDayCount)
+        ? computedBaseDayCount.toString()
+        : computedBaseDayCount.toFixed(2)
       : null;
-  const hasBaseDayList = Array.isArray(component.baseDays) && component.baseDays.length > 0 && baseDaysCount !== null;
+  const hasBaseDayList = explicitBaseDays.length > 0;
 
   return (
     <Stack gap={4}>
@@ -223,15 +228,15 @@ const ComponentListItem: React.FC<ComponentListItemProps> = ({
           </Badge>
           <Text size="sm">
             {component.name}
-            {baseDaysCount !== null && (
+            {computedBaseDayCount !== null && (
               <Text
                 component="span"
                 size="xs"
                 c="dimmed"
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
               >
-                {' '}
-                ({formattedBaseDays} {baseDaysCount === 1 ? 'day' : 'days'} counted
+                {': '}
+                ({formattedBaseDays} {computedBaseDayCount === 1 ? 'day' : 'days'} counted
                 {hasBaseDayList && (
                   <ActionIcon
                     size="xs"
@@ -256,7 +261,7 @@ const ComponentListItem: React.FC<ComponentListItemProps> = ({
       {hasBaseDayList && (
         <Collapse in={showBaseDays}>
           <Stack gap={2} pl="md">
-            {component.baseDays!.map((day, index) => {
+            {explicitBaseDays.map((day, index) => {
               const parsed = dayjs(day);
               const formatted = parsed.isValid() ? parsed.format('MMM D, YYYY') : day;
               return (
