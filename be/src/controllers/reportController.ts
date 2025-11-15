@@ -116,19 +116,27 @@ type ProductPayoutSummary = {
   componentTotals: ProductComponentTotal[];
 };
 
+type ComponentTotalEntry = {
+  componentId: number;
+  name: string;
+  category: CompensationComponentCategory;
+  calculationMethod: CompensationCalculationMethod;
+  amount: number;
+  baseDaysCount?: number;
+};
+
+type ComponentComputationResult = {
+  amount: number;
+  baseDaysCount?: number;
+};
+
 type CommissionSummary = {
   userId: number;
   firstName: string;
   totalCommission: number;
   totalCustomers: number;
   breakdown: CommissionBreakdownEntry[];
-  componentTotals: Array<{
-    componentId: number;
-    name: string;
-    category: CompensationComponentCategory;
-    calculationMethod: CompensationCalculationMethod;
-    amount: number;
-  }>;
+  componentTotals: ComponentTotalEntry[];
   bucketTotals: Record<string, number>;
   totalPayout: number;
   productTotals: ProductPayoutSummary[];
@@ -2850,12 +2858,15 @@ const computeAssignmentAmount = (
   productBucketsByUser: ProductBucketLookup,
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
-) => {
+): ComponentComputationResult => {
   const reviewRequirement = resolveReviewTargetRequirement(component, assignment);
   const totalEligibleReviews = summary.reviewTotals?.totalEligibleReviews ?? 0;
-  const applyReviewRequirement = (amount: number): number => {
+  const applyReviewRequirement = (
+    amount: number,
+    baseDaysCount?: number,
+  ): ComponentComputationResult => {
     if (!amount) {
-      return 0;
+      return { amount: 0 };
     }
     if (reviewRequirement && totalEligibleReviews < reviewRequirement.minReviews) {
       recordLockedComponent(summary, component, amount, {
@@ -2863,9 +2874,9 @@ const computeAssignmentAmount = (
         minReviews: reviewRequirement.minReviews,
         actualReviews: totalEligibleReviews,
       });
-      return 0;
+      return { amount: 0 };
     }
-    return amount;
+    return { amount, baseDaysCount };
   };
 
   if (component.calculationMethod === "task_score") {
@@ -2900,29 +2911,32 @@ const computeAssignmentAmount = (
 
   const monthlyBaseSettings = resolveMonthlyBaseSettings(component, assignment);
   if (component.calculationMethod === "flat" && monthlyBaseSettings?.mode === "calendar_days") {
-    const proratedAmount = computeCalendarDayBaseAmount(
+    const { amount: proratedAmount, creditedUnits } = computeCalendarDayBaseAmount(
       assignment,
       monthlyBaseSettings,
       rangeStart,
       rangeEnd,
     );
-    return applyReviewRequirement(proratedAmount);
+    return applyReviewRequirement(proratedAmount, creditedUnits);
   }
   if (component.calculationMethod === "per_unit" && monthlyBaseSettings?.mode === "shift_quota") {
-    return applyReviewRequirement(
-      computeShiftQuotaBaseAmount(
-        assignment,
-        monthlyBaseSettings,
-        summary,
-        rangeStart,
-        rangeEnd,
-      ),
+    const { amount, creditedUnits } = computeShiftQuotaBaseAmount(
+      assignment,
+      monthlyBaseSettings,
+      summary,
+      rangeStart,
+      rangeEnd,
     );
+    return applyReviewRequirement(amount, creditedUnits);
   }
 
   const baseAmount = Number(assignment.baseAmount ?? 0);
   const unitAmount = Number(assignment.unitAmount ?? 0);
   let total = baseAmount;
+
+  if (monthlyBaseSettings?.mode === "shift_quota"){
+    total = total +1;
+  }
 
   if (!Number.isNaN(unitAmount) && unitAmount !== 0) {
     if (component.calculationMethod === "per_unit") {
@@ -2953,24 +2967,23 @@ const applyCompensationComponents = (
     summary.lockedComponents = [];
   });
 
-  components.forEach((component) => {
+  components.forEach((component) => { 
     const assignments = component.assignments ?? [];
     if (assignments.length === 0) {
       return;
     }
 
     summaries.forEach((summary) => {
-      const amount = assignments.reduce((acc, assignment) => {
-        if (
-          !assignment.isActive ||
-          !isAssignmentEffectiveForRange(assignment, rangeStart, rangeEnd) ||
-          !assignmentAppliesToUser(assignment, summary.userId, assignmentTargets)
-        ) {
-          return acc;
-        }
-        return (
-          acc +
-          computeAssignmentAmount(
+      const aggregate = assignments.reduce<ComponentComputationResult>(
+        (acc, assignment) => {
+          if (
+            !assignment.isActive ||
+            !isAssignmentEffectiveForRange(assignment, rangeStart, rangeEnd) ||
+            !assignmentAppliesToUser(assignment, summary.userId, assignmentTargets)
+          ) {
+            return acc;
+          }
+          const computation = computeAssignmentAmount(
             component,
             assignment,
             summary,
@@ -2980,20 +2993,27 @@ const applyCompensationComponents = (
             productBucketsByUser,
             rangeStart,
             rangeEnd,
-          )
-        );
-      }, 0);
+          );
+          acc.amount += computation.amount;
+          if (computation.baseDaysCount !== undefined) {
+            acc.baseDaysCount = (acc.baseDaysCount ?? 0) + computation.baseDaysCount;
+          }
+          return acc;
+        },
+        { amount: 0 },
+      );
 
-      if (amount !== 0) {
+      if (aggregate.amount !== 0) {
         summary.componentTotals.push({
           componentId: component.id,
           name: component.name,
           category: component.category,
           calculationMethod: component.calculationMethod,
-          amount,
+          amount: aggregate.amount,
+          ...(aggregate.baseDaysCount !== undefined ? { baseDaysCount: aggregate.baseDaysCount } : {}),
         });
-        summary.bucketTotals[component.category] = (summary.bucketTotals[component.category] ?? 0) + amount;
-        summary.totalPayout += amount;
+        summary.bucketTotals[component.category] = (summary.bucketTotals[component.category] ?? 0) + aggregate.amount;
+        summary.totalPayout += aggregate.amount;
       }
     });
   });
@@ -3791,9 +3811,7 @@ const normalizeReviewPayoutConfig = (config: unknown): Partial<ReviewPayoutSetti
     settings.maxReviews = Math.max(1, Math.floor(maxReviews));
   }
 
-  const rate =
-    readNumeric(candidate.rate ?? candidate.amount ?? candidate.unitAmount ?? candidate.unit_amount) ??
-    undefined;
+  const rate = readNumeric(candidate.rate ?? candidate.amount) ?? undefined;
   if (rate !== undefined) {
     settings.rate = rate;
   }
@@ -3972,11 +3990,11 @@ const resolveReviewPayoutSettings = (
     assignmentSettings.minReviews ?? componentSettings.minReviews ?? 1;
   const maxReviewsCandidate =
     assignmentSettings.maxReviews ?? componentSettings.maxReviews ?? null;
-  const rateCandidate =
-    assignmentSettings.rate ??
-    componentSettings.rate ??
-    Number(assignment.unitAmount ?? 0);
+  const rateCandidate = assignmentSettings.rate ?? componentSettings.rate;
 
+  if (rateCandidate === undefined || rateCandidate === null) {
+    return null;
+  }
   if (!Number.isFinite(rateCandidate) || rateCandidate === 0) {
     return null;
   }
@@ -4280,16 +4298,17 @@ const computeCalendarDayBaseAmount = (
   settings: Extract<MonthlyBaseSettings, { mode: "calendar_days" }>,
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
-): number => {
+): { amount: number; creditedUnits: number } => {
   const monthlyAmount = settings.amountOverride ?? Number(assignment.baseAmount ?? 0);
   if (!Number.isFinite(monthlyAmount) || monthlyAmount === 0) {
-    return 0;
+    return { amount: 0, creditedUnits: 0 };
   }
   const overlap = getAssignmentOverlapRange(assignment, rangeStart, rangeEnd);
   if (!overlap) {
-    return 0;
+    return { amount: 0, creditedUnits: 0 };
   }
   let total = 0;
+  let creditedUnits = 0;
   let cursor = overlap.start.startOf("day");
   const finalDay = overlap.end.startOf("day");
   while (!cursor.isAfter(finalDay, "day")) {
@@ -4300,10 +4319,11 @@ const computeCalendarDayBaseAmount = (
     const daysInMonth = monthEnd.diff(monthStart.startOf("day"), "day") + 1;
     if (daysCovered > 0 && daysInMonth > 0) {
       total += monthlyAmount * (daysCovered / daysInMonth);
+      creditedUnits += daysCovered;
     }
     cursor = sliceEnd.add(1, "day").startOf("day");
   }
-  return total;
+  return { amount: total, creditedUnits };
 };
 
 const computeShiftQuotaBaseAmount = (
@@ -4312,17 +4332,18 @@ const computeShiftQuotaBaseAmount = (
   summary: CommissionSummary,
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
-): number => {
+): { amount: number; creditedUnits: number } => {
   const unitAmount = settings.unitAmountOverride ?? Number(assignment.unitAmount ?? 0);
   if (!Number.isFinite(unitAmount) || unitAmount === 0) {
-    return 0;
+    return { amount: 0, creditedUnits: 0 };
   }
   const overlap = getAssignmentOverlapRange(assignment, rangeStart, rangeEnd);
   if (!overlap) {
-    return 0;
+    return { amount: 0, creditedUnits: 0 };
   }
 
   let total = 0;
+  let creditedUnitsTotal = 0;
   let cursor = overlap.start.startOf("month");
   const lastMonth = overlap.end.startOf("month");
 
@@ -4366,12 +4387,13 @@ const computeShiftQuotaBaseAmount = (
 
     if (creditedUnits > 0) {
       total += creditedUnits * unitAmount;
+      creditedUnitsTotal += creditedUnits;
     }
 
     cursor = cursor.add(1, "month");
   }
 
-  return total;
+  return { amount: total, creditedUnits: creditedUnitsTotal };
 };
 
 const THIRTY_ONE_DAY_MONTHS = [0, 2, 4, 6, 7, 9, 11];
