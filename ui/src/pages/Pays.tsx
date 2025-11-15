@@ -18,6 +18,8 @@ import {
   Card,
   SimpleGrid,
   Select,
+  ActionIcon,
+  Collapse,
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
 import dayjs, { Dayjs } from 'dayjs';
@@ -75,7 +77,7 @@ const formatCurrency = (value: number | undefined): string => {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
-  return `${numberPart} zł`;
+  return `${numberPart} z\u0142`;
 };
 
 const getComponentColor = (category: string) => {
@@ -186,6 +188,112 @@ const FULL_ACCESS_MODULE = 'staff-payouts-all';
 const SELF_ACCESS_MODULE = 'staff-payouts-self';
 const PAGE_SLUG = PAGE_SLUGS.pays;
 
+type ComponentListItemProps = {
+  component: PayComponentSummary;
+  breakdown: PlatformGuestTierBreakdown[];
+  showPlatformTotals: boolean;
+  platformGuestTotals?: { totalGuests: number; totalBooked: number; totalAttended: number };
+};
+
+const ComponentListItem: React.FC<ComponentListItemProps> = ({
+  component,
+  breakdown,
+  showPlatformTotals,
+  platformGuestTotals,
+}) => {
+  const [showBaseDays, setShowBaseDays] = useState(false);
+  const baseDaysCount =
+    component.category === 'base' && typeof component.baseDaysCount === 'number' && component.baseDaysCount > 0
+      ? component.baseDaysCount
+      : null;
+  const formattedBaseDays =
+    baseDaysCount !== null
+      ? Number.isInteger(baseDaysCount)
+        ? baseDaysCount.toString()
+        : baseDaysCount.toFixed(2)
+      : null;
+  const hasBaseDayList = Array.isArray(component.baseDays) && component.baseDays.length > 0 && baseDaysCount !== null;
+
+  return (
+    <Stack gap={4}>
+      <Group justify="space-between" gap="xs">
+        <Group gap={6} align="center">
+          <Badge color={getComponentColor(component.category)} variant="light">
+            {component.category}
+          </Badge>
+          <Text size="sm">
+            {component.name}
+            {baseDaysCount !== null && (
+              <Text
+                component="span"
+                size="xs"
+                c="dimmed"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+              >
+                {' '}
+                ({formattedBaseDays} {baseDaysCount === 1 ? 'day' : 'days'} counted
+                {hasBaseDayList && (
+                  <ActionIcon
+                    size="xs"
+                    variant="subtle"
+                    color="blue"
+                    onClick={() => setShowBaseDays((prev) => !prev)}
+                    aria-label={showBaseDays ? 'Hide counted dates' : 'Show counted dates'}
+                  >
+                    {showBaseDays ? '\u25B2' : '\u25BC'}
+                  </ActionIcon>
+                )}
+                )
+              </Text>
+            )}
+          </Text>
+        </Group>
+        <Text size="sm" fw={600}>
+          {formatCurrency(component.amount)}
+        </Text>
+      </Group>
+
+      {hasBaseDayList && (
+        <Collapse in={showBaseDays}>
+          <Stack gap={2} pl="md">
+            {component.baseDays!.map((day, index) => {
+              const parsed = dayjs(day);
+              const formatted = parsed.isValid() ? parsed.format('MMM D, YYYY') : day;
+              return (
+                <Text key={`${component.componentId}-day-${index}`} size="xs" c="dimmed">
+                  {formatted}
+                </Text>
+              );
+            })}
+          </Stack>
+        </Collapse>
+      )}
+
+      {showPlatformTotals && platformGuestTotals && platformGuestTotals.totalGuests > 0 && (
+        <Text size="xs" c="dimmed">
+          Total guests: {platformGuestTotals.totalGuests} (Booked {platformGuestTotals.totalBooked}, Attended{' '}
+          {platformGuestTotals.totalAttended})
+        </Text>
+      )}
+
+      {breakdown.length > 0 && (
+        <Stack gap={2} pl="md">
+          {breakdown.map((tier, index) => (
+            <Group key={`${component.componentId}-${index}`} justify="space-between">
+              <Text size="xs" c="dimmed">
+                {tier.cumulativeGuests - tier.units + 1}-{tier.cumulativeGuests} guests @ {tier.rate.toFixed(2)} z\u0142
+              </Text>
+              <Text size="xs" fw={600}>
+                {formatCurrency(tier.amount)}
+              </Text>
+            </Group>
+          ))}
+        </Stack>
+      )}
+    </Stack>
+  );
+};
+
 const renderComponentList = (
   components?: PayComponentSummary[],
   platformGuestBreakdowns?: Record<string, PlatformGuestTierBreakdown[]>,
@@ -211,61 +319,14 @@ const renderComponentList = (
               component.name?.toLowerCase().includes('platform') &&
               platformGuestTotals &&
               platformGuestTotals.totalGuests > 0;
-            const baseDaysValue =
-              component.baseDaysCount !== undefined && component.baseDaysCount > 0
-                ? component.baseDaysCount
-                : null;
-            const showBaseDays = component.category === 'base' && baseDaysValue !== null;
-            const formattedBaseDays =
-              showBaseDays && baseDaysValue !== null
-                ? Number.isInteger(baseDaysValue)
-                  ? baseDaysValue.toString()
-                  : baseDaysValue.toFixed(2)
-                : null;
-
             return (
-              <Stack key={component.componentId} gap={4}>
-                <Group justify="space-between" gap="xs">
-                  <Group gap={6}>
-                    <Badge color={getComponentColor(component.category)} variant="light">
-                      {component.category}
-                    </Badge>
-                    <Text size="sm">
-                      {component.name}
-                      {showBaseDays && formattedBaseDays !== null && baseDaysValue !== null && (
-                        <Text component="span" size="xs" c="dimmed">
-                          {' '}
-                          ({formattedBaseDays} {baseDaysValue === 1 ? 'day' : 'days'} counted)
-                        </Text>
-                      )}
-                    </Text>
-                  </Group>
-                  <Text size="sm" fw={600}>
-                    {formatCurrency(component.amount)}
-                  </Text>
-                </Group>
-                {showPlatformTotals && (
-                  <Text size="xs" c="dimmed">
-                    Total guests: {platformGuestTotals.totalGuests} (Booked {platformGuestTotals.totalBooked}, Attended{' '}
-                    {platformGuestTotals.totalAttended})
-                  </Text>
-                )}
-                {breakdown.length > 0 && (
-                  <Stack gap={2} pl="md">
-                    {breakdown.map((tier, index) => (
-                      <Group key={`${component.componentId}-${index}`} justify="space-between">
-                        <Text size="xs" c="dimmed">
-                          {tier.cumulativeGuests - tier.units + 1}–{tier.cumulativeGuests} guests @{' '}
-                          {tier.rate.toFixed(2)} zł
-                        </Text>
-                        <Text size="xs" fw={600}>
-                          {formatCurrency(tier.amount)}
-                        </Text>
-                      </Group>
-                    ))}
-                  </Stack>
-                )}
-              </Stack>
+              <ComponentListItem
+                key={component.componentId}
+                component={component}
+                breakdown={breakdown}
+                showPlatformTotals={Boolean(showPlatformTotals)}
+                platformGuestTotals={platformGuestTotals}
+              />
             );
           })}
         </Stack>
