@@ -2934,10 +2934,6 @@ const computeAssignmentAmount = (
   const unitAmount = Number(assignment.unitAmount ?? 0);
   let total = baseAmount;
 
-  if (monthlyBaseSettings?.mode === "shift_quota"){
-    total = total +1;
-  }
-
   if (!Number.isNaN(unitAmount) && unitAmount !== 0) {
     if (component.calculationMethod === "per_unit") {
       total += unitAmount * summary.totalCustomers;
