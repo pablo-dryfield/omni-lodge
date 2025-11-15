@@ -286,7 +286,7 @@ const ComponentListItem: React.FC<ComponentListItemProps> = ({
           {breakdown.map((tier, index) => (
             <Group key={`${component.componentId}-${index}`} justify="space-between">
               <Text size="xs" c="dimmed">
-                {tier.cumulativeGuests - tier.units + 1}-{tier.cumulativeGuests} guests @ {tier.rate.toFixed(2)} z\u0142
+                {tier.cumulativeGuests - tier.units + 1}-{tier.cumulativeGuests} guests @ {tier.rate.toFixed(2)} zł
               </Text>
               <Text size="xs" fw={600}>
                 {formatCurrency(tier.amount)}
@@ -350,7 +350,8 @@ const renderComponentList = (
                 <Text size="sm">
                   {entry.name}{' '}
                   <Text component="span" size="xs" c="dimmed">
-                    (needs {entry.requirement.minReviews} reviews, current {entry.requirement.actualReviews})
+                    (needs {entry.requirement.minReviews} reviews, current{' '}
+                    {entry.requirement.actualReviews})
                   </Text>
                 </Text>
               </Group>
