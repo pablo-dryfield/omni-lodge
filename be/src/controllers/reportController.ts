@@ -54,6 +54,7 @@ type CommissionBreakdownEntry = {
 
 type ReviewTotals = {
   totalEligibleReviews: number;
+  totalTrackedReviews: number;
 };
 
 type PlatformGuestTotals = {
@@ -93,6 +94,8 @@ type LockedComponentRequirement = {
   type: "review_target";
   minReviews: number;
   actualReviews: number;
+  missingReviews?: number;
+  totalEligibleReviews?: number;
 };
 
 type LockedComponentEntry = {
@@ -2591,7 +2594,7 @@ const createEmptySummary = (userId: number, firstName: string): CommissionSummar
   productTotals: [],
   counterIncentiveMarkers: {},
   counterIncentiveTotals: {},
-  reviewTotals: { totalEligibleReviews: 0 },
+  reviewTotals: { totalEligibleReviews: 0, totalTrackedReviews: 0 },
   platformGuestTotals: { totalGuests: 0, totalBooked: 0, totalAttended: 0 },
   platformGuestBreakdowns: {},
   lockedComponents: [],
@@ -2772,11 +2775,11 @@ const fetchReviewStats = async (
       return;
     }
     const approved = Boolean(entry.getDataValue("underMinimumApproved"));
-    if (roundedCount < REVIEW_MINIMUM_THRESHOLD && !approved) {
-      return;
+    const current = stats.get(userId) ?? { totalEligibleReviews: 0, totalTrackedReviews: 0 };
+    current.totalTrackedReviews += roundedCount;
+    if (roundedCount >= REVIEW_MINIMUM_THRESHOLD || approved) {
+      current.totalEligibleReviews += roundedCount;
     }
-    const current = stats.get(userId) ?? { totalEligibleReviews: 0 };
-    current.totalEligibleReviews += roundedCount;
     stats.set(userId, current);
   });
 
@@ -2926,6 +2929,7 @@ const computeAssignmentAmount = (
 ): ComponentComputationResult => {
   const reviewRequirement = resolveReviewTargetRequirement(component, assignment);
   const totalEligibleReviews = summary.reviewTotals?.totalEligibleReviews ?? 0;
+  const totalTrackedReviews = summary.reviewTotals?.totalTrackedReviews ?? totalEligibleReviews;
   const applyReviewRequirement = (
     amount: number,
     baseDaysCount?: number,
@@ -2938,7 +2942,9 @@ const computeAssignmentAmount = (
       recordLockedComponent(summary, component, amount, {
         type: "review_target",
         minReviews: reviewRequirement.minReviews,
-        actualReviews: totalEligibleReviews,
+        actualReviews: totalTrackedReviews,
+        missingReviews: Math.max(0, reviewRequirement.minReviews - totalTrackedReviews),
+        totalEligibleReviews,
       });
       return { amount: 0 };
     }

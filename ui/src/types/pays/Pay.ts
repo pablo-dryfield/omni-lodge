@@ -22,6 +22,8 @@ export type LockedComponentRequirement = {
   type: 'review_target';
   minReviews: number;
   actualReviews: number;
+  missingReviews?: number;
+  totalEligibleReviews?: number;
 };
 
 export type LockedComponentSummary = {
@@ -61,6 +63,7 @@ export type Pay = {
   counterIncentiveTotals?: Record<string, number>;
   reviewTotals?: {
     totalEligibleReviews: number;
+    totalTrackedReviews?: number;
   };
   platformGuestTotals?: {
     totalGuests: number;
