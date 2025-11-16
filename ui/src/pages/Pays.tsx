@@ -51,24 +51,11 @@ import {
 
 const EARLIEST_DATA_DATE = dayjs('2020-01-01');
 
-type DatePreset =
-  | 'today'
-  | 'last_7_days'
-  | 'last_week'
-  | 'last_2_weeks'
-  | 'this_month'
-  | 'last_month'
-  | 'all_time'
-  | 'custom';
+type DatePreset = 'this_month' | 'last_month' | 'custom';
 
 const DATE_PRESET_OPTIONS: Array<{ value: DatePreset; label: string }> = [
-  { value: 'today', label: 'Today' },
-  { value: 'last_7_days', label: 'Last 7 days' },
-  { value: 'last_week', label: 'Last week' },
-  { value: 'last_2_weeks', label: 'Last 2 weeks' },
   { value: 'this_month', label: 'This month' },
   { value: 'last_month', label: 'Last month' },
-  { value: 'all_time', label: 'All time' },
   { value: 'custom', label: 'Custom range' },
 ];
 
@@ -158,25 +145,9 @@ const calculatePresetRange = (preset: DatePreset, reference: Dayjs = dayjs()): {
   };
 
   switch (preset) {
-    case 'today':
-      return { start: clampStart(startOfToday), end: today };
-    case 'last_7_days':
-      return { start: clampStart(today.subtract(6, 'day').startOf('day')), end: today };
-    case 'last_week': {
-      const range = getLastWeekRange();
-      return { start: clampStart(range.start), end: range.end };
-    }
-    case 'last_2_weeks': {
-      const lastWeek = getLastWeekRange();
-      const start = lastWeek.start.subtract(7, 'day');
-      return { start: clampStart(start), end: lastWeek.end };
-    }
     case 'last_month': {
       const start = today.subtract(1, 'month').startOf('month');
       return { start: clampStart(start), end: start.endOf('month') };
-    }
-    case 'all_time': {
-      return { start: clampStart(EARLIEST_DATA_DATE.startOf('day')), end: today };
     }
     case 'this_month':
     default:
