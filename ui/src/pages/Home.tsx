@@ -18,6 +18,12 @@ import {
   Stack,
   ThemeProvider,
   Typography,
+  Table,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell,
+  TableContainer,
 } from "@mui/material";
 import { styled } from "@mui/material/styles";
 import { createTheme } from "@mui/material/styles";
@@ -50,14 +56,17 @@ import {
   useReportDashboards,
   useHomeDashboardPreference,
   runReportQueryWithPolling,
+  runDashboardPreviewCard,
   type DashboardCardDto,
   type DashboardCardViewConfig,
   type DashboardSpotlightCardViewConfig,
   type DashboardVisualCardViewConfig,
+  type DashboardPreviewTableCardViewConfig,
   type HomeDashboardPreferenceDto,
   type MetricSpotlightDefinitionDto,
   type ReportQuerySuccessResponse,
   type QueryConfig,
+  type DashboardPreviewCardResponse,
 } from "../api/reports";
 
 const PAGE_SLUG = PAGE_SLUGS.dashboard;
@@ -135,13 +144,67 @@ const coerceNumber = (value: unknown): number | null => {
   return null;
 };
 
+const formatPreviewTableValue = (value: unknown): string => {
+  if (value === null || value === undefined) {
+    return "—";
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value.toLocaleString("en-US", { maximumFractionDigits: 4 }) : String(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "Yes" : "No";
+  }
+  if (value instanceof Date) {
+    return value.toLocaleString();
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const isPreviewTableCardViewConfig = (
+  config: DashboardCardViewConfig | null | undefined,
+): config is DashboardPreviewTableCardViewConfig =>
+  Boolean(
+    config &&
+      config.mode === "preview_table" &&
+      typeof (config as DashboardPreviewTableCardViewConfig).previewRequest === "object",
+  );
+
 type DashboardCardLiveState = {
   status: "idle" | "loading" | "error" | "success";
   visualSample?: VisualChartPoint[];
   spotlightSample?: DashboardSpotlightCardViewConfig["sample"];
+  previewSample?: {
+    columns: string[];
+    columnOrder: string[];
+    columnAliases: Record<string, string>;
+    rows: Array<Record<string, unknown>>;
+    executedAt?: string | null;
+  };
   error?: string | null;
   warning?: string | null;
 };
+
+type CardHydrationDescriptor =
+  | {
+      mode: "preview_table";
+      card: DashboardCardDto;
+      viewConfig: DashboardPreviewTableCardViewConfig;
+      cacheKey: string;
+    }
+  | {
+      mode: "visual" | "legacy";
+      card: DashboardCardDto;
+      viewConfig: DashboardCardViewConfig | null;
+      queryConfig: QueryConfig | null;
+      cacheKey: string;
+    };
 
 const isVisualCardViewConfig = (
   config: DashboardCardViewConfig | null | undefined,
@@ -655,44 +718,79 @@ const Home = (props: GenericPageProps) => {
   const useAutoRows = gridColumns === 1;
   const shouldHydrateLiveData = canUseDashboards && effectiveViewMode === "dashboard";
 
-  const cardHydrationDescriptors = useMemo(() => {
+  const cardHydrationDescriptors = useMemo<CardHydrationDescriptor[]>(() => {
     if (!shouldHydrateLiveData || activeCards.length === 0) {
       return [];
     }
     return activeCards.map((card) => {
-      const viewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
-      let queryConfig: QueryConfig | null = null;
-      if (isVisualCardViewConfig(viewConfig) && viewConfig.queryConfig) {
-        queryConfig = cloneConfig(viewConfig.queryConfig);
-      }
-      if (queryConfig) {
-        queryConfig.options = {
-          ...queryConfig.options,
-          templateId: card.templateId || queryConfig.options?.templateId || null,
-          allowAsync: true,
+      const rawViewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
+      if (isPreviewTableCardViewConfig(rawViewConfig)) {
+        const cacheKey = JSON.stringify({
+          mode: "preview",
+          templateId: card.templateId,
+          config: rawViewConfig.previewRequest,
+        });
+        return {
+          mode: "preview_table" as const,
+          card,
+          viewConfig: rawViewConfig,
+          cacheKey,
         };
       }
+      let queryConfig: QueryConfig | null = null;
+      if (isVisualCardViewConfig(rawViewConfig) && rawViewConfig.queryConfig) {
+        queryConfig = cloneConfig(rawViewConfig.queryConfig);
+        if (queryConfig) {
+          queryConfig.options = {
+            ...queryConfig.options,
+            templateId: card.templateId || queryConfig.options?.templateId || null,
+            allowAsync: true,
+          };
+        }
+      }
       return {
+        mode: queryConfig ? ("visual" as const) : ("legacy" as const),
         card,
-        viewConfig,
-        queryConfig,
+        viewConfig: rawViewConfig,
+        queryConfig: queryConfig ?? null,
         cacheKey: queryConfig ? JSON.stringify(queryConfig) : "missing",
       };
     });
   }, [activeCards, shouldHydrateLiveData]);
 
   const cardLiveQueries = useQueries({
-    queries: cardHydrationDescriptors.map(({ card, queryConfig, cacheKey }) => ({
-      queryKey: ["reports", "dashboard-card", card.id, cacheKey],
-      enabled: shouldHydrateLiveData && Boolean(queryConfig),
-      queryFn: async () => {
-        if (!queryConfig) {
-          return null;
-        }
-        return runReportQueryWithPolling(queryConfig, { pollIntervalMs: 1500, timeoutMs: 45_000 });
-      },
-      staleTime: 30 * 1000,
-    })),
+    queries: cardHydrationDescriptors.map((descriptor) => {
+      if (!shouldHydrateLiveData) {
+        return {
+          queryKey: ["reports", "dashboard-card", descriptor.card.id, "disabled"],
+          enabled: false,
+          queryFn: async () => null,
+        };
+      }
+      if (descriptor.mode === "preview_table") {
+        return {
+          queryKey: ["reports", "dashboard-card", descriptor.card.id, descriptor.cacheKey],
+          enabled: shouldHydrateLiveData,
+          queryFn: async () =>
+            runDashboardPreviewCard(descriptor.card.dashboardId, descriptor.card.id),
+          staleTime: 30 * 1000,
+        };
+      }
+      return {
+        queryKey: ["reports", "dashboard-card", descriptor.card.id, descriptor.cacheKey],
+        enabled: shouldHydrateLiveData && Boolean(descriptor.queryConfig),
+        queryFn: async () => {
+          if (!descriptor.queryConfig) {
+            return null;
+          }
+          return runReportQueryWithPolling(descriptor.queryConfig, {
+            pollIntervalMs: 1500,
+            timeoutMs: 45_000,
+          });
+        },
+        staleTime: 30 * 1000,
+      };
+    }),
   });
 
   const liveCardSamples = useMemo(() => {
@@ -703,26 +801,64 @@ const Home = (props: GenericPageProps) => {
     if (cardHydrationDescriptors.length === 0) {
       return map;
     }
-    cardHydrationDescriptors.forEach(({ card, viewConfig, queryConfig }, index) => {
+    cardHydrationDescriptors.forEach((descriptor, index) => {
       const queryResult = cardLiveQueries[index];
-      if (!queryConfig) {
+      if (descriptor.mode === "preview_table") {
+        if (!queryResult) {
+          map.set(descriptor.card.id, { status: "idle" });
+          return;
+        }
+        if (queryResult.isLoading || queryResult.isFetching) {
+          map.set(descriptor.card.id, { status: "loading" });
+          return;
+        }
+        if (queryResult.error) {
+          map.set(descriptor.card.id, {
+            status: "error",
+            error: getErrorMessage(queryResult.error, "Failed to refresh preview data."),
+          });
+          return;
+        }
+        const data = queryResult.data as DashboardPreviewCardResponse | null;
+        if (!data) {
+          map.set(descriptor.card.id, { status: "idle" });
+          return;
+        }
+        map.set(descriptor.card.id, {
+          status: "success",
+          previewSample: {
+            columns: Array.isArray(data.columns) ? data.columns : [],
+            columnOrder:
+              Array.isArray(data.columnOrder) && data.columnOrder.length > 0
+                ? data.columnOrder
+                : Array.isArray(data.columns)
+                ? data.columns
+                : [],
+            columnAliases: data.columnAliases ?? {},
+            rows: Array.isArray(data.rows) ? data.rows : [],
+            executedAt: data.executedAt ?? null,
+          },
+        });
+        return;
+      }
+      if (!descriptor.queryConfig) {
         const warning =
-          isVisualCardViewConfig(viewConfig) && effectiveViewMode === "dashboard"
+          isVisualCardViewConfig(descriptor.viewConfig) && effectiveViewMode === "dashboard"
             ? "Open this template in Reports and re-save the card to enable live data."
             : null;
-        map.set(card.id, { status: "idle", warning });
+        map.set(descriptor.card.id, { status: "idle", warning });
         return;
       }
       if (!queryResult) {
-        map.set(card.id, { status: "idle" });
+        map.set(descriptor.card.id, { status: "idle" });
         return;
       }
       if (queryResult.isLoading || queryResult.isFetching) {
-        map.set(card.id, { status: "loading" });
+        map.set(descriptor.card.id, { status: "loading" });
         return;
       }
       if (queryResult.error) {
-        map.set(card.id, {
+        map.set(descriptor.card.id, {
           status: "error",
           error: getErrorMessage(queryResult.error, "Failed to refresh dashboard data."),
         });
@@ -730,10 +866,10 @@ const Home = (props: GenericPageProps) => {
       }
       const data = queryResult.data as ReportQuerySuccessResponse | null;
       if (!data) {
-        map.set(card.id, { status: "idle" });
+        map.set(descriptor.card.id, { status: "idle" });
         return;
       }
-      map.set(card.id, computeLiveCardState(card, viewConfig, { data, isLoading: false }));
+      map.set(descriptor.card.id, computeLiveCardState(descriptor.card, descriptor.viewConfig, { data, isLoading: false }));
     });
     return map;
   }, [cardHydrationDescriptors, cardLiveQueries, effectiveViewMode, shouldHydrateLiveData]);
@@ -910,6 +1046,17 @@ const DashboardCard = ({
   if (isSpotlightCardViewConfig(viewConfig)) {
     return (
       <SpotlightDashboardCard
+        card={card}
+        config={viewConfig}
+        liveState={liveState ?? { status: "idle" }}
+        layoutMetrics={layoutMetrics}
+      />
+    );
+  }
+
+  if (isPreviewTableCardViewConfig(viewConfig)) {
+    return (
+      <PreviewTableDashboardCard
         card={card}
         config={viewConfig}
         liveState={liveState ?? { status: "idle" }}
@@ -1101,7 +1248,123 @@ const SpotlightDashboardCard = ({
       </CardContent>
     </StyledDashboardCard>
   );
-};export default Home;
+};
+
+const PreviewTableDashboardCard = ({
+  card,
+  config,
+  liveState,
+  layoutMetrics,
+}: {
+  card: DashboardCardDto;
+  config: DashboardPreviewTableCardViewConfig;
+  liveState: DashboardCardLiveState;
+  layoutMetrics?: CardLayoutMetrics;
+}) => {
+  const sample = liveState.previewSample;
+  const isLoading = liveState.status === "loading";
+  const error = liveState.status === "error" ? liveState.error : null;
+  const [cardRef, cardSize] = useElementSize<HTMLDivElement>();
+  const layoutHeight = layoutMetrics?.approxHeightPx ?? 360;
+  const measuredHeight = cardSize.height > 0 ? cardSize.height : layoutHeight;
+  const tableHeight = Math.max(160, measuredHeight - 160);
+  const columnOrder =
+    sample && sample.columnOrder.length > 0
+      ? sample.columnOrder
+      : config.columnOrder.length > 0
+      ? config.columnOrder
+      : sample?.columns ?? [];
+  const columns = columnOrder.length > 0 ? columnOrder : sample?.columns ?? [];
+  const columnAliases = sample?.columnAliases ?? config.columnAliases ?? {};
+  const rows = sample?.rows ?? [];
+  const displayedRows = rows.slice(0, 12);
+  const executedLabel = sample?.executedAt
+    ? new Date(sample.executedAt).toLocaleString()
+    : null;
+
+  return (
+    <StyledDashboardCard ref={cardRef} variant="outlined">
+      <CardAccent />
+      <CardContent
+        sx={{
+          flexGrow: 1,
+          display: "flex",
+          flexDirection: "column",
+          gap: 1.5,
+          p: { xs: 2.5, md: 3 },
+        }}
+      >
+        <Stack gap={0.5} alignItems="center" textAlign="center">
+          <CardTitle variant="subtitle1">{card.title}</CardTitle>
+          {config.description && <CardSubtitle variant="body2">{config.description}</CardSubtitle>}
+          {executedLabel && (
+            <CardSubtitle variant="caption">Updated {executedLabel}</CardSubtitle>
+          )}
+        </Stack>
+        {liveState.warning && <Alert severity="warning">{liveState.warning}</Alert>}
+        {isLoading && (
+          <Stack direction="row" gap={1} alignItems="center" justifyContent="center">
+            <CircularProgress size={16} />
+            <CardSubtitle variant="body2">Refreshing preview rows...</CardSubtitle>
+          </Stack>
+        )}
+        {error && <Alert severity="error">{error}</Alert>}
+        {!error && !isLoading && columns.length === 0 && (
+          <CardSubtitle variant="body2" sx={{ textAlign: "center" }}>
+            No preview columns available yet. Re-run the report preview and re-save this card.
+          </CardSubtitle>
+        )}
+        {!error && !isLoading && columns.length > 0 && displayedRows.length === 0 && (
+          <CardSubtitle variant="body2" sx={{ textAlign: "center" }}>
+            No preview rows returned for this configuration.
+          </CardSubtitle>
+        )}
+        {!error && columns.length > 0 && displayedRows.length > 0 && (
+          <TableContainer
+            component={Box}
+            sx={{
+              flexGrow: 1,
+              maxHeight: tableHeight,
+              overflow: "auto",
+              borderRadius: 2,
+              border: "1px solid rgba(15, 23, 42, 0.08)",
+            }}
+          >
+            <Table size="small" stickyHeader>
+              <TableHead>
+                <TableRow>
+                  {columns.map((column) => (
+                    <TableCell key={column} sx={{ fontWeight: 600 }}>
+                      {columnAliases[column] ?? column}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {displayedRows.map((row, rowIndex) => (
+                  <TableRow key={`${card.id}-row-${rowIndex}`}>
+                    {columns.map((column) => (
+                      <TableCell key={`${card.id}-row-${rowIndex}-${column}`}>
+                        {formatPreviewTableValue((row as Record<string, unknown>)[column])}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+        {rows.length > displayedRows.length && (
+          <CardSubtitle variant="caption" sx={{ textAlign: "center" }}>
+            Showing first {displayedRows.length} of {rows.length} rows
+          </CardSubtitle>
+        )}
+      </CardContent>
+    </StyledDashboardCard>
+  );
+};
+
+export default Home;
 
 
 

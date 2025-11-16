@@ -274,9 +274,18 @@ export type DashboardLegacyCardViewConfig = Record<string, unknown> & {
   mode?: string;
 };
 
+export type DashboardPreviewTableCardViewConfig = {
+  mode: "preview_table";
+  description?: string;
+  previewRequest: ReportPreviewRequest;
+  columnOrder: string[];
+  columnAliases: Record<string, string>;
+};
+
 export type DashboardCardViewConfig =
   | DashboardVisualCardViewConfig
   | DashboardSpotlightCardViewConfig
+  | DashboardPreviewTableCardViewConfig
   | DashboardLegacyCardViewConfig
   | null
   | undefined;
@@ -324,6 +333,17 @@ export type DashboardCardPayload = {
   title: string;
   viewConfig?: DashboardCardViewConfig;
   layout?: Record<string, unknown>;
+};
+
+export type DashboardPreviewCardResponse = {
+  cardId: string;
+  dashboardId: string;
+  templateId: string;
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+  columnOrder: string[];
+  columnAliases: Record<string, string>;
+  executedAt?: string | null;
 };
 
 export type DashboardExportResponse = {
@@ -640,6 +660,14 @@ export const useDeleteDashboardCard = () =>
       await axiosInstance.delete(`/reports/dashboards/${dashboardId}/cards/${cardId}`);
     },
   });
+
+export const runDashboardPreviewCard = async (dashboardId: string, cardId: string) => {
+  const response = await axiosInstance.post(
+    `/reports/dashboards/${dashboardId}/cards/${cardId}/preview`,
+    {},
+  );
+  return response.data as DashboardPreviewCardResponse;
+};
 
 export const useExportDashboard = () =>
   useMutation<DashboardExportResponse, AxiosError<{ message?: string }>, string>({
