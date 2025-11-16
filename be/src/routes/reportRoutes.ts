@@ -49,6 +49,7 @@ router.delete('/dashboards/:id', authMiddleware, dashboardController.deleteDashb
 router.post('/dashboards/:id/cards', authMiddleware, dashboardController.upsertDashboardCard);
 router.put('/dashboards/:id/cards/:cardId', authMiddleware, dashboardController.upsertDashboardCard);
 router.delete('/dashboards/:id/cards/:cardId', authMiddleware, dashboardController.deleteDashboardCard);
+router.post('/dashboards/:id/cards/:cardId/preview', authMiddleware, dashboardController.runDashboardPreviewCard);
 router.post('/dashboards/:id/export', authMiddleware, dashboardController.exportDashboard);
 router.get('/home-preferences', authMiddleware, homePreferenceController.getHomePreference);
 router.put('/home-preferences', authMiddleware, homePreferenceController.updateHomePreference);

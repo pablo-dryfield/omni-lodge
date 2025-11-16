@@ -111,6 +111,7 @@ import {
   type DashboardCardViewConfig,
   type DashboardSpotlightCardViewConfig,
   type DashboardVisualCardViewConfig,
+  type DashboardPreviewTableCardViewConfig,
   type TemplateScheduleDto,
   type TemplateSchedulePayload,
   type TemplateScheduleDeliveryTarget,
@@ -791,6 +792,15 @@ const isSpotlightCardViewConfig = (
 ): config is DashboardSpotlightCardViewConfig =>
   Boolean(
     config && config.mode === "spotlight" && typeof (config as DashboardSpotlightCardViewConfig).spotlight === "object",
+  );
+
+const isPreviewTableCardViewConfig = (
+  config: DashboardCardViewConfig | null | undefined,
+): config is DashboardPreviewTableCardViewConfig =>
+  Boolean(
+    config &&
+      config.mode === "preview_table" &&
+      typeof (config as DashboardPreviewTableCardViewConfig).previewRequest === "object",
   );
 
 const getDashboardCardDescription = (viewConfig: DashboardCardViewConfig | null | undefined): string => {
@@ -4286,6 +4296,46 @@ const Reports = (props: GenericPageProps) => {
     handleOpenDashboardModal(cardDraft);
   };
 
+  const handleAddPreviewToDashboard = () => {
+    if (!ensureTemplateReadyForDashboard()) {
+      return;
+    }
+    if (!draft.id) {
+      return;
+    }
+    if (previewColumns.length === 0) {
+      setTemplateError("Run the data preview to capture sample rows before adding this table to a dashboard.");
+      setTemplateSuccess(null);
+      return;
+    }
+    const { payload, error } = buildPreviewRequestPayload();
+    if (!payload) {
+      setTemplateError(error ?? "Unable to build the preview configuration for this dashboard card.");
+      setTemplateSuccess(null);
+      return;
+    }
+    const baseTitle = draft.name && draft.name.trim().length > 0 ? draft.name.trim() : "Report";
+    const defaultTitle = `${baseTitle} preview table`;
+    const viewConfig: DashboardPreviewTableCardViewConfig = {
+      mode: "preview_table",
+      description: `Preview table for ${baseTitle}`,
+      previewRequest: deepClone(payload),
+      columnOrder: [...previewColumns],
+      columnAliases: { ...draft.columnAliases },
+    };
+    const cardDraft: DashboardCardModalDraft = {
+      templateId: draft.id,
+      title: defaultTitle,
+      viewConfig,
+      layout: {
+        ...DASHBOARD_CARD_DEFAULT_LAYOUT,
+        w: 10,
+        h: 6,
+      },
+    };
+    handleOpenDashboardModal(cardDraft);
+  };
+
   const handleAddSpotlightToDashboard = (index: number) => {
     if (!ensureTemplateReadyForDashboard()) {
       return;
@@ -4429,6 +4479,18 @@ const Reports = (props: GenericPageProps) => {
               Run analytics to capture sample values for this spotlight.
             </Text>
           )}
+        </Stack>
+      );
+    }
+    if (isPreviewTableCardViewConfig(viewConfig)) {
+      return (
+        <Stack gap={4}>
+          <Text fw={600} fz="sm">
+            Preview table
+          </Text>
+          <Text fz="xs" c="dimmed">
+            {viewConfig.columnOrder.length} columns captured from the latest preview configuration.
+          </Text>
         </Stack>
       );
     }
@@ -4946,17 +5008,16 @@ const Reports = (props: GenericPageProps) => {
     }));
   };
 
-  const handleRunAnalysis = async () => {
-    setPreviewError(null);
-
+  const buildPreviewRequestPayload = (): {
+    payload?: ReportPreviewRequest;
+    error?: string;
+    visualError?: string;
+  } => {
     if (draft.models.length === 0) {
-      setPreviewResult(null);
-      setPreviewError("Select at least one data model to run a preview.");
-      setVisualResult(null);
-      setVisualQueryError("Select at least one data model to run analytics.");
-      setVisualExecutedAt(null);
-      setIsVisualQueryRunning(false);
-      return;
+      return {
+        error: "Select at least one data model to run a preview.",
+        visualError: "Select at least one data model to run analytics.",
+      };
     }
 
     const sanitizedFields = draft.fields
@@ -4967,13 +5028,10 @@ const Reports = (props: GenericPageProps) => {
       .filter((entry) => entry.fieldIds.length > 0);
 
     if (sanitizedFields.length === 0) {
-      setPreviewResult(null);
-      setPreviewError("Select at least one field to include in your preview.");
-      setVisualResult(null);
-      setVisualQueryError("Select at least one field to power analytics.");
-      setVisualExecutedAt(null);
-      setIsVisualQueryRunning(false);
-      return;
+      return {
+        error: "Select at least one field to include in your preview.",
+        visualError: "Select at least one field to power analytics.",
+      };
     }
 
     if (hasStaleDerivedFields) {
@@ -4981,13 +5039,10 @@ const Reports = (props: GenericPageProps) => {
         staleDerivedFieldNames.length > 0
           ? `Resolve stale derived fields (${staleDerivedFieldNames}) before running a preview.`
           : "Resolve stale derived fields before running a preview.";
-      setPreviewResult(null);
-      setPreviewError(staleMessage);
-      setVisualResult(null);
-      setVisualQueryError(staleMessage);
-      setVisualExecutedAt(null);
-      setIsVisualQueryRunning(false);
-      return;
+      return {
+        error: staleMessage,
+        visualError: staleMessage,
+      };
     }
 
     const aliasMap = new Map<string, string>();
@@ -5001,13 +5056,11 @@ const Reports = (props: GenericPageProps) => {
     );
 
     if (filterErrors.length > 0) {
-      setPreviewResult(null);
-      setPreviewError(filterErrors.join(" | "));
-      setVisualResult(null);
-      setVisualQueryError(filterErrors.join(" | "));
-      setVisualExecutedAt(null);
-      setIsVisualQueryRunning(false);
-      return;
+      const message = filterErrors.join(" | ");
+      return {
+        error: message,
+        visualError: message,
+      };
     }
 
     const orderByPayload = draft.previewOrder.reduce<PreviewOrderClausePayload[]>(
@@ -5097,6 +5150,25 @@ const Reports = (props: GenericPageProps) => {
               }))
           : undefined,
     };
+
+    return { payload };
+  };
+
+  const handleRunAnalysis = async () => {
+    setPreviewError(null);
+
+    const { payload, error, visualError } = buildPreviewRequestPayload();
+    if (!payload) {
+      const previewMessage = error ?? "Unable to build preview configuration.";
+      const analyticsMessage = visualError ?? previewMessage;
+      setPreviewResult(null);
+      setPreviewError(previewMessage);
+      setVisualResult(null);
+      setVisualQueryError(analyticsMessage);
+      setVisualExecutedAt(null);
+      setIsVisualQueryRunning(false);
+      return;
+    }
 
     try {
       const response = await runPreview(payload);
@@ -8401,10 +8473,21 @@ const Reports = (props: GenericPageProps) => {
                 </Paper>
 
                 <Paper p="md" radius="lg" shadow="xs" withBorder>
-                  <Group justify="space-between" mb="md">
-                    <Group gap="xs">
-                      <Text fw={600}>Data preview</Text>
-                      <Badge variant="light">{previewRows.length} rows</Badge>
+                  <Group justify="space-between" mb="md" align="center">
+                    <Group gap="xs" align="center">
+                      <Group gap="xs" align="center">
+                        <Text fw={600}>Data preview</Text>
+                        <Badge variant="light">{previewRows.length} rows</Badge>
+                      </Group>
+                      <Button
+                        variant="subtle"
+                        size="xs"
+                        leftSection={<IconLayoutGrid size={14} />}
+                        onClick={handleAddPreviewToDashboard}
+                        disabled={previewColumns.length === 0}
+                      >
+                        Add to dashboard
+                      </Button>
                     </Group>
                     <Text fz="xs" c="dimmed">
                       {lastRunAt === "Not run yet" ? "Preview not run yet" : `Last run: ${lastRunAt}`}

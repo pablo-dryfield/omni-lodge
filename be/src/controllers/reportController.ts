@@ -377,7 +377,7 @@ type FilterOperator =
   | "is_true"
   | "is_false";
 
-type PreviewFilterClausePayload = {
+export type PreviewFilterClausePayload = {
   leftModelId: string;
   leftFieldId: string;
   operator: FilterOperator;
@@ -392,7 +392,7 @@ type PreviewFilterClausePayload = {
   };
 };
 
-type PreviewOrderClausePayload = {
+export type PreviewOrderClausePayload = {
   source: "model" | "derived";
   modelId?: string | null;
   fieldId: string;
@@ -493,7 +493,7 @@ const validateDerivedFieldJoinCoverage = (
   }
 };
 
-type ReportPreviewRequest = {
+export type ReportPreviewRequest = {
   models: string[];
   fields: Array<{ modelId: string; fieldIds: string[] }>;
   joins?: Array<{
@@ -1889,7 +1889,7 @@ const normalizeSelectQueryConfig = (config: QueryConfig): ReportPreviewRequest =
   };
 };
 
-const executePreviewQuery = async (
+export const executePreviewQuery = async (
   payload: ReportPreviewRequest,
 ): Promise<{ result: ReportPreviewResponse; sql: string; meta: Record<string, unknown> }> => {
   if (!payload || !Array.isArray(payload.models) || payload.models.length === 0) {

@@ -4,12 +4,133 @@ import ReportDashboard from "../models/ReportDashboard.js";
 import ReportDashboardCard from "../models/ReportDashboardCard.js";
 import { AuthenticatedRequest } from "../types/AuthenticatedRequest";
 import { ensureReportingAccess } from "../utils/reportingAccess.js";
+import {
+  executePreviewQuery,
+  type PreviewFilterClausePayload,
+  type ReportPreviewRequest,
+} from "./reportController.js";
+import { PreviewQueryError } from "../errors/PreviewQueryError.js";
 
 const sanitizeLayout = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 
 const sanitizeConfig = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+
+const PREVIEW_CARD_MODE = "preview_table";
+const FILTER_OPERATORS = new Set<PreviewFilterClausePayload["operator"]>([
+  "eq",
+  "neq",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "between",
+  "contains",
+  "starts_with",
+  "ends_with",
+  "is_null",
+  "is_not_null",
+  "is_true",
+  "is_false",
+]);
+
+type PreviewTableCardConfig = {
+  mode: typeof PREVIEW_CARD_MODE;
+  previewRequest: ReportPreviewRequest;
+  columnOrder: string[];
+  columnAliases: Record<string, string>;
+};
+
+const sanitizeStringArray = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value
+        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+        .filter((entry) => entry.length > 0)
+    : [];
+
+const sanitizeStringRecord = (value: unknown): Record<string, string> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const entries = Object.entries(value as Record<string, unknown>).filter(
+    ([key, val]) => typeof key === "string" && typeof val === "string",
+  ) as Array<[string, string]>;
+  return entries.reduce<Record<string, string>>((acc, [key, val]) => {
+    const normalizedKey = key.trim();
+    const normalizedValue = val.trim();
+    if (normalizedKey.length > 0 && normalizedValue.length > 0) {
+      acc[normalizedKey] = normalizedValue;
+    }
+    return acc;
+  }, {});
+};
+
+const sanitizePreviewRequest = (value: unknown): ReportPreviewRequest | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const payload = value as Record<string, unknown>;
+  const models = sanitizeStringArray(payload.models);
+  if (models.length === 0) {
+    return null;
+  }
+  const fieldsInput = Array.isArray(payload.fields) ? payload.fields : [];
+  const fields = fieldsInput
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const record = entry as Record<string, unknown>;
+      const modelId = typeof record.modelId === "string" ? record.modelId.trim() : "";
+      const fieldIds = sanitizeStringArray(record.fieldIds);
+      if (!modelId || fieldIds.length === 0) {
+        return null;
+      }
+      return { modelId, fieldIds };
+    })
+    .filter((entry): entry is { modelId: string; fieldIds: string[] } => Boolean(entry));
+  if (fields.length === 0) {
+    return null;
+  }
+
+  const clone = JSON.parse(JSON.stringify(value)) as ReportPreviewRequest;
+  clone.models = models;
+  clone.fields = fields;
+  return clone;
+};
+
+const parsePreviewTableConfig = (
+  value: Record<string, unknown> | null | undefined,
+): PreviewTableCardConfig | null => {
+  const mode = value ? (value as { mode?: unknown }).mode : undefined;
+  if (!value || mode !== PREVIEW_CARD_MODE) {
+    return null;
+  }
+  const previewRequest = sanitizePreviewRequest((value as { previewRequest?: unknown }).previewRequest);
+  if (!previewRequest) {
+    return null;
+  }
+  return {
+    mode: PREVIEW_CARD_MODE,
+    previewRequest,
+    columnOrder: sanitizeStringArray((value as { columnOrder?: unknown }).columnOrder),
+    columnAliases: sanitizeStringRecord((value as { columnAliases?: unknown }).columnAliases),
+  };
+};
+
+const normalizeViewConfig = (value: unknown): Record<string, unknown> => {
+  const sanitized = sanitizeConfig(value);
+  const mode = (sanitized as { mode?: unknown }).mode;
+  if (mode === PREVIEW_CARD_MODE) {
+    const previewConfig = parsePreviewTableConfig(sanitized);
+    if (!previewConfig) {
+      throw new Error("Invalid preview table configuration.");
+    }
+    return previewConfig;
+  }
+  return sanitized;
+};
 
 export const listDashboards = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -267,18 +388,28 @@ export const upsertDashboardCard = async (req: Request, res: Response): Promise<
       }
     }
 
+    let normalizedViewConfig: Record<string, unknown>;
+    try {
+      normalizedViewConfig = normalizeViewConfig(viewConfig);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Invalid view configuration supplied for dashboard card.";
+      res.status(400).json({ message });
+      return;
+    }
+
     if (!card) {
       card = await ReportDashboardCard.create({
         dashboardId: dashboard.id,
         templateId: templateId.trim(),
         title: title.trim(),
-        viewConfig: sanitizeConfig(viewConfig),
+        viewConfig: normalizedViewConfig,
         layout: sanitizeLayout(layout),
       });
     } else {
       card.templateId = templateId.trim();
       card.title = title.trim();
-      card.viewConfig = sanitizeConfig(viewConfig);
+      card.viewConfig = normalizedViewConfig;
       card.layout = sanitizeLayout(layout);
       await card.save();
     }
@@ -323,5 +454,60 @@ export const deleteDashboardCard = async (req: Request, res: Response): Promise<
   } catch (error) {
     console.error("Failed to delete dashboard card", error);
     res.status(500).json({ message: "Failed to delete dashboard card" });
+  }
+};
+
+export const runDashboardPreviewCard = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    ensureReportingAccess(req);
+    const { id, cardId } = req.params;
+    if (!cardId) {
+      res.status(400).json({ message: "Card id is required." });
+      return;
+    }
+
+    const normalizedDashboardId =
+      typeof id === "string" && id.trim().length > 0 && id !== "undefined" ? id.trim() : null;
+
+    const card = normalizedDashboardId
+      ? await ReportDashboardCard.findOne({
+          where: { id: cardId, dashboardId: normalizedDashboardId },
+        })
+      : await ReportDashboardCard.findByPk(cardId);
+    if (!card) {
+      res.status(404).json({ message: "Dashboard card not found." });
+      return;
+    }
+
+    const previewConfig = parsePreviewTableConfig(
+      card.viewConfig && typeof card.viewConfig === "object" && !Array.isArray(card.viewConfig)
+        ? (card.viewConfig as Record<string, unknown>)
+        : null,
+    );
+    if (!previewConfig) {
+      res.status(400).json({ message: "This dashboard card does not store preview table data." });
+      return;
+    }
+
+    const { result } = await executePreviewQuery(previewConfig.previewRequest);
+    res.json({
+      cardId: card.id,
+      dashboardId: card.dashboardId,
+      templateId: card.templateId,
+      columns: result.columns,
+      rows: result.rows,
+      columnOrder: previewConfig.columnOrder,
+      columnAliases: previewConfig.columnAliases,
+      executedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    if (error instanceof PreviewQueryError) {
+      res.status(error.status).json(
+        error.details ? { message: error.message, details: error.details } : { message: error.message },
+      );
+      return;
+    }
+    console.error("Failed to run dashboard preview card", error);
+    res.status(500).json({ message: "Failed to run preview for this dashboard card." });
   }
 };
