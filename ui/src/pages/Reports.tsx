@@ -34,7 +34,9 @@ import {
   SimpleGrid,
   Switch,
 } from "@mantine/core";
+import { DatePickerInput } from "@mantine/dates";
 import { useDebouncedValue } from "@mantine/hooks";
+import dayjs from "dayjs";
 import {
   IconAdjustments,
   IconAlertTriangle,
@@ -227,6 +229,7 @@ type FilterOperator =
   | "gte"
   | "lt"
   | "lte"
+  | "between"
   | "contains"
   | "starts_with"
   | "ends_with"
@@ -245,6 +248,10 @@ type ReportFilter = {
   rightFieldId?: string;
   value?: string;
   valueKind: FilterValueKind;
+  range?: {
+    from?: string;
+    to?: string;
+  };
 };
 
 type FilterFieldOption = {
@@ -828,6 +835,7 @@ const normalizeFiltersForQuery = (
     gte: "gte",
     lt: "lt",
     lte: "lte",
+    between: "between",
   };
 
   const normalized: QueryConfigFilter[] = [];
@@ -856,7 +864,31 @@ const normalizeFiltersForQuery = (
     }
 
     let value: QueryConfigFilterValue | undefined;
-    if (filter.valueKind === "boolean") {
+    if (filter.operator === "between") {
+      const rawFrom = filter.range?.from ?? "";
+      const rawTo = filter.range?.to ?? "";
+      const from = rawFrom.trim();
+      const to = rawTo.trim();
+      if (!from || !to) {
+        warnings.push(
+          `Filter on ${filter.leftModelId}.${filter.leftFieldId} requires both start and end values.`,
+        );
+        return;
+      }
+      if (filter.valueKind === "number") {
+        const fromNumeric = Number(from);
+        const toNumeric = Number(to);
+        if (!Number.isFinite(fromNumeric) || !Number.isFinite(toNumeric)) {
+          warnings.push(
+            `Filter on ${filter.leftModelId}.${filter.leftFieldId} has invalid numeric bounds.`,
+          );
+          return;
+        }
+        value = { from: fromNumeric, to: toNumeric };
+      } else {
+        value = { from, to };
+      }
+    } else if (filter.valueKind === "boolean") {
       if (filter.value === "true") {
         value = true;
       } else if (filter.value === "false") {
@@ -1077,6 +1109,12 @@ const FILTER_OPERATOR_LIBRARY: FilterOperatorDefinition[] = [
     allowFieldComparison: true,
   },
   {
+    value: "between",
+    label: "Between",
+    types: ["number", "currency", "percentage", "date"],
+    requiresValue: true,
+  },
+  {
     value: "contains",
     label: "Contains",
     types: ["string", "id"],
@@ -1167,6 +1205,17 @@ const formatLastUpdatedLabel = (value?: string | Date | null) => {
     hour: "numeric",
     minute: "2-digit",
   });
+};
+
+const formatDateForFilter = (date: Date | null): string | undefined =>
+  date ? dayjs(date).format("YYYY-MM-DD") : undefined;
+
+const parseDateForFilter = (value?: string) => {
+  if (!value) {
+    return null;
+  }
+  const parsed = dayjs(value, "YYYY-MM-DD", true);
+  return parsed.isValid() ? parsed.toDate() : null;
 };
 
 const normalizeQueryConfig = (candidate: unknown): QueryConfig | null => {
@@ -5576,6 +5625,11 @@ const Reports = (props: GenericPageProps) => {
       newFilter.value = undefined;
     }
 
+    if (newFilter.operator === "between") {
+      newFilter.value = undefined;
+      newFilter.range = {};
+    }
+
     setDraft((current) => ({
       ...current,
       filters: [...current.filters, newFilter],
@@ -5615,6 +5669,7 @@ const Reports = (props: GenericPageProps) => {
         nextFilter.rightModelId = undefined;
         nextFilter.rightFieldId = undefined;
         nextFilter.value = undefined;
+        nextFilter.range = undefined;
         return nextFilter;
       }
 
@@ -5640,6 +5695,15 @@ const Reports = (props: GenericPageProps) => {
         }
       }
 
+      if (nextFilter.operator === "between") {
+        nextFilter.rightType = "value";
+        nextFilter.rightModelId = undefined;
+        nextFilter.rightFieldId = undefined;
+        nextFilter.value = undefined;
+        nextFilter.range = nextFilter.range ?? {};
+        return nextFilter;
+      }
+
       if (nextFilter.rightType === "value") {
         nextFilter.value =
           nextValueKind === "boolean"
@@ -5647,6 +5711,7 @@ const Reports = (props: GenericPageProps) => {
               ? "false"
               : "true"
             : "";
+        nextFilter.range = undefined;
       }
 
       return nextFilter;
@@ -5668,6 +5733,7 @@ const Reports = (props: GenericPageProps) => {
         nextFilter.rightModelId = undefined;
         nextFilter.rightFieldId = undefined;
         nextFilter.value = undefined;
+        nextFilter.range = undefined;
         return nextFilter;
       }
 
@@ -5678,12 +5744,18 @@ const Reports = (props: GenericPageProps) => {
       }
 
       if (nextFilter.rightType === "value") {
+        if (operator === "between") {
+          nextFilter.value = undefined;
+          nextFilter.range = nextFilter.range ?? {};
+          return nextFilter;
+        }
         nextFilter.value =
           nextFilter.valueKind === "boolean"
             ? nextFilter.value === "false"
               ? "false"
               : "true"
             : nextFilter.value ?? "";
+        nextFilter.range = undefined;
       }
 
       return nextFilter;
@@ -5692,6 +5764,9 @@ const Reports = (props: GenericPageProps) => {
 
   const handleFilterComparisonModeChange = (filterId: string, mode: FilterComparisonMode) => {
     updateFilter(filterId, (filter) => {
+      if (filter.operator === "between") {
+        return filter;
+      }
       if (mode === "field") {
         const operatorDefinition = FILTER_OPERATOR_LOOKUP.get(filter.operator);
         if (!operatorDefinition?.allowFieldComparison) {
@@ -5752,10 +5827,49 @@ const Reports = (props: GenericPageProps) => {
   };
 
   const handleFilterValueChange = (filterId: string, rawValue: string | null) => {
-    updateFilter(filterId, (filter) => ({
-      ...filter,
-      value: rawValue ?? "",
-    }));
+    updateFilter(filterId, (filter) => {
+      if (filter.operator === "between") {
+        return filter;
+      }
+      return {
+        ...filter,
+        value: rawValue ?? "",
+      };
+    });
+  };
+
+  const handleFilterRangeChange = (
+    filterId: string,
+    patch: { from?: string | undefined; to?: string | undefined },
+  ) => {
+    updateFilter(filterId, (filter) => {
+      const nextRange = { ...(filter.range ?? {}), ...patch };
+      const normalizedRange = {
+        from:
+          typeof nextRange.from === "string" && nextRange.from.length > 0
+            ? nextRange.from.trim()
+            : undefined,
+        to:
+          typeof nextRange.to === "string" && nextRange.to.length > 0
+            ? nextRange.to.trim()
+            : undefined,
+      };
+      const hasValues =
+        (normalizedRange.from && normalizedRange.from.length > 0) ||
+        (normalizedRange.to && normalizedRange.to.length > 0);
+      return {
+        ...filter,
+        range: hasValues ? normalizedRange : undefined,
+      };
+    });
+  };
+
+  const handleFilterDateRangeChange = (filterId: string, value: [Date | null, Date | null]) => {
+    const [from, to] = value;
+    handleFilterRangeChange(filterId, {
+      from: formatDateForFilter(from),
+      to: formatDateForFilter(to),
+    });
   };
 
   useEffect(() => {
@@ -5845,9 +5959,19 @@ const Reports = (props: GenericPageProps) => {
             }
           }
 
+          if (normalized.operator === "between") {
+            normalized.rightType = "value";
+            normalized.rightModelId = undefined;
+            normalized.rightFieldId = undefined;
+            normalized.value = undefined;
+            normalized.range = normalized.range ?? {};
+            return normalized;
+          }
+
           if (normalized.rightType === "value" && normalized.valueKind === "boolean") {
             normalized.value = normalized.value === "false" ? "false" : "true";
           }
+          normalized.range = undefined;
 
           return normalized;
         })
@@ -6089,12 +6213,6 @@ const Reports = (props: GenericPageProps) => {
         return;
       }
 
-      const trimmedValue = (filter.value ?? "").trim();
-      if (filter.valueKind !== "boolean" && trimmedValue.length === 0) {
-        errors.push(`Provide a value for the filter on "${fieldLabel}".`);
-        return;
-      }
-
       const buildLiteral = (kind: FilterValueKind, value: string): string | null => {
         if (kind === "number") {
           const numeric = Number(value);
@@ -6115,6 +6233,28 @@ const Reports = (props: GenericPageProps) => {
         return `'${escapeSqlLiteral(value)}'`;
       };
 
+      if (filter.operator === "between") {
+        const rangeFrom = (filter.range?.from ?? "").trim();
+        const rangeTo = (filter.range?.to ?? "").trim();
+        if (!rangeFrom || !rangeTo) {
+          errors.push(`Provide both start and end values for "${fieldLabel}".`);
+          return;
+        }
+        const fromLiteral = buildLiteral(filter.valueKind, rangeFrom);
+        const toLiteral = buildLiteral(filter.valueKind, rangeTo);
+        if (!fromLiteral || !toLiteral) {
+          return;
+        }
+        clauses.push(`${leftExpression} BETWEEN ${fromLiteral} AND ${toLiteral}`);
+        return;
+      }
+
+      const trimmedValue = (filter.value ?? "").trim();
+      if (filter.valueKind !== "boolean" && trimmedValue.length === 0) {
+        errors.push(`Provide a value for the filter on "${fieldLabel}".`);
+        return;
+      }
+
       switch (filter.operator) {
         case "eq":
         case "neq":
@@ -6129,6 +6269,7 @@ const Reports = (props: GenericPageProps) => {
             gte: ">=",
             lt: "<",
             lte: "<=",
+            between: "",
             contains: "",
             starts_with: "",
             ends_with: "",
@@ -7645,7 +7786,103 @@ const Reports = (props: GenericPageProps) => {
                             : null;
 
                         let valueControl: JSX.Element | null = null;
-                        if (requiresValue) {
+                        if (filter.operator === "between") {
+                          if (filter.valueKind === "date") {
+                            const dateRange: [Date | null, Date | null] = [
+                              parseDateForFilter(filter.range?.from),
+                              parseDateForFilter(filter.range?.to),
+                            ];
+                            valueControl = (
+                              <DatePickerInput
+                                label="Between"
+                                type="range"
+                                allowSingleDateInRange
+                                value={dateRange}
+                                onChange={(value) =>
+                                  handleFilterDateRangeChange(
+                                    filter.id,
+                                    value as [Date | null, Date | null],
+                                  )
+                                }
+                                valueFormat="MMM DD, YYYY"
+                              />
+                            );
+                          } else if (filter.valueKind === "number") {
+                            const fromNumeric =
+                              filter.range?.from && filter.range.from.length > 0
+                                ? Number(filter.range.from)
+                                : undefined;
+                            const toNumeric =
+                              filter.range?.to && filter.range.to.length > 0
+                                ? Number(filter.range.to)
+                                : undefined;
+                            valueControl = (
+                              <Group align="flex-end" gap="sm" wrap="wrap">
+                                <NumberInput
+                                  label="From"
+                                  value={
+                                    typeof fromNumeric === "number" && Number.isFinite(fromNumeric)
+                                      ? fromNumeric
+                                      : undefined
+                                  }
+                                  onChange={(value) =>
+                                    handleFilterRangeChange(filter.id, {
+                                      from:
+                                        value === null || value === ""
+                                          ? undefined
+                                          : String(value),
+                                    })
+                                  }
+                                  allowDecimal
+                                  w={140}
+                                />
+                                <NumberInput
+                                  label="To"
+                                  value={
+                                    typeof toNumeric === "number" && Number.isFinite(toNumeric)
+                                      ? toNumeric
+                                      : undefined
+                                  }
+                                  onChange={(value) =>
+                                    handleFilterRangeChange(filter.id, {
+                                      to:
+                                        value === null || value === ""
+                                          ? undefined
+                                          : String(value),
+                                    })
+                                  }
+                                  allowDecimal
+                                  w={140}
+                                />
+                              </Group>
+                            );
+                          } else {
+                            valueControl = (
+                              <Group align="flex-end" gap="sm" wrap="wrap">
+                                <TextInput
+                                  label="From"
+                                  value={filter.range?.from ?? ""}
+                                  onChange={(event) =>
+                                    handleFilterRangeChange(filter.id, {
+                                      from: event.currentTarget.value,
+                                    })
+                                  }
+                                  w={200}
+                                />
+                                <TextInput
+                                  label="To"
+                                  value={filter.range?.to ?? ""}
+                                  onChange={(event) =>
+                                    handleFilterRangeChange(filter.id, {
+                                      to: event.currentTarget.value,
+                                    })
+                                  }
+                                  w={200}
+                                />
+                              </Group>
+                            );
+                          }
+                        } else if (requiresValue) {
                           if (comparisonMode === "field" && comparableFieldOptions.length > 0) {
                             valueControl = (
                               <Select

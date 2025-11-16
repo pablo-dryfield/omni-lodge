@@ -53,6 +53,7 @@ export type PreviewFilterClausePayload = {
     | "gte"
     | "lt"
     | "lte"
+    | "between"
     | "contains"
     | "starts_with"
     | "ends_with"
@@ -65,6 +66,10 @@ export type PreviewFilterClausePayload = {
   rightFieldId?: string;
   value?: string | number | boolean | null;
   valueKind?: "string" | "number" | "date" | "boolean";
+  range?: {
+    from?: string | number | boolean | null;
+    to?: string | number | boolean | null;
+  };
 };
 
 export type PreviewOrderRuleDto = {
