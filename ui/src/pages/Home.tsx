@@ -24,11 +24,12 @@ import {
   TableRow,
   TableCell,
   TableContainer,
+  TextField,
 } from "@mui/material";
 import { styled } from "@mui/material/styles";
 import { createTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import {
@@ -67,6 +68,8 @@ import {
   type ReportQuerySuccessResponse,
   type QueryConfig,
   type DashboardPreviewCardResponse,
+  type DashboardPreviewPeriodOverride,
+  type DashboardPreviewPeriodPreset,
 } from "../api/reports";
 
 const PAGE_SLUG = PAGE_SLUGS.dashboard;
@@ -197,6 +200,7 @@ type CardHydrationDescriptor =
       card: DashboardCardDto;
       viewConfig: DashboardPreviewTableCardViewConfig;
       cacheKey: string;
+      periodOverride: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null;
     }
   | {
       mode: "visual" | "legacy";
@@ -205,6 +209,8 @@ type CardHydrationDescriptor =
       queryConfig: QueryConfig | null;
       cacheKey: string;
     };
+
+type PreviewPeriodValue = "template" | DashboardPreviewPeriodPreset | "custom";
 
 const isVisualCardViewConfig = (
   config: DashboardCardViewConfig | null | undefined,
@@ -696,6 +702,24 @@ const Home = (props: GenericPageProps) => {
   const dashboards = dashboardsQuery.data?.dashboards ?? [];
   const activeDashboard = dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null;
   const activeCards = useMemo(() => activeDashboard?.cards ?? [], [activeDashboard]);
+  useEffect(() => {
+    setPreviewCardPeriods((current) => {
+      if (activeCards.length === 0) {
+        return Object.keys(current).length === 0 ? current : {};
+      }
+      const activeIds = new Set(activeCards.map((card) => card.id));
+      let changed = false;
+      const next: typeof current = {};
+      Object.entries(current).forEach(([cardId, value]) => {
+        if (activeIds.has(cardId)) {
+          next[cardId] = value;
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : current;
+    });
+  }, [activeCards]);
   const orderedActiveCards = useMemo(
     () =>
       activeCards
@@ -717,6 +741,29 @@ const Home = (props: GenericPageProps) => {
   const gridGap = isSmallScreen ? 1 : 2;
   const useAutoRows = gridColumns === 1;
   const shouldHydrateLiveData = canUseDashboards && effectiveViewMode === "dashboard";
+  const [previewCardPeriods, setPreviewCardPeriods] = useState<
+    Record<string, DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null>
+  >({});
+
+  const handlePreviewCardPeriodChange = useCallback(
+    (cardId: string, override: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null) => {
+      setPreviewCardPeriods((current) => {
+        if (override === null) {
+          if (!current[cardId]) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[cardId];
+          return next;
+        }
+        return {
+          ...current,
+          [cardId]: override,
+        };
+      });
+    },
+    [],
+  );
 
   const cardHydrationDescriptors = useMemo<CardHydrationDescriptor[]>(() => {
     if (!shouldHydrateLiveData || activeCards.length === 0) {
@@ -725,16 +772,19 @@ const Home = (props: GenericPageProps) => {
     return activeCards.map((card) => {
       const rawViewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
       if (isPreviewTableCardViewConfig(rawViewConfig)) {
+        const periodOverride = previewCardPeriods[card.id] ?? null;
         const cacheKey = JSON.stringify({
           mode: "preview",
           templateId: card.templateId,
           config: rawViewConfig.previewRequest,
+          period: periodOverride ?? "template",
         });
         return {
           mode: "preview_table" as const,
           card,
           viewConfig: rawViewConfig,
           cacheKey,
+          periodOverride,
         };
       }
       let queryConfig: QueryConfig | null = null;
@@ -756,7 +806,7 @@ const Home = (props: GenericPageProps) => {
         cacheKey: queryConfig ? JSON.stringify(queryConfig) : "missing",
       };
     });
-  }, [activeCards, shouldHydrateLiveData]);
+  }, [activeCards, previewCardPeriods, shouldHydrateLiveData]);
 
   const cardLiveQueries = useQueries({
     queries: cardHydrationDescriptors.map((descriptor) => {
@@ -772,7 +822,9 @@ const Home = (props: GenericPageProps) => {
           queryKey: ["reports", "dashboard-card", descriptor.card.id, descriptor.cacheKey],
           enabled: shouldHydrateLiveData,
           queryFn: async () =>
-            runDashboardPreviewCard(descriptor.card.dashboardId, descriptor.card.id),
+            runDashboardPreviewCard(descriptor.card.dashboardId, descriptor.card.id, {
+              period: descriptor.periodOverride ?? undefined,
+            }),
           staleTime: 30 * 1000,
         };
       }
@@ -978,6 +1030,8 @@ const Home = (props: GenericPageProps) => {
                 card={card}
                 liveState={liveCardSamples.get(card.id)}
                 layoutMetrics={{ columnSpan, rowSpan, approxHeightPx }}
+                previewPeriodOverride={previewCardPeriods[card.id] ?? null}
+                onPreviewPeriodChange={(nextOverride) => handlePreviewCardPeriodChange(card.id, nextOverride)}
               />
             </Box>
           );
@@ -1005,10 +1059,14 @@ const DashboardCard = ({
   card,
   liveState,
   layoutMetrics,
+  previewPeriodOverride,
+  onPreviewPeriodChange,
 }: {
   card: DashboardCardDto;
   liveState?: DashboardCardLiveState;
   layoutMetrics?: CardLayoutMetrics;
+  previewPeriodOverride?: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null;
+  onPreviewPeriodChange?: (override: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null) => void;
 }) => {
   const viewConfig = card.viewConfig as DashboardCardViewConfig;
   if (!viewConfig || typeof viewConfig !== "object") {
@@ -1061,6 +1119,8 @@ const DashboardCard = ({
         config={viewConfig}
         liveState={liveState ?? { status: "idle" }}
         layoutMetrics={layoutMetrics}
+        periodOverride={previewPeriodOverride ?? null}
+        onPeriodChange={onPreviewPeriodChange}
       />
     );
   }
@@ -1255,11 +1315,15 @@ const PreviewTableDashboardCard = ({
   config,
   liveState,
   layoutMetrics,
+  periodOverride,
+  onPeriodChange,
 }: {
   card: DashboardCardDto;
   config: DashboardPreviewTableCardViewConfig;
   liveState: DashboardCardLiveState;
   layoutMetrics?: CardLayoutMetrics;
+  periodOverride: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null;
+  onPeriodChange?: (override: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null) => void;
 }) => {
   const sample = liveState.previewSample;
   const isLoading = liveState.status === "loading";
@@ -1277,6 +1341,103 @@ const PreviewTableDashboardCard = ({
   const columns = columnOrder.length > 0 ? columnOrder : sample?.columns ?? [];
   const columnAliases = sample?.columnAliases ?? config.columnAliases ?? {};
   const rows = sample?.rows ?? [];
+  const canOverridePeriod = Boolean(config.dateFilter);
+  const [selectedPeriod, setSelectedPeriod] = useState<PreviewPeriodValue>("template");
+  const [customRange, setCustomRange] = useState<{ from: string; to: string }>({ from: "", to: "" });
+  const periodOverrideSignature = useMemo(() => {
+    if (!periodOverride) {
+      return "template";
+    }
+    if (typeof periodOverride === "string") {
+      return periodOverride;
+    }
+    if (periodOverride.mode === "custom") {
+      return `custom:${periodOverride.from}:${periodOverride.to}`;
+    }
+    return periodOverride.mode;
+  }, [periodOverride]);
+  useEffect(() => {
+    if (!periodOverride) {
+      setSelectedPeriod("template");
+      setCustomRange({ from: "", to: "" });
+      return;
+    }
+    if (typeof periodOverride === "string") {
+      setSelectedPeriod(periodOverride);
+      return;
+    }
+    if (periodOverride.mode === "custom") {
+      setSelectedPeriod("custom");
+      setCustomRange({
+        from: periodOverride.from,
+        to: periodOverride.to,
+      });
+      return;
+    }
+    setSelectedPeriod(periodOverride.mode);
+  }, [card.id, periodOverrideSignature, periodOverride]);
+  const handlePresetSelection = (value: PreviewPeriodValue) => {
+    if (value === selectedPeriod) {
+      return;
+    }
+    if (!canOverridePeriod && value !== "template") {
+      return;
+    }
+    setSelectedPeriod(value);
+    if (!onPeriodChange) {
+      return;
+    }
+    if (value === "template") {
+      onPeriodChange(null);
+      return;
+    }
+    if (value === "this_month" || value === "last_month") {
+      onPeriodChange(value);
+    }
+  };
+  const handleCustomRangeChange = (key: "from" | "to", nextValue: string) => {
+    setCustomRange((current) => ({
+      ...current,
+      [key]: nextValue,
+    }));
+  };
+  const handleApplyCustomRange = () => {
+    if (!onPeriodChange || !canOverridePeriod) {
+      return;
+    }
+    if (!customRange.from || !customRange.to) {
+      return;
+    }
+    onPeriodChange({
+      mode: "custom",
+      from: customRange.from,
+      to: customRange.to,
+    });
+  };
+  const periodDescription = useMemo(() => {
+    if (!canOverridePeriod) {
+      return "Add a date filter to this report to enable period overrides.";
+    }
+    if (!periodOverride) {
+      return "Using the template's saved date filter.";
+    }
+    if (typeof periodOverride === "string") {
+      return periodOverride === "this_month" ? "Filtering to this month." : "Filtering to last month.";
+    }
+    if (periodOverride.mode === "custom") {
+      return `Filtering from ${periodOverride.from} to ${periodOverride.to}.`;
+    }
+    return "Using the template's saved date filter.";
+  }, [canOverridePeriod, periodOverride]);
+  const periodOptions: Array<{ value: PreviewPeriodValue; label: string }> = useMemo(
+    () => [
+      { value: "template", label: "Template default" },
+      { value: "this_month", label: "This month" },
+      { value: "last_month", label: "Last month" },
+      { value: "custom", label: "Custom range" },
+    ],
+    [],
+  );
   const [page, setPage] = useState(0);
   const rowsPerPage = 10;
   useEffect(() => {
@@ -1308,6 +1469,63 @@ const PreviewTableDashboardCard = ({
           {executedLabel && (
             <CardSubtitle variant="caption">Updated {executedLabel}</CardSubtitle>
           )}
+        </Stack>
+        <Stack gap={selectedPeriod === "custom" ? 1 : 0.5}>
+          <Stack
+            direction={{ xs: "column", md: "row" }}
+            gap={1}
+            alignItems={{ xs: "stretch", md: "center" }}
+            justifyContent="space-between"
+          >
+            <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="center">
+              {periodOptions.map((option) => (
+                <Button
+                  key={option.value}
+                  size="small"
+                  variant={selectedPeriod === option.value ? "contained" : "outlined"}
+                  onClick={() => handlePresetSelection(option.value)}
+                  disabled={!canOverridePeriod && option.value !== "template"}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </Stack>
+            {selectedPeriod === "custom" && (
+              <Stack direction={{ xs: "column", sm: "row" }} gap={1} alignItems="center">
+                <TextField
+                  type="date"
+                  size="small"
+                  label="Start"
+                  value={customRange.from}
+                  onChange={(event) => handleCustomRangeChange("from", event.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                  disabled={!canOverridePeriod}
+                />
+                <TextField
+                  type="date"
+                  size="small"
+                  label="End"
+                  value={customRange.to}
+                  onChange={(event) => handleCustomRangeChange("to", event.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                  disabled={!canOverridePeriod}
+                />
+                <Button
+                  size="small"
+                  variant="contained"
+                  onClick={handleApplyCustomRange}
+                  disabled={
+                    !canOverridePeriod || customRange.from.trim().length === 0 || customRange.to.trim().length === 0
+                  }
+                >
+                  Apply
+                </Button>
+              </Stack>
+            )}
+          </Stack>
+          <CardSubtitle variant="caption" sx={{ textAlign: "center" }}>
+            {periodDescription}
+          </CardSubtitle>
         </Stack>
         {liveState.warning && <Alert severity="warning">{liveState.warning}</Alert>}
         {isLoading && (
@@ -1368,12 +1586,17 @@ const PreviewTableDashboardCard = ({
               Showing {rows.length === 0 ? 0 : startIndex + 1}-{startIndex + displayedRows.length} of {rows.length} rows
             </CardSubtitle>
             <Stack direction="row" gap={1}>
-              <Button variant="subtle" size="xs" onClick={() => setPage((prev) => Math.max(0, prev - 1))} disabled={safePage === 0}>
+              <Button
+                variant="text"
+                size="small"
+                onClick={() => setPage((prev) => Math.max(0, prev - 1))}
+                disabled={safePage === 0}
+              >
                 Previous
               </Button>
               <Button
-                variant="subtle"
-                size="xs"
+                variant="text"
+                size="small"
                 onClick={() => setPage((prev) => Math.min(totalPages - 1, prev + 1))}
                 disabled={safePage >= totalPages - 1}
               >

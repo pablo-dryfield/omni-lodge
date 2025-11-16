@@ -4316,12 +4316,14 @@ const Reports = (props: GenericPageProps) => {
     }
     const baseTitle = draft.name && draft.name.trim().length > 0 ? draft.name.trim() : "Report";
     const defaultTitle = `${baseTitle} preview table`;
+    const dateFilterMetadata = findDateFilterMetadata(payload.filters);
     const viewConfig: DashboardPreviewTableCardViewConfig = {
       mode: "preview_table",
       description: `Preview table for ${baseTitle}`,
       previewRequest: deepClone(payload),
       columnOrder: [...previewColumns],
       columnAliases: { ...draft.columnAliases },
+      ...(dateFilterMetadata ? { dateFilter: dateFilterMetadata } : {}),
     };
     const cardDraft: DashboardCardModalDraft = {
       templateId: draft.id,
@@ -5008,11 +5010,11 @@ const Reports = (props: GenericPageProps) => {
     }));
   };
 
-  const buildPreviewRequestPayload = (): {
-    payload?: ReportPreviewRequest;
-    error?: string;
-    visualError?: string;
-  } => {
+const buildPreviewRequestPayload = (): {
+  payload?: ReportPreviewRequest;
+  error?: string;
+  visualError?: string;
+} => {
     if (draft.models.length === 0) {
       return {
         error: "Select at least one data model to run a preview.",
@@ -5151,8 +5153,54 @@ const Reports = (props: GenericPageProps) => {
           : undefined,
     };
 
-    return { payload };
-  };
+  return { payload };
+};
+
+const findDateFilterMetadata = (
+  filterClauses?: ReportPreviewRequest["filters"],
+): {
+  modelId: string;
+  fieldId: string;
+  operator: FilterOperator;
+  filterIndex: number;
+  clauseSql?: string;
+} | null => {
+  let fallback: {
+    modelId: string;
+    fieldId: string;
+    operator: FilterOperator;
+    filterIndex: number;
+    clauseSql?: string;
+  } | null = null;
+  for (let index = 0; index < draft.filters.length; index += 1) {
+    const filter = draft.filters[index];
+    if (
+      filter.valueKind === "date" &&
+      (filter.operator === "between" || filter.operator === "gte" || filter.operator === "lte")
+    ) {
+      if (!filter.leftModelId || !filter.leftFieldId) {
+        continue;
+      }
+      const clauseInput = Array.isArray(filterClauses) ? filterClauses[index] : undefined;
+      const clauseSql =
+        typeof clauseInput === "string" && clauseInput.trim().length > 0 ? clauseInput.trim() : undefined;
+      const metadata = {
+        modelId: filter.leftModelId,
+        fieldId: filter.leftFieldId,
+        operator: filter.operator,
+        filterIndex: index,
+        ...(clauseSql ? { clauseSql } : {}),
+      };
+      if (filter.operator === "between") {
+        return metadata;
+      }
+      if (!fallback) {
+        fallback = metadata;
+      }
+    }
+  }
+  return fallback;
+};
 
   const handleRunAnalysis = async () => {
     setPreviewError(null);

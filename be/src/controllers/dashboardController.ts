@@ -8,8 +8,10 @@ import {
   executePreviewQuery,
   type PreviewFilterClausePayload,
   type ReportPreviewRequest,
+  type FilterOperator,
 } from "./reportController.js";
 import { PreviewQueryError } from "../errors/PreviewQueryError.js";
+import dayjs from "dayjs";
 
 const sanitizeLayout = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -40,6 +42,139 @@ type PreviewTableCardConfig = {
   previewRequest: ReportPreviewRequest;
   columnOrder: string[];
   columnAliases: Record<string, string>;
+  dateFilter?: {
+    modelId: string;
+    fieldId: string;
+    operator: FilterOperator;
+    filterIndex?: number;
+    clauseSql?: string;
+  };
+};
+
+type PeriodRange = {
+  from: string;
+  to: string;
+};
+
+type PeriodNormalizationResult =
+  | { ok: true; range: PeriodRange }
+  | { ok: false; message: string };
+
+const normalizePeriodToken = (value: string): "this_month" | "last_month" | "custom" | null => {
+  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
+  if (normalized === "this_month" || normalized === "last_month" || normalized === "custom") {
+    return normalized as "this_month" | "last_month" | "custom";
+  }
+  return null;
+};
+
+const normalizePresetRange = (preset: "this_month" | "last_month"): PeriodRange => {
+  const reference = preset === "this_month" ? dayjs() : dayjs().subtract(1, "month");
+  return {
+    from: reference.startOf("month").format("YYYY-MM-DD"),
+    to: reference.endOf("month").format("YYYY-MM-DD"),
+  };
+};
+
+const normalizeCustomRange = (from: string, to: string): PeriodNormalizationResult => {
+  const fromDate = dayjs(from, "YYYY-MM-DD", true);
+  const toDate = dayjs(to, "YYYY-MM-DD", true);
+  if (!fromDate.isValid() || !toDate.isValid()) {
+    return { ok: false, message: "Custom periods require YYYY-MM-DD formatted dates." };
+  }
+  if (fromDate.isAfter(toDate)) {
+    return { ok: false, message: "Custom period start date must be before the end date." };
+  }
+  return {
+    ok: true,
+    range: {
+      from: fromDate.format("YYYY-MM-DD"),
+      to: toDate.format("YYYY-MM-DD"),
+    },
+  };
+};
+
+const normalizePeriodOverride = (value: unknown): PeriodNormalizationResult => {
+  if (typeof value === "string") {
+    const preset = normalizePeriodToken(value);
+    if (!preset || preset === "custom") {
+      return { ok: false, message: "Unsupported period preset." };
+    }
+    return { ok: true, range: normalizePresetRange(preset) };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, message: "Invalid period override payload." };
+  }
+  const record = value as Record<string, unknown>;
+  const discriminator =
+    typeof record.mode === "string"
+      ? record.mode
+      : typeof record.preset === "string"
+        ? record.preset
+        : typeof record.type === "string"
+          ? record.type
+          : null;
+  const normalized = discriminator ? normalizePeriodToken(discriminator) : null;
+  if (!normalized) {
+    if (typeof record.from === "string" && typeof record.to === "string") {
+      return normalizeCustomRange(record.from, record.to);
+    }
+    return { ok: false, message: "Specify a period preset or custom date range." };
+  }
+  if (normalized === "custom") {
+    if (typeof record.from !== "string" || typeof record.to !== "string") {
+      return { ok: false, message: "Custom periods require both start and end dates." };
+    }
+    return normalizeCustomRange(record.from, record.to);
+  }
+  return { ok: true, range: normalizePresetRange(normalized) };
+};
+
+const clonePreviewRequest = (request: ReportPreviewRequest): ReportPreviewRequest =>
+  JSON.parse(JSON.stringify(request)) as ReportPreviewRequest;
+
+const applyPeriodOverrideToPreviewRequest = (
+  request: ReportPreviewRequest,
+  metadata: NonNullable<PreviewTableCardConfig["dateFilter"]>,
+  range: PeriodRange,
+): void => {
+  const filters = Array.isArray(request.filters) ? [...request.filters] : [];
+  let removalIndex = -1;
+  if (
+    typeof metadata.filterIndex === "number" &&
+    metadata.filterIndex >= 0 &&
+    metadata.filterIndex < filters.length
+  ) {
+    removalIndex = metadata.filterIndex;
+  } else if (typeof metadata.clauseSql === "string" && metadata.clauseSql.trim().length > 0) {
+    const normalizedClause = metadata.clauseSql.trim().toLowerCase();
+    removalIndex = filters.findIndex(
+      (filter) => typeof filter === "string" && filter.trim().toLowerCase() === normalizedClause,
+    );
+  }
+  if (removalIndex >= 0) {
+    filters.splice(removalIndex, 1);
+  }
+  const insertionIndex = removalIndex >= 0 ? removalIndex : filters.length;
+  const clause: PreviewFilterClausePayload = {
+    leftModelId: metadata.modelId,
+    leftFieldId: metadata.fieldId,
+    operator: metadata.operator,
+    rightType: "value",
+    valueKind: "date",
+  };
+  if (metadata.operator === "between") {
+    clause.range = { from: range.from, to: range.to };
+  } else if (metadata.operator === "gte") {
+    clause.value = range.from;
+  } else if (metadata.operator === "lte") {
+    clause.value = range.to;
+  } else {
+    clause.operator = "between";
+    clause.range = { from: range.from, to: range.to };
+  }
+  filters.splice(insertionIndex, 0, clause);
+  request.filters = filters;
 };
 
 const sanitizeStringArray = (value: unknown): string[] =>
@@ -111,11 +246,39 @@ const parsePreviewTableConfig = (
   if (!previewRequest) {
     return null;
   }
+  const rawDateFilter = (value as Record<string, unknown>).dateFilter as
+    | { modelId?: unknown; fieldId?: unknown; operator?: unknown; filterIndex?: unknown; clauseSql?: unknown }
+    | undefined;
+  let dateFilter: PreviewTableCardConfig["dateFilter"] | undefined;
+  if (
+    rawDateFilter &&
+    typeof rawDateFilter.modelId === "string" &&
+    rawDateFilter.modelId.trim().length > 0 &&
+    typeof rawDateFilter.fieldId === "string" &&
+    rawDateFilter.fieldId.trim().length > 0 &&
+    typeof rawDateFilter.operator === "string"
+  ) {
+    const operator = rawDateFilter.operator.trim() as FilterOperator;
+    dateFilter = {
+      modelId: rawDateFilter.modelId.trim(),
+      fieldId: rawDateFilter.fieldId.trim(),
+      operator,
+      ...(typeof rawDateFilter.filterIndex === "number" &&
+      Number.isInteger(rawDateFilter.filterIndex) &&
+      rawDateFilter.filterIndex >= 0
+        ? { filterIndex: rawDateFilter.filterIndex }
+        : {}),
+      ...(typeof rawDateFilter.clauseSql === "string" && rawDateFilter.clauseSql.trim().length > 0
+        ? { clauseSql: rawDateFilter.clauseSql.trim() }
+        : {}),
+    };
+  }
   return {
     mode: PREVIEW_CARD_MODE,
     previewRequest,
     columnOrder: sanitizeStringArray((value as { columnOrder?: unknown }).columnOrder),
     columnAliases: sanitizeStringRecord((value as { columnAliases?: unknown }).columnAliases),
+    ...(dateFilter ? { dateFilter } : {}),
   };
 };
 
@@ -489,7 +652,22 @@ export const runDashboardPreviewCard = async (req: AuthenticatedRequest, res: Re
       return;
     }
 
-    const { result } = await executePreviewQuery(previewConfig.previewRequest);
+    const previewRequest = clonePreviewRequest(previewConfig.previewRequest);
+    const rawPeriodOverride = (req.body as { period?: unknown } | undefined)?.period;
+    if (rawPeriodOverride !== undefined && rawPeriodOverride !== null) {
+      if (!previewConfig.dateFilter) {
+        res.status(400).json({ message: "This dashboard card does not support period overrides." });
+        return;
+      }
+      const normalized = normalizePeriodOverride(rawPeriodOverride);
+      if (!normalized.ok) {
+        res.status(400).json({ message: normalized.message });
+        return;
+      }
+      applyPeriodOverrideToPreviewRequest(previewRequest, previewConfig.dateFilter, normalized.range);
+    }
+
+    const { result } = await executePreviewQuery(previewRequest);
     res.json({
       cardId: card.id,
       dashboardId: card.dashboardId,
