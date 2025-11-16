@@ -1277,7 +1277,15 @@ const PreviewTableDashboardCard = ({
   const columns = columnOrder.length > 0 ? columnOrder : sample?.columns ?? [];
   const columnAliases = sample?.columnAliases ?? config.columnAliases ?? {};
   const rows = sample?.rows ?? [];
-  const displayedRows = rows.slice(0, 12);
+  const [page, setPage] = useState(0);
+  const rowsPerPage = 10;
+  useEffect(() => {
+    setPage(0);
+  }, [card.id, sample?.executedAt, rows.length]);
+  const totalPages = Math.max(1, Math.ceil(rows.length / rowsPerPage));
+  const safePage = Math.min(page, totalPages - 1);
+  const startIndex = safePage * rowsPerPage;
+  const displayedRows = rows.slice(startIndex, startIndex + rowsPerPage);
   const executedLabel = sample?.executedAt
     ? new Date(sample.executedAt).toLocaleString()
     : null;
@@ -1354,10 +1362,25 @@ const PreviewTableDashboardCard = ({
             </Table>
           </TableContainer>
         )}
-        {rows.length > displayedRows.length && (
-          <CardSubtitle variant="caption" sx={{ textAlign: "center" }}>
-            Showing first {displayedRows.length} of {rows.length} rows
-          </CardSubtitle>
+        {rows.length > 0 && (
+          <Stack direction="row" alignItems="center" justifyContent="space-between">
+            <CardSubtitle variant="caption">
+              Showing {rows.length === 0 ? 0 : startIndex + 1}-{startIndex + displayedRows.length} of {rows.length} rows
+            </CardSubtitle>
+            <Stack direction="row" gap={1}>
+              <Button variant="subtle" size="xs" onClick={() => setPage((prev) => Math.max(0, prev - 1))} disabled={safePage === 0}>
+                Previous
+              </Button>
+              <Button
+                variant="subtle"
+                size="xs"
+                onClick={() => setPage((prev) => Math.min(totalPages - 1, prev + 1))}
+                disabled={safePage >= totalPages - 1}
+              >
+                Next
+              </Button>
+            </Stack>
+          </Stack>
         )}
       </CardContent>
     </StyledDashboardCard>
