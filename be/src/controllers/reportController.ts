@@ -18,6 +18,9 @@ import ReportTemplate, {
   ReportTemplateDerivedField,
   ReportTemplateMetricSpotlight,
   PreviewOrderRule,
+  PreviewGroupingRule,
+  PreviewAggregationRule,
+  PreviewHavingRule,
 } from "../models/ReportTemplate.js";
 import { AuthenticatedRequest } from "../types/AuthenticatedRequest";
 import type { DerivedFieldExpressionAst } from "../types/DerivedFieldExpressionAst.js";
@@ -501,6 +504,9 @@ type ReportPreviewRequest = {
   orderBy?: PreviewOrderClausePayload[];
   limit?: number;
   derivedFields?: DerivedFieldQueryPayload[];
+  grouping?: PreviewGroupingClausePayload[];
+  aggregations?: PreviewAggregationClausePayload[];
+  having?: PreviewHavingClausePayload[];
 };
 
 type ReportPreviewResponse = {
@@ -566,12 +572,40 @@ export type QueryConfig = {
   options?: QueryConfigOptions;
 };
 
+type PreviewGroupingClausePayload = {
+  id: string;
+  source: "model" | "derived";
+  modelId?: string | null;
+  fieldId: string;
+  bucket?: "hour" | "day" | "week" | "month" | "quarter" | "year" | null;
+};
+
+type PreviewAggregationClausePayload = {
+  id: string;
+  source: "model" | "derived";
+  modelId?: string | null;
+  fieldId: string;
+  aggregation: "sum" | "avg" | "min" | "max" | "count" | "count_distinct";
+  alias?: string | null;
+};
+
+type PreviewHavingClausePayload = {
+  id: string;
+  aggregationId: string;
+  operator: "eq" | "neq" | "gt" | "gte" | "lt" | "lte";
+  value?: string | number | boolean | null;
+  valueKind?: "string" | "number" | "date" | "boolean";
+};
+
 type TemplateOptionsInput = {
   autoDistribution?: unknown;
   notifyTeam?: unknown;
   columnOrder?: unknown;
   columnAliases?: unknown;
   previewOrder?: unknown;
+  previewGrouping?: unknown;
+  previewAggregations?: unknown;
+  previewHaving?: unknown;
   autoRunOnOpen?: unknown;
 };
 
@@ -590,6 +624,9 @@ type TemplatePayloadInput = {
   columnOrder?: unknown;
   columnAliases?: unknown;
   previewOrder?: unknown;
+  previewGrouping?: unknown;
+  previewAggregations?: unknown;
+  previewHaving?: unknown;
   queryConfig?: unknown;
   derivedFields?: unknown;
   metricsSpotlight?: unknown;
@@ -614,6 +651,9 @@ type SerializedReportTemplate = {
   columnOrder: string[];
   columnAliases: Record<string, string>;
   previewOrder: PreviewOrderRule[];
+  previewGrouping: PreviewGroupingRule[];
+  previewAggregations: PreviewAggregationRule[];
+  previewHaving: PreviewHavingRule[];
   autoRunOnOpen: boolean;
   owner: {
     id: number | null;
@@ -629,6 +669,9 @@ const DEFAULT_TEMPLATE_OPTIONS: ReportTemplateOptions = {
   columnOrder: [],
   columnAliases: {},
   previewOrder: [],
+  previewGrouping: [],
+  previewAggregations: [],
+  previewHaving: [],
   autoRunOnOpen: false,
 };
 
@@ -746,10 +789,10 @@ const toPreviewOrderRules = (value: unknown): PreviewOrderRule[] => {
     }
     const modelId =
       source === "derived"
-        ? null
+        ? undefined
         : typeof record.modelId === "string" && record.modelId.trim().length > 0
         ? record.modelId.trim()
-        : null;
+        : undefined;
     rules.push({
       id,
       source,
@@ -759,6 +802,139 @@ const toPreviewOrderRules = (value: unknown): PreviewOrderRule[] => {
     });
   });
   return rules;
+};
+
+const PREVIEW_BUCKETS = new Set(["hour", "day", "week", "month", "quarter", "year"]);
+
+const toPreviewGroupingRules = (value: unknown): PreviewGroupingRule[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const rules: PreviewGroupingRule[] = [];
+  value.forEach((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const id =
+      typeof record.id === "string" && record.id.trim().length > 0 ? record.id.trim() : `group-${index}`;
+    const source = record.source === "derived" ? "derived" : "model";
+    const fieldId = typeof record.fieldId === "string" ? record.fieldId.trim() : "";
+    if (!fieldId) {
+      return;
+    }
+    const modelId =
+      source === "derived"
+        ? undefined
+        : typeof record.modelId === "string" && record.modelId.trim().length > 0
+        ? record.modelId.trim()
+        : undefined;
+    let bucket: PreviewGroupingRule["bucket"] | null = null;
+    if (typeof record.bucket === "string") {
+      const normalizedBucket = record.bucket.toLowerCase();
+      if (PREVIEW_BUCKETS.has(normalizedBucket)) {
+        bucket = normalizedBucket as PreviewGroupingRule["bucket"];
+      }
+    }
+    rules.push({
+      id,
+      source,
+      modelId,
+      fieldId,
+      bucket,
+    });
+  });
+  return rules;
+};
+
+const toPreviewAggregationRules = (value: unknown): PreviewAggregationRule[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const aggregations: PreviewAggregationRule[] = [];
+  value.forEach((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const fieldId = typeof record.fieldId === "string" ? record.fieldId.trim() : "";
+    if (!fieldId) {
+      return;
+    }
+    const aggregation =
+      record.aggregation === "avg" ||
+      record.aggregation === "min" ||
+      record.aggregation === "max" ||
+      record.aggregation === "count" ||
+      record.aggregation === "count_distinct"
+        ? record.aggregation
+        : "sum";
+    const source = record.source === "derived" ? "derived" : "model";
+    const modelId =
+      source === "derived"
+        ? null
+        : typeof record.modelId === "string" && record.modelId.trim().length > 0
+        ? record.modelId.trim()
+        : null;
+    const alias =
+      typeof record.alias === "string" && record.alias.trim().length > 0 ? record.alias.trim() : null;
+    const id =
+      typeof record.id === "string" && record.id.trim().length > 0 ? record.id.trim() : `agg-${index}`;
+    aggregations.push({
+      id,
+      source,
+      modelId,
+      fieldId,
+      aggregation,
+      alias,
+    });
+  });
+  return aggregations;
+};
+
+const toPreviewHavingRules = (value: unknown): PreviewHavingRule[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const clauses: PreviewHavingRule[] = [];
+  value.forEach((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const aggregationId =
+      typeof record.aggregationId === "string" && record.aggregationId.trim().length > 0
+        ? record.aggregationId.trim()
+        : "";
+    if (!aggregationId) {
+      return;
+    }
+    const operator =
+      record.operator === "neq" ||
+      record.operator === "gt" ||
+      record.operator === "gte" ||
+      record.operator === "lt" ||
+      record.operator === "lte"
+        ? record.operator
+        : "eq";
+    const id =
+      typeof record.id === "string" && record.id.trim().length > 0 ? record.id.trim() : `having-${index}`;
+    const valueKind =
+      record.valueKind === "string" ||
+      record.valueKind === "number" ||
+      record.valueKind === "date" ||
+      record.valueKind === "boolean"
+        ? record.valueKind
+        : "number";
+    clauses.push({
+      id,
+      aggregationId,
+      operator,
+      value: "value" in record ? (record.value as string | number | boolean | null | undefined) : undefined,
+      valueKind,
+    });
+  });
+  return clauses;
 };
 
 const toReferencedFieldMap = (value: unknown): Record<string, string[]> => {
@@ -1030,6 +1206,17 @@ const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
   const previewOrderInput =
     input.previewOrder !== undefined ? input.previewOrder : optionsCandidate?.previewOrder;
   const previewOrder = toPreviewOrderRules(previewOrderInput);
+  const previewGroupingInput =
+    input.previewGrouping !== undefined ? input.previewGrouping : optionsCandidate?.previewGrouping;
+  const previewGrouping = toPreviewGroupingRules(previewGroupingInput);
+  const previewAggregationsInput =
+    input.previewAggregations !== undefined
+      ? input.previewAggregations
+      : optionsCandidate?.previewAggregations;
+  const previewAggregations = toPreviewAggregationRules(previewAggregationsInput);
+  const previewHavingInput =
+    input.previewHaving !== undefined ? input.previewHaving : optionsCandidate?.previewHaving;
+  const previewHaving = toPreviewHavingRules(previewHavingInput);
   const autoRunOnOpen =
     typeof optionsCandidate?.autoRunOnOpen === "boolean"
       ? optionsCandidate.autoRunOnOpen
@@ -1047,6 +1234,9 @@ const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
     columnOrder,
     columnAliases,
     previewOrder,
+    previewGrouping,
+    previewAggregations,
+    previewHaving,
     autoRunOnOpen,
   };
 
@@ -1077,6 +1267,9 @@ const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
     derivedFields,
     metricsSpotlight: toMetricsSpotlightArray(input.metricsSpotlight),
     previewOrder,
+    previewGrouping,
+    previewAggregations,
+    previewHaving,
     options,
   };
 };
@@ -1112,6 +1305,15 @@ const serializeReportTemplate = (
         : Array.isArray(rawOptions.previewOrder) && rawOptions.previewOrder.length > 0
         ? toPreviewOrderRules(rawOptions.previewOrder)
         : [],
+    previewGrouping: Array.isArray(rawOptions.previewGrouping)
+      ? toPreviewGroupingRules(rawOptions.previewGrouping)
+      : [],
+    previewAggregations: Array.isArray(rawOptions.previewAggregations)
+      ? toPreviewAggregationRules(rawOptions.previewAggregations)
+      : [],
+    previewHaving: Array.isArray(rawOptions.previewHaving)
+      ? toPreviewHavingRules(rawOptions.previewHaving)
+      : [],
     autoRunOnOpen:
       typeof rawOptions.autoRunOnOpen === "boolean"
         ? rawOptions.autoRunOnOpen
@@ -1120,6 +1322,9 @@ const serializeReportTemplate = (
 
   const serializedPreviewOrder =
     templatePreviewOrder.length > 0 ? templatePreviewOrder : mergedOptions.previewOrder;
+  const serializedPreviewGrouping = mergedOptions.previewGrouping;
+  const serializedPreviewAggregations = mergedOptions.previewAggregations;
+  const serializedPreviewHaving = mergedOptions.previewHaving;
 
   return {
     id: template.id,
@@ -1165,6 +1370,9 @@ const serializeReportTemplate = (
     columnOrder: [...mergedOptions.columnOrder],
     columnAliases: { ...mergedOptions.columnAliases },
     previewOrder: serializedPreviewOrder,
+    previewGrouping: serializedPreviewGrouping,
+    previewAggregations: serializedPreviewAggregations,
+    previewHaving: serializedPreviewHaving,
     autoRunOnOpen: mergedOptions.autoRunOnOpen,
     owner: {
       id: template.userId ?? null,
@@ -1695,55 +1903,178 @@ const executePreviewQuery = async (
     aliasMap.set(modelId, `m${index}`);
   });
 
-  const selectClauses: string[] = [];
-  const usedFields = new Set<string>();
-
-  requestedFields.forEach((entry) => {
-    const descriptor = ensureModelDescriptor(entry.modelId);
-    const alias = aliasMap.get(entry.modelId);
-    if (!descriptor || !alias) {
-      return;
-    }
-
-    entry.fieldIds.forEach((fieldId) => {
-      const field = descriptor.fields.find((candidate) => candidate.fieldName === fieldId);
-      if (!field) {
-        return;
-      }
-      const selectAlias = `${descriptor.id}__${field.fieldName}`;
-      if (usedFields.has(selectAlias)) {
-        return;
-      }
-      usedFields.add(selectAlias);
-      selectClauses.push(
-        `${alias}.${quoteIdentifier(field.columnName)} AS ${quoteIdentifier(selectAlias)}`,
-      );
-    });
-  });
-
-  if (selectClauses.length === 0) {
-    throw new PreviewQueryError("Unable to determine any valid fields to query.");
-  }
-
   const derivedFieldPayloads = Array.isArray(payload.derivedFields) ? payload.derivedFields : [];
   validateDerivedFieldGraph(derivedFieldPayloads, payload.models, payload.joins ?? [], aliasMap);
   const derivedFieldLookup = new Map<string, DerivedFieldQueryPayload>(
     derivedFieldPayloads.map((field) => [field.id, field]),
   );
-  derivedFieldPayloads.forEach((field, index) => {
-    try {
-      const { clause, alias } = buildDerivedFieldSelectClause(field, aliasMap, index);
-      selectClauses.push(clause);
-      usedFields.add(alias);
-    } catch (error) {
-      if (error instanceof PreviewQueryError) {
-        throw error;
+
+  const previewGrouping = toPreviewGroupingRules(payload.grouping);
+  const previewAggregations = toPreviewAggregationRules(payload.aggregations);
+  const previewHaving = toPreviewHavingRules(payload.having);
+  const isAggregatedPreview = previewGrouping.length > 0 || previewAggregations.length > 0;
+
+  const selectClauses: string[] = [];
+  const selectedAliases = new Set<string>();
+  const groupByClauses: string[] = [];
+  const aggregationAliasLookup = new Map<string, string>();
+
+  if (!isAggregatedPreview) {
+    requestedFields.forEach((entry) => {
+      const descriptor = ensureModelDescriptor(entry.modelId);
+      const alias = aliasMap.get(entry.modelId);
+      if (!descriptor || !alias) {
+        return;
       }
-      throw new PreviewQueryError(
-        `Derived field ${field.id || `#${index + 1}`} could not be processed.`,
-      );
+
+      entry.fieldIds.forEach((fieldId) => {
+        const field = descriptor.fields.find((candidate) => candidate.fieldName === fieldId);
+        if (!field) {
+          return;
+        }
+        const selectAlias = `${descriptor.id}__${field.fieldName}`;
+        if (selectedAliases.has(selectAlias)) {
+          return;
+        }
+        selectedAliases.add(selectAlias);
+        selectClauses.push(
+          `${alias}.${quoteIdentifier(field.columnName)} AS ${quoteIdentifier(selectAlias)}`,
+        );
+      });
+    });
+
+    if (selectClauses.length === 0) {
+      throw new PreviewQueryError("Unable to determine any valid fields to query.");
     }
-  });
+
+    derivedFieldPayloads.forEach((field, index) => {
+      try {
+        const { clause, alias } = buildDerivedFieldSelectClause(field, aliasMap, index);
+        selectClauses.push(clause);
+        selectedAliases.add(alias);
+      } catch (error) {
+        if (error instanceof PreviewQueryError) {
+          throw error;
+        }
+        throw new PreviewQueryError(
+          `Derived field ${field.id || `#${index + 1}`} could not be processed.`,
+        );
+      }
+    });
+  }
+
+  const applyDateBucket = (expression: string, bucket?: PreviewGroupingRule["bucket"]) => {
+    if (!bucket) {
+      return expression;
+    }
+    const normalizedBucket = bucket.toLowerCase();
+    if (!PREVIEW_BUCKETS.has(normalizedBucket)) {
+      throw new PreviewQueryError(`Unsupported time bucket: ${bucket}`);
+    }
+    return `date_trunc('${normalizedBucket}', ${expression})`;
+  };
+
+  if (previewGrouping.length > 0) {
+    previewGrouping.forEach((group, index) => {
+      let expression: string | null = null;
+      let aliasValue: string | null = null;
+      if (group.source === "derived") {
+        const derivedField = derivedFieldLookup.get(group.fieldId);
+        if (!derivedField || !derivedField.expressionAst) {
+          throw new PreviewQueryError(
+            `Derived field ${group.fieldId || `#${index + 1}`} is not available for grouping.`,
+          );
+        }
+        expression = renderDerivedFieldExpressionSql(derivedField.expressionAst, aliasMap);
+        aliasValue = group.bucket
+          ? `${derivedField.id}_${group.bucket}`
+          : derivedField.id ?? `derived_group_${index}`;
+      } else {
+        const modelId = group.modelId ?? "";
+        const descriptor = ensureModelDescriptor(modelId);
+        const alias = aliasMap.get(modelId);
+        if (!descriptor || !alias) {
+          throw new PreviewQueryError(`Model ${modelId} is not available for grouping.`);
+        }
+        const field = descriptor.fields.find((candidate) => candidate.fieldName === group.fieldId);
+        if (!field) {
+          throw new PreviewQueryError(
+            `Field ${group.fieldId} is not available on model ${modelId}.`,
+          );
+        }
+        const baseExpression = `${alias}.${quoteIdentifier(field.columnName)}`;
+        expression = applyDateBucket(baseExpression, group.bucket ?? undefined);
+        aliasValue =
+          group.bucket && group.bucket.length > 0
+            ? `${descriptor.id}__${field.fieldName}_${group.bucket}`
+            : `${descriptor.id}__${field.fieldName}`;
+      }
+      if (!expression || !aliasValue) {
+        return;
+      }
+      selectClauses.push(`${expression} AS ${quoteIdentifier(aliasValue)}`);
+      groupByClauses.push(expression);
+      selectedAliases.add(aliasValue);
+    });
+  }
+
+  if (previewAggregations.length > 0) {
+    const aggregationMap: Record<PreviewAggregationClausePayload["aggregation"], string> = {
+      sum: "SUM",
+      avg: "AVG",
+      min: "MIN",
+      max: "MAX",
+      count: "COUNT",
+      count_distinct: "COUNT",
+    };
+    previewAggregations.forEach((aggregation, index) => {
+      const sqlAggregation = aggregationMap[aggregation.aggregation] ?? "SUM";
+      let expression: string | null = null;
+      if (aggregation.source === "derived") {
+        const derivedField = derivedFieldLookup.get(aggregation.fieldId);
+        if (!derivedField || !derivedField.expressionAst) {
+          throw new PreviewQueryError(
+            `Derived field ${aggregation.fieldId || `#${index + 1}`} is not available for aggregations.`,
+          );
+        }
+        expression = renderDerivedFieldExpressionSql(derivedField.expressionAst, aliasMap);
+      } else {
+        const modelId = aggregation.modelId ?? "";
+        const descriptor = ensureModelDescriptor(modelId);
+        const alias = aliasMap.get(modelId);
+        if (!descriptor || !alias) {
+          throw new PreviewQueryError(`Model ${modelId} is not available for aggregations.`);
+        }
+        const field = descriptor.fields.find((candidate) => candidate.fieldName === aggregation.fieldId);
+        if (!field) {
+          throw new PreviewQueryError(
+            `Field ${aggregation.fieldId} is not available on model ${modelId}.`,
+          );
+        }
+        expression = `${alias}.${quoteIdentifier(field.columnName)}`;
+      }
+      if (!expression) {
+        return;
+      }
+      const aliasValue =
+        aggregation.alias && aggregation.alias.trim().length > 0
+          ? aggregation.alias.trim()
+          : `${aggregation.id || aggregation.fieldId}_${aggregation.aggregation}_${index}`;
+      const aggregationExpression =
+        aggregation.aggregation === "count_distinct"
+          ? `${sqlAggregation}(DISTINCT (${expression}))`
+          : `${sqlAggregation}(${expression})`;
+      selectClauses.push(`${aggregationExpression} AS ${quoteIdentifier(aliasValue)}`);
+      selectedAliases.add(aliasValue);
+      aggregationAliasLookup.set(aggregation.id, aliasValue);
+    });
+  }
+
+  if (isAggregatedPreview && selectClauses.length === 0) {
+    throw new PreviewQueryError(
+      "Grouping or aggregation is required to build the preview. Add at least one grouping or aggregation rule.",
+    );
+  }
 
   const baseModelId = payload.models[0];
   const baseDescriptor = ensureModelDescriptor(baseModelId);
@@ -1775,6 +2106,7 @@ const executePreviewQuery = async (
 
   const whereClauses = buildWhereClauses(payload.filters ?? [], aliasMap, derivedFieldLookup);
   const orderByClauses = buildOrderByClauses(payload.orderBy ?? [], aliasMap, derivedFieldLookup);
+  const havingClauses = buildHavingClauses(previewHaving, aggregationAliasLookup);
 
   const limitValue = Math.min(Math.max(Number(payload.limit ?? 200) || 200, 1), 1000);
 
@@ -1783,6 +2115,8 @@ const executePreviewQuery = async (
     `FROM ${fromClause}`,
     ...joinClauses,
     whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "",
+    groupByClauses.length > 0 ? `GROUP BY ${groupByClauses.join(", ")}` : "",
+    havingClauses.length > 0 ? `HAVING ${havingClauses.join(" AND ")}` : "",
     orderByClauses.length > 0 ? `ORDER BY ${orderByClauses.join(", ")}` : "",
     `LIMIT :limit`,
   ].filter(Boolean);
@@ -1794,7 +2128,7 @@ const executePreviewQuery = async (
     type: QueryTypes.SELECT,
   });
 
-  const columns = rows.length > 0 ? Object.keys(rows[0]) : Array.from(usedFields);
+  const columns = rows.length > 0 ? Object.keys(rows[0]) : Array.from(selectedAliases);
 
   const response: ReportPreviewResponse = {
     rows,
@@ -1808,7 +2142,7 @@ const executePreviewQuery = async (
     meta: {
       type: "preview",
       models: payload.models,
-      selectedColumns: Array.from(usedFields),
+      selectedColumns: Array.from(selectedAliases),
     },
   };
 };
@@ -5459,6 +5793,33 @@ function buildOrderByClauses(
     const expression = resolveColumnExpression(clause.modelId, clause.fieldId, aliasMap);
     return `${expression} ${direction}`;
   });
+}
+
+function buildHavingClauses(
+  having: PreviewHavingClausePayload[],
+  aggregationAliasLookup: Map<string, string>,
+): string[] {
+  if (!having || having.length === 0) {
+    return [];
+  }
+  const operatorSqlMap: Record<PreviewHavingClausePayload["operator"], string> = {
+    eq: "=",
+    neq: "<>",
+    gt: ">",
+    gte: ">=",
+    lt: "<",
+    lte: "<=",
+  };
+  return having.reduce<string[]>((clauses, clause) => {
+    const alias = aggregationAliasLookup.get(clause.aggregationId);
+    if (!alias) {
+      throw new PreviewQueryError("One or more HAVING clauses reference unknown aggregations.");
+    }
+    const operator = operatorSqlMap[clause.operator] ?? "=";
+    const literal = buildFilterLiteral(clause.valueKind ?? "number", clause.value, `Aggregation ${alias}`);
+    clauses.push(`${quoteIdentifier(alias)} ${operator} ${literal}`);
+    return clauses;
+  }, []);
 }
 
 function quoteTable(descriptor: ReportModelDescriptor): string {
