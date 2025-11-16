@@ -105,6 +105,7 @@ type LockedComponentEntry = {
   calculationMethod: CompensationCalculationMethod;
   amount: number;
   requirement: LockedComponentRequirement;
+  bucketCategory?: string;
 };
 
 type ProductComponentTotal = {
@@ -2688,7 +2689,11 @@ const recordLockedComponent = (
     calculationMethod: component.calculationMethod,
     amount,
     requirement,
+    bucketCategory: component.category,
   });
+  if (component.category) {
+    summary.bucketTotals[component.category] = (summary.bucketTotals[component.category] ?? 0) + amount;
+  }
 };
 
 const ensureSummariesForUserIds = async (
