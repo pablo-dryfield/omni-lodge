@@ -361,7 +361,7 @@ type DerivedFieldQueryPayload = {
   compiledSqlHash?: string | null;
 };
 
-type FilterOperator =
+export type FilterOperator =
   | "eq"
   | "neq"
   | "gt"

@@ -274,12 +274,35 @@ export type DashboardLegacyCardViewConfig = Record<string, unknown> & {
   mode?: string;
 };
 
+type FilterOperator =
+  | "eq"
+  | "neq"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "between"
+  | "contains"
+  | "starts_with"
+  | "ends_with"
+  | "is_null"
+  | "is_not_null"
+  | "is_true"
+  | "is_false";
+
 export type DashboardPreviewTableCardViewConfig = {
   mode: "preview_table";
   description?: string;
   previewRequest: ReportPreviewRequest;
   columnOrder: string[];
   columnAliases: Record<string, string>;
+  dateFilter?: {
+    modelId: string;
+    fieldId: string;
+    operator: FilterOperator;
+    filterIndex?: number;
+    clauseSql?: string;
+  };
 };
 
 export type DashboardCardViewConfig =
@@ -345,6 +368,12 @@ export type DashboardPreviewCardResponse = {
   columnAliases: Record<string, string>;
   executedAt?: string | null;
 };
+
+export type DashboardPreviewPeriodPreset = "this_month" | "last_month";
+
+export type DashboardPreviewPeriodOverride =
+  | { mode: DashboardPreviewPeriodPreset }
+  | { mode: "custom"; from: string; to: string };
 
 export type DashboardExportResponse = {
   export: {
@@ -661,10 +690,16 @@ export const useDeleteDashboardCard = () =>
     },
   });
 
-export const runDashboardPreviewCard = async (dashboardId: string, cardId: string) => {
+export const runDashboardPreviewCard = async (
+  dashboardId: string,
+  cardId: string,
+  options: { period?: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null } = {},
+) => {
+  const payload =
+    options.period !== undefined && options.period !== null ? { period: options.period } : {};
   const response = await axiosInstance.post(
     `/reports/dashboards/${dashboardId}/cards/${cardId}/preview`,
-    {},
+    payload,
   );
   return response.data as DashboardPreviewCardResponse;
 };
