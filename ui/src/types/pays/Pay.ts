@@ -33,6 +33,7 @@ export type LockedComponentSummary = {
   calculationMethod: string;
   amount: number;
   requirement: LockedComponentRequirement;
+  bucketCategory?: string;
 };
 
 export type PlatformGuestTierBreakdown = {

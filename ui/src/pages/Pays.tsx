@@ -235,7 +235,7 @@ const ComponentListItem: React.FC<ComponentListItemProps> = ({
                 c="dimmed"
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
               >
-                {': '}
+                {'  '}
                 ({formattedBaseDays} {computedBaseDayCount === 1 ? 'day' : 'days'} counted
                 {hasBaseDayList && (
                   <ActionIcon
@@ -367,7 +367,10 @@ const renderComponentList = (
 };
 
 
-const renderBucketTotals = (bucketTotals?: Record<string, number>) => {
+const renderBucketTotals = (
+  bucketTotals?: Record<string, number>,
+  lockedComponents?: LockedComponentSummary[],
+) => {
   if (!bucketTotals || Object.keys(bucketTotals).length === 0) {
     return null;
   }
@@ -375,20 +378,55 @@ const renderBucketTotals = (bucketTotals?: Record<string, number>) => {
   if (entries.length === 0) {
     return null;
   }
+  const lockedMap = new Map<string, LockedComponentSummary[]>();
+  lockedComponents?.forEach((entry) => {
+    const bucket = entry.bucketCategory ?? entry.category;
+    if (!bucket) {
+      return;
+    }
+    const list = lockedMap.get(bucket) ?? [];
+    list.push(entry);
+    lockedMap.set(bucket, list);
+  });
   return (
     <Stack gap="xs">
       <Text size="sm" fw={600}>
         Payments
       </Text>
       <Stack gap={4}>
-        {entries.map(([bucket, amount]) => (
-          <Group key={bucket} justify="space-between">
-            <Badge variant="outline" color={getComponentColor(bucket)}>
-              {bucket}
-            </Badge>
-            <Text size="sm">{formatCurrency(amount)}</Text>
-          </Group>
-        ))}
+        {entries.map(([bucket, amount]) => {
+          const lockedList = lockedMap.get(bucket) ?? [];
+          const lockedLabel =
+            lockedList.length > 0
+              ? Array.from(
+                  new Set(
+                    lockedList.map((entry) => {
+                      const requirement = entry.requirement;
+                      const current = requirement.actualReviews;
+                      return `(needs ${requirement.minReviews} reviews, current ${current})`;
+                    }),
+                  ),
+                ).join(' • ')
+              : null;
+          return (
+            <Group key={bucket} justify="space-between" align="center">
+              <Group gap="xs" align="center">
+                <Badge
+                  variant={lockedList.length > 0 ? 'light' : 'outline'}
+                  color={lockedList.length > 0 ? 'red' : getComponentColor(bucket)}
+                >
+                  {bucket}
+                </Badge>
+                {lockedLabel && (
+                  <Text size="xs" c="dimmed">
+                    {lockedLabel}
+                  </Text>
+                )}
+              </Group>
+              <Text size="sm">{formatCurrency(amount)}</Text>
+            </Group>
+          );
+        })}
       </Stack>
     </Stack>
   );
@@ -951,7 +989,7 @@ const Pays: React.FC = () => {
                   item.platformGuestTotals,
                   item.lockedComponents,
                 )}
-                {renderBucketTotals(item.bucketTotals)}
+                {renderBucketTotals(item.bucketTotals, item.lockedComponents)}
               </Stack>
 
               {hasDetails && (
@@ -1018,7 +1056,7 @@ const Pays: React.FC = () => {
                     <tr>
                       <td colSpan={4} style={{ backgroundColor: '#fafafa', padding: '12px 8px' }}>
                         <Stack gap="md">
-                          {renderBucketTotals(item.bucketTotals)}
+                          {renderBucketTotals(item.bucketTotals, item.lockedComponents)}
                           {renderComponentList(
                             item.componentTotals,
                             item.platformGuestBreakdowns,
