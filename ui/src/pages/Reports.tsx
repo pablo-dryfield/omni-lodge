@@ -121,6 +121,9 @@ import {
   type ReportPreviewRequest,
   type ReportPreviewResponse,
   type PreviewOrderClausePayload,
+  type PreviewGroupingRuleDto,
+  type PreviewAggregationRuleDto,
+  type PreviewHavingRuleDto,
   type ReportTemplateDto,
   type ReportTemplateListResponse,
   type SaveReportTemplateRequest,
@@ -274,6 +277,31 @@ type PreviewOrderRule = {
   direction: "asc" | "desc";
 };
 
+type PreviewGroupingRule = {
+  id: string;
+  source: "model" | "derived";
+  modelId?: string;
+  fieldId: string;
+  bucket?: TimeBucket | null;
+};
+
+type PreviewAggregationRule = {
+  id: string;
+  source: "model" | "derived";
+  modelId?: string;
+  fieldId: string;
+  aggregation: QueryConfigMetric["aggregation"];
+  alias?: string;
+};
+
+type PreviewHavingRule = {
+  id: string;
+  aggregationId: string;
+  operator: "eq" | "neq" | "gt" | "gte" | "lt" | "lte";
+  value?: string;
+  valueKind: FilterValueKind;
+};
+
 type DerivedFieldStatus = "active" | "stale";
 type ReportDerivedField = DerivedFieldDefinitionDto & { status?: DerivedFieldStatus };
 const DERIVED_FIELD_VISIBILITY_FLAG = "__includeInBuilder";
@@ -325,6 +353,9 @@ type ReportTemplate = {
   derivedFields: ReportDerivedField[];
   metricsSpotlight: MetricSpotlightDefinitionDto[];
   previewOrder: PreviewOrderRule[];
+  previewGrouping: PreviewGroupingRule[];
+  previewAggregations: PreviewAggregationRule[];
+  previewHaving: PreviewHavingRule[];
 };
 
 const DEFAULT_CONNECTION_LABEL = "OmniLodge core database";
@@ -353,6 +384,15 @@ const AGGREGATION_LABELS: Record<QueryConfigMetric["aggregation"], string> = {
   count: "Count",
   count_distinct: "Unique count",
 };
+
+const HAVING_OPERATOR_OPTIONS: { value: PreviewHavingRule["operator"]; label: string }[] = [
+  { value: "gt", label: ">" },
+  { value: "gte", label: "≥" },
+  { value: "lt", label: "<" },
+  { value: "lte", label: "≤" },
+  { value: "eq", label: "=" },
+  { value: "neq", label: "≠" },
+];
 
 type TimeBucket = Exclude<QueryConfigDimension["bucket"], undefined>;
 
@@ -495,6 +535,7 @@ const getDefaultKey = (model: DataModelDefinition): string =>
   "id";
 
 const deepClone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
+const generateId = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 
 const createEmptyTemplate = (): ReportTemplate => ({
   id: "template-empty",
@@ -519,6 +560,9 @@ const createEmptyTemplate = (): ReportTemplate => ({
   derivedFields: [],
   metricsSpotlight: [],
   previewOrder: [],
+  previewGrouping: [],
+  previewAggregations: [],
+  previewHaving: [],
 });
 
 const buildJoinKey = (left: string, right: string) => {
@@ -1276,6 +1320,174 @@ const normalizePreviewOrderRules = (value: unknown): PreviewOrderRule[] => {
   return rules;
 };
 
+const normalizePreviewGroupingRules = (value: unknown): PreviewGroupingRule[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const rules: PreviewGroupingRule[] = [];
+  value.forEach((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const id =
+      typeof record.id === "string" && record.id.trim().length > 0 ? record.id.trim() : `group-${index}`;
+    const source = record.source === "derived" ? "derived" : "model";
+    const fieldId = typeof record.fieldId === "string" ? record.fieldId.trim() : "";
+    if (!fieldId) {
+      return;
+    }
+    const modelId =
+      source === "derived"
+        ? undefined
+        : typeof record.modelId === "string" && record.modelId.trim().length > 0
+        ? record.modelId.trim()
+        : undefined;
+    const bucket =
+      typeof record.bucket === "string" && record.bucket.trim().length > 0
+        ? (record.bucket.trim() as TimeBucket)
+        : null;
+    rules.push({
+      id,
+      source,
+      modelId,
+      fieldId,
+      bucket,
+    });
+  });
+  return rules;
+};
+
+const normalizePreviewAggregationRules = (value: unknown): PreviewAggregationRule[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const aggregations: PreviewAggregationRule[] = [];
+  value.forEach((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const fieldId = typeof record.fieldId === "string" ? record.fieldId.trim() : "";
+    if (!fieldId) {
+      return;
+    }
+    const id =
+      typeof record.id === "string" && record.id.trim().length > 0 ? record.id.trim() : `agg-${index}`;
+    const source = record.source === "derived" ? "derived" : "model";
+    const modelId =
+      source === "derived"
+        ? undefined
+        : typeof record.modelId === "string" && record.modelId.trim().length > 0
+        ? record.modelId.trim()
+        : undefined;
+    const aggregation =
+      record.aggregation === "avg" ||
+      record.aggregation === "min" ||
+      record.aggregation === "max" ||
+      record.aggregation === "count" ||
+      record.aggregation === "count_distinct"
+        ? (record.aggregation as PreviewAggregationRule["aggregation"])
+        : "sum";
+    const alias =
+      typeof record.alias === "string" && record.alias.trim().length > 0 ? record.alias.trim() : undefined;
+    aggregations.push({
+      id,
+      source,
+      modelId,
+      fieldId,
+      aggregation,
+      alias,
+    });
+  });
+  return aggregations;
+};
+
+const normalizePreviewHavingRules = (value: unknown): PreviewHavingRule[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const clauses: PreviewHavingRule[] = [];
+  value.forEach((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const aggregationId =
+      typeof record.aggregationId === "string" && record.aggregationId.trim().length > 0
+        ? record.aggregationId.trim()
+        : "";
+    if (!aggregationId) {
+      return;
+    }
+    const operator =
+      record.operator === "neq" ||
+      record.operator === "gt" ||
+      record.operator === "gte" ||
+      record.operator === "lt" ||
+      record.operator === "lte"
+        ? (record.operator as PreviewHavingRule["operator"])
+        : "eq";
+    const id =
+      typeof record.id === "string" && record.id.trim().length > 0
+        ? record.id.trim()
+        : `having-${index}`;
+    const valueKind =
+      record.valueKind === "string" ||
+      record.valueKind === "number" ||
+      record.valueKind === "date" ||
+      record.valueKind === "boolean"
+        ? (record.valueKind as FilterValueKind)
+        : "number";
+    const value =
+      typeof record.value === "string" ||
+      typeof record.value === "number" ||
+      typeof record.value === "boolean"
+        ? String(record.value)
+        : record.value === null
+        ? "0"
+        : undefined;
+    clauses.push({
+      id,
+      aggregationId,
+      operator,
+      value,
+      valueKind,
+    });
+  });
+  return clauses;
+};
+
+const serializePreviewGroupingRules = (rules: PreviewGroupingRule[]): PreviewGroupingRuleDto[] =>
+  rules.map((rule) => ({
+    id: rule.id,
+    source: rule.source,
+    modelId: rule.source === "derived" ? null : rule.modelId ?? null,
+    fieldId: rule.fieldId,
+    bucket: rule.bucket ?? null,
+  }));
+
+const serializePreviewAggregationRules = (
+  rules: PreviewAggregationRule[],
+): PreviewAggregationRuleDto[] =>
+  rules.map((rule) => ({
+    id: rule.id,
+    source: rule.source,
+    modelId: rule.source === "derived" ? null : rule.modelId ?? null,
+    fieldId: rule.fieldId,
+    aggregation: rule.aggregation,
+    alias: rule.alias ?? null,
+  }));
+
+const serializePreviewHavingRules = (rules: PreviewHavingRule[]): PreviewHavingRuleDto[] =>
+  rules.map((rule) => ({
+    id: rule.id,
+    aggregationId: rule.aggregationId,
+    operator: rule.operator,
+    value: rule.value ?? "",
+    valueKind: rule.valueKind,
+  }));
+
 const buildDerivedFieldPayloads = (
   fields: DerivedFieldDefinitionDto[],
 ): QueryConfigDerivedField[] => {
@@ -1446,6 +1658,24 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
       : Array.isArray(template.options?.previewOrder)
       ? normalizePreviewOrderRules(template.options.previewOrder)
       : [];
+  const previewGrouping =
+    Array.isArray(template.previewGrouping) && template.previewGrouping.length > 0
+      ? normalizePreviewGroupingRules(template.previewGrouping)
+      : Array.isArray(template.options?.previewGrouping)
+      ? normalizePreviewGroupingRules(template.options.previewGrouping)
+      : [];
+  const previewAggregations =
+    Array.isArray(template.previewAggregations) && template.previewAggregations.length > 0
+      ? normalizePreviewAggregationRules(template.previewAggregations)
+      : Array.isArray(template.options?.previewAggregations)
+      ? normalizePreviewAggregationRules(template.options.previewAggregations)
+      : [];
+  const previewHaving =
+    Array.isArray(template.previewHaving) && template.previewHaving.length > 0
+      ? normalizePreviewHavingRules(template.previewHaving)
+      : Array.isArray(template.options?.previewHaving)
+      ? normalizePreviewHavingRules(template.options.previewHaving)
+      : [];
 
   const columnOrder = rawColumnOrder.filter(
     (alias): alias is string => typeof alias === "string" && alias.length > 0,
@@ -1605,6 +1835,9 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
     derivedFields,
     metricsSpotlight,
     previewOrder,
+    previewGrouping,
+    previewAggregations,
+    previewHaving,
   };
 };
 
@@ -2221,6 +2454,14 @@ const Reports = (props: GenericPageProps) => {
 
     return [...baseOptions, ...derivedOptions];
   }, [draft.derivedFields, draft.models, modelMap]);
+
+  const numericFilterFieldOptions = useMemo(
+    () =>
+      filterFieldOptions.filter((option) =>
+        ["number", "currency", "percentage", "id"].includes(option.field.type),
+      ),
+    [filterFieldOptions],
+  );
 
   const filterFieldLookup = useMemo(() => {
     const lookup = new Map<string, FilterFieldOption>();
@@ -4354,6 +4595,9 @@ const Reports = (props: GenericPageProps) => {
         columnOrder: [...draft.columnOrder],
         columnAliases: { ...draft.columnAliases },
         previewOrder: draft.previewOrder.map((rule) => ({ ...rule })),
+        previewGrouping: serializePreviewGroupingRules(draft.previewGrouping),
+        previewAggregations: serializePreviewAggregationRules(draft.previewAggregations),
+        previewHaving: serializePreviewHavingRules(draft.previewHaving),
         autoRunOnOpen: draft.autoRunOnOpen,
       },
       queryConfig: draft.queryConfig ? deepClone(draft.queryConfig) : null,
@@ -4362,6 +4606,9 @@ const Reports = (props: GenericPageProps) => {
       columnOrder: [...draft.columnOrder],
       columnAliases: { ...draft.columnAliases },
       previewOrder: draft.previewOrder.map((rule) => ({ ...rule })),
+      previewGrouping: serializePreviewGroupingRules(draft.previewGrouping),
+      previewAggregations: serializePreviewAggregationRules(draft.previewAggregations),
+      previewHaving: serializePreviewHavingRules(draft.previewHaving),
     };
 
     try {
@@ -4377,6 +4624,9 @@ const Reports = (props: GenericPageProps) => {
               columnAliases: { ...draft.columnAliases },
               autoRunOnOpen: draft.autoRunOnOpen,
               previewOrder: [...draft.previewOrder],
+              previewGrouping: [...draft.previewGrouping],
+              previewAggregations: [...draft.previewAggregations],
+              previewHaving: [...draft.previewHaving],
             };
       setTemplates((current) => {
         const exists = current.some((template) => template.id === mergedTemplate.id);
@@ -4423,6 +4673,9 @@ const Reports = (props: GenericPageProps) => {
         columnOrder: [],
         columnAliases: {},
         previewOrder: [],
+        previewGrouping: [],
+        previewAggregations: [],
+        previewHaving: [],
         autoRunOnOpen: false,
       },
       queryConfig: null,
@@ -4431,6 +4684,9 @@ const Reports = (props: GenericPageProps) => {
       columnOrder: [],
       columnAliases: {},
       previewOrder: [],
+      previewGrouping: [],
+      previewAggregations: [],
+      previewHaving: [],
     };
 
     try {
@@ -4446,6 +4702,9 @@ const Reports = (props: GenericPageProps) => {
               columnAliases: {},
               autoRunOnOpen: false,
               previewOrder: [],
+              previewGrouping: [],
+              previewAggregations: [],
+              previewHaving: [],
             };
       setTemplates((current) => [...current, mergedTemplate]);
       setSelectedTemplateId(mergedTemplate.id);
@@ -4481,6 +4740,9 @@ const Reports = (props: GenericPageProps) => {
         columnOrder: [...selectedTemplate.columnOrder],
         columnAliases: { ...selectedTemplate.columnAliases },
         previewOrder: selectedTemplate.previewOrder.map((rule) => ({ ...rule })),
+        previewGrouping: serializePreviewGroupingRules(selectedTemplate.previewGrouping),
+        previewAggregations: serializePreviewAggregationRules(selectedTemplate.previewAggregations),
+        previewHaving: serializePreviewHavingRules(selectedTemplate.previewHaving),
         autoRunOnOpen: selectedTemplate.autoRunOnOpen,
       },
       queryConfig: selectedTemplate.queryConfig
@@ -4491,6 +4753,9 @@ const Reports = (props: GenericPageProps) => {
       columnOrder: [...selectedTemplate.columnOrder],
       columnAliases: { ...selectedTemplate.columnAliases },
       previewOrder: selectedTemplate.previewOrder.map((rule) => ({ ...rule })),
+      previewGrouping: serializePreviewGroupingRules(selectedTemplate.previewGrouping),
+      previewAggregations: serializePreviewAggregationRules(selectedTemplate.previewAggregations),
+      previewHaving: serializePreviewHavingRules(selectedTemplate.previewHaving),
     };
 
     try {
@@ -4506,6 +4771,9 @@ const Reports = (props: GenericPageProps) => {
               columnAliases: { ...selectedTemplate.columnAliases },
               autoRunOnOpen: selectedTemplate.autoRunOnOpen,
               previewOrder: [...selectedTemplate.previewOrder],
+              previewGrouping: [...selectedTemplate.previewGrouping],
+              previewAggregations: [...selectedTemplate.previewAggregations],
+              previewHaving: [...selectedTemplate.previewHaving],
             };
       setTemplates((current) => [...current, mergedTemplate]);
       setSelectedTemplateId(mergedTemplate.id);
@@ -4734,6 +5002,51 @@ const Reports = (props: GenericPageProps) => {
       orderBy: orderByPayload.length > 0 ? orderByPayload : undefined,
       limit: 500,
       derivedFields: derivedFieldPayloads.length > 0 ? derivedFieldPayloads : undefined,
+      grouping:
+        draft.previewGrouping.length > 0
+          ? draft.previewGrouping.reduce<PreviewGroupingRuleDto[]>((accumulator, rule) => {
+              if (rule.source === "model" && !rule.modelId) {
+                return accumulator;
+              }
+              accumulator.push({
+                id: rule.id,
+                source: rule.source,
+                modelId: rule.source === "derived" ? null : rule.modelId ?? null,
+                fieldId: rule.fieldId,
+                bucket: rule.bucket ?? null,
+              });
+              return accumulator;
+            }, [])
+          : undefined,
+      aggregations:
+        draft.previewAggregations.length > 0
+          ? draft.previewAggregations.reduce<PreviewAggregationRuleDto[]>((accumulator, rule) => {
+              if (rule.source === "model" && !rule.modelId) {
+                return accumulator;
+              }
+              accumulator.push({
+                id: rule.id,
+                source: rule.source,
+                modelId: rule.source === "derived" ? null : rule.modelId ?? null,
+                fieldId: rule.fieldId,
+                aggregation: rule.aggregation,
+                alias: rule.alias ?? null,
+              });
+              return accumulator;
+            }, [])
+          : undefined,
+      having:
+        draft.previewHaving.length > 0
+          ? draft.previewHaving
+              .filter((clause) => draft.previewAggregations.some((agg) => agg.id === clause.aggregationId))
+              .map((clause) => ({
+                id: clause.id,
+                aggregationId: clause.aggregationId,
+                operator: clause.operator,
+                value: clause.value ?? "",
+                valueKind: clause.valueKind,
+              }))
+          : undefined,
     };
 
     try {
@@ -5001,6 +5314,237 @@ const Reports = (props: GenericPageProps) => {
     setDraft((current) => ({
       ...current,
       previewOrder: current.previewOrder.filter((rule) => rule.id !== ruleId),
+    }));
+  };
+
+  const handleAddGroupingRule = () => {
+    const defaultOption = filterFieldOptions[0];
+    if (!defaultOption) {
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      previewGrouping: [
+        ...current.previewGrouping,
+        {
+          id: generateId("group"),
+          source: defaultOption.source === "derived" ? "derived" : "model",
+          modelId: defaultOption.source === "derived" ? undefined : defaultOption.modelId,
+          fieldId: defaultOption.fieldId,
+          bucket: null,
+        },
+      ],
+    }));
+  };
+
+  const handleGroupingFieldChange = (ruleId: string, optionValue: string | null) => {
+    if (!optionValue) {
+      return;
+    }
+    const option = filterFieldLookup.get(optionValue);
+    if (!option) {
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      previewGrouping: current.previewGrouping.map((rule) =>
+        rule.id === ruleId
+          ? {
+              ...rule,
+              source: option.source === "derived" ? "derived" : "model",
+              modelId: option.source === "derived" ? undefined : option.modelId,
+              fieldId: option.fieldId,
+              bucket: option.field.type === "date" ? rule.bucket ?? null : null,
+            }
+          : rule,
+      ),
+    }));
+  };
+
+  const handleGroupingBucketChange = (ruleId: string, bucket: TimeBucket | null) => {
+    setDraft((current) => ({
+      ...current,
+      previewGrouping: current.previewGrouping.map((rule) =>
+        rule.id === ruleId
+          ? {
+              ...rule,
+              bucket,
+            }
+          : rule,
+      ),
+    }));
+  };
+
+  const handleRemoveGroupingRule = (ruleId: string) => {
+    setDraft((current) => ({
+      ...current,
+      previewGrouping: current.previewGrouping.filter((rule) => rule.id !== ruleId),
+    }));
+  };
+
+  const handleAddAggregationRule = () => {
+    const defaultOption = numericFilterFieldOptions[0];
+    if (!defaultOption) {
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      previewAggregations: [
+        ...current.previewAggregations,
+        {
+          id: generateId("agg"),
+          source: defaultOption.source === "derived" ? "derived" : "model",
+          modelId: defaultOption.source === "derived" ? undefined : defaultOption.modelId,
+          fieldId: defaultOption.fieldId,
+          aggregation: "sum",
+          alias: defaultOption.label,
+        },
+      ],
+    }));
+  };
+
+  const handleAggregationFieldChange = (aggregationId: string, optionValue: string | null) => {
+    if (!optionValue) {
+      return;
+    }
+    const option = filterFieldLookup.get(optionValue);
+    if (!option) {
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      previewAggregations: current.previewAggregations.map((aggregation) =>
+        aggregation.id === aggregationId
+          ? {
+              ...aggregation,
+              source: option.source === "derived" ? "derived" : "model",
+              modelId: option.source === "derived" ? undefined : option.modelId,
+              fieldId: option.fieldId,
+              alias: option.label,
+            }
+          : aggregation,
+      ),
+    }));
+  };
+
+  const handleAggregationTypeChange = (
+    aggregationId: string,
+    aggregation: PreviewAggregationRule["aggregation"],
+  ) => {
+    setDraft((current) => ({
+      ...current,
+      previewAggregations: current.previewAggregations.map((rule) =>
+        rule.id === aggregationId
+          ? {
+              ...rule,
+              aggregation,
+            }
+          : rule,
+      ),
+    }));
+  };
+
+  const handleAggregationAliasChange = (aggregationId: string, alias: string) => {
+    setDraft((current) => ({
+      ...current,
+      previewAggregations: current.previewAggregations.map((rule) =>
+        rule.id === aggregationId
+          ? {
+              ...rule,
+              alias,
+            }
+          : rule,
+      ),
+    }));
+  };
+
+  const handleRemoveAggregationRule = (aggregationId: string) => {
+    setDraft((current) => {
+      const nextAggregations = current.previewAggregations.filter((rule) => rule.id !== aggregationId);
+      if (nextAggregations.length === current.previewAggregations.length) {
+        return current;
+      }
+      const validAggregationIds = new Set(nextAggregations.map((rule) => rule.id));
+      const nextHaving = current.previewHaving.filter((clause) =>
+        validAggregationIds.has(clause.aggregationId),
+      );
+      return {
+        ...current,
+        previewAggregations: nextAggregations,
+        previewHaving: nextHaving,
+      };
+    });
+  };
+
+  const handleAddHavingRule = () => {
+    const defaultAggregation = draft.previewAggregations[0];
+    if (!defaultAggregation) {
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      previewHaving: [
+        ...current.previewHaving,
+        {
+          id: generateId("having"),
+          aggregationId: defaultAggregation.id,
+          operator: "gt",
+          valueKind: "number",
+          value: "",
+        },
+      ],
+    }));
+  };
+
+  const handleHavingAggregationChange = (clauseId: string, aggregationId: string) => {
+    setDraft((current) => ({
+      ...current,
+      previewHaving: current.previewHaving.map((clause) =>
+        clause.id === clauseId
+          ? {
+              ...clause,
+              aggregationId,
+            }
+          : clause,
+      ),
+    }));
+  };
+
+  const handleHavingOperatorChange = (
+    clauseId: string,
+    operator: PreviewHavingRule["operator"],
+  ) => {
+    setDraft((current) => ({
+      ...current,
+      previewHaving: current.previewHaving.map((clause) =>
+        clause.id === clauseId
+          ? {
+              ...clause,
+              operator,
+            }
+          : clause,
+      ),
+    }));
+  };
+
+  const handleHavingValueChange = (clauseId: string, value: string) => {
+    setDraft((current) => ({
+      ...current,
+      previewHaving: current.previewHaving.map((clause) =>
+        clause.id === clauseId
+          ? {
+              ...clause,
+              value,
+            }
+          : clause,
+      ),
+    }));
+  };
+
+  const handleRemoveHavingRule = (clauseId: string) => {
+    setDraft((current) => ({
+      ...current,
+      previewHaving: current.previewHaving.filter((clause) => clause.id !== clauseId),
     }));
   };
 
@@ -5321,26 +5865,71 @@ const Reports = (props: GenericPageProps) => {
 
   useEffect(() => {
     setDraft((current) => {
-      if (current.previewOrder.length === 0) {
-        return current;
-      }
       const validKeys = new Set(filterFieldOptions.map((option) => option.value));
-      const nextOrder = current.previewOrder.filter((rule) => {
-        const key =
-          rule.source === "derived"
-            ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, rule.fieldId)
-            : rule.modelId
-            ? buildFilterOptionKey(rule.modelId, rule.fieldId)
-            : "";
-        return key.length > 0 && validKeys.has(key);
-      });
-      if (nextOrder.length === current.previewOrder.length) {
-        return current;
+      const buildKey = (source: "model" | "derived", modelId: string | undefined, fieldId: string) =>
+        source === "derived"
+          ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, fieldId)
+          : modelId
+          ? buildFilterOptionKey(modelId, fieldId)
+          : "";
+
+      let changed = false;
+      let nextState = current;
+
+      if (nextState.previewOrder.length > 0) {
+        const nextOrder = nextState.previewOrder.filter((rule) => {
+          const key = buildKey(rule.source, rule.modelId, rule.fieldId);
+          return key.length > 0 && validKeys.has(key);
+        });
+        if (nextOrder.length !== nextState.previewOrder.length) {
+          nextState = {
+            ...nextState,
+            previewOrder: nextOrder,
+          };
+          changed = true;
+        }
       }
-      return {
-        ...current,
-        previewOrder: nextOrder,
-      };
+
+      if (nextState.previewGrouping.length > 0) {
+        const nextGrouping = nextState.previewGrouping.filter((rule) => {
+          const key = buildKey(rule.source, rule.modelId, rule.fieldId);
+          return key.length > 0 && validKeys.has(key);
+        });
+        if (nextGrouping.length !== nextState.previewGrouping.length) {
+          nextState = {
+            ...nextState,
+            previewGrouping: nextGrouping,
+          };
+          changed = true;
+        }
+      }
+
+      if (nextState.previewAggregations.length > 0) {
+        const nextAggregations = nextState.previewAggregations.filter((rule) => {
+          const key = buildKey(rule.source, rule.modelId, rule.fieldId);
+          return key.length > 0 && validKeys.has(key);
+        });
+        if (nextAggregations.length !== nextState.previewAggregations.length) {
+          nextState = {
+            ...nextState,
+            previewAggregations: nextAggregations,
+          };
+          changed = true;
+        }
+        const validAggregationIds = new Set(nextAggregations.map((rule) => rule.id));
+        const nextHaving = nextState.previewHaving.filter((clause) =>
+          validAggregationIds.has(clause.aggregationId),
+        );
+        if (nextHaving.length !== nextState.previewHaving.length) {
+          nextState = {
+            ...nextState,
+            previewHaving: nextHaving,
+          };
+          changed = true;
+        }
+      }
+
+      return changed ? nextState : current;
     });
   }, [filterFieldOptions]);
 
@@ -7198,6 +7787,280 @@ const Reports = (props: GenericPageProps) => {
                     >
                       Add condition
                     </Button>
+                    <Divider my="sm" />
+                    <Stack gap="xs">
+                      <Group justify="space-between" align="center">
+                        <Text fw={600} fz="sm">
+                          Grouping
+                        </Text>
+                        <Button
+                          variant="subtle"
+                          size="xs"
+                          leftSection={<IconPlus size={12} />}
+                          onClick={handleAddGroupingRule}
+                          disabled={filterFieldOptions.length === 0}
+                        >
+                          Add group field
+                        </Button>
+                      </Group>
+                      {draft.previewGrouping.length === 0 ? (
+                        <Text c="dimmed" fz="sm">
+                          {filterFieldOptions.length === 0
+                            ? "Select data models to enable grouping."
+                            : "No grouping applied. Add a field to aggregate rows."}
+                        </Text>
+                      ) : (
+                        draft.previewGrouping.map((group) => {
+                          const optionKey =
+                            group.source === "derived"
+                              ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, group.fieldId)
+                              : group.modelId
+                              ? buildFilterOptionKey(group.modelId, group.fieldId)
+                              : "";
+                          const option = optionKey ? filterFieldLookup.get(optionKey) : undefined;
+                          const supportsBucket = option?.field.type === "date";
+                          return (
+                            <Paper key={group.id} withBorder radius="md" p="sm">
+                              <Stack gap="xs">
+                                <Group align="flex-end" gap="sm" wrap="wrap">
+                                  <Select
+                                    label="Field"
+                                    data={filterFieldOptions.map((candidate) => ({
+                                      value: candidate.value,
+                                      label: candidate.label,
+                                    }))}
+                                    value={option ? optionKey : null}
+                                    onChange={(value) => handleGroupingFieldChange(group.id, value)}
+                                    searchable
+                                    placeholder="Select field"
+                                    style={{ flex: 1, minWidth: 220 }}
+                                  />
+                                  {supportsBucket && (
+                                    <Select
+                                      label="Bucket"
+                                      data={bucketOptions}
+                                      value={group.bucket ?? null}
+                                      onChange={(value) =>
+                                        handleGroupingBucketChange(
+                                          group.id,
+                                          (value as TimeBucket | null | undefined) ?? null,
+                                        )
+                                      }
+                                      placeholder="No bucketing"
+                                      clearable
+                                      style={{ width: 180 }}
+                                    />
+                                  )}
+                                  <ActionIcon
+                                    variant="subtle"
+                                    color="red"
+                                    onClick={() => handleRemoveGroupingRule(group.id)}
+                                    aria-label="Remove grouping"
+                                  >
+                                    <IconTrash size={16} />
+                                  </ActionIcon>
+                                </Group>
+                              </Stack>
+                            </Paper>
+                          );
+                        })
+                      )}
+                    </Stack>
+                    <Divider my="sm" />
+                    <Stack gap="xs">
+                      <Group justify="space-between" align="center">
+                        <Text fw={600} fz="sm">
+                          Aggregations
+                        </Text>
+                        <Button
+                          variant="subtle"
+                          size="xs"
+                          leftSection={<IconPlus size={12} />}
+                          onClick={handleAddAggregationRule}
+                          disabled={numericFilterFieldOptions.length === 0}
+                        >
+                          Add aggregation
+                        </Button>
+                      </Group>
+                      {draft.previewAggregations.length === 0 ? (
+                        <Text c="dimmed" fz="sm">
+                          {numericFilterFieldOptions.length === 0
+                            ? "Select numeric fields in the preview to enable aggregations."
+                            : "No aggregated metrics defined."}
+                        </Text>
+                      ) : (
+                        draft.previewAggregations.map((aggregation) => {
+                          const optionKey =
+                            aggregation.source === "derived"
+                              ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, aggregation.fieldId)
+                              : aggregation.modelId
+                              ? buildFilterOptionKey(aggregation.modelId, aggregation.fieldId)
+                              : "";
+                          const option = optionKey ? filterFieldLookup.get(optionKey) : undefined;
+                          return (
+                            <Paper key={aggregation.id} withBorder radius="md" p="sm">
+                              <Stack gap="xs">
+                                <Group align="flex-end" gap="sm" wrap="wrap">
+                                  <Select
+                                    label="Field"
+                                    data={numericFilterFieldOptions.map((candidate) => ({
+                                      value: candidate.value,
+                                      label: candidate.label,
+                                    }))}
+                                    value={option ? optionKey : null}
+                                    onChange={(value) =>
+                                      handleAggregationFieldChange(aggregation.id, value)
+                                    }
+                                    searchable
+                                    placeholder="Select field"
+                                    style={{ flex: 1, minWidth: 220 }}
+                                  />
+                                  <Select
+                                    label="Aggregation"
+                                    data={METRIC_AGGREGATIONS.map((value) => ({
+                                      value,
+                                      label: AGGREGATION_LABELS[value],
+                                    }))}
+                                    value={aggregation.aggregation}
+                                    onChange={(value) =>
+                                      handleAggregationTypeChange(
+                                        aggregation.id,
+                                        (value as PreviewAggregationRule["aggregation"]) ?? "sum",
+                                      )
+                                    }
+                                    style={{ width: 180 }}
+                                  />
+                                  <TextInput
+                                    label="Alias"
+                                    value={aggregation.alias ?? ""}
+                                    onChange={(event) =>
+                                      handleAggregationAliasChange(
+                                        aggregation.id,
+                                        event.currentTarget.value,
+                                      )
+                                    }
+                                    placeholder="Optional label"
+                                    style={{ flex: 1, minWidth: 160 }}
+                                  />
+                                  <ActionIcon
+                                    variant="subtle"
+                                    color="red"
+                                    onClick={() => handleRemoveAggregationRule(aggregation.id)}
+                                    aria-label="Remove aggregation"
+                                  >
+                                    <IconTrash size={16} />
+                                  </ActionIcon>
+                                </Group>
+                              </Stack>
+                            </Paper>
+                          );
+                        })
+                      )}
+                    </Stack>
+                    <Divider my="sm" />
+                    <Stack gap="xs">
+                      <Group justify="space-between" align="center">
+                        <Text fw={600} fz="sm">
+                          Group filters (HAVING)
+                        </Text>
+                        <Button
+                          variant="subtle"
+                          size="xs"
+                          leftSection={<IconPlus size={12} />}
+                          onClick={handleAddHavingRule}
+                          disabled={draft.previewAggregations.length === 0}
+                        >
+                          Add group filter
+                        </Button>
+                      </Group>
+                      {draft.previewHaving.length === 0 ? (
+                        <Text c="dimmed" fz="sm">
+                          {draft.previewAggregations.length === 0
+                            ? "Add an aggregation to enable HAVING filters."
+                            : "No HAVING filters applied."}
+                        </Text>
+                      ) : (
+                        draft.previewHaving.map((clause) => {
+                          const aggregationOptions = draft.previewAggregations.map((aggregation) => {
+                            const optionKey =
+                              aggregation.source === "derived"
+                                ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, aggregation.fieldId)
+                                : aggregation.modelId
+                                ? buildFilterOptionKey(aggregation.modelId, aggregation.fieldId)
+                                : "";
+                            const option = optionKey ? filterFieldLookup.get(optionKey) : undefined;
+                            const baseLabel = option?.label ?? aggregation.fieldId;
+                            const label = aggregation.alias && aggregation.alias.trim().length > 0
+                              ? `${aggregation.alias} (${AGGREGATION_LABELS[aggregation.aggregation]})`
+                              : `${baseLabel} (${AGGREGATION_LABELS[aggregation.aggregation]})`;
+                            return {
+                              value: aggregation.id,
+                              label,
+                            };
+                          });
+                          const numericValue =
+                            clause.value !== undefined && clause.value !== ""
+                              ? Number(clause.value)
+                              : undefined;
+                          return (
+                            <Paper key={clause.id} withBorder radius="md" p="sm">
+                              <Stack gap="xs">
+                                <Group align="flex-end" gap="sm" wrap="wrap">
+                                  <Select
+                                    label="Aggregation"
+                                    data={aggregationOptions}
+                                    value={clause.aggregationId}
+                                    onChange={(value) =>
+                                      value && handleHavingAggregationChange(clause.id, value)
+                                    }
+                                    placeholder="Select aggregation"
+                                    style={{ flex: 1, minWidth: 220 }}
+                                  />
+                                  <Select
+                                    label="Operator"
+                                    data={HAVING_OPERATOR_OPTIONS}
+                                    value={clause.operator}
+                                    onChange={(value) =>
+                                      handleHavingOperatorChange(
+                                        clause.id,
+                                        (value as PreviewHavingRule["operator"]) ?? "gt",
+                                      )
+                                    }
+                                    style={{ width: 140 }}
+                                  />
+                                  <NumberInput
+                                    label="Value"
+                                    value={
+                                      typeof numericValue === "number" && Number.isFinite(numericValue)
+                                        ? numericValue
+                                        : undefined
+                                    }
+                                    onChange={(value) =>
+                                      handleHavingValueChange(
+                                        clause.id,
+                                        value === null || value === undefined
+                                          ? ""
+                                          : String(value),
+                                      )
+                                    }
+                                    allowDecimal
+                                    w={160}
+                                  />
+                                  <ActionIcon
+                                    variant="subtle"
+                                    color="red"
+                                    onClick={() => handleRemoveHavingRule(clause.id)}
+                                    aria-label="Remove group filter"
+                                  >
+                                    <IconTrash size={16} />
+                                  </ActionIcon>
+                                </Group>
+                              </Stack>
+                            </Paper>
+                          );
+                        })
+                      )}
+                    </Stack>
                     <Divider my="sm" />
                     <Stack gap="xs">
                       <Group justify="space-between" align="center">

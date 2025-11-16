@@ -75,6 +75,31 @@ export type PreviewOrderRuleDto = {
   direction: "asc" | "desc";
 };
 
+export type PreviewGroupingRuleDto = {
+  id: string;
+  source: "model" | "derived";
+  modelId?: string | null;
+  fieldId: string;
+  bucket?: "hour" | "day" | "week" | "month" | "quarter" | "year" | null;
+};
+
+export type PreviewAggregationRuleDto = {
+  id: string;
+  source: "model" | "derived";
+  modelId?: string | null;
+  fieldId: string;
+  aggregation: "sum" | "avg" | "min" | "max" | "count" | "count_distinct";
+  alias?: string | null;
+};
+
+export type PreviewHavingRuleDto = {
+  id: string;
+  aggregationId: string;
+  operator: "eq" | "neq" | "gt" | "gte" | "lt" | "lte";
+  value?: string | number | boolean | null;
+  valueKind?: "string" | "number" | "date" | "boolean";
+};
+
 export type PreviewOrderClausePayload = {
   source: "model" | "derived";
   modelId?: string | null;
@@ -457,6 +482,9 @@ export type ReportPreviewRequest = {
   orderBy?: PreviewOrderClausePayload[];
   limit?: number;
   derivedFields?: QueryConfigDerivedField[];
+  grouping?: PreviewGroupingRuleDto[];
+  aggregations?: PreviewAggregationRuleDto[];
+  having?: PreviewHavingRuleDto[];
 };
 
 export type ReportPreviewResponse = {
@@ -709,6 +737,9 @@ export type ReportTemplateOptionsDto = {
   columnOrder: string[];
   columnAliases: Record<string, string>;
   previewOrder: PreviewOrderRuleDto[];
+  previewGrouping: PreviewGroupingRuleDto[];
+  previewAggregations: PreviewAggregationRuleDto[];
+  previewHaving: PreviewHavingRuleDto[];
   autoRunOnOpen: boolean;
 };
 
@@ -729,6 +760,9 @@ export type ReportTemplateDto = {
   derivedFields: DerivedFieldDefinitionDto[];
   metricsSpotlight: MetricSpotlightDefinitionDto[];
   previewOrder: PreviewOrderRuleDto[];
+  previewGrouping: PreviewGroupingRuleDto[];
+  previewAggregations: PreviewAggregationRuleDto[];
+  previewHaving: PreviewHavingRuleDto[];
   owner: {
     id: number | null;
     name: string;
@@ -762,6 +796,9 @@ export type SaveReportTemplateRequest = {
   columnOrder?: string[];
   columnAliases?: Record<string, string>;
   previewOrder?: PreviewOrderRuleDto[];
+  previewGrouping?: PreviewGroupingRuleDto[];
+  previewAggregations?: PreviewAggregationRuleDto[];
+  previewHaving?: PreviewHavingRuleDto[];
 };
 
 export const useReportTemplates = () =>

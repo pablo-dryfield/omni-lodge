@@ -26,12 +26,40 @@ export type PreviewOrderRule = {
   direction: "asc" | "desc";
 };
 
+export type PreviewGroupingRule = {
+  id: string;
+  source: "model" | "derived";
+  modelId?: string | null;
+  fieldId: string;
+  bucket?: "hour" | "day" | "week" | "month" | "quarter" | "year" | null;
+};
+
+export type PreviewAggregationRule = {
+  id: string;
+  source: "model" | "derived";
+  modelId?: string | null;
+  fieldId: string;
+  aggregation: "sum" | "avg" | "min" | "max" | "count" | "count_distinct";
+  alias?: string | null;
+};
+
+export type PreviewHavingRule = {
+  id: string;
+  aggregationId: string;
+  operator: "eq" | "neq" | "gt" | "gte" | "lt" | "lte";
+  value?: string | number | boolean | null;
+  valueKind?: "string" | "number" | "date" | "boolean";
+};
+
 export type ReportTemplateOptions = {
   autoDistribution: boolean;
   notifyTeam: boolean;
   columnOrder: string[];
   columnAliases: Record<string, string>;
   previewOrder: PreviewOrderRule[];
+  previewGrouping: PreviewGroupingRule[];
+  previewAggregations: PreviewAggregationRule[];
+  previewHaving: PreviewHavingRule[];
   autoRunOnOpen: boolean;
 };
 
@@ -129,6 +157,9 @@ export default class ReportTemplate extends Model {
     columnOrder: [],
     columnAliases: {},
     previewOrder: [],
+    previewGrouping: [],
+    previewAggregations: [],
+    previewHaving: [],
     autoRunOnOpen: false,
   })
   @Column({ type: DataType.JSONB })
