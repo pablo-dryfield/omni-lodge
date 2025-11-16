@@ -368,6 +368,7 @@ type FilterOperator =
   | "gte"
   | "lt"
   | "lte"
+  | "between"
   | "contains"
   | "starts_with"
   | "ends_with"
@@ -385,6 +386,10 @@ type PreviewFilterClausePayload = {
   rightFieldId?: string;
   value?: string | number | boolean | null;
   valueKind?: "string" | "number" | "date" | "boolean";
+  range?: {
+    from?: string | number | boolean | null;
+    to?: string | number | boolean | null;
+  };
 };
 
 type PreviewOrderClausePayload = {
@@ -5666,6 +5671,24 @@ function renderPreviewFilterClause(
       throw new PreviewQueryError("The selected operator requires a literal value.");
     }
     return `${leftExpression} ${sqlOperator} ${rightExpression}`;
+  }
+
+  if (operator === "between") {
+    const range = clause.range;
+    if (!range || range.from === undefined || range.to === undefined || range.from === null || range.to === null) {
+      throw new PreviewQueryError(`Provide both start and end values for ${clause.leftFieldId}.`);
+    }
+    const fromLiteral = buildFilterLiteral(
+      clause.valueKind ?? "string",
+      range.from as string | number | boolean,
+      `Filter ${clause.leftFieldId} (start)`,
+    );
+    const toLiteral = buildFilterLiteral(
+      clause.valueKind ?? "string",
+      range.to as string | number | boolean,
+      `Filter ${clause.leftFieldId} (end)`,
+    );
+    return `${leftExpression} BETWEEN ${fromLiteral} AND ${toLiteral}`;
   }
 
   switch (operator) {
