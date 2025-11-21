@@ -231,6 +231,13 @@ export type DashboardVisualCardViewConfig = {
   metricAlias?: string;
   dimensionAlias?: string;
   comparisonAlias?: string;
+  dateFilter?: {
+    modelId: string;
+    fieldId: string;
+    operator: FilterOperator;
+    filterIndex?: number;
+    clauseSql?: string;
+  };
   visual: {
     id: string;
     name: string;
@@ -268,13 +275,20 @@ export type DashboardSpotlightCardViewConfig = {
       tone: "positive" | "neutral" | "negative";
     }>;
   };
+  dateFilter?: {
+    modelId: string;
+    fieldId: string;
+    operator: FilterOperator;
+    filterIndex?: number;
+    clauseSql?: string;
+  };
 };
 
 export type DashboardLegacyCardViewConfig = Record<string, unknown> & {
   mode?: string;
 };
 
-type FilterOperator =
+export type FilterOperator =
   | "eq"
   | "neq"
   | "gt"

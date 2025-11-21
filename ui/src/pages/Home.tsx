@@ -65,10 +65,12 @@ import {
   type DashboardSpotlightCardViewConfig,
   type DashboardVisualCardViewConfig,
   type DashboardPreviewTableCardViewConfig,
+  type FilterOperator,
   type HomeDashboardPreferenceDto,
   type MetricSpotlightDefinitionDto,
   type ReportQuerySuccessResponse,
   type QueryConfig,
+  type QueryConfigFilter,
   type DashboardPreviewCardResponse,
   type DashboardPreviewPeriodOverride,
   type DashboardPreviewPeriodPreset,
@@ -208,6 +210,7 @@ const computePeriodRange = (
 const applyPeriodOverrideToQueryConfig = (
   queryConfig: QueryConfig | null,
   override: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null,
+  metadata?: { modelId: string; fieldId: string; operator: FilterOperator } | null,
 ): QueryConfig | null => {
   if (!queryConfig || !override) {
     return queryConfig;
@@ -222,6 +225,26 @@ const applyPeriodOverrideToQueryConfig = (
       range,
     };
   }
+  if (metadata) {
+    const filters = Array.isArray(queryConfig.filters) ? [...queryConfig.filters] : [];
+    const nextFilters = filters.filter(
+      (filter) => !(filter.modelId === metadata.modelId && filter.fieldId === metadata.fieldId),
+    );
+    const operator = metadata.operator === "gte" || metadata.operator === "lte" ? metadata.operator : "between";
+    const value =
+      operator === "gte"
+        ? range.from
+        : operator === "lte"
+          ? range.to
+          : { from: range.from, to: range.to };
+    nextFilters.push({
+      modelId: metadata.modelId,
+      fieldId: metadata.fieldId,
+      operator: operator as QueryConfigFilter["operator"],
+      value,
+    });
+    queryConfig.filters = nextFilters;
+  }
   return queryConfig;
 };
 
@@ -233,7 +256,10 @@ const cardSupportsPeriodOverride = (viewConfig: DashboardCardViewConfig | null |
     return Boolean(viewConfig.dateFilter);
   }
   if (isVisualCardViewConfig(viewConfig)) {
-    return Boolean(viewConfig.queryConfig?.time?.field);
+    return Boolean(viewConfig.dateFilter || viewConfig.queryConfig?.time?.field);
+  }
+  if (isSpotlightCardViewConfig(viewConfig)) {
+    return Boolean(viewConfig.dateFilter);
   }
   return false;
 };
@@ -943,7 +969,7 @@ const Home = (props: GenericPageProps) => {
       if (isVisualCardViewConfig(rawViewConfig) && rawViewConfig.queryConfig) {
         queryConfig = cloneConfig(rawViewConfig.queryConfig);
         if (queryConfig) {
-          applyPeriodOverrideToQueryConfig(queryConfig, globalPeriodOverride);
+          applyPeriodOverrideToQueryConfig(queryConfig, globalPeriodOverride, rawViewConfig.dateFilter ?? null);
           queryConfig.options = {
             ...queryConfig.options,
             templateId: card.templateId || queryConfig.options?.templateId || null,
