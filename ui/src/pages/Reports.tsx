@@ -4260,6 +4260,7 @@ const Reports = (props: GenericPageProps) => {
             columns: [...visualColumns],
           }
         : undefined;
+    const dateFilterMetadata = findDateFilterMetadata();
     const viewConfig: DashboardCardViewConfig = {
       mode: "visual",
       description: `Visual: ${metricLabel} vs ${dimensionLabel}`,
@@ -4267,6 +4268,7 @@ const Reports = (props: GenericPageProps) => {
       metricAlias: visualQueryDescriptor.metricAlias ?? undefined,
       dimensionAlias: visualQueryDescriptor.dimensionAlias ?? undefined,
       comparisonAlias: visualQueryDescriptor.comparisonAlias ?? undefined,
+      ...(dateFilterMetadata ? { dateFilter: dateFilterMetadata } : {}),
       visual: {
         id: activeVisual.id,
         name: defaultTitle,
@@ -4352,6 +4354,7 @@ const Reports = (props: GenericPageProps) => {
       spotlight.label && spotlight.label.trim().length > 0 ? spotlight.label.trim() : metricLabel;
     const spotlightId = spotlight.metric || `spotlight-${index}`;
     const summaryCard = metricsSummary.find((card) => card.id === spotlightId);
+    const dateFilterMetadata = findDateFilterMetadata();
     const viewConfig: DashboardCardViewConfig = {
       mode: "spotlight",
       description: `Spotlight: ${defaultTitle}`,
@@ -4359,6 +4362,7 @@ const Reports = (props: GenericPageProps) => {
         ...spotlight,
         metricLabel,
       },
+      ...(dateFilterMetadata ? { dateFilter: dateFilterMetadata } : {}),
       sample: summaryCard
         ? {
             cards: [
