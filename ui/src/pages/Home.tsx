@@ -25,7 +25,9 @@ import {
   TableCell,
   TableContainer,
   TextField,
+  Switch,
 } from "@mui/material";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import { styled } from "@mui/material/styles";
 import { createTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
@@ -91,6 +93,8 @@ const DEFAULT_CARD_LAYOUT = {
   w: 6,
   h: 4,
 };
+
+const AUTO_REFRESH_INTERVAL_MS = 60 * 1000;
 
 type VisualChartPoint = {
   dimension: string;
@@ -177,6 +181,61 @@ const formatDisplayDate = (value: string | undefined | null): string | null => {
   }
   const parsed = dayjs(value);
   return parsed.isValid() ? parsed.format("MMM D, YYYY") : value;
+};
+
+const computePeriodRange = (
+  override: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null,
+): { from: string; to: string } | null => {
+  if (!override) {
+    return null;
+  }
+  if (typeof override === "string") {
+    const base = override === "last_month" ? dayjs().subtract(1, "month") : dayjs();
+    return {
+      from: base.startOf("month").format("YYYY-MM-DD"),
+      to: base.endOf("month").format("YYYY-MM-DD"),
+    };
+  }
+  if (override.mode === "custom" && override.from && override.to) {
+    return {
+      from: override.from,
+      to: override.to,
+    };
+  }
+  return null;
+};
+
+const applyPeriodOverrideToQueryConfig = (
+  queryConfig: QueryConfig | null,
+  override: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null,
+): QueryConfig | null => {
+  if (!queryConfig || !override) {
+    return queryConfig;
+  }
+  const range = computePeriodRange(override);
+  if (!range) {
+    return queryConfig;
+  }
+  if (queryConfig.time && queryConfig.time.field) {
+    queryConfig.time = {
+      ...queryConfig.time,
+      range,
+    };
+  }
+  return queryConfig;
+};
+
+const cardSupportsPeriodOverride = (viewConfig: DashboardCardViewConfig | null | undefined): boolean => {
+  if (!viewConfig || typeof viewConfig !== "object") {
+    return false;
+  }
+  if (isPreviewTableCardViewConfig(viewConfig)) {
+    return Boolean(viewConfig.dateFilter);
+  }
+  if (isVisualCardViewConfig(viewConfig)) {
+    return Boolean(viewConfig.queryConfig?.time?.field);
+  }
+  return false;
 };
 
 const isPreviewTableCardViewConfig = (
@@ -743,26 +802,22 @@ const Home = (props: GenericPageProps) => {
   const gridGap = isSmallScreen ? 1 : 2;
   const useAutoRows = gridColumns === 1;
   const shouldHydrateLiveData = canUseDashboards && effectiveViewMode === "dashboard";
-  const previewCardsSupportPeriod = useMemo(
-    () =>
-      orderedActiveCards.some((card) => {
-        const viewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
-        return isPreviewTableCardViewConfig(viewConfig) && Boolean(viewConfig.dateFilter);
-      }),
+  const cardsSupportPeriod = useMemo(
+    () => orderedActiveCards.some((card) => cardSupportsPeriodOverride((card.viewConfig as DashboardCardViewConfig) ?? null)),
     [orderedActiveCards],
   );
   const [globalPeriodSelection, setGlobalPeriodSelection] = useState<PreviewPeriodValue>("this_month");
   const [globalCustomInputs, setGlobalCustomInputs] = useState<{ from: string; to: string }>({ from: "", to: "" });
   const [globalCustomAppliedRange, setGlobalCustomAppliedRange] = useState<{ from: string; to: string } | null>(null);
   const globalPeriodOverride = useMemo<DashboardPreviewPeriodPreset | DashboardPreviewPeriodOverride | null>(() => {
-    if (!previewCardsSupportPeriod) {
+    if (!cardsSupportPeriod) {
       return null;
     }
     if (globalPeriodSelection === "custom") {
       return buildCustomPeriodOverride(globalCustomAppliedRange);
     }
     return globalPeriodSelection;
-  }, [globalCustomAppliedRange, globalPeriodSelection, previewCardsSupportPeriod]);
+  }, [globalCustomAppliedRange, globalPeriodSelection, cardsSupportPeriod]);
   const handleGlobalPresetSelection = useCallback(
     (value: PreviewPeriodValue) => {
       setGlobalPeriodSelection(value);
@@ -813,15 +868,52 @@ const Home = (props: GenericPageProps) => {
     }
     return null;
   }, [globalPeriodOverride]);
+  const [refreshMode, setRefreshMode] = useState<"manual" | "auto">("manual");
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
+  const triggerRefresh = useCallback(() => {
+    setRefreshNonce((current) => current + 1);
+    setLastRefreshedAt(new Date().toISOString());
+  }, []);
+
+  useEffect(() => {
+    if (!shouldHydrateLiveData) {
+      return;
+    }
+    triggerRefresh();
+  }, [shouldHydrateLiveData, triggerRefresh]);
+
+  useEffect(() => {
+    if (!shouldHydrateLiveData || !activeDashboardId) {
+      return;
+    }
+    triggerRefresh();
+  }, [activeDashboardId, shouldHydrateLiveData, triggerRefresh]);
+
+  useEffect(() => {
+    if (!shouldHydrateLiveData || refreshMode !== "auto") {
+      return;
+    }
+    const handle = setInterval(triggerRefresh, AUTO_REFRESH_INTERVAL_MS);
+    return () => clearInterval(handle);
+  }, [refreshMode, shouldHydrateLiveData, triggerRefresh]);
+
+  useEffect(() => {
+    if (!shouldHydrateLiveData) {
+      return;
+    }
+    triggerRefresh();
+  }, [globalPeriodOverride, shouldHydrateLiveData, triggerRefresh]);
+
   const globalPeriodStatusText = useMemo(() => {
-    if (!previewCardsSupportPeriod) {
-      return "Add a date filter to a preview table to enable period overrides.";
+    if (!cardsSupportPeriod) {
+      return "Add a date filter to a dashboard card to enable period overrides.";
     }
     if (globalPeriodSelection === "custom" && !globalCustomAppliedRange) {
       return "Select start and end dates, then click Apply.";
     }
     return globalAppliedRangeLabel ?? "Select a period to apply to all preview tables.";
-  }, [globalAppliedRangeLabel, globalCustomAppliedRange, globalPeriodSelection, previewCardsSupportPeriod]);
+  }, [globalAppliedRangeLabel, globalCustomAppliedRange, globalPeriodSelection, cardsSupportPeriod]);
 
   const cardHydrationDescriptors = useMemo<CardHydrationDescriptor[]>(() => {
     if (!shouldHydrateLiveData || activeCards.length === 0) {
@@ -837,6 +929,7 @@ const Home = (props: GenericPageProps) => {
           templateId: card.templateId,
           config: rawViewConfig.previewRequest,
           period: periodOverride ?? "none",
+          refreshNonce,
         });
         return {
           mode: "preview_table" as const,
@@ -850,6 +943,7 @@ const Home = (props: GenericPageProps) => {
       if (isVisualCardViewConfig(rawViewConfig) && rawViewConfig.queryConfig) {
         queryConfig = cloneConfig(rawViewConfig.queryConfig);
         if (queryConfig) {
+          applyPeriodOverrideToQueryConfig(queryConfig, globalPeriodOverride);
           queryConfig.options = {
             ...queryConfig.options,
             templateId: card.templateId || queryConfig.options?.templateId || null,
@@ -862,10 +956,10 @@ const Home = (props: GenericPageProps) => {
         card,
         viewConfig: rawViewConfig,
         queryConfig: queryConfig ?? null,
-        cacheKey: queryConfig ? JSON.stringify(queryConfig) : "missing",
+        cacheKey: queryConfig ? JSON.stringify({ queryConfig, refreshNonce }) : JSON.stringify({ refreshNonce }),
       };
     });
-  }, [activeCards, globalPeriodOverride, shouldHydrateLiveData]);
+  }, [activeCards, globalPeriodOverride, refreshNonce, shouldHydrateLiveData]);
 
   const cardLiveQueries = useQueries({
     queries: cardHydrationDescriptors.map((descriptor) => {
@@ -884,7 +978,9 @@ const Home = (props: GenericPageProps) => {
             runDashboardPreviewCard(descriptor.card.dashboardId, descriptor.card.id, {
               period: descriptor.periodOverride ?? undefined,
             }),
-          staleTime: 30 * 1000,
+          staleTime: Infinity,
+          refetchOnWindowFocus: false,
+          refetchOnReconnect: false,
         };
       }
       return {
@@ -899,7 +995,9 @@ const Home = (props: GenericPageProps) => {
             timeoutMs: 45_000,
           });
         },
-        staleTime: 30 * 1000,
+        staleTime: Infinity,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: false,
       };
     }),
   });
@@ -1012,56 +1110,78 @@ const Home = (props: GenericPageProps) => {
     </Card>
   );
 
-  const renderGlobalPeriodControls = () => {
-    if (!previewCardsSupportPeriod) {
-      return null;
-    }
+  const renderDashboardControls = () => {
     const isCustom = globalPeriodSelection === "custom";
+    const lastUpdatedLabel = lastRefreshedAt ? dayjs(lastRefreshedAt).format("DD/MM/YYYY, HH:mm:ss") : "Never refreshed";
     return (
       <Stack gap={isCustom ? 1.5 : 1} alignItems="center" justifyContent="center">
-        <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="center">
-          {PERIOD_OPTIONS.map((option) => (
-            <Button
-              key={option.value}
-              size="small"
-              variant={globalPeriodSelection === option.value ? "contained" : "outlined"}
-              onClick={() => handleGlobalPresetSelection(option.value)}
-            >
-              {option.label}
-            </Button>
-          ))}
-        </Stack>
-        {isCustom && (
-          <Stack direction={{ xs: "column", sm: "row" }} gap={1} alignItems="center" justifyContent="center">
-            <TextField
-              type="date"
-              size="small"
-              label="Start"
-              value={globalCustomInputs.from}
-              onChange={(event) => handleGlobalCustomInputChange("from", event.target.value)}
-              InputLabelProps={{ shrink: true }}
+        <Stack direction={{ xs: "column", md: "row" }} gap={2} alignItems="center" justifyContent="center">
+          <Button
+            variant="contained"
+            startIcon={<RefreshIcon fontSize="small" />}
+            onClick={triggerRefresh}
+            disabled={!shouldHydrateLiveData}
+          >
+            Refresh data
+          </Button>
+          <Stack direction="row" gap={1} alignItems="center">
+            <Switch
+              checked={refreshMode === "auto"}
+              onChange={(event) => setRefreshMode(event.target.checked ? "auto" : "manual")}
             />
-            <TextField
-              type="date"
-              size="small"
-              label="End"
-              value={globalCustomInputs.to}
-              onChange={(event) => handleGlobalCustomInputChange("to", event.target.value)}
-              InputLabelProps={{ shrink: true }}
-            />
-            <Button
-              size="small"
-              variant="contained"
-              onClick={handleGlobalApplyCustomRange}
-              disabled={globalCustomInputs.from.trim().length === 0 || globalCustomInputs.to.trim().length === 0}
-            >
-              Apply
-            </Button>
+            <Typography variant="body2">{refreshMode === "auto" ? "Automatic refresh" : "Idle mode"}</Typography>
           </Stack>
+          <Typography variant="body2" color="textSecondary">
+            Last updated {lastUpdatedLabel}
+          </Typography>
+        </Stack>
+        {cardsSupportPeriod && (
+          <>
+            <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="center">
+              {PERIOD_OPTIONS.map((option) => (
+                <Button
+                  key={option.value}
+                  size="small"
+                  variant={globalPeriodSelection === option.value ? "contained" : "outlined"}
+                  onClick={() => handleGlobalPresetSelection(option.value)}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </Stack>
+            {isCustom && (
+              <Stack direction={{ xs: "column", sm: "row" }} gap={1} alignItems="center" justifyContent="center">
+                <TextField
+                  type="date"
+                  size="small"
+                  label="Start"
+                  value={globalCustomInputs.from}
+                  onChange={(event) => handleGlobalCustomInputChange("from", event.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                />
+                <TextField
+                  type="date"
+                  size="small"
+                  label="End"
+                  value={globalCustomInputs.to}
+                  onChange={(event) => handleGlobalCustomInputChange("to", event.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                />
+                <Button
+                  size="small"
+                  variant="contained"
+                  onClick={handleGlobalApplyCustomRange}
+                  disabled={globalCustomInputs.from.trim().length === 0 || globalCustomInputs.to.trim().length === 0}
+                >
+                  Apply
+                </Button>
+              </Stack>
+            )}
+            <CardSubtitle variant="caption" sx={{ textAlign: "center" }}>
+              {globalPeriodStatusText}
+            </CardSubtitle>
+          </>
         )}
-        <CardSubtitle variant="caption" sx={{ textAlign: "center" }}>
-          {globalPeriodStatusText}
-        </CardSubtitle>
       </Stack>
     );
   };
@@ -1110,7 +1230,7 @@ const Home = (props: GenericPageProps) => {
     }
     return (
       <Stack gap={2}>
-        {previewCardsSupportPeriod && renderGlobalPeriodControls()}
+        {renderDashboardControls()}
         <Box
           sx={{
             display: "grid",
@@ -1456,57 +1576,6 @@ const PreviewTableDashboardCard = ({
   const rows = sample?.rows ?? [];
   const canOverridePeriod = Boolean(config.dateFilter);
   const effectivePeriodOverride = canOverridePeriod ? periodOverride : null;
-  const periodDescription = useMemo(() => {
-    if (!canOverridePeriod) {
-      return "Add a date filter to this report to enable period overrides.";
-    }
-    if (!effectivePeriodOverride) {
-      return "Date overrides are unavailable for this card.";
-    }
-    if (typeof effectivePeriodOverride === "string") {
-      return effectivePeriodOverride === "this_month"
-        ? "Filtering to this month."
-        : "Filtering to last month.";
-    }
-    if (effectivePeriodOverride.mode === "custom") {
-      const from = formatDisplayDate(effectivePeriodOverride.from);
-      const to = formatDisplayDate(effectivePeriodOverride.to);
-      if (from && to) {
-        return `Filtering from ${from} to ${to}.`;
-      }
-      return "Filtering by a custom date range.";
-    }
-    return "Date overrides are unavailable for this card.";
-  }, [canOverridePeriod, effectivePeriodOverride]);
-  const computeOverrideRangeLabel = (): string | null => {
-    if (!effectivePeriodOverride) {
-      return null;
-    }
-    if (typeof effectivePeriodOverride === "string") {
-      const now = dayjs();
-      if (effectivePeriodOverride === "this_month") {
-        return `Applied range: ${now.startOf("month").format("MMM D, YYYY")} - ${now
-          .endOf("month")
-          .format("MMM D, YYYY")}`;
-      }
-      if (effectivePeriodOverride === "last_month") {
-        const ref = now.subtract(1, "month");
-        return `Applied range: ${ref.startOf("month").format("MMM D, YYYY")} - ${ref
-          .endOf("month")
-          .format("MMM D, YYYY")}`;
-      }
-      return null;
-    }
-    if (effectivePeriodOverride.mode === "custom") {
-      const from = formatDisplayDate(effectivePeriodOverride.from);
-      const to = formatDisplayDate(effectivePeriodOverride.to);
-      if (from && to) {
-        return `Applied range: ${from} - ${to}`;
-      }
-    }
-    return null;
-  };
-  const appliedRangeLabel = computeOverrideRangeLabel();
   const [page, setPage] = useState(0);
   const rowsPerPage = 10;
   useEffect(() => {
@@ -1535,13 +1604,7 @@ const PreviewTableDashboardCard = ({
         <Stack gap={0.5} alignItems="center" textAlign="center">
           <CardTitle variant="subtitle1">{card.title}</CardTitle>
           {config.description && <CardSubtitle variant="body2">{config.description}</CardSubtitle>}
-          {executedLabel && (
-            <CardSubtitle variant="caption">Updated {executedLabel}</CardSubtitle>
-          )}
         </Stack>
-        <CardSubtitle variant="caption" sx={{ textAlign: "center" }}>
-          {appliedRangeLabel ?? periodDescription}
-        </CardSubtitle>
         {liveState.warning && <Alert severity="warning">{liveState.warning}</Alert>}
         {isLoading && (
           <Stack direction="row" gap={1} alignItems="center" justifyContent="center">
