@@ -5174,13 +5174,22 @@ const findDateFilterMetadata = (
   } | null = null;
   for (let index = 0; index < draft.filters.length; index += 1) {
     const filter = draft.filters[index];
+    if (!filter.leftModelId || !filter.leftFieldId) {
+      continue;
+    }
+    const leftOption = filterFieldLookup.get(buildFilterOptionKey(filter.leftModelId, filter.leftFieldId));
+    if (!leftOption || leftOption.modelId === DERIVED_FIELD_SENTINEL) {
+      continue;
+    }
+    const isDateFilter = filter.valueKind === "date" || leftOption.field.type === "date";
+    if (!isDateFilter) {
+      continue;
+    }
     if (
-      filter.valueKind === "date" &&
-      (filter.operator === "between" || filter.operator === "gte" || filter.operator === "lte")
+      filter.operator === "between" ||
+      filter.operator === "gte" ||
+      filter.operator === "lte"
     ) {
-      if (!filter.leftModelId || !filter.leftFieldId) {
-        continue;
-      }
       const clauseInput = Array.isArray(filterClauses) ? filterClauses[index] : undefined;
       const clauseSql =
         typeof clauseInput === "string" && clauseInput.trim().length > 0 ? clauseInput.trim() : undefined;

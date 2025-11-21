@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { Op } from "sequelize";
 import ReportDashboard from "../models/ReportDashboard.js";
 import ReportDashboardCard from "../models/ReportDashboardCard.js";
+import ReportTemplate from "../models/ReportTemplate.js";
 import { AuthenticatedRequest } from "../types/AuthenticatedRequest";
 import { ensureReportingAccess } from "../utils/reportingAccess.js";
 import {
@@ -132,6 +133,104 @@ const normalizePeriodOverride = (value: unknown): PeriodNormalizationResult => {
 
 const clonePreviewRequest = (request: ReportPreviewRequest): ReportPreviewRequest =>
   JSON.parse(JSON.stringify(request)) as ReportPreviewRequest;
+
+type TemplateDateFilterMetadata = {
+  modelId: string;
+  fieldId: string;
+  operator: FilterOperator;
+  filterIndex: number;
+};
+
+const SUPPORTED_DATE_FILTER_OPERATORS = new Set<FilterOperator>(["between", "gte", "lte"]);
+
+const extractTemplateDateFilter = (filters: unknown[]): TemplateDateFilterMetadata | null => {
+  if (!Array.isArray(filters)) {
+    return null;
+  }
+  for (let index = 0; index < filters.length; index += 1) {
+    const entry = filters[index];
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const operator = typeof record.operator === "string" ? (record.operator.trim() as FilterOperator) : null;
+    const leftModelId = typeof record.leftModelId === "string" ? record.leftModelId.trim() : null;
+    const leftFieldId = typeof record.leftFieldId === "string" ? record.leftFieldId.trim() : null;
+    const valueKind = typeof record.valueKind === "string" ? record.valueKind.trim() : null;
+    if (!operator || !leftModelId || !leftFieldId) {
+      continue;
+    }
+    if (!SUPPORTED_DATE_FILTER_OPERATORS.has(operator)) {
+      continue;
+    }
+    if (valueKind && valueKind !== "date") {
+      continue;
+    }
+    return {
+      modelId: leftModelId,
+      fieldId: leftFieldId,
+      operator,
+      filterIndex: index,
+    };
+  }
+  return null;
+};
+
+const hydratePreviewCardsWithTemplateFilters = async (
+  cards: ReportDashboardCard[],
+): Promise<Map<string, TemplateDateFilterMetadata>> => {
+  const templateIds = Array.from(
+    new Set(
+      cards
+        .map((card) => card.templateId)
+        .filter((value): value is string => typeof value === "string" && value.length > 0),
+    ),
+  );
+  if (templateIds.length === 0) {
+    return new Map();
+  }
+  const templates = await ReportTemplate.findAll({
+    where: { id: templateIds },
+    attributes: ["id", "filters"],
+  });
+  const metadata = new Map<string, TemplateDateFilterMetadata>();
+  templates.forEach((template) => {
+    const candidate = extractTemplateDateFilter(template.filters ?? []);
+    if (candidate) {
+      metadata.set(template.id, candidate);
+    }
+  });
+  cards.forEach((card) => {
+    const config = card.viewConfig;
+    if (
+      !config ||
+      typeof config !== "object" ||
+      Array.isArray(config) ||
+      (config as { mode?: unknown }).mode !== PREVIEW_CARD_MODE ||
+      (config as { dateFilter?: unknown }).dateFilter
+    ) {
+      return;
+    }
+    const candidate = metadata.get(card.templateId);
+    if (candidate) {
+      (config as { dateFilter?: TemplateDateFilterMetadata }).dateFilter = candidate;
+    }
+  });
+  return metadata;
+};
+
+const resolveTemplateDateFilter = async (
+  templateId: string,
+): Promise<TemplateDateFilterMetadata | null> => {
+  if (!templateId) {
+    return null;
+  }
+  const template = await ReportTemplate.findByPk(templateId, { attributes: ["id", "filters"] });
+  if (!template) {
+    return null;
+  }
+  return extractTemplateDateFilter(template.filters ?? []);
+};
 
 const applyPeriodOverrideToPreviewRequest = (
   request: ReportPreviewRequest,
@@ -308,6 +407,23 @@ export const listDashboards = async (req: AuthenticatedRequest, res: Response): 
       include: [{ model: ReportDashboardCard, as: "cards" }],
       order: [["updatedAt", "DESC"]],
     });
+
+    const previewCardsNeedingMetadata =
+      dashboards
+        .flatMap((dashboard) => dashboard.cards ?? [])
+        .filter((card): card is ReportDashboardCard => {
+          const config = card.viewConfig;
+          return (
+            Boolean(config) &&
+            typeof config === "object" &&
+            !Array.isArray(config) &&
+            (config as { mode?: unknown }).mode === PREVIEW_CARD_MODE &&
+            !(config as { dateFilter?: unknown }).dateFilter
+          );
+        }) ?? [];
+    if (previewCardsNeedingMetadata.length > 0) {
+      await hydratePreviewCardsWithTemplateFilters(previewCardsNeedingMetadata);
+    }
 
     res.json({
       dashboards: dashboards.map((dashboard) => ({
@@ -650,6 +766,17 @@ export const runDashboardPreviewCard = async (req: AuthenticatedRequest, res: Re
     if (!previewConfig) {
       res.status(400).json({ message: "This dashboard card does not store preview table data." });
       return;
+    }
+
+    if (!previewConfig.dateFilter) {
+      const inferred = await resolveTemplateDateFilter(card.templateId);
+      if (inferred) {
+        previewConfig.dateFilter = inferred;
+        const viewConfig = card.viewConfig;
+        if (viewConfig && typeof viewConfig === "object" && !Array.isArray(viewConfig)) {
+          (viewConfig as { dateFilter?: TemplateDateFilterMetadata }).dateFilter = inferred;
+        }
+      }
     }
 
     const previewRequest = clonePreviewRequest(previewConfig.previewRequest);
