@@ -112,6 +112,7 @@ import {
   type DashboardSpotlightCardViewConfig,
   type DashboardVisualCardViewConfig,
   type DashboardPreviewTableCardViewConfig,
+  type DashboardCardDto,
   type TemplateScheduleDto,
   type TemplateSchedulePayload,
   type TemplateScheduleDeliveryTarget,
@@ -2892,223 +2893,222 @@ const Reports = (props: GenericPageProps) => {
   }, [orderedNumericColumns, orderedTextualColumns]);
 
   const activeVisual = draft.visuals[0] ?? DEFAULT_VISUAL;
-  const visualQueryDescriptor = useMemo<VisualQueryDescriptor>(() => {
-    const emptyDescriptor: VisualQueryDescriptor = {
-      config: null,
-      metricAlias: null,
-      dimensionAlias: null,
-      comparisonAlias: null,
-      metricBaseAlias: null,
-      dimensionBaseAlias: null,
-      metricLabel: "Metric",
-      dimensionLabel: "Dimension",
-      warnings: [],
-    };
+  const buildVisualDescriptor = useCallback(
+    (visual: VisualDefinition | null): VisualQueryDescriptor => {
+      const emptyDescriptor: VisualQueryDescriptor = {
+        config: null,
+        metricAlias: null,
+        dimensionAlias: null,
+        comparisonAlias: null,
+        metricBaseAlias: null,
+        dimensionBaseAlias: null,
+        metricLabel: "Metric",
+        dimensionLabel: "Dimension",
+        comparisonLabel: undefined,
+        warnings: [],
+      };
 
-    if (draft.models.length === 0) {
-      return emptyDescriptor;
-    }
-
-    const metricBaseAlias = activeVisual.metric;
-    const dimensionBaseAlias = activeVisual.dimension;
-
-    if (!metricBaseAlias || !dimensionBaseAlias) {
-      return emptyDescriptor;
-    }
-
-    const resolveFieldReference = (
-      alias: string,
-    ): ({ kind: "model"; modelId: string; fieldId: string } | { kind: "derived"; fieldId: string }) | null => {
-      if (!alias) {
-        return null;
+      if (draft.models.length === 0 || !visual) {
+        return emptyDescriptor;
       }
-      const detail = fieldDetailByAlias.get(alias);
-      if (!detail) {
-        return null;
+
+      const metricBaseAlias = visual.metric;
+      const dimensionBaseAlias = visual.dimension;
+
+      if (!metricBaseAlias || !dimensionBaseAlias) {
+        return emptyDescriptor;
       }
-      if (detail.source === "derived" || detail.derivedFieldId) {
-        return { kind: "derived", fieldId: detail.derivedFieldId ?? detail.id };
+
+      const resolveFieldReference = (
+        alias: string,
+      ): ({ kind: "model"; modelId: string; fieldId: string } | { kind: "derived"; fieldId: string }) | null => {
+        if (!alias) {
+          return null;
+        }
+        const detail = fieldDetailByAlias.get(alias);
+        if (!detail) {
+          return null;
+        }
+        if (detail.source === "derived" || detail.derivedFieldId) {
+          return { kind: "derived", fieldId: detail.derivedFieldId ?? detail.id };
+        }
+        const parsed = parseColumnAlias(alias);
+        if (!parsed) {
+          return null;
+        }
+        return { kind: "model", ...parsed };
+      };
+
+      const metricDetail = fieldDetailByAlias.get(metricBaseAlias);
+      const dimensionDetail = fieldDetailByAlias.get(dimensionBaseAlias);
+
+      const warnings: string[] = [];
+
+      if (!metricDetail) {
+        warnings.push("Select a metric field to run analytics.");
+        return { ...emptyDescriptor, warnings };
       }
-      const parsed = parseColumnAlias(alias);
-      if (!parsed) {
-        return null;
+
+      if (!dimensionDetail) {
+        warnings.push("Select a dimension field to run analytics.");
+        return { ...emptyDescriptor, warnings };
       }
-      return { kind: "model", ...parsed };
-    };
 
-    const metricDetail = fieldDetailByAlias.get(metricBaseAlias);
-    const dimensionDetail = fieldDetailByAlias.get(dimensionBaseAlias);
+      const metricReference = resolveFieldReference(metricBaseAlias);
+      const dimensionReference = resolveFieldReference(dimensionBaseAlias);
 
-    const warnings: string[] = [];
+      if (!metricReference || !dimensionReference) {
+        warnings.push("Unable to determine metric/dimension columns for analytics.");
+        return { ...emptyDescriptor, warnings };
+      }
 
-    if (!metricDetail) {
-      warnings.push("Select a metric field to run analytics.");
-      return { ...emptyDescriptor, warnings };
-    }
+      if (dimensionReference.kind === "derived") {
+        warnings.push("Derived fields cannot be used as dimensions yet.");
+        return { ...emptyDescriptor, warnings };
+      }
 
-    if (!dimensionDetail) {
-      warnings.push("Select a dimension field to run analytics.");
-      return { ...emptyDescriptor, warnings };
-    }
+      const metricAggregation =
+        visual.metricAggregation && METRIC_AGGREGATIONS.includes(visual.metricAggregation)
+          ? visual.metricAggregation
+          : "sum";
+      const metricAlias = buildMetricAggregationAlias(metricBaseAlias, metricAggregation);
 
-    const metricReference = resolveFieldReference(metricBaseAlias);
-    const dimensionReference = resolveFieldReference(dimensionBaseAlias);
+      const dimensionBucket: TimeBucket | undefined =
+        visual.dimensionBucket && DIMENSION_BUCKETS.includes(visual.dimensionBucket as TimeBucket)
+          ? (visual.dimensionBucket as TimeBucket)
+          : undefined;
+      const dimensionAlias = buildDimensionAlias(dimensionBaseAlias, dimensionBucket);
 
-    if (!metricReference || !dimensionReference) {
-      warnings.push("Unable to determine metric/dimension columns for analytics.");
-      return { ...emptyDescriptor, warnings };
-    }
+      const metrics: QueryConfigMetric[] = [
+        metricReference.kind === "derived"
+          ? {
+              modelId: DERIVED_FIELD_SENTINEL,
+              fieldId: metricReference.fieldId,
+              aggregation: metricAggregation,
+              alias: metricAlias,
+            }
+          : {
+              modelId: metricReference.modelId,
+              fieldId: metricReference.fieldId,
+              aggregation: metricAggregation,
+              alias: metricAlias,
+            },
+      ];
 
-    if (dimensionReference.kind === "derived") {
-      warnings.push("Derived fields cannot be used as dimensions yet.");
-      return { ...emptyDescriptor, warnings };
-    }
-
-    const metricAggregation =
-      activeVisual.metricAggregation && METRIC_AGGREGATIONS.includes(activeVisual.metricAggregation)
-        ? activeVisual.metricAggregation
-        : "sum";
-    const metricAlias = buildMetricAggregationAlias(metricBaseAlias, metricAggregation);
-
-    const dimensionBucket: TimeBucket | undefined =
-      activeVisual.dimensionBucket &&
-      DIMENSION_BUCKETS.includes(activeVisual.dimensionBucket as TimeBucket)
-        ? (activeVisual.dimensionBucket as TimeBucket)
-        : undefined;
-    const dimensionAlias = buildDimensionAlias(dimensionBaseAlias, dimensionBucket);
-
-    const metrics: QueryConfigMetric[] = [
-      metricReference.kind === "derived"
-        ? {
-            modelId: DERIVED_FIELD_SENTINEL,
-            fieldId: metricReference.fieldId,
-            aggregation: metricAggregation,
-            alias: metricAlias,
+      let comparisonAlias: string | null = null;
+      if (visual.comparison) {
+        const comparisonBaseAlias = visual.comparison;
+        const comparisonDetail = fieldDetailByAlias.get(comparisonBaseAlias);
+        if (comparisonDetail) {
+          const comparisonReference = resolveFieldReference(comparisonBaseAlias);
+          if (comparisonReference) {
+            const comparisonAggregation =
+              visual.comparisonAggregation && METRIC_AGGREGATIONS.includes(visual.comparisonAggregation)
+                ? visual.comparisonAggregation
+                : metricAggregation;
+            comparisonAlias = buildMetricAggregationAlias(comparisonBaseAlias, comparisonAggregation);
+            metrics.push(
+              comparisonReference.kind === "derived"
+                ? {
+                    modelId: DERIVED_FIELD_SENTINEL,
+                    fieldId: comparisonReference.fieldId,
+                    aggregation: comparisonAggregation,
+                    alias: comparisonAlias,
+                  }
+                : {
+                    modelId: comparisonReference.modelId,
+                    fieldId: comparisonReference.fieldId,
+                    aggregation: comparisonAggregation,
+                    alias: comparisonAlias,
+                  },
+            );
+          } else {
+            warnings.push(
+              `Comparison series ${comparisonBaseAlias} could not be resolved and was skipped.`,
+            );
           }
-        : {
-            modelId: metricReference.modelId,
-            fieldId: metricReference.fieldId,
-            aggregation: metricAggregation,
-            alias: metricAlias,
-          },
-    ];
-
-    let comparisonAlias: string | null = null;
-    if (activeVisual.comparison) {
-      const comparisonBaseAlias = activeVisual.comparison;
-      const comparisonDetail = fieldDetailByAlias.get(comparisonBaseAlias);
-      if (comparisonDetail) {
-        const comparisonReference = resolveFieldReference(comparisonBaseAlias);
-        if (comparisonReference) {
-          const comparisonAggregation =
-            activeVisual.comparisonAggregation &&
-            METRIC_AGGREGATIONS.includes(activeVisual.comparisonAggregation)
-              ? activeVisual.comparisonAggregation
-              : metricAggregation;
-          comparisonAlias = buildMetricAggregationAlias(comparisonBaseAlias, comparisonAggregation);
-          metrics.push(
-            comparisonReference.kind === "derived"
-              ? {
-                  modelId: DERIVED_FIELD_SENTINEL,
-                  fieldId: comparisonReference.fieldId,
-                  aggregation: comparisonAggregation,
-                  alias: comparisonAlias,
-                }
-              : {
-                  modelId: comparisonReference.modelId,
-                  fieldId: comparisonReference.fieldId,
-                  aggregation: comparisonAggregation,
-                  alias: comparisonAlias,
-                },
-          );
         } else {
           warnings.push(
-            `Comparison series ${comparisonBaseAlias} could not be resolved and was skipped.`,
+            `Comparison series ${visual.comparison} is not in the selected field list and was skipped.`,
           );
         }
-      } else {
-        warnings.push(
-          `Comparison series ${activeVisual.comparison} is not in the selected field list and was skipped.`,
-        );
       }
-    }
 
-    const { filters: normalizedFilters, warnings: filterWarnings } = normalizeFiltersForQuery(
-      draft.filters,
-    );
-    warnings.push(...filterWarnings);
+      const { filters: normalizedFilters, warnings: filterWarnings } = normalizeFiltersForQuery(
+        draft.filters,
+      );
+      warnings.push(...filterWarnings);
 
-    const limitValue =
-      typeof activeVisual.limit === "number" && Number.isFinite(activeVisual.limit) && activeVisual.limit > 0
-        ? Math.round(activeVisual.limit)
-        : 100;
+      const limitValue =
+        typeof visual.limit === "number" && Number.isFinite(visual.limit) && visual.limit > 0
+          ? Math.round(visual.limit)
+          : 100;
 
-    const joins =
-      draft.joins.length > 0
-        ? draft.joins.map(
-            ({ id, leftModel, leftField, rightModel, rightField, joinType, description }) => ({
-              id,
-              leftModel,
-              leftField,
-              rightModel,
-              rightField,
-              joinType,
-              description,
-            }),
-          )
-        : undefined;
+      const joins =
+        draft.joins.length > 0
+          ? draft.joins.map(
+              ({ id, leftModel, leftField, rightModel, rightField, joinType, description }) => ({
+                id,
+                leftModel,
+                leftField,
+                rightModel,
+                rightField,
+                joinType,
+                description,
+              }),
+            )
+          : undefined;
 
-    const descriptor: VisualQueryDescriptor = {
-      config: {
-        models: [...draft.models],
-        joins,
-        filters: normalizedFilters.length > 0 ? normalizedFilters : undefined,
-        metrics,
-        dimensions: [
-          {
-            modelId: dimensionReference.modelId,
-            fieldId: dimensionReference.fieldId,
-            bucket: dimensionBucket,
-            alias: dimensionAlias,
+      const descriptor: VisualQueryDescriptor = {
+        config: {
+          models: [...draft.models],
+          joins,
+          filters: normalizedFilters.length > 0 ? normalizedFilters : undefined,
+          metrics,
+          dimensions: [
+            {
+              modelId: dimensionReference.modelId,
+              fieldId: dimensionReference.fieldId,
+              bucket: dimensionBucket,
+              alias: dimensionAlias,
+            },
+          ],
+          orderBy: [{ alias: dimensionAlias, direction: "asc" }],
+          limit: limitValue,
+          derivedFields: derivedFieldPayloads.length > 0 ? derivedFieldPayloads : undefined,
+          options: {
+            allowAsync: true,
+            templateId:
+              draft.id && draft.id !== "template-empty" ? draft.id : undefined,
           },
-        ],
-        orderBy: [{ alias: dimensionAlias, direction: "asc" }],
-        limit: limitValue,
-        derivedFields: derivedFieldPayloads.length > 0 ? derivedFieldPayloads : undefined,
-        options: {
-          allowAsync: true,
-          templateId:
-            draft.id && draft.id !== "template-empty" ? draft.id : undefined,
         },
-      },
-      metricAlias,
-      dimensionAlias,
-      comparisonAlias,
-      metricBaseAlias,
-      dimensionBaseAlias,
-      metricLabel: getColumnLabel(metricBaseAlias),
-      dimensionLabel: getColumnLabel(dimensionBaseAlias),
-      comparisonLabel: activeVisual.comparison ? getColumnLabel(activeVisual.comparison) : undefined,
-      warnings,
-    };
+        metricAlias,
+        dimensionAlias,
+        comparisonAlias,
+        metricBaseAlias,
+        dimensionBaseAlias,
+        metricLabel: getColumnLabel(metricBaseAlias),
+        dimensionLabel: getColumnLabel(dimensionBaseAlias),
+        comparisonLabel: visual.comparison ? getColumnLabel(visual.comparison) : undefined,
+        warnings,
+      };
 
-    return descriptor;
-  }, [
-    activeVisual.comparison,
-    activeVisual.comparisonAggregation,
-    activeVisual.dimension,
-    activeVisual.dimensionBucket,
-    activeVisual.limit,
-    activeVisual.metric,
-    activeVisual.metricAggregation,
-    draft.filters,
-    draft.id,
-    draft.joins,
-    draft.models,
-    fieldDetailByAlias,
-    getColumnLabel,
-    derivedFieldPayloads,
-  ]);
+      return descriptor;
+    },
+    [
+      draft.filters,
+      draft.id,
+      draft.joins,
+      draft.models,
+      fieldDetailByAlias,
+      getColumnLabel,
+      derivedFieldPayloads,
+    ],
+  );
+  const visualQueryDescriptor = useMemo(
+    () => buildVisualDescriptor(activeVisual ?? null),
+    [activeVisual, buildVisualDescriptor],
+  );
 
   const chartMetricAlias = visualQueryDescriptor.metricAlias ?? "";
   const chartDimensionAlias = visualQueryDescriptor.dimensionAlias ?? "";
@@ -4235,6 +4235,519 @@ const Reports = (props: GenericPageProps) => {
     return true;
   };
 
+  const buildFilterClausesForRequest = useCallback(
+    (filters: ReportFilter[], aliasLookup: Map<string, string>) => {
+      const clauses: string[] = [];
+      const errors: string[] = [];
+
+      const resolveColumnExpressionForFilter = (modelId: string, fieldId: string): string | null => {
+        const alias = aliasLookup.get(modelId);
+        const model = modelMap.get(modelId);
+        if (!alias || !model) {
+          return null;
+        }
+        const field = model.fields.find((candidate) => candidate.id === fieldId);
+        if (!field) {
+          return null;
+        }
+        const column = field.sourceColumn ?? field.id;
+        return `${alias}.${quoteIdentifier(column)}`;
+      };
+
+      const buildDerivedExpressionSql = (fieldId: string): string | null => {
+        const derivedField = derivedFieldMap.get(fieldId);
+        if (!derivedField || !derivedField.expressionAst) {
+          return null;
+        }
+
+        const renderNode = (node: DerivedFieldExpressionAst): string | null => {
+          switch (node.type) {
+            case "column":
+              return resolveColumnExpressionForFilter(node.modelId, node.fieldId);
+            case "literal":
+              if (node.valueType === "number") {
+                return Number(node.value).toString();
+              }
+              if (node.valueType === "boolean") {
+                return node.value ? "TRUE" : "FALSE";
+              }
+              return `'${escapeSqlLiteral(String(node.value ?? ""))}'`;
+            case "binary": {
+              const left = renderNode(node.left);
+              const right = renderNode(node.right);
+              if (!left || !right) {
+                return null;
+              }
+              return `(${left} ${node.operator} ${right})`;
+            }
+            case "unary": {
+              const argument = renderNode(node.argument);
+              if (!argument) {
+                return null;
+              }
+              return `${node.operator}(${argument})`;
+            }
+            case "function": {
+              const args = node.args.map((arg) => renderNode(arg));
+              if (args.some((arg) => !arg)) {
+                return null;
+              }
+              return `${node.name}(${args.join(", ")})`;
+            }
+            default:
+              return null;
+          }
+        };
+
+        return renderNode(derivedField.expressionAst);
+      };
+
+      const resolveFieldExpression = (option: FilterFieldOption): string | null => {
+        if (option.modelId === DERIVED_FIELD_SENTINEL) {
+          return buildDerivedExpressionSql(option.fieldId);
+        }
+        return resolveColumnExpressionForFilter(option.modelId, option.fieldId);
+      };
+
+      filters.forEach((filter) => {
+        const leftOption = filterFieldLookup.get(buildFilterOptionKey(filter.leftModelId, filter.leftFieldId));
+        if (!leftOption) {
+          errors.push("A filter references a field that is no longer available.");
+          return;
+        }
+
+        const operatorDefinition = FILTER_OPERATOR_LOOKUP.get(filter.operator);
+        if (!operatorDefinition) {
+          return;
+        }
+
+        const leftExpression = resolveFieldExpression(leftOption);
+        if (!leftExpression) {
+          errors.push(`"${leftOption.label}" is not available in the current preview.`);
+          return;
+        }
+
+        const requiresValue = operatorDefinition.requiresValue;
+        const allowFieldComparison = operatorDefinition.allowFieldComparison ?? false;
+        const fieldLabel = leftOption.label;
+
+        if (!requiresValue) {
+          switch (filter.operator) {
+            case "is_null":
+              clauses.push(`${leftExpression} IS NULL`);
+              break;
+            case "is_not_null":
+              clauses.push(`${leftExpression} IS NOT NULL`);
+              break;
+            case "is_true":
+              clauses.push(`${leftExpression} IS TRUE`);
+              break;
+            case "is_false":
+              clauses.push(`${leftExpression} IS FALSE`);
+              break;
+            default:
+              break;
+          }
+          return;
+        }
+
+        if (filter.rightType === "field") {
+          if (!allowFieldComparison) {
+            errors.push(`The operator on "${fieldLabel}" does not support comparing against a field.`);
+            return;
+          }
+          if (!filter.rightModelId || !filter.rightFieldId) {
+            errors.push(`Select a comparison field for "${fieldLabel}".`);
+            return;
+          }
+          const rightOption = filterFieldLookup.get(
+            buildFilterOptionKey(filter.rightModelId, filter.rightFieldId),
+          );
+          if (!rightOption) {
+            errors.push("The comparison field is no longer available.");
+            return;
+          }
+          const rightExpression = resolveFieldExpression(rightOption);
+          if (!rightExpression) {
+            errors.push("The comparison field is not available in the current preview.");
+            return;
+          }
+          const operatorSqlMap: Partial<Record<FilterOperator, string>> = {
+            eq: "=",
+            neq: "<>",
+            gt: ">",
+            gte: ">=",
+            lt: "<",
+            lte: "<=",
+          };
+          const sqlOperator = operatorSqlMap[filter.operator];
+          if (!sqlOperator) {
+            errors.push(`"${fieldLabel}" operator requires a literal value.`);
+            return;
+          }
+          clauses.push(`${leftExpression} ${sqlOperator} ${rightExpression}`);
+          return;
+        }
+
+        const buildLiteral = (kind: FilterValueKind, value: string): string | null => {
+          if (kind === "number") {
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) {
+              errors.push(`Enter a valid number for "${fieldLabel}".`);
+              return null;
+            }
+            return String(numeric);
+          }
+          if (kind === "boolean") {
+            const normalized = value.toLowerCase();
+            if (normalized !== "true" && normalized !== "false") {
+              errors.push(`Select true or false for "${fieldLabel}".`);
+              return null;
+            }
+            return normalized === "true" ? "TRUE" : "FALSE";
+          }
+          return `'${escapeSqlLiteral(value)}'`;
+        };
+
+        if (filter.operator === "between") {
+          const rangeFrom = (filter.range?.from ?? "").trim();
+          const rangeTo = (filter.range?.to ?? "").trim();
+          if (!rangeFrom || !rangeTo) {
+            errors.push(`Provide both start and end values for "${fieldLabel}".`);
+            return;
+          }
+          const fromLiteral = buildLiteral(filter.valueKind, rangeFrom);
+          const toLiteral = buildLiteral(filter.valueKind, rangeTo);
+          if (!fromLiteral || !toLiteral) {
+            return;
+          }
+          clauses.push(`${leftExpression} BETWEEN ${fromLiteral} AND ${toLiteral}`);
+          return;
+        }
+
+        const trimmedValue = (filter.value ?? "").trim();
+        if (filter.valueKind !== "boolean" && trimmedValue.length === 0) {
+          errors.push(`Provide a value for the filter on "${fieldLabel}".`);
+          return;
+        }
+
+        switch (filter.operator) {
+          case "eq":
+          case "neq":
+          case "gt":
+          case "gte":
+          case "lt":
+          case "lte": {
+            const operatorSqlMap: Record<FilterOperator, string> = {
+              eq: "=",
+              neq: "<>",
+              gt: ">",
+              gte: ">=",
+              lt: "<",
+              lte: "<=",
+              between: "",
+              contains: "",
+              starts_with: "",
+              ends_with: "",
+              is_null: "IS NULL",
+              is_not_null: "IS NOT NULL",
+              is_true: "IS TRUE",
+              is_false: "IS FALSE",
+            };
+            const literal = buildLiteral(filter.valueKind, trimmedValue);
+            if (!literal) {
+              return;
+            }
+            clauses.push(`${leftExpression} ${operatorSqlMap[filter.operator]} ${literal}`);
+            break;
+          }
+          case "contains": {
+            const literal = `'${`%${escapeSqlLiteral(trimmedValue)}%`}'`;
+            clauses.push(`${leftExpression} ILIKE ${literal}`);
+            break;
+          }
+          case "starts_with": {
+            const literal = `'${`${escapeSqlLiteral(trimmedValue)}%`}'`;
+            clauses.push(`${leftExpression} ILIKE ${literal}`);
+            break;
+          }
+          case "ends_with": {
+            const literal = `'${`%${escapeSqlLiteral(trimmedValue)}`}'`;
+            clauses.push(`${leftExpression} ILIKE ${literal}`);
+            break;
+          }
+          default:
+            break;
+        }
+      });
+
+      return { clauses, errors };
+    },
+    [derivedFieldMap, filterFieldLookup, modelMap],
+  );
+
+  const buildPreviewRequestPayload = useCallback((): {
+    payload?: ReportPreviewRequest;
+    error?: string;
+    visualError?: string;
+  } => {
+    if (draft.models.length === 0) {
+      return {
+        error: "Select at least one data model to run a preview.",
+        visualError: "Select at least one data model to run analytics.",
+      };
+    }
+
+    const sanitizedFields = draft.fields
+      .map((entry) => ({
+        modelId: entry.modelId,
+        fieldIds: entry.fieldIds.filter((fieldId) => Boolean(fieldId)),
+      }))
+      .filter((entry) => entry.fieldIds.length > 0);
+
+    if (sanitizedFields.length === 0) {
+      return {
+        error: "Select at least one field to include in your preview.",
+        visualError: "Select at least one field to power analytics.",
+      };
+    }
+
+    if (hasStaleDerivedFields) {
+      const staleMessage =
+        staleDerivedFieldNames.length > 0
+          ? `Resolve stale derived fields (${staleDerivedFieldNames}) before running a preview.`
+          : "Resolve stale derived fields before running a preview.";
+      return {
+        error: staleMessage,
+        visualError: staleMessage,
+      };
+    }
+
+    const aliasMap = new Map<string, string>();
+    draft.models.forEach((modelId, index) => {
+      aliasMap.set(modelId, `m${index}`);
+    });
+
+    const { clauses: filterClauses, errors: filterErrors } = buildFilterClausesForRequest(
+      draft.filters,
+      aliasMap,
+    );
+
+    if (filterErrors.length > 0) {
+      const message = filterErrors.join(" | ");
+      return {
+        error: message,
+        visualError: message,
+      };
+    }
+
+    const orderByPayload = draft.previewOrder.reduce<PreviewOrderClausePayload[]>(
+      (accumulator, rule) => {
+        if (rule.source === "derived") {
+          accumulator.push({
+            source: "derived",
+            fieldId: rule.fieldId,
+            direction: rule.direction,
+          });
+          return accumulator;
+        }
+        if (rule.modelId) {
+          accumulator.push({
+            source: "model",
+            modelId: rule.modelId,
+            fieldId: rule.fieldId,
+            direction: rule.direction,
+          });
+        }
+        return accumulator;
+      },
+      [],
+    );
+
+    const payload: ReportPreviewRequest = {
+      models: draft.models,
+      fields: sanitizedFields,
+      joins: draft.joins.map(
+        ({ id, leftModel, leftField, rightModel, rightField, joinType, description }) => ({
+          id,
+          leftModel,
+          leftField,
+          rightModel,
+          rightField,
+          joinType,
+          description,
+        }),
+      ),
+      filters: filterClauses,
+      orderBy: orderByPayload.length > 0 ? orderByPayload : undefined,
+      limit: 500,
+      derivedFields: derivedFieldPayloads.length > 0 ? derivedFieldPayloads : undefined,
+      grouping:
+        draft.previewGrouping.length > 0
+          ? draft.previewGrouping.reduce<PreviewGroupingRuleDto[]>((accumulator, rule) => {
+              if (rule.source === "model" && !rule.modelId) {
+                return accumulator;
+              }
+              accumulator.push({
+                id: rule.id,
+                source: rule.source,
+                modelId: rule.source === "derived" ? null : rule.modelId ?? null,
+                fieldId: rule.fieldId,
+                bucket: rule.bucket ?? null,
+              });
+              return accumulator;
+            }, [])
+          : undefined,
+      aggregations:
+        draft.previewAggregations.length > 0
+          ? draft.previewAggregations.reduce<PreviewAggregationRuleDto[]>((accumulator, rule) => {
+              if (rule.source === "model" && !rule.modelId) {
+                return accumulator;
+              }
+              accumulator.push({
+                id: rule.id,
+                source: rule.source,
+                modelId: rule.source === "derived" ? null : rule.modelId ?? null,
+                fieldId: rule.fieldId,
+                aggregation: rule.aggregation,
+                alias: rule.alias ?? null,
+              });
+              return accumulator;
+            }, [])
+          : undefined,
+      having:
+        draft.previewHaving.length > 0
+          ? draft.previewHaving
+              .filter((clause) => draft.previewAggregations.some((agg) => agg.id === clause.aggregationId))
+              .map((clause) => ({
+                id: clause.id,
+                aggregationId: clause.aggregationId,
+                operator: clause.operator,
+                value: clause.value ?? "",
+                valueKind: clause.valueKind,
+              }))
+          : undefined,
+    };
+
+    return { payload };
+  }, [draft, derivedFieldPayloads, hasStaleDerivedFields, staleDerivedFieldNames, buildFilterClausesForRequest]);
+
+  const findDateFilterMetadata = useCallback(
+    (
+      filterClauses?: ReportPreviewRequest["filters"],
+    ): {
+      modelId: string;
+      fieldId: string;
+      operator: FilterOperator;
+      filterIndex: number;
+      clauseSql?: string;
+    } | null => {
+      let fallback: {
+        modelId: string;
+        fieldId: string;
+        operator: FilterOperator;
+        filterIndex: number;
+        clauseSql?: string;
+      } | null = null;
+      for (let index = 0; index < draft.filters.length; index += 1) {
+        const filter = draft.filters[index];
+        if (!filter.leftModelId || !filter.leftFieldId) {
+          continue;
+        }
+        const leftOption = filterFieldLookup.get(buildFilterOptionKey(filter.leftModelId, filter.leftFieldId));
+        if (!leftOption || leftOption.modelId === DERIVED_FIELD_SENTINEL) {
+          continue;
+        }
+        const isDateFilter = filter.valueKind === "date" || leftOption.field.type === "date";
+        if (!isDateFilter) {
+          continue;
+        }
+        if (
+          filter.operator === "between" ||
+          filter.operator === "gte" ||
+          filter.operator === "lte"
+        ) {
+          const clauseInput = Array.isArray(filterClauses) ? filterClauses[index] : undefined;
+          const clauseSql =
+            typeof clauseInput === "string" && clauseInput.trim().length > 0 ? clauseInput.trim() : undefined;
+          const metadata = {
+            modelId: filter.leftModelId,
+            fieldId: filter.leftFieldId,
+            operator: filter.operator,
+            filterIndex: index,
+            ...(clauseSql ? { clauseSql } : {}),
+          };
+          if (filter.operator === "between") {
+            return metadata;
+          }
+          if (!fallback) {
+            fallback = metadata;
+          }
+        }
+      }
+      return fallback;
+    },
+    [draft.filters, filterFieldLookup],
+  );
+
+  const buildVisualCardViewConfig = useCallback(
+    (
+      visual: VisualDefinition,
+      options?: {
+        sample?: DashboardVisualCardViewConfig["sample"];
+        dateFilterMetadata?: ReturnType<typeof findDateFilterMetadata> | null;
+      },
+    ): DashboardVisualCardViewConfig | null => {
+      if (!visual.metric || !visual.dimension) {
+        return null;
+      }
+      const descriptor = buildVisualDescriptor(visual);
+      const metricLabel = descriptor.metricLabel ?? getColumnLabel(visual.metric) ?? "Metric";
+      const dimensionLabel =
+        descriptor.dimensionLabel ?? getColumnLabel(visual.dimension) ?? "Dimension";
+      const comparisonLabel =
+        visual.comparison &&
+        (descriptor.comparisonLabel ?? getColumnLabel(visual.comparison) ?? visual.comparison);
+      const normalizedName =
+        visual.name && visual.name.trim().length > 0 ? visual.name.trim() : `${metricLabel} vs ${dimensionLabel}`;
+      return {
+        mode: "visual",
+        description: `Visual: ${metricLabel} vs ${dimensionLabel}`,
+        queryConfig: descriptor.config ? deepClone(descriptor.config) : null,
+        metricAlias: descriptor.metricAlias ?? undefined,
+        dimensionAlias: descriptor.dimensionAlias ?? undefined,
+        comparisonAlias: descriptor.comparisonAlias ?? undefined,
+        ...(options?.dateFilterMetadata ? { dateFilter: { ...options.dateFilterMetadata } } : {}),
+        visual: {
+          id: visual.id,
+          name: normalizedName,
+          type: visual.type,
+          metric: visual.metric,
+          metricAggregation:
+            visual.metricAggregation && METRIC_AGGREGATIONS.includes(visual.metricAggregation)
+              ? visual.metricAggregation
+              : "sum",
+          metricLabel,
+          dimension: visual.dimension,
+          dimensionLabel,
+          dimensionBucket: visual.dimensionBucket,
+          comparison: visual.comparison ?? undefined,
+          comparisonLabel: comparisonLabel ?? undefined,
+          comparisonAggregation:
+            visual.comparison && visual.comparisonAggregation
+              ? visual.comparisonAggregation
+              : undefined,
+          limit:
+            typeof visual.limit === "number" && Number.isFinite(visual.limit) && visual.limit > 0
+              ? Math.round(visual.limit)
+              : 100,
+        },
+        sample: options?.sample,
+      };
+    },
+    [buildVisualDescriptor, getColumnLabel],
+  );
+
   const handleAddVisualToDashboard = () => {
     if (!ensureTemplateReadyForDashboard()) {
       return;
@@ -4247,8 +4760,6 @@ const Reports = (props: GenericPageProps) => {
       visualQueryDescriptor.metricLabel ?? getColumnLabel(activeVisual.metric) ?? "Metric";
     const dimensionLabel =
       visualQueryDescriptor.dimensionLabel ?? getColumnLabel(activeVisual.dimension) ?? "Dimension";
-    const comparisonLabel =
-      activeVisual.comparison && (visualQueryDescriptor.comparisonLabel ?? getColumnLabel(activeVisual.comparison));
     const defaultTitle =
       activeVisual.name && activeVisual.name.trim().length > 0
         ? activeVisual.name.trim()
@@ -4261,34 +4772,14 @@ const Reports = (props: GenericPageProps) => {
           }
         : undefined;
     const dateFilterMetadata = findDateFilterMetadata();
-    const viewConfig: DashboardCardViewConfig = {
-      mode: "visual",
-      description: `Visual: ${metricLabel} vs ${dimensionLabel}`,
-      queryConfig: visualQueryDescriptor.config ? deepClone(visualQueryDescriptor.config) : null,
-      metricAlias: visualQueryDescriptor.metricAlias ?? undefined,
-      dimensionAlias: visualQueryDescriptor.dimensionAlias ?? undefined,
-      comparisonAlias: visualQueryDescriptor.comparisonAlias ?? undefined,
-      ...(dateFilterMetadata ? { dateFilter: dateFilterMetadata } : {}),
-      visual: {
-        id: activeVisual.id,
-        name: defaultTitle,
-        type: activeVisual.type,
-        metric: activeVisual.metric,
-        metricAggregation: activeVisual.metricAggregation ?? "sum",
-        metricLabel,
-        dimension: activeVisual.dimension,
-        dimensionLabel,
-        dimensionBucket: activeVisual.dimensionBucket,
-        comparison: activeVisual.comparison ?? undefined,
-        comparisonLabel: comparisonLabel ?? undefined,
-        comparisonAggregation:
-          activeVisual.comparison && activeVisual.comparisonAggregation
-            ? activeVisual.comparisonAggregation
-            : undefined,
-        limit: activeVisual.limit ?? 100,
-      },
+    const viewConfig = buildVisualCardViewConfig(activeVisual, {
       sample,
-    };
+      dateFilterMetadata,
+    });
+    if (!viewConfig) {
+      setTemplateError("Unable to build the visual configuration for this dashboard card.");
+      return;
+    }
     const cardDraft: DashboardCardModalDraft = {
       templateId: draft.id,
       title: defaultTitle,
@@ -4297,6 +4788,170 @@ const Reports = (props: GenericPageProps) => {
     };
     handleOpenDashboardModal(cardDraft);
   };
+
+  const buildPreviewTableViewConfig = useCallback(
+    (
+      description: string,
+      existing: DashboardPreviewTableCardViewConfig | null = null,
+      onError?: (message: string) => void,
+    ): DashboardPreviewTableCardViewConfig | null => {
+      const { payload, error } = buildPreviewRequestPayload();
+      if (!payload) {
+        if (onError) {
+          onError(error ?? "Unable to build the preview configuration for this dashboard card.");
+        }
+        return null;
+      }
+      const dateFilterMetadata = findDateFilterMetadata(payload.filters);
+      return {
+        mode: "preview_table",
+        description,
+        previewRequest: deepClone(payload),
+        columnOrder: previewColumns.length > 0 ? [...previewColumns] : existing?.columnOrder ?? [],
+        columnAliases: { ...draft.columnAliases },
+        ...(dateFilterMetadata ? { dateFilter: dateFilterMetadata } : {}),
+      };
+    },
+    [buildPreviewRequestPayload, draft.columnAliases, findDateFilterMetadata, previewColumns],
+  );
+
+  const updateDashboardCardsForTemplate = useCallback(
+    async (templateId: string) => {
+      if (!templateId || dashboards.length === 0) {
+        return;
+      }
+      const dateFilterMetadata = findDateFilterMetadata();
+      const visualLookup = new Map<string, VisualDefinition>();
+      draft.visuals.forEach((visual) => {
+        if (visual.id) {
+          visualLookup.set(visual.id, visual);
+        }
+      });
+      const spotlightLookup = new Map<string, MetricSpotlightDefinitionDto>();
+      draft.metricsSpotlight.forEach((spotlight) => {
+        if (spotlight.metric) {
+          spotlightLookup.set(spotlight.metric, spotlight);
+        }
+      });
+      const updateTasks: Promise<DashboardCardDto | void>[] = [];
+      const enqueueUpdate = (
+        dashboardId: string,
+        card: DashboardCardDto,
+        viewConfig: DashboardCardViewConfig,
+      ) => {
+        updateTasks.push(
+          upsertDashboardCardMutation.mutateAsync({
+            dashboardId,
+            cardId: card.id,
+            payload: {
+              templateId,
+              title: card.title,
+              viewConfig,
+              layout: card.layout,
+            },
+          }),
+        );
+      };
+      dashboards.forEach((dashboard) => {
+        (dashboard.cards ?? []).forEach((card) => {
+          if (card.templateId !== templateId) {
+            return;
+          }
+          const viewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
+          if (isPreviewTableCardViewConfig(viewConfig)) {
+            const updatedConfig = buildPreviewTableViewConfig(viewConfig.description ?? card.title, viewConfig);
+            if (!updatedConfig) {
+              return;
+            }
+            enqueueUpdate(dashboard.id, card, updatedConfig);
+            return;
+          }
+          if (isVisualCardViewConfig(viewConfig)) {
+            const visualId = viewConfig.visual?.id ?? null;
+            const matchingVisual = visualId ? visualLookup.get(visualId) : undefined;
+            if (matchingVisual) {
+              const updatedConfig = buildVisualCardViewConfig(matchingVisual, {
+                sample: viewConfig.sample,
+                dateFilterMetadata,
+              });
+              if (updatedConfig) {
+                enqueueUpdate(dashboard.id, card, updatedConfig);
+                return;
+              }
+            }
+            if (dateFilterMetadata) {
+              if (
+                viewConfig.dateFilter &&
+                viewConfig.dateFilter.modelId === dateFilterMetadata.modelId &&
+                viewConfig.dateFilter.fieldId === dateFilterMetadata.fieldId &&
+                viewConfig.dateFilter.operator === dateFilterMetadata.operator
+              ) {
+                return;
+              }
+              enqueueUpdate(dashboard.id, card, {
+                ...viewConfig,
+                dateFilter: { ...dateFilterMetadata },
+              });
+            }
+            return;
+          }
+          if (isSpotlightCardViewConfig(viewConfig)) {
+            const spotlightMetric = viewConfig.spotlight?.metric ?? null;
+            const latestSpotlight = spotlightMetric ? spotlightLookup.get(spotlightMetric) : undefined;
+            if (latestSpotlight) {
+              const updatedConfig: DashboardSpotlightCardViewConfig = {
+                ...viewConfig,
+                spotlight: {
+                  ...viewConfig.spotlight,
+                  ...latestSpotlight,
+                  metricLabel: getColumnLabel(latestSpotlight.metric),
+                },
+                ...(dateFilterMetadata ? { dateFilter: { ...dateFilterMetadata } } : {}),
+              };
+              enqueueUpdate(dashboard.id, card, updatedConfig);
+              return;
+            }
+            if (dateFilterMetadata) {
+              if (
+                viewConfig.dateFilter &&
+                viewConfig.dateFilter.modelId === dateFilterMetadata.modelId &&
+                viewConfig.dateFilter.fieldId === dateFilterMetadata.fieldId &&
+                viewConfig.dateFilter.operator === dateFilterMetadata.operator
+              ) {
+                return;
+              }
+              enqueueUpdate(dashboard.id, card, {
+                ...viewConfig,
+                dateFilter: { ...dateFilterMetadata },
+              });
+            }
+          }
+        });
+      });
+      if (updateTasks.length === 0) {
+        return;
+      }
+      try {
+        await Promise.allSettled(updateTasks);
+        await queryClient.invalidateQueries({ queryKey: ["reports", "dashboards"] });
+      } catch (error) {
+        console.error("Failed to refresh dashboard cards after saving template", error);
+        setTemplateError((current) => current ?? "Template saved, but some dashboard cards were not refreshed.");
+      }
+    },
+    [
+      buildPreviewTableViewConfig,
+      buildVisualCardViewConfig,
+      dashboards,
+      draft.metricsSpotlight,
+      draft.visuals,
+      findDateFilterMetadata,
+      getColumnLabel,
+      queryClient,
+      setTemplateError,
+      upsertDashboardCardMutation,
+    ],
+  );
 
   const handleAddPreviewToDashboard = () => {
     if (!ensureTemplateReadyForDashboard()) {
@@ -4310,23 +4965,15 @@ const Reports = (props: GenericPageProps) => {
       setTemplateSuccess(null);
       return;
     }
-    const { payload, error } = buildPreviewRequestPayload();
-    if (!payload) {
-      setTemplateError(error ?? "Unable to build the preview configuration for this dashboard card.");
-      setTemplateSuccess(null);
-      return;
-    }
     const baseTitle = draft.name && draft.name.trim().length > 0 ? draft.name.trim() : "Report";
     const defaultTitle = `${baseTitle} preview table`;
-    const dateFilterMetadata = findDateFilterMetadata(payload.filters);
-    const viewConfig: DashboardPreviewTableCardViewConfig = {
-      mode: "preview_table",
-      description: `Preview table for ${baseTitle}`,
-      previewRequest: deepClone(payload),
-      columnOrder: [...previewColumns],
-      columnAliases: { ...draft.columnAliases },
-      ...(dateFilterMetadata ? { dateFilter: dateFilterMetadata } : {}),
-    };
+    const viewConfig = buildPreviewTableViewConfig(`Preview table for ${baseTitle}`, null, (errorMessage) => {
+      setTemplateError(errorMessage);
+      setTemplateSuccess(null);
+    });
+    if (!viewConfig) {
+      return;
+    }
     const cardDraft: DashboardCardModalDraft = {
       templateId: draft.id,
       title: defaultTitle,
@@ -4754,6 +5401,7 @@ const Reports = (props: GenericPageProps) => {
       });
       setSelectedTemplateId(mergedTemplate.id);
       setDraft(deepClone(mergedTemplate));
+      await updateDashboardCardsForTemplate(mergedTemplate.id);
       setTemplateSuccess("Template saved.");
     } catch (error) {
       setTemplateError(extractAxiosErrorMessage(error, "Failed to save template"));
@@ -5013,207 +5661,6 @@ const Reports = (props: GenericPageProps) => {
       joins: current.joins.filter((join) => join.id !== joinId),
     }));
   };
-
-const buildPreviewRequestPayload = (): {
-  payload?: ReportPreviewRequest;
-  error?: string;
-  visualError?: string;
-} => {
-    if (draft.models.length === 0) {
-      return {
-        error: "Select at least one data model to run a preview.",
-        visualError: "Select at least one data model to run analytics.",
-      };
-    }
-
-    const sanitizedFields = draft.fields
-      .map((entry) => ({
-        modelId: entry.modelId,
-        fieldIds: entry.fieldIds.filter((fieldId) => Boolean(fieldId)),
-      }))
-      .filter((entry) => entry.fieldIds.length > 0);
-
-    if (sanitizedFields.length === 0) {
-      return {
-        error: "Select at least one field to include in your preview.",
-        visualError: "Select at least one field to power analytics.",
-      };
-    }
-
-    if (hasStaleDerivedFields) {
-      const staleMessage =
-        staleDerivedFieldNames.length > 0
-          ? `Resolve stale derived fields (${staleDerivedFieldNames}) before running a preview.`
-          : "Resolve stale derived fields before running a preview.";
-      return {
-        error: staleMessage,
-        visualError: staleMessage,
-      };
-    }
-
-    const aliasMap = new Map<string, string>();
-    draft.models.forEach((modelId, index) => {
-      aliasMap.set(modelId, `m${index}`);
-    });
-
-    const { clauses: filterClauses, errors: filterErrors } = buildFilterClausesForRequest(
-      draft.filters,
-      aliasMap,
-    );
-
-    if (filterErrors.length > 0) {
-      const message = filterErrors.join(" | ");
-      return {
-        error: message,
-        visualError: message,
-      };
-    }
-
-    const orderByPayload = draft.previewOrder.reduce<PreviewOrderClausePayload[]>(
-      (accumulator, rule) => {
-        if (rule.source === "derived") {
-          accumulator.push({
-            source: "derived",
-            fieldId: rule.fieldId,
-            direction: rule.direction,
-          });
-          return accumulator;
-        }
-        if (rule.modelId) {
-          accumulator.push({
-            source: "model",
-            modelId: rule.modelId,
-            fieldId: rule.fieldId,
-            direction: rule.direction,
-          });
-        }
-        return accumulator;
-      },
-      [],
-    );
-
-    const payload: ReportPreviewRequest = {
-      models: draft.models,
-      fields: sanitizedFields,
-      joins: draft.joins.map(
-        ({ id, leftModel, leftField, rightModel, rightField, joinType, description }) => ({
-          id,
-          leftModel,
-          leftField,
-          rightModel,
-          rightField,
-          joinType,
-          description,
-        }),
-      ),
-      filters: filterClauses,
-      orderBy: orderByPayload.length > 0 ? orderByPayload : undefined,
-      limit: 500,
-      derivedFields: derivedFieldPayloads.length > 0 ? derivedFieldPayloads : undefined,
-      grouping:
-        draft.previewGrouping.length > 0
-          ? draft.previewGrouping.reduce<PreviewGroupingRuleDto[]>((accumulator, rule) => {
-              if (rule.source === "model" && !rule.modelId) {
-                return accumulator;
-              }
-              accumulator.push({
-                id: rule.id,
-                source: rule.source,
-                modelId: rule.source === "derived" ? null : rule.modelId ?? null,
-                fieldId: rule.fieldId,
-                bucket: rule.bucket ?? null,
-              });
-              return accumulator;
-            }, [])
-          : undefined,
-      aggregations:
-        draft.previewAggregations.length > 0
-          ? draft.previewAggregations.reduce<PreviewAggregationRuleDto[]>((accumulator, rule) => {
-              if (rule.source === "model" && !rule.modelId) {
-                return accumulator;
-              }
-              accumulator.push({
-                id: rule.id,
-                source: rule.source,
-                modelId: rule.source === "derived" ? null : rule.modelId ?? null,
-                fieldId: rule.fieldId,
-                aggregation: rule.aggregation,
-                alias: rule.alias ?? null,
-              });
-              return accumulator;
-            }, [])
-          : undefined,
-      having:
-        draft.previewHaving.length > 0
-          ? draft.previewHaving
-              .filter((clause) => draft.previewAggregations.some((agg) => agg.id === clause.aggregationId))
-              .map((clause) => ({
-                id: clause.id,
-                aggregationId: clause.aggregationId,
-                operator: clause.operator,
-                value: clause.value ?? "",
-                valueKind: clause.valueKind,
-              }))
-          : undefined,
-    };
-
-  return { payload };
-};
-
-const findDateFilterMetadata = (
-  filterClauses?: ReportPreviewRequest["filters"],
-): {
-  modelId: string;
-  fieldId: string;
-  operator: FilterOperator;
-  filterIndex: number;
-  clauseSql?: string;
-} | null => {
-  let fallback: {
-    modelId: string;
-    fieldId: string;
-    operator: FilterOperator;
-    filterIndex: number;
-    clauseSql?: string;
-  } | null = null;
-  for (let index = 0; index < draft.filters.length; index += 1) {
-    const filter = draft.filters[index];
-    if (!filter.leftModelId || !filter.leftFieldId) {
-      continue;
-    }
-    const leftOption = filterFieldLookup.get(buildFilterOptionKey(filter.leftModelId, filter.leftFieldId));
-    if (!leftOption || leftOption.modelId === DERIVED_FIELD_SENTINEL) {
-      continue;
-    }
-    const isDateFilter = filter.valueKind === "date" || leftOption.field.type === "date";
-    if (!isDateFilter) {
-      continue;
-    }
-    if (
-      filter.operator === "between" ||
-      filter.operator === "gte" ||
-      filter.operator === "lte"
-    ) {
-      const clauseInput = Array.isArray(filterClauses) ? filterClauses[index] : undefined;
-      const clauseSql =
-        typeof clauseInput === "string" && clauseInput.trim().length > 0 ? clauseInput.trim() : undefined;
-      const metadata = {
-        modelId: filter.leftModelId,
-        fieldId: filter.leftFieldId,
-        operator: filter.operator,
-        filterIndex: index,
-        ...(clauseSql ? { clauseSql } : {}),
-      };
-      if (filter.operator === "between") {
-        return metadata;
-      }
-      if (!fallback) {
-        fallback = metadata;
-      }
-    }
-  }
-  return fallback;
-};
 
   const handleRunAnalysis = async () => {
     setPreviewError(null);
@@ -6190,258 +6637,6 @@ const findDateFilterMetadata = (
     });
   }, [filterFieldOptions]);
 
-  const buildFilterClausesForRequest = useCallback(
-  (filters: ReportFilter[], aliasLookup: Map<string, string>) => {
-    const clauses: string[] = [];
-    const errors: string[] = [];
-
-    const resolveColumnExpressionForFilter = (modelId: string, fieldId: string): string | null => {
-      const alias = aliasLookup.get(modelId);
-      const model = modelMap.get(modelId);
-      if (!alias || !model) {
-        return null;
-      }
-      const field = model.fields.find((candidate) => candidate.id === fieldId);
-      if (!field) {
-        return null;
-      }
-      const column = field.sourceColumn ?? field.id;
-      return `${alias}.${quoteIdentifier(column)}`;
-    };
-
-    const buildDerivedExpressionSql = (fieldId: string): string | null => {
-      const derivedField = derivedFieldMap.get(fieldId);
-      if (!derivedField || !derivedField.expressionAst) {
-        return null;
-      }
-
-      const renderNode = (node: DerivedFieldExpressionAst): string | null => {
-        switch (node.type) {
-          case "column":
-            return resolveColumnExpressionForFilter(node.modelId, node.fieldId);
-          case "literal":
-            if (node.valueType === "number") {
-              return Number(node.value).toString();
-            }
-            if (node.valueType === "boolean") {
-              return node.value ? "TRUE" : "FALSE";
-            }
-            return `'${escapeSqlLiteral(String(node.value ?? ""))}'`;
-          case "binary": {
-            const left = renderNode(node.left);
-            const right = renderNode(node.right);
-            if (!left || !right) {
-              return null;
-            }
-            return `(${left} ${node.operator} ${right})`;
-          }
-          case "unary": {
-            const argument = renderNode(node.argument);
-            if (!argument) {
-              return null;
-            }
-            return `${node.operator}(${argument})`;
-          }
-          case "function": {
-            const args = node.args.map((arg) => renderNode(arg));
-            if (args.some((arg) => !arg)) {
-              return null;
-            }
-            return `${node.name}(${args.join(", ")})`;
-          }
-          default:
-            return null;
-        }
-      };
-
-      return renderNode(derivedField.expressionAst);
-    };
-
-    const resolveFieldExpression = (option: FilterFieldOption): string | null => {
-      if (option.modelId === DERIVED_FIELD_SENTINEL) {
-        return buildDerivedExpressionSql(option.fieldId);
-      }
-      return resolveColumnExpressionForFilter(option.modelId, option.fieldId);
-    };
-
-    filters.forEach((filter) => {
-      const leftOption = filterFieldLookup.get(
-        buildFilterOptionKey(filter.leftModelId, filter.leftFieldId),
-      );
-      if (!leftOption) {
-        errors.push("A filter references a field that is no longer available.");
-        return;
-      }
-
-      const operatorDefinition = FILTER_OPERATOR_LOOKUP.get(filter.operator);
-      if (!operatorDefinition) {
-        return;
-      }
-
-      const leftExpression = resolveFieldExpression(leftOption);
-      if (!leftExpression) {
-        errors.push(`"${leftOption.label}" is not available in the current preview.`);
-        return;
-      }
-
-      const requiresValue = operatorDefinition.requiresValue;
-      const allowFieldComparison = operatorDefinition.allowFieldComparison ?? false;
-      const fieldLabel = leftOption.label;
-
-      if (!requiresValue) {
-        switch (filter.operator) {
-          case "is_null":
-            clauses.push(`${leftExpression} IS NULL`);
-            break;
-          case "is_not_null":
-            clauses.push(`${leftExpression} IS NOT NULL`);
-            break;
-          case "is_true":
-            clauses.push(`${leftExpression} IS TRUE`);
-            break;
-          case "is_false":
-            clauses.push(`${leftExpression} IS FALSE`);
-            break;
-          default:
-            break;
-        }
-        return;
-      }
-
-      if (filter.rightType === "field") {
-        if (!allowFieldComparison) {
-          errors.push(`The operator on "${fieldLabel}" does not support comparing against a field.`);
-          return;
-        }
-        if (!filter.rightModelId || !filter.rightFieldId) {
-          errors.push(`Select a comparison field for "${fieldLabel}".`);
-          return;
-        }
-        const rightOption = filterFieldLookup.get(
-          buildFilterOptionKey(filter.rightModelId, filter.rightFieldId),
-        );
-        if (!rightOption) {
-          errors.push("The comparison field is no longer available.");
-          return;
-        }
-        const rightExpression = resolveFieldExpression(rightOption);
-        if (!rightExpression) {
-          errors.push("The comparison field is not available in the current preview.");
-          return;
-        }
-        const operatorSqlMap: Partial<Record<FilterOperator, string>> = {
-          eq: "=",
-          neq: "<>",
-          gt: ">",
-          gte: ">=",
-          lt: "<",
-          lte: "<=",
-        };
-        const sqlOperator = operatorSqlMap[filter.operator];
-        if (!sqlOperator) {
-          errors.push(`"${fieldLabel}" operator requires a literal value.`);
-          return;
-        }
-        clauses.push(`${leftExpression} ${sqlOperator} ${rightExpression}`);
-        return;
-      }
-
-      const buildLiteral = (kind: FilterValueKind, value: string): string | null => {
-        if (kind === "number") {
-          const numeric = Number(value);
-          if (!Number.isFinite(numeric)) {
-            errors.push(`Enter a valid number for "${fieldLabel}".`);
-            return null;
-          }
-          return String(numeric);
-        }
-        if (kind === "boolean") {
-          const normalized = value.toLowerCase();
-          if (normalized !== "true" && normalized !== "false") {
-            errors.push(`Select true or false for "${fieldLabel}".`);
-            return null;
-          }
-          return normalized === "true" ? "TRUE" : "FALSE";
-        }
-        return `'${escapeSqlLiteral(value)}'`;
-      };
-
-      if (filter.operator === "between") {
-        const rangeFrom = (filter.range?.from ?? "").trim();
-        const rangeTo = (filter.range?.to ?? "").trim();
-        if (!rangeFrom || !rangeTo) {
-          errors.push(`Provide both start and end values for "${fieldLabel}".`);
-          return;
-        }
-        const fromLiteral = buildLiteral(filter.valueKind, rangeFrom);
-        const toLiteral = buildLiteral(filter.valueKind, rangeTo);
-        if (!fromLiteral || !toLiteral) {
-          return;
-        }
-        clauses.push(`${leftExpression} BETWEEN ${fromLiteral} AND ${toLiteral}`);
-        return;
-      }
-
-      const trimmedValue = (filter.value ?? "").trim();
-      if (filter.valueKind !== "boolean" && trimmedValue.length === 0) {
-        errors.push(`Provide a value for the filter on "${fieldLabel}".`);
-        return;
-      }
-
-      switch (filter.operator) {
-        case "eq":
-        case "neq":
-        case "gt":
-        case "gte":
-        case "lt":
-        case "lte": {
-          const operatorSqlMap: Record<FilterOperator, string> = {
-            eq: "=",
-            neq: "<>",
-            gt: ">",
-            gte: ">=",
-            lt: "<",
-            lte: "<=",
-            between: "",
-            contains: "",
-            starts_with: "",
-            ends_with: "",
-            is_null: "IS NULL",
-            is_not_null: "IS NOT NULL",
-            is_true: "IS TRUE",
-            is_false: "IS FALSE",
-          };
-          const literal = buildLiteral(filter.valueKind, trimmedValue);
-          if (!literal) {
-            return;
-          }
-          clauses.push(`${leftExpression} ${operatorSqlMap[filter.operator]} ${literal}`);
-          break;
-        }
-        case "contains": {
-          const literal = `'${`%${escapeSqlLiteral(trimmedValue)}%`}'`;
-          clauses.push(`${leftExpression} ILIKE ${literal}`);
-          break;
-        }
-        case "starts_with": {
-          const literal = `'${`${escapeSqlLiteral(trimmedValue)}%`}'`;
-          clauses.push(`${leftExpression} ILIKE ${literal}`);
-          break;
-        }
-        case "ends_with": {
-          const literal = `'${`%${escapeSqlLiteral(trimmedValue)}`}'`;
-          clauses.push(`${leftExpression} ILIKE ${literal}`);
-          break;
-        }
-        default:
-          break;
-      }
-    });
-
-    return { clauses, errors };
-  },
-  [derivedFieldMap, filterFieldLookup, modelMap],
-);
 
 
   const builderLoaded = dataModels.length > 0 && !isTemplatesLoading && !isTemplatesError;

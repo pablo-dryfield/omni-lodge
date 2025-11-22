@@ -176,7 +176,7 @@ const extractTemplateDateFilter = (filters: unknown[]): TemplateDateFilterMetada
   return null;
 };
 
-const hydratePreviewCardsWithTemplateFilters = async (
+const hydrateCardsWithTemplateFilters = async (
   cards: ReportDashboardCard[],
 ): Promise<Map<string, TemplateDateFilterMetadata>> => {
   const templateIds = Array.from(
@@ -202,13 +202,10 @@ const hydratePreviewCardsWithTemplateFilters = async (
   });
   cards.forEach((card) => {
     const config = card.viewConfig;
-    if (
-      !config ||
-      typeof config !== "object" ||
-      Array.isArray(config) ||
-      (config as { mode?: unknown }).mode !== PREVIEW_CARD_MODE ||
-      (config as { dateFilter?: unknown }).dateFilter
-    ) {
+    if (!config || typeof config !== "object" || Array.isArray(config)) {
+      return;
+    }
+    if ((config as { dateFilter?: unknown }).dateFilter) {
       return;
     }
     const candidate = metadata.get(card.templateId);
@@ -408,21 +405,15 @@ export const listDashboards = async (req: AuthenticatedRequest, res: Response): 
       order: [["updatedAt", "DESC"]],
     });
 
-    const previewCardsNeedingMetadata =
+    const cardsNeedingMetadata =
       dashboards
         .flatMap((dashboard) => dashboard.cards ?? [])
         .filter((card): card is ReportDashboardCard => {
           const config = card.viewConfig;
-          return (
-            Boolean(config) &&
-            typeof config === "object" &&
-            !Array.isArray(config) &&
-            (config as { mode?: unknown }).mode === PREVIEW_CARD_MODE &&
-            !(config as { dateFilter?: unknown }).dateFilter
-          );
+          return Boolean(config) && typeof config === "object" && !Array.isArray(config) && !(config as { dateFilter?: unknown }).dateFilter;
         }) ?? [];
-    if (previewCardsNeedingMetadata.length > 0) {
-      await hydratePreviewCardsWithTemplateFilters(previewCardsNeedingMetadata);
+    if (cardsNeedingMetadata.length > 0) {
+      await hydrateCardsWithTemplateFilters(cardsNeedingMetadata);
     }
 
     res.json({
