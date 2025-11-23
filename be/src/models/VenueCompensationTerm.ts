@@ -22,7 +22,7 @@ export type VenueCompensationRateUnit = 'per_person' | 'flat';
   modelName: 'VenueCompensationTerm',
   tableName: 'venue_compensation_terms',
 })
-export default class VenueCompensationTerm extends Model {
+export class VenueCompensationTerm extends Model {
   @PrimaryKey
   @AutoIncrement
   @Column(DataType.INTEGER)
@@ -34,7 +34,7 @@ export default class VenueCompensationTerm extends Model {
   declare venueId: number;
 
   @BelongsTo(() => Venue, { foreignKey: 'venue_id', as: 'venue' })
-  declare venue?: Venue;
+  declare venue?: unknown;
 
   @AllowNull(false)
   @Column({ field: 'compensation_type', type: DataType.ENUM('open_bar', 'commission') })
@@ -81,7 +81,7 @@ export default class VenueCompensationTerm extends Model {
   declare createdBy: number | null;
 
   @BelongsTo(() => User, { foreignKey: 'created_by', as: 'createdByUser' })
-  declare createdByUser?: User;
+  declare createdByUser?: unknown;
 
   @ForeignKey(() => User)
   @AllowNull(true)
@@ -89,6 +89,13 @@ export default class VenueCompensationTerm extends Model {
   declare updatedBy: number | null;
 
   @BelongsTo(() => User, { foreignKey: 'updated_by', as: 'updatedByUser' })
-  declare updatedByUser?: User;
+  declare updatedByUser?: unknown;
 }
 
+export type VenueCompensationTermWithRelations = VenueCompensationTerm & {
+  venue?: Venue;
+  createdByUser?: User;
+  updatedByUser?: User;
+};
+
+export default VenueCompensationTerm;

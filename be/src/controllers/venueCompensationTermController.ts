@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import dayjs from 'dayjs';
 import type { Includeable } from 'sequelize';
 import { DataType } from 'sequelize-typescript';
-import VenueCompensationTerm from '../models/VenueCompensationTerm.js';
+import VenueCompensationTerm, { type VenueCompensationTermWithRelations } from '../models/VenueCompensationTerm.js';
 import Venue from '../models/Venue.js';
 import User from '../models/User.js';
 import HttpError from '../errors/HttpError.js';
@@ -132,7 +132,7 @@ const sanitizeTermPayload = (raw: Record<string, unknown> | undefined, options: 
   return next;
 };
 
-const serializeTerm = (record: VenueCompensationTerm) => {
+const serializeTerm = (record: VenueCompensationTermWithRelations) => {
   const plain = record.get({ plain: true }) as Record<string, unknown>;
   const createdByName = record.createdByUser
     ? `${record.createdByUser.firstName ?? ''} ${record.createdByUser.lastName ?? ''}`.trim()
@@ -204,7 +204,7 @@ export const listVenueCompensationTerms = async (req: Request, res: Response): P
       ],
     });
 
-    const data = records.map(serializeTerm);
+    const data = records.map((record) => serializeTerm(record as VenueCompensationTermWithRelations));
     res.status(200).json([
       {
         data,
@@ -237,7 +237,7 @@ export const createVenueCompensationTerm = async (req: AuthenticatedRequest, res
       return;
     }
 
-    res.status(201).json([serializeTerm(withRelations)]);
+    res.status(201).json([serializeTerm(withRelations as VenueCompensationTermWithRelations)]);
   } catch (error) {
     if (error instanceof HttpError) {
       res.status(error.status).json([{ message: error.message }]);
@@ -289,7 +289,7 @@ export const updateVenueCompensationTerm = async (req: AuthenticatedRequest, res
       return;
     }
 
-    res.status(200).json([serializeTerm(record)]);
+    res.status(200).json([serializeTerm(record as VenueCompensationTermWithRelations)]);
   } catch (error) {
     if (error instanceof HttpError) {
       res.status(error.status).json([{ message: error.message }]);
