@@ -31,6 +31,8 @@ import {
   listHistoricalAssignments,
   parseWeekParam,
   autoAssignWeek,
+  generateShiftInstancesFromTemplates,
+  clearShiftInstances,
 } from '../services/scheduleService.js';
 import ScheduleWeek from '../models/ScheduleWeek.js';
 import type { SwapRequestStatus } from '../models/SwapRequest.js';
@@ -46,7 +48,9 @@ function getActorId(req: AuthenticatedRequest): number | null {
 router.post('/weeks/generate', authMiddleware, requireRoles(MANAGER_ROLES), async (req, res) => {
   try {
     const weekParam = typeof req.query.week === 'string' ? req.query.week : null;
-    const result = await generateWeek({ week: weekParam, actorId: getActorId(req), autoSpawn: true });
+    const autoSpawnParam = typeof req.query.autoSpawn === 'string' ? req.query.autoSpawn.toLowerCase() : null;
+    const autoSpawn = autoSpawnParam == null ? true : !['false', '0', 'no'].includes(autoSpawnParam);
+    const result = await generateWeek({ week: weekParam, actorId: getActorId(req), autoSpawn });
     res.json(result);
   } catch (error) {
     res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
@@ -112,6 +116,49 @@ router.post('/weeks/:id/auto-assign', authMiddleware, requireRoles(MANAGER_ROLES
   try {
     const result = await autoAssignWeek(Number(req.params.id), getActorId(req));
     res.json(result);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.post('/weeks/:id/generate-instances', authMiddleware, requireRoles(MANAGER_ROLES), async (req, res) => {
+  try {
+    const weekId = Number(req.params.id);
+    if (!Number.isFinite(weekId) || weekId <= 0) {
+      res.status(400).json({ error: 'Valid week id is required.' });
+      return;
+    }
+    const templateIds = Array.isArray(req.body?.templateIds)
+      ? (req.body.templateIds as Array<number | string>)
+          .map((value) => {
+            if (typeof value === 'number') {
+              return value;
+            }
+            const parsed = Number(value);
+            return Number.isFinite(parsed) ? parsed : null;
+          })
+          .filter((value): value is number => value != null)
+      : undefined;
+    const summary = await generateShiftInstancesFromTemplates({
+      weekId,
+      templateIds,
+      actorId: getActorId(req),
+    });
+    res.json(summary);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.post('/weeks/:id/clear-instances', authMiddleware, requireRoles(MANAGER_ROLES), async (req, res) => {
+  try {
+    const weekId = Number(req.params.id);
+    if (!Number.isFinite(weekId) || weekId <= 0) {
+      res.status(400).json({ error: 'Valid week id is required.' });
+      return;
+    }
+    const summary = await clearShiftInstances({ weekId, actorId: getActorId(req) });
+    res.json(summary);
   } catch (error) {
     res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
   }

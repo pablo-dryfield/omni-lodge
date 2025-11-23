@@ -160,9 +160,32 @@ async function ensureWeekExists(identifier: WeekIdentifier, transaction?: Transa
   return { week, created };
 }
 
-async function spawnInstancesFromTemplates(week: ScheduleWeek, actorId: number | null, transaction: Transaction): Promise<void> {
-  const templates = await ShiftTemplate.findAll({ transaction });
+type SpawnInstancesOptions = {
+  templateIds?: number[] | null;
+  logAction?: string;
+};
+
+type SpawnInstancesSummary = {
+  created: number;
+  skipped: number;
+  templateCount: number;
+};
+
+async function spawnInstancesFromTemplates(
+  week: ScheduleWeek,
+  actorId: number | null,
+  transaction: Transaction,
+  options?: SpawnInstancesOptions,
+): Promise<SpawnInstancesSummary> {
+  const templateFilter =
+    options?.templateIds && options.templateIds.length > 0 ? { id: options.templateIds } : undefined;
+  const templates = await ShiftTemplate.findAll({ where: templateFilter, transaction });
+  if (options?.templateIds && options.templateIds.length > 0 && templates.length === 0) {
+    throw new HttpError(404, 'No matching shift templates were found.');
+  }
   const weekStart = getWeekStart(week.year, week.isoWeek);
+  let created = 0;
+  let skipped = 0;
 
   for (const template of templates) {
     if (!template.defaultStartTime) {
@@ -192,6 +215,7 @@ async function spawnInstancesFromTemplates(week: ScheduleWeek, actorId: number |
         transaction,
       });
       if (alreadyExists) {
+        skipped += 1;
         continue;
       }
 
@@ -209,16 +233,19 @@ async function spawnInstancesFromTemplates(week: ScheduleWeek, actorId: number |
         },
         { transaction },
       );
+      created += 1;
     }
   }
 
   await logAudit({
     actorId,
-    action: 'schedule.week.autospawn',
+    action: options?.logAction ?? 'schedule.week.autospawn',
     entity: 'schedule_week',
     entityId: String(week.id),
-    meta: { templateCount: templates.length },
+    meta: { templateCount: templates.length, created, skipped },
   });
+
+  return { created, skipped, templateCount: templates.length };
 }
 
 type VolunteerWeekAssignmentSummary = {
@@ -605,6 +632,78 @@ export async function generateWeek(options: { week?: string | null; actorId?: nu
     });
 
     return { week, created };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+export async function generateShiftInstancesFromTemplates(options: {
+  weekId: number;
+  templateIds?: number[] | null;
+  actorId?: number | null;
+}): Promise<{ weekId: number; created: number; skipped: number; templateCount: number }> {
+  const week = await ScheduleWeek.findByPk(options.weekId);
+  if (!week) {
+    throw new HttpError(404, 'Schedule week not found');
+  }
+  assertWeekMutable(week);
+
+  const transaction = await sequelize.transaction();
+  try {
+    const summary = await spawnInstancesFromTemplates(week, options.actorId ?? null, transaction, {
+      templateIds: options.templateIds,
+      logAction: 'schedule.week.spawn_instances',
+    });
+    await transaction.commit();
+    return { weekId: week.id, ...summary };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+export async function clearShiftInstances(options: {
+  weekId: number;
+  actorId?: number | null;
+}): Promise<{ weekId: number; deletedInstances: number; deletedAssignments: number }> {
+  const week = await ScheduleWeek.findByPk(options.weekId);
+  if (!week) {
+    throw new HttpError(404, 'Schedule week not found');
+  }
+  assertWeekMutable(week);
+
+  const transaction = await sequelize.transaction();
+  try {
+    const instances = await ShiftInstance.findAll({
+      where: { scheduleWeekId: week.id },
+      attributes: ['id'],
+      transaction,
+    });
+    if (instances.length === 0) {
+      await transaction.commit();
+      return { weekId: week.id, deletedInstances: 0, deletedAssignments: 0 };
+    }
+    const instanceIds = instances.map((instance) => instance.id);
+    const deletedAssignments = await ShiftAssignment.destroy({
+      where: { shiftInstanceId: { [Op.in]: instanceIds } },
+      transaction,
+    });
+    const deletedInstances = await ShiftInstance.destroy({
+      where: { id: { [Op.in]: instanceIds } },
+      transaction,
+    });
+    await transaction.commit();
+
+    await logAudit({
+      actorId: options.actorId ?? null,
+      action: 'schedule.week.clear_instances',
+      entity: 'schedule_week',
+      entityId: String(week.id),
+      meta: { deletedInstances, deletedAssignments },
+    });
+
+    return { weekId: week.id, deletedInstances, deletedAssignments };
   } catch (error) {
     await transaction.rollback();
     throw error;
