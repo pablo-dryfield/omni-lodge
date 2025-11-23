@@ -5,4 +5,8 @@ export interface UserShiftRoleAssignment extends Record<string, unknown> {
   roleIds: number[];
   livesInAccom?: boolean;
   staffProfileActive?: boolean;
+  roles?: Array<{
+    id: number;
+    name: string;
+  }>;
 }
