@@ -21,6 +21,8 @@ import PaymentMethod from './PaymentMethod.js';
 import NightReport from './NightReport.js';
 import NightReportVenue from './NightReportVenue.js';
 import NightReportPhoto from './NightReportPhoto.js';
+import Venue from './Venue.js';
+import VenueCompensationTerm from './VenueCompensationTerm.js';
 import {
   FinanceAccount,
   FinanceAuditLog,
@@ -197,6 +199,11 @@ export function defineAssociations() {
   Counter.hasOne(NightReport, { foreignKey: 'counterId', as: 'nightReport', onDelete: 'CASCADE', hooks: true });
   NightReportVenue.belongsTo(NightReport, { foreignKey: 'reportId', as: 'report', onDelete: 'CASCADE' });
   NightReportPhoto.belongsTo(NightReport, { foreignKey: 'reportId', as: 'report', onDelete: 'CASCADE' });
+  Venue.hasMany(VenueCompensationTerm, { foreignKey: 'venue_id', as: 'compensationTerms' });
+  VenueCompensationTerm.belongsTo(Venue, { foreignKey: 'venue_id', as: 'venue' });
+  Venue.hasMany(NightReportVenue, { foreignKey: 'venue_id', as: 'nightReportEntries' });
+  NightReportVenue.belongsTo(Venue, { foreignKey: 'venue_id', as: 'venue' });
+  NightReportVenue.belongsTo(VenueCompensationTerm, { foreignKey: 'compensation_term_id', as: 'compensationTerm' });
 
   // Finance associations
   FinanceAccount.hasMany(FinanceTransaction, { foreignKey: 'accountId', as: 'transactions' });

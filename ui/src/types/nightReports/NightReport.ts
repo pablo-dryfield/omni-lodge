@@ -24,11 +24,19 @@ export type NightReportVenue = {
   id: number;
   orderIndex: number;
   venueName: string;
+  venueId: number | null;
   totalPeople: number;
   isOpenBar: boolean;
   normalCount: number | null;
   cocktailsCount: number | null;
   brunchCount: number | null;
+  compensationTermId: number | null;
+  compensationType: 'open_bar' | 'commission' | null;
+  compensationDirection: 'payable' | 'receivable' | null;
+  rateApplied: number | string | null;
+  rateUnit: 'per_person' | 'flat' | null;
+  payoutAmount: number | string | null;
+  currencyCode: string | null;
 };
 
 export type NightReportPhoto = {
@@ -58,6 +66,7 @@ export type NightReport = {
 export type NightReportVenueInput = {
   orderIndex?: number;
   venueName: string;
+  venueId?: number;
   totalPeople: number;
   isOpenBar?: boolean;
   normalCount?: number | null;
@@ -88,4 +97,3 @@ export type NightReportPhotoUploadResponse = {
   capturedAt: string | null;
   downloadUrl: string;
 };
-

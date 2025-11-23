@@ -30,6 +30,7 @@ import productPriceReducer from '../reducers/productPriceReducer';
 import channelCommissionReducer from '../reducers/channelCommissionReducer';
 import channelProductPriceReducer from '../reducers/channelProductPriceReducer';
 import venueReducer from '../reducers/venueReducer';
+import venueCompensationTermReducer from '../reducers/venueCompensationTermReducer';
 import financeReducer from '../reducers/financeReducer';
 import staffProfileReducer from '../reducers/staffProfileReducer';
 import reviewPlatformReducer from '../reducers/reviewPlatformReducer';
@@ -55,6 +56,7 @@ const reducer = {
   channelCommissions: channelCommissionReducer,
   channelProductPrices: channelProductPriceReducer,
   venues: venueReducer,
+  venueCompensationTerms: venueCompensationTermReducer,
   modules: moduleReducer,
   rolePagePermissions: rolePagePermissionReducer,
   roleModulePermissions: roleModulePermissionReducer,

@@ -28,6 +28,7 @@ import NightReport from "../models/NightReport.js";
 import NightReportVenue from "../models/NightReportVenue.js";
 import NightReportPhoto from "../models/NightReportPhoto.js";
 import Venue from "../models/Venue.js";
+import VenueCompensationTerm from "../models/VenueCompensationTerm.js";
 import StaffProfile from "../models/StaffProfile.js";
 import ShiftType from "../models/ShiftType.js";
 import ShiftTemplate from "../models/ShiftTemplate.js";
@@ -124,6 +125,7 @@ const sequelize = new Sequelize({
     ProductType,
     Addon,
     Venue,
+    VenueCompensationTerm,
     NightReport,
     NightReportVenue,
     NightReportPhoto,

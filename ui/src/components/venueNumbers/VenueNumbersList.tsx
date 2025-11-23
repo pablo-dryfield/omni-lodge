@@ -66,12 +66,14 @@ import { DID_NOT_OPERATE_NOTE } from "../../constants/nightReports";
 type EditableVenue = {
   tempKey: string;
   id?: number;
+  venueId: number | null;
   venueName: string;
   totalPeople: string;
   normalCount: string;
   cocktailsCount: string;
   brunchCount: string;
 };
+type EditableVenueField = "venueName" | "totalPeople" | "normalCount" | "cocktailsCount" | "brunchCount";
 
 type EditableReport = {
   activityDate: string;
@@ -89,6 +91,7 @@ const generateTempKey = (): string => `tmp-${Math.random().toString(36).slice(2,
 const createEmptyVenue = (): EditableVenue => ({
   tempKey: generateTempKey(),
   id: undefined,
+  venueId: null,
   venueName: "",
   totalPeople: "",
   normalCount: "",
@@ -139,6 +142,21 @@ const buildNightReportPhotoFileName = (
   return `${base}.${extension}`;
 };
 
+const formatCurrencyLabel = (
+  value: number | string | null | undefined,
+  currencyCode: string | null | undefined,
+): string => {
+  if (value == null) {
+    return "-";
+  }
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) {
+    return "-";
+  }
+  const currency = (currencyCode ?? "USD").toUpperCase();
+  return `${currency} ${parsed.toFixed(2)}`;
+};
+
 const resolveOpenBarMode = (productName: string | null | undefined): OpenBarMode => {
   const normalized = productName?.trim().toLowerCase() ?? "";
   if (normalized.includes("bottomless brunch")) {
@@ -161,7 +179,22 @@ const computeOpenBarTotal = (normal: number, cocktails: number, brunch: number, 
   }
 };
 
-const toEditableReport = (report: NightReport | null): EditableReport => {
+const toEditableReport = (report: NightReport | null, directory?: Map<string, Venue>): EditableReport => {
+  const resolveVenueId = (name: string, fallbackId?: number | null): number | null => {
+    if (fallbackId != null) {
+      return fallbackId;
+    }
+    if (!directory) {
+      return null;
+    }
+    const normalized = name.trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+    const match = directory.get(normalized);
+    return match?.id ?? null;
+  };
+
   if (!report) {
     return {
       activityDate: dayjs().format(DATE_FORMAT),
@@ -178,6 +211,7 @@ const toEditableReport = (report: NightReport | null): EditableReport => {
     .map((venue, index) => ({
       tempKey: generateTempKey(),
       id: venue.id,
+      venueId: resolveVenueId(venue.venueName ?? "", venue.venueId ?? null),
       venueName: venue.venueName ?? "",
       totalPeople: venue.totalPeople != null ? String(venue.totalPeople) : "",
       normalCount: index === OPEN_BAR_INDEX && venue.normalCount != null ? String(venue.normalCount) : "",
@@ -232,7 +266,11 @@ const resolvePhotoDownloadUrl = (downloadUrl: string): string => {
   return downloadUrl;
 };
 
-const buildVenuePayload = (report: EditableReport, mode: OpenBarMode = "default"): NightReportVenueInput[] =>
+const buildVenuePayload = (
+  report: EditableReport,
+  mode: OpenBarMode = "default",
+  directory?: Map<string, Venue>,
+): NightReportVenueInput[] =>
   report.venues.map((venue, index) => {
     const payload: NightReportVenueInput = {
       orderIndex: index + 1,
@@ -250,6 +288,12 @@ const buildVenuePayload = (report: EditableReport, mode: OpenBarMode = "default"
       payload.totalPeople = computeOpenBarTotal(normalValue, cocktailsValue, brunchValue, mode);
     } else {
       payload.totalPeople = normalizeNumber(venue.totalPeople, 0) ?? 0;
+    }
+    const normalizedName = payload.venueName.toLowerCase();
+    const directoryMatch = directory?.get(normalizedName);
+    const resolvedVenueId = venue.venueId ?? directoryMatch?.id ?? null;
+    if (resolvedVenueId != null) {
+      payload.venueId = resolvedVenueId;
     }
     return payload;
   });
@@ -338,7 +382,7 @@ const VenueNumbersList = () => {
     return null;
   }, [searchParams]);
 
-  const { venuesOptions, openBarVenueOptions } = useMemo(() => {
+  const { venuesOptions, openBarVenueOptions, venueDirectory } = useMemo(() => {
     const venues = (venuesState.data[0]?.data as Venue[] | undefined) ?? [];
     const activeVenues = venues
       .filter((venue) => venue.isActive !== false)
@@ -352,18 +396,75 @@ const VenueNumbersList = () => {
 
     const allVenueNames = activeVenues.map((venue) => venue.name);
     const openBarNames = activeVenues.filter((venue) => venue.allowsOpenBar === true).map((venue) => venue.name);
+    const directory = new Map<string, Venue>();
+    venues.forEach((venueRecord) => {
+      if (!venueRecord.name) {
+        return;
+      }
+      directory.set(venueRecord.name.trim().toLowerCase(), venueRecord);
+    });
 
     return {
       venuesOptions: allVenueNames,
       openBarVenueOptions: openBarNames,
+      venueDirectory: directory,
     };
   }, [venuesState.data]);
+
+  useEffect(() => {
+    if (venueDirectory.size === 0) {
+      return;
+    }
+    setFormState((prev) => {
+      let changed = false;
+      const nextVenues = prev.venues.map((venue) => {
+        if (venue.venueId || !venue.venueName.trim()) {
+          return venue;
+        }
+        const match = venueDirectory.get(venue.venueName.trim().toLowerCase());
+        if (!match) {
+          return venue;
+        }
+        changed = true;
+        return { ...venue, venueId: match.id };
+      });
+      if (!changed) {
+        return prev;
+      }
+      return {
+        ...prev,
+        venues: nextVenues,
+      };
+    });
+  }, [venueDirectory]);
 
   const counters = useMemo(() => (countersState.data[0]?.data as Counter[] | undefined) ?? [], [countersState.data]);
   const reports = useMemo(
     () => (nightReportListState.data[0]?.data as NightReportSummary[] | undefined) ?? [],
     [nightReportListState.data],
   );
+  const compensationByOrder = useMemo(() => {
+    const map = new Map<
+      number,
+      {
+        direction: "payable" | "receivable" | null;
+        rateApplied: number | null;
+        rateUnit: "per_person" | "flat" | null;
+        payoutAmount: number | null;
+        currencyCode: string | null;
+      }
+    >();
+    (nightReportDetail.data?.venues ?? []).forEach((venue) => {
+      map.set(venue.orderIndex, {
+        direction: venue.compensationDirection ?? null,
+        rateApplied: venue.rateApplied != null ? Number(venue.rateApplied) : null,
+        rateUnit: venue.rateUnit ?? null,
+        payoutAmount: venue.payoutAmount != null ? Number(venue.payoutAmount) : null,
+        currencyCode: venue.currencyCode ?? "USD",
+      });
+    });
+    return map;
+  }, [nightReportDetail.data?.venues]);
   const detailReportId = nightReportDetail.data?.id ?? null;
   const currentCounter = useMemo(
     () => counters.find((counter) => counter.id === formState.counterId),
@@ -529,7 +630,7 @@ const VenueNumbersList = () => {
       return;
     }
 
-    const next = toEditableReport(nightReportDetail.data);
+    const next = toEditableReport(nightReportDetail.data, venueDirectory);
     const serverVenues = nightReportDetail.data?.venues ?? [];
     const initialDidNotOperate = Array.isArray(serverVenues) && serverVenues.length === 0;
 
@@ -600,7 +701,7 @@ const VenueNumbersList = () => {
       }
       return prev;
     });
-  }, [nightReportDetail.data, selectedReportId, computeInitialEditableKeys, counters, requestedMode]);
+  }, [nightReportDetail.data, selectedReportId, computeInitialEditableKeys, counters, requestedMode, venueDirectory]);
 
   useEffect(() => {
     if (selectedReportId === null) {
@@ -777,10 +878,10 @@ const VenueNumbersList = () => {
     setActiveReportMode(null);
     modeRequestRef.current = null;
     lastLoadedReportIdRef.current = null;
-    setFormState(toEditableReport(null));
+    setFormState(toEditableReport(null, venueDirectory));
     setNotesExpanded(false);
     setSearchParams({});
-  }, [pendingChanges, setSearchParams]);
+  }, [pendingChanges, setSearchParams, venueDirectory]);
 
   const validateForm = (report: EditableReport): string | null => {
     if (!report.counterId) {
@@ -845,18 +946,24 @@ const VenueNumbersList = () => {
 
     return null;
   };
-  const handleVenueChange = (index: number, field: keyof EditableVenue, value: string) => {
+  const handleVenueChange = (index: number, field: EditableVenueField, value: string) => {
     setValidationError(null);
     setPendingChanges(true);
     setFormState((prev) => {
-      const nextVenues = prev.venues.map((venue, idx) =>
-        idx === index
-          ? {
-              ...venue,
-              [field]: value,
-            }
-          : venue,
-      );
+      const nextVenues = prev.venues.map((venue, idx) => {
+        if (idx !== index) {
+          return venue;
+        }
+        const updated: EditableVenue = {
+          ...venue,
+          [field]: value,
+        };
+        if (field === "venueName") {
+          const match = venueDirectory.get(value.trim().toLowerCase());
+          updated.venueId = match?.id ?? null;
+        }
+        return updated;
+      });
       if (index === OPEN_BAR_INDEX) {
         const openBar = nextVenues[OPEN_BAR_INDEX];
         const normalValue = normalizeNumber(openBar.normalCount, 0) ?? 0;
@@ -1144,9 +1251,9 @@ const VenueNumbersList = () => {
       activityDate: formState.activityDate,
       leaderId: formState.leaderId ?? undefined,
       notes: formState.notes || undefined,
-      venues: buildVenuePayload(formState, openBarMode),
+      venues: buildVenuePayload(formState, openBarMode, venueDirectory),
     }),
-    [formState, openBarMode],
+    [formState, openBarMode, venueDirectory],
   );
 
   const handleSaveVenues = async () => {
@@ -1843,6 +1950,7 @@ const VenueNumbersList = () => {
         <Stack spacing={2}>
           {formState.venues.map((venue, index) => {
             const isOpenBar = index === OPEN_BAR_INDEX;
+            const compensationSnapshot = compensationByOrder.get(index + 1);
             const availableOptions = (() => {
               const baseOptions = isOpenBar ? openBarVenueOptions : venuesOptions;
               if (!venue.venueName) {
@@ -2011,6 +2119,29 @@ const VenueNumbersList = () => {
                           </Grid>
                         )}
                       </Grid>
+                      {compensationSnapshot && (
+                        <Typography variant="caption" color="text.secondary">
+                          {compensationSnapshot.direction === "receivable"
+                            ? "Commission"
+                            : "Open bar payout"}
+                          :{" "}
+                          {formatCurrencyLabel(
+                            compensationSnapshot.payoutAmount,
+                            compensationSnapshot.currencyCode,
+                          )}
+                          {compensationSnapshot.rateApplied != null && (
+                            <>
+                              {" "}
+                              • Rate{" "}
+                              {formatCurrencyLabel(
+                                compensationSnapshot.rateApplied,
+                                compensationSnapshot.currencyCode,
+                              )}
+                              {compensationSnapshot.rateUnit === "per_person" ? "/person" : ""}
+                            </>
+                          )}
+                        </Typography>
+                      )}
                     </Stack>
                   </CardContent>
                 </Card>
