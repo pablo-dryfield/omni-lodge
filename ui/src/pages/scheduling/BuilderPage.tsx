@@ -19,6 +19,7 @@ import {
   TextInput,
   Textarea,
   Title,
+  Tooltip,
 } from "@mantine/core";
 import {
   IconAlertTriangle,
@@ -58,7 +59,13 @@ import {
 import { useShiftRoles, useShiftRoleAssignments } from "../../api/shiftRoles";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import AddShiftInstanceModal from "../../components/scheduling/AddShiftInstanceModal";
-import type { AvailabilityEntry, ShiftAssignment, ShiftInstance, ScheduleViolation } from "../../types/scheduling";
+import type {
+  AvailabilityEntry,
+  ShiftAssignment,
+  ShiftInstance,
+  ShiftRoleRequirement,
+  ScheduleViolation,
+} from "../../types/scheduling";
 import type { ServerResponse } from "../../types/general/ServerResponse";
 import type { ShiftRole } from "../../types/shiftRoles/ShiftRole";
 import type { UserShiftRoleAssignment } from "../../types/shiftRoles/UserShiftRoleAssignment";
@@ -124,6 +131,9 @@ const makeRoleValue = (opts: { shiftRoleId: number | null; roleName: string; pre
   const base = opts.roleName.trim().toLowerCase().replace(/\s+/g, "-");
   return `${opts.prefix ?? "custom"}:${base || "role"}`;
 };
+
+const createRoleKey = (roleId: number | null, roleName: string) =>
+  roleId != null ? `id:${roleId}` : `name:${normalizeRoleName(roleName)}`;
 
 const ROLE_PRIORITY: Record<string, number> = {
   guide: 0,
@@ -632,6 +642,26 @@ const BuilderPage = () => {
   const instancesQuery = useShiftInstances(canAccessBuilder ? weekId : null);
   const shiftRolesQuery = useShiftRoles();
   const shiftRoleAssignmentsQuery = useShiftRoleAssignments();
+  const shiftRoleRecords = useMemo<ShiftRole[]>(() => {
+    return (shiftRolesQuery.data?.[0]?.data ?? []) as ShiftRole[];
+  }, [shiftRolesQuery.data]);
+  const shiftRoleNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    shiftRoleRecords.forEach((role) => {
+      map.set(role.id, role.name);
+    });
+    return map;
+  }, [shiftRoleRecords]);
+  const normalizedShiftRoleIdByName = useMemo(() => {
+    const lookup = new Map<string, number>();
+    shiftRoleRecords.forEach((role) => {
+      const normalized = normalizeRoleName(role.name);
+      if (normalized && !lookup.has(normalized)) {
+        lookup.set(normalized, role.id);
+      }
+    });
+    return lookup;
+  }, [shiftRoleRecords]);
   const weekAvailabilityQuery = useWeekAvailability(canAccessBuilder && weekId ? weekId : null);
 
   const assignMutation = useAssignShifts();
@@ -702,15 +732,37 @@ const BuilderPage = () => {
     });
     return map;
   }, [shiftRoleAssignments]);
+  const userRoleIdsByUserId = useMemo(() => {
+    const map = new Map<number, number[]>();
+    shiftRoleAssignments.forEach((assignment) => {
+      const normalizedIds = Array.from(
+        new Set(
+          (assignment.roleIds ?? [])
+            .map((value) => Number(value))
+            .filter((value): value is number => Number.isFinite(value)),
+        ),
+      );
+      map.set(assignment.userId, normalizedIds);
+    });
+    return map;
+  }, [shiftRoleAssignments]);
+  const userRoleIdSetByUserId = useMemo(() => {
+    const map = new Map<number, Set<number>>();
+    userRoleIdsByUserId.forEach((ids, userId) => {
+      map.set(userId, new Set(ids));
+    });
+    return map;
+  }, [userRoleIdsByUserId]);
   const rosterEligibleUserIds = useMemo(() => {
     const set = new Set<number>();
     shiftRoleAssignments.forEach((assignment) => {
-      if (Array.isArray(assignment.roleIds) && assignment.roleIds.length > 0 && assignment.staffProfileActive) {
+      const roleIds = userRoleIdsByUserId.get(assignment.userId) ?? [];
+      if (roleIds.length > 0 && assignment.staffProfileActive) {
         set.add(assignment.userId);
       }
     });
     return set;
-  }, [shiftRoleAssignments]);
+  }, [shiftRoleAssignments, userRoleIdsByUserId]);
   const getDefaultAvailability = useCallback(
     (userId: number | null | undefined) => {
       if (userId == null) {
@@ -723,6 +775,127 @@ const BuilderPage = () => {
       return userLivesInAccomById.get(userId) ?? false;
     },
     [userHasActiveProfileById, userLivesInAccomById],
+  );
+
+  const getRoleDefinitionsForInstance = useCallback((instance?: ShiftInstance | null) => {
+    if (!instance) {
+      return [];
+    }
+    if (Array.isArray(instance.requiredRoles) && instance.requiredRoles.length > 0) {
+      return instance.requiredRoles;
+    }
+    return instance.template?.defaultRoles ?? [];
+  }, []);
+
+  const countAssignmentsForRole = useCallback(
+    (instance: ShiftInstance, role: ShiftRoleRequirement) => {
+      const roleLabel = role.role && role.role.trim().length > 0 ? role.role : "Staff";
+      const assignments = instance.assignments ?? [];
+      if (role.shiftRoleId != null) {
+        const normalizedRoleLabel = normalizeRoleName(roleLabel);
+        return assignments.filter((assignment) => {
+          if (assignment.shiftRoleId === role.shiftRoleId) {
+            return true;
+          }
+          if (!normalizedRoleLabel) {
+            return false;
+          }
+          const assignmentLabel = normalizeRoleName(
+            assignment.roleInShift && assignment.roleInShift.trim().length > 0 ? assignment.roleInShift : "",
+          );
+          if (!assignmentLabel) {
+            return false;
+          }
+          return (
+            assignmentLabel === normalizedRoleLabel ||
+            assignmentLabel.includes(normalizedRoleLabel) ||
+            normalizedRoleLabel.includes(assignmentLabel)
+          );
+        }).length;
+      }
+      const targetKey = createRoleKey(null, roleLabel);
+      return assignments.filter((assignment) => {
+        const assignmentLabel =
+          assignment.roleInShift && assignment.roleInShift.trim().length > 0 ? assignment.roleInShift : "Staff";
+        const assignmentKey = createRoleKey(assignment.shiftRoleId ?? null, assignmentLabel);
+        return assignmentKey === targetKey;
+      }).length;
+    },
+    [],
+  );
+
+  const userHasShiftRole = useCallback(
+    (
+      userId: number | null | undefined,
+      target?: { shiftRoleId?: number | null; roleName?: string | null },
+    ): boolean => {
+      if (userId == null) {
+        return false;
+      }
+      const roleSet = userRoleIdSetByUserId.get(userId);
+      if (!roleSet || roleSet.size === 0) {
+        return false;
+      }
+      if (target?.shiftRoleId != null) {
+        return roleSet.has(target.shiftRoleId);
+      }
+      const normalizedTarget = normalizeRoleName(target?.roleName ?? "");
+      if (!normalizedTarget) {
+        return true;
+      }
+      for (const roleId of roleSet) {
+        const roleName = shiftRoleNameById.get(roleId);
+        if (!roleName) {
+          continue;
+        }
+        const normalizedRoleName = normalizeRoleName(roleName);
+        if (
+          normalizedRoleName === normalizedTarget ||
+          normalizedRoleName.includes(normalizedTarget) ||
+          normalizedTarget.includes(normalizedRoleName)
+        ) {
+          return true;
+        }
+      }
+      return false;
+    },
+    [shiftRoleNameById, userRoleIdSetByUserId],
+  );
+
+  const hasOpenRoleForUser = useCallback(
+    (userId: number, instance?: ShiftInstance | null) => {
+      if (!instance) {
+        return false;
+      }
+      const roleDefinitions = getRoleDefinitionsForInstance(instance);
+      if (roleDefinitions.length === 0) {
+        return true;
+      }
+      return roleDefinitions.some((definition) => {
+        if (
+          !userHasShiftRole(userId, {
+            shiftRoleId: definition.shiftRoleId ?? null,
+            roleName: definition.role ?? "",
+          })
+        ) {
+          return false;
+        }
+        const requiredSlots = Math.max(1, definition.required ?? 1);
+        const filledSlots = countAssignmentsForRole(instance, definition);
+        return filledSlots < requiredSlots;
+      });
+    },
+    [countAssignmentsForRole, getRoleDefinitionsForInstance, userHasShiftRole],
+  );
+
+  const doesUserMatchRoleOption = useCallback(
+    (userId: number, option: RoleOption) => {
+      if (option.isCustomEntry) {
+        return true;
+      }
+      return userHasShiftRole(userId, { shiftRoleId: option.shiftRoleId, roleName: option.roleName || option.label });
+    },
+    [userHasShiftRole],
   );
 
   const rosterStaff = useMemo(() => {
@@ -927,10 +1100,6 @@ const BuilderPage = () => {
   const isPublished = weekState === "published";
   const canModifyWeek = Boolean(weekId) && !isPublished;
 
-  const shiftRoleRecords = useMemo<ShiftRole[]>(() => {
-    return (shiftRolesQuery.data?.[0]?.data ?? []) as ShiftRole[];
-  }, [shiftRolesQuery.data]);
-
   const handleRosterCardSelect = useCallback((userId: number | null) => {
     if (userId == null || Number.isNaN(userId)) {
       setSelectedRosterUserId(null);
@@ -982,6 +1151,7 @@ const BuilderPage = () => {
     await clearInstancesMutation.mutateAsync({ weekId });
     setClearInstancesModalOpen(false);
   }, [clearInstancesMutation, weekId]);
+
 
   const formatAssignButtonLabel = useCallback(
     (baseLabel?: string | null) => {
@@ -1110,20 +1280,31 @@ const BuilderPage = () => {
     return options;
   }, [assignmentModal.shift, shiftRoleRecords]);
 
+  const applicableAssignmentRoleOptions = useMemo(() => {
+    if (!assignmentUserId) {
+      return assignmentRoleOptions;
+    }
+    const userId = Number(assignmentUserId);
+    if (!Number.isFinite(userId)) {
+      return assignmentRoleOptions;
+    }
+    return assignmentRoleOptions.filter((option) => doesUserMatchRoleOption(userId, option) || option.isCustomEntry);
+  }, [assignmentRoleOptions, assignmentUserId, doesUserMatchRoleOption]);
+
   useEffect(() => {
     if (!assignmentModal.opened) {
       return;
     }
-    if (assignmentRoleOptions.length === 0) {
+    if (applicableAssignmentRoleOptions.length === 0) {
       setAssignmentRoleOption(null);
       return;
     }
 
     setAssignmentRoleOption((current) => {
-      if (current && assignmentRoleOptions.some((option) => option.value === current.value)) {
+      if (current && applicableAssignmentRoleOptions.some((option) => option.value === current.value)) {
         return current;
       }
-      const firstOption = assignmentRoleOptions[0];
+      const firstOption = applicableAssignmentRoleOptions[0];
       if (firstOption.isCustomEntry) {
         setAssignmentCustomRoleName("");
       } else {
@@ -1131,7 +1312,7 @@ const BuilderPage = () => {
       }
       return firstOption;
     });
-  }, [assignmentModal.opened, assignmentRoleOptions]);
+  }, [assignmentModal.opened, applicableAssignmentRoleOptions]);
 
   const availabilityByUserId = useMemo(() => {
     const map = new Map<number, AvailabilityWithMinutes[]>();
@@ -1195,11 +1376,34 @@ const BuilderPage = () => {
     return buildShiftWindow(assignmentModal.shift);
   }, [assignmentModal.opened, assignmentModal.shift, buildShiftWindow]);
 
+
+  const userMeetsRoleRequirements = useCallback(
+    (userId: number, instance?: ShiftInstance | null) => {
+      const roleSet = userRoleIdSetByUserId.get(userId);
+      if (!roleSet || roleSet.size === 0) {
+        return false;
+      }
+      if (!instance) {
+        return true;
+      }
+      return hasOpenRoleForUser(userId, instance);
+    },
+    [hasOpenRoleForUser, userRoleIdSetByUserId],
+  );
+
+  const userCanTakeInstance = useCallback(
+    (userId: number, instance: ShiftInstance | null | undefined) => userMeetsRoleRequirements(userId, instance),
+    [userMeetsRoleRequirements],
+  );
+
   const isUserAvailableForShift = useCallback(
     (userId: number, shiftOverride?: ShiftInstance | null): boolean => {
       const comparisonWindow = shiftOverride ? buildShiftWindow(shiftOverride) : activeShiftWindow;
       if (!comparisonWindow) {
         return true;
+      }
+      if (!userCanTakeInstance(userId, shiftOverride ?? assignmentModal.shift ?? ({} as ShiftInstance))) {
+        return false;
       }
       const entries = availabilityByUserId.get(userId);
       const fallbackAvailable = getDefaultAvailability(userId);
@@ -1233,7 +1437,53 @@ const BuilderPage = () => {
         return true;
       });
     },
-    [activeShiftWindow, availabilityByUserId, buildShiftWindow, getDefaultAvailability],
+    [
+      activeShiftWindow,
+      availabilityByUserId,
+      buildShiftWindow,
+      getDefaultAvailability,
+      userCanTakeInstance,
+      assignmentModal.shift,
+    ],
+  );
+
+  const renderShiftTooltip = useCallback((instance: ShiftInstance) => {
+    const title = instance.template?.name ?? instance.shiftType?.name ?? "Shift";
+    const dateLabel = dayjs(instance.date).format("ddd, MMM D");
+    const timeLabel = formatShiftTimeRange(instance.timeStart, instance.timeEnd) || "Any time";
+    const assignedCount = instance.assignments?.length ?? 0;
+    const capacity = instance.capacity ?? null;
+    return (
+      <Stack gap={2} maw={260}>
+        <Text fw={600}>{title}</Text>
+        <Text size="xs" c="dimmed">
+          {dateLabel} {"\u2022"} {timeLabel}
+        </Text>
+        <Text size="xs">
+          Assigned: {assignedCount}
+          {capacity != null ? ` / Capacity: ${capacity}` : ""}
+        </Text>
+      </Stack>
+    );
+  }, []);
+
+  const getInstanceHighlightStyles = useCallback(
+    (instance: ShiftInstance) => {
+      const userId = draggedUserId ?? selectedRosterUserId;
+      if (!userId) {
+        return {};
+      }
+      const eligible = isUserAvailableForShift(userId, instance);
+      return eligible
+        ? {
+            boxShadow: "0 0 0 2px rgba(46, 196, 182, 0.4)",
+            backgroundColor: "rgba(46, 196, 182, 0.08)",
+          }
+        : {
+            opacity: 0.45,
+          };
+    },
+    [draggedUserId, selectedRosterUserId, isUserAvailableForShift],
   );
 
   const staffOptionsByAvailability = useMemo(() => {
@@ -1525,6 +1775,32 @@ const BuilderPage = () => {
       setAssignmentError("Select or enter a role for this assignment.");
       return;
     }
+    const numericUserId = Number(assignmentUserId);
+    if (
+      Number.isFinite(numericUserId) &&
+      !assignmentRoleOption.isCustomEntry &&
+      !doesUserMatchRoleOption(numericUserId, assignmentRoleOption)
+    ) {
+      setAssignmentError("This team member does not have the required shift role.");
+      return;
+    }
+
+    if (selectedOption.isCustomEntry) {
+      const normalizedRoleName = normalizeRoleName(roleName);
+      const normalizedUserId = Number.isFinite(numericUserId) ? numericUserId : null;
+      const matchedRoleId =
+        normalizedRoleName && normalizedShiftRoleIdByName.has(normalizedRoleName)
+          ? normalizedShiftRoleIdByName.get(normalizedRoleName) ?? null
+          : null;
+      if (
+        normalizedUserId != null &&
+        matchedRoleId != null &&
+        !userHasShiftRole(normalizedUserId, { shiftRoleId: matchedRoleId, roleName })
+      ) {
+        setAssignmentError("This team member does not have the required shift role.");
+        return;
+      }
+    }
 
     try {
       setAssignmentError(null);
@@ -1718,42 +1994,55 @@ const BuilderPage = () => {
           ? instancesForDate.map((instance) => {
               const label = formatShiftTimeRange(instance.timeStart, instance.timeEnd);
               const dropActive = dragHoverInstanceId === instance.id;
+              const highlightStyles = getInstanceHighlightStyles(instance);
               return (
-                <Box
+                <Tooltip
                   key={`pub-instance-${instance.id}`}
-                  onDragOver={(event) => handleInstanceDragOver(event, instance.id)}
-                  onDragLeave={(event) => handleInstanceDragLeave(event, instance.id)}
-                  onDrop={(event) => handleDropOnShift(event, instance)}
-                  style={{
-                    width: "100%",
-                    border: dropActive ? `1px dashed ${palette.plumDark}` : undefined,
-                    borderRadius: dropActive ? 12 : undefined,
-                    padding: dropActive ? "6px" : undefined,
-                    backgroundColor: dropActive ? "rgba(124, 77, 255, 0.08)" : "transparent",
-                    transition: "background-color 120ms ease, border-color 120ms ease",
-                  }}
+                  label={renderShiftTooltip(instance)}
+                  position="right"
+                  withArrow
+                  multiline
+                  withinPortal
                 >
-                  <Group justify="space-between" align="center" style={{ width: "100%" }}>
-                    <Button
-                      size="xs"
-                      variant="light"
-                      leftSection={<IconPlus size={14} />}
-                      onClick={() => openAssignmentForShift(instance, { userId: selectedRosterUserId })}
-                    >
-                      {formatAssignButtonLabel(label)}
-                    </Button>
-                    {canModifyWeek ? (
-                      <ActionIcon
-                        variant="subtle"
-                        color="red"
-                        onClick={() => handleDeleteInstance(instance)}
-                        disabled={deleteInstanceMutation.isPending}
+                  <Box
+                    onDragOver={(event) => handleInstanceDragOver(event, instance.id)}
+                    onDragLeave={(event) => handleInstanceDragLeave(event, instance.id)}
+                    onDrop={(event) => handleDropOnShift(event, instance)}
+                    style={{
+                      width: "100%",
+                      border: dropActive ? `1px dashed ${palette.plumDark}` : undefined,
+                      borderRadius: dropActive ? 12 : undefined,
+                      padding: dropActive ? "6px" : undefined,
+                      backgroundColor: dropActive
+                        ? "rgba(124, 77, 255, 0.08)"
+                        : highlightStyles.backgroundColor ?? "transparent",
+                      boxShadow: highlightStyles.boxShadow,
+                      opacity: highlightStyles.opacity,
+                      transition: "background-color 120ms ease, border-color 120ms ease",
+                    }}
+                  >
+                    <Group justify="space-between" align="center" style={{ width: "100%" }}>
+                      <Button
+                        size="xs"
+                        variant="light"
+                        leftSection={<IconPlus size={14} />}
+                        onClick={() => openAssignmentForShift(instance, { userId: selectedRosterUserId })}
                       >
-                        <IconTrash size={16} />
-                      </ActionIcon>
-                    ) : null}
-                  </Group>
-                </Box>
+                        {formatAssignButtonLabel(label)}
+                      </Button>
+                      {canModifyWeek ? (
+                        <ActionIcon
+                          variant="subtle"
+                          color="red"
+                          onClick={() => handleDeleteInstance(instance)}
+                          disabled={deleteInstanceMutation.isPending}
+                        >
+                          <IconTrash size={16} />
+                        </ActionIcon>
+                      ) : null}
+                    </Group>
+                  </Box>
+                </Tooltip>
               );
             })
           : null}
@@ -1789,24 +2078,36 @@ const BuilderPage = () => {
           const grouped = groupAssignmentsByUser(assignments);
           const templateRoles = instance.requiredRoles ?? instance.template?.defaultRoles ?? [];
           const dropActive = dragHoverInstanceId === instance.id;
+          const highlightStyles = getInstanceHighlightStyles(instance);
 
           return (
-            <Stack
+            <Tooltip
               key={`instance-${instance.id}`}
-              gap={10}
-              style={{
-                width: "100%",
-                border: dropActive ? `1px dashed ${palette.plumDark}` : undefined,
-                borderRadius: dropActive ? 16 : undefined,
-                padding: dropActive ? "10px" : undefined,
-                backgroundColor: dropActive ? "rgba(124, 77, 255, 0.08)" : "transparent",
-                transition: "background-color 120ms ease, border-color 120ms ease",
-              }}
-              onDragOver={(event) => handleInstanceDragOver(event, instance.id)}
-              onDragLeave={(event) => handleInstanceDragLeave(event, instance.id)}
-              onDrop={(event) => handleDropOnShift(event, instance)}
+              label={renderShiftTooltip(instance)}
+              position="right"
+              withArrow
+              multiline
+              withinPortal
             >
-        <Stack gap={10} align="center" style={{ width: "100%" }}>
+              <Stack
+                gap={10}
+                style={{
+                  width: "100%",
+                  border: dropActive ? `1px dashed ${palette.plumDark}` : undefined,
+                  borderRadius: dropActive ? 16 : undefined,
+                  padding: dropActive ? "10px" : undefined,
+                  backgroundColor: dropActive
+                    ? "rgba(124, 77, 255, 0.08)"
+                    : highlightStyles.backgroundColor ?? "transparent",
+                  boxShadow: highlightStyles.boxShadow,
+                  opacity: highlightStyles.opacity,
+                  transition: "background-color 120ms ease, border-color 120ms ease",
+                }}
+                onDragOver={(event) => handleInstanceDragOver(event, instance.id)}
+                onDragLeave={(event) => handleInstanceDragLeave(event, instance.id)}
+                onDrop={(event) => handleDropOnShift(event, instance)}
+              >
+                <Stack gap={10} align="center" style={{ width: "100%" }}>
                 {grouped.length > 0 ? (
                   grouped
                     .map((groupAssignments) =>
@@ -1841,7 +2142,8 @@ const BuilderPage = () => {
                   </ActionIcon>
                 ) : null}
               </Group>
-            </Stack>
+              </Stack>
+            </Tooltip>
           );
         })}
       </Stack>
@@ -2677,7 +2979,7 @@ const BuilderPage = () => {
             />
           ) : null}
           <Select
-            data={assignmentRoleOptions.map((option) => ({
+            data={applicableAssignmentRoleOptions.map((option) => ({
               value: option.value,
               label: option.label,
             }))}
@@ -2685,7 +2987,7 @@ const BuilderPage = () => {
             placeholder="Select role"
             value={assignmentRoleOption?.value ?? null}
             onChange={(value) => {
-              const option = assignmentRoleOptions.find((candidate) => candidate.value === value) ?? null;
+              const option = applicableAssignmentRoleOptions.find((candidate) => candidate.value === value) ?? null;
               setAssignmentRoleOption(option);
               if (option?.isCustomEntry) {
                 setAssignmentCustomRoleName("");
@@ -2695,7 +2997,7 @@ const BuilderPage = () => {
             }}
             searchable
             nothingFoundMessage="No roles"
-            disabled={assignmentRoleOptions.length === 0}
+            disabled={applicableAssignmentRoleOptions.length === 0}
           />
           {assignmentRoleOption?.isCustomEntry ? (
             <TextInput
