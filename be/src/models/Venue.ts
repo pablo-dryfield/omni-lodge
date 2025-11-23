@@ -7,10 +7,9 @@ import {
   AllowNull,
   DataType,
   Default,
-  HasMany,
 } from 'sequelize-typescript';
-import VenueCompensationTerm from './VenueCompensationTerm.js';
-import NightReportVenue from './NightReportVenue.js';
+import type VenueCompensationTerm from './VenueCompensationTerm.js';
+import type NightReportVenue from './NightReportVenue.js';
 
 @Table({
   timestamps: true,
@@ -51,9 +50,7 @@ export default class Venue extends Model {
   @Column({ field: 'updated_at', type: DataType.DATE })
   declare updatedAt: Date | null;
 
-  @HasMany(() => VenueCompensationTerm, { foreignKey: 'venue_id', as: 'compensationTerms' })
   declare compensationTerms?: VenueCompensationTerm[];
 
-  @HasMany(() => NightReportVenue, { foreignKey: 'venue_id', as: 'nightReportEntries' })
   declare nightReportEntries?: NightReportVenue[];
 }

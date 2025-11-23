@@ -52,7 +52,7 @@ export default class NightReportVenue extends Model {
   @Column({ field: 'venue_id', type: DataType.INTEGER })
   declare venueId: number | null;
 
-  @BelongsTo(() => Venue, { foreignKey: 'venue_id', as: 'venue' })
+  @BelongsTo(() => Venue, { foreignKey: 'venue_id', as: 'nightReportVenueVenue' })
   declare venue?: Venue;
 
   @AllowNull(true)

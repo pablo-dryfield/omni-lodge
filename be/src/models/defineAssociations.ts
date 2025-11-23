@@ -200,10 +200,10 @@ export function defineAssociations() {
   NightReportVenue.belongsTo(NightReport, { foreignKey: 'reportId', as: 'report', onDelete: 'CASCADE' });
   NightReportPhoto.belongsTo(NightReport, { foreignKey: 'reportId', as: 'report', onDelete: 'CASCADE' });
   Venue.hasMany(VenueCompensationTerm, { foreignKey: 'venue_id', as: 'compensationTerms' });
-  VenueCompensationTerm.belongsTo(Venue, { foreignKey: 'venue_id', as: 'venue' });
+  VenueCompensationTerm.belongsTo(Venue, { foreignKey: 'venue_id', as: 'venueCompTermVenue' });
   Venue.hasMany(NightReportVenue, { foreignKey: 'venue_id', as: 'nightReportEntries' });
   NightReportVenue.belongsTo(Venue, { foreignKey: 'venue_id', as: 'venue' });
-  NightReportVenue.belongsTo(VenueCompensationTerm, { foreignKey: 'compensation_term_id', as: 'compensationTerm' });
+  NightReportVenue.belongsTo(VenueCompensationTerm, { foreignKey: 'compensation_term_id', as: 'compensationTermReportVenue' });
 
   // Finance associations
   FinanceAccount.hasMany(FinanceTransaction, { foreignKey: 'accountId', as: 'transactions' });
