@@ -25,9 +25,9 @@ type SchedulingTabDefinition = {
 };
 
 const BASE_TABS: SchedulingTabDefinition[] = [
-  { label: "Availability", value: "availability", icon: IconCalendarCheck, module: "scheduling-availability" },
-  { label: "Builder", value: "builder", icon: IconClipboardList, module: "scheduling-builder", requiredAction: "create" },
   { label: "Schedule", value: "schedule", icon: IconLayoutGrid, module: "scheduling-builder" },
+  { label: "Builder", value: "builder", icon: IconClipboardList, module: "scheduling-builder", requiredAction: "create" },
+  { label: "Availability", value: "availability", icon: IconCalendarCheck, module: "scheduling-availability" },
   { label: "My Shifts", value: "my-shifts", icon: IconUsersGroup, module: "scheduling-my-shifts" },
   { label: "Swaps", value: "swaps", icon: IconRefresh, module: "scheduling-swaps" },
   { label: "History", value: "history", icon: IconHistory, module: "scheduling-history" },
@@ -56,7 +56,9 @@ const SchedulingLayout = () => {
     const tabs = BASE_TABS.filter((tab) => hasAction(tab.module, tab.requiredAction ?? "view"));
 
     if (canManageTemplates && hasAction("scheduling-builder", "create")) {
-      tabs.splice(1, 0, {
+      const builderIndex = tabs.findIndex((tab) => tab.value === "builder");
+      const insertIndex = builderIndex >= 0 ? builderIndex + 1 : 1;
+      tabs.splice(insertIndex, 0, {
         label: "Templates",
         value: "templates",
         icon: IconTemplate,

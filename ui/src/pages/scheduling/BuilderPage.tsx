@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, DragEvent, ReactNode } from "react";
 import {
   ActionIcon,
   Alert,
@@ -11,6 +11,7 @@ import {
   Group,
   Loader,
   Modal,
+  MultiSelect,
   Select,
   Switch,
   Stack,
@@ -40,10 +41,12 @@ import {
   getUpcomingWeeks,
   useAssignShifts,
   useAutoAssignWeek,
+  useClearShiftInstances,
   useCreateShiftInstance,
   useDeleteAssignment,
   useDeleteShiftInstance,
   useEnsureWeek,
+  useGenerateShiftInstances,
   useLockWeek,
   usePublishWeek,
   useReopenWeek,
@@ -52,12 +55,13 @@ import {
   useWeekAvailability,
   useWeekSummary,
 } from "../../api/scheduling";
-import { useShiftRoles } from "../../api/shiftRoles";
+import { useShiftRoles, useShiftRoleAssignments } from "../../api/shiftRoles";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import AddShiftInstanceModal from "../../components/scheduling/AddShiftInstanceModal";
 import type { AvailabilityEntry, ShiftAssignment, ShiftInstance, ScheduleViolation } from "../../types/scheduling";
 import type { ServerResponse } from "../../types/general/ServerResponse";
 import type { ShiftRole } from "../../types/shiftRoles/ShiftRole";
+import type { UserShiftRoleAssignment } from "../../types/shiftRoles/UserShiftRoleAssignment";
 
 dayjs.extend(isoWeek);
 
@@ -313,6 +317,9 @@ const USER_COLOR_PALETTE: UserSwatch[] = [
 
 const DEFAULT_USER_COLOR: UserSwatch = { background: "#ECEFF4", text: palette.slate };
 
+const PANEL_SCROLL_HEIGHT = "70vh";
+const ROSTER_PANEL_WIDTH = 320;
+
 const formatShiftTimeRange = (start?: string | null, end?: string | null) => {
   const first = (start ?? "").trim().replace(/^(\d{1,2}:\d{2}).*$/, "$1");
   const second = (end ?? "").trim().replace(/^(\d{1,2}:\d{2}).*$/, "$1");
@@ -326,6 +333,18 @@ const formatShiftTimeRange = (start?: string | null, end?: string | null) => {
     return first;
   }
   return `${first} \u2013 ${second}`;
+};
+
+const getShiftTypeLabel = (instance: ShiftInstance) => {
+  const typeName = instance.shiftType?.name?.trim();
+  if (typeName) {
+    return typeName;
+  }
+  const templateName = instance.template?.name?.trim();
+  if (templateName) {
+    return templateName;
+  }
+  return "Shift";
 };
 
 const isPubCrawlShiftInstance = (instance: ShiftInstance) => {
@@ -576,6 +595,10 @@ const BuilderPage = () => {
   }, [selectedWeek, weekOptions]);
   const [showAddInstance, setShowAddInstance] = useState(false);
   const [staff, setStaff] = useState<StaffOption[]>([]);
+  const [draggedUserId, setDraggedUserId] = useState<number | null>(null);
+  const [dragHoverInstanceId, setDragHoverInstanceId] = useState<number | null>(null);
+  const [pendingAssignmentUserId, setPendingAssignmentUserId] = useState<number | null>(null);
+  const [selectedRosterUserId, setSelectedRosterUserId] = useState<number | null>(null);
   const [assignmentModal, setAssignmentModal] = useState<{ opened: boolean; shift: ShiftInstance | null }>({
     opened: false,
     shift: null,
@@ -590,6 +613,9 @@ const BuilderPage = () => {
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishViolations, setPublishViolations] = useState<ScheduleViolation[] | null>(null);
   const [reopenError, setReopenError] = useState<string | null>(null);
+  const [generateInstancesModalOpen, setGenerateInstancesModalOpen] = useState(false);
+  const [generateTemplateSelection, setGenerateTemplateSelection] = useState<string[]>([]);
+  const [clearInstancesModalOpen, setClearInstancesModalOpen] = useState(false);
 
   const selectCanAccessBuilder = useMemo(
     () => makeSelectIsModuleActionAllowed("scheduling-builder", "view"),
@@ -605,6 +631,7 @@ const BuilderPage = () => {
   const templatesQuery = useShiftTemplates({ enabled: canAccessBuilder });
   const instancesQuery = useShiftInstances(canAccessBuilder ? weekId : null);
   const shiftRolesQuery = useShiftRoles();
+  const shiftRoleAssignmentsQuery = useShiftRoleAssignments();
   const weekAvailabilityQuery = useWeekAvailability(
     canAccessBuilder && assignmentModal.opened ? weekId ?? null : null,
   );
@@ -617,6 +644,9 @@ const BuilderPage = () => {
   const lockWeekMutation = useLockWeek();
   const publishWeekMutation = usePublishWeek();
   const reopenWeekMutation = useReopenWeek();
+  const generateInstancesMutation = useGenerateShiftInstances();
+  const { mutateAsync: generateInstancesMutateAsync, reset: resetGenerateInstances } = generateInstancesMutation;
+  const clearInstancesMutation = useClearShiftInstances();
 
   const weekStart = useMemo(() => {
     const [year, weekPart] = selectedWeek.split("-W");
@@ -635,6 +665,104 @@ const BuilderPage = () => {
   const monthSegments = useMemo<MonthSegment[]>(() => buildMonthSegments(daysOfWeek), [daysOfWeek]);
 
   const shiftInstances = useMemo(() => instancesQuery.data ?? [], [instancesQuery.data]);
+  const staffAssignmentSummary = useMemo(() => {
+    const map = new Map<number, { total: number; perShiftType: Map<string, number> }>();
+    shiftInstances.forEach((instance) => {
+      const label = getShiftTypeLabel(instance);
+      (instance.assignments ?? []).forEach((assignment) => {
+        if (!assignment.userId) {
+          return;
+        }
+        const entry = map.get(assignment.userId);
+        if (entry) {
+          entry.total += 1;
+          entry.perShiftType.set(label, (entry.perShiftType.get(label) ?? 0) + 1);
+        } else {
+          map.set(assignment.userId, {
+            total: 1,
+            perShiftType: new Map([[label, 1]]),
+          });
+        }
+      });
+    });
+    return map;
+  }, [shiftInstances]);
+  const shiftRoleAssignments = useMemo<UserShiftRoleAssignment[]>(() => {
+    return (shiftRoleAssignmentsQuery.data?.[0]?.data ?? []) as UserShiftRoleAssignment[];
+  }, [shiftRoleAssignmentsQuery.data]);
+  const rosterEligibleUserIds = useMemo(() => {
+    const set = new Set<number>();
+    shiftRoleAssignments.forEach((assignment) => {
+      if (Array.isArray(assignment.roleIds) && assignment.roleIds.length > 0) {
+        set.add(assignment.userId);
+      }
+    });
+    return set;
+  }, [shiftRoleAssignments]);
+  const rosterStaff = useMemo(() => {
+    if (!shiftRoleAssignmentsQuery.isSuccess) {
+      return staff;
+    }
+    return staff.filter((option) => rosterEligibleUserIds.has(Number(option.value)));
+  }, [staff, rosterEligibleUserIds, shiftRoleAssignmentsQuery.isSuccess]);
+  const staffCards = useMemo(
+    () =>
+      rosterStaff
+        .map((option) => {
+          const userId = Number(option.value);
+          const normalizedUserId = Number.isFinite(userId) ? userId : null;
+          const summary = normalizedUserId != null ? staffAssignmentSummary.get(normalizedUserId) : null;
+          const shiftCounts = summary
+            ? Array.from(summary.perShiftType.entries())
+                .sort((a, b) => {
+                  if (b[1] !== a[1]) {
+                    return b[1] - a[1];
+                  }
+                  return a[0].localeCompare(b[0]);
+                })
+                .map(([label, count]) => ({ label, count }))
+            : [];
+          return {
+            key: option.value,
+            userId: normalizedUserId,
+            name: option.label,
+            totalAssignments: summary?.total ?? 0,
+            shiftCounts,
+            color: getUserColor(normalizedUserId),
+          };
+        })
+        .sort((a, b) => {
+          if (b.totalAssignments !== a.totalAssignments) {
+            return b.totalAssignments - a.totalAssignments;
+          }
+          return a.name.localeCompare(b.name);
+        }),
+    [rosterStaff, staffAssignmentSummary],
+  );
+  const templateOptions = useMemo(
+    () =>
+      (templatesQuery.data ?? []).map((template) => ({
+        value: template.id.toString(),
+        label: template.name,
+      })),
+    [templatesQuery.data],
+  );
+  const selectedRosterUserName = useMemo(() => {
+    if (selectedRosterUserId == null) {
+      return null;
+    }
+    const match = staffCards.find((card) => card.userId === selectedRosterUserId);
+    return match?.name ?? null;
+  }, [selectedRosterUserId, staffCards]);
+
+  useEffect(() => {
+    if (selectedRosterUserId == null) {
+      return;
+    }
+    if (!staffCards.some((card) => card.userId === selectedRosterUserId)) {
+      setSelectedRosterUserId(null);
+    }
+  }, [selectedRosterUserId, staffCards]);
 
   const pubCrawlInstances = useMemo(
     () => shiftInstances.filter((instance) => isPubCrawlShiftInstance(instance)),
@@ -777,6 +905,95 @@ const BuilderPage = () => {
     return (shiftRolesQuery.data?.[0]?.data ?? []) as ShiftRole[];
   }, [shiftRolesQuery.data]);
 
+  const handleRosterCardSelect = useCallback((userId: number | null) => {
+    if (userId == null || Number.isNaN(userId)) {
+      setSelectedRosterUserId(null);
+      return;
+    }
+    setSelectedRosterUserId((current) => (current === userId ? null : userId));
+  }, []);
+
+  const clearRosterSelection = useCallback(() => {
+    setSelectedRosterUserId(null);
+  }, []);
+
+  const handleOpenGenerateInstancesModal = useCallback(() => {
+    setGenerateTemplateSelection((templatesQuery.data ?? []).map((template) => template.id.toString()));
+    resetGenerateInstances();
+    setGenerateInstancesModalOpen(true);
+  }, [resetGenerateInstances, templatesQuery.data]);
+
+  const handleCloseGenerateInstancesModal = useCallback(() => {
+    setGenerateInstancesModalOpen(false);
+  }, []);
+
+  const handleSelectAllTemplates = useCallback(() => {
+    setGenerateTemplateSelection(templateOptions.map((option) => option.value));
+  }, [templateOptions]);
+
+  const handleClearTemplateSelection = useCallback(() => {
+    setGenerateTemplateSelection([]);
+  }, []);
+
+  const handleGenerateInstancesSubmit = useCallback(async () => {
+    if (!weekId || generateTemplateSelection.length === 0) {
+      return;
+    }
+    const templateIds = generateTemplateSelection
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
+    if (templateIds.length === 0) {
+      return;
+    }
+    await generateInstancesMutateAsync({ weekId, templateIds });
+    setGenerateInstancesModalOpen(false);
+  }, [generateInstancesMutateAsync, generateTemplateSelection, weekId]);
+
+  const handleClearInstances = useCallback(async () => {
+    if (!weekId) {
+      return;
+    }
+    await clearInstancesMutation.mutateAsync({ weekId });
+    setClearInstancesModalOpen(false);
+  }, [clearInstancesMutation, weekId]);
+
+  const formatAssignButtonLabel = useCallback(
+    (baseLabel?: string | null) => {
+      if (selectedRosterUserName) {
+        return baseLabel && baseLabel.trim().length > 0
+          ? `Assign ${selectedRosterUserName} (${baseLabel})`
+          : `Assign ${selectedRosterUserName}`;
+      }
+      if (baseLabel && baseLabel.trim().length > 0) {
+        return `Assign (${baseLabel})`;
+      }
+      return "Assign staff";
+    },
+    [selectedRosterUserName],
+  );
+
+  const handleUserCardDragStart = useCallback(
+    (event: DragEvent<HTMLElement>, userId: number | null) => {
+      if (!canModifyWeek || userId == null) {
+        event.preventDefault();
+        return;
+      }
+      setDraggedUserId(userId);
+      setSelectedRosterUserId(userId);
+      if (event.dataTransfer) {
+        event.dataTransfer.setData("application/x-schedule-user", String(userId));
+        event.dataTransfer.setData("text/plain", String(userId));
+        event.dataTransfer.effectAllowed = "copyMove";
+      }
+    },
+    [canModifyWeek],
+  );
+
+  const handleUserCardDragEnd = useCallback(() => {
+    setDraggedUserId(null);
+    setDragHoverInstanceId(null);
+  }, []);
+
   useEffect(() => {
     autoAssignMutation.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -915,11 +1132,10 @@ const BuilderPage = () => {
     return map;
   }, [assignmentModal.opened, weekAvailabilityQuery.data]);
 
-  const activeShiftWindow = useMemo(() => {
-    if (!assignmentModal.opened || !assignmentModal.shift) {
+  const buildShiftWindow = useCallback((shift?: ShiftInstance | null) => {
+    if (!shift) {
       return null;
     }
-    const shift = assignmentModal.shift;
     const startMinutes = parseTimeToMinutes(shift.timeStart) ?? 0;
     const endMinutesRaw = shift.timeEnd ? parseTimeToMinutes(shift.timeEnd) : null;
     const endMinutes =
@@ -931,18 +1147,26 @@ const BuilderPage = () => {
       startMinutes,
       endMinutes,
     };
-  }, [assignmentModal.opened, assignmentModal.shift]);
+  }, []);
+
+  const activeShiftWindow = useMemo(() => {
+    if (!assignmentModal.opened) {
+      return null;
+    }
+    return buildShiftWindow(assignmentModal.shift);
+  }, [assignmentModal.opened, assignmentModal.shift, buildShiftWindow]);
 
   const isUserAvailableForShift = useCallback(
-    (userId: number): boolean => {
-      if (!assignmentModal.opened || !activeShiftWindow) {
+    (userId: number, shiftOverride?: ShiftInstance | null): boolean => {
+      const comparisonWindow = shiftOverride ? buildShiftWindow(shiftOverride) : activeShiftWindow;
+      if (!comparisonWindow) {
         return true;
       }
       const entries = availabilityByUserId.get(userId);
       if (!entries || entries.length === 0) {
         return true;
       }
-      const dayEntries = entries.filter((entry) => entry.day === activeShiftWindow.date);
+      const dayEntries = entries.filter((entry) => entry.day === comparisonWindow.date);
       if (dayEntries.length === 0) {
         return true;
       }
@@ -951,25 +1175,25 @@ const BuilderPage = () => {
         if (entry.status !== "available") {
           return false;
         }
-        if (entry.shiftTypeId && entry.shiftTypeId !== activeShiftWindow.shiftTypeId) {
+        if (entry.shiftTypeId && entry.shiftTypeId !== comparisonWindow.shiftTypeId) {
           return false;
         }
         if (
           entry.startMinutesValue != null &&
-          activeShiftWindow.startMinutes < entry.startMinutesValue
+          comparisonWindow.startMinutes < entry.startMinutesValue
         ) {
           return false;
         }
         if (
           entry.endMinutesValue != null &&
-          activeShiftWindow.endMinutes > entry.endMinutesValue
+          comparisonWindow.endMinutes > entry.endMinutesValue
         ) {
           return false;
         }
         return true;
       });
     },
-    [activeShiftWindow, assignmentModal.opened, availabilityByUserId],
+    [activeShiftWindow, availabilityByUserId, buildShiftWindow],
   );
 
   const staffOptionsByAvailability = useMemo(() => {
@@ -1084,6 +1308,48 @@ const BuilderPage = () => {
     isUserAvailableForShift,
   ]);
 
+  useEffect(() => {
+    if (!assignmentModal.opened || pendingAssignmentUserId == null) {
+      return;
+    }
+    if (!assignmentModal.shift) {
+      setPendingAssignmentUserId(null);
+      return;
+    }
+    const userId = pendingAssignmentUserId;
+    setAssignmentShowUnavailable(true);
+    setAssignmentUserId(userId.toString());
+    const available = isUserAvailableForShift(userId, assignmentModal.shift);
+    setAssignmentRequiresOverride(!available);
+    if (available) {
+      setAssignmentOverrideReason("");
+    }
+    setPendingAssignmentUserId(null);
+  }, [
+    assignmentModal.opened,
+    assignmentModal.shift,
+    pendingAssignmentUserId,
+    isUserAvailableForShift,
+  ]);
+
+  useEffect(() => {
+    if (!assignmentModal.opened || !assignmentModal.shift || !assignmentUserId) {
+      return;
+    }
+    const userId = Number(assignmentUserId);
+    if (!Number.isFinite(userId)) {
+      return;
+    }
+    const available = isUserAvailableForShift(userId, assignmentModal.shift);
+    setAssignmentRequiresOverride(!available);
+  }, [
+    assignmentModal.opened,
+    assignmentModal.shift,
+    assignmentUserId,
+    availabilityByUserId,
+    isUserAvailableForShift,
+  ]);
+
   const autoAssignData = autoAssignMutation.data;
 
   const autoAssignErrorMessage = useMemo(() => {
@@ -1117,9 +1383,9 @@ const BuilderPage = () => {
     return autoAssignData.unfilled.length > 5 ? `${entries.join(", ")}, ...` : entries.join(", ");
   }, [autoAssignData]);
 
-  const handleOpenAssignment = (shift: ShiftInstance) => {
+  const handleOpenAssignment = useCallback((shift: ShiftInstance) => {
     setAssignmentModal({ opened: true, shift });
-  };
+  }, []);
 
   const handleCloseAssignment = () => {
     setAssignmentModal({ opened: false, shift: null });
@@ -1129,8 +1395,81 @@ const BuilderPage = () => {
     setAssignmentOverrideReason("");
     setAssignmentError(null);
     setAssignmentRequiresOverride(false);
+    setAssignmentShowUnavailable(false);
+    setPendingAssignmentUserId(null);
+    setDraggedUserId(null);
+    setDragHoverInstanceId(null);
     assignMutation.reset();
   };
+
+  const openAssignmentForShift = useCallback(
+    (shift: ShiftInstance, options?: { userId?: number | null }) => {
+      const userId = options?.userId;
+      if (typeof userId === "number" && Number.isFinite(userId)) {
+        setPendingAssignmentUserId(userId);
+      }
+      handleOpenAssignment(shift);
+    },
+    [handleOpenAssignment],
+  );
+
+  const getUserIdFromDragEvent = useCallback(
+    (event: DragEvent<HTMLElement>) => {
+      if (draggedUserId != null) {
+        return draggedUserId;
+      }
+      const payload =
+        event.dataTransfer?.getData("application/x-schedule-user") ??
+        event.dataTransfer?.getData("text/plain") ??
+        "";
+      const parsed = Number(payload);
+      return Number.isFinite(parsed) ? parsed : null;
+    },
+    [draggedUserId],
+  );
+
+  const handleDropOnShift = useCallback(
+    (event: DragEvent<HTMLElement>, instance: ShiftInstance) => {
+      if (!canModifyWeek) {
+        return;
+      }
+      const userId = getUserIdFromDragEvent(event);
+      if (userId == null) {
+        return;
+      }
+      event.preventDefault();
+      setDragHoverInstanceId(null);
+      openAssignmentForShift(instance, { userId });
+      setDraggedUserId(null);
+    },
+    [canModifyWeek, getUserIdFromDragEvent, openAssignmentForShift],
+  );
+
+  const handleInstanceDragOver = useCallback(
+    (event: DragEvent<HTMLElement>, instanceId: number) => {
+      if (!canModifyWeek || draggedUserId == null) {
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      setDragHoverInstanceId(instanceId);
+    },
+    [canModifyWeek, draggedUserId],
+  );
+
+  const handleInstanceDragLeave = useCallback(
+    (event: DragEvent<HTMLElement>, instanceId: number) => {
+      if (dragHoverInstanceId !== instanceId) {
+        return;
+      }
+      const nextTarget = event.relatedTarget as Node | null;
+      if (nextTarget && event.currentTarget.contains(nextTarget)) {
+        return;
+      }
+      setDragHoverInstanceId(null);
+    },
+    [dragHoverInstanceId],
+  );
 
   const handleCreateAssignment = async () => {
     if (!assignmentModal.shift || !assignmentUserId || !assignmentRoleOption || !weekId) {
@@ -1338,32 +1677,43 @@ const BuilderPage = () => {
         {canModifyWeek
           ? instancesForDate.map((instance) => {
               const label = formatShiftTimeRange(instance.timeStart, instance.timeEnd);
+              const dropActive = dragHoverInstanceId === instance.id;
               return (
-                <Group
+                <Box
                   key={`pub-instance-${instance.id}`}
-                  justify="space-between"
-                  align="center"
-                  style={{ width: "100%" }}
+                  onDragOver={(event) => handleInstanceDragOver(event, instance.id)}
+                  onDragLeave={(event) => handleInstanceDragLeave(event, instance.id)}
+                  onDrop={(event) => handleDropOnShift(event, instance)}
+                  style={{
+                    width: "100%",
+                    border: dropActive ? `1px dashed ${palette.plumDark}` : undefined,
+                    borderRadius: dropActive ? 12 : undefined,
+                    padding: dropActive ? "6px" : undefined,
+                    backgroundColor: dropActive ? "rgba(124, 77, 255, 0.08)" : "transparent",
+                    transition: "background-color 120ms ease, border-color 120ms ease",
+                  }}
                 >
-                  <Button
-                    size="xs"
-                    variant="light"
-                    leftSection={<IconPlus size={14} />}
-                    onClick={() => handleOpenAssignment(instance)}
-                  >
-                    {label ? `Assign (${label})` : "Assign staff"}
-                  </Button>
-                  {canModifyWeek ? (
-                    <ActionIcon
-                      variant="subtle"
-                      color="red"
-                      onClick={() => handleDeleteInstance(instance)}
-                      disabled={deleteInstanceMutation.isPending}
+                  <Group justify="space-between" align="center" style={{ width: "100%" }}>
+                    <Button
+                      size="xs"
+                      variant="light"
+                      leftSection={<IconPlus size={14} />}
+                      onClick={() => openAssignmentForShift(instance, { userId: selectedRosterUserId })}
                     >
-                      <IconTrash size={16} />
-                    </ActionIcon>
-                  ) : null}
-                </Group>
+                      {formatAssignButtonLabel(label)}
+                    </Button>
+                    {canModifyWeek ? (
+                      <ActionIcon
+                        variant="subtle"
+                        color="red"
+                        onClick={() => handleDeleteInstance(instance)}
+                        disabled={deleteInstanceMutation.isPending}
+                      >
+                        <IconTrash size={16} />
+                      </ActionIcon>
+                    ) : null}
+                  </Group>
+                </Box>
               );
             })
           : null}
@@ -1398,9 +1748,24 @@ const BuilderPage = () => {
           const assignments = instance.assignments ?? [];
           const grouped = groupAssignmentsByUser(assignments);
           const templateRoles = instance.requiredRoles ?? instance.template?.defaultRoles ?? [];
+          const dropActive = dragHoverInstanceId === instance.id;
 
           return (
-            <Stack key={`instance-${instance.id}`} gap={10} style={{ width: "100%" }}>
+            <Stack
+              key={`instance-${instance.id}`}
+              gap={10}
+              style={{
+                width: "100%",
+                border: dropActive ? `1px dashed ${palette.plumDark}` : undefined,
+                borderRadius: dropActive ? 16 : undefined,
+                padding: dropActive ? "10px" : undefined,
+                backgroundColor: dropActive ? "rgba(124, 77, 255, 0.08)" : "transparent",
+                transition: "background-color 120ms ease, border-color 120ms ease",
+              }}
+              onDragOver={(event) => handleInstanceDragOver(event, instance.id)}
+              onDragLeave={(event) => handleInstanceDragLeave(event, instance.id)}
+              onDrop={(event) => handleDropOnShift(event, instance)}
+            >
         <Stack gap={10} align="center" style={{ width: "100%" }}>
                 {grouped.length > 0 ? (
                   grouped
@@ -1419,9 +1784,9 @@ const BuilderPage = () => {
                   size="xs"
                   variant="light"
                   leftSection={<IconPlus size={14} />}
-                  onClick={() => handleOpenAssignment(instance)}
+                  onClick={() => openAssignmentForShift(instance, { userId: selectedRosterUserId })}
                 >
-                  Assign staff
+                  {formatAssignButtonLabel(null)}
                 </Button>
               ) : null}
               <Group justify="space-between" align="center">
@@ -1599,6 +1964,140 @@ const BuilderPage = () => {
     );
   });
 
+  const rosterPanel = (
+    <Card
+      withBorder
+      shadow="md"
+      radius="lg"
+      padding="lg"
+      style={{
+        flex: `1 1 ${ROSTER_PANEL_WIDTH}px`,
+        minWidth: 260,
+        maxWidth: 420,
+        height: PANEL_SCROLL_HEIGHT,
+        backgroundColor: "#fff",
+        borderColor: palette.border,
+        position: "relative",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <Stack gap="xs">
+        <Group justify="space-between" align="flex-start" wrap="nowrap">
+          <Stack gap={4} style={{ maxWidth: "260px" }}>
+            <Text fw={700} size="lg" style={{ fontFamily: HEADER_FONT_STACK }}>
+              Active team roster
+            </Text>
+            <Text size="sm" c="dimmed">
+              Drag a card or click to select it, then choose a shift in the schedule.
+            </Text>
+            {selectedRosterUserName ? (
+              <Badge color="teal" variant="light">
+                Selected: {selectedRosterUserName}
+              </Badge>
+            ) : (
+              <Text size="xs" c="dimmed">
+                Tip: Selection stays active so you can click multiple spots in a row.
+              </Text>
+            )}
+          </Stack>
+          <Stack gap={6} align="flex-end">
+            <Badge color="violet" variant="light">
+              {staffCards.length} active
+            </Badge>
+            {selectedRosterUserName ? (
+              <Button size="xs" variant="subtle" color="gray" onClick={clearRosterSelection}>
+                Clear selection
+              </Button>
+            ) : null}
+          </Stack>
+        </Group>
+      </Stack>
+      <Box style={{ flex: 1, overflowY: "auto", marginTop: 12 }}>
+        {staffCards.length ? (
+          <Stack gap="sm">
+            {staffCards.map((staffer) => {
+              const styles = createUserCardStyles(staffer.color.background);
+              const isDragging = staffer.userId != null && draggedUserId === staffer.userId;
+              const isSelected = staffer.userId != null && staffer.userId === selectedRosterUserId;
+              const borderColor = isSelected ? palette.plumDark : styles.container.borderColor;
+              const borderWidth = isSelected ? 2 : styles.container.borderWidth;
+              return (
+                <Card
+                  key={`staff-card-${staffer.key}`}
+                  radius="lg"
+                  withBorder
+                  padding="md"
+                  draggable={canModifyWeek}
+                  onDragStart={(event) => handleUserCardDragStart(event, staffer.userId)}
+                  onDragEnd={handleUserCardDragEnd}
+                  onClick={() => handleRosterCardSelect(staffer.userId)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      handleRosterCardSelect(staffer.userId);
+                    }
+                  }}
+                  tabIndex={0}
+                  role="button"
+                  aria-pressed={isSelected}
+                  style={{
+                    ...styles.container,
+                    color: staffer.color.text,
+                    cursor: canModifyWeek ? "grab" : "pointer",
+                    opacity: isDragging ? 0.7 : 1,
+                    width: "100%",
+                    borderColor,
+                    borderWidth,
+                    outline: isSelected ? `2px solid ${palette.plumDark}` : "none",
+                    boxShadow: isSelected ? `0 6px 18px rgba(82, 36, 199, 0.3)` : styles.container.boxShadow,
+                  }}
+                >
+                  <Box style={styles.overlay} />
+                  <Stack gap={8} align="flex-start" style={{ position: "relative", zIndex: 1 }}>
+                    <Group justify="space-between" style={{ width: "100%" }} wrap="nowrap">
+                      <Text style={{ ...userCardNameStyles, color: staffer.color.text }}>{staffer.name}</Text>
+                      {isSelected ? (
+                        <Badge color="teal" size="xs" variant="filled">
+                          Selected
+                        </Badge>
+                      ) : null}
+                    </Group>
+                    <Text size="xs" style={{ fontFamily: HEADER_FONT_STACK }}>
+                      {staffer.totalAssignments
+                        ? `Assigned to ${staffer.totalAssignments} shift${
+                            staffer.totalAssignments === 1 ? "" : "s"
+                          }`
+                        : "No assignments yet this week"}
+                    </Text>
+                    {staffer.shiftCounts.length ? (
+                      <Group gap={6} wrap="wrap">
+                        {staffer.shiftCounts.map((entry) => (
+                          <Badge
+                            key={`${staffer.key}-${entry.label}`}
+                            variant="light"
+                            color="indigo"
+                            style={{ textTransform: "none" }}
+                          >
+                            {entry.label}: {entry.count}
+                          </Badge>
+                        ))}
+                      </Group>
+                    ) : null}
+                  </Stack>
+                </Card>
+              );
+            })}
+          </Stack>
+        ) : (
+          <Text size="sm" c="dimmed">
+            Active staff will appear here once loaded.
+          </Text>
+        )}
+      </Box>
+    </Card>
+  );
+
   const otherShiftTables = otherShiftGroups
     .map((group) => {
       if (group.timeBuckets.length === 0) {
@@ -1744,6 +2243,22 @@ const BuilderPage = () => {
             </Button>
             <Button
               variant="white"
+              color="teal"
+              onClick={handleOpenGenerateInstancesModal}
+              disabled={!canModifyWeek || templateOptions.length === 0}
+            >
+              Generate shift instances
+            </Button>
+            <Button
+              variant="white"
+              color="red"
+              onClick={() => setClearInstancesModalOpen(true)}
+              disabled={!canModifyWeek || !hasWeek || shiftInstances.length === 0}
+            >
+              Clear week
+            </Button>
+            <Button
+              variant="white"
               color="indigo"
               onClick={handleAutoAssign}
               loading={autoAssignMutation.isPending}
@@ -1865,51 +2380,192 @@ const BuilderPage = () => {
           <Text size="sm">{autoAssignErrorMessage}</Text>
         </Alert>
       ) : null}
-
+      {generateInstancesMutation.isSuccess ? (
+        <Alert color="green" title="Shift instances generated">
+          <Text size="sm">
+            Created {generateInstancesMutation.data?.created ?? 0} new shift
+            {generateInstancesMutation.data?.created === 1 ? "" : "s"} from{" "}
+            {generateInstancesMutation.data?.templateCount ?? 0} template
+            {generateInstancesMutation.data?.templateCount === 1 ? "" : "s"}.
+            {generateInstancesMutation.data && generateInstancesMutation.data.skipped > 0
+              ? ` Skipped ${generateInstancesMutation.data.skipped} existing slot${
+                  generateInstancesMutation.data.skipped === 1 ? "" : "s"
+                }.`
+              : null}
+          </Text>
+        </Alert>
+      ) : null}
+      {clearInstancesMutation.isSuccess ? (
+        <Alert color="red" title="Week cleared">
+          <Text size="sm">
+            Deleted {clearInstancesMutation.data?.deletedInstances ?? 0} shift
+            {clearInstancesMutation.data?.deletedInstances === 1 ? "" : "s"} and{" "}
+            {clearInstancesMutation.data?.deletedAssignments ?? 0} assignment
+            {clearInstancesMutation.data?.deletedAssignments === 1 ? "" : "s"} for this week.
+          </Text>
+        </Alert>
+      ) : null}
       {loading ? (
         <Center py="xl">
           <Loader />
         </Center>
-      ) : !hasWeek ? (
-        <Alert color="yellow" variant="light" radius="md" title="Week not available">
-          <Text size="sm">
-            Schedule data for {formatWeekValue(selectedWeek)} is not available yet. Generate the week to begin assigning
-            staff.
-          </Text>
-        </Alert>
       ) : (
-        <Card
-          withBorder
-          shadow="xl"
-          radius="lg"
-          padding="xl"
-          style={{ backgroundColor: palette.lavender, borderColor: palette.border, overflow: "hidden" }}
-        >
-          <Stack gap="xl" style={{ width: "100%", minWidth: 0, overflowX: "hidden" }}>
-            {pubCrawlTable}
-            {otherShiftTables}
-            {!pubCrawlTable && otherShiftTables.length === 0 ? (
-              <Text size="sm" c="dimmed" ta="center">
-                No shifts scheduled for this week yet. Use the actions above to add shifts or auto assign staff.
-              </Text>
-            ) : null}
-            {pubCrawlInstances.length === 0 ? (
-              <Alert
-                mb={0}
-                color="yellow"
-                variant="light"
-                radius="md"
-                icon={<IconAlertTriangle size={16} />}
-                title="No pub crawl shifts found"
-              >
+        <Group align="flex-start" gap="lg" wrap="wrap" style={{ width: "100%" }}>
+          <Box style={{ flex: "2 1 600px", minWidth: 0 }}>
+            {!hasWeek ? (
+              <Alert color="yellow" variant="light" radius="md" title="Week not available">
                 <Text size="sm">
-                  There are no assignments for the pub crawl shift during {formatWeekValue(selectedWeek)}.
+                  Schedule data for {formatWeekValue(selectedWeek)} is not available yet. Generate the week to begin
+                  assigning staff.
                 </Text>
               </Alert>
-            ) : null}
-          </Stack>
-        </Card>
+            ) : (
+              <Card
+                withBorder
+                shadow="xl"
+                radius="lg"
+                padding="xl"
+                style={{
+                  backgroundColor: palette.lavender,
+                  borderColor: palette.border,
+                  height: PANEL_SCROLL_HEIGHT,
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                <Stack gap="md" style={{ height: "100%" }}>
+                  <Text size="sm" c="dimmed">
+                    {selectedRosterUserName
+                      ? `Selected: ${selectedRosterUserName}. Click any Assign button or drop their card onto a shift.`
+                      : "Tip: Select someone from the roster or drag them directly to a shift cell."}
+                  </Text>
+                  <Box style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+                    <Stack gap="xl" style={{ width: "100%", minWidth: 0, paddingRight: 12 }}>
+                      {pubCrawlTable}
+                      {otherShiftTables}
+                      {!pubCrawlTable && otherShiftTables.length === 0 ? (
+                        <Text size="sm" c="dimmed" ta="center">
+                          No shifts scheduled for this week yet. Use the actions above to add shifts or auto assign staff.
+                        </Text>
+                      ) : null}
+                      {pubCrawlInstances.length === 0 ? (
+                        <Alert
+                          mb={0}
+                          color="yellow"
+                          variant="light"
+                          radius="md"
+                          icon={<IconAlertTriangle size={16} />}
+                          title="No pub crawl shifts found"
+                        >
+                          <Text size="sm">
+                            There are no assignments for the pub crawl shift during {formatWeekValue(selectedWeek)}.
+                          </Text>
+                        </Alert>
+                      ) : null}
+                    </Stack>
+                  </Box>
+                </Stack>
+              </Card>
+            )}
+          </Box>
+          {rosterPanel}
+        </Group>
       )}
+
+      <Modal
+        opened={generateInstancesModalOpen}
+        onClose={handleCloseGenerateInstancesModal}
+        title="Generate shift instances"
+      >
+        <Stack>
+          <Text size="sm">
+            Select which templates should create shift instances for the week of {weekRangeLabel}. Existing instances for
+            the same template and day will be left untouched.
+          </Text>
+          <MultiSelect
+            data={templateOptions}
+            value={generateTemplateSelection}
+            onChange={setGenerateTemplateSelection}
+            label="Shift templates"
+            placeholder="Pick templates"
+            searchable
+            nothingFoundMessage="No templates"
+            disabled={templateOptions.length === 0}
+          />
+          <Group justify="space-between">
+            <Group gap="xs">
+              <Button
+                variant="light"
+                size="xs"
+                onClick={handleSelectAllTemplates}
+                disabled={templateOptions.length === 0}
+              >
+                Select all
+              </Button>
+              <Button variant="subtle" size="xs" onClick={handleClearTemplateSelection}>
+                Clear
+              </Button>
+            </Group>
+            <Text size="xs" c="dimmed">
+              {generateTemplateSelection.length} selected
+            </Text>
+          </Group>
+          {generateInstancesMutation.isError ? (
+            <Alert color="red" title="Unable to generate">
+              <Text size="sm">
+                {(
+                  generateInstancesMutation.error as AxiosError<{ error?: string; message?: string }> | undefined
+                )?.response?.data?.error ??
+                  (generateInstancesMutation.error as Error).message}
+              </Text>
+            </Alert>
+          ) : null}
+          <Button
+            onClick={handleGenerateInstancesSubmit}
+            disabled={!weekId || generateTemplateSelection.length === 0}
+            loading={generateInstancesMutation.isPending}
+          >
+            Generate selected templates
+          </Button>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={clearInstancesModalOpen}
+        onClose={() => {
+          if (!clearInstancesMutation.isPending) {
+            setClearInstancesModalOpen(false);
+          }
+        }}
+        title="Clear week schedule"
+      >
+        <Stack>
+          <Alert color="red" title="This cannot be undone">
+            <Text size="sm">
+              This will delete all shift instances for {weekRangeLabel}, along with every assignment linked to them. You
+              will need to regenerate or add shifts again.
+            </Text>
+          </Alert>
+          {clearInstancesMutation.isError ? (
+            <Alert color="red" title="Unable to clear schedule">
+              <Text size="sm">
+                {(
+                  clearInstancesMutation.error as AxiosError<{ error?: string; message?: string }> | undefined
+                )?.response?.data?.error ??
+                  (clearInstancesMutation.error as Error).message}
+              </Text>
+            </Alert>
+          ) : null}
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setClearInstancesModalOpen(false)} disabled={clearInstancesMutation.isPending}>
+              Cancel
+            </Button>
+            <Button color="red" loading={clearInstancesMutation.isPending} onClick={handleClearInstances}>
+              Delete all shifts
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <AddShiftInstanceModal
         opened={showAddInstance}

@@ -68,7 +68,7 @@ export const useGenerateWeek = () => {
   return useMutation({
     mutationFn: async (params: WeekQueryParams = {}) => {
       const response = await axiosInstance.post("/schedules/weeks/generate", null, {
-        params: params.week ? { week: params.week } : undefined,
+        params: params.week ? { week: params.week, autoSpawn: false } : { autoSpawn: false },
       });
       return response.data as { week: ScheduleWeekSummary["week"]; created: boolean };
     },
@@ -117,7 +117,7 @@ export const useEnsureWeek = (
         const tryGenerate = async (): Promise<EnsureWeekResult> => {
           try {
             const response = await axiosInstance.post("/schedules/weeks/generate", null, {
-              params: { week: weekValue },
+              params: { week: weekValue, autoSpawn: false },
             });
             return response.data as EnsureWeekResult;
           } catch (error) {
@@ -217,6 +217,57 @@ export const useAutoAssignWeek = () => {
     onSuccess: (_data, variables) => {
       invalidateQuery(queryClient, schedulingKeys.shiftInstances(variables.weekId));
       invalidateQuery(queryClient, schedulingKeys.weekSummary(variables.weekId));
+    },
+  });
+};
+
+export type GenerateShiftInstancesSummary = {
+  weekId: number;
+  created: number;
+  skipped: number;
+  templateCount: number;
+};
+
+export const useGenerateShiftInstances = () => {
+  const queryClient = useQueryClient();
+  return useMutation<
+    GenerateShiftInstancesSummary,
+    AxiosError<{ error?: string; message?: string }>,
+    { weekId: number; templateIds: number[] }
+  >({
+    mutationFn: async ({ weekId, templateIds }) => {
+      const response = await axiosInstance.post(`/schedules/weeks/${weekId}/generate-instances`, {
+        templateIds,
+      });
+      return response.data as GenerateShiftInstancesSummary;
+    },
+    onSuccess: (result) => {
+      invalidateQuery(queryClient, schedulingKeys.shiftInstances(result.weekId));
+      invalidateQuery(queryClient, schedulingKeys.weekSummary(result.weekId));
+    },
+  });
+};
+
+export type ClearShiftInstancesSummary = {
+  weekId: number;
+  deletedInstances: number;
+  deletedAssignments: number;
+};
+
+export const useClearShiftInstances = () => {
+  const queryClient = useQueryClient();
+  return useMutation<
+    ClearShiftInstancesSummary,
+    AxiosError<{ error?: string; message?: string }>,
+    { weekId: number }
+  >({
+    mutationFn: async ({ weekId }) => {
+      const response = await axiosInstance.post(`/schedules/weeks/${weekId}/clear-instances`);
+      return response.data as ClearShiftInstancesSummary;
+    },
+    onSuccess: (result) => {
+      invalidateQuery(queryClient, schedulingKeys.shiftInstances(result.weekId));
+      invalidateQuery(queryClient, schedulingKeys.weekSummary(result.weekId));
     },
   });
 };
