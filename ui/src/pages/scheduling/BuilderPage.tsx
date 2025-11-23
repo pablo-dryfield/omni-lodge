@@ -964,6 +964,37 @@ const BuilderPage = () => {
     [getRoleDefinitionsForInstance, hasOpenSlotForRequirement, userHasShiftRole],
   );
 
+  const findRoleAssignmentForUser = useCallback(
+    (instance: ShiftInstance, userId: number) => {
+      const roleDefinitions = getRoleDefinitionsForInstance(instance);
+      if (roleDefinitions.length === 0) {
+        return {
+          roleLabel: "Staff",
+          shiftRoleId: null,
+        };
+      }
+      for (const definition of roleDefinitions) {
+        const requirement = { shiftRoleId: definition.shiftRoleId ?? null, roleName: definition.role ?? "" };
+        if (!userHasShiftRole(userId, requirement)) {
+          continue;
+        }
+        if (!hasOpenSlotForRequirement(instance, requirement)) {
+          continue;
+        }
+        const preferredLabel =
+          definition.role?.trim() ||
+          (definition.shiftRoleId != null ? shiftRoleNameById.get(definition.shiftRoleId) ?? "" : "");
+        const roleLabel = preferredLabel.length > 0 ? preferredLabel : "Staff";
+        return {
+          roleLabel,
+          shiftRoleId: definition.shiftRoleId ?? null,
+        };
+      }
+      return null;
+    },
+    [getRoleDefinitionsForInstance, hasOpenSlotForRequirement, shiftRoleNameById, userHasShiftRole],
+  );
+
   const doesUserMatchRoleOption = useCallback(
     (userId: number, option: RoleOption) => {
       if (option.isCustomEntry) {
@@ -1581,6 +1612,40 @@ const BuilderPage = () => {
     ],
   );
 
+  const attemptAutoAssign = useCallback(
+    async (instance: ShiftInstance, userId: number | null | undefined) => {
+      if (!canModifyWeek || !weekId || userId == null || !Number.isFinite(userId)) {
+        return { status: "needs_modal" as const };
+      }
+      if (!isUserAvailableForShift(userId, instance)) {
+        return { status: "needs_modal" as const };
+      }
+      const roleMatch = findRoleAssignmentForUser(instance, userId);
+      if (!roleMatch) {
+        return { status: "needs_modal" as const };
+      }
+      try {
+        await assignMutation.mutateAsync({
+          assignments: [
+            {
+              shiftInstanceId: instance.id,
+              userId,
+              roleInShift: roleMatch.roleLabel,
+              shiftRoleId: roleMatch.shiftRoleId,
+            },
+          ],
+          weekId,
+        });
+        return { status: "success" as const };
+      } catch (error) {
+        const axiosError = error as AxiosError<{ error?: string; message?: string }>;
+        const message = axiosError.response?.data?.error ?? axiosError.response?.data?.message ?? axiosError.message;
+        return { status: "error" as const, message };
+      }
+    },
+    [assignMutation, canModifyWeek, findRoleAssignmentForUser, isUserAvailableForShift, weekId],
+  );
+
   const staffOptionsByAvailability = useMemo(() => {
     if (!assignmentModal.opened || !activeShiftWindow) {
       return {
@@ -1788,14 +1853,26 @@ const BuilderPage = () => {
   };
 
   const openAssignmentForShift = useCallback(
-    (shift: ShiftInstance, options?: { userId?: number | null }) => {
+    async (shift: ShiftInstance, options?: { userId?: number | null }) => {
       const userId = options?.userId;
       if (typeof userId === "number" && Number.isFinite(userId)) {
+        const result = await attemptAutoAssign(shift, userId);
+        if (result.status === "success") {
+          setAssignmentError(null);
+          return;
+        }
+        if (result.status === "error") {
+          setAssignmentError(result.message);
+        } else {
+          setAssignmentError(null);
+        }
         setPendingAssignmentUserId(userId);
+      } else {
+        setAssignmentError(null);
       }
       handleOpenAssignment(shift);
     },
-    [handleOpenAssignment],
+    [attemptAutoAssign, handleOpenAssignment],
   );
 
   const getUserIdFromDragEvent = useCallback(
@@ -1824,7 +1901,7 @@ const BuilderPage = () => {
       }
       event.preventDefault();
       setDragHoverInstanceId(null);
-      openAssignmentForShift(instance, { userId });
+      void openAssignmentForShift(instance, { userId });
       setDraggedUserId(null);
     },
     [canModifyWeek, getUserIdFromDragEvent, openAssignmentForShift],
@@ -2130,7 +2207,7 @@ const BuilderPage = () => {
                             ? `${selectedRosterUserName} does not have the ${roleLabel} role.`
                             : undefined
                         }
-                        onClick={() => openAssignmentForShift(instance, { userId: selectedRosterUserId })}
+                        onClick={() => void openAssignmentForShift(instance, { userId: selectedRosterUserId })}
                       >
                         {formatAssignButtonLabel(label)}
                       </Button>
@@ -2229,7 +2306,7 @@ const BuilderPage = () => {
                   size="xs"
                   variant="light"
                   leftSection={<IconPlus size={14} />}
-                  onClick={() => openAssignmentForShift(instance, { userId: selectedRosterUserId })}
+                  onClick={() => void openAssignmentForShift(instance, { userId: selectedRosterUserId })}
                 >
                   {formatAssignButtonLabel(null)}
                 </Button>
