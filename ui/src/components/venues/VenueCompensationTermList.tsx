@@ -61,11 +61,12 @@ const normalizeTermPayload = (payload: Partial<VenueCompensationTerm>) => {
     }
   }
 
-  if (payload.isActive !== undefined && payload.isActive !== null) {
-    if (typeof payload.isActive === "string") {
-      next.isActive = payload.isActive.trim().toLowerCase() === "true";
+  const isActiveValue = payload.isActive as string | boolean | null | undefined;
+  if (isActiveValue !== undefined && isActiveValue !== null) {
+    if (typeof isActiveValue === "string") {
+      next.isActive = isActiveValue.trim().toLowerCase() === "true";
     } else {
-      next.isActive = Boolean(payload.isActive);
+      next.isActive = Boolean(isActiveValue);
     }
   }
 
