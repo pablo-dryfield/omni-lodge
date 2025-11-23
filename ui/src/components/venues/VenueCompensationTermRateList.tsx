@@ -8,7 +8,6 @@ import { getChangedValues } from "../../utils/getChangedValues";
 import { EditSelectOption } from "../../utils/CustomEditSelect";
 import { venueCompensationTermRateColumnDef } from "./venueCompensationTermRateColumnDef";
 import { VenueCompensationTermRate } from "../../types/venues/VenueCompensationTermRate";
-import { fetchVenueCompensationTerms } from "../../actions/venueCompensationTermActions";
 import { fetchProducts } from "../../actions/productActions";
 import {
   createVenueCompensationTermRate,
@@ -29,12 +28,6 @@ export const VenueCompensationTermRateList = () => {
   useEffect(() => {
     dispatch(fetchVenueCompensationTermRates(undefined));
   }, [dispatch]);
-
-  useEffect(() => {
-    if (!termState.data[0]?.data?.length) {
-      dispatch(fetchVenueCompensationTerms(undefined));
-    }
-  }, [dispatch, termState.data]);
 
   useEffect(() => {
     if (!productState.data[0]?.data?.length) {
@@ -136,4 +129,3 @@ export const VenueCompensationTermRateList = () => {
 };
 
 export default VenueCompensationTermRateList;
-

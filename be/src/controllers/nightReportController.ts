@@ -433,8 +433,17 @@ async function resolveNightReportVenueRows(
     const termKey = `${venue.id}:${compensationType}`;
     const term = termMap.get(termKey);
     if (!term) {
+      const hasAnyActive = terms.some(
+        (candidate) => candidate.venueId === venue.id && candidate.isActive && candidate.compensationType === compensationType,
+      );
       const label = entry.isOpenBar ? 'open bar payout' : 'commission';
-      throw new HttpError(400, `No active ${label} term is configured for ${venue.name} on ${trimmedDate}`);
+      if (!hasAnyActive) {
+        throw new HttpError(400, `No active ${label} term is configured for ${venue.name} on ${trimmedDate}`);
+      }
+      throw new HttpError(
+        400,
+        `A ${label} term for ${venue.name} exists but its date range does not cover ${trimmedDate}. Update the term or add a new one with valid dates.`,
+      );
     }
 
     let rateApplied = 0;
