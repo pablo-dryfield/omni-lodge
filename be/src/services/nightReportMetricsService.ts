@@ -16,6 +16,9 @@ export type NightReportDailyReport = {
   openBarPeople: number;
   venuesCount: number;
   retentionRatio: number;
+  openBarPayout: number;
+  commissionRevenue: number;
+  netVenueValue: number;
 };
 
 export type NightReportLeaderSummary = {
@@ -95,6 +98,19 @@ export const fetchLeaderNightReportStats = async (
     const productId = report.counter?.productId ?? null;
     const productName =
       report.counter?.product?.name ?? (productId !== null ? `Product ${productId}` : "Unassigned Product");
+    const openBarPayout = venues
+      .filter((venue) => venue.direction === "payable")
+      .reduce((sum, venue) => {
+        const payoutValue = venue.payoutAmount != null ? Number(venue.payoutAmount) : 0;
+        return sum + (Number.isFinite(payoutValue) ? payoutValue : 0);
+      }, 0);
+    const commissionRevenue = venues
+      .filter((venue) => venue.direction === "receivable")
+      .reduce((sum, venue) => {
+        const payoutValue = venue.payoutAmount != null ? Number(venue.payoutAmount) : 0;
+        return sum + (Number.isFinite(payoutValue) ? payoutValue : 0);
+      }, 0);
+    const netVenueValue = commissionRevenue - openBarPayout;
 
     const entry: NightReportDailyReport = {
       reportId: report.id,
@@ -107,6 +123,9 @@ export const fetchLeaderNightReportStats = async (
       openBarPeople,
       venuesCount,
       retentionRatio,
+      openBarPayout,
+      commissionRevenue,
+      netVenueValue,
     };
 
     if (!stats.has(leaderId)) {

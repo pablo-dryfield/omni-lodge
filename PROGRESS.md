@@ -1,4 +1,4 @@
-# Omni Lodge Staff Compensation Overhaul
+ï»¿# Omni Lodge Staff Compensation Overhaul
 
 Progress tracker for the end-to-end redesign of staff payments, review handling, and incentives.
 
@@ -15,6 +15,7 @@ Progress tracker for the end-to-end redesign of staff payments, review handling,
 - [x] (9) Integrate night report metrics for leader incentives & staff-of-month.
 - [x] (10) Enhance reviews dashboard with historical analytics.
 - [x] (11) Replace legacy staff payment page with the new multi-bucket summary.
+- [x] (12) Track venue compensation terms (open bar payouts + commissions) and snapshot payouts per night report.
 
 ## In Progress / Next Steps
 
@@ -24,7 +25,9 @@ Progress tracker for the end-to-end redesign of staff payments, review handling,
 - Keep backend responsible for entry provisioning to avoid noisy client traffic.
 - Tier-1 payouts (1-15 reviews) auto-lock until the 15th review lands unless an admin/owner/manager records an under-minimum approval in the entries panel.
 - Review platforms now capture weight, source key, base URL, and alias metadata so review counters and payout rules know how to treat each source.
-- Compensation components now flow from settings › assignments › payout calculation › staff payments UI, adding multi-bucket totals beside commissions.
+- Compensation components now flow from settings â€º assignments â€º payout calculation â€º staff payments UI, adding multi-bucket totals beside commissions.
 - Assistant-manager task planner now feeds payroll: staff-type/user assignments auto-create payout summaries and task_score base components pro-rate pay from completed/waived logs across the selected range.
 - Night report incentives now run off submitted reports: leader metrics API exposes attendance/retention performance (daily/custom) and night_report compensation components pay per qualified day, retention hit, plus best-staff-of-period bonuses.
+- Venue compensation terms live under Settings â†’ Venues; each term stores the venue, rate, unit, currency, and effective dates so night reports can snap the correct rate (and surface open-bar costs vs. commission revenue in metrics/reporting).
 - Future API changes should be reflected here with a short summary + checklist updates.
+

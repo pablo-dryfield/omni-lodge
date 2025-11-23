@@ -1,11 +1,13 @@
 import type { Response } from 'express';
-import { Op } from 'sequelize';
+import { Op, Transaction } from 'sequelize';
 import dayjs from 'dayjs';
 import Counter from '../models/Counter.js';
 import NightReport, { type NightReportStatus } from '../models/NightReport.js';
 import NightReportVenue from '../models/NightReportVenue.js';
 import NightReportPhoto from '../models/NightReportPhoto.js';
 import User from '../models/User.js';
+import Venue from '../models/Venue.js';
+import VenueCompensationTerm from '../models/VenueCompensationTerm.js';
 import HttpError from '../errors/HttpError.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import logger from '../utils/logger.js';
@@ -36,11 +38,19 @@ type NightReportPayload = {
     id: number;
     orderIndex: number;
     venueName: string;
+    venueId: number | null;
     totalPeople: number;
     isOpenBar: boolean;
     normalCount: number | null;
     cocktailsCount: number | null;
     brunchCount: number | null;
+    compensationTermId: number | null;
+    compensationType: 'open_bar' | 'commission' | null;
+    compensationDirection: 'payable' | 'receivable' | null;
+    rateApplied: number | null;
+    rateUnit: 'per_person' | 'flat' | null;
+    payoutAmount: number | null;
+    currencyCode: string | null;
   }>;
   photos: Array<{
     id: number;
@@ -70,6 +80,7 @@ const NIGHT_REPORT_COLUMNS = [
 type VenueInput = {
   orderIndex?: number;
   venueName?: string;
+  venueId?: number;
   totalPeople?: number;
   isOpenBar?: boolean;
   normalCount?: number | null;
@@ -151,11 +162,19 @@ function serializeNightReport(report: NightReport, req: AuthenticatedRequest): N
       id: venue.id,
       orderIndex: venue.orderIndex,
       venueName: venue.venueName,
+       venueId: venue.venueId ?? null,
       totalPeople: venue.totalPeople,
       isOpenBar: venue.isOpenBar,
       normalCount: venue.normalCount,
       cocktailsCount: venue.cocktailsCount,
       brunchCount: venue.brunchCount,
+      compensationTermId: venue.compensationTermId ?? null,
+      compensationType: venue.compensationType ?? null,
+      compensationDirection: venue.direction ?? null,
+      rateApplied: venue.rateApplied != null ? Number(venue.rateApplied) : null,
+      rateUnit: venue.rateUnit ?? null,
+      payoutAmount: venue.payoutAmount != null ? Number(venue.payoutAmount) : null,
+      currencyCode: venue.currencyCode ?? null,
     }));
 
   const photos = (report.photos ?? []).map((photo) => ({
@@ -214,6 +233,7 @@ function normalizeVenueInput(raw: unknown): VenueInput[] {
     return {
       orderIndex: typeof venue.orderIndex === 'number' ? venue.orderIndex : undefined,
       venueName: typeof venue.venueName === 'string' ? venue.venueName.trim() : undefined,
+      venueId: typeof venue.venueId === 'number' ? venue.venueId : undefined,
       totalPeople: typeof venue.totalPeople === 'number' ? venue.totalPeople : undefined,
       isOpenBar: typeof venue.isOpenBar === 'boolean' ? venue.isOpenBar : undefined,
       normalCount:
@@ -229,6 +249,7 @@ function normalizeVenueInput(raw: unknown): VenueInput[] {
 type NormalizedVenue = {
   orderIndex: number;
   venueName: string;
+  venueId: number | null;
   totalPeople: number;
   isOpenBar: boolean;
   normalCount: number | null;
@@ -245,6 +266,7 @@ function validateAndArrangeVenues(raw: VenueInput[]): NormalizedVenue[] {
     .map((venue, index) => ({
       orderIndex: venue.orderIndex && venue.orderIndex > 0 ? Math.floor(venue.orderIndex) : index + 1,
       venueName: venue.venueName ?? '',
+      venueId: venue.venueId ?? null,
       totalPeople: venue.totalPeople ?? 0,
       isOpenBar: venue.isOpenBar ?? index === 0,
       normalCount: venue.normalCount ?? null,
@@ -286,6 +308,149 @@ function validateAndArrangeVenues(raw: VenueInput[]): NormalizedVenue[] {
   }
 
   return sorted;
+}
+
+type PreparedVenueRow = {
+  orderIndex: number;
+  venueId: number;
+  venueName: string;
+  totalPeople: number;
+  isOpenBar: boolean;
+  normalCount: number | null;
+  cocktailsCount: number | null;
+  brunchCount: number | null;
+  compensationTermId: number;
+  compensationType: 'open_bar' | 'commission';
+  direction: 'payable' | 'receivable';
+  rateApplied: number;
+  rateUnit: 'per_person' | 'flat';
+  payoutAmount: number;
+  currencyCode: string;
+};
+
+const normalizeVenueKey = (value: string): string => value.trim().toLowerCase();
+
+const roundToCents = (value: number): number => {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.round(value * 100) / 100;
+};
+
+async function resolveNightReportVenueRows(
+  venues: NormalizedVenue[],
+  activityDate: string,
+  transaction?: Transaction,
+): Promise<PreparedVenueRow[]> {
+  if (venues.length === 0) {
+    return [];
+  }
+
+  const trimmedDate = (activityDate ?? '').trim();
+  if (!trimmedDate) {
+    throw new HttpError(400, 'Activity date is required to compute venue payouts');
+  }
+
+  const directory = await Venue.findAll({ transaction });
+  const byId = new Map<number, Venue>();
+  const byName = new Map<string, Venue>();
+  directory.forEach((venue) => {
+    byId.set(venue.id, venue);
+    if (venue.name) {
+      byName.set(normalizeVenueKey(venue.name), venue);
+    }
+  });
+
+  const resolved = venues.map((entry) => {
+    const key = normalizeVenueKey(entry.venueName);
+    let venueRecord = entry.venueId != null ? byId.get(entry.venueId) ?? null : null;
+    if (!venueRecord && key) {
+      venueRecord = byName.get(key) ?? null;
+    }
+    if (!venueRecord) {
+      throw new HttpError(400, `Venue "${entry.venueName}" is not part of the directory`);
+    }
+    if (entry.isOpenBar && venueRecord.allowsOpenBar !== true) {
+      throw new HttpError(400, `Venue "${venueRecord.name}" is not eligible to host the open bar`);
+    }
+    return { entry, venue: venueRecord };
+  });
+
+  const uniqueVenueIds = [...new Set(resolved.map(({ venue }) => venue.id))];
+  const terms = await VenueCompensationTerm.findAll({
+    where: {
+      venueId: uniqueVenueIds.length > 0 ? { [Op.in]: uniqueVenueIds } : uniqueVenueIds,
+      isActive: true,
+      validFrom: { [Op.lte]: trimmedDate },
+      [Op.or]: [{ validTo: null }, { validTo: { [Op.gte]: trimmedDate } }],
+    },
+    order: [
+      ['venueId', 'ASC'],
+      ['compensationType', 'ASC'],
+      ['validFrom', 'DESC'],
+      ['id', 'DESC'],
+    ],
+    transaction,
+  });
+
+  const termMap = new Map<string, VenueCompensationTerm>();
+  terms.forEach((term) => {
+    const key = `${term.venueId}:${term.compensationType}`;
+    if (!termMap.has(key)) {
+      termMap.set(key, term);
+    }
+  });
+
+  return resolved.map(({ entry, venue }) => {
+    const compensationType: 'open_bar' | 'commission' = entry.isOpenBar ? 'open_bar' : 'commission';
+    const direction: 'payable' | 'receivable' = entry.isOpenBar ? 'payable' : 'receivable';
+    const termKey = `${venue.id}:${compensationType}`;
+    const term = termMap.get(termKey);
+    if (!term) {
+      const label = entry.isOpenBar ? 'open bar payout' : 'commission';
+      throw new HttpError(400, `No active ${label} term is configured for ${venue.name} on ${trimmedDate}`);
+    }
+
+    const baseRateRaw = typeof term.rateAmount === 'number' ? term.rateAmount : Number(term.rateAmount ?? 0);
+    const rateApplied = roundToCents(baseRateRaw);
+    const rateUnit = term.rateUnit === 'flat' ? 'flat' : 'per_person';
+    const units = rateUnit === 'flat' ? 1 : Math.max(entry.totalPeople, 0);
+    const payoutAmount = roundToCents(rateApplied * units);
+
+    return {
+      orderIndex: entry.orderIndex,
+      venueId: venue.id,
+      venueName: venue.name ?? entry.venueName,
+      totalPeople: entry.totalPeople,
+      isOpenBar: entry.isOpenBar,
+      normalCount: entry.normalCount,
+      cocktailsCount: entry.cocktailsCount,
+      brunchCount: entry.brunchCount,
+      compensationTermId: term.id,
+      compensationType,
+      direction,
+      rateApplied,
+      rateUnit,
+      payoutAmount,
+      currencyCode: term.currencyCode ?? 'USD',
+    };
+  });
+}
+
+function mapReportVenuesToNormalized(venues: NightReportVenue[]): NormalizedVenue[] {
+  return venues
+    .slice()
+    .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0))
+    .map((venue, index) => ({
+      orderIndex: venue.orderIndex ?? index + 1,
+      venueName: venue.venueName ?? '',
+      venueId: venue.venueId ?? null,
+      totalPeople: venue.totalPeople ?? 0,
+      isOpenBar: venue.isOpenBar ?? index === 0,
+      normalCount: venue.normalCount ?? null,
+      cocktailsCount: venue.cocktailsCount ?? null,
+      brunchCount: venue.brunchCount ?? null,
+    }));
 }
 
 async function getNightReportById(reportId: number): Promise<NightReport | null> {
@@ -421,18 +586,14 @@ export const createNightReport = async (req: AuthenticatedRequest, res: Response
       );
 
       if (normalizedVenues.length > 0) {
-        const venueRows = normalizedVenues.map((venue) => ({
-          reportId: report.id,
-          orderIndex: venue.orderIndex,
-          venueName: venue.venueName,
-          totalPeople: venue.totalPeople,
-          isOpenBar: venue.isOpenBar,
-          normalCount: venue.normalCount,
-          cocktailsCount: venue.cocktailsCount,
-          brunchCount: venue.brunchCount,
-        }));
-
-        await NightReportVenue.bulkCreate(venueRows, { transaction });
+        const venueRows = await resolveNightReportVenueRows(normalizedVenues, activityDate, transaction);
+        await NightReportVenue.bulkCreate(
+          venueRows.map((row) => ({
+            reportId: report.id,
+            ...row,
+          })),
+          { transaction },
+        );
       }
 
       return report;
@@ -529,8 +690,13 @@ export const updateNightReport = async (req: AuthenticatedRequest, res: Response
     const rawVenuesInput = body.venues;
     const hasVenuesInput = Array.isArray(rawVenuesInput);
     const venuesInput = normalizeVenueInput(rawVenuesInput);
-    const normalizedVenues =
-      venuesInput.length > 0 ? validateAndArrangeVenues(venuesInput) : [];
+    const normalizedVenues = venuesInput.length > 0 ? validateAndArrangeVenues(venuesInput) : [];
+    const effectiveActivityDate = updatePayload.activityDate ?? report.activityDate;
+    const shouldRebuildForDateChange =
+      !hasVenuesInput && Boolean(updatePayload.activityDate) && (report.venues?.length ?? 0) > 0;
+    const normalizedExistingVenues = shouldRebuildForDateChange
+      ? mapReportVenuesToNormalized(report.venues ?? [])
+      : [];
 
     await sequelize.transaction(async (transaction) => {
       if (Object.keys(updatePayload).length > 0) {
@@ -541,17 +707,30 @@ export const updateNightReport = async (req: AuthenticatedRequest, res: Response
       if (hasVenuesInput) {
         await NightReportVenue.destroy({ where: { reportId }, transaction });
         if (normalizedVenues.length > 0) {
-          const venueRows = normalizedVenues.map((venue) => ({
-            reportId,
-            orderIndex: venue.orderIndex,
-            venueName: venue.venueName,
-            totalPeople: venue.totalPeople,
-            isOpenBar: venue.isOpenBar,
-            normalCount: venue.normalCount,
-            cocktailsCount: venue.cocktailsCount,
-            brunchCount: venue.brunchCount,
-          }));
-          await NightReportVenue.bulkCreate(venueRows, { transaction });
+          const venueRows = await resolveNightReportVenueRows(normalizedVenues, effectiveActivityDate, transaction);
+          await NightReportVenue.bulkCreate(
+            venueRows.map((row) => ({
+              reportId,
+              ...row,
+            })),
+            { transaction },
+          );
+        }
+      } else if (shouldRebuildForDateChange) {
+        await NightReportVenue.destroy({ where: { reportId }, transaction });
+        if (normalizedExistingVenues.length > 0) {
+          const venueRows = await resolveNightReportVenueRows(
+            normalizedExistingVenues,
+            effectiveActivityDate,
+            transaction,
+          );
+          await NightReportVenue.bulkCreate(
+            venueRows.map((row) => ({
+              reportId,
+              ...row,
+            })),
+            { transaction },
+          );
         }
       }
     });
@@ -765,6 +944,12 @@ export const getNightReportLeaderMetrics = async (req: AuthenticatedRequest, res
       const totalPeople = summary.reports.reduce((sum, report) => sum + report.totalPeople, 0);
       const totalVenues = summary.reports.reduce((sum, report) => sum + report.venuesCount, 0);
       const totalRetention = summary.reports.reduce((sum, report) => sum + report.retentionRatio, 0);
+      const totalOpenBarPayout = summary.reports.reduce((sum, report) => sum + (report.openBarPayout ?? 0), 0);
+      const totalCommissionRevenue = summary.reports.reduce(
+        (sum, report) => sum + (report.commissionRevenue ?? 0),
+        0,
+      );
+      const netVenueValue = summary.reports.reduce((sum, report) => sum + (report.netVenueValue ?? 0), 0);
       const qualifiedReports = summary.reports.filter(
         (report) => report.totalPeople >= minAttendanceValue,
       );
@@ -794,6 +979,10 @@ export const getNightReportLeaderMetrics = async (req: AuthenticatedRequest, res
         averageAttendance: totalReports ? totalPeople / totalReports : 0,
         averageVenues: totalReports ? totalVenues / totalReports : 0,
         averageRetention: totalReports ? totalRetention / totalReports : 0,
+        totalOpenBarPayout,
+        totalCommissionRevenue,
+        netVenueValue,
+        averageNetVenueValue: totalReports ? netVenueValue / totalReports : 0,
         qualifiedReports: qualifiedReports.length,
         retentionHits,
         meetsMinimumReports: meetsMinReports,
