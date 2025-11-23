@@ -3,4 +3,6 @@ export interface UserShiftRoleAssignment extends Record<string, unknown> {
   firstName: string;
   lastName: string;
   roleIds: number[];
+  livesInAccom?: boolean;
+  staffProfileActive?: boolean;
 }

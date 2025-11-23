@@ -632,9 +632,7 @@ const BuilderPage = () => {
   const instancesQuery = useShiftInstances(canAccessBuilder ? weekId : null);
   const shiftRolesQuery = useShiftRoles();
   const shiftRoleAssignmentsQuery = useShiftRoleAssignments();
-  const weekAvailabilityQuery = useWeekAvailability(
-    canAccessBuilder && assignmentModal.opened ? weekId ?? null : null,
-  );
+  const weekAvailabilityQuery = useWeekAvailability(canAccessBuilder && weekId ? weekId : null);
 
   const assignMutation = useAssignShifts();
   const deleteAssignmentMutation = useDeleteAssignment();
@@ -690,17 +688,45 @@ const BuilderPage = () => {
   const shiftRoleAssignments = useMemo<UserShiftRoleAssignment[]>(() => {
     return (shiftRoleAssignmentsQuery.data?.[0]?.data ?? []) as UserShiftRoleAssignment[];
   }, [shiftRoleAssignmentsQuery.data]);
+  const userLivesInAccomById = useMemo(() => {
+    const map = new Map<number, boolean>();
+    shiftRoleAssignments.forEach((assignment) => {
+      map.set(assignment.userId, Boolean(assignment.livesInAccom));
+    });
+    return map;
+  }, [shiftRoleAssignments]);
+  const userHasActiveProfileById = useMemo(() => {
+    const map = new Map<number, boolean>();
+    shiftRoleAssignments.forEach((assignment) => {
+      map.set(assignment.userId, Boolean(assignment.staffProfileActive));
+    });
+    return map;
+  }, [shiftRoleAssignments]);
   const rosterEligibleUserIds = useMemo(() => {
     const set = new Set<number>();
     shiftRoleAssignments.forEach((assignment) => {
-      if (Array.isArray(assignment.roleIds) && assignment.roleIds.length > 0) {
+      if (Array.isArray(assignment.roleIds) && assignment.roleIds.length > 0 && assignment.staffProfileActive) {
         set.add(assignment.userId);
       }
     });
     return set;
   }, [shiftRoleAssignments]);
+  const getDefaultAvailability = useCallback(
+    (userId: number | null | undefined) => {
+      if (userId == null) {
+        return false;
+      }
+      const hasActiveProfile = userHasActiveProfileById.get(userId) ?? false;
+      if (!hasActiveProfile) {
+        return false;
+      }
+      return userLivesInAccomById.get(userId) ?? false;
+    },
+    [userHasActiveProfileById, userLivesInAccomById],
+  );
+
   const rosterStaff = useMemo(() => {
-    if (!shiftRoleAssignmentsQuery.isSuccess) {
+    if (!shiftRoleAssignmentsQuery.isSuccess || rosterEligibleUserIds.size === 0) {
       return staff;
     }
     return staff.filter((option) => rosterEligibleUserIds.has(Number(option.value)));
@@ -1108,10 +1134,6 @@ const BuilderPage = () => {
   }, [assignmentModal.opened, assignmentRoleOptions]);
 
   const availabilityByUserId = useMemo(() => {
-    if (!assignmentModal.opened) {
-      return new Map<number, AvailabilityWithMinutes[]>();
-    }
-
     const map = new Map<number, AvailabilityWithMinutes[]>();
     const entries = (weekAvailabilityQuery.data ?? []) as AvailabilityEntry[];
     entries.forEach((entry) => {
@@ -1130,7 +1152,24 @@ const BuilderPage = () => {
       }
     });
     return map;
-  }, [assignmentModal.opened, weekAvailabilityQuery.data]);
+  }, [weekAvailabilityQuery.data]);
+
+  const availabilityStatusByUserId = useMemo(() => {
+    const map = new Map<number, Map<string, "available" | "unavailable">>();
+    const entries = (weekAvailabilityQuery.data ?? []) as AvailabilityEntry[];
+    entries.forEach((entry) => {
+      const dayMap = map.get(entry.userId);
+      if (dayMap) {
+        const existing = dayMap.get(entry.day);
+        if (entry.status === "available" || !existing) {
+          dayMap.set(entry.day, entry.status);
+        }
+      } else {
+        map.set(entry.userId, new Map([[entry.day, entry.status]]));
+      }
+    });
+    return map;
+  }, [weekAvailabilityQuery.data]);
 
   const buildShiftWindow = useCallback((shift?: ShiftInstance | null) => {
     if (!shift) {
@@ -1163,12 +1202,13 @@ const BuilderPage = () => {
         return true;
       }
       const entries = availabilityByUserId.get(userId);
+      const fallbackAvailable = getDefaultAvailability(userId);
       if (!entries || entries.length === 0) {
-        return true;
+        return fallbackAvailable;
       }
       const dayEntries = entries.filter((entry) => entry.day === comparisonWindow.date);
       if (dayEntries.length === 0) {
-        return true;
+        return fallbackAvailable;
       }
 
       return dayEntries.some((entry) => {
@@ -1193,7 +1233,7 @@ const BuilderPage = () => {
         return true;
       });
     },
-    [activeShiftWindow, availabilityByUserId, buildShiftWindow],
+    [activeShiftWindow, availabilityByUserId, buildShiftWindow, getDefaultAvailability],
   );
 
   const staffOptionsByAvailability = useMemo(() => {
@@ -2070,25 +2110,49 @@ const BuilderPage = () => {
                           }`
                         : "No assignments yet this week"}
                     </Text>
-                    {staffer.shiftCounts.length ? (
-                      <Group gap={6} wrap="wrap">
-                        {staffer.shiftCounts.map((entry) => (
-                          <Badge
-                            key={`${staffer.key}-${entry.label}`}
-                            variant="light"
-                            color="indigo"
-                            style={{ textTransform: "none" }}
-                          >
-                            {entry.label}: {entry.count}
-                          </Badge>
-                        ))}
-                      </Group>
-                    ) : null}
-                  </Stack>
-                </Card>
-              );
-            })}
-          </Stack>
+                      {staffer.shiftCounts.length ? (
+                        <Group gap={6} wrap="wrap">
+                          {staffer.shiftCounts.map((entry) => (
+                            <Badge
+                              key={`${staffer.key}-${entry.label}`}
+                              variant="light"
+                              color="indigo"
+                              style={{ textTransform: "none" }}
+                            >
+                              {entry.label}: {entry.count}
+                            </Badge>
+                          ))}
+                        </Group>
+                      ) : null}
+                      {daysOfWeek.length ? (
+                        <Group gap={4} wrap="nowrap">
+                          {daysOfWeek.map((day) => {
+                            const isoDate = day.format("YYYY-MM-DD");
+                            const dayMap =
+                              staffer.userId != null ? availabilityStatusByUserId.get(staffer.userId) : undefined;
+                            const hasEntries = staffer.userId != null && availabilityByUserId.has(staffer.userId);
+                            const defaultStatus = getDefaultAvailability(staffer.userId) ? "available" : "unavailable";
+                            const status = dayMap?.get(isoDate) ?? (hasEntries ? "unavailable" : defaultStatus);
+                            const isAvailable = status === "available";
+                            return (
+                              <Badge
+                                key={`${staffer.key}-${isoDate}`}
+                                size="xs"
+                                variant={isAvailable ? "filled" : "outline"}
+                                color={isAvailable ? "teal" : "gray"}
+                                style={{ minWidth: 26, textAlign: "center" }}
+                              >
+                                {day.format("dd")}
+                              </Badge>
+                            );
+                          })}
+                        </Group>
+                      ) : null}
+                    </Stack>
+                  </Card>
+                );
+              })}
+            </Stack>
         ) : (
           <Text size="sm" c="dimmed">
             Active staff will appear here once loaded.

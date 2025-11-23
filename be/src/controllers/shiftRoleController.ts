@@ -3,6 +3,7 @@ import { Op } from 'sequelize';
 import ShiftRole from '../models/ShiftRole.js';
 import User from '../models/User.js';
 import UserShiftRole from '../models/UserShiftRole.js';
+import StaffProfile from '../models/StaffProfile.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 
 const slugify = (value: string) =>
@@ -114,16 +115,23 @@ export const listUserShiftRoleAssignments = async (_req: Request, res: Response)
         ['lastName', 'ASC'],
       ],
       attributes: ['id', 'firstName', 'lastName'],
-      include: [{ model: ShiftRole, as: 'shiftRoles', through: { attributes: [] } }],
+      include: [
+        { model: ShiftRole, as: 'shiftRoles', through: { attributes: [] } },
+        { model: StaffProfile, as: 'staffProfile', attributes: ['livesInAccom', 'active'] },
+      ],
     });
 
     const payload = users.map((userRecord) => {
       const relatedRoles = (userRecord as User & { shiftRoles?: ShiftRole[] }).shiftRoles ?? [];
+      const profile = (userRecord as User & { staffProfile?: StaffProfile }).staffProfile;
+      const hasActiveProfile = Boolean(profile?.active);
       return {
         userId: userRecord.id,
         firstName: userRecord.firstName,
         lastName: userRecord.lastName,
         roleIds: relatedRoles.map((role) => role.id),
+        livesInAccom: Boolean(profile?.livesInAccom),
+        staffProfileActive: hasActiveProfile,
       };
     });
 
