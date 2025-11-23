@@ -117,6 +117,59 @@ type AssignmentInput = {
   overrideReason?: string | null;
 };
 
+const matchesRoleDefinition = (definition: ShiftTemplateRoleRequirement, assignment: AssignmentInput): boolean => {
+  if (definition.shiftRoleId != null && assignment.shiftRoleId != null) {
+    return definition.shiftRoleId === assignment.shiftRoleId;
+  }
+  if (definition.shiftRoleId == null && assignment.shiftRoleId == null) {
+    const normalizedDefinition = normalizeRoleName(definition.role ?? '');
+    const normalizedAssignment = normalizeRoleName(assignment.roleInShift);
+    if (!normalizedDefinition || !normalizedAssignment) {
+      return false;
+    }
+    return (
+      normalizedDefinition === normalizedAssignment ||
+      normalizedDefinition.includes(normalizedAssignment) ||
+      normalizedAssignment.includes(normalizedDefinition)
+    );
+  }
+  return false;
+};
+
+const doesUserHaveRoleForDefinition = (
+  userId: number,
+  definition: ShiftTemplateRoleRequirement,
+  userRoleIdsByUserId: Map<number, Set<number>>,
+  shiftRoleNameById: Map<number, string>,
+): boolean => {
+  const roleSet = userRoleIdsByUserId.get(userId);
+  if (!roleSet || roleSet.size === 0) {
+    return false;
+  }
+  if (definition.shiftRoleId != null) {
+    return roleSet.has(definition.shiftRoleId);
+  }
+  const normalizedDefinition = normalizeRoleName(definition.role ?? '');
+  if (!normalizedDefinition) {
+    return false;
+  }
+  for (const roleId of roleSet) {
+    const roleName = shiftRoleNameById.get(roleId);
+    if (!roleName) {
+      continue;
+    }
+    const normalizedUserRole = normalizeRoleName(roleName);
+    if (
+      normalizedUserRole === normalizedDefinition ||
+      normalizedUserRole.includes(normalizedDefinition) ||
+      normalizedDefinition.includes(normalizedUserRole)
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
 type AvailabilityInput = {
   day: string;
   startTime?: string | null;
@@ -421,6 +474,24 @@ function computeRolesToFill(instance: ShiftInstance, volunteerSet: Set<number>):
   });
   return decorated.map((item) => item.slot);
 }
+
+const getRoleDefinitionsForInstance = (instance: ShiftInstance): ShiftTemplateRoleRequirement[] => {
+  if (instance.requiredRoles && instance.requiredRoles.length > 0) {
+    return instance.requiredRoles;
+  }
+  return instance.template?.defaultRoles ?? [];
+};
+
+const countAssignmentsForRole = (instance: ShiftInstance, role: ShiftTemplateRoleRequirement): number => {
+  const roleLabel = (role.role ?? 'Staff').trim() || 'Staff';
+  const targetKey = createRoleKey(role.shiftRoleId ?? null, roleLabel);
+  const assignments = instance.assignments ?? [];
+  return assignments.filter((assignment) => {
+    const assignmentLabel = (assignment.roleInShift ?? '').trim();
+    const assignmentKey = createRoleKey(assignment.shiftRoleId ?? null, assignmentLabel || 'Staff');
+    return assignmentKey === targetKey;
+  }).length;
+};
 
 async function validateVolunteerLimits(weekId: number, transaction?: Transaction): Promise<ScheduleViolation[]> {
   const counts = await getVolunteerAssignmentCounts(weekId, transaction);
@@ -1220,16 +1291,51 @@ export async function createShiftAssignmentsBulk(assignments: AssignmentInput[],
 
   return sequelize.transaction(async (transaction) => {
     const created: ShiftAssignment[] = [];
+    const uniqueUserIds = Array.from(new Set(assignments.map((assignment) => assignment.userId))).filter((id) =>
+      Number.isFinite(id),
+    );
+    const userRoleLinks = uniqueUserIds.length
+      ? await UserShiftRole.findAll({
+          where: { userId: uniqueUserIds },
+          transaction,
+        })
+      : [];
+    const userRoleIdsByUserId = new Map<number, Set<number>>();
+    const referencedRoleIds = new Set<number>();
+    userRoleLinks.forEach((link) => {
+      const set = userRoleIdsByUserId.get(link.userId) ?? new Set<number>();
+      if (link.shiftRoleId != null) {
+        set.add(link.shiftRoleId);
+        referencedRoleIds.add(link.shiftRoleId);
+      }
+      userRoleIdsByUserId.set(link.userId, set);
+    });
+    const shiftRoleNameById = new Map<number, string>();
+    if (referencedRoleIds.size > 0) {
+      const roles = await ShiftRole.findAll({
+        where: { id: Array.from(referencedRoleIds) },
+        transaction,
+      });
+      roles.forEach((role) => shiftRoleNameById.set(role.id, role.name));
+    }
+    const pendingAssignmentsByInstance = new Map<number, ShiftAssignment[]>();
 
     for (const input of assignments) {
       const instance = await ShiftInstance.findByPk(input.shiftInstanceId, {
-        include: [{ model: ScheduleWeek, as: 'scheduleWeek' }],
+        include: [
+          { model: ScheduleWeek, as: 'scheduleWeek' },
+          { model: ShiftAssignment, as: 'assignments' },
+          { model: ShiftTemplate, as: 'template' },
+        ],
         transaction,
       });
       if (!instance || !instance.scheduleWeek) {
         throw new HttpError(404, 'Shift instance not found');
       }
       assertWeekMutable(instance.scheduleWeek);
+      const persistedAssignments = instance.assignments ?? [];
+      const pendingAssignments = pendingAssignmentsByInstance.get(instance.id) ?? [];
+      instance.assignments = persistedAssignments.concat(pendingAssignments);
 
       const existingAssignments = await ShiftAssignment.findAll({
         where: {
@@ -1310,6 +1416,22 @@ export async function createShiftAssignmentsBulk(assignments: AssignmentInput[],
         throw new HttpError(400, 'Assignment outside availability. Provide override reason.');
       }
 
+      const roleDefinitions = getRoleDefinitionsForInstance(instance);
+      if (roleDefinitions.length > 0) {
+        const matchingDefinition = roleDefinitions.find((definition) => matchesRoleDefinition(definition, input));
+        if (!matchingDefinition) {
+          throw new HttpError(400, 'Shift does not accept the specified role.');
+        }
+        if (!doesUserHaveRoleForDefinition(input.userId, matchingDefinition, userRoleIdsByUserId, shiftRoleNameById)) {
+          throw new HttpError(400, 'User does not have the required shift role for this assignment.');
+        }
+        const requiredSlots = Math.max(1, matchingDefinition.required ?? 1);
+        const filledSlots = countAssignmentsForRole(instance, matchingDefinition);
+        if (filledSlots >= requiredSlots) {
+          throw new HttpError(400, 'All slots for this role are already filled.');
+        }
+      }
+
       const assignment = await ShiftAssignment.create(
         {
           shiftInstanceId: input.shiftInstanceId,
@@ -1320,6 +1442,14 @@ export async function createShiftAssignmentsBulk(assignments: AssignmentInput[],
         { transaction },
       );
       created.push(assignment);
+      const buffered = pendingAssignmentsByInstance.get(instance.id) ?? [];
+      buffered.push(assignment);
+      pendingAssignmentsByInstance.set(instance.id, buffered);
+      if (instance.assignments) {
+        instance.assignments.push(assignment);
+      } else {
+        instance.assignments = [assignment];
+      }
 
       if (!availability && input.overrideReason) {
         await logAudit({

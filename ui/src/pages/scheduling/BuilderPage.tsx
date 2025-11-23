@@ -135,6 +135,25 @@ const makeRoleValue = (opts: { shiftRoleId: number | null; roleName: string; pre
 const createRoleKey = (roleId: number | null, roleName: string) =>
   roleId != null ? `id:${roleId}` : `name:${normalizeRoleName(roleName)}`;
 
+const matchesRoleRequirement = (
+  definition: ShiftRoleRequirement,
+  target: { shiftRoleId?: number | null; roleName?: string | null },
+) => {
+  if (definition.shiftRoleId != null && target.shiftRoleId != null) {
+    return definition.shiftRoleId === target.shiftRoleId;
+  }
+  const normalizedDefinition = normalizeRoleName(definition.role ?? "");
+  const normalizedTarget = normalizeRoleName(target.roleName ?? "");
+  if (!normalizedDefinition || !normalizedTarget) {
+    return false;
+  }
+  return (
+    normalizedDefinition === normalizedTarget ||
+    normalizedDefinition.includes(normalizedTarget) ||
+    normalizedTarget.includes(normalizedDefinition)
+  );
+};
+
 const ROLE_PRIORITY: Record<string, number> = {
   guide: 0,
   "social media": 1,
@@ -662,6 +681,28 @@ const BuilderPage = () => {
     });
     return lookup;
   }, [shiftRoleRecords]);
+  const getShiftRoleIdForLabel = useCallback(
+    (label: string | null | undefined) => {
+      const normalized = normalizeRoleName(label);
+      if (!normalized) {
+        return null;
+      }
+      if (normalizedShiftRoleIdByName.has(normalized)) {
+        return normalizedShiftRoleIdByName.get(normalized) ?? null;
+      }
+      const singular = normalized.endsWith("s") ? normalized.slice(0, -1) : normalized;
+      if (normalizedShiftRoleIdByName.has(singular)) {
+        return normalizedShiftRoleIdByName.get(singular) ?? null;
+      }
+      for (const [key, value] of normalizedShiftRoleIdByName.entries()) {
+        if (key.includes(normalized) || normalized.includes(key)) {
+          return value;
+        }
+      }
+      return null;
+    },
+    [normalizedShiftRoleIdByName],
+  );
   const weekAvailabilityQuery = useWeekAvailability(canAccessBuilder && weekId ? weekId : null);
 
   const assignMutation = useAssignShifts();
@@ -777,15 +818,36 @@ const BuilderPage = () => {
     [userHasActiveProfileById, userLivesInAccomById],
   );
 
-  const getRoleDefinitionsForInstance = useCallback((instance?: ShiftInstance | null) => {
-    if (!instance) {
-      return [];
-    }
-    if (Array.isArray(instance.requiredRoles) && instance.requiredRoles.length > 0) {
-      return instance.requiredRoles;
-    }
-    return instance.template?.defaultRoles ?? [];
-  }, []);
+  const getFallbackRoleDefinitions = useCallback(
+    (instance?: ShiftInstance | null): ShiftRoleRequirement[] => {
+      if (!instance || !isPubCrawlShiftInstance(instance)) {
+        return [];
+      }
+      return ROLE_ORDER.map((label) => ({
+        role: label,
+        shiftRoleId: getShiftRoleIdForLabel(label),
+        required: 0,
+      }));
+    },
+    [getShiftRoleIdForLabel],
+  );
+
+  const getRoleDefinitionsForInstance = useCallback(
+    (instance?: ShiftInstance | null): ShiftRoleRequirement[] => {
+      if (!instance) {
+        return [];
+      }
+      const explicitRoles =
+        (instance.requiredRoles && instance.requiredRoles.length > 0
+          ? instance.requiredRoles
+          : instance.template?.defaultRoles) ?? [];
+      if (explicitRoles.length > 0) {
+        return explicitRoles;
+      }
+      return getFallbackRoleDefinitions(instance);
+    },
+    [getFallbackRoleDefinitions],
+  );
 
   const countAssignmentsForRole = useCallback(
     (instance: ShiftInstance, role: ShiftRoleRequirement) => {
@@ -862,6 +924,26 @@ const BuilderPage = () => {
     [shiftRoleNameById, userRoleIdSetByUserId],
   );
 
+  const hasOpenSlotForRequirement = useCallback(
+    (instance: ShiftInstance, requirement: { shiftRoleId?: number | null; roleName?: string | null }) => {
+      const definitions = getRoleDefinitionsForInstance(instance).filter((definition) =>
+        matchesRoleRequirement(definition, requirement),
+      );
+      if (definitions.length === 0) {
+        return true;
+      }
+      return definitions.some((definition) => {
+        const requiredSlots =
+          definition.required == null || definition.required <= 0
+            ? Number.POSITIVE_INFINITY
+            : Math.max(1, definition.required);
+        const filledSlots = countAssignmentsForRole(instance, definition);
+        return filledSlots < requiredSlots;
+      });
+    },
+    [countAssignmentsForRole, getRoleDefinitionsForInstance],
+  );
+
   const hasOpenRoleForUser = useCallback(
     (userId: number, instance?: ShiftInstance | null) => {
       if (!instance) {
@@ -872,20 +954,14 @@ const BuilderPage = () => {
         return true;
       }
       return roleDefinitions.some((definition) => {
-        if (
-          !userHasShiftRole(userId, {
-            shiftRoleId: definition.shiftRoleId ?? null,
-            roleName: definition.role ?? "",
-          })
-        ) {
+        const requirement = { shiftRoleId: definition.shiftRoleId ?? null, roleName: definition.role ?? "" };
+        if (!userHasShiftRole(userId, requirement)) {
           return false;
         }
-        const requiredSlots = Math.max(1, definition.required ?? 1);
-        const filledSlots = countAssignmentsForRole(instance, definition);
-        return filledSlots < requiredSlots;
+        return hasOpenSlotForRequirement(instance, requirement);
       });
     },
-    [countAssignmentsForRole, getRoleDefinitionsForInstance, userHasShiftRole],
+    [getRoleDefinitionsForInstance, hasOpenSlotForRequirement, userHasShiftRole],
   );
 
   const doesUserMatchRoleOption = useCallback(
@@ -1468,10 +1544,22 @@ const BuilderPage = () => {
   }, []);
 
   const getInstanceHighlightStyles = useCallback(
-    (instance: ShiftInstance) => {
+    (instance: ShiftInstance, options?: { roleLabel?: string }) => {
       const userId = draggedUserId ?? selectedRosterUserId;
       if (!userId) {
         return {};
+      }
+      const requirement =
+        options?.roleLabel != null
+          ? { shiftRoleId: getShiftRoleIdForLabel(options.roleLabel), roleName: options.roleLabel }
+          : null;
+      if (
+        requirement &&
+        (!userHasShiftRole(userId, requirement) || !hasOpenSlotForRequirement(instance, requirement))
+      ) {
+        return {
+          opacity: 0.2,
+        };
       }
       const eligible = isUserAvailableForShift(userId, instance);
       return eligible
@@ -1483,7 +1571,14 @@ const BuilderPage = () => {
             opacity: 0.45,
           };
     },
-    [draggedUserId, selectedRosterUserId, isUserAvailableForShift],
+    [
+      draggedUserId,
+      selectedRosterUserId,
+      getShiftRoleIdForLabel,
+      userHasShiftRole,
+      hasOpenSlotForRequirement,
+      isUserAvailableForShift,
+    ],
   );
 
   const staffOptionsByAvailability = useMemo(() => {
@@ -1980,6 +2075,9 @@ const BuilderPage = () => {
     const assignments = assignmentsByDate.get(isoDate) ?? [];
     const nodes = renderAssignmentsForRole(roleLabel, assignments);
     const instancesForDate = pubCrawlInstancesByDate.get(isoDate) ?? [];
+    const roleRequirement = { shiftRoleId: getShiftRoleIdForLabel(roleLabel), roleName: roleLabel };
+    const selectedRosterEligible =
+      selectedRosterUserId == null || userHasShiftRole(selectedRosterUserId, roleRequirement);
 
     return (
       <Stack gap={8} align="center" style={{ width: "100%" }}>
@@ -1994,7 +2092,7 @@ const BuilderPage = () => {
           ? instancesForDate.map((instance) => {
               const label = formatShiftTimeRange(instance.timeStart, instance.timeEnd);
               const dropActive = dragHoverInstanceId === instance.id;
-              const highlightStyles = getInstanceHighlightStyles(instance);
+              const highlightStyles = getInstanceHighlightStyles(instance, { roleLabel });
               return (
                 <Tooltip
                   key={`pub-instance-${instance.id}`}
@@ -2026,6 +2124,12 @@ const BuilderPage = () => {
                         size="xs"
                         variant="light"
                         leftSection={<IconPlus size={14} />}
+                        disabled={Boolean(selectedRosterUserId) && !selectedRosterEligible}
+                        title={
+                          !selectedRosterEligible && selectedRosterUserName
+                            ? `${selectedRosterUserName} does not have the ${roleLabel} role.`
+                            : undefined
+                        }
                         onClick={() => openAssignmentForShift(instance, { userId: selectedRosterUserId })}
                       >
                         {formatAssignButtonLabel(label)}
