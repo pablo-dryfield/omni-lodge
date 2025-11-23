@@ -3,6 +3,7 @@ import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
 import VenuesList from "../../components/venues/VenuesList";
 import VenueCompensationTermList from "../../components/venues/VenueCompensationTermList";
+import VenueCompensationTermRateList from "../../components/venues/VenueCompensationTermRateList";
 
 const PAGE_SLUG = PAGE_SLUGS.settingsVenues;
 
@@ -24,6 +25,13 @@ const SettingsVenues = () => {
           </Text>
         </div>
         <VenueCompensationTermList />
+        <div>
+          <Title order={4}>Rate Bands</Title>
+          <Text size="sm" c="dimmed">
+            Define per-product, per-ticket rates (normal vs cocktails vs brunch) with their own date ranges.
+          </Text>
+        </div>
+        <VenueCompensationTermRateList />
       </Stack>
     </PageAccessGuard>
   );

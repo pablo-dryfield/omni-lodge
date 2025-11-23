@@ -8,6 +8,7 @@ import NightReportPhoto from '../models/NightReportPhoto.js';
 import User from '../models/User.js';
 import Venue from '../models/Venue.js';
 import VenueCompensationTerm from '../models/VenueCompensationTerm.js';
+import VenueCompensationTermRate from '../models/VenueCompensationTermRate.js';
 import HttpError from '../errors/HttpError.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import logger from '../utils/logger.js';
@@ -340,6 +341,7 @@ const roundToCents = (value: number): number => {
 async function resolveNightReportVenueRows(
   venues: NormalizedVenue[],
   activityDate: string,
+  productId: number | null,
   transaction?: Transaction,
 ): Promise<PreparedVenueRow[]> {
   if (venues.length === 0) {
@@ -394,11 +396,35 @@ async function resolveNightReportVenueRows(
   });
 
   const termMap = new Map<string, VenueCompensationTerm>();
+  const termIds = terms.map((term) => term.id);
+  const rates = termIds.length
+    ? await VenueCompensationTermRate.findAll({
+        where: {
+          termId: { [Op.in]: termIds },
+          isActive: true,
+        },
+        order: [
+          ['termId', 'ASC'],
+          ['productId', 'DESC'],
+          ['ticketType', 'ASC'],
+          ['validFrom', 'DESC'],
+          ['id', 'DESC'],
+        ],
+        transaction,
+      })
+    : [];
+
+  const ratesByTerm = new Map<number, VenueCompensationTermRate[]>();
+  rates.forEach((rate) => {
+    if (!ratesByTerm.has(rate.termId)) {
+      ratesByTerm.set(rate.termId, []);
+    }
+    ratesByTerm.get(rate.termId)!.push(rate);
+  });
+
   terms.forEach((term) => {
     const key = `${term.venueId}:${term.compensationType}`;
-    if (!termMap.has(key)) {
-      termMap.set(key, term);
-    }
+    termMap.set(key, term);
   });
 
   return resolved.map(({ entry, venue }) => {
@@ -411,11 +437,32 @@ async function resolveNightReportVenueRows(
       throw new HttpError(400, `No active ${label} term is configured for ${venue.name} on ${trimmedDate}`);
     }
 
-    const baseRateRaw = typeof term.rateAmount === 'number' ? term.rateAmount : Number(term.rateAmount ?? 0);
-    const rateApplied = roundToCents(baseRateRaw);
-    const rateUnit = term.rateUnit === 'flat' ? 'flat' : 'per_person';
-    const units = rateUnit === 'flat' ? 1 : Math.max(entry.totalPeople, 0);
-    const payoutAmount = roundToCents(rateApplied * units);
+    let rateApplied = 0;
+    let rateUnit: 'per_person' | 'flat' = 'per_person';
+    let payoutAmount = 0;
+
+    if (entry.isOpenBar) {
+      const bucketContributions = computeOpenBarPayout(
+        term,
+        ratesByTerm.get(term.id) ?? [],
+        {
+          normal: entry.normalCount ?? 0,
+          cocktail: entry.cocktailsCount ?? 0,
+          brunch: entry.brunchCount ?? 0,
+        },
+        productId,
+        trimmedDate,
+      );
+      payoutAmount = roundToCents(bucketContributions.total);
+      rateApplied = payoutAmount;
+      rateUnit = 'per_person';
+    } else {
+      const baseRateRaw = typeof term.rateAmount === 'number' ? term.rateAmount : Number(term.rateAmount ?? 0);
+      rateApplied = roundToCents(baseRateRaw);
+      rateUnit = term.rateUnit === 'flat' ? 'flat' : 'per_person';
+      const units = rateUnit === 'flat' ? 1 : Math.max(entry.totalPeople, 0);
+      payoutAmount = roundToCents(rateApplied * units);
+    }
 
     return {
       orderIndex: entry.orderIndex,
@@ -451,6 +498,93 @@ function mapReportVenuesToNormalized(venues: NightReportVenue[]): NormalizedVenu
       cocktailsCount: venue.cocktailsCount ?? null,
       brunchCount: venue.brunchCount ?? null,
     }));
+}
+
+type BucketCounts = {
+  normal: number;
+  cocktail: number;
+  brunch: number;
+};
+
+const bucketOrder: Array<keyof BucketCounts | 'generic'> = ['normal', 'cocktail', 'brunch', 'generic'];
+
+function computeOpenBarPayout(
+  term: VenueCompensationTerm,
+  rates: VenueCompensationTermRate[],
+  counts: BucketCounts,
+  productId: number | null,
+  referenceDate: string,
+) {
+  const dateValue = referenceDate;
+  const contributions: number[] = [];
+
+  const selectRate = (ticketType: string): VenueCompensationTermRate | null => {
+    const filtered = rates.filter((rate) => {
+      const matchesTicket =
+        rate.ticketType === ticketType ||
+        (ticketType !== 'generic' && rate.ticketType === 'generic');
+      if (!matchesTicket) {
+        return false;
+      }
+      const withinStart = !rate.validFrom || rate.validFrom <= dateValue;
+      const withinEnd = !rate.validTo || rate.validTo >= dateValue;
+      if (!withinStart || !withinEnd) {
+        return false;
+      }
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      return null;
+    }
+
+    const productMatches = productId
+      ? filtered.filter((rate) => rate.productId === productId)
+      : [];
+    const fallbackMatches = filtered.filter((rate) => rate.productId == null);
+    const candidatePool = productMatches.length > 0 ? productMatches : fallbackMatches.length > 0 ? fallbackMatches : filtered;
+
+    return candidatePool[0] ?? null;
+  };
+
+  const applyRate = (ticketType: keyof BucketCounts, count: number) => {
+    if (!count || count <= 0) {
+      return;
+    }
+    const rate = selectRate(ticketType);
+    if (!rate) {
+      const genericRate = selectRate('generic');
+      if (!genericRate) {
+        return;
+      }
+      const units = genericRate.rateUnit === 'flat' ? 1 : count;
+      contributions.push(roundToCents(Number(genericRate.rateAmount ?? 0) * units));
+      return;
+    }
+    const units = rate.rateUnit === 'flat' ? 1 : count;
+    contributions.push(roundToCents(Number(rate.rateAmount ?? 0) * units));
+  };
+
+  applyRate('normal', counts.normal);
+  applyRate('cocktail', counts.cocktail);
+  applyRate('brunch', counts.brunch);
+
+  if (contributions.length === 0) {
+    const fallbackRate = selectRate('generic');
+    if (fallbackRate) {
+      const units = fallbackRate.rateUnit === 'flat' ? 1 : Math.max(counts.normal + counts.cocktail + counts.brunch, 0);
+      contributions.push(roundToCents(Number(fallbackRate.rateAmount ?? 0) * units));
+    } else {
+      const baseRateRaw = typeof term.rateAmount === 'number' ? term.rateAmount : Number(term.rateAmount ?? 0);
+      const rateApplied = roundToCents(baseRateRaw);
+      const units = term.rateUnit === 'flat' ? 1 : Math.max(counts.normal + counts.cocktail + counts.brunch, 0);
+      contributions.push(roundToCents(rateApplied * units));
+    }
+  }
+
+  return {
+    total: contributions.reduce((sum, value) => sum + value, 0),
+  };
 }
 
 async function getNightReportById(reportId: number): Promise<NightReport | null> {
@@ -586,7 +720,12 @@ export const createNightReport = async (req: AuthenticatedRequest, res: Response
       );
 
       if (normalizedVenues.length > 0) {
-        const venueRows = await resolveNightReportVenueRows(normalizedVenues, activityDate, transaction);
+        const venueRows = await resolveNightReportVenueRows(
+          normalizedVenues,
+          activityDate,
+          counter.productId ?? null,
+          transaction,
+        );
         await NightReportVenue.bulkCreate(
           venueRows.map((row) => ({
             reportId: report.id,
@@ -692,6 +831,7 @@ export const updateNightReport = async (req: AuthenticatedRequest, res: Response
     const venuesInput = normalizeVenueInput(rawVenuesInput);
     const normalizedVenues = venuesInput.length > 0 ? validateAndArrangeVenues(venuesInput) : [];
     const effectiveActivityDate = updatePayload.activityDate ?? report.activityDate;
+    const reportProductId = report.counter?.productId ?? null;
     const shouldRebuildForDateChange =
       !hasVenuesInput && Boolean(updatePayload.activityDate) && (report.venues?.length ?? 0) > 0;
     const normalizedExistingVenues = shouldRebuildForDateChange
@@ -707,7 +847,12 @@ export const updateNightReport = async (req: AuthenticatedRequest, res: Response
       if (hasVenuesInput) {
         await NightReportVenue.destroy({ where: { reportId }, transaction });
         if (normalizedVenues.length > 0) {
-          const venueRows = await resolveNightReportVenueRows(normalizedVenues, effectiveActivityDate, transaction);
+          const venueRows = await resolveNightReportVenueRows(
+            normalizedVenues,
+            effectiveActivityDate,
+            reportProductId,
+            transaction,
+          );
           await NightReportVenue.bulkCreate(
             venueRows.map((row) => ({
               reportId,
@@ -722,6 +867,7 @@ export const updateNightReport = async (req: AuthenticatedRequest, res: Response
           const venueRows = await resolveNightReportVenueRows(
             normalizedExistingVenues,
             effectiveActivityDate,
+            reportProductId,
             transaction,
           );
           await NightReportVenue.bulkCreate(
