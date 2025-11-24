@@ -44,7 +44,7 @@ const defaultUnavailable = (message?: string) => (
 
 const defaultDenied = (
   <AlertShell title="No access" tone="yellow">
-    <Text size="sm">You do not have permission to view this page.</Text>
+    <Text size="sm">You do not have permission to view this page. Contact the Manager to get access.</Text>
   </AlertShell>
 );
 

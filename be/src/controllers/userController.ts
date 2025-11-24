@@ -5,6 +5,9 @@ import { DataType } from 'sequelize-typescript';
 import { Op } from 'sequelize';
 import User from '../models/User.js';
 import UserType from '../models/UserType.js';
+import StaffProfile from '../models/StaffProfile.js';
+import ShiftRole from '../models/ShiftRole.js';
+import UserShiftRole from '../models/UserShiftRole.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { Env } from '../types/Env.js';
 
@@ -22,6 +25,49 @@ const NAME_TO_SLUG: Record<string, string[]> = {
   owner: ['owner'],
 };
 
+const SIGNUP_STAFF_TYPES: Array<StaffProfile['staffType']> = ['volunteer', 'long_term'];
+const DISALLOWED_SIGNUP_ROLE_SLUGS = new Set(['leader', 'manager']);
+
+const normalizeStaffType = (value: unknown): StaffProfile['staffType'] | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase() as StaffProfile['staffType'];
+  return SIGNUP_STAFF_TYPES.find((type) => type === normalized);
+};
+
+const normalizeBoolean = (value: unknown, fallback = false): boolean => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y'].includes(trimmed)) {
+      return true;
+    }
+    if (['false', '0', 'no', 'n'].includes(trimmed)) {
+      return false;
+    }
+  }
+  return fallback;
+};
+
+const normalizeRoleIds = (value: unknown): number[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      value
+        .map((entry) => Number(entry))
+        .filter((entry): entry is number => Number.isInteger(entry) && entry > 0),
+    ),
+  );
+};
+
 declare const process: {
   env: Env;
 };
@@ -37,11 +83,80 @@ function buildUserColumns() {
 
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const data = { ...req.body };
-    const salt = await bcrypt.genSalt(10);
-    data.password = await bcrypt.hash(data.password, salt);
-    const newUser = await User.create(data);
-    res.status(201).json([newUser]);
+    const sequelize = User.sequelize;
+    if (!sequelize) {
+      res.status(500).json([{ message: 'Database connection is not available' }]);
+      return;
+    }
+
+    const staffType = normalizeStaffType(req.body.staffType);
+    const livesInAccom = normalizeBoolean(req.body.livesInAccom);
+    const shiftRoleIds = normalizeRoleIds(req.body.shiftRoleIds);
+
+    let createdUser: User | null = null;
+
+    await sequelize.transaction(async (transaction) => {
+      const { username, email, password, firstName, lastName } = req.body;
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(password, salt);
+      const userPayload = {
+        username,
+        email,
+        password: hashedPassword,
+        firstName,
+        lastName,
+      };
+
+      const newUser = await User.create(userPayload, { transaction });
+      createdUser = newUser;
+
+      const shouldCreateStaffProfile = Boolean(staffType);
+      if (shouldCreateStaffProfile) {
+        await StaffProfile.create(
+          {
+            userId: newUser.id,
+            staffType,
+            livesInAccom,
+            active: true,
+          },
+          { transaction },
+        );
+      }
+
+      if (shiftRoleIds.length > 0) {
+        const roles = await ShiftRole.findAll({
+          where: { id: { [Op.in]: shiftRoleIds } },
+          transaction,
+        });
+
+        if (roles.length !== shiftRoleIds.length) {
+          throw new Error('One or more shift roles do not exist.');
+        }
+
+        const forbiddenRole = roles.find((role) => {
+          const slug = (role.slug ?? role.name ?? '').trim().toLowerCase();
+          return DISALLOWED_SIGNUP_ROLE_SLUGS.has(slug);
+        });
+
+        if (forbiddenRole) {
+          throw new Error('Selected shift roles are not available during signup.');
+        }
+
+        const assignmentRows = roles.map((role) => ({
+          userId: newUser.id,
+          shiftRoleId: role.id,
+        }));
+
+        await UserShiftRole.bulkCreate(assignmentRows, { transaction });
+      }
+    });
+
+    if (!createdUser) {
+      res.status(500).json([{ message: 'Unable to create user.' }]);
+      return;
+    }
+
+    res.status(201).json([createdUser]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);

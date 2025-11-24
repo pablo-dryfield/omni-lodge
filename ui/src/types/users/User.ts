@@ -11,4 +11,7 @@ export type User = {
   createdBy: number;
   updatedBy: number;
   status: boolean;
+  staffType?: 'volunteer' | 'long_term';
+  livesInAccom?: boolean;
+  shiftRoleIds?: number[];
 };
