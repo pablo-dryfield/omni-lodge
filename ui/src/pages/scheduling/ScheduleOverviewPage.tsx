@@ -438,45 +438,20 @@ const ScheduleOverviewPage = () => {
   const [selectedWeek, setSelectedWeek] = useState<string>("");
   const scheduleWeeksQuery = useScheduleWeeks({ limit: 120 });
   const weekOptions = useMemo(() => {
-    const optionMap = new Map<string, { value: string; label: string; sortKey: number }>();
-    const addWeekOption = (value: string | Dayjs | null | undefined) => {
-      if (!value) {
-        return;
-      }
-      const normalized = ensureIsoWeekString(value);
-      if (optionMap.has(normalized)) {
-        return;
-      }
-      const start = parseIsoWeekStart(normalized);
-      if (!start) {
-        return;
-      }
-      optionMap.set(normalized, {
-        value: normalized,
-        label: formatScheduleWeekLabel(start.isoWeekYear(), start.isoWeek()),
-        sortKey: start.valueOf(),
-      });
-    };
     const existingWeeks = (scheduleWeeksQuery.data ?? []) as ScheduleWeek[];
-    let latestStart: Dayjs | null = null;
-    existingWeeks.forEach((weekRecord) => {
-      const normalizedValue = ensureIsoWeekString(
-        `${weekRecord.year}-W${weekRecord.isoWeek.toString().padStart(2, "0")}`,
-      );
-      addWeekOption(normalizedValue);
-      const start = parseIsoWeekStart(normalizedValue);
-      if (start && (!latestStart || start.isAfter(latestStart))) {
-        latestStart = start;
+    const options: { value: string; label: string }[] = existingWeeks.map((weekRecord) => ({
+      value: ensureIsoWeekString(`${weekRecord.year}-W${weekRecord.isoWeek.toString().padStart(2, "0")}`),
+      label: formatScheduleWeekLabel(weekRecord.year, weekRecord.isoWeek),
+    }));
+    options.sort((a, b) => {
+      const aStart = parseIsoWeekStart(a.value);
+      const bStart = parseIsoWeekStart(b.value);
+      if (!aStart || !bStart) {
+        return 0;
       }
+      return aStart.valueOf() - bStart.valueOf();
     });
-    const currentStart = dayjs().startOf("isoWeek");
-    const futureBase: Dayjs = latestStart ?? currentStart;
-    for (let offset = 0; offset < 12; offset += 1) {
-      addWeekOption(futureBase.add(offset, "week"));
-    }
-    return Array.from(optionMap.values())
-      .sort((a, b) => a.sortKey - b.sortKey)
-      .map(({ value, label }) => ({ value, label }));
+    return options;
   }, [scheduleWeeksQuery.data]);
 
   useEffect(() => {
@@ -486,14 +461,12 @@ const ScheduleOverviewPage = () => {
     if (selectedWeek && weekOptions.some((option) => option.value === selectedWeek)) {
       return;
     }
-    const nextWeekValue = ensureIsoWeekString(dayjs().add(1, "week"));
-    const currentWeekValue = ensureIsoWeekString(dayjs());
-    const fallback =
-      weekOptions.find((option) => option.value === nextWeekValue)?.value ??
-      weekOptions.find((option) => option.value === currentWeekValue)?.value ??
-      weekOptions[weekOptions.length - 1]?.value ??
-      weekOptions[0]?.value ??
-      "";
+     const currentWeekValue = ensureIsoWeekString(dayjs());
+        const fallback =
+          weekOptions.find((option) => option.value === currentWeekValue)?.value ??
+          weekOptions[weekOptions.length - 1]?.value ??
+          weekOptions[0]?.value ??
+          "";
     if (fallback) {
       setSelectedWeek(fallback);
     }
