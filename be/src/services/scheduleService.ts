@@ -52,6 +52,7 @@ const DEFAULT_SHIFT_TYPES: Array<{ key: string; name: string; description: strin
 const ALL_WEEKDAY_NUMBERS = [1, 2, 3, 4, 5, 6, 7] as const;
 
 const MAX_VOLUNTEER_WEEKLY_ASSIGNMENTS = 4;
+const MIN_VOLUNTEER_WEEKLY_ASSIGNMENTS = 4;
 const DEFAULT_SHIFT_DURATION_HOURS = 2;
 
 function getWeekStart(year: number, week: number): dayjs.Dayjs {
@@ -504,6 +505,14 @@ async function validateVolunteerLimits(weekId: number, transaction?: Transaction
       return;
     }
     const { uniqueDayCount, totalAssignments } = summary;
+    if (totalAssignments < MIN_VOLUNTEER_WEEKLY_ASSIGNMENTS) {
+      violations.push({
+        code: 'volunteer-too-few',
+        message: `Volunteer ${userId} has only ${totalAssignments} shift${totalAssignments === 1 ? '' : 's'} scheduled (minimum ${MIN_VOLUNTEER_WEEKLY_ASSIGNMENTS}).`,
+        meta: { userId, totalAssignments, minRequired: MIN_VOLUNTEER_WEEKLY_ASSIGNMENTS },
+        severity: 'warning',
+      });
+    }
     if (uniqueDayCount > 4) {
       violations.push({
         code: 'volunteer-too-many',
@@ -681,13 +690,17 @@ export async function generateWeek(options: { week?: string | null; actorId?: nu
   const transaction = await sequelize.transaction();
   try {
     const { week, created } = await ensureWeekExists(identifier, transaction);
-    let shouldSpawn = created;
-    if (!shouldSpawn && options.autoSpawn) {
-      const existingInstances = await ShiftInstance.count({
-        where: { scheduleWeekId: week.id },
-        transaction,
-      });
-      shouldSpawn = existingInstances === 0;
+    let shouldSpawn = false;
+    if (options.autoSpawn) {
+      if (created) {
+        shouldSpawn = true;
+      } else {
+        const existingInstances = await ShiftInstance.count({
+          where: { scheduleWeekId: week.id },
+          transaction,
+        });
+        shouldSpawn = existingInstances === 0;
+      }
     }
     if (shouldSpawn) {
       await spawnInstancesFromTemplates(week, options.actorId ?? null, transaction);
@@ -1412,7 +1425,8 @@ export async function createShiftAssignmentsBulk(assignments: AssignmentInput[],
       });
 
       const availability = await findAvailabilityForAssignment(instance, input.userId);
-      if (!availability && (!input.overrideReason || input.overrideReason.trim().length === 0)) {
+      const fallbackAvailable = Boolean(profile?.active && profile?.livesInAccom);
+      if (!availability && !fallbackAvailable && (!input.overrideReason || input.overrideReason.trim().length === 0)) {
         throw new HttpError(400, 'Assignment outside availability. Provide override reason.');
       }
 
@@ -1770,21 +1784,6 @@ export async function deleteShiftAssignment(assignmentId: number, actorId: numbe
     throw new HttpError(404, 'Assignment not found');
   }
   assertWeekMutable(assignment.shiftInstance.scheduleWeek);
-
-  const profile = await StaffProfile.findOne({ where: { userId: assignment.userId } });
-  if (profile && profile.active && profile.staffType === 'volunteer' && profile.livesInAccom) {
-    const remaining = await ShiftAssignment.count({
-      where: { userId: assignment.userId },
-      include: [{
-        model: ShiftInstance,
-        as: 'shiftInstance',
-        where: { scheduleWeekId: assignment.shiftInstance.scheduleWeekId },
-      }],
-    });
-    if (remaining <= 3) {
-      throw new HttpError(400, 'Removing this assignment would drop volunteer below minimum shift requirement.');
-    }
-  }
 
   await assignment.destroy();
   await logAudit({

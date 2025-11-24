@@ -112,6 +112,11 @@ type RoleOption = {
   isCustomEntry?: boolean;
 };
 
+type RoleRequirementInput = {
+  shiftRoleId?: number | null;
+  roleName?: string | null;
+};
+
 const ASSIGNMENT_ROLE_PRIORITY: Record<string, number> = {
   manager: 0,
   leader: 1,
@@ -135,10 +140,7 @@ const makeRoleValue = (opts: { shiftRoleId: number | null; roleName: string; pre
 const createRoleKey = (roleId: number | null, roleName: string) =>
   roleId != null ? `id:${roleId}` : `name:${normalizeRoleName(roleName)}`;
 
-const matchesRoleRequirement = (
-  definition: ShiftRoleRequirement,
-  target: { shiftRoleId?: number | null; roleName?: string | null },
-) => {
+const matchesRoleRequirement = (definition: ShiftRoleRequirement, target: RoleRequirementInput) => {
   if (definition.shiftRoleId != null && target.shiftRoleId != null) {
     return definition.shiftRoleId === target.shiftRoleId;
   }
@@ -151,6 +153,28 @@ const matchesRoleRequirement = (
     normalizedDefinition === normalizedTarget ||
     normalizedDefinition.includes(normalizedTarget) ||
     normalizedTarget.includes(normalizedDefinition)
+  );
+};
+
+const doesOptionMatchRequirement = (option: RoleOption, requirement?: RoleRequirementInput | null) => {
+  if (!requirement) {
+    return false;
+  }
+  if (requirement.shiftRoleId != null && option.shiftRoleId != null) {
+    return requirement.shiftRoleId === option.shiftRoleId;
+  }
+  const normalizedRequirement = normalizeRoleName(requirement.roleName ?? "");
+  if (!normalizedRequirement) {
+    return false;
+  }
+  const normalizedOption = normalizeRoleName(option.roleName ?? option.label);
+  if (!normalizedOption) {
+    return false;
+  }
+  return (
+    normalizedOption === normalizedRequirement ||
+    normalizedOption.includes(normalizedRequirement) ||
+    normalizedRequirement.includes(normalizedOption)
   );
 };
 
@@ -625,8 +649,11 @@ const BuilderPage = () => {
   const [showAddInstance, setShowAddInstance] = useState(false);
   const [staff, setStaff] = useState<StaffOption[]>([]);
   const [draggedUserId, setDraggedUserId] = useState<number | null>(null);
+  const [draggedAssignmentIds, setDraggedAssignmentIds] = useState<number[] | null>(null);
   const [dragHoverInstanceId, setDragHoverInstanceId] = useState<number | null>(null);
   const [pendingAssignmentUserId, setPendingAssignmentUserId] = useState<number | null>(null);
+  const [pendingAssignmentRoleRequirement, setPendingAssignmentRoleRequirement] = useState<RoleRequirementInput | null>(null);
+  const [pendingMoveAssignmentIds, setPendingMoveAssignmentIds] = useState<number[] | null>(null);
   const [selectedRosterUserId, setSelectedRosterUserId] = useState<number | null>(null);
   const [assignmentModal, setAssignmentModal] = useState<{ opened: boolean; shift: ShiftInstance | null }>({
     opened: false,
@@ -645,6 +672,8 @@ const BuilderPage = () => {
   const [generateInstancesModalOpen, setGenerateInstancesModalOpen] = useState(false);
   const [generateTemplateSelection, setGenerateTemplateSelection] = useState<string[]>([]);
   const [clearInstancesModalOpen, setClearInstancesModalOpen] = useState(false);
+  const [publishWarningModalOpen, setPublishWarningModalOpen] = useState(false);
+  const [publishWarningsAcknowledged, setPublishWarningsAcknowledged] = useState(false);
 
   const selectCanAccessBuilder = useMemo(
     () => makeSelectIsModuleActionAllowed("scheduling-builder", "view"),
@@ -735,26 +764,40 @@ const BuilderPage = () => {
 
   const shiftInstances = useMemo(() => instancesQuery.data ?? [], [instancesQuery.data]);
   const staffAssignmentSummary = useMemo(() => {
-    const map = new Map<number, { total: number; perShiftType: Map<string, number> }>();
+    const map = new Map<number, { perShiftTypeInstances: Map<string, Set<number>> }>();
     shiftInstances.forEach((instance) => {
       const label = getShiftTypeLabel(instance);
+      const instanceId = instance.id;
       (instance.assignments ?? []).forEach((assignment) => {
         if (!assignment.userId) {
           return;
         }
-        const entry = map.get(assignment.userId);
-        if (entry) {
-          entry.total += 1;
-          entry.perShiftType.set(label, (entry.perShiftType.get(label) ?? 0) + 1);
-        } else {
-          map.set(assignment.userId, {
-            total: 1,
-            perShiftType: new Map([[label, 1]]),
-          });
+        const userId = assignment.userId;
+        let entry = map.get(userId);
+        if (!entry) {
+          entry = { perShiftTypeInstances: new Map() };
+          map.set(userId, entry);
         }
+        let typeSet = entry.perShiftTypeInstances.get(label);
+        if (!typeSet) {
+          typeSet = new Set<number>();
+          entry.perShiftTypeInstances.set(label, typeSet);
+        }
+        typeSet.add(instanceId);
       });
     });
-    return map;
+    const summary = new Map<number, { total: number; perShiftType: Map<string, number> }>();
+    map.forEach((entry, userId) => {
+      const perShiftTypeCounts = new Map<string, number>();
+      let total = 0;
+      entry.perShiftTypeInstances.forEach((instanceIds, label) => {
+        const count = instanceIds.size;
+        perShiftTypeCounts.set(label, count);
+        total += count;
+      });
+      summary.set(userId, { total, perShiftType: perShiftTypeCounts });
+    });
+    return summary;
   }, [shiftInstances]);
   const shiftRoleAssignments = useMemo<UserShiftRoleAssignment[]>(() => {
     return (shiftRoleAssignmentsQuery.data?.[0]?.data ?? []) as UserShiftRoleAssignment[];
@@ -887,10 +930,7 @@ const BuilderPage = () => {
   );
 
   const userHasShiftRole = useCallback(
-    (
-      userId: number | null | undefined,
-      target?: { shiftRoleId?: number | null; roleName?: string | null },
-    ): boolean => {
+    (userId: number | null | undefined, target?: RoleRequirementInput | null): boolean => {
       if (userId == null) {
         return false;
       }
@@ -925,7 +965,7 @@ const BuilderPage = () => {
   );
 
   const hasOpenSlotForRequirement = useCallback(
-    (instance: ShiftInstance, requirement: { shiftRoleId?: number | null; roleName?: string | null }) => {
+    (instance: ShiftInstance, requirement: RoleRequirementInput) => {
       const definitions = getRoleDefinitionsForInstance(instance).filter((definition) =>
         matchesRoleRequirement(definition, requirement),
       );
@@ -965,21 +1005,26 @@ const BuilderPage = () => {
   );
 
   const findRoleAssignmentForUser = useCallback(
-    (instance: ShiftInstance, userId: number) => {
+    (instance: ShiftInstance, userId: number, preferredRequirement?: RoleRequirementInput | null) => {
       const roleDefinitions = getRoleDefinitionsForInstance(instance);
       if (roleDefinitions.length === 0) {
+        const fallbackLabel =
+          preferredRequirement?.roleName && preferredRequirement.roleName.trim().length > 0
+            ? preferredRequirement.roleName
+            : "Staff";
         return {
-          roleLabel: "Staff",
-          shiftRoleId: null,
+          roleLabel: fallbackLabel,
+          shiftRoleId: preferredRequirement?.shiftRoleId ?? null,
         };
       }
-      for (const definition of roleDefinitions) {
+
+      const tryDefinition = (definition: ShiftRoleRequirement) => {
         const requirement = { shiftRoleId: definition.shiftRoleId ?? null, roleName: definition.role ?? "" };
         if (!userHasShiftRole(userId, requirement)) {
-          continue;
+          return null;
         }
         if (!hasOpenSlotForRequirement(instance, requirement)) {
-          continue;
+          return null;
         }
         const preferredLabel =
           definition.role?.trim() ||
@@ -989,6 +1034,25 @@ const BuilderPage = () => {
           roleLabel,
           shiftRoleId: definition.shiftRoleId ?? null,
         };
+      };
+
+      if (preferredRequirement) {
+        const preferredDefinition = roleDefinitions.find((definition) =>
+          matchesRoleRequirement(definition, preferredRequirement),
+        );
+        if (preferredDefinition) {
+          const preferredMatch = tryDefinition(preferredDefinition);
+          if (preferredMatch) {
+            return preferredMatch;
+          }
+        }
+      }
+
+      for (const definition of roleDefinitions) {
+        const match = tryDefinition(definition);
+        if (match) {
+          return match;
+        }
       }
       return null;
     },
@@ -1157,7 +1221,41 @@ const BuilderPage = () => {
     return map;
   }, [pubCrawlInstances]);
 
+  const weekViolations = useMemo(
+    () => summaryQuery.data?.violations ?? [],
+    [summaryQuery.data?.violations],
+  );
+  const volunteerShortfallViolations = useMemo(
+    () => weekViolations.filter((violation) => violation.code === "volunteer-too-few"),
+    [weekViolations],
+  );
+  const volunteerWarningSignature = useMemo(() => {
+    if (volunteerShortfallViolations.length === 0) {
+      return "";
+    }
+    return volunteerShortfallViolations
+      .map((violation) => {
+        const meta = (violation.meta ?? null) as { userId?: number; totalAssignments?: number } | null;
+        const userToken =
+          meta && typeof meta.userId === "number" ? `user-${meta.userId}` : `msg-${violation.message}`;
+        const totalToken = meta && typeof meta.totalAssignments === "number" ? meta.totalAssignments.toString() : "";
+        return `${userToken}-${totalToken}`;
+      })
+      .sort()
+      .join("|");
+  }, [volunteerShortfallViolations]);
+  const hasVolunteerWarning = volunteerShortfallViolations.length > 0;
+  const weekState = summaryQuery.data?.week?.state ?? null;
+  const isPublished = weekState === "published";
+  const canModifyWeek = Boolean(weekId) && !isPublished;
+  useEffect(() => {
+    setPublishWarningsAcknowledged(false);
+  }, [volunteerWarningSignature]);
+
   const visibleRoles = useMemo(() => {
+    if (canModifyWeek) {
+      return Array.from(ROLE_ORDER);
+    }
     const rolesWithAssignments = ROLE_ORDER.filter((roleLabel) =>
       daysOfWeek.some((day) => {
         const isoDate = day.format("YYYY-MM-DD");
@@ -1165,11 +1263,8 @@ const BuilderPage = () => {
         return filterAssignmentsForRole(roleLabel, assignments).length > 0;
       }),
     );
-    if (rolesWithAssignments.length > 0) {
-      return rolesWithAssignments;
-    }
-    return pubCrawlInstances.length > 0 ? Array.from(ROLE_ORDER) : rolesWithAssignments;
-  }, [assignmentsByDate, daysOfWeek, pubCrawlInstances.length]);
+    return rolesWithAssignments;
+  }, [assignmentsByDate, canModifyWeek, daysOfWeek]);
 
   const pubCrawlHeading = useMemo(() => {
     if (pubCrawlInstances.length === 0) {
@@ -1202,10 +1297,6 @@ const BuilderPage = () => {
   const loading = ensureWeekQuery.isLoading || instancesQuery.isLoading;
   const error = ensureWeekQuery.isError ? ensureWeekQuery.error : instancesQuery.error;
   const hasWeek = Boolean(weekId);
-  const weekViolations = summaryQuery.data?.violations ?? [];
-  const weekState = summaryQuery.data?.week?.state ?? null;
-  const isPublished = weekState === "published";
-  const canModifyWeek = Boolean(weekId) && !isPublished;
 
   const handleRosterCardSelect = useCallback((userId: number | null) => {
     if (userId == null || Number.isNaN(userId)) {
@@ -1282,6 +1373,7 @@ const BuilderPage = () => {
         return;
       }
       setDraggedUserId(userId);
+      setDraggedAssignmentIds(null);
       setSelectedRosterUserId(userId);
       if (event.dataTransfer) {
         event.dataTransfer.setData("application/x-schedule-user", String(userId));
@@ -1294,8 +1386,64 @@ const BuilderPage = () => {
 
   const handleUserCardDragEnd = useCallback(() => {
     setDraggedUserId(null);
+    setDraggedAssignmentIds(null);
     setDragHoverInstanceId(null);
   }, []);
+
+  const handleAssignmentCardSelect = useCallback(
+    (userId: number | null | undefined) => {
+      if (userId == null || Number.isNaN(userId)) {
+        return;
+      }
+      setSelectedRosterUserId(userId);
+    },
+    [],
+  );
+
+  const handleAssignmentCardDragStart = useCallback(
+    (event: DragEvent<HTMLElement>, userId: number | null | undefined, assignmentIds?: number[]) => {
+      if (!canModifyWeek || userId == null) {
+        event.preventDefault();
+        return;
+      }
+      setDraggedUserId(userId);
+      if (assignmentIds && assignmentIds.length > 0) {
+        const uniqueIds = Array.from(new Set(assignmentIds.filter((id) => Number.isFinite(id))));
+        setDraggedAssignmentIds(uniqueIds.length > 0 ? uniqueIds : null);
+      } else {
+        setDraggedAssignmentIds(null);
+      }
+      if (event.dataTransfer) {
+        event.dataTransfer.setData("application/x-schedule-user", String(userId));
+        event.dataTransfer.setData("text/plain", String(userId));
+        event.dataTransfer.effectAllowed = "copyMove";
+      }
+    },
+    [canModifyWeek],
+  );
+
+  const handleAssignmentCardDragEnd = useCallback(() => {
+    setDraggedUserId(null);
+    setDraggedAssignmentIds(null);
+    setDragHoverInstanceId(null);
+  }, []);
+
+  const cleanupMovedAssignments = useCallback(
+    async (assignmentIds: number[] | null | undefined) => {
+      if (!weekId || !assignmentIds || assignmentIds.length === 0) {
+        return;
+      }
+      const uniqueIds = Array.from(new Set(assignmentIds.filter((id) => Number.isFinite(id))));
+      for (const assignmentId of uniqueIds) {
+        try {
+          await deleteAssignmentMutation.mutateAsync({ assignmentId, weekId });
+        } catch {
+          // Ignore cleanup errors; assignments can still be removed manually if needed.
+        }
+      }
+    },
+    [deleteAssignmentMutation, weekId],
+  );
 
   useEffect(() => {
     autoAssignMutation.reset();
@@ -1407,6 +1555,22 @@ const BuilderPage = () => {
       return;
     }
 
+    if (pendingAssignmentRoleRequirement) {
+      const matchingOption = applicableAssignmentRoleOptions.find((option) =>
+        doesOptionMatchRequirement(option, pendingAssignmentRoleRequirement),
+      );
+      if (matchingOption) {
+        setAssignmentRoleOption(matchingOption);
+        if (matchingOption.isCustomEntry) {
+          setAssignmentCustomRoleName("");
+        } else {
+          setAssignmentCustomRoleName(matchingOption.roleName);
+        }
+        setPendingAssignmentRoleRequirement(null);
+        return;
+      }
+    }
+
     setAssignmentRoleOption((current) => {
       if (current && applicableAssignmentRoleOptions.some((option) => option.value === current.value)) {
         return current;
@@ -1419,7 +1583,7 @@ const BuilderPage = () => {
       }
       return firstOption;
     });
-  }, [assignmentModal.opened, applicableAssignmentRoleOptions]);
+  }, [assignmentModal.opened, applicableAssignmentRoleOptions, pendingAssignmentRoleRequirement]);
 
   const availabilityByUserId = useMemo(() => {
     const map = new Map<number, AvailabilityWithMinutes[]>();
@@ -1554,25 +1718,58 @@ const BuilderPage = () => {
     ],
   );
 
-  const renderShiftTooltip = useCallback((instance: ShiftInstance) => {
-    const title = instance.template?.name ?? instance.shiftType?.name ?? "Shift";
-    const dateLabel = dayjs(instance.date).format("ddd, MMM D");
-    const timeLabel = formatShiftTimeRange(instance.timeStart, instance.timeEnd) || "Any time";
-    const assignedCount = instance.assignments?.length ?? 0;
-    const capacity = instance.capacity ?? null;
-    return (
-      <Stack gap={2} maw={260}>
-        <Text fw={600}>{title}</Text>
-        <Text size="xs" c="dimmed">
-          {dateLabel} {"\u2022"} {timeLabel}
-        </Text>
-        <Text size="xs">
-          Assigned: {assignedCount}
-          {capacity != null ? ` / Capacity: ${capacity}` : ""}
-        </Text>
-      </Stack>
-    );
-  }, []);
+  const renderShiftTooltip = useCallback(
+    (instance: ShiftInstance) => {
+      const title = instance.template?.name ?? instance.shiftType?.name ?? "Shift";
+      const dateLabel = dayjs(instance.date).format("ddd, MMM D");
+      const timeLabel = formatShiftTimeRange(instance.timeStart, instance.timeEnd) || "Any time";
+      const assignedCount = instance.assignments?.length ?? 0;
+      const capacity = instance.capacity ?? null;
+      const roleDefinitions = getRoleDefinitionsForInstance(instance);
+      const roleSummary = roleDefinitions
+        .map((definition, index) => {
+          const label = definition.role?.trim() && definition.role.trim().length > 0 ? definition.role.trim() : "Staff";
+          const required =
+            definition.required == null
+              ? null
+              : definition.required <= 0
+                ? 0
+                : Math.max(1, Number(definition.required));
+          const filled = countAssignmentsForRole(instance, definition);
+          const key = `${label}-${definition.shiftRoleId ?? index}`;
+          if (required == null) {
+            return { key, text: `${label}: ${filled}` };
+          }
+          return { key, text: `${label}: ${filled}/${required}` };
+        })
+        .filter((entry) => entry.text.trim().length > 0);
+      return (
+        <Stack gap={4} maw={280}>
+          <Text fw={600}>{title}</Text>
+          <Text size="xs" c="dimmed">
+            {dateLabel} {"\u2022"} {timeLabel}
+          </Text>
+          <Text size="xs">
+            Assigned: {assignedCount}
+            {capacity != null ? ` / Capacity: ${capacity}` : ""}
+          </Text>
+          {roleSummary.length > 0 ? (
+            <Stack gap={2}>
+              <Text size="xs" fw={600}>
+                Roles
+              </Text>
+              {roleSummary.map((entry) => (
+                <Text key={entry.key} size="xs">
+                  {entry.text}
+                </Text>
+              ))}
+            </Stack>
+          ) : null}
+        </Stack>
+      );
+    },
+    [countAssignmentsForRole, getRoleDefinitionsForInstance],
+  );
 
   const getInstanceHighlightStyles = useCallback(
     (instance: ShiftInstance, options?: { roleLabel?: string }) => {
@@ -1613,14 +1810,18 @@ const BuilderPage = () => {
   );
 
   const attemptAutoAssign = useCallback(
-    async (instance: ShiftInstance, userId: number | null | undefined) => {
+    async (
+      instance: ShiftInstance,
+      userId: number | null | undefined,
+      options?: { preferredRequirement?: RoleRequirementInput | null },
+    ) => {
       if (!canModifyWeek || !weekId || userId == null || !Number.isFinite(userId)) {
         return { status: "needs_modal" as const };
       }
       if (!isUserAvailableForShift(userId, instance)) {
         return { status: "needs_modal" as const };
       }
-      const roleMatch = findRoleAssignmentForUser(instance, userId);
+      const roleMatch = findRoleAssignmentForUser(instance, userId, options?.preferredRequirement);
       if (!roleMatch) {
         return { status: "needs_modal" as const };
       }
@@ -1847,17 +2048,27 @@ const BuilderPage = () => {
     setAssignmentRequiresOverride(false);
     setAssignmentShowUnavailable(false);
     setPendingAssignmentUserId(null);
+    setPendingAssignmentRoleRequirement(null);
+    setPendingMoveAssignmentIds(null);
     setDraggedUserId(null);
+    setDraggedAssignmentIds(null);
     setDragHoverInstanceId(null);
     assignMutation.reset();
   };
 
   const openAssignmentForShift = useCallback(
-    async (shift: ShiftInstance, options?: { userId?: number | null }) => {
+    async (
+      shift: ShiftInstance,
+      options?: { userId?: number | null; moveAssignmentIds?: number[] | null; preferredRequirement?: RoleRequirementInput | null },
+    ) => {
       const userId = options?.userId;
+      const moveAssignmentIds = options?.moveAssignmentIds ?? null;
+      const preferredRequirement = options?.preferredRequirement ?? null;
       if (typeof userId === "number" && Number.isFinite(userId)) {
-        const result = await attemptAutoAssign(shift, userId);
+        const result = await attemptAutoAssign(shift, userId, { preferredRequirement });
         if (result.status === "success") {
+          await cleanupMovedAssignments(moveAssignmentIds);
+          setPendingMoveAssignmentIds(null);
           setAssignmentError(null);
           return;
         }
@@ -1870,9 +2081,11 @@ const BuilderPage = () => {
       } else {
         setAssignmentError(null);
       }
+      setPendingMoveAssignmentIds(moveAssignmentIds);
+      setPendingAssignmentRoleRequirement(preferredRequirement);
       handleOpenAssignment(shift);
     },
-    [attemptAutoAssign, handleOpenAssignment],
+    [attemptAutoAssign, cleanupMovedAssignments, handleOpenAssignment],
   );
 
   const getUserIdFromDragEvent = useCallback(
@@ -1891,7 +2104,7 @@ const BuilderPage = () => {
   );
 
   const handleDropOnShift = useCallback(
-    (event: DragEvent<HTMLElement>, instance: ShiftInstance) => {
+    (event: DragEvent<HTMLElement>, instance: ShiftInstance, options?: { preferredRequirement?: RoleRequirementInput | null }) => {
       if (!canModifyWeek) {
         return;
       }
@@ -1901,10 +2114,13 @@ const BuilderPage = () => {
       }
       event.preventDefault();
       setDragHoverInstanceId(null);
-      void openAssignmentForShift(instance, { userId });
+      const moveAssignmentIds = draggedAssignmentIds;
+      const preferredRequirement = options?.preferredRequirement ?? null;
+      void openAssignmentForShift(instance, { userId, moveAssignmentIds, preferredRequirement });
+      setDraggedAssignmentIds(null);
       setDraggedUserId(null);
     },
-    [canModifyWeek, getUserIdFromDragEvent, openAssignmentForShift],
+    [canModifyWeek, draggedAssignmentIds, getUserIdFromDragEvent, openAssignmentForShift],
   );
 
   const handleInstanceDragOver = useCallback(
@@ -1974,6 +2190,7 @@ const BuilderPage = () => {
       }
     }
 
+    const moveAssignmentIds = pendingMoveAssignmentIds;
     try {
       setAssignmentError(null);
       await assignMutation.mutateAsync({
@@ -1988,6 +2205,8 @@ const BuilderPage = () => {
         ],
         weekId,
       });
+      await cleanupMovedAssignments(moveAssignmentIds);
+      setPendingMoveAssignmentIds(null);
       handleCloseAssignment();
     } catch (error) {
       const axiosError = error as AxiosError<{ error?: string; message?: string }>;
@@ -2020,8 +2239,10 @@ const BuilderPage = () => {
     await lockWeekMutation.mutateAsync(weekId);
   };
 
-  const handlePublishWeek = async () => {
-    if (!weekId) return;
+  const executePublishWeek = useCallback(async () => {
+    if (!weekId) {
+      return;
+    }
     setPublishError(null);
     setPublishViolations(null);
     try {
@@ -2035,7 +2256,28 @@ const BuilderPage = () => {
         setPublishViolations(violations);
       }
     }
-  };
+  }, [publishWeekMutation, weekId]);
+
+  const handlePublishWeek = useCallback(() => {
+    if (!weekId) {
+      return;
+    }
+    if (hasVolunteerWarning && !publishWarningsAcknowledged) {
+      setPublishWarningModalOpen(true);
+      return;
+    }
+    void executePublishWeek();
+  }, [executePublishWeek, hasVolunteerWarning, publishWarningsAcknowledged, weekId]);
+
+  const handleConfirmPublishWarnings = useCallback(() => {
+    setPublishWarningModalOpen(false);
+    setPublishWarningsAcknowledged(true);
+    void executePublishWeek();
+  }, [executePublishWeek]);
+
+  const handleDismissPublishWarnings = useCallback(() => {
+    setPublishWarningModalOpen(false);
+  }, []);
 
   const handleAutoAssign = async () => {
     if (!weekId) {
@@ -2075,6 +2317,7 @@ const BuilderPage = () => {
     if (!primary) {
       return null;
     }
+    const assignmentIds = groupAssignments.map((assignment) => assignment.id);
 
     const { background, text } = getUserColor(primary.userId ?? null);
     const name = getUserDisplayName(primary);
@@ -2082,6 +2325,9 @@ const BuilderPage = () => {
     const secondaryColor =
       text.toLowerCase() === "#ffffff" ? "rgba(255, 255, 255, 0.78)" : lightenColor(text, 0.35);
     const removeDisabled = !allowManage || deleteAssignmentMutation.isPending || !canModifyWeek;
+    const assignmentUserId = primary.userId ?? null;
+    const isSelected = assignmentUserId != null && assignmentUserId === selectedRosterUserId;
+    const isDragging = assignmentUserId != null && draggedUserId === assignmentUserId;
 
     return (
       <Card
@@ -2089,7 +2335,26 @@ const BuilderPage = () => {
         radius="lg"
         withBorder
         padding="md"
-        style={{ ...styles.container, color: text }}
+        style={{
+          ...styles.container,
+          color: text,
+          cursor: canModifyWeek && assignmentUserId != null ? "grab" : "pointer",
+          opacity: isDragging ? 0.7 : 1,
+          outline: isSelected ? `2px solid ${palette.plumDark}` : "none",
+          boxShadow: isSelected ? `0 6px 18px rgba(82, 36, 199, 0.3)` : styles.container.boxShadow,
+        }}
+        onClick={() => handleAssignmentCardSelect(primary.userId)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            handleAssignmentCardSelect(primary.userId);
+          }
+        }}
+        draggable={Boolean(canModifyWeek && primary.userId != null)}
+        onDragStart={(event) => handleAssignmentCardDragStart(event, primary.userId, assignmentIds)}
+        onDragEnd={handleAssignmentCardDragEnd}
+        tabIndex={0}
+        role="button"
       >
         <Box style={styles.overlay} />
         <Stack gap={8} align="center" style={{ width: "100%", position: "relative", zIndex: 1 }}>
@@ -2182,7 +2447,9 @@ const BuilderPage = () => {
                   <Box
                     onDragOver={(event) => handleInstanceDragOver(event, instance.id)}
                     onDragLeave={(event) => handleInstanceDragLeave(event, instance.id)}
-                    onDrop={(event) => handleDropOnShift(event, instance)}
+                    onDrop={(event) =>
+                      handleDropOnShift(event, instance, { preferredRequirement: roleRequirement })
+                    }
                     style={{
                       width: "100%",
                       border: dropActive ? `1px dashed ${palette.plumDark}` : undefined,
@@ -2207,7 +2474,12 @@ const BuilderPage = () => {
                             ? `${selectedRosterUserName} does not have the ${roleLabel} role.`
                             : undefined
                         }
-                        onClick={() => void openAssignmentForShift(instance, { userId: selectedRosterUserId })}
+                        onClick={() =>
+                          void openAssignmentForShift(instance, {
+                            userId: selectedRosterUserId,
+                            preferredRequirement: roleRequirement,
+                          })
+                        }
                       >
                         {formatAssignButtonLabel(label)}
                       </Button>
@@ -3122,6 +3394,37 @@ const BuilderPage = () => {
         defaultDate={weekStart.toDate()}
         templates={templatesQuery.data ?? []}
       />
+
+      <Modal opened={publishWarningModalOpen} onClose={handleDismissPublishWarnings} title="Publish with volunteer shortfalls?">
+        <Stack>
+          <Alert color="yellow" title="Some volunteers are under the weekly minimum">
+            <Stack gap={4}>
+              <Text size="sm">
+                Publishing now keeps these accommodated volunteers below the target number of shifts for this week.
+                You can continue assigning them later if needed.
+              </Text>
+              <Stack gap={2}>
+                {volunteerShortfallViolations.map((violation) => (
+                  <Text
+                    key={`${violation.code}-${(violation.meta as { userId?: number } | undefined)?.userId ?? violation.message}`}
+                    size="sm"
+                  >
+                    {"\u2022"} {violation.message}
+                  </Text>
+                ))}
+              </Stack>
+            </Stack>
+          </Alert>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={handleDismissPublishWarnings} disabled={publishWeekMutation.isPending}>
+              Review schedule
+            </Button>
+            <Button color="yellow" onClick={handleConfirmPublishWarnings} loading={publishWeekMutation.isPending}>
+              Publish anyway
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <Modal opened={assignmentModal.opened} onClose={handleCloseAssignment} title="Assign staff">
         <Stack>

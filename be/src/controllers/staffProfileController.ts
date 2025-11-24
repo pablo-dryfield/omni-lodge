@@ -3,6 +3,7 @@ import { DataType } from 'sequelize-typescript';
 import StaffProfile from '../models/StaffProfile.js';
 import User from '../models/User.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
+import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 
 const STAFF_TYPE_OPTIONS: Array<StaffProfile['staffType']> = ['volunteer', 'long_term'];
 
@@ -239,5 +240,36 @@ export const deleteStaffProfile = async (req: Request, res: Response): Promise<v
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);
+  }
+};
+
+export const getMyStaffProfile = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.authContext?.id;
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const profile = await StaffProfile.findByPk(userId);
+    if (!profile) {
+      res.status(200).json({
+        userId,
+        staffType: null,
+        livesInAccom: false,
+        active: false,
+      });
+      return;
+    }
+
+    res.status(200).json({
+      userId: profile.userId,
+      staffType: profile.staffType,
+      livesInAccom: profile.livesInAccom,
+      active: profile.active,
+    });
+  } catch (error) {
+    const errorMessage = (error as ErrorWithMessage).message;
+    res.status(500).json({ error: errorMessage });
   }
 };

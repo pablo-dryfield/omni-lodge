@@ -73,6 +73,8 @@ router.get(
   staffProfileController.listStaffProfiles,
 );
 
+router.get('/me', authMiddleware, staffProfileController.getMyStaffProfile);
+
 router.get(
   '/:userId',
   authMiddleware,
@@ -111,4 +113,3 @@ router.delete(
 );
 
 export default router;
-
