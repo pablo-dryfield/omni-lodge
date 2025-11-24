@@ -13,7 +13,7 @@ import {
 
 const router = Router();
 
-router.get('/', authMiddleware, requireRoles(MANAGER_ROLES), listShiftRoles);
+router.get('/', listShiftRoles);
 router.post('/', authMiddleware, requireRoles(MANAGER_ROLES), createShiftRole);
 router.patch('/:id', authMiddleware, requireRoles(MANAGER_ROLES), updateShiftRole);
 router.delete('/:id', authMiddleware, requireRoles(MANAGER_ROLES), deleteShiftRole);
@@ -22,4 +22,3 @@ router.get('/assignments', authMiddleware, requireRoles(MANAGER_ROLES), listUser
 router.put('/assignments/:userId', authMiddleware, requireRoles(MANAGER_ROLES), updateUserShiftRoles);
 
 export default router;
-
