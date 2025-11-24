@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActionIcon, Alert, Box, Button, Card, Group, SimpleGrid, Stack, Switch, Text, Title } from "@mantine/core";
 import { TimeInput } from "@mantine/dates";
 import dayjs from "dayjs";
@@ -6,6 +6,7 @@ import isoWeek from "dayjs/plugin/isoWeek";
 import weekday from "dayjs/plugin/weekday";
 import type { AxiosError } from "axios";
 import { useEnsureWeek, useAvailability, useSaveAvailability, getUpcomingWeeks } from "../../api/scheduling";
+import { useMyStaffProfile } from "../../api/staffProfiles";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import type { AvailabilityPayload } from "../../types/scheduling";
 import { useAppSelector } from "../../store/hooks";
@@ -39,6 +40,32 @@ const AvailabilityPage = () => {
   const weekId = ensureWeekQuery.data?.week?.id ?? null;
   const availabilityQuery = useAvailability(weekId);
   const saveAvailability = useSaveAvailability();
+  const myStaffProfileQuery = useMyStaffProfile();
+
+  const weekStart = useMemo(() => {
+    if (!selectedWeek) {
+      return null;
+    }
+    const [year, weekPart] = selectedWeek.split("-W");
+    return dayjs()
+      .year(Number(year))
+      .isoWeek(Number(weekPart))
+      .startOf("isoWeek");
+  }, [selectedWeek]);
+
+  const defaultAvailabilityStatus = useMemo(
+    () => (myStaffProfileQuery.data?.livesInAccom ? "available" : "unavailable"),
+    [myStaffProfileQuery.data?.livesInAccom],
+  );
+
+  const getDefaultEntryState = useCallback(
+    (): AvailabilityEntryState => ({
+      status: defaultAvailabilityStatus,
+      startTime: null,
+      endTime: null,
+    }),
+    [defaultAvailabilityStatus],
+  );
 
   const cloneEntries = (source: Record<string, AvailabilityEntryState>) =>
     Object.fromEntries(Object.entries(source).map(([key, value]) => [key, { ...value }]));
@@ -46,11 +73,37 @@ const AvailabilityPage = () => {
   const cloneTimeframes = (source: Record<string, boolean>) => ({ ...source });
 
 
+  const buildDefaultEntries = useCallback(() => {
+    if (!weekStart) {
+      return { entryMap: {}, visibilityMap: {} };
+    }
+    const entryMap: Record<string, AvailabilityEntryState> = {};
+    const visibilityMap: Record<string, boolean> = {};
+    Array.from({ length: 7 }).forEach((_, index) => {
+      const day = weekStart.add(index, "day").format("YYYY-MM-DD");
+      entryMap[day] = getDefaultEntryState();
+      visibilityMap[day] = false;
+    });
+    return { entryMap, visibilityMap };
+  }, [getDefaultEntryState, weekStart]);
+
+  const applyDefaultEntries = useCallback(() => {
+    const { entryMap, visibilityMap } = buildDefaultEntries();
+    if (Object.keys(entryMap).length === 0) {
+      return;
+    }
+    setEntries(entryMap);
+    setTimeframeVisible(visibilityMap);
+    setInitialEntries(cloneEntries(entryMap));
+    setInitialTimeframes(cloneTimeframes(visibilityMap));
+  }, [buildDefaultEntries]);
+
   useEffect(() => {
-    if (availabilityQuery.data) {
+    const hasEntries = (availabilityQuery.data?.length ?? 0) > 0;
+    if (hasEntries) {
       const entryMap: Record<string, AvailabilityEntryState> = {};
       const visibilityMap: Record<string, boolean> = {};
-      availabilityQuery.data.forEach((entry) => {
+      availabilityQuery.data?.forEach((entry) => {
         entryMap[entry.day] = {
           status: entry.status,
           startTime: entry.startTime ?? null,
@@ -62,12 +115,28 @@ const AvailabilityPage = () => {
       setTimeframeVisible(visibilityMap);
       setInitialEntries(cloneEntries(entryMap));
       setInitialTimeframes(cloneTimeframes(visibilityMap));
-      const hasData = availabilityQuery.data.length > 0;
-      setIsLocked(hasData);
-      setIsEditing(!hasData);
+      setIsLocked(true);
+      setIsEditing(false);
+      setSaveError(null);
+      return;
+    }
+    if (
+      !availabilityQuery.isFetching &&
+      myStaffProfileQuery.isSuccess &&
+      weekStart
+    ) {
+      applyDefaultEntries();
+      setIsLocked(false);
+      setIsEditing(true);
       setSaveError(null);
     }
-  }, [availabilityQuery.data]);
+  }, [
+    applyDefaultEntries,
+    availabilityQuery.data,
+    availabilityQuery.isFetching,
+    myStaffProfileQuery.isSuccess,
+    weekStart,
+  ]);
 
   useEffect(() => {
     setEntries({});
@@ -77,17 +146,6 @@ const AvailabilityPage = () => {
     setIsLocked(false);
     setIsEditing(true);
     setSaveError(null);
-  }, [selectedWeek]);
-
-  const weekStart = useMemo(() => {
-    if (!selectedWeek) {
-      return null;
-    }
-    const [year, weekPart] = selectedWeek.split("-W");
-    return dayjs()
-      .year(Number(year))
-      .isoWeek(Number(weekPart))
-      .startOf("isoWeek");
   }, [selectedWeek]);
 
   const deadline = weekStart
@@ -116,7 +174,7 @@ const AvailabilityPage = () => {
       return;
     }
     setEntries((current) => {
-      const existing = current[day] ?? { status: "available" as const, startTime: null, endTime: null };
+      const existing = current[day] ?? getDefaultEntryState();
       const nextEntry: AvailabilityEntryState =
         status === "unavailable"
           ? { status, startTime: null, endTime: null }
@@ -139,14 +197,17 @@ const AvailabilityPage = () => {
     if (!isEditing) {
       return;
     }
-    setEntries((current) => ({
-      ...current,
-      [day]: {
-        status: current[day]?.status ?? "available",
-        startTime: key === "startTime" ? value : current[day]?.startTime ?? null,
-        endTime: key === "endTime" ? value : current[day]?.endTime ?? null,
-      },
-    }));
+    setEntries((current) => {
+      const fallback = getDefaultEntryState();
+      return {
+        ...current,
+        [day]: {
+          status: current[day]?.status ?? fallback.status,
+          startTime: key === "startTime" ? value : current[day]?.startTime ?? fallback.startTime,
+          endTime: key === "endTime" ? value : current[day]?.endTime ?? fallback.endTime,
+        },
+      };
+    });
   };
 
   const handleToggleTimeframe = (day: string, visible: boolean) => {
@@ -159,7 +220,7 @@ const AvailabilityPage = () => {
     }));
 
     setEntries((current) => {
-      const entry = current[day] ?? { status: "available" as const, startTime: null, endTime: null };
+      const entry = current[day] ?? getDefaultEntryState();
       return {
         ...current,
         [day]: visible
@@ -183,7 +244,7 @@ const AvailabilityPage = () => {
       scheduleWeekId: weekId,
       entries: Array.from({ length: 7 }).map((_, index) => {
         const day = weekStart.add(index, "day").format("YYYY-MM-DD");
-        const current = entries[day] ?? { status: "available" as const };
+          const current = entries[day] ?? { status: defaultAvailabilityStatus };
         const visible = timeframeVisible[day] ?? Boolean(current.startTime || current.endTime);
         return {
           day,
