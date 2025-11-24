@@ -91,6 +91,19 @@ export function parseWeekParam(weekParam?: string | null): WeekIdentifier {
   return { year: target.isoWeekYear(), isoWeek: target.isoWeek() };
 }
 
+export async function listScheduleWeeks(options?: { limit?: number }): Promise<ScheduleWeek[]> {
+  const queryOptions: { order: Array<[string, string]>; limit?: number } = {
+    order: [
+      ['year', 'ASC'],
+      ['isoWeek', 'ASC'],
+    ],
+  };
+  if (options?.limit && Number.isFinite(options.limit) && options.limit > 0) {
+    queryOptions.limit = Math.floor(options.limit);
+  }
+  return ScheduleWeek.findAll(queryOptions);
+}
+
 export type ScheduleViolation = {
   code: string;
   message: string;
