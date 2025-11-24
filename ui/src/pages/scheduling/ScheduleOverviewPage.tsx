@@ -12,8 +12,9 @@ import {
   getUpcomingWeeks,
   useEnsureWeek,
   useShiftInstances,
+  useScheduleWeeks,
 } from "../../api/scheduling";
-import type { ShiftAssignment, ShiftInstance } from "../../types/scheduling";
+import type { ShiftAssignment, ShiftInstance, ScheduleWeek } from "../../types/scheduling";
 
 dayjs.extend(isoWeek);
 
@@ -383,9 +384,12 @@ const ensureIsoWeekString = (value: Dayjs | string) => {
   return `${year}-W${week.toString().padStart(2, "0")}`;
 };
 
-const parseIsoWeekStart = (value: string | null | undefined): Dayjs | null => {
+const parseIsoWeekStart = (value: string | Dayjs | null | undefined): Dayjs | null => {
   if (!value) {
     return null;
+  }
+  if (dayjs.isDayjs(value)) {
+    return value.startOf("isoWeek");
   }
   const parsed = dayjs(value, "GGGG-[W]WW", true);
   return parsed.isValid() ? parsed.startOf("isoWeek") : null;
@@ -431,62 +435,102 @@ const formatWeekValue = (value: string | null | undefined) => {
 
 const ScheduleOverviewPage = () => {
   const isMobile = useMediaQuery("(max-width: 768px)");
-  const [weekOptions, initialWeekValue] = useMemo(() => {
-    const options = getUpcomingWeeks(6);
-    const initial = options[0]?.value ?? dayjs().format("GGGG-[W]WW");
-    return [options, initial] as const;
-  }, []);
+  const [selectedWeek, setSelectedWeek] = useState<string>("");
+  const scheduleWeeksQuery = useScheduleWeeks({ limit: 120 });
+  const weekOptions = useMemo(() => {
+    const optionMap = new Map<string, { value: string; label: string; sortKey: number }>();
+    const addWeekOption = (value: string | Dayjs | null | undefined) => {
+      if (!value) {
+        return;
+      }
+      const normalized = ensureIsoWeekString(value);
+      if (optionMap.has(normalized)) {
+        return;
+      }
+      const start = parseIsoWeekStart(normalized);
+      if (!start) {
+        return;
+      }
+      optionMap.set(normalized, {
+        value: normalized,
+        label: formatScheduleWeekLabel(start.isoWeekYear(), start.isoWeek()),
+        sortKey: start.valueOf(),
+      });
+    };
+    const existingWeeks = (scheduleWeeksQuery.data ?? []) as ScheduleWeek[];
+    let latestStart: Dayjs | null = null;
+    existingWeeks.forEach((weekRecord) => {
+      const normalizedValue = ensureIsoWeekString(
+        `${weekRecord.year}-W${weekRecord.isoWeek.toString().padStart(2, "0")}`,
+      );
+      addWeekOption(normalizedValue);
+      const start = parseIsoWeekStart(normalizedValue);
+      if (start && (!latestStart || start.isAfter(latestStart))) {
+        latestStart = start;
+      }
+    });
+    const currentStart = dayjs().startOf("isoWeek");
+    const futureBase: Dayjs = latestStart ?? currentStart;
+    for (let offset = 0; offset < 12; offset += 1) {
+      addWeekOption(futureBase.add(offset, "week"));
+    }
+    return Array.from(optionMap.values())
+      .sort((a, b) => a.sortKey - b.sortKey)
+      .map(({ value, label }) => ({ value, label }));
+  }, [scheduleWeeksQuery.data]);
 
-  const [selectedWeek, setSelectedWeek] = useState(initialWeekValue);
+  useEffect(() => {
+    if (!weekOptions.length) {
+      return;
+    }
+    if (selectedWeek && weekOptions.some((option) => option.value === selectedWeek)) {
+      return;
+    }
+    const nextWeekValue = ensureIsoWeekString(dayjs().add(1, "week"));
+    const currentWeekValue = ensureIsoWeekString(dayjs());
+    const fallback =
+      weekOptions.find((option) => option.value === nextWeekValue)?.value ??
+      weekOptions.find((option) => option.value === currentWeekValue)?.value ??
+      weekOptions[weekOptions.length - 1]?.value ??
+      weekOptions[0]?.value ??
+      "";
+    if (fallback) {
+      setSelectedWeek(fallback);
+    }
+  }, [weekOptions, selectedWeek]);
 
-  const ensureWeekQuery = useEnsureWeek(selectedWeek, { allowGenerate: false, enabled: true });
+  const ensureWeekQuery = useEnsureWeek(selectedWeek || null, { allowGenerate: false, enabled: Boolean(selectedWeek) });
   const weekId = ensureWeekQuery.data?.week?.id ?? null;
   const shiftInstancesQuery = useShiftInstances(weekId);
   const shiftInstances = useMemo(() => shiftInstancesQuery.data ?? [], [shiftInstancesQuery.data]);
-  const previousWeekValue = useMemo(() => {
-    const start = parseIsoWeekStart(selectedWeek);
-    if (!start) {
-      return null;
-    }
-    const previous = start.subtract(1, "week");
-    return ensureIsoWeekString(previous);
-  }, [selectedWeek]);
-  const previousWeekQuery = useEnsureWeek(previousWeekValue, {
-    allowGenerate: false,
-    enabled: Boolean(previousWeekValue),
-  });
-  const canNavigateBackward = Boolean(previousWeekQuery.data?.week);
-  const canNavigateForward = useMemo(() => {
-    const start = parseIsoWeekStart(selectedWeek);
-    if (!start) {
-      return false;
-    }
-    const currentStart = dayjs().startOf("isoWeek");
-    const diff = start.diff(currentStart, "week");
-    return diff < 1;
-  }, [selectedWeek]);
+  const weekIndex = useMemo(
+    () => weekOptions.findIndex((option) => option.value === selectedWeek),
+    [weekOptions, selectedWeek],
+  );
+  const canNavigateBackward = weekIndex > 0;
+  const canNavigateForward = weekIndex >= 0 && weekIndex < weekOptions.length - 1;
 
   const handleNavigateWeek = useCallback(
     (direction: -1 | 1) => {
-      const [year, weekPart] = selectedWeek.split("-W");
-      const adjusted = dayjs().year(Number(year)).isoWeek(Number(weekPart)).add(direction, "week");
       if (direction === -1 && !canNavigateBackward) {
         return;
       }
       if (direction === 1 && !canNavigateForward) {
         return;
       }
-      setSelectedWeek(ensureIsoWeekString(adjusted));
+      if (weekIndex === -1) {
+        const adjusted = dayjs(selectedWeek || undefined).add(direction, "week");
+        setSelectedWeek(ensureIsoWeekString(adjusted));
+        return;
+      }
+      const nextIndex = weekIndex + direction;
+      if (nextIndex < 0 || nextIndex >= weekOptions.length) {
+        return;
+      }
+      setSelectedWeek(weekOptions[nextIndex].value);
     },
-    [selectedWeek, canNavigateBackward, canNavigateForward],
+    [selectedWeek, canNavigateBackward, canNavigateForward, weekIndex, weekOptions],
   );
-
-  useEffect(() => {
-    if (!selectedWeek) {
-      const fallback = weekOptions[0]?.value ?? dayjs().format("GGGG-[W]WW");
-      setSelectedWeek(fallback);
-    }
-  }, [selectedWeek, weekOptions]);
 
   const weekStart = useMemo(() => {
     const [year, weekPart] = selectedWeek.split("-W");
@@ -1216,7 +1260,7 @@ const ScheduleOverviewPage = () => {
             </Button>
             <Box style={weekSelectorWrapperStyle}>
               <WeekSelector
-                value={selectedWeek}
+                value={selectedWeek || null}
                 weeks={weekOptions}
                 onChange={setSelectedWeek}
                 selectProps={{
@@ -1243,6 +1287,12 @@ const ScheduleOverviewPage = () => {
           </Group>
         </Stack>
       </Card>
+
+      {scheduleWeeksQuery.isError ? (
+        <Alert color="red" variant="light" radius="md" title="Unable to load available weeks">
+          <Text size="sm">{(scheduleWeeksQuery.error as Error).message}</Text>
+        </Alert>
+      ) : null}
 
       {error ? (
         <Alert color="red" variant="light" radius="md" title="Unable to load schedule">

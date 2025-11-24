@@ -36,7 +36,7 @@ const WeekSelector = ({
       })()
     : null;
 
-  const { styles: injectedStyles, ...restSelectProps } = selectProps ?? {};
+  const { styles: injectedStyles, searchable: searchableOverride, ...restSelectProps } = selectProps ?? {};
 
   const baseStyles = {
     input: { textAlign: "center" },
@@ -66,7 +66,7 @@ const WeekSelector = ({
         placeholder="Select ISO week"
         value={value ?? undefined}
         onChange={(next) => next && onChange(next)}
-        searchable
+        searchable={searchableOverride ?? false}
         nothingFoundMessage="No weeks"
         w="100%"
         {...restSelectProps}
@@ -77,4 +77,3 @@ const WeekSelector = ({
 };
 
 export default WeekSelector;
-

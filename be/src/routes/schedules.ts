@@ -4,6 +4,7 @@ import { requireRoles } from '../middleware/authorizationMiddleware.js';
 import { MANAGER_ROLES } from './schedulingRoles.js';
 import {
   generateWeek,
+  listScheduleWeeks,
   getWeekSummary,
   lockWeek,
   publishWeek,
@@ -52,6 +53,17 @@ router.post('/weeks/generate', authMiddleware, requireRoles(MANAGER_ROLES), asyn
     const autoSpawn = autoSpawnParam == null ? true : !['false', '0', 'no'].includes(autoSpawnParam);
     const result = await generateWeek({ week: weekParam, actorId: getActorId(req), autoSpawn });
     res.json(result);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.get('/weeks', authMiddleware, async (req, res) => {
+  try {
+    const limitParam = typeof req.query.limit === 'string' ? Number(req.query.limit) : null;
+    const limit = Number.isFinite(limitParam) && limitParam != null ? limitParam : undefined;
+    const weeks = await listScheduleWeeks({ limit });
+    res.json(weeks);
   } catch (error) {
     res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
   }

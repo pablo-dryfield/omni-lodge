@@ -10,6 +10,7 @@ import type {
   ReportsQuery,
   ScheduleExport,
   ScheduleWeekSummary,
+  ScheduleWeek,
   ShiftAssignment,
   ShiftInstance,
   ShiftInstancePayload,
@@ -33,6 +34,7 @@ type EnsureWeekResult = { week: ScheduleWeekSummary["week"] | null; created: boo
 const schedulingKeys = {
   base: schedulingBaseKey,
   weekSummary: (weekId: number) => [...schedulingBaseKey, "week", weekId] as const,
+  weeksList: (limit?: number | string) => [...schedulingBaseKey, "weeks", limit ?? "all"] as const,
   shiftTemplates: [...schedulingBaseKey, "templates"] as const,
   shiftTypes: [...schedulingBaseKey, "shift-types"] as const,
   shiftInstances: (weekId: number) => [...schedulingBaseKey, "instances", weekId] as const,
@@ -220,6 +222,17 @@ export const useAutoAssignWeek = () => {
     },
   });
 };
+
+export const useScheduleWeeks = (options?: { limit?: number }) =>
+  useQuery({
+    queryKey: schedulingKeys.weeksList(options?.limit ?? "all"),
+    queryFn: async () => {
+      const response = await axiosInstance.get("/schedules/weeks", {
+        params: options?.limit ? { limit: options.limit } : undefined,
+      });
+      return response.data as ScheduleWeek[];
+    },
+  });
 
 export type GenerateShiftInstancesSummary = {
   weekId: number;
@@ -552,3 +565,34 @@ export const getUpcomingWeeks = (count = 4, includeCurrent = true) => {
   });
 };
 
+export const getRecentWeeks = (options?: { pastCount?: number; futureCount?: number; includeCurrent?: boolean }) => {
+  const pastCount = options?.pastCount ?? 8;
+  const futureCount = options?.futureCount ?? 8;
+  const includeCurrent = options?.includeCurrent ?? true;
+  const base = dayjs().startOf("isoWeek");
+
+  const buildOption = (target: dayjs.Dayjs) => {
+    const year = target.isoWeekYear();
+    const week = target.isoWeek();
+    return {
+      value: `${year}-W${week.toString().padStart(2, "0")}`,
+      label: formatScheduleWeekLabel(year, week),
+      year,
+      week,
+    };
+  };
+
+  const weeks: Array<{ value: string; label: string; year: number; week: number }> = [];
+
+  for (let index = pastCount; index >= 1; index -= 1) {
+    weeks.push(buildOption(base.subtract(index, "week")));
+  }
+
+  const startOffset = includeCurrent ? 0 : 1;
+  const limit = Math.max(futureCount, 0);
+  for (let offset = startOffset; offset < limit + startOffset; offset += 1) {
+    weeks.push(buildOption(base.add(offset, "week")));
+  }
+
+  return weeks;
+};
