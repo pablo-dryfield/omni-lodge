@@ -43,6 +43,7 @@ const formatProfilePayload = (profile: StaffProfile & { user?: User | null }) =>
   const plain = profile.get({ plain: true }) as StaffProfile & { user?: User | null };
   const user = plain.user;
   const fullName = user ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() : '';
+  const profilePhotoUrl = user?.profilePhotoUrl ?? null;
 
   return {
     userId: plain.userId,
@@ -54,6 +55,7 @@ const formatProfilePayload = (profile: StaffProfile & { user?: User | null }) =>
     userName: fullName.length > 0 ? fullName : null,
     userEmail: user?.email ?? null,
     userStatus: user?.status ?? null,
+    profilePhotoUrl,
   };
 };
 
@@ -251,22 +253,28 @@ export const getMyStaffProfile = async (req: AuthenticatedRequest, res: Response
       return;
     }
 
-    const profile = await StaffProfile.findByPk(userId);
+    const profile = await StaffProfile.findByPk(userId, {
+      include: [{ model: User, as: 'user' }],
+    });
     if (!profile) {
+      const user = await User.findByPk(userId);
       res.status(200).json({
         userId,
         staffType: null,
         livesInAccom: false,
         active: false,
+        profilePhotoUrl: user?.profilePhotoUrl ?? null,
       });
       return;
     }
 
+    const profileJson = profile.get({ plain: true }) as StaffProfile & { user?: User | null };
     res.status(200).json({
       userId: profile.userId,
       staffType: profile.staffType,
       livesInAccom: profile.livesInAccom,
       active: profile.active,
+      profilePhotoUrl: profileJson.user?.profilePhotoUrl ?? null,
     });
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;

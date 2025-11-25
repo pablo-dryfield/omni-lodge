@@ -3,8 +3,15 @@ import * as userController from '../controllers/userController.js';
 import { check, param, validationResult } from 'express-validator';
 import authMiddleware from '../middleware/authMiddleware.js';
 import { authorizeModuleAction } from '../middleware/authorizationMiddleware.js';
+import multer from 'multer';
 
 const router: Router = express.Router();
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10 MB
+  },
+});
 
 const validateId = [
   param('id').isInt({ gt: 0 }).withMessage('ID must be a positive integer')
@@ -35,7 +42,7 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
   next();
 };
 
-router.post('/register', validateUserPOST, validate, userController.registerUser);
+router.post('/register', upload.single('profilePhoto'), validateUserPOST, validate, userController.registerUser);
 router.post('/login', validateUserLogin, validate, userController.loginUser);
 router.post('/logout', validate, userController.logoutUser);
 

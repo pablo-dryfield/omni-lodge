@@ -8,8 +8,10 @@ import UserType from '../models/UserType.js';
 import StaffProfile from '../models/StaffProfile.js';
 import ShiftRole from '../models/ShiftRole.js';
 import UserShiftRole from '../models/UserShiftRole.js';
+import { deleteProfilePhoto, storeProfilePhoto, StoreProfilePhotoResult } from '../services/profilePhotoStorageService.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { Env } from '../types/Env.js';
+import logger from '../utils/logger.js';
 
 const NAME_TO_SLUG: Record<string, string[]> = {
   guide: ['guide', 'pub-crawl-guide'],
@@ -56,9 +58,28 @@ const normalizeBoolean = (value: unknown, fallback = false): boolean => {
 };
 
 const normalizeRoleIds = (value: unknown): number[] => {
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return normalizeRoleIds(parsed);
+      }
+    } catch {
+      const csv = value
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+      if (csv.length > 0) {
+        return normalizeRoleIds(csv);
+      }
+    }
+    return [];
+  }
+
   if (!Array.isArray(value)) {
     return [];
   }
+
   return Array.from(
     new Set(
       value
@@ -66,6 +87,14 @@ const normalizeRoleIds = (value: unknown): number[] => {
         .filter((entry): entry is number => Number.isInteger(entry) && entry > 0),
     ),
   );
+};
+
+const normalizeOptionalString = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 };
 
 declare const process: {
@@ -82,6 +111,9 @@ function buildUserColumns() {
 }
 
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
+  const profilePhotoFile = req.file;
+  let uploadedPhotoPath: string | null = null;
+  let uploadedPhotoShouldCleanup = false;
   try {
     const sequelize = User.sequelize;
     if (!sequelize) {
@@ -96,7 +128,30 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
     let createdUser: User | null = null;
 
     await sequelize.transaction(async (transaction) => {
-      const { username, email, password, firstName, lastName } = req.body;
+      const {
+        username,
+        email,
+        password,
+        firstName,
+        lastName,
+        phone,
+        countryOfCitizenship,
+        dateOfBirth,
+        preferredPronouns,
+        emergencyContactName,
+        emergencyContactRelationship,
+        emergencyContactPhone,
+        emergencyContactEmail,
+        arrivalDate,
+        departureDate,
+        dietaryRestrictions,
+        allergies,
+        medicalNotes,
+        whatsappHandle,
+        facebookProfileUrl,
+        instagramProfileUrl,
+        discoverySource,
+      } = req.body;
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(password, salt);
       const userPayload = {
@@ -105,12 +160,67 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
         password: hashedPassword,
         firstName,
         lastName,
+        phone: normalizeOptionalString(phone),
+        countryOfCitizenship: normalizeOptionalString(countryOfCitizenship),
+        dateOfBirth: normalizeOptionalString(dateOfBirth),
+        preferredPronouns: normalizeOptionalString(preferredPronouns),
+        emergencyContactName: normalizeOptionalString(emergencyContactName),
+        emergencyContactRelationship: normalizeOptionalString(emergencyContactRelationship),
+        emergencyContactPhone: normalizeOptionalString(emergencyContactPhone),
+        emergencyContactEmail: normalizeOptionalString(emergencyContactEmail),
+        arrivalDate: normalizeOptionalString(arrivalDate),
+        departureDate: normalizeOptionalString(departureDate),
+        dietaryRestrictions: normalizeOptionalString(dietaryRestrictions),
+        allergies: normalizeOptionalString(allergies),
+        medicalNotes: normalizeOptionalString(medicalNotes),
+        whatsappHandle: normalizeOptionalString(whatsappHandle),
+        facebookProfileUrl: normalizeOptionalString(facebookProfileUrl),
+        instagramProfileUrl: normalizeOptionalString(instagramProfileUrl),
+        discoverySource: normalizeOptionalString(discoverySource),
       };
 
       const newUser = await User.create(userPayload, { transaction });
       createdUser = newUser;
 
       const shouldCreateStaffProfile = Boolean(staffType);
+      let profilePhotoPathValue: string | null = null;
+      let profilePhotoUrlValue: string | null = null;
+
+      if (profilePhotoFile) {
+        if (!shouldCreateStaffProfile) {
+          throw new Error('Staff type selection is required to upload a profile photo.');
+        }
+
+        let uploadResult: StoreProfilePhotoResult | null = null;
+        try {
+          uploadResult = await storeProfilePhoto({
+            userId: newUser.id,
+            originalName: profilePhotoFile.originalname,
+            mimeType: profilePhotoFile.mimetype,
+            data: profilePhotoFile.buffer,
+          });
+        } catch (error) {
+          logger.warn(`Failed to upload profile photo for user ${newUser.id}: ${(error as Error).message}`);
+        }
+
+        if (uploadResult) {
+          uploadedPhotoPath = uploadResult.relativePath;
+          uploadedPhotoShouldCleanup = true;
+          profilePhotoPathValue = uploadResult.relativePath;
+          profilePhotoUrlValue = uploadResult.driveWebViewLink ?? null;
+
+          await newUser.update(
+            {
+              profilePhotoPath: profilePhotoPathValue,
+              profilePhotoUrl: profilePhotoUrlValue,
+            },
+            { transaction },
+          );
+          newUser.profilePhotoPath = profilePhotoPathValue;
+          newUser.profilePhotoUrl = profilePhotoUrlValue;
+        }
+      }
+
       if (shouldCreateStaffProfile) {
         await StaffProfile.create(
           {
@@ -151,6 +261,8 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
       }
     });
 
+    uploadedPhotoShouldCleanup = false;
+
     if (!createdUser) {
       res.status(500).json([{ message: 'Unable to create user.' }]);
       return;
@@ -158,6 +270,9 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
 
     res.status(201).json([createdUser]);
   } catch (error) {
+    if (uploadedPhotoShouldCleanup && uploadedPhotoPath) {
+      await deleteProfilePhoto(uploadedPhotoPath).catch(() => {});
+    }
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);
   }
