@@ -7,9 +7,13 @@ import {
   AllowNull,
   DataType,
   Default,
+  ForeignKey,
+  BelongsTo,
 } from 'sequelize-typescript';
 import type VenueCompensationTerm from './VenueCompensationTerm.js';
 import type NightReportVenue from './NightReportVenue.js';
+import FinanceVendor from '../finance/models/FinanceVendor.js';
+import FinanceClient from '../finance/models/FinanceClient.js';
 
 @Table({
   timestamps: true,
@@ -49,6 +53,22 @@ export default class Venue extends Model {
   @AllowNull(true)
   @Column({ field: 'updated_at', type: DataType.DATE })
   declare updatedAt: Date | null;
+
+  @ForeignKey(() => FinanceVendor)
+  @AllowNull(true)
+  @Column({ field: 'finance_vendor_id', type: DataType.INTEGER })
+  declare financeVendorId: number | null;
+
+  @BelongsTo(() => FinanceVendor, { foreignKey: 'finance_vendor_id', as: 'financeVendor' })
+  declare financeVendor?: FinanceVendor | null;
+
+  @ForeignKey(() => FinanceClient)
+  @AllowNull(true)
+  @Column({ field: 'finance_client_id', type: DataType.INTEGER })
+  declare financeClientId: number | null;
+
+  @BelongsTo(() => FinanceClient, { foreignKey: 'finance_client_id', as: 'financeClient' })
+  declare financeClient?: FinanceClient | null;
 
   declare compensationTerms?: VenueCompensationTerm[];
 

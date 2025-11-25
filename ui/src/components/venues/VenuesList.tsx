@@ -8,6 +8,8 @@ import { createVenue, deleteVenue, fetchVenues, updateVenue } from "../../action
 import { removeEmptyKeys } from "../../utils/removeEmptyKeys";
 import { getChangedValues } from "../../utils/getChangedValues";
 import { MRT_ColumnDef } from "mantine-react-table";
+import { fetchFinanceVendors, fetchFinanceClients } from "../../actions/financeActions";
+import { selectFinanceVendors, selectFinanceClients } from "../../selectors/financeSelectors";
 
 const MODULE_SLUG = "venue-directory";
 
@@ -15,10 +17,24 @@ const VenuesList = () => {
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.venues)[0];
   const { loggedUserId } = useAppSelector((state) => state.session);
+  const financeVendors = useAppSelector(selectFinanceVendors);
+  const financeClients = useAppSelector(selectFinanceClients);
 
   useEffect(() => {
     dispatch(fetchVenues());
   }, [dispatch]);
+
+  useEffect(() => {
+    if (!financeVendors.data.length && !financeVendors.loading) {
+      dispatch(fetchFinanceVendors());
+    }
+  }, [dispatch, financeVendors.data.length, financeVendors.loading]);
+
+  useEffect(() => {
+    if (!financeClients.data.length && !financeClients.loading) {
+      dispatch(fetchFinanceClients());
+    }
+  }, [dispatch, financeClients.data.length, financeClients.loading]);
 
   const initialState = useMemo(
     () => ({
@@ -33,9 +49,54 @@ const VenuesList = () => {
     [],
   );
 
+  const vendorOptions = useMemo(
+    () =>
+      financeVendors.data.map((vendor) => ({
+        value: vendor.id.toString(),
+        label: vendor.name,
+      })),
+    [financeVendors.data],
+  );
+
+  const clientOptions = useMemo(
+    () =>
+      financeClients.data.map((client) => ({
+        value: client.id.toString(),
+        label: client.name,
+      })),
+    [financeClients.data],
+  );
+
+  const vendorLookup = useMemo(
+    () =>
+      financeVendors.data.reduce<Record<number, string>>((acc, vendor) => {
+        acc[vendor.id] = vendor.name;
+        return acc;
+      }, {}),
+    [financeVendors.data],
+  );
+
+  const clientLookup = useMemo(
+    () =>
+      financeClients.data.reduce<Record<number, string>>((acc, client) => {
+        acc[client.id] = client.name;
+        return acc;
+      }, {}),
+    [financeClients.data],
+  );
+
   const columns = useMemo<MRT_ColumnDef<Partial<Venue>>[]>(
-    () => modifyColumn(data[0]?.columns || [], venuesColumnDef()),
-    [data],
+    () =>
+      modifyColumn(
+        data[0]?.columns || [],
+        venuesColumnDef({
+          vendorOptions,
+          clientOptions,
+          vendorLookup,
+          clientLookup,
+        }),
+      ),
+    [data, vendorOptions, clientOptions, vendorLookup, clientLookup],
   );
 
   const handleCreate = async (payload: Partial<Venue>) => {
@@ -89,4 +150,3 @@ const VenuesList = () => {
 };
 
 export default VenuesList;
-
