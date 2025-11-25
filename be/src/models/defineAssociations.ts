@@ -210,6 +210,10 @@ export function defineAssociations() {
   NightReportVenue.belongsTo(VenueCompensationTerm, { foreignKey: 'compensation_term_id', as: 'compensationTermReportVenue' });
 
   // Finance associations
+  Venue.belongsTo(FinanceVendor, { foreignKey: 'finance_vendor_id', as: 'financeVendor' });
+  FinanceVendor.hasMany(Venue, { foreignKey: 'finance_vendor_id', as: 'venues' });
+  Venue.belongsTo(FinanceClient, { foreignKey: 'finance_client_id', as: 'financeClient' });
+  FinanceClient.hasMany(Venue, { foreignKey: 'finance_client_id', as: 'venues' });
   FinanceAccount.hasMany(FinanceTransaction, { foreignKey: 'accountId', as: 'transactions' });
   FinanceCategory.hasMany(FinanceTransaction, { foreignKey: 'categoryId', as: 'transactions' });
   FinanceCategory.hasMany(FinanceVendor, { foreignKey: 'defaultCategoryId', as: 'vendors' });
