@@ -13,6 +13,7 @@ import {
   downloadNightReportPhoto,
   getNightReportLeaderMetrics,
   getNightReportVenueSummary,
+  createVenueCompensationCollectionLog,
 } from '../controllers/nightReportController.js';
 
 const router = Router();
@@ -26,6 +27,7 @@ const upload = multer({
 router.get('/', authMiddleware, listNightReports);
 router.get('/metrics/leader-performance', authMiddleware, getNightReportLeaderMetrics);
 router.get('/metrics/venue-summary', authMiddleware, getNightReportVenueSummary);
+router.post('/venue-collections', authMiddleware, createVenueCompensationCollectionLog);
 router.post('/', authMiddleware, createNightReport);
 router.get('/:id', authMiddleware, getNightReport);
 router.patch('/:id', authMiddleware, updateNightReport);

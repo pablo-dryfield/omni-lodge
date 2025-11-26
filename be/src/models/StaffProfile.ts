@@ -13,7 +13,6 @@ import type { NonAttribute } from 'sequelize';
 import User from './User.js';
 import FinanceVendor from '../finance/models/FinanceVendor.js';
 import FinanceClient from '../finance/models/FinanceClient.js';
-import FinanceCategory from '../finance/models/FinanceCategory.js';
 
 export type StaffType = 'volunteer' | 'long_term' | 'assistant_manager' | 'manager' | 'guide';
 
@@ -64,19 +63,4 @@ export default class StaffProfile extends Model {
   @BelongsTo(() => FinanceClient, { foreignKey: 'finance_client_id', as: 'financeClient' })
   declare financeClient?: NonAttribute<FinanceClient | null>;
 
-  @ForeignKey(() => FinanceCategory)
-  @AllowNull(true)
-  @Column({ field: 'guiding_category_id', type: DataType.INTEGER })
-  declare guidingCategoryId: number | null;
-
-  @BelongsTo(() => FinanceCategory, { foreignKey: 'guiding_category_id', as: 'guidingCategory' })
-  declare guidingCategory?: NonAttribute<FinanceCategory | null>;
-
-  @ForeignKey(() => FinanceCategory)
-  @AllowNull(true)
-  @Column({ field: 'review_category_id', type: DataType.INTEGER })
-  declare reviewCategoryId: number | null;
-
-  @BelongsTo(() => FinanceCategory, { foreignKey: 'review_category_id', as: 'reviewCategory' })
-  declare reviewCategory?: NonAttribute<FinanceCategory | null>;
 }

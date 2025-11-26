@@ -11,10 +11,8 @@ export type StaffProfileColumnParams = {
   userOptions: EditSelectOption[];
   vendorOptions: EditSelectOption[];
   clientOptions: EditSelectOption[];
-  categoryOptions: EditSelectOption[];
   vendorLookup: Record<number, string>;
   clientLookup: Record<number, string>;
-  categoryLookup: Record<number, string>;
 };
 
 const STAFF_TYPE_OPTIONS: EditSelectOption[] = [
@@ -46,10 +44,8 @@ export const staffProfilesColumnDef = ({
   userOptions,
   vendorOptions,
   clientOptions,
-  categoryOptions,
   vendorLookup,
   clientLookup,
-  categoryLookup,
 }: StaffProfileColumnParams): ResponseModifications<Partial<StaffProfile>>[] => [
   {
     accessorKey: "userId",
@@ -173,38 +169,6 @@ export const staffProfilesColumnDef = ({
           table={table}
           options={[{ value: "", label: "No Client" }, ...clientOptions]}
           placeholder="Select client"
-        />
-      ),
-    },
-  },
-  {
-    accessorKey: "guidingCategoryId",
-    modifications: {
-      header: "Guiding Category",
-      Cell: ({ cell }) => renderLookup(cell.getValue(), categoryLookup, "Category"),
-      Edit: ({ cell, row, table }) => (
-        <CustomEditSelect
-          cell={cell}
-          row={row}
-          table={table}
-          options={[{ value: "", label: "Default (none)" }, ...categoryOptions]}
-          placeholder="Select category"
-        />
-      ),
-    },
-  },
-  {
-    accessorKey: "reviewCategoryId",
-    modifications: {
-      header: "Review Category",
-      Cell: ({ cell }) => renderLookup(cell.getValue(), categoryLookup, "Category"),
-      Edit: ({ cell, row, table }) => (
-        <CustomEditSelect
-          cell={cell}
-          row={row}
-          table={table}
-          options={[{ value: "", label: "Default (none)" }, ...categoryOptions]}
-          placeholder="Select category"
         />
       ),
     },
