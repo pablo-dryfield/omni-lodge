@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { Op, Transaction } from 'sequelize';
+import { Op, Transaction, fn, col } from 'sequelize';
 import dayjs from 'dayjs';
 import Counter from '../models/Counter.js';
 import NightReport, { type NightReportStatus } from '../models/NightReport.js';
@@ -20,6 +20,14 @@ import {
   openNightReportPhotoStream,
 } from '../services/nightReportStorageService.js';
 import { fetchLeaderNightReportStats } from '../services/nightReportMetricsService.js';
+
+type RawVenueAggregate = {
+  venueId: number | null;
+  venueName: string | null;
+  currencyCode: string | null;
+  direction: 'payable' | 'receivable' | null;
+  totalAmount: string | number | null;
+};
 
 type NightReportPayload = {
   id: number;
@@ -67,6 +75,62 @@ type NightReportPayload = {
 };
 
 const ADMIN_ROLE_SLUGS = new Set(['admin', 'owner', 'super_admin']);
+type SummaryPeriod = 'this_month' | 'last_month' | 'custom';
+
+const SUMMARY_PERIODS: SummaryPeriod[] = ['this_month', 'last_month', 'custom'];
+
+const roundCurrencyValue = (value: number): number => Math.round(value * 100) / 100;
+
+const resolveVenueSummaryRange = (
+  rawPeriod: string | undefined,
+  startDateParam?: string,
+  endDateParam?: string,
+): { period: SummaryPeriod; start: dayjs.Dayjs; end: dayjs.Dayjs } => {
+  const normalized = SUMMARY_PERIODS.includes(rawPeriod as SummaryPeriod)
+    ? (rawPeriod as SummaryPeriod)
+    : ('this_month' as SummaryPeriod);
+
+  const now = dayjs();
+  let start: dayjs.Dayjs;
+  let end: dayjs.Dayjs;
+
+  if (normalized === 'last_month') {
+    start = now.subtract(1, 'month').startOf('month');
+    end = start.endOf('month');
+  } else if (normalized === 'custom') {
+    if (!startDateParam || !endDateParam) {
+      throw new HttpError(400, 'Provide startDate and endDate when using the custom period');
+    }
+    start = dayjs(startDateParam).startOf('day');
+    end = dayjs(endDateParam).endOf('day');
+  } else {
+    start = now.startOf('month');
+    end = now.endOf('month');
+  }
+
+  if (normalized !== 'custom') {
+    if (startDateParam) {
+      const override = dayjs(startDateParam).startOf('day');
+      if (!override.isValid()) {
+        throw new HttpError(400, 'Invalid startDate provided');
+      }
+      start = override;
+    }
+    if (endDateParam) {
+      const override = dayjs(endDateParam).endOf('day');
+      if (!override.isValid()) {
+        throw new HttpError(400, 'Invalid endDate provided');
+      }
+      end = override;
+    }
+  }
+
+  if (!start.isValid() || !end.isValid() || end.isBefore(start)) {
+    throw new HttpError(400, 'Provide a valid date range');
+  }
+
+  return { period: normalized, start, end };
+};
 
 const NIGHT_REPORT_COLUMNS = [
   { header: 'ID', accessorKey: 'id', type: 'number' },
@@ -1175,6 +1239,118 @@ export const getNightReportLeaderMetrics = async (req: AuthenticatedRequest, res
   } catch (error) {
     logger.error('Failed to calculate night report leader metrics', error);
     res.status(500).json([{ message: 'Failed to load leader metrics' }]);
+  }
+};
+
+export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const periodParam = typeof req.query.period === 'string' ? req.query.period : undefined;
+    const startDateParam = typeof req.query.startDate === 'string' ? req.query.startDate : undefined;
+    const endDateParam = typeof req.query.endDate === 'string' ? req.query.endDate : undefined;
+
+    const { period, start, end } = resolveVenueSummaryRange(periodParam, startDateParam, endDateParam);
+
+    const aggregates = (await NightReportVenue.findAll({
+      attributes: [
+        'venueId',
+        'venueName',
+        'currencyCode',
+        'direction',
+        [fn('COALESCE', fn('SUM', col('payout_amount')), 0), 'totalAmount'],
+      ],
+      include: [
+        {
+          model: NightReport,
+          as: 'report',
+          attributes: [],
+          required: true,
+          where: {
+            status: 'submitted',
+            activityDate: {
+              [Op.between]: [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')],
+            },
+          },
+        },
+      ],
+      group: [
+        'NightReportVenue.venue_id',
+        'NightReportVenue.venue_name',
+        'NightReportVenue.currency_code',
+        'NightReportVenue.direction',
+      ],
+      raw: true,
+    })) as unknown as RawVenueAggregate[];
+
+    const venueMap = new Map<
+      string,
+      { venueId: number | null; venueName: string; currency: string; receivable: number; payable: number }
+    >();
+    const totalsMap = new Map<string, { receivable: number; payable: number }>();
+
+    aggregates.forEach((row) => {
+      const currency = (row.currencyCode ?? 'USD').toUpperCase();
+      const direction = row.direction === 'receivable' ? 'receivable' : 'payable';
+      const numericAmount = Number(row.totalAmount ?? 0);
+      const amount = Number.isFinite(numericAmount) ? numericAmount : 0;
+
+      if (amount === 0) {
+        return;
+      }
+
+      const venueId = row.venueId ?? null;
+      const defaultName = venueId != null ? `Venue #${venueId}` : 'Unspecified Venue';
+      const venueName = (row.venueName ?? '').trim() || defaultName;
+      const key = `${venueId ?? 'null'}|${venueName}|${currency}`;
+
+      if (!venueMap.has(key)) {
+        venueMap.set(key, { venueId, venueName, currency, receivable: 0, payable: 0 });
+      }
+
+      const existing = venueMap.get(key)!;
+      existing[direction] += amount;
+
+      if (!totalsMap.has(currency)) {
+        totalsMap.set(currency, { receivable: 0, payable: 0 });
+      }
+      totalsMap.get(currency)![direction] += amount;
+    });
+
+    const venues = Array.from(venueMap.values()).map((entry) => ({
+      venueId: entry.venueId,
+      venueName: entry.venueName,
+      currency: entry.currency,
+      receivable: roundCurrencyValue(entry.receivable),
+      payable: roundCurrencyValue(entry.payable),
+      net: roundCurrencyValue(entry.receivable - entry.payable),
+    }));
+
+    venues.sort((a, b) => b.net - a.net);
+
+    const totalsByCurrency = Array.from(totalsMap.entries()).map(([currency, sums]) => ({
+      currency,
+      receivable: roundCurrencyValue(sums.receivable),
+      payable: roundCurrencyValue(sums.payable),
+      net: roundCurrencyValue(sums.receivable - sums.payable),
+    }));
+
+    res.status(200).json([
+      {
+        data: {
+          period,
+          range: { startDate: start.format('YYYY-MM-DD'), endDate: end.format('YYYY-MM-DD') },
+          totalsByCurrency,
+          venues,
+        },
+        columns: [],
+      },
+    ]);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to generate venue payout summary', error);
+    res.status(500).json([{ message: 'Failed to load venue payout summary' }]);
   }
 };
 

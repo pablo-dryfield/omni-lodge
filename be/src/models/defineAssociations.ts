@@ -214,6 +214,14 @@ export function defineAssociations() {
   FinanceVendor.hasMany(Venue, { foreignKey: 'finance_vendor_id', as: 'venues' });
   Venue.belongsTo(FinanceClient, { foreignKey: 'finance_client_id', as: 'financeClient' });
   FinanceClient.hasMany(Venue, { foreignKey: 'finance_client_id', as: 'venues' });
+  StaffProfile.belongsTo(FinanceVendor, { foreignKey: 'finance_vendor_id', as: 'financeVendor' });
+  FinanceVendor.hasMany(StaffProfile, { foreignKey: 'finance_vendor_id', as: 'staffProfiles' });
+  StaffProfile.belongsTo(FinanceClient, { foreignKey: 'finance_client_id', as: 'financeClient' });
+  FinanceClient.hasMany(StaffProfile, { foreignKey: 'finance_client_id', as: 'staffProfiles' });
+  StaffProfile.belongsTo(FinanceCategory, { foreignKey: 'guiding_category_id', as: 'guidingCategory' });
+  FinanceCategory.hasMany(StaffProfile, { foreignKey: 'guiding_category_id', as: 'guidingStaffProfiles' });
+  StaffProfile.belongsTo(FinanceCategory, { foreignKey: 'review_category_id', as: 'reviewCategory' });
+  FinanceCategory.hasMany(StaffProfile, { foreignKey: 'review_category_id', as: 'reviewStaffProfiles' });
   FinanceAccount.hasMany(FinanceTransaction, { foreignKey: 'accountId', as: 'transactions' });
   FinanceCategory.hasMany(FinanceTransaction, { foreignKey: 'categoryId', as: 'transactions' });
   FinanceCategory.hasMany(FinanceVendor, { foreignKey: 'defaultCategoryId', as: 'vendors' });
