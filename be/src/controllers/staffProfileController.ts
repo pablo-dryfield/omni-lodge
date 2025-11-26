@@ -7,7 +7,6 @@ import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import FinanceVendor from '../finance/models/FinanceVendor.js';
 import FinanceClient from '../finance/models/FinanceClient.js';
-import FinanceCategory from '../finance/models/FinanceCategory.js';
 
 const STAFF_TYPE_OPTIONS: Array<StaffProfile['staffType']> = ['volunteer', 'long_term'];
 
@@ -21,8 +20,6 @@ const STAFF_PROFILE_INCLUDE: Includeable[] = [
   { model: User, as: 'user' },
   { model: FinanceVendor, as: 'financeVendor', attributes: ['id', 'name'] },
   { model: FinanceClient, as: 'financeClient', attributes: ['id', 'name'] },
-  { model: FinanceCategory, as: 'guidingCategory', attributes: ['id', 'name'] },
-  { model: FinanceCategory, as: 'reviewCategory', attributes: ['id', 'name'] },
 ];
 
 const buildStaffProfileColumns = (): ColumnConfig[] => {
@@ -56,16 +53,12 @@ const formatProfilePayload = (
     user?: User | null;
     financeVendor?: FinanceVendor | null;
     financeClient?: FinanceClient | null;
-    guidingCategory?: FinanceCategory | null;
-    reviewCategory?: FinanceCategory | null;
   },
 ) => {
   const plain = profile.get({ plain: true }) as StaffProfile & {
     user?: User | null;
     financeVendor?: FinanceVendor | null;
     financeClient?: FinanceClient | null;
-    guidingCategory?: FinanceCategory | null;
-    reviewCategory?: FinanceCategory | null;
   };
   const user = plain.user;
   const fullName = user ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() : '';
@@ -76,10 +69,8 @@ const formatProfilePayload = (
     staffType: plain.staffType,
     livesInAccom: plain.livesInAccom,
     active: plain.active,
-     financeVendorId: plain.financeVendorId ?? null,
-     financeClientId: plain.financeClientId ?? null,
-     guidingCategoryId: plain.guidingCategoryId ?? null,
-     reviewCategoryId: plain.reviewCategoryId ?? null,
+    financeVendorId: plain.financeVendorId ?? null,
+    financeClientId: plain.financeClientId ?? null,
     createdAt: plain.createdAt,
     updatedAt: plain.updatedAt,
     userName: fullName.length > 0 ? fullName : null,
@@ -88,8 +79,6 @@ const formatProfilePayload = (
     profilePhotoUrl,
     financeVendorName: plain.financeVendor?.name ?? null,
     financeClientName: plain.financeClient?.name ?? null,
-    guidingCategoryName: plain.guidingCategory?.name ?? null,
-    reviewCategoryName: plain.reviewCategory?.name ?? null,
   };
 };
 
@@ -157,16 +146,6 @@ const ensureClientExists = async (id: number | null): Promise<void> => {
   }
 };
 
-const ensureCategoryExists = async (id: number | null, label: string): Promise<void> => {
-  if (!id) {
-    return;
-  }
-  const exists = await FinanceCategory.count({ where: { id } });
-  if (!exists) {
-    throw new Error(`Finance category (${label}) ${id} does not exist`);
-  }
-};
-
 export const listStaffProfiles = async (req: Request, res: Response): Promise<void> => {
   try {
     const profiles = await StaffProfile.findAll({
@@ -231,14 +210,10 @@ export const createStaffProfile = async (req: Request, res: Response): Promise<v
 
     let financeVendorId: number | null;
     let financeClientId: number | null;
-    let guidingCategoryId: number | null;
-    let reviewCategoryId: number | null;
 
     try {
       financeVendorId = extractForeignKeyValue(req.body.financeVendorId ?? req.body.financeVendor?.id);
       financeClientId = extractForeignKeyValue(req.body.financeClientId ?? req.body.financeClient?.id);
-      guidingCategoryId = extractForeignKeyValue(req.body.guidingCategoryId ?? req.body.guidingCategory?.id);
-      reviewCategoryId = extractForeignKeyValue(req.body.reviewCategoryId ?? req.body.reviewCategory?.id);
     } catch {
       res.status(400).json([{ message: 'Finance identifiers must be positive integers or null.' }]);
       return;
@@ -247,8 +222,6 @@ export const createStaffProfile = async (req: Request, res: Response): Promise<v
     try {
       await ensureVendorExists(financeVendorId);
       await ensureClientExists(financeClientId);
-      await ensureCategoryExists(guidingCategoryId, 'guiding');
-      await ensureCategoryExists(reviewCategoryId, 'review');
     } catch (validationError) {
       const message = validationError instanceof Error ? validationError.message : 'Invalid finance linkage';
       res.status(400).json([{ message }]);
@@ -262,8 +235,6 @@ export const createStaffProfile = async (req: Request, res: Response): Promise<v
       active: active ?? true,
       financeVendorId,
       financeClientId,
-      guidingCategoryId,
-      reviewCategoryId,
     });
 
     res.status(201).json([profile]);
@@ -316,12 +287,6 @@ export const updateStaffProfile = async (req: Request, res: Response): Promise<v
     const hasFinanceClient =
       Object.prototype.hasOwnProperty.call(req.body, 'financeClientId') ||
       Object.prototype.hasOwnProperty.call(req.body, 'financeClient');
-    const hasGuidingCategory =
-      Object.prototype.hasOwnProperty.call(req.body, 'guidingCategoryId') ||
-      Object.prototype.hasOwnProperty.call(req.body, 'guidingCategory');
-    const hasReviewCategory =
-      Object.prototype.hasOwnProperty.call(req.body, 'reviewCategoryId') ||
-      Object.prototype.hasOwnProperty.call(req.body, 'reviewCategory');
 
     try {
       if (hasFinanceVendor) {
@@ -333,16 +298,6 @@ export const updateStaffProfile = async (req: Request, res: Response): Promise<v
         const financeClientId = extractForeignKeyValue(req.body.financeClientId ?? req.body.financeClient?.id);
         updates.financeClientId = financeClientId;
         await ensureClientExists(financeClientId);
-      }
-      if (hasGuidingCategory) {
-        const guidingCategoryId = extractForeignKeyValue(req.body.guidingCategoryId ?? req.body.guidingCategory?.id);
-        updates.guidingCategoryId = guidingCategoryId;
-        await ensureCategoryExists(guidingCategoryId, 'guiding');
-      }
-      if (hasReviewCategory) {
-        const reviewCategoryId = extractForeignKeyValue(req.body.reviewCategoryId ?? req.body.reviewCategory?.id);
-        updates.reviewCategoryId = reviewCategoryId;
-        await ensureCategoryExists(reviewCategoryId, 'review');
       }
     } catch {
       res.status(400).json([{ message: 'Finance identifiers must be positive integers that reference valid records.' }]);

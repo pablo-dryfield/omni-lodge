@@ -30,6 +30,7 @@ import NightReportPhoto from "../models/NightReportPhoto.js";
 import Venue from "../models/Venue.js";
 import VenueCompensationTerm from "../models/VenueCompensationTerm.js";
 import VenueCompensationTermRate from "../models/VenueCompensationTermRate.js";
+import VenueCompensationCollectionLog from "../models/VenueCompensationCollectionLog.js";
 import StaffProfile from "../models/StaffProfile.js";
 import ShiftType from "../models/ShiftType.js";
 import ShiftTemplate from "../models/ShiftTemplate.js";
@@ -128,6 +129,7 @@ const sequelize = new Sequelize({
     Venue,
     VenueCompensationTerm,
     VenueCompensationTermRate,
+    VenueCompensationCollectionLog,
     NightReport,
     NightReportVenue,
     NightReportPhoto,

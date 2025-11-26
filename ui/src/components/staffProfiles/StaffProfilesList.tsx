@@ -16,12 +16,8 @@ import {
   fetchStaffProfiles,
   updateStaffProfile,
 } from "../../actions/staffProfileActions";
-import { fetchFinanceVendors, fetchFinanceClients, fetchFinanceCategories } from "../../actions/financeActions";
-import {
-  selectFinanceVendors,
-  selectFinanceClients,
-  selectFinanceCategories,
-} from "../../selectors/financeSelectors";
+import { fetchFinanceVendors, fetchFinanceClients } from "../../actions/financeActions";
+import { selectFinanceVendors, selectFinanceClients } from "../../selectors/financeSelectors";
 
 type CompactUser = {
   id: number;
@@ -76,16 +72,6 @@ const coerceStaffProfilePayload = (payload: Partial<StaffProfile>): Partial<Staf
     next.financeClientId = financeClientId;
   }
 
-  const guidingCategoryId = coerceNullableNumber(next.guidingCategoryId);
-  if (guidingCategoryId !== undefined) {
-    next.guidingCategoryId = guidingCategoryId;
-  }
-
-  const reviewCategoryId = coerceNullableNumber(next.reviewCategoryId);
-  if (reviewCategoryId !== undefined) {
-    next.reviewCategoryId = reviewCategoryId;
-  }
-
   return next;
 };
 
@@ -95,7 +81,6 @@ const StaffProfilesList = () => {
   const { loggedUserId } = useAppSelector((state) => state.session);
   const financeVendorsState = useAppSelector(selectFinanceVendors);
   const financeClientsState = useAppSelector(selectFinanceClients);
-  const financeCategoriesState = useAppSelector(selectFinanceCategories);
   const [userOptions, setUserOptions] = useState<EditSelectOption[]>([]);
   const [userLabelById, setUserLabelById] = useState<Map<number, string>>(new Map());
 
@@ -114,12 +99,6 @@ const StaffProfilesList = () => {
       dispatch(fetchFinanceClients());
     }
   }, [dispatch, financeClientsState.data.length, financeClientsState.loading]);
-
-  useEffect(() => {
-    if (!financeCategoriesState.data.length && !financeCategoriesState.loading) {
-      dispatch(fetchFinanceCategories());
-    }
-  }, [dispatch, financeCategoriesState.data.length, financeCategoriesState.loading]);
 
   useEffect(() => {
     const fetchUserOptions = async () => {
@@ -199,15 +178,6 @@ const StaffProfilesList = () => {
     [financeClientsState.data],
   );
 
-  const categoryOptions = useMemo<EditSelectOption[]>(
-    () =>
-      financeCategoriesState.data.map((category) => ({
-        value: category.id.toString(),
-        label: category.name,
-      })),
-    [financeCategoriesState.data],
-  );
-
   const vendorLookup = useMemo(
     () =>
       financeVendorsState.data.reduce<Record<number, string>>((acc, vendor) => {
@@ -226,15 +196,6 @@ const StaffProfilesList = () => {
     [financeClientsState.data],
   );
 
-  const categoryLookup = useMemo(
-    () =>
-      financeCategoriesState.data.reduce<Record<number, string>>((acc, category) => {
-        acc[category.id] = category.name;
-        return acc;
-      }, {}),
-    [financeCategoriesState.data],
-  );
-
   const modifiedColumns = useMemo<MRT_ColumnDef<Partial<StaffProfile>>[]>(
     () =>
       modifyColumn(
@@ -244,10 +205,8 @@ const StaffProfilesList = () => {
           userOptions: optionsWithStatus,
           vendorOptions,
           clientOptions,
-          categoryOptions,
           vendorLookup,
           clientLookup,
-          categoryLookup,
         }),
       ),
     [
@@ -256,10 +215,8 @@ const StaffProfilesList = () => {
       userLabelById,
       vendorOptions,
       clientOptions,
-      categoryOptions,
       vendorLookup,
       clientLookup,
-      categoryLookup,
     ],
   );
 
@@ -284,8 +241,6 @@ const StaffProfilesList = () => {
     delete sanitized.userStatus;
     delete sanitized.financeVendorName;
     delete sanitized.financeClientName;
-    delete sanitized.guidingCategoryName;
-    delete sanitized.reviewCategoryName;
     delete sanitized.createdAt;
     delete sanitized.updatedAt;
     return sanitized;

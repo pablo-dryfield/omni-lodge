@@ -139,9 +139,18 @@ async function syncAccessControl() {
         typeof code === "string" &&
         ["42P01", "42701"].includes(code) &&
         (/\bshift_roles\b/i.test(message) || /\bshift_assignments\b/i.test(message));
+      const isStaffProfileFinanceColumnCollision =
+        typeof code === "string" &&
+        code === "42701" &&
+        /\bstaff_profiles\b/i.test(message) &&
+        /\b(finance_(vendor|client)_id|guiding_category_id|review_category_id)\b/i.test(message);
       if (isShiftRoleSchemaIssue) {
         console.warn(
           'Skipping automatic schema sync for shift role references because the "shift_roles" table is not yet available. Run the migrations to create it.',
+        );
+      } else if (isStaffProfileFinanceColumnCollision) {
+        console.warn(
+          'Skipping schema sync for staff profile finance mappings because the columns already exist. Ensure the latest migrations have been applied.',
         );
       } else {
         throw error;

@@ -5,8 +5,6 @@ export type StaffProfile = {
   active: boolean;
   financeVendorId: number | null;
   financeClientId: number | null;
-  guidingCategoryId: number | null;
-  reviewCategoryId: number | null;
   createdAt?: Date;
   updatedAt?: Date;
   userName?: string | null;
@@ -14,6 +12,4 @@ export type StaffProfile = {
   userStatus?: boolean | null;
   financeVendorName?: string | null;
   financeClientName?: string | null;
-  guidingCategoryName?: string | null;
-  reviewCategoryName?: string | null;
 };

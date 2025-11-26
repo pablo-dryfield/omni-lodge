@@ -9,6 +9,8 @@ import User from '../models/User.js';
 import Venue from '../models/Venue.js';
 import VenueCompensationTerm from '../models/VenueCompensationTerm.js';
 import VenueCompensationTermRate from '../models/VenueCompensationTermRate.js';
+import VenueCompensationCollectionLog from '../models/VenueCompensationCollectionLog.js';
+import FinanceTransaction from '../finance/models/FinanceTransaction.js';
 import HttpError from '../errors/HttpError.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import logger from '../utils/logger.js';
@@ -27,6 +29,24 @@ type RawVenueAggregate = {
   currencyCode: string | null;
   direction: 'payable' | 'receivable' | null;
   totalAmount: string | number | null;
+};
+
+type CollectionAggregate = {
+  venueId: number;
+  currencyCode: string;
+  direction: 'receivable' | 'payable';
+  totalAmountMinor: string | number | null;
+};
+
+type VenueDetailAggregate = {
+  venueId: number | null;
+  venueName: string | null;
+  currencyCode: string | null;
+  direction: 'receivable' | 'payable' | null;
+  payoutAmount: string | number | null;
+  totalPeople: number | null;
+  activityDate: string | null;
+  reportId: number | null;
 };
 
 type NightReportPayload = {
@@ -80,6 +100,17 @@ type SummaryPeriod = 'this_month' | 'last_month' | 'custom';
 const SUMMARY_PERIODS: SummaryPeriod[] = ['this_month', 'last_month', 'custom'];
 
 const roundCurrencyValue = (value: number): number => Math.round(value * 100) / 100;
+
+const parseAmountToMinor = (value: unknown): number => {
+  if (value === null || value === undefined || value === '') {
+    return 0;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new HttpError(400, 'Amount must be a valid number');
+  }
+  return Math.round(parsed * 100);
+};
 
 const resolveVenueSummaryRange = (
   rawPeriod: string | undefined,
@@ -1242,6 +1273,86 @@ export const getNightReportLeaderMetrics = async (req: AuthenticatedRequest, res
   }
 };
 
+export const createVenueCompensationCollectionLog = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const venueId = Number(req.body.venueId);
+    if (!Number.isInteger(venueId) || venueId <= 0) {
+      throw new HttpError(400, 'A valid venueId is required.');
+    }
+
+    const directionInput = typeof req.body.direction === 'string' ? req.body.direction.toLowerCase() : '';
+    const direction = directionInput === 'receivable' || directionInput === 'payable' ? directionInput : null;
+    if (!direction) {
+      throw new HttpError(400, 'Direction must be either "receivable" or "payable".');
+    }
+
+    const currency =
+      typeof req.body.currency === 'string' && req.body.currency.trim().length > 0
+        ? req.body.currency.trim().toUpperCase()
+        : 'USD';
+
+    const amountMinor = parseAmountToMinor(req.body.amount);
+    if (amountMinor <= 0) {
+      throw new HttpError(400, 'Amount must be greater than zero.');
+    }
+
+    const rangeStartRaw = typeof req.body.rangeStart === 'string' ? req.body.rangeStart : '';
+    const rangeEndRaw = typeof req.body.rangeEnd === 'string' ? req.body.rangeEnd : '';
+    const rangeStart = dayjs(rangeStartRaw).startOf('day');
+    const rangeEnd = dayjs(rangeEndRaw).endOf('day');
+    if (!rangeStart.isValid() || !rangeEnd.isValid() || rangeEnd.isBefore(rangeStart)) {
+      throw new HttpError(400, 'Provide a valid rangeStart and rangeEnd.');
+    }
+
+    const financeTransactionIdRaw =
+      req.body.financeTransactionId !== undefined ? Number(req.body.financeTransactionId) : null;
+    let financeTransactionId: number | null = null;
+    if (financeTransactionIdRaw !== null && financeTransactionIdRaw !== 0) {
+      if (!Number.isInteger(financeTransactionIdRaw) || financeTransactionIdRaw <= 0) {
+        throw new HttpError(400, 'financeTransactionId must be a positive integer.');
+      }
+      const transactionExists = await FinanceTransaction.count({ where: { id: financeTransactionIdRaw } });
+      if (!transactionExists) {
+        throw new HttpError(400, 'Finance transaction not found.');
+      }
+      financeTransactionId = financeTransactionIdRaw;
+    }
+
+    const venueExists = await Venue.count({ where: { id: venueId } });
+    if (!venueExists) {
+      throw new HttpError(404, 'Venue not found.');
+    }
+
+    const note =
+      typeof req.body.note === 'string' && req.body.note.trim().length > 0 ? req.body.note.trim() : null;
+
+    const record = await VenueCompensationCollectionLog.create({
+      venueId,
+      direction,
+      currencyCode: currency,
+      amountMinor,
+      rangeStart: rangeStart.format('YYYY-MM-DD'),
+      rangeEnd: rangeEnd.format('YYYY-MM-DD'),
+      financeTransactionId,
+      note,
+      createdBy: actorId,
+    });
+
+    res.status(201).json([record]);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to record venue compensation collection', error);
+    res.status(500).json([{ message: 'Failed to record collection' }]);
+  }
+};
+
 export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const periodParam = typeof req.query.period === 'string' ? req.query.period : undefined;
@@ -1250,13 +1361,16 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
 
     const { period, start, end } = resolveVenueSummaryRange(periodParam, startDateParam, endDateParam);
 
-    const aggregates = (await NightReportVenue.findAll({
+    const detailRows = (await NightReportVenue.findAll({
       attributes: [
         'venueId',
         'venueName',
         'currencyCode',
         'direction',
-        [fn('COALESCE', fn('SUM', col('payout_amount')), 0), 'totalAmount'],
+        'payoutAmount',
+        'totalPeople',
+        [col('report.activity_date'), 'activityDate'],
+        [col('report.id'), 'reportId'],
       ],
       include: [
         {
@@ -1272,42 +1386,98 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
           },
         },
       ],
-      group: [
-        'NightReportVenue.venue_id',
-        'NightReportVenue.venue_name',
-        'NightReportVenue.currency_code',
-        'NightReportVenue.direction',
-      ],
       raw: true,
-    })) as unknown as RawVenueAggregate[];
+    })) as unknown as VenueDetailAggregate[];
+
+    const collectionRows = (await VenueCompensationCollectionLog.findAll({
+      attributes: [
+        'venueId',
+        'currencyCode',
+        'direction',
+        [fn('COALESCE', fn('SUM', col('amount_minor')), 0), 'totalAmountMinor'],
+      ],
+      where: {
+        rangeStart: start.format('YYYY-MM-DD'),
+        rangeEnd: end.format('YYYY-MM-DD'),
+      },
+      group: ['venue_id', 'currency_code', 'direction'],
+      raw: true,
+    })) as unknown as CollectionAggregate[];
+
+    const collectionMap = new Map<string, { receivable: number; payable: number }>();
+    const currencyCollectionMap = new Map<string, { receivable: number; payable: number }>();
+    collectionRows.forEach((row) => {
+      const venueKey = `${row.venueId ?? 'null'}|${(row.currencyCode ?? 'USD').toUpperCase()}`;
+      const majorAmount = roundCurrencyValue(Number(row.totalAmountMinor ?? 0) / 100);
+      if (majorAmount === 0) {
+        return;
+      }
+      const venueTotals = collectionMap.get(venueKey) ?? { receivable: 0, payable: 0 };
+      venueTotals[row.direction] += majorAmount;
+      collectionMap.set(venueKey, venueTotals);
+
+      const currencyKey = (row.currencyCode ?? 'USD').toUpperCase();
+      const currencyTotals = currencyCollectionMap.get(currencyKey) ?? { receivable: 0, payable: 0 };
+      currencyTotals[row.direction] += majorAmount;
+      currencyCollectionMap.set(currencyKey, currencyTotals);
+    });
 
     const venueMap = new Map<
       string,
-      { venueId: number | null; venueName: string; currency: string; receivable: number; payable: number }
+      {
+        venueId: number | null;
+        venueName: string;
+        currency: string;
+        receivable: number;
+        payable: number;
+        totalPeople: number;
+        daily: Array<{
+          date: string;
+          reportId: number | null;
+          totalPeople: number;
+          amount: number;
+          direction: 'receivable' | 'payable';
+        }>;
+      }
     >();
     const totalsMap = new Map<string, { receivable: number; payable: number }>();
 
-    aggregates.forEach((row) => {
+    detailRows.forEach((row) => {
       const currency = (row.currencyCode ?? 'USD').toUpperCase();
       const direction = row.direction === 'receivable' ? 'receivable' : 'payable';
-      const numericAmount = Number(row.totalAmount ?? 0);
+      const numericAmount = Number(row.payoutAmount ?? 0);
       const amount = Number.isFinite(numericAmount) ? numericAmount : 0;
-
-      if (amount === 0) {
-        return;
-      }
-
+      const numericPeople = Number(row.totalPeople ?? 0);
+      const totalPeople = Number.isFinite(numericPeople) ? numericPeople : 0;
+      const activityDate = row.activityDate ? dayjs(row.activityDate).format('YYYY-MM-DD') : '';
+      const reportId = typeof row.reportId === 'number' ? row.reportId : null;
       const venueId = row.venueId ?? null;
       const defaultName = venueId != null ? `Venue #${venueId}` : 'Unspecified Venue';
       const venueName = (row.venueName ?? '').trim() || defaultName;
       const key = `${venueId ?? 'null'}|${venueName}|${currency}`;
 
       if (!venueMap.has(key)) {
-        venueMap.set(key, { venueId, venueName, currency, receivable: 0, payable: 0 });
+        venueMap.set(key, {
+          venueId,
+          venueName,
+          currency,
+          receivable: 0,
+          payable: 0,
+          totalPeople: 0,
+          daily: [],
+        });
       }
 
       const existing = venueMap.get(key)!;
       existing[direction] += amount;
+      existing.totalPeople += totalPeople;
+      existing.daily.push({
+        date: activityDate,
+        reportId,
+        totalPeople,
+        amount: roundCurrencyValue(amount),
+        direction,
+      });
 
       if (!totalsMap.has(currency)) {
         totalsMap.set(currency, { receivable: 0, payable: 0 });
@@ -1315,23 +1485,54 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       totalsMap.get(currency)![direction] += amount;
     });
 
-    const venues = Array.from(venueMap.values()).map((entry) => ({
-      venueId: entry.venueId,
-      venueName: entry.venueName,
-      currency: entry.currency,
-      receivable: roundCurrencyValue(entry.receivable),
-      payable: roundCurrencyValue(entry.payable),
-      net: roundCurrencyValue(entry.receivable - entry.payable),
-    }));
+    venueMap.forEach((entry) => {
+      entry.daily.sort((a, b) => a.date.localeCompare(b.date));
+    });
+
+    const venues = Array.from(venueMap.values()).map((entry) => {
+      const key = `${entry.venueId ?? 'null'}|${entry.currency}`;
+      const collected = collectionMap.get(key) ?? { receivable: 0, payable: 0 };
+      const receivable = roundCurrencyValue(entry.receivable);
+      const payable = roundCurrencyValue(entry.payable);
+      const receivableCollected = roundCurrencyValue(collected.receivable);
+      const payableCollected = roundCurrencyValue(collected.payable);
+
+      return {
+        venueId: entry.venueId,
+        venueName: entry.venueName,
+        currency: entry.currency,
+        receivable,
+        receivableCollected,
+        receivableOutstanding: roundCurrencyValue(Math.max(receivable - receivableCollected, 0)),
+        payable,
+        payableCollected,
+        payableOutstanding: roundCurrencyValue(Math.max(payable - payableCollected, 0)),
+        net: roundCurrencyValue(receivable - payable),
+        totalPeople: entry.totalPeople,
+        daily: entry.daily,
+        rowKey: key,
+      };
+    });
 
     venues.sort((a, b) => b.net - a.net);
 
-    const totalsByCurrency = Array.from(totalsMap.entries()).map(([currency, sums]) => ({
-      currency,
-      receivable: roundCurrencyValue(sums.receivable),
-      payable: roundCurrencyValue(sums.payable),
-      net: roundCurrencyValue(sums.receivable - sums.payable),
-    }));
+    const totalsByCurrency = Array.from(totalsMap.entries()).map(([currency, sums]) => {
+      const collected = currencyCollectionMap.get(currency) ?? { receivable: 0, payable: 0 };
+      const receivable = roundCurrencyValue(sums.receivable);
+      const payable = roundCurrencyValue(sums.payable);
+      const receivableCollected = roundCurrencyValue(collected.receivable);
+      const payableCollected = roundCurrencyValue(collected.payable);
+      return {
+        currency,
+        receivable,
+        receivableCollected,
+        receivableOutstanding: roundCurrencyValue(Math.max(receivable - receivableCollected, 0)),
+        payable,
+        payableCollected,
+        payableOutstanding: roundCurrencyValue(Math.max(payable - payableCollected, 0)),
+        net: roundCurrencyValue(sums.receivable - sums.payable),
+      };
+    });
 
     res.status(200).json([
       {

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
+  ActionIcon,
   Button,
   Card,
   Grid,
@@ -17,9 +18,15 @@ import {
 } from "@mantine/core";
 import { DatePickerInput } from "@mantine/dates";
 import dayjs from "dayjs";
+import isSameOrBefore from "dayjs/plugin/isSameOrBefore";
+import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
 import axiosInstance from "../../utils/axiosInstance";
 import { ServerResponse } from "../../types/general/ServerResponse";
-import type { VenuePayoutSummary } from "../../types/nightReports/VenuePayoutSummary";
+import type {
+  VenuePayoutSummary,
+  VenuePayoutVenueBreakdown,
+  VenuePayoutVenueDaily,
+} from "../../types/nightReports/VenuePayoutSummary";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { useFinanceBootstrap } from "../../hooks/useFinanceBootstrap";
 import {
@@ -29,6 +36,9 @@ import {
   selectFinanceVendors,
 } from "../../selectors/financeSelectors";
 import { createFinanceTransaction } from "../../actions/financeActions";
+import type { EditSelectOption } from "../../utils/CustomEditSelect";
+
+type DailyRow = VenuePayoutVenueDaily & { placeholder?: boolean };
 
 type CashEntryState = {
   amount: number;
@@ -37,6 +47,7 @@ type CashEntryState = {
   accountId: string;
   categoryId: string;
   counterpartyId: string;
+  venueId: string;
   description: string;
 };
 
@@ -60,6 +71,8 @@ const formatCurrency = (value: number, currency: string) =>
 
 const toMinorUnits = (value: number) => Math.round(value * 100);
 
+dayjs.extend(isSameOrBefore);
+
 const VenueNumbersSummary = () => {
   const dispatch = useAppDispatch();
   useFinanceBootstrap();
@@ -80,6 +93,7 @@ const VenueNumbersSummary = () => {
     accountId: "",
     categoryId: "",
     counterpartyId: "",
+    venueId: "",
     description: "",
   });
   const [payoutEntry, setPayoutEntry] = useState<CashEntryState>({
@@ -89,12 +103,50 @@ const VenueNumbersSummary = () => {
     accountId: "",
     categoryId: "",
     counterpartyId: "",
+    venueId: "",
     description: "",
   });
   const [commissionMessage, setCommissionMessage] = useState<MessageState>(null);
   const [payoutMessage, setPayoutMessage] = useState<MessageState>(null);
   const [commissionSubmitting, setCommissionSubmitting] = useState(false);
   const [payoutSubmitting, setPayoutSubmitting] = useState(false);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  const toggleRow = (rowKey: string) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowKey)) {
+        next.delete(rowKey);
+      } else {
+        next.add(rowKey);
+      }
+      return next;
+    });
+  };
+
+  const commissionVenueOptions = useMemo<EditSelectOption[]>(() => {
+    if (!summary) {
+      return [];
+    }
+    return summary.venues
+      .filter((venue) => venue.venueId !== null && (venue.receivable > 0 || venue.receivableOutstanding > 0))
+      .map((venue) => ({
+        value: String(venue.venueId),
+        label: `${venue.venueName} (${venue.currency})`,
+      }));
+  }, [summary]);
+
+  const payoutVenueOptions = useMemo<EditSelectOption[]>(() => {
+    if (!summary) {
+      return [];
+    }
+    return summary.venues
+      .filter((venue) => venue.venueId !== null && (venue.payable > 0 || venue.payableOutstanding > 0))
+      .map((venue) => ({
+        value: String(venue.venueId),
+        label: `${venue.venueName} (${venue.currency})`,
+      }));
+  }, [summary]);
 
   const canFetch = period !== "custom" || (customRange[0] && customRange[1]);
 
@@ -139,12 +191,20 @@ const VenueNumbersSummary = () => {
   }, [fetchSummary, canFetch]);
 
   useEffect(() => {
+    setExpandedRows(new Set());
+  }, [summary]);
+
+  useEffect(() => {
     if (!summary) {
       return;
     }
     const defaultCurrency = summary.totalsByCurrency[0]?.currency ?? DEFAULT_CURRENCY;
-    const defaultReceivable = summary.totalsByCurrency[0]?.receivable ?? 0;
-    const defaultPayable = summary.totalsByCurrency[0]?.payable ?? 0;
+    const defaultReceivable =
+      summary.totalsByCurrency[0]?.receivableOutstanding ??
+      summary.totalsByCurrency[0]?.receivable ??
+      0;
+    const defaultPayable =
+      summary.totalsByCurrency[0]?.payableOutstanding ?? summary.totalsByCurrency[0]?.payable ?? 0;
     const rangeLabel = `${summary.range.startDate} → ${summary.range.endDate}`;
 
     setCommissionEntry((prev) => ({
@@ -153,6 +213,7 @@ const VenueNumbersSummary = () => {
       amount: prev.amount === 0 ? defaultReceivable : prev.amount,
       description: prev.description || `Commission collection for ${rangeLabel}`,
       date: prev.date ?? new Date(),
+      venueId: prev.venueId,
     }));
 
     setPayoutEntry((prev) => ({
@@ -161,8 +222,35 @@ const VenueNumbersSummary = () => {
       amount: prev.amount === 0 ? defaultPayable : prev.amount,
       description: prev.description || `Open bar payout for ${rangeLabel}`,
       date: prev.date ?? new Date(),
+      venueId: prev.venueId,
     }));
   }, [summary]);
+
+useEffect(() => {
+    if (!commissionVenueOptions.length) {
+      if (commissionEntry.venueId) {
+        setCommissionEntry((prev) => ({ ...prev, venueId: "" }));
+      }
+      return;
+    }
+    const exists = commissionVenueOptions.some((opt) => opt.value === commissionEntry.venueId);
+    if (!exists) {
+      setCommissionEntry((prev) => ({ ...prev, venueId: commissionVenueOptions[0].value }));
+    }
+  }, [commissionEntry.venueId, commissionVenueOptions]);
+
+useEffect(() => {
+    if (!payoutVenueOptions.length) {
+      if (payoutEntry.venueId) {
+        setPayoutEntry((prev) => ({ ...prev, venueId: "" }));
+      }
+      return;
+    }
+    const exists = payoutVenueOptions.some((opt) => opt.value === payoutEntry.venueId);
+    if (!exists) {
+      setPayoutEntry((prev) => ({ ...prev, venueId: payoutVenueOptions[0].value }));
+    }
+  }, [payoutEntry.venueId, payoutVenueOptions]);
 
   const accountOptions = useMemo(
     () =>
@@ -205,14 +293,22 @@ const VenueNumbersSummary = () => {
       commissionEntry.amount <= 0 ||
       !commissionEntry.accountId ||
       !commissionEntry.categoryId ||
-      !commissionEntry.counterpartyId
+      !commissionEntry.counterpartyId ||
+      !commissionEntry.venueId
     ) {
-      setCommissionMessage({ type: "error", text: "Fill in the amount, account, category, and client." });
+      setCommissionMessage({
+        type: "error",
+        text: "Fill in the amount, account, category, client, and venue.",
+      });
+      return;
+    }
+    if (!summary) {
+      setCommissionMessage({ type: "error", text: "Load a summary range before recording payments." });
       return;
     }
     setCommissionSubmitting(true);
     try {
-      await dispatch(
+      const transaction = await dispatch(
         createFinanceTransaction({
           kind: "income",
           date: dayjs(commissionEntry.date).format("YYYY-MM-DD"),
@@ -224,24 +320,73 @@ const VenueNumbersSummary = () => {
           counterpartyId: Number(commissionEntry.counterpartyId),
           status: "paid",
           description: commissionEntry.description || null,
-          meta: summary
-            ? {
-                source: "venue-numbers-summary",
-                period: summary.period,
-                rangeStart: summary.range.startDate,
-                rangeEnd: summary.range.endDate,
-              }
-            : null,
+          meta: {
+            source: "venue-numbers-summary",
+            period: summary.period,
+            rangeStart: summary.range.startDate,
+            rangeEnd: summary.range.endDate,
+          },
         }),
       ).unwrap();
-      setCommissionMessage({ type: "success", text: "Commission transaction recorded." });
+
+      await axiosInstance.post(
+        "/nightReports/venue-collections",
+        {
+          venueId: Number(commissionEntry.venueId),
+          direction: "receivable",
+          currency: commissionEntry.currency,
+          amount: commissionEntry.amount,
+          rangeStart: summary.range.startDate,
+          rangeEnd: summary.range.endDate,
+          financeTransactionId: transaction.id,
+          note: commissionEntry.description ?? null,
+        },
+        { withCredentials: true },
+      );
+
+      setCommissionMessage({ type: "success", text: "Commission recorded and logged." });
+      setCommissionEntry((prev) => ({ ...prev, amount: 0 }));
+      await fetchSummary();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unable to create transaction.";
+      const message = err instanceof Error ? err.message : "Unable to record transaction.";
       setCommissionMessage({ type: "error", text: message });
     } finally {
       setCommissionSubmitting(false);
     }
   };
+
+  const buildDailyRows = useCallback(
+    (venue: VenuePayoutVenueBreakdown): DailyRow[] => {
+      if (!summary) {
+        return venue.daily;
+      }
+      const start = dayjs(summary.range.startDate).startOf("day");
+      const end = dayjs(summary.range.endDate).endOf("day");
+      if (!start.isValid() || !end.isValid()) {
+        return venue.daily;
+      }
+      const rows: DailyRow[] = venue.daily.map((entry) => ({ ...entry }));
+      const seenDates = new Set(rows.map((row) => row.date));
+      let cursor = start.clone();
+      while (cursor.isSameOrBefore(end, "day")) {
+        const dateKey = cursor.format("YYYY-MM-DD");
+        if (!seenDates.has(dateKey)) {
+          rows.push({
+            date: dateKey,
+            reportId: null,
+            totalPeople: 0,
+            amount: 0,
+            direction: "receivable",
+            placeholder: true,
+          });
+        }
+        cursor = cursor.add(1, "day");
+      }
+      rows.sort((a, b) => a.date.localeCompare(b.date));
+      return rows;
+    },
+    [summary],
+  );
 
   const handlePayoutSubmit = async () => {
     setPayoutMessage(null);
@@ -249,14 +394,22 @@ const VenueNumbersSummary = () => {
       payoutEntry.amount <= 0 ||
       !payoutEntry.accountId ||
       !payoutEntry.categoryId ||
-      !payoutEntry.counterpartyId
+      !payoutEntry.counterpartyId ||
+      !payoutEntry.venueId
     ) {
-      setPayoutMessage({ type: "error", text: "Fill in the amount, account, category, and vendor." });
+      setPayoutMessage({
+        type: "error",
+        text: "Fill in the amount, account, category, vendor, and venue.",
+      });
+      return;
+    }
+    if (!summary) {
+      setPayoutMessage({ type: "error", text: "Load a summary range before recording payments." });
       return;
     }
     setPayoutSubmitting(true);
     try {
-      await dispatch(
+      const transaction = await dispatch(
         createFinanceTransaction({
           kind: "expense",
           date: dayjs(payoutEntry.date).format("YYYY-MM-DD"),
@@ -268,19 +421,35 @@ const VenueNumbersSummary = () => {
           counterpartyId: Number(payoutEntry.counterpartyId),
           status: "paid",
           description: payoutEntry.description || null,
-          meta: summary
-            ? {
-                source: "venue-numbers-summary",
-                period: summary.period,
-                rangeStart: summary.range.startDate,
-                rangeEnd: summary.range.endDate,
-              }
-            : null,
+          meta: {
+            source: "venue-numbers-summary",
+            period: summary.period,
+            rangeStart: summary.range.startDate,
+            rangeEnd: summary.range.endDate,
+          },
         }),
       ).unwrap();
-      setPayoutMessage({ type: "success", text: "Open bar payout recorded." });
+
+      await axiosInstance.post(
+        "/nightReports/venue-collections",
+        {
+          venueId: Number(payoutEntry.venueId),
+          direction: "payable",
+          currency: payoutEntry.currency,
+          amount: payoutEntry.amount,
+          rangeStart: summary.range.startDate,
+          rangeEnd: summary.range.endDate,
+          financeTransactionId: transaction.id,
+          note: payoutEntry.description ?? null,
+        },
+        { withCredentials: true },
+      );
+
+      setPayoutMessage({ type: "success", text: "Open bar payout recorded and logged." });
+      setPayoutEntry((prev) => ({ ...prev, amount: 0 }));
+      await fetchSummary();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unable to create transaction.";
+      const message = err instanceof Error ? err.message : "Unable to record transaction.";
       setPayoutMessage({ type: "error", text: message });
     } finally {
       setPayoutSubmitting(false);
@@ -380,19 +549,47 @@ const VenueNumbersSummary = () => {
                       <Card shadow="sm" padding="md" withBorder>
                         <Stack gap={4}>
                           <Text fw={600}>{row.currency}</Text>
-                          <Group justify="space-between">
-                            <Text c="dimmed" size="sm">
-                              Commission
-                            </Text>
-                            <Text>{formatCurrency(row.receivable, row.currency)}</Text>
-                          </Group>
-                          <Group justify="space-between">
-                            <Text c="dimmed" size="sm">
-                              Open bar payouts
-                            </Text>
-                            <Text>{formatCurrency(row.payable, row.currency)}</Text>
-                          </Group>
-                          <Group justify="space-between">
+                          <Stack gap={2}>
+                            <Group justify="space-between">
+                              <Text c="dimmed" size="sm">
+                                Commission owed
+                              </Text>
+                              <Text>{formatCurrency(row.receivable, row.currency)}</Text>
+                            </Group>
+                            <Group justify="space-between">
+                              <Text c="dimmed" size="sm">
+                                Collected
+                              </Text>
+                              <Text>{formatCurrency(row.receivableCollected, row.currency)}</Text>
+                            </Group>
+                            <Group justify="space-between">
+                              <Text c="dimmed" size="sm">
+                                Outstanding
+                              </Text>
+                              <Text>{formatCurrency(row.receivableOutstanding, row.currency)}</Text>
+                            </Group>
+                          </Stack>
+                          <Stack gap={2}>
+                            <Group justify="space-between">
+                              <Text c="dimmed" size="sm">
+                                Open bar payouts
+                              </Text>
+                              <Text>{formatCurrency(row.payable, row.currency)}</Text>
+                            </Group>
+                            <Group justify="space-between">
+                              <Text c="dimmed" size="sm">
+                                Paid
+                              </Text>
+                              <Text>{formatCurrency(row.payableCollected, row.currency)}</Text>
+                            </Group>
+                            <Group justify="space-between">
+                              <Text c="dimmed" size="sm">
+                                Outstanding
+                              </Text>
+                              <Text>{formatCurrency(row.payableOutstanding, row.currency)}</Text>
+                            </Group>
+                          </Stack>
+                          <Group justify="space-between" mt="sm">
                             <Text c="dimmed" size="sm">
                               Net
                             </Text>
@@ -418,23 +615,117 @@ const VenueNumbersSummary = () => {
                 <Table highlightOnHover withColumnBorders>
                   <Table.Thead>
                     <Table.Tr>
+                      <Table.Th />
                       <Table.Th>Venue</Table.Th>
-                      <Table.Th>Commission</Table.Th>
-                      <Table.Th>Open Bar Payout</Table.Th>
+                      <Table.Th>Total People</Table.Th>
+                      <Table.Th>Commission Owed</Table.Th>
+                      <Table.Th>Commission Collected</Table.Th>
+                      <Table.Th>Commission Outstanding</Table.Th>
+                      <Table.Th>Payout Owed</Table.Th>
+                      <Table.Th>Payout Paid</Table.Th>
+                      <Table.Th>Payout Outstanding</Table.Th>
                       <Table.Th>Net</Table.Th>
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
-                    {summary.venues.map((venue) => (
-                      <Table.Tr key={`${venue.venueId ?? "unknown"}-${venue.currency}`}>
-                        <Table.Td>{venue.venueName}</Table.Td>
-                        <Table.Td>{formatCurrency(venue.receivable, venue.currency)}</Table.Td>
-                        <Table.Td>{formatCurrency(venue.payable, venue.currency)}</Table.Td>
-                        <Table.Td c={venue.net >= 0 ? "green" : "red"}>
-                          {formatCurrency(venue.net, venue.currency)}
-                        </Table.Td>
-                      </Table.Tr>
-                    ))}
+                    {summary.venues.map((venue) => {
+                      const isExpanded = expandedRows.has(venue.rowKey);
+                      const dailyRows = buildDailyRows(venue);
+                      return (
+                        <Fragment key={venue.rowKey}>
+                          <Table.Tr>
+                            <Table.Td w={40}>
+                              <ActionIcon
+                                variant="subtle"
+                                onClick={() => toggleRow(venue.rowKey)}
+                                aria-label={isExpanded ? "Collapse venue details" : "Expand venue details"}
+                              >
+                                {isExpanded ? <IconChevronDown size={18} /> : <IconChevronRight size={18} />}
+                              </ActionIcon>
+                            </Table.Td>
+                            <Table.Td>
+                              <Text fw={600}>{venue.venueName}</Text>
+                            </Table.Td>
+                            <Table.Td>{venue.totalPeople}</Table.Td>
+                            <Table.Td>{formatCurrency(venue.receivable, venue.currency)}</Table.Td>
+                            <Table.Td>{formatCurrency(venue.receivableCollected, venue.currency)}</Table.Td>
+                            <Table.Td>{formatCurrency(venue.receivableOutstanding, venue.currency)}</Table.Td>
+                            <Table.Td>{formatCurrency(venue.payable, venue.currency)}</Table.Td>
+                            <Table.Td>{formatCurrency(venue.payableCollected, venue.currency)}</Table.Td>
+                            <Table.Td>{formatCurrency(venue.payableOutstanding, venue.currency)}</Table.Td>
+                            <Table.Td c={venue.net >= 0 ? "green" : "red"}>
+                              {formatCurrency(venue.net, venue.currency)}
+                            </Table.Td>
+                          </Table.Tr>
+                          {isExpanded && (
+                            <Table.Tr>
+                              <Table.Td colSpan={10}>
+                                <Stack gap="xs">
+                                  <Group justify="space-between">
+                                    <Text fw={600} size="sm">
+                                      Daily performance
+                                    </Text>
+                                    <Text size="sm" c="dimmed">
+                                      {dailyRows.length} day{dailyRows.length === 1 ? "" : "s"} tracked
+                                    </Text>
+                                  </Group>
+                                  {dailyRows.length === 0 ? (
+                                    <Text size="sm" c="dimmed">
+                                      No submitted reports match this venue during the selected period.
+                                    </Text>
+                                  ) : (
+                                    <Table striped withColumnBorders>
+                                      <Table.Thead>
+                                        <Table.Tr>
+                                          <Table.Th>Date</Table.Th>
+                                          <Table.Th>Total People</Table.Th>
+                                          <Table.Th>Report</Table.Th>
+                                          <Table.Th>Type</Table.Th>
+                                          <Table.Th>Amount</Table.Th>
+                                        </Table.Tr>
+                                      </Table.Thead>
+                                      <Table.Tbody>
+                                        {dailyRows.map((day) => {
+                                          const placeholder = Boolean(day.placeholder);
+                                          const amountColor = placeholder
+                                            ? "dimmed"
+                                            : day.direction === "receivable"
+                                              ? "green"
+                                              : "red";
+                                          return (
+                                            <Table.Tr key={`${day.date}-${day.reportId ?? "none"}-${day.direction}`}>
+                                              <Table.Td>{dayjs(day.date).format("MMM D, YYYY")}</Table.Td>
+                                              <Table.Td>{day.totalPeople}</Table.Td>
+                                              <Table.Td>
+                                                {placeholder
+                                                  ? "No report"
+                                                  : day.reportId
+                                                    ? `Report #${day.reportId}`
+                                                    : "N/A"}
+                                              </Table.Td>
+                                              <Table.Td>
+                                                {placeholder
+                                                  ? "No activity"
+                                                  : day.direction === "receivable"
+                                                    ? "Commission"
+                                                    : "Open bar payout"}
+                                              </Table.Td>
+                                              <Table.Td c={amountColor}>
+                                                {formatCurrency(day.amount, venue.currency)}
+                                              </Table.Td>
+                                            </Table.Tr>
+                                          );
+                                        })}
+                                      </Table.Tbody>
+                                    </Table>
+                                  )}
+                                </Stack>
+                              </Table.Td>
+                            </Table.Tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
                   </Table.Tbody>
                 </Table>
               )}
@@ -477,6 +768,16 @@ const VenueNumbersSummary = () => {
                     placeholder="Select category"
                   />
                   <Select
+                    label="Venue"
+                    data={commissionVenueOptions}
+                    value={commissionEntry.venueId}
+                    onChange={(value) =>
+                      setCommissionEntry((prev) => ({ ...prev, venueId: value ?? "" }))
+                    }
+                    placeholder="Select venue"
+                    disabled={!commissionVenueOptions.length}
+                  />
+                  <Select
                     label="Client"
                     data={clientOptions}
                     value={commissionEntry.counterpartyId}
@@ -505,7 +806,11 @@ const VenueNumbersSummary = () => {
                       {commissionMessage.text}
                     </Alert>
                   )}
-                  <Button onClick={handleCommissionSubmit} loading={commissionSubmitting}>
+                  <Button
+                    onClick={handleCommissionSubmit}
+                    loading={commissionSubmitting}
+                    disabled={!commissionVenueOptions.length || !summary}
+                  >
                     Record collection
                   </Button>
                 </Stack>
@@ -546,6 +851,14 @@ const VenueNumbersSummary = () => {
                     placeholder="Select category"
                   />
                   <Select
+                    label="Venue"
+                    data={payoutVenueOptions}
+                    value={payoutEntry.venueId}
+                    onChange={(value) => setPayoutEntry((prev) => ({ ...prev, venueId: value ?? "" }))}
+                    placeholder="Select venue"
+                    disabled={!payoutVenueOptions.length}
+                  />
+                  <Select
                     label="Vendor"
                     data={vendorOptions}
                     value={payoutEntry.counterpartyId}
@@ -574,7 +887,11 @@ const VenueNumbersSummary = () => {
                       {payoutMessage.text}
                     </Alert>
                   )}
-                  <Button onClick={handlePayoutSubmit} loading={payoutSubmitting}>
+                  <Button
+                    onClick={handlePayoutSubmit}
+                    loading={payoutSubmitting}
+                    disabled={!payoutVenueOptions.length || !summary}
+                  >
                     Record payout
                   </Button>
                 </Stack>
