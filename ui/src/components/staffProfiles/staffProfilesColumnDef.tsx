@@ -9,6 +9,12 @@ import type { StaffProfile } from "../../types/staffProfiles/StaffProfile";
 export type StaffProfileColumnParams = {
   userLabelById: Map<number, string>;
   userOptions: EditSelectOption[];
+  vendorOptions: EditSelectOption[];
+  clientOptions: EditSelectOption[];
+  categoryOptions: EditSelectOption[];
+  vendorLookup: Record<number, string>;
+  clientLookup: Record<number, string>;
+  categoryLookup: Record<number, string>;
 };
 
 const STAFF_TYPE_OPTIONS: EditSelectOption[] = [
@@ -24,9 +30,26 @@ const formatDateTime = (value: unknown) => {
   return parsed.isValid() ? parsed.format("YYYY-MM-DD HH:mm:ss") : "";
 };
 
+const renderLookup = (value: unknown, lookup: Record<number, string>, fallbackLabel: string) => {
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+  const id = Number(value);
+  if (!Number.isFinite(id) || id <= 0) {
+    return "";
+  }
+  return lookup[id] ?? `${fallbackLabel} #${id}`;
+};
+
 export const staffProfilesColumnDef = ({
   userLabelById,
   userOptions,
+  vendorOptions,
+  clientOptions,
+  categoryOptions,
+  vendorLookup,
+  clientLookup,
+  categoryLookup,
 }: StaffProfileColumnParams): ResponseModifications<Partial<StaffProfile>>[] => [
   {
     accessorKey: "userId",
@@ -120,6 +143,70 @@ export const staffProfilesColumnDef = ({
         );
       },
       Edit: ({ cell, row, table }) => <CustomEditSwitch cell={cell} row={row} table={table} />,
+    },
+  },
+  {
+    accessorKey: "financeVendorId",
+    modifications: {
+      header: "Finance Vendor",
+      Cell: ({ cell }) => renderLookup(cell.getValue(), vendorLookup, "Vendor"),
+      Edit: ({ cell, row, table }) => (
+        <CustomEditSelect
+          cell={cell}
+          row={row}
+          table={table}
+          options={[{ value: "", label: "No Vendor" }, ...vendorOptions]}
+          placeholder="Select vendor"
+        />
+      ),
+    },
+  },
+  {
+    accessorKey: "financeClientId",
+    modifications: {
+      header: "Finance Client",
+      Cell: ({ cell }) => renderLookup(cell.getValue(), clientLookup, "Client"),
+      Edit: ({ cell, row, table }) => (
+        <CustomEditSelect
+          cell={cell}
+          row={row}
+          table={table}
+          options={[{ value: "", label: "No Client" }, ...clientOptions]}
+          placeholder="Select client"
+        />
+      ),
+    },
+  },
+  {
+    accessorKey: "guidingCategoryId",
+    modifications: {
+      header: "Guiding Category",
+      Cell: ({ cell }) => renderLookup(cell.getValue(), categoryLookup, "Category"),
+      Edit: ({ cell, row, table }) => (
+        <CustomEditSelect
+          cell={cell}
+          row={row}
+          table={table}
+          options={[{ value: "", label: "Default (none)" }, ...categoryOptions]}
+          placeholder="Select category"
+        />
+      ),
+    },
+  },
+  {
+    accessorKey: "reviewCategoryId",
+    modifications: {
+      header: "Review Category",
+      Cell: ({ cell }) => renderLookup(cell.getValue(), categoryLookup, "Category"),
+      Edit: ({ cell, row, table }) => (
+        <CustomEditSelect
+          cell={cell}
+          row={row}
+          table={table}
+          options={[{ value: "", label: "Default (none)" }, ...categoryOptions]}
+          placeholder="Select category"
+        />
+      ),
     },
   },
   {

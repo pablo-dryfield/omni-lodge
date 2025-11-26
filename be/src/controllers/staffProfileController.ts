@@ -1,9 +1,13 @@
 import { Request, Response } from 'express';
+import type { Includeable } from 'sequelize';
 import { DataType } from 'sequelize-typescript';
 import StaffProfile from '../models/StaffProfile.js';
 import User from '../models/User.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
+import FinanceVendor from '../finance/models/FinanceVendor.js';
+import FinanceClient from '../finance/models/FinanceClient.js';
+import FinanceCategory from '../finance/models/FinanceCategory.js';
 
 const STAFF_TYPE_OPTIONS: Array<StaffProfile['staffType']> = ['volunteer', 'long_term'];
 
@@ -12,6 +16,14 @@ type ColumnConfig = {
   accessorKey: string;
   type?: 'date' | 'text' | 'boolean';
 };
+
+const STAFF_PROFILE_INCLUDE: Includeable[] = [
+  { model: User, as: 'user' },
+  { model: FinanceVendor, as: 'financeVendor', attributes: ['id', 'name'] },
+  { model: FinanceClient, as: 'financeClient', attributes: ['id', 'name'] },
+  { model: FinanceCategory, as: 'guidingCategory', attributes: ['id', 'name'] },
+  { model: FinanceCategory, as: 'reviewCategory', attributes: ['id', 'name'] },
+];
 
 const buildStaffProfileColumns = (): ColumnConfig[] => {
   const attributes = StaffProfile.getAttributes();
@@ -39,8 +51,22 @@ const buildStaffProfileColumns = (): ColumnConfig[] => {
   return [...baseColumns, ...supplemental];
 };
 
-const formatProfilePayload = (profile: StaffProfile & { user?: User | null }) => {
-  const plain = profile.get({ plain: true }) as StaffProfile & { user?: User | null };
+const formatProfilePayload = (
+  profile: StaffProfile & {
+    user?: User | null;
+    financeVendor?: FinanceVendor | null;
+    financeClient?: FinanceClient | null;
+    guidingCategory?: FinanceCategory | null;
+    reviewCategory?: FinanceCategory | null;
+  },
+) => {
+  const plain = profile.get({ plain: true }) as StaffProfile & {
+    user?: User | null;
+    financeVendor?: FinanceVendor | null;
+    financeClient?: FinanceClient | null;
+    guidingCategory?: FinanceCategory | null;
+    reviewCategory?: FinanceCategory | null;
+  };
   const user = plain.user;
   const fullName = user ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() : '';
   const profilePhotoUrl = user?.profilePhotoUrl ?? null;
@@ -50,12 +76,20 @@ const formatProfilePayload = (profile: StaffProfile & { user?: User | null }) =>
     staffType: plain.staffType,
     livesInAccom: plain.livesInAccom,
     active: plain.active,
+     financeVendorId: plain.financeVendorId ?? null,
+     financeClientId: plain.financeClientId ?? null,
+     guidingCategoryId: plain.guidingCategoryId ?? null,
+     reviewCategoryId: plain.reviewCategoryId ?? null,
     createdAt: plain.createdAt,
     updatedAt: plain.updatedAt,
     userName: fullName.length > 0 ? fullName : null,
     userEmail: user?.email ?? null,
     userStatus: user?.status ?? null,
     profilePhotoUrl,
+    financeVendorName: plain.financeVendor?.name ?? null,
+    financeClientName: plain.financeClient?.name ?? null,
+    guidingCategoryName: plain.guidingCategory?.name ?? null,
+    reviewCategoryName: plain.reviewCategory?.name ?? null,
   };
 };
 
@@ -89,10 +123,54 @@ const normalizeStaffType = (value: unknown): StaffProfile['staffType'] | undefin
   return STAFF_TYPE_OPTIONS.find((option) => option === normalized) ?? undefined;
 };
 
+const extractForeignKeyValue = (value: unknown): number | null => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  if (typeof value === 'object' && value !== null && 'id' in value) {
+    return extractForeignKeyValue((value as { id?: unknown }).id);
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error('Invalid identifier');
+  }
+  return parsed;
+};
+
+const ensureVendorExists = async (id: number | null): Promise<void> => {
+  if (!id) {
+    return;
+  }
+  const exists = await FinanceVendor.count({ where: { id } });
+  if (!exists) {
+    throw new Error(`Finance vendor ${id} does not exist`);
+  }
+};
+
+const ensureClientExists = async (id: number | null): Promise<void> => {
+  if (!id) {
+    return;
+  }
+  const exists = await FinanceClient.count({ where: { id } });
+  if (!exists) {
+    throw new Error(`Finance client ${id} does not exist`);
+  }
+};
+
+const ensureCategoryExists = async (id: number | null, label: string): Promise<void> => {
+  if (!id) {
+    return;
+  }
+  const exists = await FinanceCategory.count({ where: { id } });
+  if (!exists) {
+    throw new Error(`Finance category (${label}) ${id} does not exist`);
+  }
+};
+
 export const listStaffProfiles = async (req: Request, res: Response): Promise<void> => {
   try {
     const profiles = await StaffProfile.findAll({
-      include: [{ model: User, as: 'user' }],
+      include: STAFF_PROFILE_INCLUDE,
       order: [['userId', 'ASC']],
     });
     const payload = profiles.map((profile) => formatProfilePayload(profile));
@@ -107,7 +185,7 @@ export const getStaffProfile = async (req: Request, res: Response): Promise<void
   try {
     const { userId } = req.params;
     const profile = await StaffProfile.findByPk(Number(userId), {
-      include: [{ model: User, as: 'user' }],
+      include: STAFF_PROFILE_INCLUDE,
     });
 
     if (!profile) {
@@ -151,11 +229,41 @@ export const createStaffProfile = async (req: Request, res: Response): Promise<v
     const livesInAccom = normalizeBoolean(req.body.livesInAccom) ?? false;
     const active = normalizeBoolean(req.body.active);
 
+    let financeVendorId: number | null;
+    let financeClientId: number | null;
+    let guidingCategoryId: number | null;
+    let reviewCategoryId: number | null;
+
+    try {
+      financeVendorId = extractForeignKeyValue(req.body.financeVendorId ?? req.body.financeVendor?.id);
+      financeClientId = extractForeignKeyValue(req.body.financeClientId ?? req.body.financeClient?.id);
+      guidingCategoryId = extractForeignKeyValue(req.body.guidingCategoryId ?? req.body.guidingCategory?.id);
+      reviewCategoryId = extractForeignKeyValue(req.body.reviewCategoryId ?? req.body.reviewCategory?.id);
+    } catch {
+      res.status(400).json([{ message: 'Finance identifiers must be positive integers or null.' }]);
+      return;
+    }
+
+    try {
+      await ensureVendorExists(financeVendorId);
+      await ensureClientExists(financeClientId);
+      await ensureCategoryExists(guidingCategoryId, 'guiding');
+      await ensureCategoryExists(reviewCategoryId, 'review');
+    } catch (validationError) {
+      const message = validationError instanceof Error ? validationError.message : 'Invalid finance linkage';
+      res.status(400).json([{ message }]);
+      return;
+    }
+
     const profile = await StaffProfile.create({
       userId,
       staffType,
       livesInAccom,
       active: active ?? true,
+      financeVendorId,
+      financeClientId,
+      guidingCategoryId,
+      reviewCategoryId,
     });
 
     res.status(201).json([profile]);
@@ -202,6 +310,45 @@ export const updateStaffProfile = async (req: Request, res: Response): Promise<v
       updates.active = active;
     }
 
+    const hasFinanceVendor =
+      Object.prototype.hasOwnProperty.call(req.body, 'financeVendorId') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'financeVendor');
+    const hasFinanceClient =
+      Object.prototype.hasOwnProperty.call(req.body, 'financeClientId') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'financeClient');
+    const hasGuidingCategory =
+      Object.prototype.hasOwnProperty.call(req.body, 'guidingCategoryId') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'guidingCategory');
+    const hasReviewCategory =
+      Object.prototype.hasOwnProperty.call(req.body, 'reviewCategoryId') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'reviewCategory');
+
+    try {
+      if (hasFinanceVendor) {
+        const financeVendorId = extractForeignKeyValue(req.body.financeVendorId ?? req.body.financeVendor?.id);
+        updates.financeVendorId = financeVendorId;
+        await ensureVendorExists(financeVendorId);
+      }
+      if (hasFinanceClient) {
+        const financeClientId = extractForeignKeyValue(req.body.financeClientId ?? req.body.financeClient?.id);
+        updates.financeClientId = financeClientId;
+        await ensureClientExists(financeClientId);
+      }
+      if (hasGuidingCategory) {
+        const guidingCategoryId = extractForeignKeyValue(req.body.guidingCategoryId ?? req.body.guidingCategory?.id);
+        updates.guidingCategoryId = guidingCategoryId;
+        await ensureCategoryExists(guidingCategoryId, 'guiding');
+      }
+      if (hasReviewCategory) {
+        const reviewCategoryId = extractForeignKeyValue(req.body.reviewCategoryId ?? req.body.reviewCategory?.id);
+        updates.reviewCategoryId = reviewCategoryId;
+        await ensureCategoryExists(reviewCategoryId, 'review');
+      }
+    } catch {
+      res.status(400).json([{ message: 'Finance identifiers must be positive integers that reference valid records.' }]);
+      return;
+    }
+
     if (Object.keys(updates).length === 0) {
       res.status(400).json([{ message: 'No valid fields provided for update.' }]);
       return;
@@ -214,7 +361,7 @@ export const updateStaffProfile = async (req: Request, res: Response): Promise<v
     }
 
     const profile = await StaffProfile.findByPk(userId, {
-      include: [{ model: User, as: 'user' }],
+      include: STAFF_PROFILE_INCLUDE,
     });
 
     res.status(200).json([profile]);
@@ -254,7 +401,7 @@ export const getMyStaffProfile = async (req: AuthenticatedRequest, res: Response
     }
 
     const profile = await StaffProfile.findByPk(userId, {
-      include: [{ model: User, as: 'user' }],
+      include: STAFF_PROFILE_INCLUDE,
     });
     if (!profile) {
       const user = await User.findByPk(userId);

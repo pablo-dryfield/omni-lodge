@@ -16,6 +16,12 @@ import {
   fetchStaffProfiles,
   updateStaffProfile,
 } from "../../actions/staffProfileActions";
+import { fetchFinanceVendors, fetchFinanceClients, fetchFinanceCategories } from "../../actions/financeActions";
+import {
+  selectFinanceVendors,
+  selectFinanceClients,
+  selectFinanceCategories,
+} from "../../selectors/financeSelectors";
 
 type CompactUser = {
   id: number;
@@ -29,6 +35,20 @@ const MODULE_SLUG = "staff-profile-directory";
 
 const coerceStaffProfilePayload = (payload: Partial<StaffProfile>): Partial<StaffProfile> => {
   const next: Partial<StaffProfile> = { ...payload };
+
+  const coerceNullableNumber = (value: unknown): number | null | undefined => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null || value === "") {
+      return null;
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return null;
+    }
+    return parsed;
+  };
 
   if (next.userId !== undefined && next.userId !== null) {
     next.userId = Number(next.userId);
@@ -46,6 +66,26 @@ const coerceStaffProfilePayload = (payload: Partial<StaffProfile>): Partial<Staf
     next.staffType = next.staffType as StaffProfile["staffType"];
   }
 
+  const financeVendorId = coerceNullableNumber(next.financeVendorId);
+  if (financeVendorId !== undefined) {
+    next.financeVendorId = financeVendorId;
+  }
+
+  const financeClientId = coerceNullableNumber(next.financeClientId);
+  if (financeClientId !== undefined) {
+    next.financeClientId = financeClientId;
+  }
+
+  const guidingCategoryId = coerceNullableNumber(next.guidingCategoryId);
+  if (guidingCategoryId !== undefined) {
+    next.guidingCategoryId = guidingCategoryId;
+  }
+
+  const reviewCategoryId = coerceNullableNumber(next.reviewCategoryId);
+  if (reviewCategoryId !== undefined) {
+    next.reviewCategoryId = reviewCategoryId;
+  }
+
   return next;
 };
 
@@ -53,12 +93,33 @@ const StaffProfilesList = () => {
   const dispatch = useAppDispatch();
   const staffProfileState = useAppSelector((state) => state.staffProfiles)[0];
   const { loggedUserId } = useAppSelector((state) => state.session);
+  const financeVendorsState = useAppSelector(selectFinanceVendors);
+  const financeClientsState = useAppSelector(selectFinanceClients);
+  const financeCategoriesState = useAppSelector(selectFinanceCategories);
   const [userOptions, setUserOptions] = useState<EditSelectOption[]>([]);
   const [userLabelById, setUserLabelById] = useState<Map<number, string>>(new Map());
 
   useEffect(() => {
     dispatch(fetchStaffProfiles());
   }, [dispatch]);
+
+  useEffect(() => {
+    if (!financeVendorsState.data.length && !financeVendorsState.loading) {
+      dispatch(fetchFinanceVendors());
+    }
+  }, [dispatch, financeVendorsState.data.length, financeVendorsState.loading]);
+
+  useEffect(() => {
+    if (!financeClientsState.data.length && !financeClientsState.loading) {
+      dispatch(fetchFinanceClients());
+    }
+  }, [dispatch, financeClientsState.data.length, financeClientsState.loading]);
+
+  useEffect(() => {
+    if (!financeCategoriesState.data.length && !financeCategoriesState.loading) {
+      dispatch(fetchFinanceCategories());
+    }
+  }, [dispatch, financeCategoriesState.data.length, financeCategoriesState.loading]);
 
   useEffect(() => {
     const fetchUserOptions = async () => {
@@ -120,6 +181,60 @@ const StaffProfilesList = () => {
     });
   }, [staffProfiles, userOptions]);
 
+  const vendorOptions = useMemo<EditSelectOption[]>(
+    () =>
+      financeVendorsState.data.map((vendor) => ({
+        value: vendor.id.toString(),
+        label: vendor.name,
+      })),
+    [financeVendorsState.data],
+  );
+
+  const clientOptions = useMemo<EditSelectOption[]>(
+    () =>
+      financeClientsState.data.map((client) => ({
+        value: client.id.toString(),
+        label: client.name,
+      })),
+    [financeClientsState.data],
+  );
+
+  const categoryOptions = useMemo<EditSelectOption[]>(
+    () =>
+      financeCategoriesState.data.map((category) => ({
+        value: category.id.toString(),
+        label: category.name,
+      })),
+    [financeCategoriesState.data],
+  );
+
+  const vendorLookup = useMemo(
+    () =>
+      financeVendorsState.data.reduce<Record<number, string>>((acc, vendor) => {
+        acc[vendor.id] = vendor.name;
+        return acc;
+      }, {}),
+    [financeVendorsState.data],
+  );
+
+  const clientLookup = useMemo(
+    () =>
+      financeClientsState.data.reduce<Record<number, string>>((acc, client) => {
+        acc[client.id] = client.name;
+        return acc;
+      }, {}),
+    [financeClientsState.data],
+  );
+
+  const categoryLookup = useMemo(
+    () =>
+      financeCategoriesState.data.reduce<Record<number, string>>((acc, category) => {
+        acc[category.id] = category.name;
+        return acc;
+      }, {}),
+    [financeCategoriesState.data],
+  );
+
   const modifiedColumns = useMemo<MRT_ColumnDef<Partial<StaffProfile>>[]>(
     () =>
       modifyColumn(
@@ -127,9 +242,25 @@ const StaffProfilesList = () => {
         staffProfilesColumnDef({
           userLabelById,
           userOptions: optionsWithStatus,
+          vendorOptions,
+          clientOptions,
+          categoryOptions,
+          vendorLookup,
+          clientLookup,
+          categoryLookup,
         }),
       ),
-    [optionsWithStatus, staffProfileState.data, userLabelById],
+    [
+      optionsWithStatus,
+      staffProfileState.data,
+      userLabelById,
+      vendorOptions,
+      clientOptions,
+      categoryOptions,
+      vendorLookup,
+      clientLookup,
+      categoryLookup,
+    ],
   );
 
   const initialState = useMemo(
@@ -151,6 +282,10 @@ const StaffProfilesList = () => {
     delete sanitized.userName;
     delete sanitized.userEmail;
     delete sanitized.userStatus;
+    delete sanitized.financeVendorName;
+    delete sanitized.financeClientName;
+    delete sanitized.guidingCategoryName;
+    delete sanitized.reviewCategoryName;
     delete sanitized.createdAt;
     delete sanitized.updatedAt;
     return sanitized;
