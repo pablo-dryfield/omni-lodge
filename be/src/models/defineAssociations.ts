@@ -225,6 +225,14 @@ export function defineAssociations() {
   FinanceClient.hasMany(StaffProfile, { foreignKey: 'finance_client_id', as: 'staffProfiles' });
   FinanceAccount.hasMany(FinanceTransaction, { foreignKey: 'accountId', as: 'transactions' });
   FinanceCategory.hasMany(FinanceTransaction, { foreignKey: 'categoryId', as: 'transactions' });
+  FinanceAccount.hasMany(CompensationComponent, {
+    foreignKey: 'default_finance_account_id',
+    as: 'defaultAccountCompensationComponents',
+  });
+  FinanceCategory.hasMany(CompensationComponent, {
+    foreignKey: 'default_finance_category_id',
+    as: 'defaultCategoryCompensationComponents',
+  });
   FinanceCategory.hasMany(FinanceVendor, { foreignKey: 'defaultCategoryId', as: 'vendors' });
   FinanceCategory.hasMany(FinanceClient, { foreignKey: 'defaultCategoryId', as: 'clients' });
 

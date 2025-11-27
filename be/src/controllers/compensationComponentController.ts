@@ -1,4 +1,4 @@
-import { Op, WhereOptions } from 'sequelize';
+import { Op, WhereOptions, type Includeable } from 'sequelize';
 import type { Request, Response } from 'express';
 import dayjs from 'dayjs';
 import CompensationComponent from '../models/CompensationComponent.js';
@@ -6,6 +6,8 @@ import CompensationComponentAssignment, { type CompensationTargetScope } from '.
 import User from '../models/User.js';
 import ShiftRole from '../models/ShiftRole.js';
 import UserType from '../models/UserType.js';
+import FinanceAccount from '../finance/models/FinanceAccount.js';
+import FinanceCategory from '../finance/models/FinanceCategory.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 
 const CATEGORY_VALUES = new Set(['base', 'commission', 'incentive', 'bonus', 'review', 'deduction', 'adjustment']);
@@ -54,6 +56,17 @@ const normalizeTaskList = (payload: unknown): Array<Record<string, unknown>> => 
   return [];
 };
 
+const parseOptionalForeignKey = (value: unknown): number | null => {
+  if (value === '' || value === null || value === undefined) {
+    return null;
+  }
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric <= 0) {
+    return null;
+  }
+  return numeric;
+};
+
 const sanitizeComponentPayload = (body: Record<string, unknown>) => {
   const next: Partial<CompensationComponent> = {};
 
@@ -84,6 +97,16 @@ const sanitizeComponentPayload = (body: Record<string, unknown>) => {
   }
   if (body.currencyCode != null && typeof body.currencyCode === 'string') {
     next.currencyCode = normalizeCurrency(body.currencyCode);
+  }
+  if ('defaultFinanceAccountId' in body) {
+    next.defaultFinanceAccountId = parseOptionalForeignKey(
+      (body as Record<string, unknown>).defaultFinanceAccountId,
+    );
+  }
+  if ('defaultFinanceCategoryId' in body) {
+    next.defaultFinanceCategoryId = parseOptionalForeignKey(
+      (body as Record<string, unknown>).defaultFinanceCategoryId,
+    );
   }
   return next;
 };
@@ -183,9 +206,38 @@ const formatAssignment = (
   updatedAt: assignment.updatedAt?.toISOString() ?? null,
 });
 
+const buildComponentIncludes = (includeAssignments: boolean): Includeable[] => {
+  const includes: Includeable[] = [
+    {
+      model: FinanceAccount,
+      as: 'defaultFinanceAccount',
+      attributes: ['id', 'name', 'type', 'currency'],
+    },
+    {
+      model: FinanceCategory,
+      as: 'defaultFinanceCategory',
+      attributes: ['id', 'name', 'kind', 'parentId'],
+    },
+  ];
+  if (includeAssignments) {
+    includes.push({
+      model: CompensationComponentAssignment,
+      as: 'assignments',
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
+        { model: ShiftRole, as: 'shiftRole', attributes: ['id', 'name'] },
+        { model: UserType, as: 'userType', attributes: ['id', 'name'] },
+      ],
+    });
+  }
+  return includes;
+};
+
 const formatComponent = (
   component: CompensationComponent & {
     assignments?: CompensationComponentAssignment[];
+    defaultFinanceAccount?: FinanceAccount | null;
+    defaultFinanceCategory?: FinanceCategory | null;
   },
 ) => ({
   id: component.id,
@@ -196,6 +248,24 @@ const formatComponent = (
   description: component.description ?? null,
   config: component.config ?? {},
   currencyCode: component.currencyCode,
+  defaultFinanceAccountId: component.defaultFinanceAccountId ?? null,
+  defaultFinanceAccount: component.defaultFinanceAccount
+    ? {
+        id: component.defaultFinanceAccount.id,
+        name: component.defaultFinanceAccount.name,
+        type: component.defaultFinanceAccount.type,
+        currency: component.defaultFinanceAccount.currency,
+      }
+    : null,
+  defaultFinanceCategoryId: component.defaultFinanceCategoryId ?? null,
+  defaultFinanceCategory: component.defaultFinanceCategory
+    ? {
+        id: component.defaultFinanceCategory.id,
+        name: component.defaultFinanceCategory.name,
+        kind: component.defaultFinanceCategory.kind,
+        parentId: component.defaultFinanceCategory.parentId ?? null,
+      }
+    : null,
   isActive: component.isActive ?? true,
   createdAt: component.createdAt?.toISOString() ?? null,
   updatedAt: component.updatedAt?.toISOString() ?? null,
@@ -257,19 +327,7 @@ export const listCompensationComponents = async (req: Request, res: Response): P
 
     const components = await CompensationComponent.findAll({
       where,
-      include: includeAssignments
-        ? [
-            {
-              model: CompensationComponentAssignment,
-              as: 'assignments',
-              include: [
-                { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
-                { model: ShiftRole, as: 'shiftRole', attributes: ['id', 'name'] },
-                { model: UserType, as: 'userType', attributes: ['id', 'name'] },
-              ],
-            },
-          ]
-        : [],
+      include: buildComponentIncludes(includeAssignments),
       order: [
         ['category', 'ASC'],
         ['name', 'ASC'],
@@ -311,7 +369,7 @@ export const createCompensationComponent = async (req: AuthenticatedRequest, res
 
     const created = await CompensationComponent.create(payload);
     const refreshed = await CompensationComponent.findByPk(created.id, {
-      include: [{ model: CompensationComponentAssignment, as: 'assignments' }],
+      include: buildComponentIncludes(true),
     });
     res.status(201).json([
       {
@@ -342,7 +400,7 @@ export const updateCompensationComponent = async (req: AuthenticatedRequest, res
     }
 
     const refreshed = await CompensationComponent.findByPk(id, {
-      include: [{ model: CompensationComponentAssignment, as: 'assignments' }],
+      include: buildComponentIncludes(true),
     });
     res.status(200).json([
       {

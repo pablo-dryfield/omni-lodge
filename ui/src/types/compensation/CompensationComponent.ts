@@ -1,3 +1,8 @@
+import type { FinanceAccount, FinanceCategory } from '../finance';
+
+type FinanceAccountSummary = Pick<FinanceAccount, 'id' | 'name' | 'type' | 'currency'>;
+type FinanceCategorySummary = Pick<FinanceCategory, 'id' | 'name' | 'kind' | 'parentId'>;
+
 export type CompensationComponentAssignment = {
   id: number;
   componentId: number;
@@ -31,6 +36,10 @@ export type CompensationComponent = {
   description?: string | null;
   config: Record<string, unknown>;
   currencyCode: string;
+  defaultFinanceAccountId?: number | null;
+  defaultFinanceAccount?: FinanceAccountSummary | null;
+  defaultFinanceCategoryId?: number | null;
+  defaultFinanceCategory?: FinanceCategorySummary | null;
   isActive: boolean;
   assignments: CompensationComponentAssignment[];
   createdAt?: string | null;
@@ -46,6 +55,8 @@ export type CompensationComponentPayload = {
   config?: Record<string, unknown>;
   currencyCode?: string;
   isActive?: boolean;
+  defaultFinanceAccountId?: number | null;
+  defaultFinanceCategoryId?: number | null;
 };
 
 export type CompensationComponentAssignmentPayload = {
