@@ -44,6 +44,16 @@ export type PlatformGuestTierBreakdown = {
   cumulativeGuests: number;
 };
 
+export type PayPayouts = {
+  currency: string;
+  payableDue: number;
+  payablePaid: number;
+  payableOutstanding: number;
+  receivableDue: number;
+  receivableCollected: number;
+  receivableOutstanding: number;
+};
+
 export type Pay = {
   userId?: number;
   firstName: string;
@@ -74,4 +84,16 @@ export type Pay = {
   platformGuestBreakdowns?: Record<string, PlatformGuestTierBreakdown[]>;
   lockedComponents?: LockedComponentSummary[];
   breakdown: PayBreakdown[];
+  staffProfileId?: number | null;
+  financeVendorId?: number | null;
+  financeClientId?: number | null;
+  payouts?: PayPayouts;
+  openingBalance?: number;
+  closingBalance?: number;
+  dueAmount?: number;
+  paidAmount?: number;
+  range?: {
+    startDate: string;
+    endDate: string;
+  };
 };

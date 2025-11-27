@@ -32,6 +32,8 @@ import VenueCompensationTerm from "../models/VenueCompensationTerm.js";
 import VenueCompensationTermRate from "../models/VenueCompensationTermRate.js";
 import VenueCompensationCollectionLog from "../models/VenueCompensationCollectionLog.js";
 import StaffProfile from "../models/StaffProfile.js";
+import StaffPayoutCollectionLog from "../models/StaffPayoutCollectionLog.js";
+import StaffPayoutLedger from "../models/StaffPayoutLedger.js";
 import ShiftType from "../models/ShiftType.js";
 import ShiftTemplate from "../models/ShiftTemplate.js";
 import ScheduleWeek from "../models/ScheduleWeek.js";
@@ -134,6 +136,8 @@ const sequelize = new Sequelize({
     NightReportVenue,
     NightReportPhoto,
     StaffProfile,
+    StaffPayoutCollectionLog,
+    StaffPayoutLedger,
     ShiftType,
     ShiftTemplate,
     ScheduleWeek,
