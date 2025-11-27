@@ -25,6 +25,9 @@ import {
 import { fetchLeaderNightReportStats } from '../services/nightReportMetricsService.js';
 
 const DEFAULT_PAYOUT_CURRENCY = process.env.FINANCE_BASE_CURRENCY?.trim().toUpperCase() ?? 'PLN';
+const VENUE_LEDGER_START_DATE = dayjs(
+  process.env.VENUE_LEDGER_START_DATE ?? process.env.VENUE_COMP_LEDGER_START ?? '2025-10-01',
+);
 
 type RawVenueAggregate = {
   venueId: number | null;
@@ -1408,6 +1411,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       start.year() === end.year();
     const startIso = start.format('YYYY-MM-DD');
     const endIso = end.format('YYYY-MM-DD');
+    const ledgerEligible = isCanonicalRange && !start.isBefore(VENUE_LEDGER_START_DATE, 'day');
 
     const detailRows = (await NightReportVenue.findAll({
       attributes: [
@@ -1583,7 +1587,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       totalsMap.get(currency)![direction] += amount;
     });
 
-    if (isCanonicalRange) {
+    if (ledgerEligible) {
       const canonicalEntries = Array.from(venueMap.values()).filter((entry) => entry.venueId !== null);
       if (canonicalEntries.length > 0) {
         const venueIds = Array.from(new Set(canonicalEntries.map((entry) => entry.venueId))) as number[];
@@ -1594,6 +1598,9 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
             },
             rangeEnd: {
               [Op.lt]: startIso,
+            },
+            rangeStart: {
+              [Op.gte]: VENUE_LEDGER_START_DATE.format('YYYY-MM-DD'),
             },
           },
           order: [
@@ -1626,31 +1633,35 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
     ): LedgerSnapshot => {
       const due = roundCurrencyValue(Math.max(dueValue, 0));
       const paid = roundCurrencyValue(Math.max(paidValue, 0));
-      let opening = 0;
-      if (isCanonicalRange && venueId) {
-        const previous = previousLedgerMap.get(`${venueId}|${currency}|${direction}`);
-        if (previous) {
-          opening = convertMinorUnitsToMajor(previous.closingBalanceMinor);
-        }
-      }
-      const closing = isCanonicalRange
-        ? roundCurrencyValue(opening + due - paid)
-        : roundCurrencyValue(due - paid);
 
-      if (isCanonicalRange && venueId) {
-        const upsertKey = `${venueId}|${currency}|${direction}`;
-        ledgerUpsertMap.set(upsertKey, {
-          venueId,
-          direction,
-          currencyCode: currency,
-          rangeStart: startIso,
-          rangeEnd: endIso,
-          openingBalanceMinor: convertMajorUnitsToMinor(opening),
-          dueAmountMinor: convertMajorUnitsToMinor(due),
-          paidAmountMinor: convertMajorUnitsToMinor(paid),
-          closingBalanceMinor: convertMajorUnitsToMinor(closing),
-        });
+      if (!ledgerEligible || !venueId) {
+        return {
+          opening: 0,
+          due,
+          paid,
+          closing: roundCurrencyValue(due - paid),
+        };
       }
+
+      let opening = 0;
+      const previous = previousLedgerMap.get(`${venueId}|${currency}|${direction}`);
+      if (previous) {
+        opening = convertMinorUnitsToMajor(previous.closingBalanceMinor);
+      }
+      const closing = roundCurrencyValue(opening + due - paid);
+
+      const upsertKey = `${venueId}|${currency}|${direction}`;
+      ledgerUpsertMap.set(upsertKey, {
+        venueId,
+        direction,
+        currencyCode: currency,
+        rangeStart: startIso,
+        rangeEnd: endIso,
+        openingBalanceMinor: convertMajorUnitsToMinor(opening),
+        dueAmountMinor: convertMajorUnitsToMinor(due),
+        paidAmountMinor: convertMajorUnitsToMinor(paid),
+        closingBalanceMinor: convertMajorUnitsToMinor(closing),
+      });
 
       return { opening, due, paid, closing };
     };
@@ -1749,7 +1760,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       };
     });
 
-    if (isCanonicalRange && ledgerUpsertMap.size > 0) {
+    if (ledgerEligible && ledgerUpsertMap.size > 0) {
       await Promise.all(Array.from(ledgerUpsertMap.values()).map((payload) => VenueCompensationLedger.upsert(payload)));
     }
 
