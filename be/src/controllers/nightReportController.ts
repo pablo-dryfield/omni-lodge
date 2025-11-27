@@ -45,6 +45,9 @@ type VenueDetailAggregate = {
   direction: 'receivable' | 'payable' | null;
   payoutAmount: string | number | null;
   totalPeople: number | null;
+  normalCount: number | null;
+  cocktailsCount: number | null;
+  brunchCount: number | null;
   activityDate: string | null;
   reportId: number | null;
 };
@@ -1369,6 +1372,9 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         'direction',
         'payoutAmount',
         'totalPeople',
+        'normalCount',
+        'cocktailsCount',
+        'brunchCount',
         [col('report.activity_date'), 'activityDate'],
         [col('report.id'), 'reportId'],
       ],
@@ -1430,13 +1436,17 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         currency: string;
         receivable: number;
         payable: number;
-        totalPeople: number;
+        totalPeopleReceivable: number;
+        totalPeoplePayable: number;
         daily: Array<{
           date: string;
           reportId: number | null;
           totalPeople: number;
           amount: number;
           direction: 'receivable' | 'payable';
+          normalCount: number;
+          cocktailsCount: number;
+          brunchCount: number;
         }>;
       }
     >();
@@ -1449,6 +1459,12 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       const amount = Number.isFinite(numericAmount) ? numericAmount : 0;
       const numericPeople = Number(row.totalPeople ?? 0);
       const totalPeople = Number.isFinite(numericPeople) ? numericPeople : 0;
+      const normalCountRaw = Number(row.normalCount ?? 0);
+      const normalCount = Number.isFinite(normalCountRaw) ? normalCountRaw : 0;
+      const cocktailsCountRaw = Number(row.cocktailsCount ?? 0);
+      const cocktailsCount = Number.isFinite(cocktailsCountRaw) ? cocktailsCountRaw : 0;
+      const brunchCountRaw = Number(row.brunchCount ?? 0);
+      const brunchCount = Number.isFinite(brunchCountRaw) ? brunchCountRaw : 0;
       const activityDate = row.activityDate ? dayjs(row.activityDate).format('YYYY-MM-DD') : '';
       const reportId = typeof row.reportId === 'number' ? row.reportId : null;
       const venueId = row.venueId ?? null;
@@ -1463,20 +1479,28 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
           currency,
           receivable: 0,
           payable: 0,
-          totalPeople: 0,
+          totalPeopleReceivable: 0,
+          totalPeoplePayable: 0,
           daily: [],
         });
       }
 
       const existing = venueMap.get(key)!;
       existing[direction] += amount;
-      existing.totalPeople += totalPeople;
+      if (direction === 'receivable') {
+        existing.totalPeopleReceivable += totalPeople;
+      } else {
+        existing.totalPeoplePayable += totalPeople;
+      }
       existing.daily.push({
         date: activityDate,
         reportId,
         totalPeople,
         amount: roundCurrencyValue(amount),
         direction,
+        normalCount,
+        cocktailsCount,
+        brunchCount,
       });
 
       if (!totalsMap.has(currency)) {
@@ -1508,7 +1532,9 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         payableCollected,
         payableOutstanding: roundCurrencyValue(Math.max(payable - payableCollected, 0)),
         net: roundCurrencyValue(receivable - payable),
-        totalPeople: entry.totalPeople,
+        totalPeople: entry.totalPeopleReceivable + entry.totalPeoplePayable,
+        totalPeopleReceivable: entry.totalPeopleReceivable,
+        totalPeoplePayable: entry.totalPeoplePayable,
         daily: entry.daily,
         rowKey: key,
       };
