@@ -298,6 +298,9 @@ const COMMISSION_RATE_PER_ATTENDEE = 0;
 const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-01");
 const REVIEW_MINIMUM_THRESHOLD = 15;
 const DEFAULT_PAYOUT_CURRENCY = process.env.FINANCE_BASE_CURRENCY?.trim().toUpperCase() ?? "PLN";
+const STAFF_LEDGER_START_DATE = dayjs(
+  process.env.STAFF_LEDGER_START_DATE ?? process.env.PAYOUT_LEDGER_START ?? "2025-10-01",
+);
 const roundCurrencyValue = (value: number): number => Math.round(value * 100) / 100;
 const convertMinorUnitsToMajor = (value: unknown): number =>
   roundCurrencyValue(Number(value ?? 0) / 100);
@@ -1590,6 +1593,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       end.isSame(start.endOf("month"), "day") &&
       start.isSame(end, "month") &&
       start.year() === end.year();
+    const isLedgerEligible = isCanonicalRange && !start.isBefore(STAFF_LEDGER_START_DATE, "day");
 
     const commissionDataByUser = new Map<number, CommissionSummary>();
     const productBucketsByUser: ProductBucketLookup = new Map();
@@ -1880,7 +1884,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
 
     const commissionUserIds = Array.from(commissionDataByUser.keys());
     const previousLedgerMap = new Map<number, StaffPayoutLedger>();
-    if (isCanonicalRange && commissionUserIds.length > 0) {
+    if (isLedgerEligible && commissionUserIds.length > 0) {
       const previousLedgers = await StaffPayoutLedger.findAll({
         where: {
           staffUserId: {
@@ -1888,6 +1892,9 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           },
           rangeEnd: {
             [Op.lt]: start.format("YYYY-MM-DD"),
+          },
+          rangeStart: {
+            [Op.gte]: STAFF_LEDGER_START_DATE.format("YYYY-MM-DD"),
           },
         },
         order: [
@@ -1932,12 +1939,12 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       };
       const existingLedger = previousLedgerMap.get(entry.userId);
       const openingBalance =
-        isCanonicalRange && existingLedger
+        isLedgerEligible && existingLedger
           ? roundCurrencyValue(existingLedger.closingBalanceMinor / 100)
           : 0;
       const periodDueAmount = Number(entry.totalPayout.toFixed(2));
       const periodPaidAmount = roundCurrencyValue(payouts.payablePaid ?? 0);
-      const closingBalance = isCanonicalRange
+      const closingBalance = isLedgerEligible
         ? roundCurrencyValue(openingBalance + periodDueAmount - periodPaidAmount)
         : roundCurrencyValue(periodDueAmount - periodPaidAmount);
 
@@ -1994,7 +2001,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       };
     });
 
-    if (isCanonicalRange && allSummaries.length > 0) {
+    if (isLedgerEligible && allSummaries.length > 0) {
       await Promise.all(
         allSummaries.map((summary) => {
           const openingBalanceMinor = convertMajorUnitsToMinor(summary.openingBalance ?? 0);

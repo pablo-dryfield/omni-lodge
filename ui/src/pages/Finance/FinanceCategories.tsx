@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ActionIcon,
+  Badge,
   Button,
+  Card,
   Group,
   Modal,
   Select,
   Stack,
   Switch,
-  Table,
+  Text,
   TextInput,
   Title,
 } from "@mantine/core";
@@ -20,7 +22,7 @@ import {
   updateFinanceCategory,
 } from "../../actions/financeActions";
 import { selectFinanceCategories } from "../../selectors/financeSelectors";
-import { FinanceCategory } from "../../types/finance";
+import type { FinanceCategory } from "../../types/finance";
 
 type DraftCategory = {
   name: string;
@@ -29,7 +31,9 @@ type DraftCategory = {
   isActive: boolean;
 };
 
-const defaultDraft: DraftCategory = {
+type CategoryNode = FinanceCategory & { children: CategoryNode[] };
+
+const DEFAULT_DRAFT: DraftCategory = {
   name: "",
   kind: "expense",
   parentId: null,
@@ -41,7 +45,7 @@ const FinanceCategories = () => {
   const categories = useAppSelector(selectFinanceCategories);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<FinanceCategory | null>(null);
-  const [draft, setDraft] = useState<DraftCategory>(defaultDraft);
+  const [draft, setDraft] = useState<DraftCategory>(DEFAULT_DRAFT);
 
   useEffect(() => {
     dispatch(fetchFinanceCategories());
@@ -56,29 +60,109 @@ const FinanceCategories = () => {
         isActive: editingCategory.isActive,
       });
     } else {
-      setDraft(defaultDraft);
+      setDraft(DEFAULT_DRAFT);
     }
   }, [editingCategory]);
 
-  const parentOptions = useMemo(
-    () =>
-      categories.data.map((category) => ({
-        value: String(category.id),
-        label: `${category.kind === "income" ? "Income" : "Expense"} �- ${category.name}`,
-      })),
-    [categories.data],
-  );
+  const categoryTree = useMemo<CategoryNode[]>(() => {
+    const nodes = new Map<number, CategoryNode>();
+    categories.data.forEach((category) => {
+      nodes.set(category.id, { ...category, children: [] });
+    });
 
-  const displayCategories = useMemo(() => {
-    const map = new Map<number, FinanceCategory>();
-    categories.data.forEach((category) => map.set(category.id, category));
-    return categories.data
-      .map((category) => {
-        const parent = category.parentId ? map.get(category.parentId) : undefined;
-        return { category, parentName: parent?.name ?? "—" };
-      })
-      .sort((a, b) => a.category.name.localeCompare(b.category.name));
+    const roots: CategoryNode[] = [];
+    nodes.forEach((node) => {
+      if (node.parentId && nodes.has(node.parentId)) {
+        nodes.get(node.parentId)!.children.push(node);
+      } else {
+        roots.push(node);
+      }
+    });
+
+    const sortTree = (list: CategoryNode[]) => {
+      list.sort((a, b) => a.name.localeCompare(b.name));
+      list.forEach((child) => sortTree(child.children));
+    };
+    sortTree(roots);
+
+    return roots;
   }, [categories.data]);
+
+  const parentOptions = useMemo(() => {
+    const options: { value: string; label: string }[] = [];
+    const traverse = (nodes: CategoryNode[], depth = 0) => {
+      nodes.forEach((node) => {
+        options.push({
+          value: String(node.id),
+          label: `${"• ".repeat(depth)}${node.name} (${node.kind === "income" ? "Income" : "Expense"})`,
+        });
+        if (node.children.length > 0) {
+          traverse(node.children, depth + 1);
+        }
+      });
+    };
+    traverse(categoryTree);
+    return options;
+  }, [categoryTree]);
+
+  const handleDelete = async (id: number) => {
+    await dispatch(deleteFinanceCategory(id));
+  };
+
+  const renderTree = (nodes: CategoryNode[], depth = 0): JSX.Element[] =>
+    nodes.flatMap((node) => {
+      const card = (
+        <Card key={node.id} withBorder padding="md" radius="md" style={{ marginLeft: depth * 20 }}>
+          <Stack gap="xs">
+            <Group justify="space-between" align="flex-start">
+              <Stack gap={2}>
+                <Group gap="xs">
+                  <Text fw={600}>{node.name}</Text>
+                  <Badge color={node.kind === "income" ? "green" : "blue"} variant="light">
+                    {node.kind === "income" ? "Income" : "Expense"}
+                  </Badge>
+                  {!node.isActive && (
+                    <Badge color="gray" variant="light">
+                      Inactive
+                    </Badge>
+                  )}
+                </Group>
+                <Text size="xs" c="dimmed">
+                  {node.parentId ? `Child of category #${node.parentId}` : "Root category"}
+                </Text>
+              </Stack>
+              <Group gap={4}>
+                <ActionIcon
+                  variant="subtle"
+                  aria-label="Edit category"
+                  onClick={() => {
+                    setEditingCategory(node);
+                    setModalOpen(true);
+                  }}
+                >
+                  <IconEdit size={18} />
+                </ActionIcon>
+                <ActionIcon
+                  color="red"
+                  variant="subtle"
+                  aria-label="Delete category"
+                  onClick={() => handleDelete(node.id)}
+                >
+                  <IconTrash size={18} />
+                </ActionIcon>
+              </Group>
+            </Group>
+            {node.children.length > 0 && (
+              <Text size="sm" c="dimmed">
+                {node.children.length} subcategor{node.children.length === 1 ? "y" : "ies"}
+              </Text>
+            )}
+          </Stack>
+        </Card>
+      );
+      const children = node.children.length > 0 ? renderTree(node.children, depth + 1) : [];
+      return [card, ...children];
+    });
 
   const handleSubmit = async () => {
     if (!draft.name.trim()) {
@@ -89,10 +173,7 @@ const FinanceCategories = () => {
       await dispatch(
         updateFinanceCategory({
           id: editingCategory.id,
-          changes: {
-            ...editingCategory,
-            ...draft,
-          },
+          changes: { ...editingCategory, ...draft },
         }),
       );
     } else {
@@ -101,11 +182,7 @@ const FinanceCategories = () => {
 
     setModalOpen(false);
     setEditingCategory(null);
-    setDraft(defaultDraft);
-  };
-
-  const handleDelete = async (id: number) => {
-    await dispatch(deleteFinanceCategory(id));
+    setDraft(DEFAULT_DRAFT);
   };
 
   return (
@@ -123,43 +200,15 @@ const FinanceCategories = () => {
         </Button>
       </Group>
 
-      <Table striped withColumnBorders highlightOnHover>
-        <Table.Thead>
-          <Table.Tr>
-            <Table.Th>Name</Table.Th>
-            <Table.Th>Kind</Table.Th>
-            <Table.Th>Parent</Table.Th>
-            <Table.Th>Status</Table.Th>
-            <Table.Th />
-          </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {displayCategories.map(({ category, parentName }) => (
-            <Table.Tr key={category.id}>
-              <Table.Td>{category.name}</Table.Td>
-              <Table.Td>{category.kind === "income" ? "Income" : "Expense"}</Table.Td>
-              <Table.Td>{parentName}</Table.Td>
-              <Table.Td>{category.isActive ? "Active" : "Inactive"}</Table.Td>
-              <Table.Td width={120}>
-                <Group gap={4} justify="flex-end">
-                  <ActionIcon
-                    variant="subtle"
-                    onClick={() => {
-                      setEditingCategory(category);
-                      setModalOpen(true);
-                    }}
-                  >
-                    <IconEdit size={18} />
-                  </ActionIcon>
-                  <ActionIcon color="red" variant="subtle" onClick={() => handleDelete(category.id)}>
-                    <IconTrash size={18} />
-                  </ActionIcon>
-                </Group>
-              </Table.Td>
-            </Table.Tr>
-          ))}
-        </Table.Tbody>
-      </Table>
+      {categoryTree.length === 0 ? (
+        <Card withBorder padding="xl">
+          <Text c="dimmed" ta="center">
+            No categories found. Create your first category to start building the tree.
+          </Text>
+        </Card>
+      ) : (
+        <Stack gap="sm">{renderTree(categoryTree)}</Stack>
+      )}
 
       <Modal
         opened={modalOpen}
@@ -185,7 +234,9 @@ const FinanceCategories = () => {
                 { value: "expense", label: "Expense" },
               ]}
               value={draft.kind}
-              onChange={(value) => setDraft((state) => ({ ...state, kind: (value ?? "expense") as DraftCategory["kind"] }))}
+              onChange={(value) =>
+                setDraft((state) => ({ ...state, kind: (value ?? "expense") as DraftCategory["kind"] }))
+              }
             />
             <Select
               label="Parent"
@@ -220,4 +271,3 @@ const FinanceCategories = () => {
 };
 
 export default FinanceCategories;
-
