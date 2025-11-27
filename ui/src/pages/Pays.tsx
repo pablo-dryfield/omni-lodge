@@ -1,4 +1,4 @@
-﻿import React, { Fragment, useEffect, useMemo, useState } from 'react';
+﻿import React, { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Paper,
   Container,
@@ -20,6 +20,10 @@ import {
   Select,
   ActionIcon,
   Collapse,
+  Modal,
+  NumberInput,
+  Textarea,
+  SegmentedControl,
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
 import dayjs, { Dayjs } from 'dayjs';
@@ -32,10 +36,23 @@ import {
 } from '../types/pays/Pay';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { fetchPays } from '../actions/payActions';
+import {
+  fetchFinanceAccounts,
+  fetchFinanceCategories,
+  fetchFinanceVendors,
+  createFinanceTransaction,
+} from '../actions/financeActions';
 import { useModuleAccess } from '../hooks/useModuleAccess';
 import { PageAccessGuard } from '../components/access/PageAccessGuard';
 import { PAGE_SLUGS } from '../constants/pageSlugs';
 import { useMediaQuery } from '@mantine/hooks';
+import axiosInstance from '../utils/axiosInstance';
+import {
+  selectFinanceAccounts,
+  selectFinanceCategories,
+  selectFinanceVendors,
+} from '../selectors/financeSelectors';
+import type { FinanceVendor } from '../types/finance';
 import {
   ResponsiveContainer,
   PieChart,
@@ -50,6 +67,7 @@ import {
 } from 'recharts';
 
 const EARLIEST_DATA_DATE = dayjs('2020-01-01');
+const DEFAULT_CURRENCY = 'PLN';
 
 type DatePreset = 'this_month' | 'last_month' | 'custom';
 
@@ -59,13 +77,32 @@ const DATE_PRESET_OPTIONS: Array<{ value: DatePreset; label: string }> = [
   { value: 'custom', label: 'Custom range' },
 ];
 
-const formatCurrency = (value: number | undefined): string => {
+const formatCurrency = (value: number | undefined, currencyCode?: string): string => {
   const numberPart = (value ?? 0).toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+  if (currencyCode && currencyCode.trim().length > 0) {
+    return `${currencyCode.trim().toUpperCase()} ${numberPart}`;
+  }
   return `${numberPart} zł`;
 };
+
+const toMinorUnits = (value: number): number => Math.round(value * 100);
+
+const computePreviousRange = (start: Dayjs, end: Dayjs) => {
+  const diffDays = end.startOf('day').diff(start.startOf('day'), 'day');
+  const previousRangeEnd = start.subtract(1, 'day');
+  const previousRangeStart =
+    diffDays > 0 ? previousRangeEnd.subtract(diffDays, 'day') : previousRangeEnd;
+  return {
+    start: previousRangeStart,
+    end: previousRangeEnd,
+  };
+};
+
+const formatRangeLabel = (start: string, end: string) =>
+  `${dayjs(start).format('MMM D, YYYY')} - ${dayjs(end).format('MMM D, YYYY')}`;
 
 const getComponentColor = (category: string) => {
   switch (category) {
@@ -336,6 +373,40 @@ const renderComponentList = (
     </Stack>
   );
 };
+
+type EntryModalState = {
+  open: boolean;
+  staff: Pay | null;
+  amount: number;
+  currency: string;
+  date: Date;
+  accountId: string;
+  categoryId: string;
+  counterpartyId: string;
+  description: string;
+  rangeStart: string;
+  rangeEnd: string;
+  period: 'current' | 'previous';
+  previousRangeStart?: string;
+  previousRangeEnd?: string;
+};
+
+const createEmptyEntryModalState = (): EntryModalState => ({
+  open: false,
+  staff: null,
+  amount: 0,
+  currency: DEFAULT_CURRENCY,
+  date: new Date(),
+  accountId: '',
+  categoryId: '',
+  counterpartyId: '',
+  description: '',
+  rangeStart: '',
+  rangeEnd: '',
+  period: 'current',
+  previousRangeStart: undefined,
+  previousRangeEnd: undefined,
+});
 
 
 const renderBucketTotals = (
@@ -641,6 +712,9 @@ const Pays: React.FC = () => {
   const dispatch = useAppDispatch();
   const payState = useAppSelector((state) => state.pays)[0];
   const { data: responseData, loading, error } = payState;
+  const accounts = useAppSelector(selectFinanceAccounts);
+  const categories = useAppSelector(selectFinanceCategories);
+  const vendors = useAppSelector(selectFinanceVendors);
 
   const today = dayjs();
   const initialRange = calculatePresetRange('this_month', today);
@@ -652,6 +726,9 @@ const Pays: React.FC = () => {
     initialRange.end.toDate(),
   ]);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
+  const [entryModal, setEntryModal] = useState<EntryModalState>(createEmptyEntryModalState());
+  const [entryMessage, setEntryMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [entrySubmitting, setEntrySubmitting] = useState(false);
   const friendlyError = error ? humanizeErrorMessage(error) : null;
 
   useEffect(() => {
@@ -667,6 +744,181 @@ const Pays: React.FC = () => {
     setStartDate(range.start);
     setEndDate(range.end);
   }, [datePreset, customRangeValue]);
+
+  useEffect(() => {
+    if (!accounts.loading && accounts.data.length === 0) {
+      void dispatch(fetchFinanceAccounts());
+    }
+  }, [dispatch, accounts.data.length, accounts.loading]);
+
+  useEffect(() => {
+    if (!categories.loading && categories.data.length === 0) {
+      void dispatch(fetchFinanceCategories());
+    }
+  }, [dispatch, categories.data.length, categories.loading]);
+
+  useEffect(() => {
+    if (!vendors.loading && vendors.data.length === 0) {
+      void dispatch(fetchFinanceVendors());
+    }
+  }, [dispatch, vendors.data.length, vendors.loading]);
+
+  const financeVendorsById = useMemo(() => {
+    const map = new Map<number, FinanceVendor>();
+    vendors.data.forEach((vendor) => {
+      if (typeof vendor.id === 'number') {
+        map.set(vendor.id, vendor);
+      }
+    });
+    return map;
+  }, [vendors.data]);
+
+  const accountOptions = useMemo(
+    () =>
+      accounts.data
+        .filter(
+          (account) =>
+            (account.type === 'cash' || account.type === 'bank') && (account.isActive ?? true),
+        )
+        .map((account) => ({
+          value: String(account.id),
+          label: `${account.name} (${account.currency})`,
+        })),
+    [accounts.data],
+  );
+
+  const expenseCategoryOptions = useMemo(
+    () =>
+      categories.data
+        .filter((category) => category.kind === 'expense')
+        .map((category) => ({ value: String(category.id), label: category.name })),
+    [categories.data],
+  );
+
+  const vendorOptions = useMemo(
+    () => vendors.data.map((vendor) => ({ value: String(vendor.id), label: vendor.name })),
+    [vendors.data],
+  );
+
+  const resolveStaffCounterpartyDefaults = useCallback(
+    (staff: Pay) => {
+      let counterpartyId = '';
+      let categoryId = '';
+      const vendorId = staff.financeVendorId;
+      if (vendorId) {
+        counterpartyId = String(vendorId);
+        const defaultCategoryId = financeVendorsById.get(vendorId)?.defaultCategoryId;
+        if (defaultCategoryId) {
+          categoryId = String(defaultCategoryId);
+        }
+      }
+      return { counterpartyId, categoryId };
+    },
+    [financeVendorsById],
+  );
+
+  const handleCounterpartyChange = useCallback(
+    (value: string | null) => {
+      setEntryModal((prev) => {
+        const nextId = value ?? '';
+        let nextCategoryId = prev.categoryId;
+        if (!value) {
+          nextCategoryId = '';
+        } else {
+          const vendor = financeVendorsById.get(Number(value));
+          nextCategoryId = vendor?.defaultCategoryId ? String(vendor.defaultCategoryId) : '';
+        }
+        return { ...prev, counterpartyId: nextId, categoryId: nextCategoryId };
+      });
+    },
+    [financeVendorsById],
+  );
+
+  const openEntryModal = useCallback(
+    (staff: Pay) => {
+      const outstanding = staff.closingBalance ?? staff.payouts?.payableOutstanding ?? 0;
+      const defaults = resolveStaffCounterpartyDefaults(staff);
+      const currency = staff.payouts?.currency ?? DEFAULT_CURRENCY;
+      const rangeStartValue =
+        staff.range?.startDate ?? startDate?.format('YYYY-MM-DD') ?? dayjs().format('YYYY-MM-DD');
+      const rangeEndValue =
+        staff.range?.endDate ?? endDate?.format('YYYY-MM-DD') ?? dayjs().format('YYYY-MM-DD');
+      const baseRangeStart = dayjs(rangeStartValue);
+      const baseRangeEnd = dayjs(rangeEndValue);
+      const previousRange = computePreviousRange(baseRangeStart, baseRangeEnd);
+
+      setEntryModal({
+        open: true,
+        staff,
+        amount:
+          outstanding > 0 ? outstanding : Math.max(staff.totalPayout ?? staff.totalCommission, 0),
+        currency,
+        date: new Date(),
+        accountId: '',
+        categoryId: defaults.categoryId,
+        counterpartyId: defaults.counterpartyId,
+        description: `Staff payout for ${staff.firstName} (${formatRangeLabel(rangeStartValue, rangeEndValue)})`,
+        rangeStart: rangeStartValue,
+        rangeEnd: rangeEndValue,
+        period: 'current',
+        previousRangeStart: previousRange.start.format('YYYY-MM-DD'),
+        previousRangeEnd: previousRange.end.format('YYYY-MM-DD'),
+      });
+      setEntryMessage(null);
+    },
+    [endDate, resolveStaffCounterpartyDefaults, startDate],
+  );
+
+  const closeEntryModal = useCallback(() => {
+    setEntryModal(createEmptyEntryModalState());
+    setEntryMessage(null);
+  }, []);
+
+  const handleEntryAccountChange = useCallback(
+    (value: string | null) => {
+      if (!value) {
+        setEntryModal((prev) => ({ ...prev, accountId: '' }));
+        return;
+      }
+      const account = accounts.data.find((item) => item.id === Number(value));
+      setEntryModal((prev) => ({
+        ...prev,
+        accountId: value,
+        currency: account?.currency ?? prev.currency,
+      }));
+    },
+    [accounts.data],
+  );
+
+  const handleEntryPeriodChange = useCallback(
+    (value: 'current' | 'previous') => {
+      setEntryModal((prev) => {
+        if (value === 'previous' && prev.previousRangeStart && prev.previousRangeEnd) {
+          return {
+            ...prev,
+            period: value,
+            rangeStart: prev.previousRangeStart,
+            rangeEnd: prev.previousRangeEnd,
+            description: `Staff payout for ${prev.staff?.firstName ?? ''} (${formatRangeLabel(
+              prev.previousRangeStart,
+              prev.previousRangeEnd,
+            )})`,
+          };
+        }
+        return {
+          ...prev,
+          period: 'current',
+          rangeStart: prev.staff?.range?.startDate ?? startDate?.format('YYYY-MM-DD') ?? prev.rangeStart,
+          rangeEnd: prev.staff?.range?.endDate ?? endDate?.format('YYYY-MM-DD') ?? prev.rangeEnd,
+          description: `Staff payout for ${prev.staff?.firstName ?? ''} (${formatRangeLabel(
+            prev.staff?.range?.startDate ?? startDate?.format('YYYY-MM-DD') ?? prev.rangeStart,
+            prev.staff?.range?.endDate ?? endDate?.format('YYYY-MM-DD') ?? prev.rangeEnd,
+          )})`,
+        };
+      });
+    },
+    [endDate, startDate],
+  );
 
   const handlePresetChange = (value: string | null) => {
     if (!value) {
@@ -737,6 +989,35 @@ const Pays: React.FC = () => {
       }));
   }, [summaries]);
 
+  const totalOpening = useMemo(
+    () => summaries.reduce((sum, item) => sum + (item.openingBalance ?? 0), 0),
+    [summaries],
+  );
+  const totalEarnings = useMemo(
+    () =>
+      summaries.reduce(
+        (sum, item) => sum + (item.dueAmount ?? item.totalPayout ?? normalizeTotal(item)),
+        0,
+      ),
+    [summaries],
+  );
+  const totalPaid = useMemo(
+    () =>
+      summaries.reduce(
+        (sum, item) => sum + (item.paidAmount ?? item.payouts?.payablePaid ?? 0),
+        0,
+      ),
+    [summaries],
+  );
+  const totalClosing = useMemo(
+    () =>
+      summaries.reduce(
+        (sum, item) => sum + (item.closingBalance ?? item.payouts?.payableOutstanding ?? 0),
+        0,
+      ),
+    [summaries],
+  );
+
   const totalCommission = useMemo(
     () => summaries.reduce((sum, item) => sum + item.totalCommission, 0),
     [summaries],
@@ -771,6 +1052,93 @@ const Pays: React.FC = () => {
     }
   }, [startDate, endDate, dispatch, permissionsReady, permissionsLoading, canViewFull, canViewSelf, scopeParam]);
 
+  const handleEntrySubmit = async () => {
+    setEntryMessage(null);
+    if (!entryModal.staff) {
+      setEntryMessage({ type: 'error', text: 'Select a staff entry before recording a payout.' });
+      return;
+    }
+    if (!entryModal.rangeStart || !entryModal.rangeEnd) {
+      setEntryMessage({ type: 'error', text: 'Select a payout period before recording a payment.' });
+      return;
+    }
+    if (!entryModal.staff.staffProfileId) {
+      setEntryMessage({
+        type: 'error',
+        text: 'Link this staff profile to a finance vendor before recording a payout.',
+      });
+      return;
+    }
+    if (
+      entryModal.amount <= 0 ||
+      !entryModal.accountId ||
+      !entryModal.categoryId ||
+      !entryModal.counterpartyId
+    ) {
+      setEntryMessage({
+        type: 'error',
+        text: 'Fill in the amount, account, category, and vendor before submitting.',
+      });
+      return;
+    }
+
+    setEntrySubmitting(true);
+    try {
+      const transaction = await dispatch(
+        createFinanceTransaction({
+          kind: 'expense',
+          date: dayjs(entryModal.date).format('YYYY-MM-DD'),
+          accountId: Number(entryModal.accountId),
+          currency: entryModal.currency,
+          amountMinor: toMinorUnits(entryModal.amount),
+          categoryId: Number(entryModal.categoryId),
+          counterpartyType: 'vendor',
+          counterpartyId: Number(entryModal.counterpartyId),
+          status: 'paid',
+          description: entryModal.description || null,
+          meta: {
+            source: 'staff-payments',
+            rangeStart: entryModal.rangeStart,
+            rangeEnd: entryModal.rangeEnd,
+            staffUserId: entryModal.staff.userId ?? null,
+          },
+        }),
+      ).unwrap();
+
+      await axiosInstance.post(
+        '/reports/staffPayouts/collections',
+        {
+          staffProfileId: entryModal.staff.staffProfileId,
+          direction: 'payable',
+          currency: entryModal.currency,
+          amount: entryModal.amount,
+          rangeStart: entryModal.rangeStart,
+          rangeEnd: entryModal.rangeEnd,
+          financeTransactionId: transaction.id,
+          note: entryModal.description ?? null,
+        },
+        { withCredentials: true },
+      );
+
+      closeEntryModal();
+      const refetchStart = startDate ? startDate.format('YYYY-MM-DD') : entryModal.rangeStart;
+      const refetchEnd = endDate ? endDate.format('YYYY-MM-DD') : entryModal.rangeEnd;
+      await dispatch(
+        fetchPays({
+          startDate: refetchStart,
+          endDate: refetchEnd,
+          scope: scopeParam,
+        }),
+      );
+    } catch (submissionError) {
+      const message =
+        submissionError instanceof Error ? submissionError.message : 'Unable to record payout.';
+      setEntryMessage({ type: 'error', text: message });
+    } finally {
+      setEntrySubmitting(false);
+    }
+  };
+
   const toggleRow = (index: number) => {
     setExpandedRow((prev) => (prev === index ? null : index));
   };
@@ -783,52 +1151,68 @@ const Pays: React.FC = () => {
   );
 
   const renderSummaryBoard = () => (
-    <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }}>
-      <Card withBorder>
-        <Text size="sm" c="dimmed">
-          Total payout
-        </Text>
-        <Title order={4}>{formatCurrency(totalPayout)}</Title>
-        <Text size="xs" c="dimmed">
-          Across {totalGuides} guide{totalGuides === 1 ? '' : 's'}
-        </Text>
-      </Card>
-      <Card withBorder>
-        <Text size="sm" c="dimmed">
-          Commission
-        </Text>
-        <Title order={4}>{formatCurrency(totalCommission)}</Title>
-        <Text size="xs" c="dimmed">
-          Direct commission earned
-        </Text>
-      </Card>
-      <Card withBorder>
-        <Text size="sm" c="dimmed">
-          Incentives & bonuses
-        </Text>
-        <Title order={4}>
-          {formatCurrency(
-            aggregatedBucketData
-              .filter((bucket) => bucket.bucket !== 'commission')
-              .reduce((sum, bucket) => sum + bucket.amount, 0),
-          )}
-        </Title>
-        <Text size="xs" c="dimmed">
-          Additional payouts (base, incentives, reviews)
-        </Text>
-      </Card>
-      <Card withBorder>
-        <Text size="sm" c="dimmed">
-          Range
-        </Text>
-        <Title order={5}>
-          {startDate?.format('MMM D, YYYY')} - {endDate?.format('MMM D, YYYY')}
-        </Title>
-        <Text size="xs" c="dimmed">
-          Updated from counter data
-        </Text>
-      </Card>
-    </SimpleGrid>
+    <Stack gap="sm">
+      <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }}>
+        <Card withBorder>
+          <Text size="sm" c="dimmed">
+            Opening balance
+          </Text>
+          <Title order={4}>{formatCurrency(totalOpening)}</Title>
+          <Text size="xs" c="dimmed">
+            Carry-over into this period
+          </Text>
+        </Card>
+        <Card withBorder>
+          <Text size="sm" c="dimmed">
+            New earnings
+          </Text>
+          <Title order={4}>{formatCurrency(totalEarnings)}</Title>
+          <Text size="xs" c="dimmed">
+            Guides with payouts this range
+          </Text>
+        </Card>
+        <Card withBorder>
+          <Text size="sm" c="dimmed">
+            Paid this period
+          </Text>
+          <Title order={4}>{formatCurrency(totalPaid, DEFAULT_CURRENCY)}</Title>
+          <Text size="xs" c="dimmed">
+            Finance transactions recorded
+          </Text>
+        </Card>
+        <Card withBorder>
+          <Text size="sm" c="dimmed">
+            Closing balance
+          </Text>
+          <Title order={4}>{formatCurrency(totalClosing)}</Title>
+          <Text size="xs" c="dimmed">
+            Outstanding across {totalGuides} guide{totalGuides === 1 ? '' : 's'}
+          </Text>
+        </Card>
+      </SimpleGrid>
+      <SimpleGrid cols={{ base: 1, sm: 2 }}>
+        <Card withBorder>
+          <Text size="sm" c="dimmed">
+            Total commission
+          </Text>
+          <Title order={4}>{formatCurrency(totalCommission)}</Title>
+          <Text size="xs" c="dimmed">
+            Direct commission earned
+          </Text>
+        </Card>
+        <Card withBorder>
+          <Text size="sm" c="dimmed">
+            Range
+          </Text>
+          <Title order={5}>
+            {startDate?.format('MMM D, YYYY')} - {endDate?.format('MMM D, YYYY')}
+          </Title>
+          <Text size="xs" c="dimmed">
+            Period payout total: {formatCurrency(totalPayout)}
+          </Text>
+        </Card>
+      </SimpleGrid>
+    </Stack>
   );
 
   const renderCharts = () => {
@@ -954,6 +1338,33 @@ const Pays: React.FC = () => {
               </Group>
 
               <Stack gap="xs">
+                <Stack gap={4}>
+                  <Group justify="space-between">
+                    <Text size="sm" c="dimmed">
+                      Paid
+                    </Text>
+                    <Text size="sm" fw={600}>
+                      {formatCurrency(item.payouts?.payablePaid ?? 0, item.payouts?.currency ?? DEFAULT_CURRENCY)}
+                    </Text>
+                  </Group>
+                  <Group justify="space-between">
+                    <Text size="sm" c="dimmed">
+                      Outstanding
+                    </Text>
+                    <Text size="sm" fw={600} c={(item.payouts?.payableOutstanding ?? 0) > 0 ? undefined : 'teal'}>
+                      {formatCurrency(item.payouts?.payableOutstanding ?? 0, item.payouts?.currency ?? DEFAULT_CURRENCY)}
+                    </Text>
+                  </Group>
+                  {(item.payouts?.payableOutstanding ?? 0) > 0 ? (
+                    <Button variant="light" size="xs" onClick={() => openEntryModal(item)}>
+                      Record payment
+                    </Button>
+                  ) : (
+                    <Badge color="green" variant="light" w="fit-content">
+                      Settled
+                    </Badge>
+                  )}
+                </Stack>
                 {renderComponentList(
                   item.componentTotals,
                   item.platformGuestBreakdowns,
@@ -987,6 +1398,14 @@ const Pays: React.FC = () => {
     const tableCommissionTotal = summaries.reduce((sum, item) => sum + item.totalCommission, 0);
     const tablePayoutTotal = summaries.reduce((sum, item) => sum + normalizeTotal(item), 0);
     const tableIncentiveTotal = summaries.reduce((sum, item) => sum + calculateIncentiveTotal(item), 0);
+    const tablePaidTotal = summaries.reduce(
+      (sum, item) => sum + (item.payouts?.payablePaid ?? 0),
+      0,
+    );
+    const tableOutstandingTotal = summaries.reduce(
+      (sum, item) => sum + (item.payouts?.payableOutstanding ?? 0),
+      0,
+    );
     return (
       <ScrollArea>
         <Table striped highlightOnHover withRowBorders style={{ minWidth: 640 }}>
@@ -996,6 +1415,8 @@ const Pays: React.FC = () => {
               <th style={{ padding: 12 }}>Commission</th>
               <th style={{ padding: 12 }}>Incentives</th>
               <th style={{ padding: 12 }}>Total payout</th>
+              <th style={{ padding: 12 }}>Paid</th>
+              <th style={{ padding: 12 }}>Outstanding</th>
               <th style={{ padding: 12 }} />
             </tr>
           </thead>
@@ -1008,6 +1429,9 @@ const Pays: React.FC = () => {
                 (item.lockedComponents && item.lockedComponents.length > 0) ||
                 (item.componentTotals && item.componentTotals.length > 0);
               const incentiveAmount = calculateIncentiveTotal(item);
+              const paidAmount = item.payouts?.payablePaid ?? 0;
+              const outstandingAmount = item.payouts?.payableOutstanding ?? 0;
+              const payoutCurrency = item.payouts?.currency ?? DEFAULT_CURRENCY;
               return (
                 <Fragment key={item.userId ?? index}>
                   <tr>
@@ -1015,17 +1439,30 @@ const Pays: React.FC = () => {
                     <td style={{ padding: 12 }}>{formatCurrency(item.totalCommission)}</td>
                     <td style={{ padding: 12 }}>{formatCurrency(incentiveAmount)}</td>
                     <td style={{ padding: 12 }}>{formatCurrency(normalizeTotal(item))}</td>
+                    <td style={{ padding: 12 }}>{formatCurrency(paidAmount, payoutCurrency)}</td>
+                    <td style={{ padding: 12 }}>{formatCurrency(outstandingAmount, payoutCurrency)}</td>
                     <td style={{ padding: 12, textAlign: 'right' }}>
-                      {rowHasDetails && (
-                        <Button variant="subtle" size="xs" onClick={() => toggleRow(index)}>
-                          {expandedRow === index ? 'Hide details' : 'Show details'}
-                        </Button>
-                      )}
+                      <Stack gap={6} align="flex-end">
+                        {outstandingAmount > 0 ? (
+                          <Button variant="light" size="xs" onClick={() => openEntryModal(item)}>
+                            Record payment
+                          </Button>
+                        ) : (
+                          <Text size="xs" c="dimmed">
+                            Settled
+                          </Text>
+                        )}
+                        {rowHasDetails && (
+                          <Button variant="subtle" size="xs" onClick={() => toggleRow(index)}>
+                            {expandedRow === index ? 'Hide details' : 'Show details'}
+                          </Button>
+                        )}
+                      </Stack>
                     </td>
                   </tr>
                   {expandedRow === index && (
                     <tr>
-                      <td colSpan={4} style={{ backgroundColor: '#fafafa', padding: '12px 8px' }}>
+                      <td colSpan={7} style={{ backgroundColor: '#fafafa', padding: '12px 8px' }}>
                         <Stack gap="md">
                           {renderBucketTotals(item.bucketTotals, item.lockedComponents)}
                           {renderComponentList(
@@ -1056,6 +1493,12 @@ const Pays: React.FC = () => {
               </td>
               <td style={{ padding: 12 }}>
                 <strong>{formatCurrency(tablePayoutTotal)}</strong>
+              </td>
+              <td style={{ padding: 12 }}>
+                <strong>{formatCurrency(tablePaidTotal, DEFAULT_CURRENCY)}</strong>
+              </td>
+              <td style={{ padding: 12 }}>
+                <strong>{formatCurrency(tableOutstandingTotal, DEFAULT_CURRENCY)}</strong>
               </td>
               <td />
             </tr>
@@ -1125,7 +1568,7 @@ const Pays: React.FC = () => {
                 </Group>
                 <Text size="sm" c="dimmed" ta="center">
                   {startDate && endDate
-                    ? `${startDate.format('MMM D, YYYY')} → ${endDate.format('MMM D, YYYY')}`
+                    ? `${startDate.format('MMM D, YYYY')} › ${endDate.format('MMM D, YYYY')}`
                     : 'Select a date range'}
                 </Text>
               </Stack>
@@ -1165,7 +1608,114 @@ const Pays: React.FC = () => {
     );
   }
 
-  return <PageAccessGuard pageSlug={PAGE_SLUG}>{content}</PageAccessGuard>;
+  const reportingRangeLabel =
+    startDate && endDate
+      ? `${startDate.format('MMM D, YYYY')} - ${endDate.format('MMM D, YYYY')}`
+      : 'selected period';
+
+  return (
+    <PageAccessGuard pageSlug={PAGE_SLUG}>
+      <>
+        {content}
+        <Modal
+          opened={entryModal.open}
+          onClose={closeEntryModal}
+          title={
+            entryModal.staff
+              ? `Record payout for ${entryModal.staff.firstName}`
+              : 'Record staff payout'
+          }
+          size="lg"
+          radius="md"
+        >
+          <Stack gap="sm">
+            {entryModal.staff && (
+              <Alert color="blue" variant="light">
+                Outstanding this range:{' '}
+                {formatCurrency(
+                  entryModal.staff.payouts?.payableOutstanding ?? 0,
+                  entryModal.staff.payouts?.currency ?? DEFAULT_CURRENCY,
+                )}
+              </Alert>
+            )}
+            <Text size="xs" c="dimmed">
+              Period: {reportingRangeLabel}
+            </Text>
+            <NumberInput
+              label="Amount"
+              value={entryModal.amount}
+              min={0}
+              step={10}
+              hideControls
+              onChange={(value) => {
+                const numericValue = typeof value === 'number' ? value : Number(value ?? 0);
+                setEntryModal((prev) => ({
+                  ...prev,
+                  amount: Number.isFinite(numericValue) ? numericValue : prev.amount,
+                }));
+              }}
+            />
+            <Select
+              label="Account"
+              placeholder="Select an account"
+              data={accountOptions}
+              value={entryModal.accountId}
+              onChange={handleEntryAccountChange}
+              searchable
+            />
+            <Select
+              label="Expense category"
+              placeholder="Select a category"
+              data={expenseCategoryOptions}
+              value={entryModal.categoryId}
+              onChange={(value) => setEntryModal((prev) => ({ ...prev, categoryId: value ?? '' }))}
+              searchable
+            />
+            <Select
+              label="Vendor"
+              placeholder="Select the staff vendor profile"
+              data={vendorOptions}
+              value={entryModal.counterpartyId}
+              onChange={handleCounterpartyChange}
+              searchable
+            />
+            <DatePickerInput
+              label="Payment date"
+              value={entryModal.date}
+              onChange={(value) => {
+                if (value) {
+                  setEntryModal((prev) => ({ ...prev, date: value }));
+                }
+              }}
+            />
+            <Textarea
+              label="Description"
+              minRows={2}
+              value={entryModal.description}
+              onChange={(event) =>
+                setEntryModal((prev) => ({ ...prev, description: event.currentTarget.value }))
+              }
+            />
+            <Text size="xs" c="dimmed">
+              Currency: {entryModal.currency}
+            </Text>
+            {entryMessage && (
+              <Alert color={entryMessage.type === 'error' ? 'red' : 'green'}>{entryMessage.text}</Alert>
+            )}
+            <Group justify="flex-end">
+              <Button variant="subtle" onClick={closeEntryModal}>
+                Cancel
+              </Button>
+              <Button onClick={handleEntrySubmit} loading={entrySubmitting}>
+                Record payout
+              </Button>
+            </Group>
+          </Stack>
+        </Modal>
+      </>
+    </PageAccessGuard>
+  );
 };
 
 export default Pays;
+

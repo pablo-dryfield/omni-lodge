@@ -38,6 +38,8 @@ import {
   FinanceVendor,
 } from '../finance/models/index.js';
 import StaffProfile from './StaffProfile.js';
+import StaffPayoutCollectionLog from './StaffPayoutCollectionLog.js';
+import StaffPayoutLedger from './StaffPayoutLedger.js';
 import ShiftType from './ShiftType.js';
 import ShiftTemplate from './ShiftTemplate.js';
 import ScheduleWeek from './ScheduleWeek.js';
@@ -76,6 +78,8 @@ export function defineAssociations() {
   User.hasMany(CompensationComponent, { foreignKey: 'updated_by', as: 'compensationComponentsUpdated' });
   User.hasMany(CompensationComponentAssignment, { foreignKey: 'user_id', as: 'compensationAssignments' });
   CompensationComponentAssignment.belongsTo(User, { foreignKey: 'user_id', as: 'userCompensation' });
+  User.hasMany(StaffPayoutLedger, { foreignKey: 'staff_user_id', as: 'payoutLedgers' });
+  StaffPayoutLedger.belongsTo(User, { foreignKey: 'staff_user_id', as: 'ledgerUser' });
 
   // UserType Associations
   UserType.hasMany(User, { foreignKey: 'userTypeId', as: 'users' });

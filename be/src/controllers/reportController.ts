@@ -1,6 +1,14 @@
 import crypto from "crypto";
 import { Request, Response } from "express";
-import { Association, ModelAttributeColumnOptions, Op, QueryTypes, type ModelAttributeColumnReferencesOptions } from "sequelize";
+import {
+  Association,
+  ModelAttributeColumnOptions,
+  Op,
+  QueryTypes,
+  col,
+  fn,
+  type ModelAttributeColumnReferencesOptions,
+} from "sequelize";
 import { Model, ModelCtor, Sequelize } from "sequelize-typescript";
 import dayjs from "dayjs";
 import Counter, { type CounterStatus } from "../models/Counter.js";
@@ -9,6 +17,8 @@ import CounterProduct from "../models/CounterProduct.js";
 import CounterUser from "../models/CounterUser.js";
 import User from "../models/User.js";
 import StaffProfile from "../models/StaffProfile.js";
+import StaffPayoutCollectionLog from "../models/StaffPayoutCollectionLog.js";
+import StaffPayoutLedger from "../models/StaffPayoutLedger.js";
 import UserShiftRole from "../models/UserShiftRole.js";
 import ReviewCounter from "../models/ReviewCounter.js";
 import ReviewCounterEntry from "../models/ReviewCounterEntry.js";
@@ -141,6 +151,16 @@ type ComponentComputationResult = {
   baseDays?: string[];
 };
 
+type StaffPayoutReconciliation = {
+  currency: string;
+  payableDue: number;
+  payablePaid: number;
+  payableOutstanding: number;
+  receivableDue: number;
+  receivableCollected: number;
+  receivableOutstanding: number;
+};
+
 type CommissionSummary = {
   userId: number;
   firstName: string;
@@ -161,6 +181,12 @@ type CommissionSummary = {
   managerMonthlyShiftCounts: Record<string, number>;
   shiftDayIndex: Map<string, string[]>;
   managerShiftDayIndex: Map<string, Set<string>>;
+  staffProfileId: number | null;
+  financeVendorId: number | null;
+  financeClientId: number | null;
+  payouts: StaffPayoutReconciliation;
+  openingBalance: number;
+  closingBalance: number;
 };
 
 type GuideDailyBreakdown = {
@@ -202,6 +228,13 @@ type ProductBucketLookup = Map<number, Map<string, ProductBucket>>;
 type GuideCommissionRateLookup = {
   defaultRate: number;
   ratesByProduct: Map<string, number>;
+};
+
+type StaffCollectionAggregate = {
+  staffProfileId: number;
+  currencyCode: string | null;
+  direction: "receivable" | "payable";
+  totalAmountMinor: number | string | null;
 };
 
 const FULL_ACCESS_ROLE_SLUGS = new Set([
@@ -263,6 +296,11 @@ const resolveCounterManagerId = (
 const COMMISSION_RATE_PER_ATTENDEE = 0;
 const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-01");
 const REVIEW_MINIMUM_THRESHOLD = 15;
+const DEFAULT_PAYOUT_CURRENCY = process.env.FINANCE_BASE_CURRENCY?.trim().toUpperCase() ?? "PLN";
+const roundCurrencyValue = (value: number): number => Math.round(value * 100) / 100;
+const convertMinorUnitsToMajor = (value: unknown): number =>
+  roundCurrencyValue(Number(value ?? 0) / 100);
+const convertMajorUnitsToMinor = (value: number): number => Math.round(value * 100);
 
 type DialectQuoter = {
   quoteTable: (value: string | { tableName: string; schema?: string }) => string;
@@ -1739,6 +1777,128 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       productBucketsByUser,
     );
 
+    const summaryUserIds = Array.from(commissionDataByUser.keys());
+    if (summaryUserIds.length > 0) {
+      const staffProfiles = await StaffProfile.findAll({
+        attributes: ["userId", "financeVendorId", "financeClientId"],
+        where: {
+          userId: {
+            [Op.in]: summaryUserIds,
+          },
+        },
+        raw: true,
+      });
+
+      const profileByUserId = new Map<number, { userId: number; financeVendorId: number | null; financeClientId: number | null }>();
+      staffProfiles.forEach((profile) => {
+        profileByUserId.set(profile.userId, profile);
+      });
+
+      const collectionRows =
+        (await StaffPayoutCollectionLog.findAll({
+          attributes: [
+            ["staff_profile_id", "staffProfileId"],
+            ["currency_code", "currencyCode"],
+            "direction",
+            [fn("COALESCE", fn("SUM", col("amount_minor")), 0), "totalAmountMinor"],
+          ],
+          where: {
+            staffProfileId: {
+              [Op.in]: summaryUserIds,
+            },
+            rangeStart: start.format("YYYY-MM-DD"),
+            rangeEnd: end.format("YYYY-MM-DD"),
+          },
+          group: ["staff_profile_id", "currency_code", "direction"],
+          raw: true,
+        })) as unknown as StaffCollectionAggregate[];
+
+      const collectionMap = new Map<
+        number,
+        { currency: string; receivable: number; payable: number }
+      >();
+      collectionRows.forEach((row) => {
+        const staffProfileId = Number(row.staffProfileId ?? NaN);
+        if (!Number.isFinite(staffProfileId)) {
+          return;
+        }
+        const currency =
+          typeof row.currencyCode === "string" && row.currencyCode.trim().length > 0
+            ? row.currencyCode.trim().toUpperCase()
+            : DEFAULT_PAYOUT_CURRENCY;
+        const existing =
+          collectionMap.get(staffProfileId) ?? {
+            currency,
+            receivable: 0,
+            payable: 0,
+          };
+        const amount = convertMinorUnitsToMajor(row.totalAmountMinor ?? 0);
+        if (row.direction === "receivable") {
+          existing.receivable += amount;
+        } else {
+          existing.payable += amount;
+        }
+        existing.currency = currency;
+        collectionMap.set(staffProfileId, existing);
+      });
+
+      commissionDataByUser.forEach((summary, userId) => {
+        const profile = profileByUserId.get(userId) ?? null;
+        const collection =
+          collectionMap.get(userId) ?? {
+            currency: DEFAULT_PAYOUT_CURRENCY,
+            receivable: 0,
+            payable: 0,
+          };
+        summary.staffProfileId = profile?.userId ?? null;
+        summary.financeVendorId = profile?.financeVendorId ?? null;
+        summary.financeClientId = profile?.financeClientId ?? null;
+        const payableDue =
+          summary.totalPayout > 0 ? roundCurrencyValue(summary.totalPayout) : 0;
+        const receivableDue =
+          summary.totalPayout < 0 ? roundCurrencyValue(Math.abs(summary.totalPayout)) : 0;
+        summary.payouts = {
+          currency: collection.currency ?? DEFAULT_PAYOUT_CURRENCY,
+          payableDue,
+          payablePaid: roundCurrencyValue(collection.payable),
+          payableOutstanding: roundCurrencyValue(Math.max(payableDue - collection.payable, 0)),
+          receivableDue,
+          receivableCollected: roundCurrencyValue(collection.receivable),
+          receivableOutstanding: roundCurrencyValue(
+            Math.max(receivableDue - collection.receivable, 0),
+          ),
+        };
+      });
+    }
+
+    const commissionUserIds = Array.from(commissionDataByUser.keys());
+    const previousLedgerMap = new Map<number, StaffPayoutLedger>();
+    if (commissionUserIds.length > 0) {
+      const previousLedgers = await StaffPayoutLedger.findAll({
+        where: {
+          staffUserId: {
+            [Op.in]: commissionUserIds,
+          },
+          rangeEnd: {
+            [Op.lt]: start.format("YYYY-MM-DD"),
+          },
+        },
+        order: [
+          ["staff_user_id", "ASC"],
+          ["range_end", "DESC"],
+        ],
+      });
+
+      previousLedgers.forEach((ledger) => {
+        if (!previousLedgerMap.has(ledger.staffUserId)) {
+          previousLedgerMap.set(ledger.staffUserId, ledger);
+        }
+      });
+    }
+
+    const rangeStartIso = start.format("YYYY-MM-DD");
+    const rangeEndIso = end.format("YYYY-MM-DD");
+
     const allSummaries = Array.from(commissionDataByUser.values()).map((entry) => {
       const productBuckets = productBucketsByUser.get(entry.userId);
       const productTotals = productBuckets
@@ -1754,6 +1914,22 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             })),
           }))
         : [];
+      const payouts = entry.payouts ?? {
+        currency: DEFAULT_PAYOUT_CURRENCY,
+        payableDue: 0,
+        payablePaid: 0,
+        payableOutstanding: 0,
+        receivableDue: 0,
+        receivableCollected: 0,
+        receivableOutstanding: 0,
+      };
+      const existingLedger = previousLedgerMap.get(entry.userId);
+      const openingBalance = existingLedger
+        ? roundCurrencyValue(existingLedger.closingBalanceMinor / 100)
+        : 0;
+      const periodDueAmount = Number(entry.totalPayout.toFixed(2));
+      const periodPaidAmount = roundCurrencyValue(payouts.payablePaid ?? 0);
+      const closingBalance = roundCurrencyValue(openingBalance + periodDueAmount - periodPaidAmount);
 
       return {
         ...entry,
@@ -1787,8 +1963,42 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           ...locked,
           amount: Number(locked.amount.toFixed(2)),
         })),
+        payouts: {
+          currency: payouts.currency ?? DEFAULT_PAYOUT_CURRENCY,
+          payableDue: roundCurrencyValue(payouts.payableDue ?? 0),
+          payablePaid: roundCurrencyValue(payouts.payablePaid ?? 0),
+          payableOutstanding: roundCurrencyValue(payouts.payableOutstanding ?? 0),
+          receivableDue: roundCurrencyValue(payouts.receivableDue ?? 0),
+          receivableCollected: roundCurrencyValue(payouts.receivableCollected ?? 0),
+          receivableOutstanding: roundCurrencyValue(payouts.receivableOutstanding ?? 0),
+        },
+        openingBalance,
+        closingBalance,
+        range: {
+          startDate: rangeStartIso,
+          endDate: rangeEndIso,
+        },
+        dueAmount: periodDueAmount,
+        paidAmount: periodPaidAmount,
       };
     });
+
+    if (allSummaries.length > 0) {
+      await Promise.all(
+        allSummaries.map((summary) =>
+          StaffPayoutLedger.upsert({
+            staffUserId: summary.userId,
+            rangeStart: rangeStartIso,
+            rangeEnd: rangeEndIso,
+            currencyCode: summary.payouts?.currency ?? DEFAULT_PAYOUT_CURRENCY,
+            openingBalanceMinor: convertMajorUnitsToMinor(summary.openingBalance ?? 0),
+            dueAmountMinor: convertMajorUnitsToMinor(summary.dueAmount ?? 0),
+            paidAmountMinor: convertMajorUnitsToMinor(summary.paidAmount ?? 0),
+            closingBalanceMinor: convertMajorUnitsToMinor(summary.closingBalance ?? 0),
+          }),
+        ),
+      );
+    }
 
     const authRequest = req as AuthenticatedRequest;
     const requesterId = authRequest.authContext?.id ?? null;
@@ -2942,6 +3152,20 @@ const createEmptySummary = (userId: number, firstName: string): CommissionSummar
   managerMonthlyShiftCounts: {},
   shiftDayIndex: new Map<string, string[]>(),
   managerShiftDayIndex: new Map<string, Set<string>>(),
+  staffProfileId: null,
+  financeVendorId: null,
+  financeClientId: null,
+  payouts: {
+    currency: DEFAULT_PAYOUT_CURRENCY,
+    payableDue: 0,
+    payablePaid: 0,
+    payableOutstanding: 0,
+    receivableDue: 0,
+    receivableCollected: 0,
+    receivableOutstanding: 0,
+  },
+  openingBalance: 0,
+  closingBalance: 0,
 });
 
 const recordCounterIncentiveMarker = (
