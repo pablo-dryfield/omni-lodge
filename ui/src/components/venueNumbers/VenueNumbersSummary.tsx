@@ -17,6 +17,7 @@ import {
   Text,
   Textarea,
   Title,
+  Box,
 } from "@mantine/core";
 import { DatePickerInput } from "@mantine/dates";
 import dayjs from "dayjs";
@@ -29,6 +30,7 @@ import type {
   VenuePayoutSummary,
   VenuePayoutVenueBreakdown,
   VenuePayoutVenueDaily,
+  VenuePayoutCurrencyTotals,
 } from "../../types/nightReports/VenuePayoutSummary";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { useFinanceBootstrap } from "../../hooks/useFinanceBootstrap";
@@ -45,6 +47,16 @@ import { fetchVenues } from "../../actions/venueActions";
 import type { Venue } from "../../types/venues/Venue";
 import type { FinanceClient } from "../../types/finance/Client";
 import type { FinanceVendor } from "../../types/finance/Vendor";
+import {
+  ResponsiveContainer,
+  RadarChart,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
+  Radar,
+  Tooltip as RechartsTooltip,
+  Legend,
+} from "recharts";
 
 type DailyRow = VenuePayoutVenueDaily & { placeholder?: boolean };
 
@@ -81,6 +93,14 @@ const formatCurrency = (value: number, currency: string) =>
 
 const toMinorUnits = (value: number) => Math.round(value * 100);
 
+const formatCurrencyCompact = (value: number, currency: string) =>
+  new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency,
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+
 dayjs.extend(isSameOrBefore);
 
 const createEmptyEntryModalState = (): EntryModalState => ({
@@ -95,6 +115,21 @@ const createEmptyEntryModalState = (): EntryModalState => ({
   counterpartyId: "",
   description: "",
 });
+
+type RadarMetric = {
+  key: keyof Pick<
+    VenuePayoutCurrencyTotals,
+    "receivableCollected" | "receivableOutstanding" | "payableCollected" | "payableOutstanding"
+  >;
+  label: string;
+};
+
+const RADAR_METRICS: readonly RadarMetric[] = [
+  { key: "receivableCollected", label: "Commission collected" },
+  { key: "receivableOutstanding", label: "Commission outstanding" },
+  { key: "payableCollected", label: "Payout paid" },
+  { key: "payableOutstanding", label: "Payout outstanding" },
+];
 
 const VenueNumbersSummary = () => {
   const dispatch = useAppDispatch();
@@ -493,6 +528,39 @@ const VenueNumbersSummary = () => {
       : entryModal.kind === "payable"
         ? entryModal.venue?.payableOutstanding ?? 0
         : 0;
+  const radarCurrencies = useMemo(
+    () => summary?.totalsByCurrency.map((row) => row.currency) ?? [],
+    [summary],
+  );
+  const radarData = useMemo(() => {
+    if (!summary) {
+      return [];
+    }
+    return RADAR_METRICS.map((metric) => {
+      const entry: Record<string, number | string> = { metric: metric.label };
+      summary.totalsByCurrency.forEach((row) => {
+        entry[row.currency] = row[metric.key] ?? 0;
+      });
+      return entry;
+    });
+  }, [summary]);
+  const chartSampleCurrency = radarCurrencies[0] ?? DEFAULT_CURRENCY;
+  const radarMaxValue = useMemo(() => {
+    let max = 0;
+    radarData.forEach((entry) => {
+      Object.entries(entry).forEach(([key, value]) => {
+        if (key === "metric") {
+          return;
+        }
+        const numeric = typeof value === "number" ? value : Number(value);
+        if (Number.isFinite(numeric)) {
+          max = Math.max(max, numeric);
+        }
+      });
+    });
+    return max || 1;
+  }, [radarData]);
+  const currencyColors = ["#4dabf7", "#69db7c", "#ffd43b", "#ff6b6b", "#b197fc", "#ffa94d"];
 
   const buildDailyRows = useCallback(
     (venue: VenuePayoutVenueBreakdown): DailyRow[] => {
@@ -642,69 +710,126 @@ const VenueNumbersSummary = () => {
               {summary.totalsByCurrency.length === 0 ? (
                 <Text>No payouts or commissions recorded for this range.</Text>
               ) : (
-                <Grid>
-                  {summary.totalsByCurrency.map((row) => (
-                    <Grid.Col span={{ base: 12, md: 4 }} key={row.currency}>
-                      <Card shadow="sm" padding="md" withBorder>
-                        <Stack gap={4}>
-                          <Text fw={600}>{row.currency}</Text>
-                          <Stack gap={2}>
-                            <Group justify="space-between">
-                              <Text c="dimmed" size="sm">
-                                Commission owed
-                              </Text>
-                              <Text>{formatCurrency(row.receivable, row.currency)}</Text>
-                            </Group>
-                            <Group justify="space-between">
-                              <Text c="dimmed" size="sm">
-                                Collected
-                              </Text>
-                              <Text>{formatCurrency(row.receivableCollected, row.currency)}</Text>
-                            </Group>
-                            <Group justify="space-between">
-                              <Text c="dimmed" size="sm">
-                                Outstanding
-                              </Text>
-                              <Text>{formatCurrency(row.receivableOutstanding, row.currency)}</Text>
-                            </Group>
+                <Grid gutter="xl" align="stretch">
+                  <Grid.Col span={{ base: 12, md: 6 }}>
+                    <Card shadow="sm" padding="md" withBorder h="100%">
+                      <Stack gap="xs" h="100%">
+                        <Box style={{ maxHeight: 260, overflowY: "auto" }}>
+                          <Stack gap="sm">
+                            {summary.totalsByCurrency.map((row) => (
+                              <Card shadow="sm" padding="md" withBorder key={row.currency}>
+                                <Stack gap={4}>
+                                  <Text fw={600}>{row.currency}</Text>
+                                  <Stack gap={2}>
+                                    <Group justify="space-between">
+                                      <Text c="dimmed" size="sm">
+                                        Commission owed
+                                      </Text>
+                                      <Text>{formatCurrency(row.receivable, row.currency)}</Text>
+                                    </Group>
+                                    <Group justify="space-between">
+                                      <Text c="dimmed" size="sm">
+                                        Collected
+                                      </Text>
+                                      <Text>{formatCurrency(row.receivableCollected, row.currency)}</Text>
+                                    </Group>
+                                    <Group justify="space-between">
+                                      <Text c="dimmed" size="sm">
+                                        Outstanding
+                                      </Text>
+                                      <Text>{formatCurrency(row.receivableOutstanding, row.currency)}</Text>
+                                    </Group>
+                                  </Stack>
+                                  <Stack gap={2}>
+                                    <Group justify="space-between">
+                                      <Text c="dimmed" size="sm">
+                                        Open bar payouts
+                                      </Text>
+                                      <Text>{formatCurrency(row.payable, row.currency)}</Text>
+                                    </Group>
+                                    <Group justify="space-between">
+                                      <Text c="dimmed" size="sm">
+                                        Paid
+                                      </Text>
+                                      <Text>{formatCurrency(row.payableCollected, row.currency)}</Text>
+                                    </Group>
+                                    <Group justify="space-between">
+                                      <Text c="dimmed" size="sm">
+                                        Outstanding
+                                      </Text>
+                                      <Text>{formatCurrency(row.payableOutstanding, row.currency)}</Text>
+                                    </Group>
+                                  </Stack>
+                                  <Group justify="space-between" mt="sm">
+                                    <Text c="dimmed" size="sm">
+                                      Net
+                                    </Text>
+                                    <Text fw={600} c={row.net >= 0 ? "green" : "red"}>
+                                      {formatCurrency(row.net, row.currency)}
+                                    </Text>
+                                  </Group>
+                                </Stack>
+                              </Card>
+                            ))}
                           </Stack>
-                          <Stack gap={2}>
-                            <Group justify="space-between">
-                              <Text c="dimmed" size="sm">
-                                Open bar payouts
-                              </Text>
-                              <Text>{formatCurrency(row.payable, row.currency)}</Text>
-                            </Group>
-                            <Group justify="space-between">
-                              <Text c="dimmed" size="sm">
-                                Paid
-                              </Text>
-                              <Text>{formatCurrency(row.payableCollected, row.currency)}</Text>
-                            </Group>
-                            <Group justify="space-between">
-                              <Text c="dimmed" size="sm">
-                                Outstanding
-                              </Text>
-                              <Text>{formatCurrency(row.payableOutstanding, row.currency)}</Text>
-                            </Group>
-                          </Stack>
-                          <Group justify="space-between" mt="sm">
-                            <Text c="dimmed" size="sm">
-                              Net
+                        </Box>
+                      </Stack>
+                    </Card>
+                  </Grid.Col>
+                  <Grid.Col span={{ base: 12, md: 6 }}>
+                    <Card shadow="sm" padding="md" withBorder h="100%">
+                      <Stack gap="xs" h="100%">
+                        <Group justify="space-between">
+                          <div>
+                            <Text fw={600}>Collections vs payouts</Text>
+                            <Text size="sm" c="dimmed">
+                              Outstanding vs collected amounts per currency
                             </Text>
-                            <Text fw={600} c={row.net >= 0 ? "green" : "red"}>
-                              {formatCurrency(row.net, row.currency)}
-                            </Text>
-                          </Group>
-                        </Stack>
-                      </Card>
-                    </Grid.Col>
-                  ))}
+                          </div>
+                        </Group>
+                        {radarData.length === 0 ? (
+                          <Text size="sm" c="dimmed">
+                            Not enough data to draw the chart.
+                          </Text>
+                        ) : (
+                          <ResponsiveContainer width="100%" height={260}>
+                            <RadarChart data={radarData}>
+                              <PolarGrid strokeDasharray="3 3" />
+                              <PolarAngleAxis dataKey="metric" />
+                              <PolarRadiusAxis
+                                tickFormatter={(value) => formatCurrencyCompact(value, chartSampleCurrency)}
+                                domain={[0, radarMaxValue]}
+                              />
+                              <RechartsTooltip
+                                formatter={(value: number, name) => {
+                                  const currency =
+                                    name && radarCurrencies.includes(name as string)
+                                      ? (name as string)
+                                      : chartSampleCurrency;
+                                  return [formatCurrency(value, currency), name];
+                                }}
+                              />
+                              <Legend />
+                              {radarCurrencies.map((currency, idx) => (
+                                <Radar
+                                  key={currency}
+                                  name={currency}
+                                  dataKey={currency}
+                                  stroke={currencyColors[idx % currencyColors.length]}
+                                  fill={currencyColors[idx % currencyColors.length]}
+                                  fillOpacity={0.25}
+                                />
+                              ))}
+                            </RadarChart>
+                          </ResponsiveContainer>
+                        )}
+                      </Stack>
+                    </Card>
+                  </Grid.Col>
                 </Grid>
               )}
             </Stack>
           </Card>
-
           <Card withBorder padding="lg">
             <Stack gap="sm">
               <Title order={5}>Breakdown by venue</Title>
