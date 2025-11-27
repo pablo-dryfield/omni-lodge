@@ -57,6 +57,15 @@ export const createStaffPayoutCollectionLog = async (
       throw new HttpError(400, 'Provide a valid rangeStart and rangeEnd.');
     }
 
+    const isCanonicalRange =
+      rangeStart.isSame(rangeStart.startOf('month'), 'day') &&
+      rangeEnd.isSame(rangeStart.endOf('month'), 'day') &&
+      rangeStart.isSame(rangeEnd, 'month') &&
+      rangeStart.year() === rangeEnd.year();
+    if (!isCanonicalRange) {
+      throw new HttpError(400, 'Payouts can only be recorded for full calendar months.');
+    }
+
     const staffProfile = await StaffProfile.findOne({
       where: { userId: staffProfileId, active: true },
       attributes: ['userId', 'financeVendorId', 'financeClientId'],

@@ -103,6 +103,24 @@ router.patch(
   staffProfileController.updateStaffProfile,
 );
 
+router.post(
+  '/:userId/create-vendor',
+  authMiddleware,
+  authorizeModuleAction('staff-profile-directory', 'update'),
+  validateUserIdParam,
+  validate,
+  staffProfileController.createVendorForStaffProfile,
+);
+
+router.post(
+  '/:userId/create-client',
+  authMiddleware,
+  authorizeModuleAction('staff-profile-directory', 'update'),
+  validateUserIdParam,
+  validate,
+  staffProfileController.createClientForStaffProfile,
+);
+
 router.delete(
   '/:userId',
   authMiddleware,

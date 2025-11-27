@@ -800,11 +800,11 @@ const Pays: React.FC = () => {
     [vendors.data],
   );
 
-  const resolveStaffCounterpartyDefaults = useCallback(
-    (staff: Pay) => {
-      let counterpartyId = '';
-      let categoryId = '';
-      const vendorId = staff.financeVendorId;
+const resolveStaffCounterpartyDefaults = useCallback(
+  (staff: Pay) => {
+    let counterpartyId = '';
+    let categoryId = '';
+    const vendorId = staff.financeVendorId;
       if (vendorId) {
         counterpartyId = String(vendorId);
         const defaultCategoryId = financeVendorsById.get(vendorId)?.defaultCategoryId;
@@ -813,9 +813,28 @@ const Pays: React.FC = () => {
         }
       }
       return { counterpartyId, categoryId };
-    },
-    [financeVendorsById],
-  );
+  },
+  [financeVendorsById],
+);
+
+  const summaries: Pay[] = useMemo(() => responseData?.[0]?.data ?? [], [responseData]);
+
+  const isCanonicalRange = useMemo(() => {
+    if (summaries.length > 0) {
+      return summaries.every((summary) => summary.rangeIsCanonical !== false);
+    }
+    if (startDate && endDate) {
+      return (
+        startDate.isSame(startDate.startOf('month'), 'day') &&
+        endDate.isSame(startDate.endOf('month'), 'day') &&
+        startDate.isSame(endDate, 'month') &&
+        startDate.year() === endDate.year()
+      );
+    }
+    return true;
+  }, [summaries, startDate, endDate]);
+
+  const canRecordPayments = isCanonicalRange;
 
   const handleCounterpartyChange = useCallback(
     (value: string | null) => {
@@ -836,6 +855,13 @@ const Pays: React.FC = () => {
 
   const openEntryModal = useCallback(
     (staff: Pay) => {
+      if (!canRecordPayments) {
+        setEntryMessage({
+          type: 'error',
+          text: 'Switch to a full-month range before recording payouts.',
+        });
+        return;
+      }
       const outstanding = staff.closingBalance ?? staff.payouts?.payableOutstanding ?? 0;
       const defaults = resolveStaffCounterpartyDefaults(staff);
       const currency = staff.payouts?.currency ?? DEFAULT_CURRENCY;
@@ -866,7 +892,7 @@ const Pays: React.FC = () => {
       });
       setEntryMessage(null);
     },
-    [endDate, resolveStaffCounterpartyDefaults, startDate],
+    [canRecordPayments, endDate, resolveStaffCounterpartyDefaults, startDate],
   );
 
   const closeEntryModal = useCallback(() => {
@@ -934,7 +960,6 @@ const Pays: React.FC = () => {
   const fullAccess = useModuleAccess(FULL_ACCESS_MODULE);
   const selfAccess = useModuleAccess(SELF_ACCESS_MODULE);
 
-  const summaries: Pay[] = useMemo(() => responseData?.[0]?.data ?? [], [responseData]);
 
   const aggregatedBucketData = useMemo(() => {
     const map = new Map<string, number>();
@@ -1150,8 +1175,8 @@ const Pays: React.FC = () => {
     (data) => theme.colors[getComponentColor(data.bucket) as keyof typeof theme.colors]?.[5] ?? theme.colors.blue[6],
   );
 
-  const renderSummaryBoard = () => (
-    <Stack gap="sm">
+const renderSummaryBoard = () => (
+  <Stack gap="sm">
       <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }}>
         <Card withBorder>
           <Text size="sm" c="dimmed">
@@ -1213,7 +1238,48 @@ const Pays: React.FC = () => {
         </Card>
       </SimpleGrid>
     </Stack>
+);
+
+const getLedgerSnapshot = (staff: Pay) => ({
+  opening: staff.openingBalance ?? 0,
+  due: staff.dueAmount ?? Math.max(staff.totalPayout ?? staff.totalCommission ?? 0, 0),
+  paid: staff.paidAmount ?? (staff.payouts?.payablePaid ?? 0),
+  closing: staff.closingBalance ?? (staff.payouts?.payableOutstanding ?? 0),
+});
+
+const renderLedgerSnapshot = (staff: Pay) => {
+  const currency = staff.payouts?.currency ?? DEFAULT_CURRENCY;
+  const ledger = getLedgerSnapshot(staff);
+
+  return (
+    <Stack gap={2}>
+      <Group justify="space-between">
+        <Text size="xs" c="dimmed">
+          Opening balance
+        </Text>
+        <Text size="xs">{formatCurrency(ledger.opening, currency)}</Text>
+      </Group>
+      <Group justify="space-between">
+        <Text size="xs" c="dimmed">
+          New activity
+        </Text>
+        <Text size="xs">{formatCurrency(ledger.due, currency)}</Text>
+      </Group>
+      <Group justify="space-between">
+        <Text size="xs" c="dimmed">
+          Payments
+        </Text>
+        <Text size="xs">{formatCurrency(ledger.paid, currency)}</Text>
+      </Group>
+      <Group justify="space-between">
+        <Text size="xs" c="dimmed">
+          Closing balance
+        </Text>
+        <Text size="xs">{formatCurrency(ledger.closing, currency)}</Text>
+      </Group>
+    </Stack>
   );
+};
 
   const renderCharts = () => {
     if (aggregatedBucketData.length === 0 && dailyTrendData.length === 0 && aggregatedComponentData.length === 0) {
@@ -1355,16 +1421,21 @@ const Pays: React.FC = () => {
                       {formatCurrency(item.payouts?.payableOutstanding ?? 0, item.payouts?.currency ?? DEFAULT_CURRENCY)}
                     </Text>
                   </Group>
-                  {(item.payouts?.payableOutstanding ?? 0) > 0 ? (
+                  {canRecordPayments && (item.payouts?.payableOutstanding ?? 0) > 0 ? (
                     <Button variant="light" size="xs" onClick={() => openEntryModal(item)}>
                       Record payment
                     </Button>
-                  ) : (
+                  ) : canRecordPayments ? (
                     <Badge color="green" variant="light" w="fit-content">
                       Settled
                     </Badge>
+                  ) : (
+                    <Badge color="gray" variant="light" w="fit-content">
+                      View only
+                    </Badge>
                   )}
                 </Stack>
+                {renderLedgerSnapshot(item)}
                 {renderComponentList(
                   item.componentTotals,
                   item.platformGuestBreakdowns,
@@ -1443,15 +1514,24 @@ const Pays: React.FC = () => {
                     <td style={{ padding: 12 }}>{formatCurrency(outstandingAmount, payoutCurrency)}</td>
                     <td style={{ padding: 12, textAlign: 'right' }}>
                       <Stack gap={6} align="flex-end">
-                        {outstandingAmount > 0 ? (
-                          <Button variant="light" size="xs" onClick={() => openEntryModal(item)}>
-                            Record payment
-                          </Button>
+                        {canRecordPayments ? (
+                          outstandingAmount > 0 ? (
+                            <Button variant="light" size="xs" onClick={() => openEntryModal(item)}>
+                              Record payment
+                            </Button>
+                          ) : (
+                            <Text size="xs" c="dimmed">
+                              Settled
+                            </Text>
+                          )
                         ) : (
                           <Text size="xs" c="dimmed">
-                            Settled
+                            View-only range
                           </Text>
                         )}
+                        <Box w="100%">
+                          {renderLedgerSnapshot(item)}
+                        </Box>
                         {rowHasDetails && (
                           <Button variant="subtle" size="xs" onClick={() => toggleRow(index)}>
                             {expandedRow === index ? 'Hide details' : 'Show details'}
@@ -1592,6 +1672,11 @@ const Pays: React.FC = () => {
 
               {!loading && !error && summaries.length > 0 && (
                 <Stack gap="lg">
+                  {!isCanonicalRange && (
+                    <Alert color="yellow" variant="light">
+                      Custom date ranges are view-only. Switch to a full calendar month to record or adjust payouts.
+                    </Alert>
+                  )}
                   {renderSummaryBoard()}
                   {renderCharts()}
                   {isDesktop ? renderDesktopTable() : renderMobileCards()}

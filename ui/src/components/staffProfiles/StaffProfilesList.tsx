@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import axiosInstance from "../../utils/axiosInstance";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
@@ -75,6 +75,20 @@ const coerceStaffProfilePayload = (payload: Partial<StaffProfile>): Partial<Staf
   return next;
 };
 
+const deriveApiErrorMessage = (error: unknown): string => {
+  if (axios.isAxiosError(error)) {
+    const payload = error.response?.data;
+    if (Array.isArray(payload) && payload[0]?.message) {
+      return payload[0].message as string;
+    }
+    return error.response?.statusText ?? error.message;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return "Failed to complete the requested action.";
+};
+
 const StaffProfilesList = () => {
   const dispatch = useAppDispatch();
   const staffProfileState = useAppSelector((state) => state.staffProfiles)[0];
@@ -83,6 +97,9 @@ const StaffProfilesList = () => {
   const financeClientsState = useAppSelector(selectFinanceClients);
   const [userOptions, setUserOptions] = useState<EditSelectOption[]>([]);
   const [userLabelById, setUserLabelById] = useState<Map<number, string>>(new Map());
+  const [creatingVendorFor, setCreatingVendorFor] = useState<number | null>(null);
+  const [creatingClientFor, setCreatingClientFor] = useState<number | null>(null);
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
 
   useEffect(() => {
     dispatch(fetchStaffProfiles());
@@ -196,6 +213,61 @@ const StaffProfilesList = () => {
     [financeClientsState.data],
   );
 
+  const runFinanceShortcut = useCallback(
+    async (profile: Partial<StaffProfile>, kind: "vendor" | "client") => {
+      const userId = profile.userId;
+      if (typeof userId !== "number") {
+        console.warn("Cannot create finance records without a userId");
+        return;
+      }
+
+      setShortcutError(null);
+      if (kind === "vendor") {
+        setCreatingVendorFor(userId);
+      } else {
+        setCreatingClientFor(userId);
+      }
+
+      const url =
+        kind === "vendor"
+          ? `/staffProfiles/${userId}/create-vendor`
+          : `/staffProfiles/${userId}/create-client`;
+
+      try {
+        await axiosInstance.post(url, {}, { withCredentials: true });
+        await Promise.all([
+          dispatch(fetchStaffProfiles()),
+          dispatch(kind === "vendor" ? fetchFinanceVendors() : fetchFinanceClients()),
+        ]);
+      } catch (error) {
+        const message = deriveApiErrorMessage(error);
+        setShortcutError(message);
+        console.error(`Failed to create finance ${kind}`, message);
+      } finally {
+        if (kind === "vendor") {
+          setCreatingVendorFor(null);
+        } else {
+          setCreatingClientFor(null);
+        }
+      }
+    },
+    [dispatch],
+  );
+
+  const handleCreateVendorShortcut = useCallback(
+    (profile: Partial<StaffProfile>) => {
+      void runFinanceShortcut(profile, "vendor");
+    },
+    [runFinanceShortcut],
+  );
+
+  const handleCreateClientShortcut = useCallback(
+    (profile: Partial<StaffProfile>) => {
+      void runFinanceShortcut(profile, "client");
+    },
+    [runFinanceShortcut],
+  );
+
   const modifiedColumns = useMemo<MRT_ColumnDef<Partial<StaffProfile>>[]>(
     () =>
       modifyColumn(
@@ -207,6 +279,10 @@ const StaffProfilesList = () => {
           clientOptions,
           vendorLookup,
           clientLookup,
+          onCreateVendor: handleCreateVendorShortcut,
+          onCreateClient: handleCreateClientShortcut,
+          vendorBusyId: creatingVendorFor,
+          clientBusyId: creatingClientFor,
         }),
       ),
     [
@@ -217,6 +293,10 @@ const StaffProfilesList = () => {
       clientOptions,
       vendorLookup,
       clientLookup,
+      handleCreateVendorShortcut,
+      handleCreateClientShortcut,
+      creatingVendorFor,
+      creatingClientFor,
     ],
   );
 
@@ -304,12 +384,14 @@ const StaffProfilesList = () => {
     }
   };
 
+  const tableError = staffProfileState.error ?? shortcutError;
+
   return (
     <Table
       pageTitle="Staff Profiles"
       data={staffProfiles}
       loading={staffProfileState.loading}
-      error={staffProfileState.error}
+      error={tableError}
       columns={modifiedColumns}
       actions={{ handleCreate, handleUpdate, handleDelete }}
       initialState={initialState}

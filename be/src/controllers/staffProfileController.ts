@@ -48,18 +48,14 @@ const buildStaffProfileColumns = (): ColumnConfig[] => {
   return [...baseColumns, ...supplemental];
 };
 
-const formatProfilePayload = (
-  profile: StaffProfile & {
-    user?: User | null;
-    financeVendor?: FinanceVendor | null;
-    financeClient?: FinanceClient | null;
-  },
-) => {
-  const plain = profile.get({ plain: true }) as StaffProfile & {
-    user?: User | null;
-    financeVendor?: FinanceVendor | null;
-    financeClient?: FinanceClient | null;
-  };
+type StaffProfileWithRelations = StaffProfile & {
+  user?: User | null;
+  financeVendor?: FinanceVendor | null;
+  financeClient?: FinanceClient | null;
+};
+
+const formatProfilePayload = (profile: StaffProfileWithRelations) => {
+  const plain = profile.get({ plain: true }) as StaffProfileWithRelations;
   const user = plain.user;
   const fullName = user ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() : '';
   const profilePhotoUrl = user?.profilePhotoUrl ?? null;
@@ -80,6 +76,57 @@ const formatProfilePayload = (
     financeVendorName: plain.financeVendor?.name ?? null,
     financeClientName: plain.financeClient?.name ?? null,
   };
+};
+
+const fetchProfileWithRelations = async (userId: number): Promise<StaffProfileWithRelations | null> =>
+  StaffProfile.findByPk(userId, {
+    include: STAFF_PROFILE_INCLUDE,
+  }) as Promise<StaffProfileWithRelations | null>;
+
+const deriveCounterpartyName = (user: User): string => {
+  const name = `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim();
+  if (name.length > 0) {
+    return name;
+  }
+  if (user.email) {
+    return user.email;
+  }
+  if (user.username) {
+    return user.username;
+  }
+  return `Staff #${user.id}`;
+};
+
+const createFinanceVendorRecord = async (profile: StaffProfileWithRelations): Promise<FinanceVendor> => {
+  const user = profile.user;
+  if (!user) {
+    throw new Error('Associated user data is required to create a vendor.');
+  }
+
+  return FinanceVendor.create({
+    name: deriveCounterpartyName(user),
+    email: user.email ?? null,
+    phone: user.phone ?? null,
+    defaultCategoryId: null,
+    notes: `Auto-created from staff profile #${profile.userId} on ${new Date().toISOString()}`,
+    isActive: true,
+  });
+};
+
+const createFinanceClientRecord = async (profile: StaffProfileWithRelations): Promise<FinanceClient> => {
+  const user = profile.user;
+  if (!user) {
+    throw new Error('Associated user data is required to create a client.');
+  }
+
+  return FinanceClient.create({
+    name: deriveCounterpartyName(user),
+    email: user.email ?? null,
+    phone: user.phone ?? null,
+    defaultCategoryId: null,
+    notes: `Auto-created from staff profile #${profile.userId} on ${new Date().toISOString()}`,
+    isActive: true,
+  });
 };
 
 const normalizeBoolean = (value: unknown): boolean | undefined => {
@@ -163,9 +210,7 @@ export const listStaffProfiles = async (req: Request, res: Response): Promise<vo
 export const getStaffProfile = async (req: Request, res: Response): Promise<void> => {
   try {
     const { userId } = req.params;
-    const profile = await StaffProfile.findByPk(Number(userId), {
-      include: STAFF_PROFILE_INCLUDE,
-    });
+    const profile = await fetchProfileWithRelations(Number(userId));
 
     if (!profile) {
       res.status(404).json([{ message: 'Staff profile not found' }]);
@@ -315,11 +360,94 @@ export const updateStaffProfile = async (req: Request, res: Response): Promise<v
       return;
     }
 
-    const profile = await StaffProfile.findByPk(userId, {
-      include: STAFF_PROFILE_INCLUDE,
-    });
+    const profile = await fetchProfileWithRelations(userId);
 
-    res.status(200).json([profile]);
+    if (!profile) {
+      res.status(404).json([{ message: 'Staff profile not found' }]);
+      return;
+    }
+
+    res.status(200).json([formatProfilePayload(profile)]);
+  } catch (error) {
+    const errorMessage = (error as ErrorWithMessage).message;
+    res.status(500).json([{ message: errorMessage }]);
+  }
+};
+
+export const createVendorForStaffProfile = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      res.status(400).json([{ message: 'A valid userId is required.' }]);
+      return;
+    }
+
+    const profile = await fetchProfileWithRelations(userId);
+    if (!profile) {
+      res.status(404).json([{ message: 'Staff profile not found' }]);
+      return;
+    }
+
+    if (profile.financeVendorId) {
+      res.status(409).json([{ message: 'This staff profile is already linked to a finance vendor.' }]);
+      return;
+    }
+
+    if (!profile.user) {
+      res.status(400).json([{ message: 'Unable to locate the associated user for this staff profile.' }]);
+      return;
+    }
+
+    const vendor = await createFinanceVendorRecord(profile);
+    await profile.update({ financeVendorId: vendor.id });
+
+    const refreshed = await fetchProfileWithRelations(userId);
+    if (!refreshed) {
+      res.status(201).json([{ message: 'Vendor created, but failed to reload profile' }]);
+      return;
+    }
+
+    res.status(201).json([formatProfilePayload(refreshed)]);
+  } catch (error) {
+    const errorMessage = (error as ErrorWithMessage).message;
+    res.status(500).json([{ message: errorMessage }]);
+  }
+};
+
+export const createClientForStaffProfile = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      res.status(400).json([{ message: 'A valid userId is required.' }]);
+      return;
+    }
+
+    const profile = await fetchProfileWithRelations(userId);
+    if (!profile) {
+      res.status(404).json([{ message: 'Staff profile not found' }]);
+      return;
+    }
+
+    if (profile.financeClientId) {
+      res.status(409).json([{ message: 'This staff profile is already linked to a finance client.' }]);
+      return;
+    }
+
+    if (!profile.user) {
+      res.status(400).json([{ message: 'Unable to locate the associated user for this staff profile.' }]);
+      return;
+    }
+
+    const client = await createFinanceClientRecord(profile);
+    await profile.update({ financeClientId: client.id });
+
+    const refreshed = await fetchProfileWithRelations(userId);
+    if (!refreshed) {
+      res.status(201).json([{ message: 'Client created, but failed to reload profile' }]);
+      return;
+    }
+
+    res.status(201).json([formatProfilePayload(refreshed)]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);

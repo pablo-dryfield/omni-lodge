@@ -1,4 +1,4 @@
-import { Badge, Switch } from "@mantine/core";
+import { Badge, Button, Stack, Switch } from "@mantine/core";
 import dayjs from "dayjs";
 import CustomEditSelect, { type EditSelectOption } from "../../utils/CustomEditSelect";
 import CustomEditSwitch from "../../utils/CustomEditSwitch";
@@ -13,6 +13,10 @@ export type StaffProfileColumnParams = {
   clientOptions: EditSelectOption[];
   vendorLookup: Record<number, string>;
   clientLookup: Record<number, string>;
+  onCreateVendor?: (profile: Partial<StaffProfile>) => void;
+  onCreateClient?: (profile: Partial<StaffProfile>) => void;
+  vendorBusyId?: number | null;
+  clientBusyId?: number | null;
 };
 
 const STAFF_TYPE_OPTIONS: EditSelectOption[] = [
@@ -46,6 +50,10 @@ export const staffProfilesColumnDef = ({
   clientOptions,
   vendorLookup,
   clientLookup,
+  onCreateVendor,
+  onCreateClient,
+  vendorBusyId,
+  clientBusyId,
 }: StaffProfileColumnParams): ResponseModifications<Partial<StaffProfile>>[] => [
   {
     accessorKey: "userId",
@@ -239,6 +247,56 @@ export const staffProfilesColumnDef = ({
         );
       },
       enableEditing: false,
+    },
+  },
+  {
+    accessorKey: "financeShortcuts",
+    modifications: {
+      id: "financeShortcuts",
+      header: "Finance Shortcuts",
+      enableColumnFilterModes: false,
+      enableSorting: false,
+      enableEditing: false,
+      Cell: ({ row }) => {
+        const profile = row.original as Partial<StaffProfile>;
+        const userId = profile.userId;
+        const vendorLinked = Boolean(profile.financeVendorId);
+        const clientLinked = Boolean(profile.financeClientId);
+        const vendorLoading = vendorBusyId != null && vendorBusyId === userId;
+        const clientLoading = clientBusyId != null && clientBusyId === userId;
+
+        const vendorLabel = vendorLinked
+          ? profile.financeVendorName ?? "Vendor linked"
+          : "Create Vendor";
+        const clientLabel = clientLinked
+          ? profile.financeClientName ?? "Client linked"
+          : "Create Client";
+
+        return (
+          <Stack gap={6}>
+            <Button
+              size="xs"
+              variant={vendorLinked ? "outline" : "light"}
+              color={vendorLinked ? "teal" : "indigo"}
+              disabled={vendorLinked || typeof userId !== "number" || !onCreateVendor}
+              loading={vendorLoading}
+              onClick={() => onCreateVendor?.(profile)}
+            >
+              {vendorLabel}
+            </Button>
+            <Button
+              size="xs"
+              variant={clientLinked ? "outline" : "light"}
+              color={clientLinked ? "teal" : "cyan"}
+              disabled={clientLinked || typeof userId !== "number" || !onCreateClient}
+              loading={clientLoading}
+              onClick={() => onCreateClient?.(profile)}
+            >
+              {clientLabel}
+            </Button>
+          </Stack>
+        );
+      },
     },
   },
 ];

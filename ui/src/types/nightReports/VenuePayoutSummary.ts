@@ -1,3 +1,10 @@
+export type VenueLedgerSnapshot = {
+  opening: number;
+  due: number;
+  paid: number;
+  closing: number;
+};
+
 export type VenuePayoutCurrencyTotals = {
   currency: string;
   receivable: number;
@@ -7,6 +14,8 @@ export type VenuePayoutCurrencyTotals = {
   payableCollected: number;
   payableOutstanding: number;
   net: number;
+  receivableLedger: VenueLedgerSnapshot;
+  payableLedger: VenueLedgerSnapshot;
 };
 
 export type VenuePayoutVenueDaily = {
@@ -36,6 +45,8 @@ export type VenuePayoutVenueBreakdown = {
   totalPeopleReceivable: number;
   totalPeoplePayable: number;
   daily: VenuePayoutVenueDaily[];
+  receivableLedger: VenueLedgerSnapshot;
+  payableLedger: VenueLedgerSnapshot;
 };
 
 export type VenuePayoutSummary = {
@@ -46,4 +57,5 @@ export type VenuePayoutSummary = {
   };
   totalsByCurrency: VenuePayoutCurrencyTotals[];
   venues: VenuePayoutVenueBreakdown[];
+  rangeIsCanonical?: boolean;
 };
