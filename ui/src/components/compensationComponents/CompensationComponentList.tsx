@@ -35,6 +35,8 @@ import type {
 import { useModuleAccess } from '../../hooks/useModuleAccess';
 import { useShiftRoles } from '../../api/shiftRoles';
 import type { ServerResponse } from '../../types/general/ServerResponse';
+import { fetchFinanceAccounts, fetchFinanceCategories } from '../../actions/financeActions';
+import { selectFinanceAccounts, selectFinanceCategories } from '../../selectors/financeSelectors';
 
 const CATEGORY_OPTIONS = [
   { value: 'base', label: 'Base' },
@@ -81,6 +83,8 @@ const defaultComponentFormState = {
   configText: '{}',
   currencyCode: 'PLN',
   isActive: true,
+  defaultFinanceAccountId: '',
+  defaultFinanceCategoryId: '',
 };
 
 type ComponentFormState = typeof defaultComponentFormState;
@@ -124,6 +128,8 @@ const CompensationComponentList = () => {
   const moduleAccess = useModuleAccess('compensation-component-management');
   const canEdit = moduleAccess.canCreate || moduleAccess.canUpdate;
   const componentState = useAppSelector((state) => state.compensationComponents)[0];
+  const accounts = useAppSelector(selectFinanceAccounts);
+  const financeCategories = useAppSelector(selectFinanceCategories);
   const components = useMemo<CompensationComponent[]>(() => {
     const payload = (componentState.data as ServerResponse<CompensationComponent> | undefined) ?? [];
     const records = payload[0]?.data ?? [];
@@ -157,6 +163,37 @@ const CompensationComponentList = () => {
     dispatch(fetchCompensationComponents());
   }, [dispatch]);
 
+  useEffect(() => {
+    if (!accounts.loading && accounts.data.length === 0) {
+      void dispatch(fetchFinanceAccounts());
+    }
+  }, [accounts.data.length, accounts.loading, dispatch]);
+
+  useEffect(() => {
+    if (!financeCategories.loading && financeCategories.data.length === 0) {
+      void dispatch(fetchFinanceCategories());
+    }
+  }, [dispatch, financeCategories.data.length, financeCategories.loading]);
+
+  const accountOptions = useMemo(
+    () =>
+      accounts.data
+        .filter((account) => (account.isActive ?? true))
+        .map((account) => ({
+          value: String(account.id),
+          label: `${account.name} (${account.currency})`,
+        })),
+    [accounts.data],
+  );
+
+  const expenseCategoryOptions = useMemo(
+    () =>
+      financeCategories.data
+        .filter((category) => category.kind === 'expense')
+        .map((category) => ({ value: String(category.id), label: category.name })),
+    [financeCategories.data],
+  );
+
   const handleRefresh = useCallback(async () => {
     await dispatch(fetchCompensationComponents());
   }, [dispatch]);
@@ -179,6 +216,8 @@ const CompensationComponentList = () => {
       configText: JSON.stringify(component.config ?? {}, null, 2),
       currencyCode: component.currencyCode ?? 'PLN',
       isActive: component.isActive ?? true,
+      defaultFinanceAccountId: component.defaultFinanceAccountId ? String(component.defaultFinanceAccountId) : '',
+      defaultFinanceCategoryId: component.defaultFinanceCategoryId ? String(component.defaultFinanceCategoryId) : '',
     });
     setComponentFormError(null);
     setComponentFormOpen(true);
@@ -221,6 +260,12 @@ const CompensationComponentList = () => {
         config,
         currencyCode: componentFormState.currencyCode.trim().toUpperCase() || 'PLN',
         isActive: componentFormState.isActive,
+        defaultFinanceAccountId: componentFormState.defaultFinanceAccountId
+          ? Number(componentFormState.defaultFinanceAccountId)
+          : null,
+        defaultFinanceCategoryId: componentFormState.defaultFinanceCategoryId
+          ? Number(componentFormState.defaultFinanceCategoryId)
+          : null,
       };
       if (editingComponent) {
         await dispatch(updateCompensationComponent({ componentId: editingComponent.id, payload })).unwrap();
@@ -518,6 +563,20 @@ const CompensationComponentList = () => {
                         Assignments: {component.assignments.length}
                       </Badge>
                     </Group>
+                    {(component.defaultFinanceAccount || component.defaultFinanceCategory) && (
+                      <Group gap="xs">
+                        {component.defaultFinanceAccount && (
+                          <Badge color="indigo" variant="outline">
+                            Acct: {component.defaultFinanceAccount.name}
+                          </Badge>
+                        )}
+                        {component.defaultFinanceCategory && (
+                          <Badge color="cyan" variant="outline">
+                            Cat: {component.defaultFinanceCategory.name}
+                          </Badge>
+                        )}
+                      </Group>
+                    )}
                     {component.description && (
                       <Text size="sm" mt={4}>
                         {component.description}
@@ -610,6 +669,30 @@ const CompensationComponentList = () => {
             value={componentFormState.currencyCode}
             onChange={(event) => setComponentFormState((prev) => ({ ...prev, currencyCode: event.currentTarget.value }))}
           />
+          <Group grow>
+            <Select
+              label="Default finance account"
+              placeholder="No default"
+              data={accountOptions}
+              value={componentFormState.defaultFinanceAccountId || null}
+              onChange={(value) =>
+                setComponentFormState((prev) => ({ ...prev, defaultFinanceAccountId: value ?? '' }))
+              }
+              searchable
+              clearable
+            />
+            <Select
+              label="Default finance category"
+              placeholder="No default"
+              data={expenseCategoryOptions}
+              value={componentFormState.defaultFinanceCategoryId || null}
+              onChange={(value) =>
+                setComponentFormState((prev) => ({ ...prev, defaultFinanceCategoryId: value ?? '' }))
+              }
+              searchable
+              clearable
+            />
+          </Group>
           <Textarea
             label="Description"
             minRows={3}

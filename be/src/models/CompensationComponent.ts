@@ -14,6 +14,8 @@ import {
 import type { NonAttribute } from 'sequelize';
 import User from './User.js';
 import CompensationComponentAssignment from './CompensationComponentAssignment.js';
+import FinanceAccount from '../finance/models/FinanceAccount.js';
+import FinanceCategory from '../finance/models/FinanceCategory.js';
 
 export type CompensationComponentCategory =
   | 'base'
@@ -79,6 +81,28 @@ export default class CompensationComponent extends Model {
   @Default('PLN')
   @Column({ field: 'currency_code', type: DataType.STRING(3) })
   declare currencyCode: string;
+
+  @ForeignKey(() => FinanceAccount)
+  @AllowNull(true)
+  @Column({ field: 'default_finance_account_id', type: DataType.INTEGER })
+  declare defaultFinanceAccountId: number | null;
+
+  @BelongsTo(() => FinanceAccount, {
+    foreignKey: 'default_finance_account_id',
+    as: 'defaultFinanceAccount',
+  })
+  declare defaultFinanceAccount?: NonAttribute<FinanceAccount | null>;
+
+  @ForeignKey(() => FinanceCategory)
+  @AllowNull(true)
+  @Column({ field: 'default_finance_category_id', type: DataType.INTEGER })
+  declare defaultFinanceCategoryId: number | null;
+
+  @BelongsTo(() => FinanceCategory, {
+    foreignKey: 'default_finance_category_id',
+    as: 'defaultFinanceCategory',
+  })
+  declare defaultFinanceCategory?: NonAttribute<FinanceCategory | null>;
 
   @AllowNull(false)
   @Default(true)

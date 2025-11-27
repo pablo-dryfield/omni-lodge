@@ -23,6 +23,8 @@ import {
   Modal,
   NumberInput,
   Textarea,
+  TextInput,
+  Switch,
   SegmentedControl,
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
@@ -34,6 +36,7 @@ import {
   type PlatformGuestTierBreakdown,
   type LockedComponentSummary,
 } from '../types/pays/Pay';
+import type { CompensationComponent } from '../types/compensation/CompensationComponent';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { fetchPays } from '../actions/payActions';
 import {
@@ -42,6 +45,7 @@ import {
   fetchFinanceVendors,
   createFinanceTransaction,
 } from '../actions/financeActions';
+import { fetchCompensationComponents } from '../actions/compensationComponentActions';
 import { useModuleAccess } from '../hooks/useModuleAccess';
 import { PageAccessGuard } from '../components/access/PageAccessGuard';
 import { PAGE_SLUGS } from '../constants/pageSlugs';
@@ -52,7 +56,8 @@ import {
   selectFinanceCategories,
   selectFinanceVendors,
 } from '../selectors/financeSelectors';
-import type { FinanceVendor } from '../types/finance';
+import type { FinanceVendor, FinanceCategory } from '../types/finance';
+import type { ServerResponse } from '../types/general/ServerResponse';
 import {
   ResponsiveContainer,
   PieChart,
@@ -65,6 +70,7 @@ import {
   CartesianGrid,
   Tooltip,
 } from 'recharts';
+import { IconTrash } from '@tabler/icons-react';
 
 const EARLIEST_DATA_DATE = dayjs('2020-01-01');
 const DEFAULT_CURRENCY = 'PLN';
@@ -374,6 +380,19 @@ const renderComponentList = (
   );
 };
 
+type EntryPaymentLine = {
+  id: string;
+  label: string;
+  amount: number;
+  categoryId: string;
+  categoryLabel?: string | null;
+  accountId?: string | null;
+  accountLabel?: string | null;
+  componentId?: number;
+  description: string;
+  include: boolean;
+};
+
 type EntryModalState = {
   open: boolean;
   staff: Pay | null;
@@ -389,6 +408,7 @@ type EntryModalState = {
   period: 'current' | 'previous';
   previousRangeStart?: string;
   previousRangeEnd?: string;
+  lines: EntryPaymentLine[];
 };
 
 const createEmptyEntryModalState = (): EntryModalState => ({
@@ -406,7 +426,131 @@ const createEmptyEntryModalState = (): EntryModalState => ({
   period: 'current',
   previousRangeStart: undefined,
   previousRangeEnd: undefined,
+  lines: [],
 });
+
+const PAYMENT_BUCKET_METADATA: Record<
+  string,
+  {
+    label: string;
+    categoryHint?: string;
+  }
+> = {
+  commission: { label: 'Commission', categoryHint: 'Commission' },
+  commissions: { label: 'Commission', categoryHint: 'Commission' },
+  base: { label: 'Base Salary', categoryHint: 'Base Salary' },
+  salary: { label: 'Base Salary', categoryHint: 'Base Salary' },
+  incentive: { label: 'Incentive', categoryHint: 'Incentives' },
+  incentives: { label: 'Incentive', categoryHint: 'Incentives' },
+  review: { label: 'Reviews', categoryHint: 'Reviews' },
+  reviews: { label: 'Reviews', categoryHint: 'Reviews' },
+  bonus: { label: 'Bonus', categoryHint: 'Bonuses' },
+  bonuses: { label: 'Bonus', categoryHint: 'Bonuses' },
+};
+
+const createLineId = () => `line-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const roundLineAmount = (value: number) => Math.round((value ?? 0) * 100) / 100;
+
+const computeSelectedLineTotal = (lines: EntryPaymentLine[]) =>
+  lines
+    .filter((line) => line.include && line.amount > 0)
+    .reduce((sum, line) => sum + line.amount, 0);
+
+const findCategoryIdByName = (
+  lookup: Map<string, FinanceCategory>,
+  name: string | undefined,
+  fallback: string,
+) => {
+  if (!name) {
+    return fallback;
+  }
+  const record = lookup.get(name.toLowerCase());
+  if (record) {
+    return String(record.id);
+  }
+  return fallback;
+};
+
+const buildDefaultPaymentLines = (
+  staff: Pay,
+  categoryLookup: Map<string, FinanceCategory>,
+  fallbackCategoryId: string,
+  componentDefinitions: Map<number, CompensationComponent>,
+): EntryPaymentLine[] => {
+  const bucketEntries = Object.entries(staff.bucketTotals ?? {}).filter(([, amount]) => amount > 0);
+  const componentsByCategory = new Map<string, PayComponentSummary[]>();
+  (staff.componentTotals ?? []).forEach((component) => {
+    if (!component.category) {
+      return;
+    }
+    const key = component.category.toLowerCase();
+    const list = componentsByCategory.get(key) ?? [];
+    list.push(component);
+    componentsByCategory.set(key, list);
+  });
+
+  const resolveDefaultsForCategory = (normalizedCategory: string) => {
+    const candidates = componentsByCategory.get(normalizedCategory);
+    if (!candidates || candidates.length === 0) {
+      return null;
+    }
+    for (const candidate of candidates) {
+      const meta = componentDefinitions.get(candidate.componentId);
+      if (meta) {
+        return {
+          componentId: candidate.componentId,
+          categoryId: meta.defaultFinanceCategoryId ? String(meta.defaultFinanceCategoryId) : undefined,
+          accountId: meta.defaultFinanceAccountId ? String(meta.defaultFinanceAccountId) : undefined,
+        };
+      }
+    }
+    return {
+      componentId: candidates[0].componentId,
+    };
+  };
+
+  const lines: EntryPaymentLine[] = bucketEntries.map(([bucket, amount]) => {
+    const normalized = bucket.toLowerCase();
+    const metadata = PAYMENT_BUCKET_METADATA[normalized];
+    const label = metadata?.label ?? bucket;
+    const defaults = resolveDefaultsForCategory(normalized);
+    const fallbackCategory = findCategoryIdByName(categoryLookup, metadata?.categoryHint, fallbackCategoryId);
+    return {
+      id: createLineId(),
+      label,
+      amount: roundLineAmount(amount),
+      categoryId: defaults?.categoryId ?? fallbackCategory,
+      accountId: defaults?.accountId ?? '',
+      componentId: defaults?.componentId,
+      description: `${label} payout`,
+      include: true,
+    };
+  });
+
+  if (lines.length === 0) {
+    const outstanding =
+      staff.closingBalance ??
+      staff.payouts?.payableOutstanding ??
+      Math.max(staff.totalPayout ?? staff.totalCommission ?? 0, 0);
+    const fallbackComponent = staff.componentTotals?.[0];
+    const fallbackDefaults = fallbackComponent
+      ? resolveDefaultsForCategory(fallbackComponent.category?.toLowerCase() ?? '')
+      : null;
+    lines.push({
+      id: createLineId(),
+      label: 'Outstanding payout',
+      amount: roundLineAmount(Math.max(outstanding, 0)),
+      categoryId: fallbackDefaults?.categoryId ?? fallbackCategoryId,
+      accountId: fallbackDefaults?.accountId ?? '',
+      componentId: fallbackDefaults?.componentId,
+      description: `Payout for ${staff.firstName}`,
+      include: true,
+    });
+  }
+
+  return lines;
+};
 
 
 const renderBucketTotals = (
@@ -712,9 +856,17 @@ const Pays: React.FC = () => {
   const dispatch = useAppDispatch();
   const payState = useAppSelector((state) => state.pays)[0];
   const { data: responseData, loading, error } = payState;
+  const compensationComponentState = useAppSelector((state) => state.compensationComponents)[0];
   const accounts = useAppSelector(selectFinanceAccounts);
   const categories = useAppSelector(selectFinanceCategories);
   const vendors = useAppSelector(selectFinanceVendors);
+  const categoryLookup = useMemo(() => {
+    const map = new Map<string, FinanceCategory>();
+    categories.data.forEach((category) => {
+      map.set(category.name.toLowerCase(), category);
+    });
+    return map;
+  }, [categories.data]);
 
   const today = dayjs();
   const initialRange = calculatePresetRange('this_month', today);
@@ -757,12 +909,6 @@ const Pays: React.FC = () => {
     }
   }, [dispatch, categories.data.length, categories.loading]);
 
-  useEffect(() => {
-    if (!vendors.loading && vendors.data.length === 0) {
-      void dispatch(fetchFinanceVendors());
-    }
-  }, [dispatch, vendors.data.length, vendors.loading]);
-
   const financeVendorsById = useMemo(() => {
     const map = new Map<number, FinanceVendor>();
     vendors.data.forEach((vendor) => {
@@ -799,6 +945,43 @@ const Pays: React.FC = () => {
     () => vendors.data.map((vendor) => ({ value: String(vendor.id), label: vendor.name })),
     [vendors.data],
   );
+
+  const componentDefinitions = useMemo<CompensationComponent[]>(() => {
+    const payload =
+      (compensationComponentState.data as ServerResponse<CompensationComponent> | undefined) ?? [];
+    const records = payload[0]?.data ?? [];
+    return [...records] as CompensationComponent[];
+  }, [compensationComponentState.data]);
+
+  const compensationComponentLookup = useMemo(() => {
+    const map = new Map<number, CompensationComponent>();
+    componentDefinitions.forEach((component) => {
+      map.set(component.id, component);
+    });
+    return map;
+  }, [componentDefinitions]);
+
+  const accountList = accounts.data;
+
+  const financeAccountsById = useMemo(() => {
+    const map = new Map<number, (typeof accountList)[number]>();
+    accountList.forEach((account) => {
+      map.set(account.id, account);
+    });
+    return map;
+  }, [accountList]);
+
+  useEffect(() => {
+    if (!vendors.loading && vendors.data.length === 0) {
+      void dispatch(fetchFinanceVendors());
+    }
+  }, [dispatch, vendors.data.length, vendors.loading]);
+
+  useEffect(() => {
+    if (!compensationComponentState.loading && componentDefinitions.length === 0) {
+      void dispatch(fetchCompensationComponents());
+    }
+  }, [componentDefinitions.length, compensationComponentState.loading, dispatch]);
 
 const resolveStaffCounterpartyDefaults = useCallback(
   (staff: Pay) => {
@@ -853,6 +1036,77 @@ const resolveStaffCounterpartyDefaults = useCallback(
     [financeVendorsById],
   );
 
+  const updateLines = useCallback((updater: (lines: EntryPaymentLine[]) => EntryPaymentLine[]) => {
+    setEntryModal((prev) => {
+      const nextLines = updater(prev.lines);
+      return {
+        ...prev,
+        lines: nextLines,
+        amount: computeSelectedLineTotal(nextLines),
+      };
+    });
+  }, []);
+
+  const handleLineChange = useCallback(
+    (lineId: string, changes: Partial<EntryPaymentLine>) => {
+      updateLines((lines) =>
+        lines.map((line) => (line.id === lineId ? { ...line, ...changes } : line)),
+      );
+    },
+    [updateLines],
+  );
+
+  const handleAddManualLine = useCallback(() => {
+    setEntryModal((prev) => {
+      const newLine: EntryPaymentLine = {
+        id: createLineId(),
+        label: 'Manual line',
+        amount: 0,
+        categoryId: prev.categoryId,
+        accountId: prev.accountId,
+        description: '',
+        include: true,
+      };
+      const nextLines = [...prev.lines, newLine];
+      return {
+        ...prev,
+        lines: nextLines,
+        amount: computeSelectedLineTotal(nextLines),
+      };
+    });
+  }, []);
+
+  const handleRemoveLine = useCallback((lineId: string) => {
+    setEntryModal((prev) => {
+      if (prev.lines.length <= 1) {
+        const resetLine: EntryPaymentLine = {
+          ...(prev.lines[0] ?? {
+            id: createLineId(),
+            label: 'Manual line',
+            amount: 0,
+            categoryId: prev.categoryId,
+            accountId: prev.accountId,
+            description: '',
+            include: true,
+          }),
+          amount: 0,
+          include: true,
+        };
+        return {
+          ...prev,
+          lines: [resetLine],
+          amount: 0,
+        };
+      }
+      const nextLines = prev.lines.filter((line) => line.id !== lineId);
+      return {
+        ...prev,
+        lines: nextLines,
+        amount: computeSelectedLineTotal(nextLines),
+      };
+    });
+  }, []);
+
   const openEntryModal = useCallback(
     (staff: Pay) => {
       if (!canRecordPayments) {
@@ -873,14 +1127,21 @@ const resolveStaffCounterpartyDefaults = useCallback(
       const baseRangeEnd = dayjs(rangeEndValue);
       const previousRange = computePreviousRange(baseRangeStart, baseRangeEnd);
 
+      const defaultLines = buildDefaultPaymentLines(
+        staff,
+        categoryLookup,
+        defaults.categoryId,
+        compensationComponentLookup,
+      );
+      const selectedTotal = computeSelectedLineTotal(defaultLines);
+      const defaultLineAccount = defaultLines.find((line) => line.accountId)?.accountId ?? '';
       setEntryModal({
         open: true,
         staff,
-        amount:
-          outstanding > 0 ? outstanding : Math.max(staff.totalPayout ?? staff.totalCommission, 0),
+        amount: selectedTotal,
         currency,
         date: new Date(),
-        accountId: '',
+        accountId: defaultLineAccount || '',
         categoryId: defaults.categoryId,
         counterpartyId: defaults.counterpartyId,
         description: `Staff payout for ${staff.firstName} (${formatRangeLabel(rangeStartValue, rangeEndValue)})`,
@@ -889,10 +1150,11 @@ const resolveStaffCounterpartyDefaults = useCallback(
         period: 'current',
         previousRangeStart: previousRange.start.format('YYYY-MM-DD'),
         previousRangeEnd: previousRange.end.format('YYYY-MM-DD'),
+        lines: defaultLines,
       });
       setEntryMessage(null);
     },
-    [canRecordPayments, endDate, resolveStaffCounterpartyDefaults, startDate],
+    [canRecordPayments, categoryLookup, compensationComponentLookup, endDate, resolveStaffCounterpartyDefaults, startDate],
   );
 
   const closeEntryModal = useCallback(() => {
@@ -911,6 +1173,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
         ...prev,
         accountId: value,
         currency: account?.currency ?? prev.currency,
+        lines: prev.lines.map((line) => (line.accountId ? line : { ...line, accountId: value })),
       }));
     },
     [accounts.data],
@@ -1094,56 +1357,65 @@ const resolveStaffCounterpartyDefaults = useCallback(
       });
       return;
     }
+    const selectedLines = entryModal.lines.filter((line) => line.include && line.amount > 0);
+    const missingCategory = selectedLines.some((line) => !line.categoryId);
+    const missingAccount = selectedLines.some((line) => !(line.accountId || entryModal.accountId));
     if (
-      entryModal.amount <= 0 ||
-      !entryModal.accountId ||
-      !entryModal.categoryId ||
+      selectedLines.length === 0 ||
+      missingCategory ||
+      missingAccount ||
       !entryModal.counterpartyId
     ) {
       setEntryMessage({
         type: 'error',
-        text: 'Fill in the amount, account, category, and vendor before submitting.',
+        text: 'Select at least one payment line with a category and account, plus vendor.',
       });
       return;
     }
 
     setEntrySubmitting(true);
     try {
-      const transaction = await dispatch(
-        createFinanceTransaction({
-          kind: 'expense',
-          date: dayjs(entryModal.date).format('YYYY-MM-DD'),
-          accountId: Number(entryModal.accountId),
-          currency: entryModal.currency,
-          amountMinor: toMinorUnits(entryModal.amount),
-          categoryId: Number(entryModal.categoryId),
-          counterpartyType: 'vendor',
-          counterpartyId: Number(entryModal.counterpartyId),
-          status: 'paid',
-          description: entryModal.description || null,
-          meta: {
-            source: 'staff-payments',
+      for (const line of selectedLines) {
+        const resolvedAccountId = Number(line.accountId ?? entryModal.accountId);
+        const accountRecord = financeAccountsById.get(resolvedAccountId);
+        const transactionCurrency = accountRecord?.currency ?? entryModal.currency;
+        const transaction = await dispatch(
+          createFinanceTransaction({
+            kind: 'expense',
+            date: dayjs(entryModal.date).format('YYYY-MM-DD'),
+            accountId: resolvedAccountId,
+            currency: transactionCurrency,
+            amountMinor: toMinorUnits(line.amount),
+            categoryId: Number(line.categoryId),
+            counterpartyType: 'vendor',
+            counterpartyId: Number(entryModal.counterpartyId),
+            status: 'paid',
+            description: line.description || entryModal.description || `${line.label} payout`,
+            meta: {
+              source: 'staff-payments',
+              rangeStart: entryModal.rangeStart,
+              rangeEnd: entryModal.rangeEnd,
+              staffUserId: entryModal.staff.userId ?? null,
+              lineLabel: line.label,
+            },
+          }),
+        ).unwrap();
+
+        await axiosInstance.post(
+          '/reports/staffPayouts/collections',
+          {
+            staffProfileId: entryModal.staff.staffProfileId,
+            direction: 'payable',
+            currency: entryModal.currency,
+            amount: line.amount,
             rangeStart: entryModal.rangeStart,
             rangeEnd: entryModal.rangeEnd,
-            staffUserId: entryModal.staff.userId ?? null,
+            financeTransactionId: transaction.id,
+            note: line.description ?? entryModal.description ?? null,
           },
-        }),
-      ).unwrap();
-
-      await axiosInstance.post(
-        '/reports/staffPayouts/collections',
-        {
-          staffProfileId: entryModal.staff.staffProfileId,
-          direction: 'payable',
-          currency: entryModal.currency,
-          amount: entryModal.amount,
-          rangeStart: entryModal.rangeStart,
-          rangeEnd: entryModal.rangeEnd,
-          financeTransactionId: transaction.id,
-          note: entryModal.description ?? null,
-        },
-        { withCredentials: true },
-      );
+          { withCredentials: true },
+        );
+      }
 
       closeEntryModal();
       const refetchStart = startDate ? startDate.format('YYYY-MM-DD') : entryModal.rangeStart;
@@ -1716,45 +1988,41 @@ const renderLedgerSnapshot = (staff: Pay) => {
           <Stack gap="sm">
             {entryModal.staff && (
               <Alert color="blue" variant="light">
-                Outstanding this range:{' '}
-                {formatCurrency(
-                  entryModal.staff.payouts?.payableOutstanding ?? 0,
-                  entryModal.staff.payouts?.currency ?? DEFAULT_CURRENCY,
-                )}
+                <Stack gap={4}>
+                  <Text size="sm">
+                    Outstanding this range:{' '}
+                    {formatCurrency(
+                      entryModal.staff.payouts?.payableOutstanding ?? 0,
+                      entryModal.staff.payouts?.currency ?? DEFAULT_CURRENCY,
+                    )}
+                  </Text>
+                  <Text size="sm">
+                    Selected in this payment: {formatCurrency(entryModal.amount, entryModal.currency)}
+                  </Text>
+                  <Text size="sm">
+                    Remaining after payment:{' '}
+                    {formatCurrency(
+                      Math.max(
+                        (entryModal.staff.payouts?.payableOutstanding ?? 0) - entryModal.amount,
+                        0,
+                      ),
+                      entryModal.currency,
+                    )}
+                  </Text>
+                </Stack>
               </Alert>
             )}
             <Text size="xs" c="dimmed">
               Period: {reportingRangeLabel}
             </Text>
-            <NumberInput
-              label="Amount"
-              value={entryModal.amount}
-              min={0}
-              step={10}
-              hideControls
-              onChange={(value) => {
-                const numericValue = typeof value === 'number' ? value : Number(value ?? 0);
-                setEntryModal((prev) => ({
-                  ...prev,
-                  amount: Number.isFinite(numericValue) ? numericValue : prev.amount,
-                }));
-              }}
-            />
             <Select
               label="Account"
               placeholder="Select an account"
               data={accountOptions}
-              value={entryModal.accountId}
+              value={entryModal.accountId || null}
               onChange={handleEntryAccountChange}
               searchable
-            />
-            <Select
-              label="Expense category"
-              placeholder="Select a category"
-              data={expenseCategoryOptions}
-              value={entryModal.categoryId}
-              onChange={(value) => setEntryModal((prev) => ({ ...prev, categoryId: value ?? '' }))}
-              searchable
+              clearable
             />
             <Select
               label="Vendor"
@@ -1764,6 +2032,93 @@ const renderLedgerSnapshot = (staff: Pay) => {
               onChange={handleCounterpartyChange}
               searchable
             />
+            <Stack gap="xs">
+              <Group justify="space-between" align="center">
+                <Text fw={600}>Payment lines</Text>
+                <Button variant="subtle" size="xs" onClick={handleAddManualLine}>
+                  Add line
+                </Button>
+              </Group>
+              {entryModal.lines.map((line) => (
+                <Card key={line.id} withBorder padding="sm" radius="md">
+                  <Stack gap="sm">
+                    <Group align="flex-start" justify="space-between" gap="md">
+                      <TextInput
+                        label="Line label"
+                        style={{ flex: 1 }}
+                        value={line.label}
+                        onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                          handleLineChange(line.id, { label: event.currentTarget.value })
+                        }
+                      />
+                      <Stack gap={4} w={160}>
+                        <Switch
+                          label="Include"
+                          checked={line.include}
+                          onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                            handleLineChange(line.id, { include: event.currentTarget.checked })
+                          }
+                        />
+                        <NumberInput
+                          label="Amount"
+                          value={line.amount}
+                          min={0}
+                          hideControls
+                          onChange={(value) => {
+                            const numeric = typeof value === 'number' ? value : Number(value ?? 0);
+                            handleLineChange(line.id, {
+                              amount: Number.isFinite(numeric) ? Math.max(numeric, 0) : line.amount,
+                            });
+                          }}
+                        />
+                      </Stack>
+                    </Group>
+                    <Group align="flex-end" gap="md">
+                      <Select
+                        label="Account"
+                        placeholder="Use payout account"
+                        data={accountOptions}
+                        value={line.accountId || null}
+                        onChange={(value) => handleLineChange(line.id, { accountId: value ?? '' })}
+                        searchable
+                        clearable
+                        style={{ flex: 1 }}
+                      />
+                      <Select
+                        label="Category"
+                        placeholder="Choose a category"
+                        data={expenseCategoryOptions}
+                        value={line.categoryId || null}
+                        onChange={(value) => handleLineChange(line.id, { categoryId: value ?? '' })}
+                        searchable
+                        style={{ flex: 1 }}
+                      />
+                      <Textarea
+                        label="Description"
+                        minRows={1}
+                        style={{ flex: 2 }}
+                        value={line.description}
+                        onChange={(event) =>
+                          handleLineChange(line.id, { description: event.currentTarget.value })
+                        }
+                      />
+                      <ActionIcon
+                        color="red"
+                        variant="subtle"
+                        aria-label="Remove line"
+                        disabled={entryModal.lines.length <= 1}
+                        onClick={() => handleRemoveLine(line.id)}
+                      >
+                        <IconTrash size={18} />
+                      </ActionIcon>
+                    </Group>
+                  </Stack>
+                </Card>
+              ))}
+              <Text size="sm" c="dimmed">
+                Current total: {formatCurrency(entryModal.amount, entryModal.currency)}
+              </Text>
+            </Stack>
             <DatePickerInput
               label="Payment date"
               value={entryModal.date}
@@ -1774,7 +2129,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
               }}
             />
             <Textarea
-              label="Description"
+              label="Global note"
               minRows={2}
               value={entryModal.description}
               onChange={(event) =>
