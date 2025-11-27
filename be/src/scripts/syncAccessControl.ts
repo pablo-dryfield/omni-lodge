@@ -144,6 +144,11 @@ async function syncAccessControl() {
         code === "42701" &&
         /\bstaff_profiles\b/i.test(message) &&
         /\b(finance_(vendor|client)_id|guiding_category_id|review_category_id)\b/i.test(message);
+      const isVenueFinanceColumnCollision =
+        typeof code === "string" &&
+        code === "42701" &&
+        /\bvenues\b/i.test(message) &&
+        /\bfinance_(vendor|client)_id\b/i.test(message);
       if (isShiftRoleSchemaIssue) {
         console.warn(
           'Skipping automatic schema sync for shift role references because the "shift_roles" table is not yet available. Run the migrations to create it.',
@@ -151,6 +156,10 @@ async function syncAccessControl() {
       } else if (isStaffProfileFinanceColumnCollision) {
         console.warn(
           'Skipping schema sync for staff profile finance mappings because the columns already exist. Ensure the latest migrations have been applied.',
+        );
+      } else if (isVenueFinanceColumnCollision) {
+        console.warn(
+          'Skipping schema sync for venue finance mappings because the columns already exist. Ensure the latest migrations have been applied.',
         );
       } else {
         throw error;
