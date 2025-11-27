@@ -96,4 +96,5 @@ export type Pay = {
     startDate: string;
     endDate: string;
   };
+  rangeIsCanonical?: boolean;
 };

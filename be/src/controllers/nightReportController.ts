@@ -10,6 +10,7 @@ import Venue from '../models/Venue.js';
 import VenueCompensationTerm from '../models/VenueCompensationTerm.js';
 import VenueCompensationTermRate from '../models/VenueCompensationTermRate.js';
 import VenueCompensationCollectionLog from '../models/VenueCompensationCollectionLog.js';
+import VenueCompensationLedger from '../models/VenueCompensationLedger.js';
 import FinanceTransaction from '../finance/models/FinanceTransaction.js';
 import HttpError from '../errors/HttpError.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
@@ -22,6 +23,8 @@ import {
   openNightReportPhotoStream,
 } from '../services/nightReportStorageService.js';
 import { fetchLeaderNightReportStats } from '../services/nightReportMetricsService.js';
+
+const DEFAULT_PAYOUT_CURRENCY = process.env.FINANCE_BASE_CURRENCY?.trim().toUpperCase() ?? 'PLN';
 
 type RawVenueAggregate = {
   venueId: number | null;
@@ -50,6 +53,13 @@ type VenueDetailAggregate = {
   brunchCount: number | null;
   activityDate: string | null;
   reportId: number | null;
+};
+
+type LedgerSnapshot = {
+  opening: number;
+  due: number;
+  paid: number;
+  closing: number;
 };
 
 type NightReportPayload = {
@@ -103,6 +113,17 @@ type SummaryPeriod = 'this_month' | 'last_month' | 'custom';
 const SUMMARY_PERIODS: SummaryPeriod[] = ['this_month', 'last_month', 'custom'];
 
 const roundCurrencyValue = (value: number): number => Math.round(value * 100) / 100;
+const convertMajorUnitsToMinor = (value: number): number => Math.round(value * 100);
+const convertMinorUnitsToMajor = (value: number | string | null | undefined): number => {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+  const numeric = typeof value === 'string' ? Number(value) : Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+  return roundCurrencyValue(numeric / 100);
+};
 
 const parseAmountToMinor = (value: unknown): number => {
   if (value === null || value === undefined || value === '') {
@@ -1296,7 +1317,7 @@ export const createVenueCompensationCollectionLog = async (
     const currency =
       typeof req.body.currency === 'string' && req.body.currency.trim().length > 0
         ? req.body.currency.trim().toUpperCase()
-        : 'USD';
+        : DEFAULT_PAYOUT_CURRENCY;
 
     const amountMinor = parseAmountToMinor(req.body.amount);
     if (amountMinor <= 0) {
@@ -1309,6 +1330,15 @@ export const createVenueCompensationCollectionLog = async (
     const rangeEnd = dayjs(rangeEndRaw).endOf('day');
     if (!rangeStart.isValid() || !rangeEnd.isValid() || rangeEnd.isBefore(rangeStart)) {
       throw new HttpError(400, 'Provide a valid rangeStart and rangeEnd.');
+    }
+
+    const isCanonicalRange =
+      rangeStart.isSame(rangeStart.startOf('month'), 'day') &&
+      rangeEnd.isSame(rangeStart.endOf('month'), 'day') &&
+      rangeStart.isSame(rangeEnd, 'month') &&
+      rangeStart.year() === rangeEnd.year();
+    if (!isCanonicalRange) {
+      throw new HttpError(400, 'Collections can only be recorded for full calendar months.');
     }
 
     const financeTransactionIdRaw =
@@ -1325,9 +1355,17 @@ export const createVenueCompensationCollectionLog = async (
       financeTransactionId = financeTransactionIdRaw;
     }
 
-    const venueExists = await Venue.count({ where: { id: venueId } });
-    if (!venueExists) {
+    const venueRecord = await Venue.findByPk(venueId, {
+      attributes: ['id', 'financeVendorId', 'financeClientId'],
+    });
+    if (!venueRecord) {
       throw new HttpError(404, 'Venue not found.');
+    }
+    if (direction === 'receivable' && !venueRecord.financeClientId) {
+      throw new HttpError(400, 'This venue is not linked to a finance client.');
+    }
+    if (direction === 'payable' && !venueRecord.financeVendorId) {
+      throw new HttpError(400, 'This venue is not linked to a finance vendor.');
     }
 
     const note =
@@ -1363,6 +1401,13 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
     const endDateParam = typeof req.query.endDate === 'string' ? req.query.endDate : undefined;
 
     const { period, start, end } = resolveVenueSummaryRange(periodParam, startDateParam, endDateParam);
+    const isCanonicalRange =
+      start.isSame(start.startOf('month'), 'day') &&
+      end.isSame(start.endOf('month'), 'day') &&
+      start.isSame(end, 'month') &&
+      start.year() === end.year();
+    const startIso = start.format('YYYY-MM-DD');
+    const endIso = end.format('YYYY-MM-DD');
 
     const detailRows = (await NightReportVenue.findAll({
       attributes: [
@@ -1387,7 +1432,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
           where: {
             status: 'submitted',
             activityDate: {
-              [Op.between]: [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')],
+              [Op.between]: [startIso, endIso],
             },
           },
         },
@@ -1403,8 +1448,8 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         [fn('COALESCE', fn('SUM', col('amount_minor')), 0), 'totalAmountMinor'],
       ],
       where: {
-        rangeStart: start.format('YYYY-MM-DD'),
-        rangeEnd: end.format('YYYY-MM-DD'),
+        rangeStart: startIso,
+        rangeEnd: endIso,
       },
       group: ['venue_id', 'currency_code', 'direction'],
       raw: true,
@@ -1412,6 +1457,35 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
 
     const collectionMap = new Map<string, { receivable: number; payable: number }>();
     const currencyCollectionMap = new Map<string, { receivable: number; payable: number }>();
+    const previousLedgerMap = new Map<string, VenueCompensationLedger>();
+    const ledgerUpsertMap = new Map<
+      string,
+      {
+        venueId: number;
+        direction: 'receivable' | 'payable';
+        currencyCode: string;
+        rangeStart: string;
+        rangeEnd: string;
+        openingBalanceMinor: number;
+        dueAmountMinor: number;
+        paidAmountMinor: number;
+        closingBalanceMinor: number;
+      }
+    >();
+    const currencyLedgerTotals = new Map<
+      string,
+      { receivable: LedgerSnapshot; payable: LedgerSnapshot }
+    >();
+    const ensureCurrencyLedgerTotals = (currency: string) => {
+      if (!currencyLedgerTotals.has(currency)) {
+        currencyLedgerTotals.set(currency, {
+          receivable: { opening: 0, due: 0, paid: 0, closing: 0 },
+          payable: { opening: 0, due: 0, paid: 0, closing: 0 },
+        });
+      }
+      return currencyLedgerTotals.get(currency)!;
+    };
+
     collectionRows.forEach((row) => {
       const venueKey = `${row.venueId ?? 'null'}|${(row.currencyCode ?? 'USD').toUpperCase()}`;
       const majorAmount = roundCurrencyValue(Number(row.totalAmountMinor ?? 0) / 100);
@@ -1509,9 +1583,77 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       totalsMap.get(currency)![direction] += amount;
     });
 
+    if (isCanonicalRange) {
+      const canonicalEntries = Array.from(venueMap.values()).filter((entry) => entry.venueId !== null);
+      if (canonicalEntries.length > 0) {
+        const venueIds = Array.from(new Set(canonicalEntries.map((entry) => entry.venueId))) as number[];
+        const previousLedgers = await VenueCompensationLedger.findAll({
+          where: {
+            venueId: {
+              [Op.in]: venueIds,
+            },
+            rangeEnd: {
+              [Op.lt]: startIso,
+            },
+          },
+          order: [
+            ['venue_id', 'ASC'],
+            ['currency_code', 'ASC'],
+            ['direction', 'ASC'],
+            ['range_end', 'DESC'],
+          ],
+        });
+
+        previousLedgers.forEach((ledger) => {
+          const key = `${ledger.venueId}|${ledger.currencyCode}|${ledger.direction}`;
+          if (!previousLedgerMap.has(key)) {
+            previousLedgerMap.set(key, ledger);
+          }
+        });
+      }
+    }
+
     venueMap.forEach((entry) => {
       entry.daily.sort((a, b) => a.date.localeCompare(b.date));
     });
+
+    const buildLedgerSnapshot = (
+      venueId: number | null,
+      currency: string,
+      direction: 'receivable' | 'payable',
+      dueValue: number,
+      paidValue: number,
+    ): LedgerSnapshot => {
+      const due = roundCurrencyValue(Math.max(dueValue, 0));
+      const paid = roundCurrencyValue(Math.max(paidValue, 0));
+      let opening = 0;
+      if (isCanonicalRange && venueId) {
+        const previous = previousLedgerMap.get(`${venueId}|${currency}|${direction}`);
+        if (previous) {
+          opening = convertMinorUnitsToMajor(previous.closingBalanceMinor);
+        }
+      }
+      const closing = isCanonicalRange
+        ? roundCurrencyValue(opening + due - paid)
+        : roundCurrencyValue(due - paid);
+
+      if (isCanonicalRange && venueId) {
+        const upsertKey = `${venueId}|${currency}|${direction}`;
+        ledgerUpsertMap.set(upsertKey, {
+          venueId,
+          direction,
+          currencyCode: currency,
+          rangeStart: startIso,
+          rangeEnd: endIso,
+          openingBalanceMinor: convertMajorUnitsToMinor(opening),
+          dueAmountMinor: convertMajorUnitsToMinor(due),
+          paidAmountMinor: convertMajorUnitsToMinor(paid),
+          closingBalanceMinor: convertMajorUnitsToMinor(closing),
+        });
+      }
+
+      return { opening, due, paid, closing };
+    };
 
     const venues = Array.from(venueMap.values()).map((entry) => {
       const key = `${entry.venueId ?? 'null'}|${entry.currency}`;
@@ -1520,6 +1662,24 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       const payable = roundCurrencyValue(entry.payable);
       const receivableCollected = roundCurrencyValue(collected.receivable);
       const payableCollected = roundCurrencyValue(collected.payable);
+
+      const receivableLedger = buildLedgerSnapshot(
+        entry.venueId,
+        entry.currency,
+        'receivable',
+        receivable,
+        receivableCollected,
+      );
+      const payableLedger = buildLedgerSnapshot(entry.venueId, entry.currency, 'payable', payable, payableCollected);
+      const currencyLedgers = ensureCurrencyLedgerTotals(entry.currency);
+      currencyLedgers.receivable.opening += receivableLedger.opening;
+      currencyLedgers.receivable.due += receivableLedger.due;
+      currencyLedgers.receivable.paid += receivableLedger.paid;
+      currencyLedgers.receivable.closing += receivableLedger.closing;
+      currencyLedgers.payable.opening += payableLedger.opening;
+      currencyLedgers.payable.due += payableLedger.due;
+      currencyLedgers.payable.paid += payableLedger.paid;
+      currencyLedgers.payable.closing += payableLedger.closing;
 
       return {
         venueId: entry.venueId,
@@ -1537,6 +1697,8 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         totalPeoplePayable: entry.totalPeoplePayable,
         daily: entry.daily,
         rowKey: key,
+        receivableLedger,
+        payableLedger,
       };
     });
 
@@ -1548,6 +1710,21 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       const payable = roundCurrencyValue(sums.payable);
       const receivableCollected = roundCurrencyValue(collected.receivable);
       const payableCollected = roundCurrencyValue(collected.payable);
+      const ledgerTotals =
+        currencyLedgerTotals.get(currency) ?? {
+          receivable: {
+            opening: 0,
+            due: receivable,
+            paid: receivableCollected,
+            closing: roundCurrencyValue(receivable - receivableCollected),
+          },
+          payable: {
+            opening: 0,
+            due: payable,
+            paid: payableCollected,
+            closing: roundCurrencyValue(payable - payableCollected),
+          },
+        };
       return {
         currency,
         receivable,
@@ -1557,16 +1734,33 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         payableCollected,
         payableOutstanding: roundCurrencyValue(Math.max(payable - payableCollected, 0)),
         net: roundCurrencyValue(sums.receivable - sums.payable),
+        receivableLedger: {
+          opening: roundCurrencyValue(ledgerTotals.receivable.opening),
+          due: roundCurrencyValue(ledgerTotals.receivable.due),
+          paid: roundCurrencyValue(ledgerTotals.receivable.paid),
+          closing: roundCurrencyValue(ledgerTotals.receivable.closing),
+        },
+        payableLedger: {
+          opening: roundCurrencyValue(ledgerTotals.payable.opening),
+          due: roundCurrencyValue(ledgerTotals.payable.due),
+          paid: roundCurrencyValue(ledgerTotals.payable.paid),
+          closing: roundCurrencyValue(ledgerTotals.payable.closing),
+        },
       };
     });
+
+    if (isCanonicalRange && ledgerUpsertMap.size > 0) {
+      await Promise.all(Array.from(ledgerUpsertMap.values()).map((payload) => VenueCompensationLedger.upsert(payload)));
+    }
 
     res.status(200).json([
       {
         data: {
           period,
-          range: { startDate: start.format('YYYY-MM-DD'), endDate: end.format('YYYY-MM-DD') },
+          range: { startDate: startIso, endDate: endIso },
           totalsByCurrency,
           venues,
+          rangeIsCanonical: isCanonicalRange,
         },
         columns: [],
       },

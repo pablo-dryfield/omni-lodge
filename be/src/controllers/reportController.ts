@@ -164,6 +164,7 @@ type StaffPayoutReconciliation = {
 type CommissionSummary = {
   userId: number;
   firstName: string;
+  lastName: string;
   totalCommission: number;
   totalCustomers: number;
   breakdown: CommissionBreakdownEntry[];
@@ -1584,6 +1585,12 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       return;
     }
 
+    const isCanonicalRange =
+      start.isSame(start.startOf("month"), "day") &&
+      end.isSame(start.endOf("month"), "day") &&
+      start.isSame(end, "month") &&
+      start.year() === end.year();
+
     const commissionDataByUser = new Map<number, CommissionSummary>();
     const productBucketsByUser: ProductBucketLookup = new Map();
     const staffByCounter = new Map<number, CounterUser[]>();
@@ -1735,7 +1742,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
 
     const reviewStatsByUser = await fetchReviewStats(start, end);
     if (reviewStatsByUser.size > 0) {
-      await ensureSummariesForUserIds(reviewStatsByUser.keys(), commissionDataByUser);
+      await ensureSummariesForUserIds(reviewStatsByUser.keys(), commissionDataByUser, true);
       reviewStatsByUser.forEach((stats, userId) => {
         const summary = commissionDataByUser.get(userId);
         if (summary) {
@@ -1873,7 +1880,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
 
     const commissionUserIds = Array.from(commissionDataByUser.keys());
     const previousLedgerMap = new Map<number, StaffPayoutLedger>();
-    if (commissionUserIds.length > 0) {
+    if (isCanonicalRange && commissionUserIds.length > 0) {
       const previousLedgers = await StaffPayoutLedger.findAll({
         where: {
           staffUserId: {
@@ -1924,12 +1931,15 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         receivableOutstanding: 0,
       };
       const existingLedger = previousLedgerMap.get(entry.userId);
-      const openingBalance = existingLedger
-        ? roundCurrencyValue(existingLedger.closingBalanceMinor / 100)
-        : 0;
+      const openingBalance =
+        isCanonicalRange && existingLedger
+          ? roundCurrencyValue(existingLedger.closingBalanceMinor / 100)
+          : 0;
       const periodDueAmount = Number(entry.totalPayout.toFixed(2));
       const periodPaidAmount = roundCurrencyValue(payouts.payablePaid ?? 0);
-      const closingBalance = roundCurrencyValue(openingBalance + periodDueAmount - periodPaidAmount);
+      const closingBalance = isCanonicalRange
+        ? roundCurrencyValue(openingBalance + periodDueAmount - periodPaidAmount)
+        : roundCurrencyValue(periodDueAmount - periodPaidAmount);
 
       return {
         ...entry,
@@ -1980,23 +1990,28 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         },
         dueAmount: periodDueAmount,
         paidAmount: periodPaidAmount,
+        rangeIsCanonical: isCanonicalRange,
       };
     });
 
-    if (allSummaries.length > 0) {
+    if (isCanonicalRange && allSummaries.length > 0) {
       await Promise.all(
-        allSummaries.map((summary) =>
-          StaffPayoutLedger.upsert({
+        allSummaries.map((summary) => {
+          const openingBalanceMinor = convertMajorUnitsToMinor(summary.openingBalance ?? 0);
+          const dueAmountMinor = convertMajorUnitsToMinor(summary.dueAmount ?? 0);
+          const paidAmountMinor = convertMajorUnitsToMinor(summary.paidAmount ?? 0);
+          const closingBalanceMinor = convertMajorUnitsToMinor(summary.closingBalance ?? 0);
+          return StaffPayoutLedger.upsert({
             staffUserId: summary.userId,
             rangeStart: rangeStartIso,
             rangeEnd: rangeEndIso,
             currencyCode: summary.payouts?.currency ?? DEFAULT_PAYOUT_CURRENCY,
-            openingBalanceMinor: convertMajorUnitsToMinor(summary.openingBalance ?? 0),
-            dueAmountMinor: convertMajorUnitsToMinor(summary.dueAmount ?? 0),
-            paidAmountMinor: convertMajorUnitsToMinor(summary.paidAmount ?? 0),
-            closingBalanceMinor: convertMajorUnitsToMinor(summary.closingBalance ?? 0),
-          }),
-        ),
+            openingBalanceMinor,
+            dueAmountMinor,
+            paidAmountMinor,
+            closingBalanceMinor,
+          });
+        }),
       );
     }
 
@@ -3061,10 +3076,10 @@ export const deleteReportTemplate = async (req: AuthenticatedRequest, res: Respo
   }
 };
 
-function aggregateDailyBreakdownByUser(
+const aggregateDailyBreakdownByUser = (
   dailyAggregates: Map<number, DailyAggregate>,
   commissionDataByUser: Map<number, CommissionSummary>,
-) {
+): void =>  {
   dailyAggregates.forEach((aggregate) => {
     const guidesCount = aggregate.guides.size;
 
@@ -3132,9 +3147,10 @@ const allocateComponentToProduct = (
   bucket.componentTotals.set(componentId, current + amount);
 };
 
-const createEmptySummary = (userId: number, firstName: string): CommissionSummary => ({
+const createEmptySummary = (userId: number, firstName: string, lastName = ""): CommissionSummary => ({
   userId,
   firstName,
+  lastName,
   totalCommission: 0,
   totalCustomers: 0,
   breakdown: [],
@@ -3262,6 +3278,7 @@ const recordLockedComponent = (
 const ensureSummariesForUserIds = async (
   userIds: Iterable<number>,
   summaries: Map<number, CommissionSummary>,
+  includeLastName = false,
 ): Promise<void> => {
   const missingIds = Array.from(new Set(Array.from(userIds).filter((userId) => !summaries.has(userId))));
   if (missingIds.length === 0) {
@@ -3270,12 +3287,19 @@ const ensureSummariesForUserIds = async (
 
   const users = await User.findAll({
     where: { id: { [Op.in]: missingIds }, status: true },
-    attributes: ["id", "firstName"],
+    attributes: ["id", "firstName", ...(includeLastName ? ["lastName"] : [])],
   });
 
   users.forEach((user) => {
     if (!summaries.has(user.id)) {
-      summaries.set(user.id, createEmptySummary(user.id, user.firstName ?? `User ${user.id}`));
+      summaries.set(
+        user.id,
+        createEmptySummary(
+          user.id,
+          user.firstName ?? `User ${user.id}`,
+          includeLastName ? user.lastName ?? "" : "",
+        ),
+      );
     }
   });
 };

@@ -31,6 +31,7 @@ import type {
   VenuePayoutVenueBreakdown,
   VenuePayoutVenueDaily,
   VenuePayoutCurrencyTotals,
+  VenueLedgerSnapshot,
 } from "../../types/nightReports/VenuePayoutSummary";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { useFinanceBootstrap } from "../../hooks/useFinanceBootstrap";
@@ -131,6 +132,13 @@ const RADAR_METRICS: readonly RadarMetric[] = [
   { key: "payableOutstanding", label: "Payout outstanding" },
 ];
 
+const LEDGER_LINE_CONFIG = [
+  { key: "opening" as const, label: "Opening balance" },
+  { key: "due" as const, label: "New activity" },
+  { key: "paid" as const, label: "Payments" },
+  { key: "closing" as const, label: "Closing balance" },
+];
+
 const VenueNumbersSummary = () => {
   const dispatch = useAppDispatch();
   useFinanceBootstrap();
@@ -155,6 +163,8 @@ const VenueNumbersSummary = () => {
   const [reportPreviewError, setReportPreviewError] = useState<string | null>(null);
   const [activePhotoPreview, setActivePhotoPreview] = useState<NightReportPhotoPreview | null>(null);
   const [previewObjectUrl, setPreviewObjectUrl] = useState<string | null>(null);
+  const rangeIsCanonical = summary?.rangeIsCanonical ?? false;
+  const canRecordPayments = rangeIsCanonical;
 
   const venueRecords = useMemo(
     () => (venuesState?.data?.[0]?.data as Venue[] | undefined) ?? [],
@@ -370,8 +380,34 @@ const VenueNumbersSummary = () => {
     [financeClientsById, financeVendorsById],
   );
 
+  const renderLedgerBreakdown = useCallback(
+    (label: string, ledger: VenueLedgerSnapshot, currency: string) => (
+      <Stack gap={2}>
+        <Text fw={600} size="sm">
+          {label}
+        </Text>
+        {LEDGER_LINE_CONFIG.map((line) => (
+          <Group justify="space-between" key={`${label}-${line.key}`}>
+            <Text c="dimmed" size="sm">
+              {line.label}
+            </Text>
+            <Text>{formatCurrency(ledger[line.key], currency)}</Text>
+          </Group>
+        ))}
+      </Stack>
+    ),
+    [],
+  );
+
   const openEntryModal = useCallback(
     (kind: "receivable" | "payable", venue: VenuePayoutVenueBreakdown) => {
+      if (!summary?.rangeIsCanonical) {
+        setEntryMessage({
+          type: "error",
+          text: "Payments can only be recorded when viewing a full calendar month.",
+        });
+        return;
+      }
       const outstanding = kind === "receivable" ? venue.receivableOutstanding : venue.payableOutstanding;
       const defaults = resolveVenueCounterpartyDefaults(kind, venue.venueId ?? null);
       const rangeLabel = summary
@@ -438,6 +474,13 @@ const VenueNumbersSummary = () => {
     }
     if (!summary) {
       setEntryMessage({ type: "error", text: "Load a summary range before recording payments." });
+      return;
+    }
+    if (!summary.rangeIsCanonical) {
+      setEntryMessage({
+        type: "error",
+        text: "Payments can only be recorded when viewing a full calendar month.",
+      });
       return;
     }
     const venueId = entryModal.venue.venueId;
@@ -707,6 +750,11 @@ const VenueNumbersSummary = () => {
                   </Text>
                 </div>
               </Group>
+              {!rangeIsCanonical && (
+                <Alert color="yellow" variant="light">
+                  This range is view-only. Collections and payouts can only be recorded for full calendar months.
+                </Alert>
+              )}
               {summary.totalsByCurrency.length === 0 ? (
                 <Text>No payouts or commissions recorded for this range.</Text>
               ) : (
@@ -768,6 +816,10 @@ const VenueNumbersSummary = () => {
                                       {formatCurrency(row.net, row.currency)}
                                     </Text>
                                   </Group>
+                                  <Stack gap="sm" mt="sm">
+                                    {renderLedgerBreakdown("Commission ledger", row.receivableLedger, row.currency)}
+                                    {renderLedgerBreakdown("Open bar ledger", row.payableLedger, row.currency)}
+                                  </Stack>
                                 </Stack>
                               </Card>
                             ))}
@@ -899,10 +951,12 @@ const VenueNumbersSummary = () => {
                                   size="xs"
                                   variant="light"
                                   disabled={
-                                    venue.venueId === null || (venue.receivableOutstanding ?? 0) <= 0
+                                    !canRecordPayments ||
+                                    venue.venueId === null ||
+                                    (venue.receivableOutstanding ?? 0) <= 0
                                   }
                                   onClick={() => {
-                                    if (venue.venueId !== null) {
+                                    if (canRecordPayments && venue.venueId !== null) {
                                       openEntryModal("receivable", venue);
                                     }
                                   }}
@@ -913,15 +967,29 @@ const VenueNumbersSummary = () => {
                                   size="xs"
                                   variant="light"
                                   color="grape"
-                                  disabled={venue.venueId === null || (venue.payableOutstanding ?? 0) <= 0}
+                                  disabled={
+                                    !canRecordPayments ||
+                                    venue.venueId === null ||
+                                    (venue.payableOutstanding ?? 0) <= 0
+                                  }
                                   onClick={() => {
-                                    if (venue.venueId !== null) {
+                                    if (canRecordPayments && venue.venueId !== null) {
                                       openEntryModal("payable", venue);
                                     }
                                   }}
                                 >
                                   Pay
                                 </Button>
+                                <Stack gap={0} mt="xs">
+                                  <Text size="xs" c="dimmed">
+                                    Commission: {formatCurrency(venue.receivableLedger.opening, venue.currency)} →{" "}
+                                    {formatCurrency(venue.receivableLedger.closing, venue.currency)}
+                                  </Text>
+                                  <Text size="xs" c="dimmed">
+                                    Open bar: {formatCurrency(venue.payableLedger.opening, venue.currency)} →{" "}
+                                    {formatCurrency(venue.payableLedger.closing, venue.currency)}
+                                  </Text>
+                                </Stack>
                               </Stack>
                             </Table.Td>
                           </Table.Tr>
