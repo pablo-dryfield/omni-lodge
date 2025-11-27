@@ -478,54 +478,100 @@ const buildDefaultPaymentLines = (
   fallbackCategoryId: string,
   componentDefinitions: Map<number, CompensationComponent>,
 ): EntryPaymentLine[] => {
-  const bucketEntries = Object.entries(staff.bucketTotals ?? {}).filter(([, amount]) => amount > 0);
-  const componentsByCategory = new Map<string, PayComponentSummary[]>();
-  (staff.componentTotals ?? []).forEach((component) => {
-    if (!component.category) {
-      return;
+  const bucketBalances = new Map<
+    string,
+    {
+      label: string;
+      amount: number;
     }
-    const key = component.category.toLowerCase();
-    const list = componentsByCategory.get(key) ?? [];
-    list.push(component);
-    componentsByCategory.set(key, list);
+  >();
+  Object.entries(staff.bucketTotals ?? {}).forEach(([bucket, amount]) => {
+    if (amount > 0) {
+      bucketBalances.set(bucket.toLowerCase(), {
+        label: bucket,
+        amount,
+      });
+    }
   });
 
-  const resolveDefaultsForCategory = (normalizedCategory: string) => {
-    const candidates = componentsByCategory.get(normalizedCategory);
-    if (!candidates || candidates.length === 0) {
-      return null;
+  const lines: EntryPaymentLine[] = [];
+  const componentAggregates = new Map<
+    number,
+    {
+      summary: PayComponentSummary;
+      total: number;
     }
-    for (const candidate of candidates) {
-      const meta = componentDefinitions.get(candidate.componentId);
-      if (meta) {
-        return {
-          componentId: candidate.componentId,
-          categoryId: meta.defaultFinanceCategoryId ? String(meta.defaultFinanceCategoryId) : undefined,
-          accountId: meta.defaultFinanceAccountId ? String(meta.defaultFinanceAccountId) : undefined,
-        };
-      }
-    }
-    return {
-      componentId: candidates[0].componentId,
-    };
-  };
+  >();
 
-  const lines: EntryPaymentLine[] = bucketEntries.map(([bucket, amount]) => {
-    const normalized = bucket.toLowerCase();
-    const metadata = PAYMENT_BUCKET_METADATA[normalized];
-    const label = metadata?.label ?? bucket;
-    const defaults = resolveDefaultsForCategory(normalized);
-    const fallbackCategory = findCategoryIdByName(categoryLookup, metadata?.categoryHint, fallbackCategoryId);
-    return {
+  (staff.componentTotals ?? []).forEach((summary) => {
+    if (summary.amount == null || summary.amount <= 0) {
+      return;
+    }
+    const existing = componentAggregates.get(summary.componentId);
+    if (existing) {
+      existing.total += summary.amount;
+    } else {
+      componentAggregates.set(summary.componentId, {
+        summary,
+        total: summary.amount,
+      });
+    }
+  });
+
+  componentAggregates.forEach(({ summary, total }) => {
+    if (!total || total <= 0) {
+      return;
+    }
+    const meta = componentDefinitions.get(summary.componentId);
+    const sourceCategory = summary.category || meta?.category || '';
+    const normalizedCategory = sourceCategory.toLowerCase();
+    const normalizedName = (summary.name || meta?.name || '').toLowerCase();
+    const defaultCategoryId = meta?.defaultFinanceCategoryId
+      ? String(meta.defaultFinanceCategoryId)
+      : findCategoryIdByName(
+          categoryLookup,
+          sourceCategory || meta?.category || summary.name || '',
+          fallbackCategoryId,
+        );
+    const defaultAccountId = meta?.defaultFinanceAccountId ? String(meta.defaultFinanceAccountId) : '';
+    const baseName = meta?.name ?? summary.name ?? `Component #${summary.componentId}`;
+    const amount = roundLineAmount(total);
+    lines.push({
       id: createLineId(),
-      label,
-      amount: roundLineAmount(amount),
-      categoryId: defaults?.categoryId ?? fallbackCategory,
-      accountId: defaults?.accountId ?? '',
-      componentId: defaults?.componentId,
-      description: `${label} payout`,
+      label: baseName,
+      componentId: summary.componentId,
+      amount,
+      categoryId: defaultCategoryId,
+      accountId: defaultAccountId,
+      description: `Auto payout - ${baseName}`,
       include: true,
-    };
+    });
+    if (normalizedName && bucketBalances.has(normalizedName)) {
+      const bucketEntry = bucketBalances.get(normalizedName)!;
+      bucketEntry.amount = Math.max(bucketEntry.amount - amount, 0);
+      bucketBalances.set(normalizedName, bucketEntry);
+    } else if (normalizedCategory && bucketBalances.has(normalizedCategory)) {
+      const bucketEntry = bucketBalances.get(normalizedCategory)!;
+      bucketEntry.amount = Math.max(bucketEntry.amount - amount, 0);
+      bucketBalances.set(normalizedCategory, bucketEntry);
+    }
+  });
+
+  bucketBalances.forEach((entry, key) => {
+    if (entry.amount <= 0) {
+      return;
+    }
+    const metadata = PAYMENT_BUCKET_METADATA[key];
+    const fallbackCategory = findCategoryIdByName(categoryLookup, metadata?.categoryHint, fallbackCategoryId);
+    lines.push({
+      id: createLineId(),
+      label: metadata?.label ?? entry.label,
+      amount: roundLineAmount(entry.amount),
+      categoryId: fallbackCategory,
+      accountId: '',
+      description: `${metadata?.label ?? entry.label} payout`,
+      include: true,
+    });
   });
 
   if (lines.length === 0) {
@@ -533,17 +579,12 @@ const buildDefaultPaymentLines = (
       staff.closingBalance ??
       staff.payouts?.payableOutstanding ??
       Math.max(staff.totalPayout ?? staff.totalCommission ?? 0, 0);
-    const fallbackComponent = staff.componentTotals?.[0];
-    const fallbackDefaults = fallbackComponent
-      ? resolveDefaultsForCategory(fallbackComponent.category?.toLowerCase() ?? '')
-      : null;
     lines.push({
       id: createLineId(),
       label: 'Outstanding payout',
       amount: roundLineAmount(Math.max(outstanding, 0)),
-      categoryId: fallbackDefaults?.categoryId ?? fallbackCategoryId,
-      accountId: fallbackDefaults?.accountId ?? '',
-      componentId: fallbackDefaults?.componentId,
+      categoryId: fallbackCategoryId,
+      accountId: '',
       description: `Payout for ${staff.firstName}`,
       include: true,
     });
@@ -1134,7 +1175,10 @@ const resolveStaffCounterpartyDefaults = useCallback(
         compensationComponentLookup,
       );
       const selectedTotal = computeSelectedLineTotal(defaultLines);
-      const defaultLineAccount = defaultLines.find((line) => line.accountId)?.accountId ?? '';
+      const uniqueAccounts = new Set(
+        defaultLines.map((line) => line.accountId).filter((value): value is string => Boolean(value)),
+      );
+      const defaultLineAccount = uniqueAccounts.size === 1 ? uniqueAccounts.values().next().value ?? '' : '';
       setEntryModal({
         open: true,
         staff,
@@ -1982,175 +2026,269 @@ const renderLedgerSnapshot = (staff: Pay) => {
               ? `Record payout for ${entryModal.staff.firstName}`
               : 'Record staff payout'
           }
-          size="lg"
-          radius="md"
+          size="xl"
+          radius="lg"
+          styles={{ content: { paddingBottom: 0 } }}
         >
-          <Stack gap="sm">
-            {entryModal.staff && (
-              <Alert color="blue" variant="light">
-                <Stack gap={4}>
-                  <Text size="sm">
-                    Outstanding this range:{' '}
-                    {formatCurrency(
-                      entryModal.staff.payouts?.payableOutstanding ?? 0,
-                      entryModal.staff.payouts?.currency ?? DEFAULT_CURRENCY,
-                    )}
-                  </Text>
-                  <Text size="sm">
-                    Selected in this payment: {formatCurrency(entryModal.amount, entryModal.currency)}
-                  </Text>
-                  <Text size="sm">
-                    Remaining after payment:{' '}
-                    {formatCurrency(
-                      Math.max(
-                        (entryModal.staff.payouts?.payableOutstanding ?? 0) - entryModal.amount,
-                        0,
-                      ),
-                      entryModal.currency,
-                    )}
-                  </Text>
+          <ScrollArea.Autosize mah="80vh">
+            <Stack gap="lg" pb="lg">
+              <Card withBorder radius="md" padding="lg">
+                <Stack gap="md">
+                  <Group justify="space-between" align="flex-start">
+                    <Stack gap={2} style={{ flex: 1 }}>
+                      <Text size="sm" c="dimmed">
+                        Payout period
+                      </Text>
+                      <Text fw={600}>
+                        {entryModal.period === 'current' ? 'Current reporting range' : 'Previous reporting range'}
+                      </Text>
+                      <Text size="sm">
+                        {entryModal.rangeStart && entryModal.rangeEnd
+                          ? formatRangeLabel(entryModal.rangeStart, entryModal.rangeEnd)
+                          : reportingRangeLabel}
+                      </Text>
+                    </Stack>
+                    <SegmentedControl
+                      value={entryModal.period}
+                      onChange={(value) => handleEntryPeriodChange(value as 'current' | 'previous')}
+                      data={[
+                        { label: 'Current', value: 'current' },
+                        { label: 'Previous', value: 'previous' },
+                      ]}
+                    />
+                  </Group>
+                  {entryModal.staff && (
+                    <SimpleGrid cols={{ base: 1, sm: 3 }}>
+                      <Card padding="sm" radius="md" withBorder shadow="xs">
+                        <Stack gap={2}>
+                          <Text size="xs" c="dimmed">
+                            Outstanding
+                          </Text>
+                          <Text fw={600}>
+                            {formatCurrency(
+                              entryModal.staff.payouts?.payableOutstanding ?? 0,
+                              entryModal.staff.payouts?.currency ?? DEFAULT_CURRENCY,
+                            )}
+                          </Text>
+                        </Stack>
+                      </Card>
+                      <Card padding="sm" radius="md" withBorder shadow="xs">
+                        <Stack gap={2}>
+                          <Text size="xs" c="dimmed">
+                            This payout
+                          </Text>
+                          <Text fw={600}>{formatCurrency(entryModal.amount, entryModal.currency)}</Text>
+                        </Stack>
+                      </Card>
+                      <Card padding="sm" radius="md" withBorder shadow="xs">
+                        <Stack gap={2}>
+                          <Text size="xs" c="dimmed">
+                            Remaining
+                          </Text>
+                          <Text fw={600}>
+                            {formatCurrency(
+                              Math.max(
+                                (entryModal.staff.payouts?.payableOutstanding ?? 0) - entryModal.amount,
+                                0,
+                              ),
+                              entryModal.currency,
+                            )}
+                          </Text>
+                        </Stack>
+                      </Card>
+                    </SimpleGrid>
+                  )}
                 </Stack>
-              </Alert>
-            )}
-            <Text size="xs" c="dimmed">
-              Period: {reportingRangeLabel}
-            </Text>
-            <Select
-              label="Account"
-              placeholder="Select an account"
-              data={accountOptions}
-              value={entryModal.accountId || null}
-              onChange={handleEntryAccountChange}
-              searchable
-              clearable
-            />
-            <Select
-              label="Vendor"
-              placeholder="Select the staff vendor profile"
-              data={vendorOptions}
-              value={entryModal.counterpartyId}
-              onChange={handleCounterpartyChange}
-              searchable
-            />
-            <Stack gap="xs">
-              <Group justify="space-between" align="center">
-                <Text fw={600}>Payment lines</Text>
-                <Button variant="subtle" size="xs" onClick={handleAddManualLine}>
-                  Add line
+              </Card>
+
+              <Card withBorder radius="md" padding="lg">
+                <Stack gap="md">
+                  <SimpleGrid cols={{ base: 1, sm: 2 }}>
+                    <Select
+                      label="Vendor"
+                      placeholder="Select the staff vendor profile"
+                      data={vendorOptions}
+                      value={entryModal.counterpartyId}
+                      onChange={handleCounterpartyChange}
+                      searchable
+                    />
+                    <Select
+                      label="Payout account"
+                      placeholder="Select an account"
+                      data={accountOptions}
+                      value={entryModal.accountId || null}
+                      onChange={handleEntryAccountChange}
+                      searchable
+                      clearable
+                    />
+                  </SimpleGrid>
+                  <SimpleGrid cols={{ base: 1, sm: 2 }}>
+                    <DatePickerInput
+                      label="Payment date"
+                      value={entryModal.date}
+                      onChange={(value) => {
+                        if (value) {
+                          setEntryModal((prev) => ({ ...prev, date: value }));
+                        }
+                      }}
+                    />
+                    <TextInput label="Currency" value={entryModal.currency} readOnly variant="filled" />
+                  </SimpleGrid>
+                  <Textarea
+                    label="Global note"
+                    minRows={2}
+                    value={entryModal.description}
+                    onChange={(event) =>
+                      setEntryModal((prev) => ({ ...prev, description: event.currentTarget.value }))
+                    }
+                  />
+                </Stack>
+              </Card>
+
+              <Card withBorder radius="md" padding="lg">
+                <Stack gap="md">
+                  <Group justify="space-between" align="center">
+                    <div>
+                      <Text fw={600}>Compensation components</Text>
+                      <Text size="xs" c="dimmed">
+                        Each line corresponds to a single compensation component.
+                      </Text>
+                    </div>
+                    <Button variant="subtle" size="xs" onClick={handleAddManualLine}>
+                      Add manual line
+                    </Button>
+                  </Group>
+                  <ScrollArea>
+                    <Table highlightOnHover withColumnBorders verticalSpacing="sm">
+                      <thead>
+                        <tr>
+                          <th style={{ width: '26%' }}>Component</th>
+                          <th style={{ width: '12%' }}>Amount</th>
+                          <th style={{ width: '18%' }}>Account</th>
+                          <th style={{ width: '18%' }}>Category</th>
+                          <th style={{ width: '16%' }}>Description</th>
+                          <th style={{ width: '6%' }}>Include</th>
+                          <th style={{ width: '4%' }}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {entryModal.lines.map((line) => {
+                          const lineComponent = line.componentId
+                            ? compensationComponentLookup.get(line.componentId)
+                            : null;
+                          return (
+                            <tr key={line.id}>
+                              <td>
+                                <Stack gap={4}>
+                                  <TextInput
+                                    value={line.label}
+                                    onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                                      handleLineChange(line.id, { label: event.currentTarget.value })
+                                    }
+                                  />
+                                  {lineComponent && (
+                                    <Group gap={6}>
+                                      <Badge color="blue" variant="light">
+                                        {lineComponent.name}
+                                      </Badge>
+                                      <Badge variant="outline" color="gray">
+                                        {lineComponent.category}
+                                      </Badge>
+                                    </Group>
+                                  )}
+                                </Stack>
+                              </td>
+                              <td>
+                                <NumberInput
+                                  value={line.amount}
+                                  min={0}
+                                  hideControls
+                                  onChange={(value) => {
+                                    const numeric = typeof value === 'number' ? value : Number(value ?? 0);
+                                    handleLineChange(line.id, {
+                                      amount: Number.isFinite(numeric) ? Math.max(numeric, 0) : line.amount,
+                                    });
+                                  }}
+                                />
+                              </td>
+                              <td>
+                                <Select
+                                  placeholder="Use payout account"
+                                  data={accountOptions}
+                                  value={line.accountId || null}
+                                  onChange={(value) => handleLineChange(line.id, { accountId: value ?? '' })}
+                                  searchable
+                                  clearable
+                                />
+                              </td>
+                              <td>
+                                <Select
+                                  placeholder="Choose a category"
+                                  data={expenseCategoryOptions}
+                                  value={line.categoryId || null}
+                                  onChange={(value) => handleLineChange(line.id, { categoryId: value ?? '' })}
+                                  searchable
+                                />
+                              </td>
+                              <td>
+                                <Textarea
+                                  minRows={1}
+                                  autosize
+                                  value={line.description}
+                                  onChange={(event) =>
+                                    handleLineChange(line.id, { description: event.currentTarget.value })
+                                  }
+                                />
+                              </td>
+                              <td>
+                                <Switch
+                                  checked={line.include}
+                                  onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                                    handleLineChange(line.id, { include: event.currentTarget.checked })
+                                  }
+                                />
+                              </td>
+                              <td>
+                                <ActionIcon
+                                  color="red"
+                                  variant="subtle"
+                                  aria-label="Remove line"
+                                  disabled={entryModal.lines.length <= 1}
+                                  onClick={() => handleRemoveLine(line.id)}
+                                >
+                                  <IconTrash size={18} />
+                                </ActionIcon>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </Table>
+                  </ScrollArea>
+                  <Group justify="space-between">
+                    <Text size="sm" c="dimmed">
+                      Current total: {formatCurrency(entryModal.amount, entryModal.currency)}
+                    </Text>
+                    <Text size="xs" c="dimmed">
+                      Lines with blank accounts use the payout account above.
+                    </Text>
+                  </Group>
+                </Stack>
+              </Card>
+
+              {entryMessage && (
+                <Alert color={entryMessage.type === 'error' ? 'red' : 'green'}>{entryMessage.text}</Alert>
+              )}
+              <Group justify="flex-end">
+                <Button variant="subtle" onClick={closeEntryModal}>
+                  Cancel
+                </Button>
+                <Button onClick={handleEntrySubmit} loading={entrySubmitting}>
+                  Record payout
                 </Button>
               </Group>
-              {entryModal.lines.map((line) => (
-                <Card key={line.id} withBorder padding="sm" radius="md">
-                  <Stack gap="sm">
-                    <Group align="flex-start" justify="space-between" gap="md">
-                      <TextInput
-                        label="Line label"
-                        style={{ flex: 1 }}
-                        value={line.label}
-                        onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                          handleLineChange(line.id, { label: event.currentTarget.value })
-                        }
-                      />
-                      <Stack gap={4} w={160}>
-                        <Switch
-                          label="Include"
-                          checked={line.include}
-                          onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                            handleLineChange(line.id, { include: event.currentTarget.checked })
-                          }
-                        />
-                        <NumberInput
-                          label="Amount"
-                          value={line.amount}
-                          min={0}
-                          hideControls
-                          onChange={(value) => {
-                            const numeric = typeof value === 'number' ? value : Number(value ?? 0);
-                            handleLineChange(line.id, {
-                              amount: Number.isFinite(numeric) ? Math.max(numeric, 0) : line.amount,
-                            });
-                          }}
-                        />
-                      </Stack>
-                    </Group>
-                    <Group align="flex-end" gap="md">
-                      <Select
-                        label="Account"
-                        placeholder="Use payout account"
-                        data={accountOptions}
-                        value={line.accountId || null}
-                        onChange={(value) => handleLineChange(line.id, { accountId: value ?? '' })}
-                        searchable
-                        clearable
-                        style={{ flex: 1 }}
-                      />
-                      <Select
-                        label="Category"
-                        placeholder="Choose a category"
-                        data={expenseCategoryOptions}
-                        value={line.categoryId || null}
-                        onChange={(value) => handleLineChange(line.id, { categoryId: value ?? '' })}
-                        searchable
-                        style={{ flex: 1 }}
-                      />
-                      <Textarea
-                        label="Description"
-                        minRows={1}
-                        style={{ flex: 2 }}
-                        value={line.description}
-                        onChange={(event) =>
-                          handleLineChange(line.id, { description: event.currentTarget.value })
-                        }
-                      />
-                      <ActionIcon
-                        color="red"
-                        variant="subtle"
-                        aria-label="Remove line"
-                        disabled={entryModal.lines.length <= 1}
-                        onClick={() => handleRemoveLine(line.id)}
-                      >
-                        <IconTrash size={18} />
-                      </ActionIcon>
-                    </Group>
-                  </Stack>
-                </Card>
-              ))}
-              <Text size="sm" c="dimmed">
-                Current total: {formatCurrency(entryModal.amount, entryModal.currency)}
-              </Text>
             </Stack>
-            <DatePickerInput
-              label="Payment date"
-              value={entryModal.date}
-              onChange={(value) => {
-                if (value) {
-                  setEntryModal((prev) => ({ ...prev, date: value }));
-                }
-              }}
-            />
-            <Textarea
-              label="Global note"
-              minRows={2}
-              value={entryModal.description}
-              onChange={(event) =>
-                setEntryModal((prev) => ({ ...prev, description: event.currentTarget.value }))
-              }
-            />
-            <Text size="xs" c="dimmed">
-              Currency: {entryModal.currency}
-            </Text>
-            {entryMessage && (
-              <Alert color={entryMessage.type === 'error' ? 'red' : 'green'}>{entryMessage.text}</Alert>
-            )}
-            <Group justify="flex-end">
-              <Button variant="subtle" onClick={closeEntryModal}>
-                Cancel
-              </Button>
-              <Button onClick={handleEntrySubmit} loading={entrySubmitting}>
-                Record payout
-              </Button>
-            </Group>
-          </Stack>
+          </ScrollArea.Autosize>
         </Modal>
       </>
     </PageAccessGuard>
