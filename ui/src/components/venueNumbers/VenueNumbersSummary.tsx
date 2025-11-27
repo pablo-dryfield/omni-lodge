@@ -8,6 +8,7 @@ import {
   Group,
   Loader,
   Grid,
+  Modal,
   NumberInput,
   Select,
   SegmentedControl,
@@ -38,24 +39,29 @@ import {
   selectFinanceVendors,
 } from "../../selectors/financeSelectors";
 import { createFinanceTransaction } from "../../actions/financeActions";
-import type { EditSelectOption } from "../../utils/CustomEditSelect";
 import NightReportPhotoPreviewDialog from "./NightReportPhotoPreviewDialog";
 import { resolvePhotoDownloadUrl, type NightReportPhotoPreview } from "../../utils/nightReportPhotoUtils";
+import { fetchVenues } from "../../actions/venueActions";
+import type { Venue } from "../../types/venues/Venue";
+import type { FinanceClient } from "../../types/finance/Client";
+import type { FinanceVendor } from "../../types/finance/Vendor";
 
 type DailyRow = VenuePayoutVenueDaily & { placeholder?: boolean };
 
-type CashEntryState = {
+type MessageState = { type: "success" | "error"; text: string } | null;
+
+type EntryModalState = {
+  open: boolean;
+  kind: "receivable" | "payable" | null;
+  venue: VenuePayoutVenueBreakdown | null;
   amount: number;
   currency: string;
   date: Date;
   accountId: string;
   categoryId: string;
   counterpartyId: string;
-  venueId: string;
   description: string;
 };
-
-type MessageState = { type: "success" | "error"; text: string } | null;
 
 const PERIOD_OPTIONS = [
   { label: "This Month", value: "this_month" },
@@ -77,6 +83,19 @@ const toMinorUnits = (value: number) => Math.round(value * 100);
 
 dayjs.extend(isSameOrBefore);
 
+const createEmptyEntryModalState = (): EntryModalState => ({
+  open: false,
+  kind: null,
+  venue: null,
+  amount: 0,
+  currency: DEFAULT_CURRENCY,
+  date: new Date(),
+  accountId: "",
+  categoryId: "",
+  counterpartyId: "",
+  description: "",
+});
+
 const VenueNumbersSummary = () => {
   const dispatch = useAppDispatch();
   useFinanceBootstrap();
@@ -84,41 +103,36 @@ const VenueNumbersSummary = () => {
   const categories = useAppSelector(selectFinanceCategories);
   const vendors = useAppSelector(selectFinanceVendors);
   const clients = useAppSelector(selectFinanceClients);
+  const venuesState = useAppSelector((state) => state.venues[0]);
+  const clientItems = clients.data;
+  const vendorItems = vendors.data;
 
   const [period, setPeriod] = useState<string>("this_month");
   const [customRange, setCustomRange] = useState<[Date | null, Date | null]>([null, null]);
   const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState<VenuePayoutSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [commissionEntry, setCommissionEntry] = useState<CashEntryState>({
-    amount: 0,
-    currency: DEFAULT_CURRENCY,
-    date: new Date(),
-    accountId: "",
-    categoryId: "",
-    counterpartyId: "",
-    venueId: "",
-    description: "",
-  });
-  const [payoutEntry, setPayoutEntry] = useState<CashEntryState>({
-    amount: 0,
-    currency: DEFAULT_CURRENCY,
-    date: new Date(),
-    accountId: "",
-    categoryId: "",
-    counterpartyId: "",
-    venueId: "",
-    description: "",
-  });
-  const [commissionMessage, setCommissionMessage] = useState<MessageState>(null);
-  const [payoutMessage, setPayoutMessage] = useState<MessageState>(null);
-  const [commissionSubmitting, setCommissionSubmitting] = useState(false);
-  const [payoutSubmitting, setPayoutSubmitting] = useState(false);
+  const [entryModal, setEntryModal] = useState<EntryModalState>(() => createEmptyEntryModalState());
+  const [entryMessage, setEntryMessage] = useState<MessageState>(null);
+  const [entrySubmitting, setEntrySubmitting] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [reportPreviewLoading, setReportPreviewLoading] = useState<number | null>(null);
   const [reportPreviewError, setReportPreviewError] = useState<string | null>(null);
   const [activePhotoPreview, setActivePhotoPreview] = useState<NightReportPhotoPreview | null>(null);
   const [previewObjectUrl, setPreviewObjectUrl] = useState<string | null>(null);
+
+  const venueRecords = useMemo(
+    () => (venuesState?.data?.[0]?.data as Venue[] | undefined) ?? [],
+    [venuesState?.data],
+  );
+  const venuesLoading = Boolean(venuesState?.loading);
+  const venuesLoaded = venueRecords.length > 0;
+
+  useEffect(() => {
+    if (!venuesLoaded && !venuesLoading) {
+      dispatch(fetchVenues());
+    }
+  }, [dispatch, venuesLoaded, venuesLoading]);
 
   const toggleRow = (rowKey: string) => {
     setExpandedRows((prev) => {
@@ -139,30 +153,6 @@ const VenueNumbersSummary = () => {
     }
     setActivePhotoPreview(null);
   }, [previewObjectUrl]);
-
-  const commissionVenueOptions = useMemo<EditSelectOption[]>(() => {
-    if (!summary) {
-      return [];
-    }
-    return summary.venues
-      .filter((venue) => venue.venueId !== null && (venue.receivable > 0 || venue.receivableOutstanding > 0))
-      .map((venue) => ({
-        value: String(venue.venueId),
-        label: `${venue.venueName} (${venue.currency})`,
-      }));
-  }, [summary]);
-
-  const payoutVenueOptions = useMemo<EditSelectOption[]>(() => {
-    if (!summary) {
-      return [];
-    }
-    return summary.venues
-      .filter((venue) => venue.venueId !== null && (venue.payable > 0 || venue.payableOutstanding > 0))
-      .map((venue) => ({
-        value: String(venue.venueId),
-        label: `${venue.venueName} (${venue.currency})`,
-      }));
-  }, [summary]);
 
   const canFetch = period !== "custom" || (customRange[0] && customRange[1]);
 
@@ -219,72 +209,50 @@ const VenueNumbersSummary = () => {
     [previewObjectUrl],
   );
 
-  useEffect(() => {
-    if (!summary) {
-      return;
-    }
-    const defaultCurrency = summary.totalsByCurrency[0]?.currency ?? DEFAULT_CURRENCY;
-    const defaultReceivable =
-      summary.totalsByCurrency[0]?.receivableOutstanding ??
-      summary.totalsByCurrency[0]?.receivable ??
-      0;
-    const defaultPayable =
-      summary.totalsByCurrency[0]?.payableOutstanding ?? summary.totalsByCurrency[0]?.payable ?? 0;
-    const rangeLabel = `${summary.range.startDate} → ${summary.range.endDate}`;
-
-    setCommissionEntry((prev) => ({
-      ...prev,
-      currency: defaultCurrency,
-      amount: prev.amount === 0 ? defaultReceivable : prev.amount,
-      description: prev.description || `Commission collection for ${rangeLabel}`,
-      date: prev.date ?? new Date(),
-      venueId: prev.venueId,
-    }));
-
-    setPayoutEntry((prev) => ({
-      ...prev,
-      currency: defaultCurrency,
-      amount: prev.amount === 0 ? defaultPayable : prev.amount,
-      description: prev.description || `Open bar payout for ${rangeLabel}`,
-      date: prev.date ?? new Date(),
-      venueId: prev.venueId,
-    }));
-  }, [summary]);
-
-useEffect(() => {
-    if (!commissionVenueOptions.length) {
-      if (commissionEntry.venueId) {
-        setCommissionEntry((prev) => ({ ...prev, venueId: "" }));
-      }
-      return;
-    }
-    const exists = commissionVenueOptions.some((opt) => opt.value === commissionEntry.venueId);
-    if (!exists) {
-      setCommissionEntry((prev) => ({ ...prev, venueId: commissionVenueOptions[0].value }));
-    }
-  }, [commissionEntry.venueId, commissionVenueOptions]);
-
-useEffect(() => {
-    if (!payoutVenueOptions.length) {
-      if (payoutEntry.venueId) {
-        setPayoutEntry((prev) => ({ ...prev, venueId: "" }));
-      }
-      return;
-    }
-    const exists = payoutVenueOptions.some((opt) => opt.value === payoutEntry.venueId);
-    if (!exists) {
-      setPayoutEntry((prev) => ({ ...prev, venueId: payoutVenueOptions[0].value }));
-    }
-  }, [payoutEntry.venueId, payoutVenueOptions]);
 
   const accountOptions = useMemo(
     () =>
-      accounts.data.map((account) => ({
-        value: String(account.id),
-        label: `${account.name} (${account.currency})`,
-      })),
+      accounts.data
+        .filter(
+          (account) =>
+            (account.type === "cash" || account.type === "bank") && (account.isActive ?? true),
+        )
+        .map((account) => ({
+          value: String(account.id),
+          label: `${account.name} (${account.currency})`,
+        })),
     [accounts.data],
   );
+
+  const venueById = useMemo(() => {
+    const map = new Map<number, Venue>();
+    venueRecords.forEach((venue) => {
+      if (typeof venue?.id === "number") {
+        map.set(venue.id, venue as Venue);
+      }
+    });
+    return map;
+  }, [venueRecords]);
+
+  const financeClientsById = useMemo(() => {
+    const map = new Map<number, FinanceClient>();
+    clientItems.forEach((client) => {
+      if (typeof client.id === "number") {
+        map.set(client.id, client);
+      }
+    });
+    return map;
+  }, [clientItems]);
+
+  const financeVendorsById = useMemo(() => {
+    const map = new Map<number, FinanceVendor>();
+    vendorItems.forEach((vendor) => {
+      if (typeof vendor.id === "number") {
+        map.set(vendor.id, vendor);
+      }
+    });
+    return map;
+  }, [vendorItems]);
 
   const incomeCategoryOptions = useMemo(
     () =>
@@ -303,48 +271,164 @@ useEffect(() => {
   );
 
   const vendorOptions = useMemo(
-    () => vendors.data.map((vendor) => ({ value: String(vendor.id), label: vendor.name })),
-    [vendors.data],
+    () => vendorItems.map((vendor) => ({ value: String(vendor.id), label: vendor.name })),
+    [vendorItems],
   );
 
   const clientOptions = useMemo(
-    () => clients.data.map((client) => ({ value: String(client.id), label: client.name })),
-    [clients.data],
+    () => clientItems.map((client) => ({ value: String(client.id), label: client.name })),
+    [clientItems],
   );
 
-  const handleCommissionSubmit = async () => {
-    setCommissionMessage(null);
+  const resolveVenueCounterpartyDefaults = useCallback(
+    (kind: "receivable" | "payable", venueId: number | null | undefined) => {
+      let counterpartyId = "";
+      let categoryId = "";
+      if (!venueId) {
+        return { counterpartyId, categoryId };
+      }
+      const venueRecord = venueById.get(venueId);
+      if (!venueRecord) {
+        return { counterpartyId, categoryId };
+      }
+      if (kind === "receivable") {
+        const clientId = venueRecord.financeClientId;
+        if (clientId) {
+          counterpartyId = String(clientId);
+          const defaultCategoryId = financeClientsById.get(clientId)?.defaultCategoryId;
+          if (defaultCategoryId) {
+            categoryId = String(defaultCategoryId);
+          }
+        }
+      } else {
+        const vendorId = venueRecord.financeVendorId;
+        if (vendorId) {
+          counterpartyId = String(vendorId);
+          const defaultCategoryId = financeVendorsById.get(vendorId)?.defaultCategoryId;
+          if (defaultCategoryId) {
+            categoryId = String(defaultCategoryId);
+          }
+        }
+      }
+      return { counterpartyId, categoryId };
+    },
+    [venueById, financeClientsById, financeVendorsById],
+  );
+
+  const handleCounterpartyChange = useCallback(
+    (value: string | null) => {
+      setEntryModal((prev) => {
+        const nextId = value ?? "";
+        let nextCategoryId = prev.categoryId;
+        if (!value) {
+          nextCategoryId = "";
+        } else if (prev.kind === "receivable") {
+          const client = financeClientsById.get(Number(value));
+          nextCategoryId = client?.defaultCategoryId ? String(client.defaultCategoryId) : "";
+        } else if (prev.kind === "payable") {
+          const vendor = financeVendorsById.get(Number(value));
+          nextCategoryId = vendor?.defaultCategoryId ? String(vendor.defaultCategoryId) : "";
+        }
+        return { ...prev, counterpartyId: nextId, categoryId: nextCategoryId };
+      });
+    },
+    [financeClientsById, financeVendorsById],
+  );
+
+  const openEntryModal = useCallback(
+    (kind: "receivable" | "payable", venue: VenuePayoutVenueBreakdown) => {
+      const outstanding = kind === "receivable" ? venue.receivableOutstanding : venue.payableOutstanding;
+      const defaults = resolveVenueCounterpartyDefaults(kind, venue.venueId ?? null);
+      const rangeLabel = summary
+        ? `${dayjs(summary.range.startDate).format("MMM D, YYYY")} - ${dayjs(summary.range.endDate).format("MMM D, YYYY")}`
+        : "selected period";
+      setEntryModal({
+        open: true,
+        kind,
+        venue,
+        amount: outstanding > 0 ? outstanding : 0,
+        currency: venue.currency,
+        date: new Date(),
+        accountId: "",
+        categoryId: defaults.categoryId,
+        counterpartyId: defaults.counterpartyId,
+        description:
+          kind === "receivable"
+            ? `Commission collection for ${venue.venueName} (${rangeLabel})`
+            : `Open bar payout for ${venue.venueName} (${rangeLabel})`,
+      });
+      setEntryMessage(null);
+    },
+    [resolveVenueCounterpartyDefaults, summary],
+  );
+
+  const closeEntryModal = useCallback(() => {
+    setEntryModal(createEmptyEntryModalState());
+    setEntryMessage(null);
+  }, []);
+
+  const handleEntryAccountChange = useCallback(
+    (value: string | null) => {
+      if (!value) {
+        setEntryModal((prev) => ({ ...prev, accountId: "" }));
+        return;
+      }
+      const account = accounts.data.find((item) => item.id === Number(value));
+      setEntryModal((prev) => ({
+        ...prev,
+        accountId: value,
+        currency: account?.currency ?? prev.currency,
+      }));
+    },
+    [accounts.data],
+  );
+
+  const handleEntrySubmit = async () => {
+    setEntryMessage(null);
+    if (!entryModal.kind || !entryModal.venue || !entryModal.open) {
+      setEntryMessage({ type: "error", text: "Select a venue entry before submitting." });
+      return;
+    }
     if (
-      commissionEntry.amount <= 0 ||
-      !commissionEntry.accountId ||
-      !commissionEntry.categoryId ||
-      !commissionEntry.counterpartyId ||
-      !commissionEntry.venueId
+      entryModal.amount <= 0 ||
+      !entryModal.accountId ||
+      !entryModal.categoryId ||
+      !entryModal.counterpartyId
     ) {
-      setCommissionMessage({
+      setEntryMessage({
         type: "error",
-        text: "Fill in the amount, account, category, client, and venue.",
+        text: "Fill in the amount, account, category, and counterparty.",
       });
       return;
     }
     if (!summary) {
-      setCommissionMessage({ type: "error", text: "Load a summary range before recording payments." });
+      setEntryMessage({ type: "error", text: "Load a summary range before recording payments." });
       return;
     }
-    setCommissionSubmitting(true);
+    const venueId = entryModal.venue.venueId;
+    if (!venueId) {
+      setEntryMessage({
+        type: "error",
+        text: "This venue is not linked to the directory and cannot be reconciled.",
+      });
+      return;
+    }
+    setEntrySubmitting(true);
     try {
+      const financeKind = entryModal.kind === "receivable" ? "income" : "expense";
+      const counterpartyType = entryModal.kind === "receivable" ? "client" : "vendor";
       const transaction = await dispatch(
         createFinanceTransaction({
-          kind: "income",
-          date: dayjs(commissionEntry.date).format("YYYY-MM-DD"),
-          accountId: Number(commissionEntry.accountId),
-          currency: commissionEntry.currency,
-          amountMinor: toMinorUnits(commissionEntry.amount),
-          categoryId: Number(commissionEntry.categoryId),
-          counterpartyType: "client",
-          counterpartyId: Number(commissionEntry.counterpartyId),
+          kind: financeKind,
+          date: dayjs(entryModal.date).format("YYYY-MM-DD"),
+          accountId: Number(entryModal.accountId),
+          currency: entryModal.currency,
+          amountMinor: toMinorUnits(entryModal.amount),
+          categoryId: Number(entryModal.categoryId),
+          counterpartyType,
+          counterpartyId: Number(entryModal.counterpartyId),
           status: "paid",
-          description: commissionEntry.description || null,
+          description: entryModal.description || null,
           meta: {
             source: "venue-numbers-summary",
             period: summary.period,
@@ -357,28 +441,58 @@ useEffect(() => {
       await axiosInstance.post(
         "/nightReports/venue-collections",
         {
-          venueId: Number(commissionEntry.venueId),
-          direction: "receivable",
-          currency: commissionEntry.currency,
-          amount: commissionEntry.amount,
+          venueId,
+          direction: entryModal.kind,
+          currency: entryModal.currency,
+          amount: entryModal.amount,
           rangeStart: summary.range.startDate,
           rangeEnd: summary.range.endDate,
           financeTransactionId: transaction.id,
-          note: commissionEntry.description ?? null,
+          note: entryModal.description ?? null,
         },
         { withCredentials: true },
       );
 
-      setCommissionMessage({ type: "success", text: "Commission recorded and logged." });
-      setCommissionEntry((prev) => ({ ...prev, amount: 0 }));
+      closeEntryModal();
       await fetchSummary();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to record transaction.";
-      setCommissionMessage({ type: "error", text: message });
+      setEntryMessage({ type: "error", text: message });
     } finally {
-      setCommissionSubmitting(false);
+      setEntrySubmitting(false);
     }
   };
+
+  const modalTitle =
+    entryModal.kind === "receivable"
+      ? "Record commission collection"
+      : entryModal.kind === "payable"
+        ? "Record open bar payout"
+        : "Record venue payment";
+
+  const modalCategoryOptions =
+    entryModal.kind === "receivable"
+      ? incomeCategoryOptions
+      : entryModal.kind === "payable"
+        ? expenseCategoryOptions
+        : [];
+
+  const modalCounterpartyOptions =
+    entryModal.kind === "receivable"
+      ? clientOptions
+      : entryModal.kind === "payable"
+        ? vendorOptions
+        : [];
+
+  const modalCounterpartyLabel =
+    entryModal.kind === "receivable" ? "Client" : entryModal.kind === "payable" ? "Vendor" : "Counterparty";
+
+  const modalOutstanding =
+    entryModal.kind === "receivable"
+      ? entryModal.venue?.receivableOutstanding ?? 0
+      : entryModal.kind === "payable"
+        ? entryModal.venue?.payableOutstanding ?? 0
+        : 0;
 
   const buildDailyRows = useCallback(
     (venue: VenuePayoutVenueBreakdown): DailyRow[] => {
@@ -466,99 +580,6 @@ useEffect(() => {
     [previewObjectUrl],
   );
 
-  const handlePayoutSubmit = async () => {
-    setPayoutMessage(null);
-    if (
-      payoutEntry.amount <= 0 ||
-      !payoutEntry.accountId ||
-      !payoutEntry.categoryId ||
-      !payoutEntry.counterpartyId ||
-      !payoutEntry.venueId
-    ) {
-      setPayoutMessage({
-        type: "error",
-        text: "Fill in the amount, account, category, vendor, and venue.",
-      });
-      return;
-    }
-    if (!summary) {
-      setPayoutMessage({ type: "error", text: "Load a summary range before recording payments." });
-      return;
-    }
-    setPayoutSubmitting(true);
-    try {
-      const transaction = await dispatch(
-        createFinanceTransaction({
-          kind: "expense",
-          date: dayjs(payoutEntry.date).format("YYYY-MM-DD"),
-          accountId: Number(payoutEntry.accountId),
-          currency: payoutEntry.currency,
-          amountMinor: toMinorUnits(payoutEntry.amount),
-          categoryId: Number(payoutEntry.categoryId),
-          counterpartyType: "vendor",
-          counterpartyId: Number(payoutEntry.counterpartyId),
-          status: "paid",
-          description: payoutEntry.description || null,
-          meta: {
-            source: "venue-numbers-summary",
-            period: summary.period,
-            rangeStart: summary.range.startDate,
-            rangeEnd: summary.range.endDate,
-          },
-        }),
-      ).unwrap();
-
-      await axiosInstance.post(
-        "/nightReports/venue-collections",
-        {
-          venueId: Number(payoutEntry.venueId),
-          direction: "payable",
-          currency: payoutEntry.currency,
-          amount: payoutEntry.amount,
-          rangeStart: summary.range.startDate,
-          rangeEnd: summary.range.endDate,
-          financeTransactionId: transaction.id,
-          note: payoutEntry.description ?? null,
-        },
-        { withCredentials: true },
-      );
-
-      setPayoutMessage({ type: "success", text: "Open bar payout recorded and logged." });
-      setPayoutEntry((prev) => ({ ...prev, amount: 0 }));
-      await fetchSummary();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unable to record transaction.";
-      setPayoutMessage({ type: "error", text: message });
-    } finally {
-      setPayoutSubmitting(false);
-    }
-  };
-
-  const handleAccountChange = (value: string | null, target: "commission" | "payout") => {
-    if (!value) {
-      if (target === "commission") {
-        setCommissionEntry((prev) => ({ ...prev, accountId: "" }));
-      } else {
-        setPayoutEntry((prev) => ({ ...prev, accountId: "" }));
-      }
-      return;
-    }
-    const account = accounts.data.find((item) => item.id === Number(value));
-    if (target === "commission") {
-      setCommissionEntry((prev) => ({
-        ...prev,
-        accountId: value,
-        currency: account?.currency ?? prev.currency,
-      }));
-    } else {
-      setPayoutEntry((prev) => ({
-        ...prev,
-        accountId: value,
-        currency: account?.currency ?? prev.currency,
-      }));
-    }
-  };
-
   return (
     <Stack gap="xl">
       <Card withBorder padding="md">
@@ -613,7 +634,7 @@ useEffect(() => {
                 <div>
                   <Title order={4}>Totals</Title>
                   <Text c="dimmed">
-                    {dayjs(summary.range.startDate).format("MMM D, YYYY")} →{" "}
+                    {dayjs(summary.range.startDate).format("MMM D, YYYY")} -{" "}
                     {dayjs(summary.range.endDate).format("MMM D, YYYY")}
                   </Text>
                 </div>
@@ -703,6 +724,7 @@ useEffect(() => {
                       <Table.Th>Payout Paid</Table.Th>
                       <Table.Th>Payout Outstanding</Table.Th>
                       <Table.Th>Net</Table.Th>
+                      <Table.Th>Actions</Table.Th>
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
@@ -746,10 +768,41 @@ useEffect(() => {
                             <Table.Td c={venue.net >= 0 ? "green" : "red"}>
                               {formatCurrency(venue.net, venue.currency)}
                             </Table.Td>
+                            <Table.Td>
+                              <Stack gap={4}>
+                                <Button
+                                  size="xs"
+                                  variant="light"
+                                  disabled={
+                                    venue.venueId === null || (venue.receivableOutstanding ?? 0) <= 0
+                                  }
+                                  onClick={() => {
+                                    if (venue.venueId !== null) {
+                                      openEntryModal("receivable", venue);
+                                    }
+                                  }}
+                                >
+                                  Collect
+                                </Button>
+                                <Button
+                                  size="xs"
+                                  variant="light"
+                                  color="grape"
+                                  disabled={venue.venueId === null || (venue.payableOutstanding ?? 0) <= 0}
+                                  onClick={() => {
+                                    if (venue.venueId !== null) {
+                                      openEntryModal("payable", venue);
+                                    }
+                                  }}
+                                >
+                                  Pay
+                                </Button>
+                              </Stack>
+                            </Table.Td>
                           </Table.Tr>
                           {isExpanded && (
                             <Table.Tr>
-                              <Table.Td colSpan={10}>
+                              <Table.Td colSpan={11}>
                                 <Stack gap="xs">
                                   <Group justify="space-between">
                                     <Text fw={600} size="sm">
@@ -853,174 +906,88 @@ useEffect(() => {
             </Stack>
           </Card>
 
-          <Grid>
-            <Grid.Col span={{ base: 12, md: 6 }}>
-              <Card withBorder padding="lg">
-                <Stack gap="sm">
-                  <Title order={5}>Record commission collected</Title>
-                  <NumberInput
-                    label="Amount"
-                    value={commissionEntry.amount}
-                    onChange={(value) =>
-                      setCommissionEntry((prev) => ({
-                        ...prev,
-                        amount: typeof value === "number" ? value : 0,
-                      }))
-                    }
-                    min={0}
-                    decimalScale={2}
-                    fixedDecimalScale
-                    hideControls
-                  />
-                  <Select
-                    label="Account"
-                    data={accountOptions}
-                    value={commissionEntry.accountId}
-                    onChange={(value) => handleAccountChange(value, "commission")}
-                    placeholder="Select account"
-                  />
-                  <Select
-                    label="Category"
-                    data={incomeCategoryOptions}
-                    value={commissionEntry.categoryId}
-                    onChange={(value) =>
-                      setCommissionEntry((prev) => ({ ...prev, categoryId: value ?? "" }))
-                    }
-                    placeholder="Select category"
-                  />
-                  <Select
-                    label="Venue"
-                    data={commissionVenueOptions}
-                    value={commissionEntry.venueId}
-                    onChange={(value) =>
-                      setCommissionEntry((prev) => ({ ...prev, venueId: value ?? "" }))
-                    }
-                    placeholder="Select venue"
-                    disabled={!commissionVenueOptions.length}
-                  />
-                  <Select
-                    label="Client"
-                    data={clientOptions}
-                    value={commissionEntry.counterpartyId}
-                    onChange={(value) =>
-                      setCommissionEntry((prev) => ({ ...prev, counterpartyId: value ?? "" }))
-                    }
-                    placeholder="Select client"
-                  />
-                  <DatePickerInput
-                    label="Date"
-                    value={commissionEntry.date}
-                    onChange={(value) =>
-                      setCommissionEntry((prev) => ({ ...prev, date: value ?? new Date() }))
-                    }
-                  />
-                  <Textarea
-                    label="Description"
-                    value={commissionEntry.description}
-                    onChange={(event) =>
-                      setCommissionEntry((prev) => ({ ...prev, description: event.currentTarget.value }))
-                    }
-                    minRows={2}
-                  />
-                  {commissionMessage && (
-                    <Alert color={commissionMessage.type === "success" ? "green" : "red"}>
-                      {commissionMessage.text}
-                    </Alert>
-                  )}
-                  <Button
-                    onClick={handleCommissionSubmit}
-                    loading={commissionSubmitting}
-                    disabled={!commissionVenueOptions.length || !summary}
-                  >
-                    Record collection
-                  </Button>
-                </Stack>
-              </Card>
-            </Grid.Col>
-            <Grid.Col span={{ base: 12, md: 6 }}>
-              <Card withBorder padding="lg">
-                <Stack gap="sm">
-                  <Title order={5}>Record open bar payout</Title>
-                  <NumberInput
-                    label="Amount"
-                    value={payoutEntry.amount}
-                    onChange={(value) =>
-                      setPayoutEntry((prev) => ({
-                        ...prev,
-                        amount: typeof value === "number" ? value : 0,
-                      }))
-                    }
-                    min={0}
-                    decimalScale={2}
-                    fixedDecimalScale
-                    hideControls
-                  />
-                  <Select
-                    label="Account"
-                    data={accountOptions}
-                    value={payoutEntry.accountId}
-                    onChange={(value) => handleAccountChange(value, "payout")}
-                    placeholder="Select account"
-                  />
-                  <Select
-                    label="Category"
-                    data={expenseCategoryOptions}
-                    value={payoutEntry.categoryId}
-                    onChange={(value) =>
-                      setPayoutEntry((prev) => ({ ...prev, categoryId: value ?? "" }))
-                    }
-                    placeholder="Select category"
-                  />
-                  <Select
-                    label="Venue"
-                    data={payoutVenueOptions}
-                    value={payoutEntry.venueId}
-                    onChange={(value) => setPayoutEntry((prev) => ({ ...prev, venueId: value ?? "" }))}
-                    placeholder="Select venue"
-                    disabled={!payoutVenueOptions.length}
-                  />
-                  <Select
-                    label="Vendor"
-                    data={vendorOptions}
-                    value={payoutEntry.counterpartyId}
-                    onChange={(value) =>
-                      setPayoutEntry((prev) => ({ ...prev, counterpartyId: value ?? "" }))
-                    }
-                    placeholder="Select vendor"
-                  />
-                  <DatePickerInput
-                    label="Date"
-                    value={payoutEntry.date}
-                    onChange={(value) =>
-                      setPayoutEntry((prev) => ({ ...prev, date: value ?? new Date() }))
-                    }
-                  />
-                  <Textarea
-                    label="Description"
-                    value={payoutEntry.description}
-                    onChange={(event) =>
-                      setPayoutEntry((prev) => ({ ...prev, description: event.currentTarget.value }))
-                    }
-                    minRows={2}
-                  />
-                  {payoutMessage && (
-                    <Alert color={payoutMessage.type === "success" ? "green" : "red"}>
-                      {payoutMessage.text}
-                    </Alert>
-                  )}
-                  <Button
-                    onClick={handlePayoutSubmit}
-                    loading={payoutSubmitting}
-                    disabled={!payoutVenueOptions.length || !summary}
-                  >
-                    Record payout
-                  </Button>
-                </Stack>
-              </Card>
-            </Grid.Col>
-          </Grid>
         </Stack>
       )}
+      <Modal opened={entryModal.open} onClose={closeEntryModal} title={modalTitle} centered>
+        <Stack gap="sm">
+          {entryModal.venue && (
+            <Stack gap={0}>
+              <Text fw={600}>{entryModal.venue.venueName}</Text>
+              <Text size="sm" c="dimmed">
+                Outstanding: {formatCurrency(modalOutstanding, entryModal.currency)} (Currency: {entryModal.currency})
+              </Text>
+            </Stack>
+          )}
+          <NumberInput
+            label="Amount"
+            value={entryModal.amount}
+            onChange={(value) =>
+              setEntryModal((prev) => ({
+                ...prev,
+                amount: typeof value === "number" ? value : 0,
+              }))
+            }
+            min={0}
+            decimalScale={2}
+            fixedDecimalScale
+            hideControls
+          />
+          <Select
+            label="Account"
+            data={accountOptions}
+            value={entryModal.accountId}
+            onChange={handleEntryAccountChange}
+            placeholder="Select account"
+            disabled={!entryModal.kind}
+          />
+          <Select
+            label="Category"
+            data={modalCategoryOptions}
+            value={entryModal.categoryId}
+            onChange={(value) =>
+              setEntryModal((prev) => ({ ...prev, categoryId: value ?? "" }))
+            }
+            placeholder="Select category"
+            disabled={!entryModal.kind}
+          />
+          <Select
+            label={modalCounterpartyLabel}
+            data={modalCounterpartyOptions}
+            value={entryModal.counterpartyId}
+            onChange={handleCounterpartyChange}
+            placeholder={`Select ${modalCounterpartyLabel.toLowerCase()}`}
+            disabled={!entryModal.kind}
+          />
+          <DatePickerInput
+            label="Date"
+            value={entryModal.date}
+            onChange={(value) => setEntryModal((prev) => ({ ...prev, date: value ?? new Date() }))}
+          />
+          <Textarea
+            label="Description"
+            value={entryModal.description}
+            onChange={(event) =>
+              setEntryModal((prev) => ({ ...prev, description: event.currentTarget.value }))
+            }
+            minRows={2}
+          />
+          {entryMessage && (
+            <Alert color={entryMessage.type === "success" ? "green" : "red"}>{entryMessage.text}</Alert>
+          )}
+          <Group justify="flex-end" gap="sm">
+            <Button variant="default" onClick={closeEntryModal}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleEntrySubmit}
+              loading={entrySubmitting}
+              disabled={!entryModal.kind}
+            >
+              {entryModal.kind === "payable" ? "Record payout" : "Record collection"}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
       <NightReportPhotoPreviewDialog
         preview={activePhotoPreview}
         onClose={handleClosePhotoPreview}
@@ -1030,3 +997,10 @@ useEffect(() => {
 };
 
 export default VenueNumbersSummary;
+
+
+
+
+
+
+
