@@ -1,12 +1,13 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
+  Anchor,
   ActionIcon,
   Button,
   Card,
-  Grid,
   Group,
   Loader,
+  Grid,
   NumberInput,
   Select,
   SegmentedControl,
@@ -22,6 +23,7 @@ import isSameOrBefore from "dayjs/plugin/isSameOrBefore";
 import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
 import axiosInstance from "../../utils/axiosInstance";
 import { ServerResponse } from "../../types/general/ServerResponse";
+import type { NightReport } from "../../types/nightReports/NightReport";
 import type {
   VenuePayoutSummary,
   VenuePayoutVenueBreakdown,
@@ -37,6 +39,8 @@ import {
 } from "../../selectors/financeSelectors";
 import { createFinanceTransaction } from "../../actions/financeActions";
 import type { EditSelectOption } from "../../utils/CustomEditSelect";
+import NightReportPhotoPreviewDialog from "./NightReportPhotoPreviewDialog";
+import { resolvePhotoDownloadUrl, type NightReportPhotoPreview } from "../../utils/nightReportPhotoUtils";
 
 type DailyRow = VenuePayoutVenueDaily & { placeholder?: boolean };
 
@@ -111,6 +115,10 @@ const VenueNumbersSummary = () => {
   const [commissionSubmitting, setCommissionSubmitting] = useState(false);
   const [payoutSubmitting, setPayoutSubmitting] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [reportPreviewLoading, setReportPreviewLoading] = useState<number | null>(null);
+  const [reportPreviewError, setReportPreviewError] = useState<string | null>(null);
+  const [activePhotoPreview, setActivePhotoPreview] = useState<NightReportPhotoPreview | null>(null);
+  const [previewObjectUrl, setPreviewObjectUrl] = useState<string | null>(null);
 
   const toggleRow = (rowKey: string) => {
     setExpandedRows((prev) => {
@@ -123,6 +131,14 @@ const VenueNumbersSummary = () => {
       return next;
     });
   };
+
+  const handleClosePhotoPreview = useCallback(() => {
+    if (previewObjectUrl) {
+      URL.revokeObjectURL(previewObjectUrl);
+      setPreviewObjectUrl(null);
+    }
+    setActivePhotoPreview(null);
+  }, [previewObjectUrl]);
 
   const commissionVenueOptions = useMemo<EditSelectOption[]>(() => {
     if (!summary) {
@@ -193,6 +209,15 @@ const VenueNumbersSummary = () => {
   useEffect(() => {
     setExpandedRows(new Set());
   }, [summary]);
+
+  useEffect(
+    () => () => {
+      if (previewObjectUrl) {
+        URL.revokeObjectURL(previewObjectUrl);
+      }
+    },
+    [previewObjectUrl],
+  );
 
   useEffect(() => {
     if (!summary) {
@@ -377,6 +402,9 @@ useEffect(() => {
             totalPeople: 0,
             amount: 0,
             direction: "receivable",
+            normalCount: 0,
+            cocktailsCount: 0,
+            brunchCount: 0,
             placeholder: true,
           });
         }
@@ -386,6 +414,56 @@ useEffect(() => {
       return rows;
     },
     [summary],
+  );
+
+  const handleReportPhotoClick = useCallback(
+    async (day: VenuePayoutVenueDaily) => {
+      if (!day.reportId) {
+        return;
+      }
+      setReportPreviewError(null);
+      setReportPreviewLoading(day.reportId);
+      try {
+        const response = await axiosInstance.get<ServerResponse<NightReport>>(
+          `/nightReports/${day.reportId}`,
+          { withCredentials: true },
+        );
+        const payload = response.data[0]?.data;
+        let report: NightReport | undefined;
+        if (Array.isArray(payload)) {
+          report = payload[0] as NightReport | undefined;
+        } else if (payload) {
+          report = payload as unknown as NightReport;
+        }
+        const photo = report?.photos?.[0];
+        if (!photo) {
+          throw new Error("This report does not have a photo attached.");
+        }
+        const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl);
+        const downloadResponse = await axiosInstance.get(downloadHref, {
+          responseType: "blob",
+          withCredentials: true,
+          baseURL: undefined,
+        });
+        const objectUrl = URL.createObjectURL(downloadResponse.data);
+        if (previewObjectUrl) {
+          URL.revokeObjectURL(previewObjectUrl);
+        }
+        setPreviewObjectUrl(objectUrl);
+        setActivePhotoPreview({
+          src: objectUrl,
+          name: photo.originalName,
+          capturedAt: photo.capturedAt,
+          downloadHref,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unable to open this report photo.";
+        setReportPreviewError(message);
+      } finally {
+        setReportPreviewLoading(null);
+      }
+    },
+    [previewObjectUrl],
   );
 
   const handlePayoutSubmit = async () => {
@@ -631,6 +709,9 @@ useEffect(() => {
                     {summary.venues.map((venue) => {
                       const isExpanded = expandedRows.has(venue.rowKey);
                       const dailyRows = buildDailyRows(venue);
+                      const receivablePeople = venue.totalPeopleReceivable ?? 0;
+                      const payablePeople = venue.totalPeoplePayable ?? 0;
+                      const showSplitPeople = receivablePeople > 0 && payablePeople > 0;
                       return (
                         <Fragment key={venue.rowKey}>
                           <Table.Tr>
@@ -646,7 +727,16 @@ useEffect(() => {
                             <Table.Td>
                               <Text fw={600}>{venue.venueName}</Text>
                             </Table.Td>
-                            <Table.Td>{venue.totalPeople}</Table.Td>
+                            <Table.Td>
+                              {showSplitPeople ? (
+                                <Stack gap={0}>
+                                  <Text size="sm">Commission: {receivablePeople}</Text>
+                                  <Text size="sm">Open bar: {payablePeople}</Text>
+                                </Stack>
+                              ) : (
+                                receivablePeople || payablePeople || 0
+                              )}
+                            </Table.Td>
                             <Table.Td>{formatCurrency(venue.receivable, venue.currency)}</Table.Td>
                             <Table.Td>{formatCurrency(venue.receivableCollected, venue.currency)}</Table.Td>
                             <Table.Td>{formatCurrency(venue.receivableOutstanding, venue.currency)}</Table.Td>
@@ -679,6 +769,9 @@ useEffect(() => {
                                         <Table.Tr>
                                           <Table.Th>Date</Table.Th>
                                           <Table.Th>Total People</Table.Th>
+                                          <Table.Th>Normal</Table.Th>
+                                          <Table.Th>Cocktail</Table.Th>
+                                          <Table.Th>Brunch</Table.Th>
                                           <Table.Th>Report</Table.Th>
                                           <Table.Th>Type</Table.Th>
                                           <Table.Th>Amount</Table.Th>
@@ -697,11 +790,38 @@ useEffect(() => {
                                               <Table.Td>{dayjs(day.date).format("MMM D, YYYY")}</Table.Td>
                                               <Table.Td>{day.totalPeople}</Table.Td>
                                               <Table.Td>
-                                                {placeholder
-                                                  ? "No report"
-                                                  : day.reportId
-                                                    ? `Report #${day.reportId}`
-                                                    : "N/A"}
+                                                {!placeholder && day.direction === "payable"
+                                                  ? day.normalCount
+                                                  : "—"}
+                                              </Table.Td>
+                                              <Table.Td>
+                                                {!placeholder && day.direction === "payable"
+                                                  ? day.cocktailsCount
+                                                  : "—"}
+                                              </Table.Td>
+                                              <Table.Td>
+                                                {!placeholder && day.direction === "payable"
+                                                  ? day.brunchCount
+                                                  : "—"}
+                                              </Table.Td>
+                                              <Table.Td>
+                                                {placeholder ? (
+                                                  "No report"
+                                                ) : day.reportId ? (
+                                                  <Group gap="xs" wrap="nowrap">
+                                                    <Anchor
+                                                      component="button"
+                                                      type="button"
+                                                      onClick={() => handleReportPhotoClick(day)}
+                                                      size="sm"
+                                                    >
+                                                      Report #{day.reportId}
+                                                    </Anchor>
+                                                    {reportPreviewLoading === day.reportId && <Loader size="xs" />}
+                                                  </Group>
+                                                ) : (
+                                                  "N/A"
+                                                )}
                                               </Table.Td>
                                               <Table.Td>
                                                 {placeholder
@@ -729,6 +849,7 @@ useEffect(() => {
                   </Table.Tbody>
                 </Table>
               )}
+              {reportPreviewError && <Alert color="red">{reportPreviewError}</Alert>}
             </Stack>
           </Card>
 
@@ -900,6 +1021,10 @@ useEffect(() => {
           </Grid>
         </Stack>
       )}
+      <NightReportPhotoPreviewDialog
+        preview={activePhotoPreview}
+        onClose={handleClosePhotoPreview}
+      />
     </Stack>
   );
 };

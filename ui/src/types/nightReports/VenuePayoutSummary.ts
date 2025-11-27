@@ -15,6 +15,9 @@ export type VenuePayoutVenueDaily = {
   totalPeople: number;
   amount: number;
   direction: "receivable" | "payable";
+  normalCount: number;
+  cocktailsCount: number;
+  brunchCount: number;
 };
 
 export type VenuePayoutVenueBreakdown = {
@@ -30,6 +33,8 @@ export type VenuePayoutVenueBreakdown = {
   payableOutstanding: number;
   net: number;
   totalPeople: number;
+  totalPeopleReceivable: number;
+  totalPeoplePayable: number;
   daily: VenuePayoutVenueDaily[];
 };
 
