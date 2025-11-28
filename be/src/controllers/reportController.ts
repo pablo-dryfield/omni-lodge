@@ -3688,6 +3688,43 @@ const applyCompensationComponents = (
         });
         summary.bucketTotals[component.category] = (summary.bucketTotals[component.category] ?? 0) + aggregate.amount;
         summary.totalPayout += aggregate.amount;
+
+        if (component.category === "commission" && summary.totalCommission > 0) {
+          const userBuckets = productBucketsByUser.get(summary.userId);
+          if (userBuckets) {
+            const positiveBuckets = Array.from(userBuckets.values()).filter(
+              (bucket) => bucket.totalCommission > 0,
+            );
+            if (positiveBuckets.length > 0) {
+              const bucketCommissionTotal = positiveBuckets.reduce(
+                (sum, bucket) => sum + bucket.totalCommission,
+                0,
+              );
+              const divisor = bucketCommissionTotal > 0 ? bucketCommissionTotal : summary.totalCommission;
+              let remaining = aggregate.amount;
+              positiveBuckets.forEach((bucket, index) => {
+                const ratio = divisor > 0 ? bucket.totalCommission / divisor : 0;
+                let allocation = aggregate.amount * ratio;
+                if (index === positiveBuckets.length - 1) {
+                  allocation = remaining;
+                } else {
+                  allocation = roundCurrencyValue(allocation);
+                  remaining = roundCurrencyValue(remaining - allocation);
+                }
+                if (allocation > 0) {
+                  allocateComponentToProduct(
+                    productBucketsByUser,
+                    summary.userId,
+                    bucket.productId,
+                    bucket.productName ?? "Product payout",
+                    component.id,
+                    allocation,
+                  );
+                }
+              });
+            }
+          }
+        }
       }
     });
   });

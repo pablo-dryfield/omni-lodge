@@ -478,6 +478,8 @@ const buildDefaultPaymentLines = (
   fallbackCategoryId: string,
   componentDefinitions: Map<number, CompensationComponent>,
 ): EntryPaymentLine[] => {
+  const lockedComponentIds = new Set((staff.lockedComponents ?? []).map((entry) => entry.componentId));
+
   const bucketBalances = new Map<
     string,
     {
@@ -494,6 +496,22 @@ const buildDefaultPaymentLines = (
     }
   });
 
+  (staff.lockedComponents ?? []).forEach((locked) => {
+    if (!locked.amount || locked.amount <= 0) {
+      return;
+    }
+    const bucketKey = locked.bucketCategory ?? locked.category;
+    if (!bucketKey) {
+      return;
+    }
+    const normalized = bucketKey.toLowerCase();
+    if (bucketBalances.has(normalized)) {
+      const entry = bucketBalances.get(normalized)!;
+      entry.amount = Math.max(entry.amount - locked.amount, 0);
+      bucketBalances.set(normalized, entry);
+    }
+  });
+
   const lines: EntryPaymentLine[] = [];
   const componentAggregates = new Map<
     number,
@@ -504,6 +522,9 @@ const buildDefaultPaymentLines = (
   >();
 
   (staff.componentTotals ?? []).forEach((summary) => {
+    if (lockedComponentIds.has(summary.componentId)) {
+      return;
+    }
     if (summary.amount == null || summary.amount <= 0) {
       return;
     }
@@ -518,43 +539,144 @@ const buildDefaultPaymentLines = (
     }
   });
 
-  componentAggregates.forEach(({ summary, total }) => {
-    if (!total || total <= 0) {
+  const decrementBucket = (bucketKey: string, amount: number) => {
+    if (!amount) {
       return;
     }
-    const meta = componentDefinitions.get(summary.componentId);
-    const sourceCategory = summary.category || meta?.category || '';
-    const normalizedCategory = sourceCategory.toLowerCase();
-    const normalizedName = (summary.name || meta?.name || '').toLowerCase();
+    const normalized = bucketKey.toLowerCase();
+    const entry = bucketBalances.get(normalized);
+    if (entry) {
+      entry.amount = Math.max(entry.amount - amount, 0);
+      bucketBalances.set(normalized, entry);
+    }
+  };
+
+  const findCommissionComponentMeta = (productName: string): CompensationComponent | null => {
+    const normalizedProduct = productName.trim().toLowerCase();
+    let firstCommission: CompensationComponent | null = null;
+    for (const component of componentDefinitions.values()) {
+      if (component.category !== 'commission') {
+        continue;
+      }
+      if (!firstCommission) {
+        firstCommission = component;
+      }
+      const nameMatch = component.name?.toLowerCase() ?? '';
+      const slugMatch = component.slug?.toLowerCase() ?? '';
+      if (
+        normalizedProduct &&
+        ((nameMatch && nameMatch.includes(normalizedProduct)) ||
+          (slugMatch && slugMatch.includes(normalizedProduct)) ||
+          (nameMatch && normalizedProduct.includes(nameMatch)))
+      ) {
+        return component;
+      }
+    }
+    return firstCommission;
+  };
+
+  const spendComponentAmount = (
+    componentId: number,
+    amount: number,
+    options?: { productName?: string },
+  ) => {
+    if (!amount || amount <= 0) {
+      return;
+    }
+    const aggregate = componentAggregates.get(componentId);
+    const summary = aggregate?.summary;
+    const meta = componentDefinitions.get(componentId);
+    const categorySource = summary?.category || meta?.category || '';
+    const normalizedCategory = categorySource.toLowerCase();
+    const componentName = (summary?.name || meta?.name || '').trim();
+    const normalizedName = componentName.toLowerCase();
     const defaultCategoryId = meta?.defaultFinanceCategoryId
       ? String(meta.defaultFinanceCategoryId)
       : findCategoryIdByName(
           categoryLookup,
-          sourceCategory || meta?.category || summary.name || '',
+          categorySource || meta?.category || componentName || '',
           fallbackCategoryId,
         );
     const defaultAccountId = meta?.defaultFinanceAccountId ? String(meta.defaultFinanceAccountId) : '';
-    const baseName = meta?.name ?? summary.name ?? `Component #${summary.componentId}`;
-    const amount = roundLineAmount(total);
+    const baseName = componentName || `Component #${componentId}`;
+    const label = options?.productName ? `${options.productName} - ${baseName}` : baseName;
+    const roundedAmount = roundLineAmount(amount);
+
     lines.push({
       id: createLineId(),
-      label: baseName,
-      componentId: summary.componentId,
-      amount,
+      label,
+      componentId,
+      amount: roundedAmount,
       categoryId: defaultCategoryId,
       accountId: defaultAccountId,
       description: `Auto payout - ${baseName}`,
       include: true,
     });
-    if (normalizedName && bucketBalances.has(normalizedName)) {
-      const bucketEntry = bucketBalances.get(normalizedName)!;
-      bucketEntry.amount = Math.max(bucketEntry.amount - amount, 0);
-      bucketBalances.set(normalizedName, bucketEntry);
-    } else if (normalizedCategory && bucketBalances.has(normalizedCategory)) {
-      const bucketEntry = bucketBalances.get(normalizedCategory)!;
-      bucketEntry.amount = Math.max(bucketEntry.amount - amount, 0);
-      bucketBalances.set(normalizedCategory, bucketEntry);
+
+    if (aggregate) {
+      aggregate.total = Math.max(0, aggregate.total - roundedAmount);
+      if (aggregate.total <= 0) {
+        componentAggregates.delete(componentId);
+      }
     }
+
+    if (normalizedName && bucketBalances.has(normalizedName)) {
+      decrementBucket(normalizedName, roundedAmount);
+    } else if (normalizedCategory && bucketBalances.has(normalizedCategory)) {
+      decrementBucket(normalizedCategory, roundedAmount);
+    }
+  };
+
+  (staff.productTotals ?? []).forEach((product) => {
+    const productName = product.productName || 'Product payout';
+    (product.componentTotals ?? []).forEach((entry) => {
+      if (!entry.componentId || !entry.amount) {
+        return;
+      }
+      if (lockedComponentIds.has(entry.componentId)) {
+        return;
+      }
+      spendComponentAmount(entry.componentId, entry.amount, { productName });
+    });
+
+    const commissionAmount = product.totalCommission ?? 0;
+    if (commissionAmount > 0) {
+      const roundedCommission = roundLineAmount(commissionAmount);
+      const commissionAggregateEntry = Array.from(componentAggregates.entries()).find(
+        ([, aggregate]) => aggregate.summary.category === 'commission',
+      );
+      if (commissionAggregateEntry) {
+        spendComponentAmount(commissionAggregateEntry[0], roundedCommission, { productName });
+      } else {
+        const matchedCommissionMeta = findCommissionComponentMeta(productName);
+        const fallbackCommissionCategoryId = matchedCommissionMeta?.defaultFinanceCategoryId
+          ? String(matchedCommissionMeta.defaultFinanceCategoryId)
+          : findCategoryIdByName(categoryLookup, 'commission', fallbackCategoryId);
+        const fallbackAccountId = matchedCommissionMeta?.defaultFinanceAccountId
+          ? String(matchedCommissionMeta.defaultFinanceAccountId)
+          : '';
+        const baseComponentName = matchedCommissionMeta?.name ?? 'Commission';
+
+        lines.push({
+          id: createLineId(),
+          label: `${productName} - ${baseComponentName}`,
+          amount: roundedCommission,
+          categoryId: fallbackCommissionCategoryId,
+          accountId: fallbackAccountId,
+          componentId: matchedCommissionMeta?.id,
+          description: `Auto payout - ${baseComponentName}`,
+          include: true,
+        });
+        decrementBucket('commission', roundedCommission);
+      }
+    }
+  });
+
+  componentAggregates.forEach(({ summary, total }) => {
+    if (!total || total <= 0) {
+      return;
+    }
+    spendComponentAmount(summary.componentId, total);
   });
 
   bucketBalances.forEach((entry, key) => {
@@ -901,6 +1023,8 @@ const Pays: React.FC = () => {
   const accounts = useAppSelector(selectFinanceAccounts);
   const categories = useAppSelector(selectFinanceCategories);
   const vendors = useAppSelector(selectFinanceVendors);
+  const fullAccess = useModuleAccess(FULL_ACCESS_MODULE);
+  const selfAccess = useModuleAccess(SELF_ACCESS_MODULE);
   const categoryLookup = useMemo(() => {
     const map = new Map<string, FinanceCategory>();
     categories.data.forEach((category) => {
@@ -1058,7 +1182,15 @@ const resolveStaffCounterpartyDefaults = useCallback(
     return true;
   }, [summaries, startDate, endDate]);
 
+  const permissionsReady = fullAccess.ready || selfAccess.ready;
+  const permissionsLoading = fullAccess.loading || selfAccess.loading;
+  const canViewFull = fullAccess.ready && fullAccess.canView;
+  const canViewSelf = selfAccess.ready && selfAccess.canView;
+  const usingSelfScope = !canViewFull && canViewSelf;
+  const scopeParam = usingSelfScope ? 'self' : undefined;
+
   const canRecordPayments = isCanonicalRange;
+  const canRecordStaffPayments = canRecordPayments && canViewFull;
 
   const handleCounterpartyChange = useCallback(
     (value: string | null) => {
@@ -1157,6 +1289,13 @@ const resolveStaffCounterpartyDefaults = useCallback(
         });
         return;
       }
+      if (!canViewFull) {
+        setEntryMessage({
+          type: 'error',
+          text: 'You do not have permission to record payouts for this view.',
+        });
+        return;
+      }
       const outstanding = staff.closingBalance ?? staff.payouts?.payableOutstanding ?? 0;
       const defaults = resolveStaffCounterpartyDefaults(staff);
       const currency = staff.payouts?.currency ?? DEFAULT_CURRENCY;
@@ -1198,8 +1337,46 @@ const resolveStaffCounterpartyDefaults = useCallback(
       });
       setEntryMessage(null);
     },
-    [canRecordPayments, categoryLookup, compensationComponentLookup, endDate, resolveStaffCounterpartyDefaults, startDate],
+    [
+      canRecordPayments,
+      canViewFull,
+      categoryLookup,
+      compensationComponentLookup,
+      endDate,
+      resolveStaffCounterpartyDefaults,
+      startDate,
+    ],
   );
+
+  const renderRecordAction = (item: Pay) => {
+    const outstanding = item.payouts?.payableOutstanding ?? 0;
+    if (!canRecordPayments) {
+      return (
+        <Text size="xs" c="dimmed">
+          View-only range
+        </Text>
+      );
+    }
+    if (outstanding > 0) {
+      if (canRecordStaffPayments) {
+        return (
+          <Button variant="light" size="xs" onClick={() => openEntryModal(item)}>
+            Record payment
+          </Button>
+        );
+      }
+      return (
+        <Text size="xs" c="dimmed">
+          View-only permission
+        </Text>
+      );
+    }
+    return (
+      <Badge color="green" variant="light" w="fit-content">
+        Settled
+      </Badge>
+    );
+  };
 
   const closeEntryModal = useCallback(() => {
     setEntryModal(createEmptyEntryModalState());
@@ -1263,10 +1440,6 @@ const resolveStaffCounterpartyDefaults = useCallback(
   const handleCustomRangeChange = (value: [Date | null, Date | null] | null) => {
     setCustomRangeValue(value ?? [null, null]);
   };
-
-  const fullAccess = useModuleAccess(FULL_ACCESS_MODULE);
-  const selfAccess = useModuleAccess(SELF_ACCESS_MODULE);
-
 
   const aggregatedBucketData = useMemo(() => {
     const map = new Map<string, number>();
@@ -1359,14 +1532,6 @@ const resolveStaffCounterpartyDefaults = useCallback(
     [summaries],
   );
   const totalGuides = summaries.length;
-
-  const permissionsReady = fullAccess.ready || selfAccess.ready;
-  const permissionsLoading = fullAccess.loading || selfAccess.loading;
-  const canViewFull = fullAccess.ready && fullAccess.canView;
-  const canViewSelf = selfAccess.ready && selfAccess.canView;
-  const usingSelfScope = !canViewFull && canViewSelf;
-
-  const scopeParam = usingSelfScope ? 'self' : undefined;
 
   useEffect(() => {
     if (!permissionsReady || permissionsLoading) {
@@ -1737,19 +1902,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
                       {formatCurrency(item.payouts?.payableOutstanding ?? 0, item.payouts?.currency ?? DEFAULT_CURRENCY)}
                     </Text>
                   </Group>
-                  {canRecordPayments && (item.payouts?.payableOutstanding ?? 0) > 0 ? (
-                    <Button variant="light" size="xs" onClick={() => openEntryModal(item)}>
-                      Record payment
-                    </Button>
-                  ) : canRecordPayments ? (
-                    <Badge color="green" variant="light" w="fit-content">
-                      Settled
-                    </Badge>
-                  ) : (
-                    <Badge color="gray" variant="light" w="fit-content">
-                      View only
-                    </Badge>
-                  )}
+                  {renderRecordAction(item)}
                 </Stack>
                 {renderLedgerSnapshot(item)}
                 {renderComponentList(
@@ -1830,21 +1983,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
                     <td style={{ padding: 12 }}>{formatCurrency(outstandingAmount, payoutCurrency)}</td>
                     <td style={{ padding: 12, textAlign: 'right' }}>
                       <Stack gap={6} align="flex-end">
-                        {canRecordPayments ? (
-                          outstandingAmount > 0 ? (
-                            <Button variant="light" size="xs" onClick={() => openEntryModal(item)}>
-                              Record payment
-                            </Button>
-                          ) : (
-                            <Text size="xs" c="dimmed">
-                              Settled
-                            </Text>
-                          )
-                        ) : (
-                          <Text size="xs" c="dimmed">
-                            View-only range
-                          </Text>
-                        )}
+                        {renderRecordAction(item)}
                         <Box w="100%">
                           {renderLedgerSnapshot(item)}
                         </Box>
