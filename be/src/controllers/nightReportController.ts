@@ -1761,7 +1761,34 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
     });
 
     if (ledgerEligible && ledgerUpsertMap.size > 0) {
-      await Promise.all(Array.from(ledgerUpsertMap.values()).map((payload) => VenueCompensationLedger.upsert(payload)));
+      await Promise.all(
+        Array.from(ledgerUpsertMap.values()).map(async (payload) => {
+          try {
+            await VenueCompensationLedger.upsert(payload, {
+              conflictFields: ["venue_id", "direction", "currency_code", "range_start", "range_end"],
+            });
+          } catch (error: any) {
+            const pgCode: string | undefined = error?.parent?.code ?? error?.original?.code;
+            if (pgCode !== '42P10') {
+              throw error;
+            }
+            const existing = await VenueCompensationLedger.findOne({
+              where: {
+                venueId: payload.venueId,
+                direction: payload.direction,
+                currencyCode: payload.currencyCode,
+                rangeStart: payload.rangeStart,
+                rangeEnd: payload.rangeEnd,
+              },
+            });
+            if (existing) {
+              await existing.update(payload);
+            } else {
+              await VenueCompensationLedger.create(payload);
+            }
+          }
+        }),
+      );
     }
 
     res.status(200).json([

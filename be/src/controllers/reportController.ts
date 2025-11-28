@@ -2003,12 +2003,12 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
 
     if (isLedgerEligible && allSummaries.length > 0) {
       await Promise.all(
-        allSummaries.map((summary) => {
+        allSummaries.map(async (summary) => {
           const openingBalanceMinor = convertMajorUnitsToMinor(summary.openingBalance ?? 0);
           const dueAmountMinor = convertMajorUnitsToMinor(summary.dueAmount ?? 0);
           const paidAmountMinor = convertMajorUnitsToMinor(summary.paidAmount ?? 0);
           const closingBalanceMinor = convertMajorUnitsToMinor(summary.closingBalance ?? 0);
-          return StaffPayoutLedger.upsert({
+          const payload = {
             staffUserId: summary.userId,
             rangeStart: rangeStartIso,
             rangeEnd: rangeEndIso,
@@ -2017,7 +2017,29 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             dueAmountMinor,
             paidAmountMinor,
             closingBalanceMinor,
-          });
+          };
+          try {
+            await StaffPayoutLedger.upsert(payload, {
+              conflictFields: ["staff_user_id", "range_start", "range_end"],
+            });
+          } catch (error: any) {
+            const pgCode: string | undefined = error?.parent?.code ?? error?.original?.code;
+            if (pgCode !== "42P10") {
+              throw error;
+            }
+            const existing = await StaffPayoutLedger.findOne({
+              where: {
+                staffUserId: payload.staffUserId,
+                rangeStart: rangeStartIso,
+                rangeEnd: rangeEndIso,
+              },
+            });
+            if (existing) {
+              await existing.update(payload);
+            } else {
+              await StaffPayoutLedger.create(payload);
+            }
+          }
         }),
       );
     }
