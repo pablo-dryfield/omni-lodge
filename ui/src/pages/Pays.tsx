@@ -1143,12 +1143,6 @@ const Pays: React.FC = () => {
     }
   }, [dispatch, vendors.data.length, vendors.loading]);
 
-  useEffect(() => {
-    if (!compensationComponentState.loading && componentDefinitions.length === 0) {
-      void dispatch(fetchCompensationComponents());
-    }
-  }, [componentDefinitions.length, compensationComponentState.loading, dispatch]);
-
 const resolveStaffCounterpartyDefaults = useCallback(
   (staff: Pay) => {
     let counterpartyId = '';
@@ -1189,6 +1183,15 @@ const resolveStaffCounterpartyDefaults = useCallback(
   const canViewSelf = selfAccess.ready && selfAccess.canView;
   const usingSelfScope = !canViewFull && canViewSelf;
   const scopeParam = usingSelfScope ? 'self' : undefined;
+
+  useEffect(() => {
+    if (!canViewFull) {
+      return;
+    }
+    if (!compensationComponentState.loading && componentDefinitions.length === 0) {
+      void dispatch(fetchCompensationComponents());
+    }
+  }, [canViewFull, componentDefinitions.length, compensationComponentState.loading, dispatch]);
 
   const canRecordPayments = isCanonicalRange;
   const canRecordStaffPayments = canRecordPayments && canViewFull;
@@ -1367,9 +1370,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
         );
       }
       return (
-        <Text size="xs" c="dimmed">
-          View-only permission
-        </Text>
+        <></>
       );
     }
     return (
@@ -1958,7 +1959,8 @@ const renderLedgerSnapshot = (staff: Pay) => {
               <th style={{ padding: 12 }}>Total payout</th>
               <th style={{ padding: 12 }}>Paid</th>
               <th style={{ padding: 12 }}>Outstanding</th>
-              <th style={{ padding: 12 }} />
+              {canViewFull && <th style={{ padding: 12 }}>Ledger</th>}
+              <th style={{ padding: 12 }}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -1982,12 +1984,14 @@ const renderLedgerSnapshot = (staff: Pay) => {
                     <td style={{ padding: 12 }}>{formatCurrency(normalizeTotal(item))}</td>
                     <td style={{ padding: 12 }}>{formatCurrency(paidAmount, payoutCurrency)}</td>
                     <td style={{ padding: 12 }}>{formatCurrency(outstandingAmount, payoutCurrency)}</td>
-                    <td style={{ padding: 12, textAlign: 'right' }}>
+                    {canViewFull && (
+                      <td style={{ padding: 12, minWidth: 200 }}>
+                        <Box>{renderLedgerSnapshot(item)}</Box>
+                      </td>
+                    )}
+                    <td style={{ padding: 12, textAlign: 'right', width: 170 }}>
                       <Stack gap={6} align="flex-end">
                         {renderRecordAction(item)}
-                        <Box w="100%">
-                          {renderLedgerSnapshot(item)}
-                        </Box>
                         {rowHasDetails && (
                           <Button variant="subtle" size="xs" onClick={() => toggleRow(index)}>
                             {expandedRow === index ? 'Hide details' : 'Show details'}
@@ -1998,7 +2002,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
                   </tr>
                   {expandedRow === index && (
                     <tr>
-                      <td colSpan={7} style={{ backgroundColor: '#fafafa', padding: '12px 8px' }}>
+                      <td colSpan={canViewFull ? 8 : 7} style={{ backgroundColor: '#fafafa', padding: '12px 8px' }}>
                         <Stack gap="md">
                           {renderBucketTotals(item.bucketTotals, item.lockedComponents)}
                           {renderComponentList(
@@ -2036,6 +2040,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
               <td style={{ padding: 12 }}>
                 <strong>{formatCurrency(tableOutstandingTotal, DEFAULT_CURRENCY)}</strong>
               </td>
+              {canViewFull && <td />}
               <td />
             </tr>
           </tbody>
@@ -2054,7 +2059,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
     );
   } else if (!(canViewFull || canViewSelf)) {
     content = (
-      <Container size={600} my={40}>
+      <Container size={isDesktop ? 1080 : undefined} my={isDesktop ? 40 : 24} px={isDesktop ? 'xl' : 'sm'}>
         <Alert color="yellow" title="No access">
           You do not have permission to view staff payment details.
         </Alert>
@@ -2062,7 +2067,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
     );
   } else {
     content = (
-      <Container fluid={!isDesktop} size={isDesktop ? 780 : undefined} my={isDesktop ? 40 : 16} px={isDesktop ? 'md' : 'sm'}>
+      <Container fluid={!isDesktop} size={isDesktop ? 1280 : undefined} my={isDesktop ? 40 : 16} px={isDesktop ? 48 : 'sm'}>
         <Paper radius={isDesktop ? 12 : 'lg'} p={isDesktop ? 'xl' : 'md'} withBorder>
           <Stack gap="md">
             {usingSelfScope && (
