@@ -1047,6 +1047,7 @@ const Pays: React.FC = () => {
   const [entryMessage, setEntryMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [entrySubmitting, setEntrySubmitting] = useState(false);
   const friendlyError = error ? humanizeErrorMessage(error) : null;
+  const currencyLabel = (entryModal.currency || DEFAULT_CURRENCY).toUpperCase();
 
   useEffect(() => {
     if (datePreset === 'custom') {
@@ -2165,7 +2166,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
               ? `Record payout for ${entryModal.staff.firstName}`
               : 'Record staff payout'
           }
-          size="xl"
+          size={isDesktop ? '80vw' : '95vw'}
           radius="lg"
           styles={{ content: { paddingBottom: 0 } }}
         >
@@ -2297,97 +2298,43 @@ const renderLedgerSnapshot = (staff: Pay) => {
                       Add manual line
                     </Button>
                   </Group>
-                  <ScrollArea>
-                    <Table highlightOnHover withColumnBorders verticalSpacing="sm">
-                      <thead>
-                        <tr>
-                          <th style={{ width: '26%' }}>Component</th>
-                          <th style={{ width: '12%' }}>Amount</th>
-                          <th style={{ width: '18%' }}>Account</th>
-                          <th style={{ width: '18%' }}>Category</th>
-                          <th style={{ width: '16%' }}>Description</th>
-                          <th style={{ width: '6%' }}>Include</th>
-                          <th style={{ width: '4%' }}></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {entryModal.lines.map((line) => {
-                          const lineComponent = line.componentId
-                            ? compensationComponentLookup.get(line.componentId)
-                            : null;
-                          return (
-                            <tr key={line.id}>
-                              <td>
-                                <Stack gap={4}>
-                                  <TextInput
-                                    value={line.label}
-                                    onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                                      handleLineChange(line.id, { label: event.currentTarget.value })
-                                    }
-                                  />
-                                  {lineComponent && (
-                                    <Group gap={6}>
-                                      <Badge color="blue" variant="light">
-                                        {lineComponent.name}
-                                      </Badge>
-                                      <Badge variant="outline" color="gray">
-                                        {lineComponent.category}
-                                      </Badge>
-                                    </Group>
-                                  )}
-                                </Stack>
-                              </td>
-                              <td>
-                                <NumberInput
-                                  value={line.amount}
-                                  min={0}
-                                  hideControls
-                                  onChange={(value) => {
-                                    const numeric = typeof value === 'number' ? value : Number(value ?? 0);
-                                    handleLineChange(line.id, {
-                                      amount: Number.isFinite(numeric) ? Math.max(numeric, 0) : line.amount,
-                                    });
-                                  }}
-                                />
-                              </td>
-                              <td>
-                                <Select
-                                  placeholder="Use payout account"
-                                  data={accountOptions}
-                                  value={line.accountId || null}
-                                  onChange={(value) => handleLineChange(line.id, { accountId: value ?? '' })}
-                                  searchable
-                                  clearable
-                                />
-                              </td>
-                              <td>
-                                <Select
-                                  placeholder="Choose a category"
-                                  data={expenseCategoryOptions}
-                                  value={line.categoryId || null}
-                                  onChange={(value) => handleLineChange(line.id, { categoryId: value ?? '' })}
-                                  searchable
-                                />
-                              </td>
-                              <td>
-                                <Textarea
-                                  minRows={1}
-                                  autosize
-                                  value={line.description}
-                                  onChange={(event) =>
-                                    handleLineChange(line.id, { description: event.currentTarget.value })
+                  <Stack gap="sm">
+                    {entryModal.lines.map((line) => {
+                      const lineComponent = line.componentId
+                        ? compensationComponentLookup.get(line.componentId)
+                        : null;
+                      return (
+                        <Card key={line.id} withBorder radius="md" padding="md" shadow="sm">
+                          <Stack gap="sm">
+                            <Group justify="space-between" align="flex-start" gap="sm" wrap="nowrap">
+                              <Stack gap={6} style={{ flex: 1, minWidth: 0 }}>
+                                <TextInput
+                                  label="Component"
+                                  value={line.label}
+                                  onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                                    handleLineChange(line.id, { label: event.currentTarget.value })
                                   }
                                 />
-                              </td>
-                              <td>
+                                {lineComponent && (
+                                  <Group gap={6} wrap="wrap">
+                                    <Badge color="blue" variant="light">
+                                      {lineComponent.name}
+                                    </Badge>
+                                    <Badge variant="outline" color="gray">
+                                      {lineComponent.category}
+                                    </Badge>
+                                  </Group>
+                                )}
+                              </Stack>
+                              <Group gap="xs">
                                 <Switch
+                                  label="Include"
+                                  size="sm"
                                   checked={line.include}
                                   onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
                                     handleLineChange(line.id, { include: event.currentTarget.checked })
                                   }
                                 />
-                              </td>
-                              <td>
                                 <ActionIcon
                                   color="red"
                                   variant="subtle"
@@ -2397,13 +2344,56 @@ const renderLedgerSnapshot = (staff: Pay) => {
                                 >
                                   <IconTrash size={18} />
                                 </ActionIcon>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </Table>
-                  </ScrollArea>
+                              </Group>
+                            </Group>
+                            <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="sm">
+                              <NumberInput
+                                label={`Amount (${currencyLabel})`}
+                                value={line.amount.toFixed(2)}
+                                min={0}
+                                hideControls
+                                step={0.01}
+                                leftSection={<Text size="xs">{currencyLabel}</Text>}
+                                onChange={(value) => {
+                                  const numeric = typeof value === 'number' ? value : Number(value ?? 0);
+                                  const sanitized = Number.isFinite(numeric) ? Math.max(numeric, 0) : line.amount;
+                                  handleLineChange(line.id, {
+                                    amount: Number(Number(sanitized).toFixed(2)),
+                                  });
+                                }}
+                              />
+                              <Select
+                                label="Account"
+                                placeholder="Use payout account"
+                                data={accountOptions}
+                                value={line.accountId || null}
+                                onChange={(value) => handleLineChange(line.id, { accountId: value ?? '' })}
+                                searchable
+                                clearable
+                              />
+                              <Select
+                                label="Category"
+                                placeholder="Choose a category"
+                                data={expenseCategoryOptions}
+                                value={line.categoryId || null}
+                                onChange={(value) => handleLineChange(line.id, { categoryId: value ?? '' })}
+                                searchable
+                              />
+                            </SimpleGrid>
+                            <Textarea
+                              label="Description"
+                              minRows={2}
+                              autosize
+                              value={line.description}
+                              onChange={(event) =>
+                                handleLineChange(line.id, { description: event.currentTarget.value })
+                              }
+                            />
+                          </Stack>
+                        </Card>
+                      );
+                    })}
+                  </Stack>
                   <Group justify="space-between">
                     <Text size="sm" c="dimmed">
                       Current total: {formatCurrency(entryModal.amount, entryModal.currency)}
