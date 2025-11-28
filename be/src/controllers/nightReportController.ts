@@ -56,6 +56,7 @@ type VenueDetailAggregate = {
   brunchCount: number | null;
   activityDate: string | null;
   reportId: number | null;
+  allowsOpenBar?: boolean | null;
 };
 
 type LedgerSnapshot = {
@@ -1426,6 +1427,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         'brunchCount',
         [col('report.activity_date'), 'activityDate'],
         [col('report.id'), 'reportId'],
+        [col('nightReportVenueVenue.allows_open_bar'), 'allowsOpenBar'],
       ],
       include: [
         {
@@ -1439,6 +1441,12 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
               [Op.between]: [startIso, endIso],
             },
           },
+        },
+        {
+          model: Venue,
+          as: 'nightReportVenueVenue',
+          attributes: ['allowsOpenBar'],
+          required: false,
         },
       ],
       raw: true,
@@ -1512,6 +1520,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         venueId: number | null;
         venueName: string;
         currency: string;
+        allowsOpenBar: boolean;
         receivable: number;
         payable: number;
         totalPeopleReceivable: number;
@@ -1548,6 +1557,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       const venueId = row.venueId ?? null;
       const defaultName = venueId != null ? `Venue #${venueId}` : 'Unspecified Venue';
       const venueName = (row.venueName ?? '').trim() || defaultName;
+      const allowsOpenBar = row.allowsOpenBar === true;
       const key = `${venueId ?? 'null'}|${venueName}|${currency}`;
 
       if (!venueMap.has(key)) {
@@ -1555,6 +1565,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
           venueId,
           venueName,
           currency,
+          allowsOpenBar,
           receivable: 0,
           payable: 0,
           totalPeopleReceivable: 0,
@@ -1569,6 +1580,9 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         existing.totalPeopleReceivable += totalPeople;
       } else {
         existing.totalPeoplePayable += totalPeople;
+      }
+      if (allowsOpenBar) {
+        existing.allowsOpenBar = true;
       }
       existing.daily.push({
         date: activityDate,
@@ -1630,11 +1644,12 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       direction: 'receivable' | 'payable',
       dueValue: number,
       paidValue: number,
+      options?: { skipLedger?: boolean },
     ): LedgerSnapshot => {
       const due = roundCurrencyValue(Math.max(dueValue, 0));
       const paid = roundCurrencyValue(Math.max(paidValue, 0));
 
-      if (!ledgerEligible || !venueId) {
+      if (!ledgerEligible || !venueId || options?.skipLedger) {
         return {
           opening: 0,
           due,
@@ -1681,7 +1696,14 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         receivable,
         receivableCollected,
       );
-      const payableLedger = buildLedgerSnapshot(entry.venueId, entry.currency, 'payable', payable, payableCollected);
+      const payableLedger = buildLedgerSnapshot(
+        entry.venueId,
+        entry.currency,
+        'payable',
+        payable,
+        payableCollected,
+        { skipLedger: entry.allowsOpenBar !== true },
+      );
       const currencyLedgers = ensureCurrencyLedgerTotals(entry.currency);
       currencyLedgers.receivable.opening += receivableLedger.opening;
       currencyLedgers.receivable.due += receivableLedger.due;
