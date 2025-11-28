@@ -1718,6 +1718,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         venueId: entry.venueId,
         venueName: entry.venueName,
         currency: entry.currency,
+        allowsOpenBar: entry.allowsOpenBar,
         receivable,
         receivableCollected,
         receivableOutstanding: roundCurrencyValue(Math.max(receivable - receivableCollected, 0)),

@@ -34,6 +34,7 @@ export type VenuePayoutVenueBreakdown = {
   venueId: number | null;
   venueName: string;
   currency: string;
+  allowsOpenBar?: boolean;
   receivable: number;
   receivableCollected: number;
   receivableOutstanding: number;

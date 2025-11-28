@@ -933,6 +933,18 @@ const VenueNumbersSummary = () => {
                       const receivablePeople = venue.totalPeopleReceivable ?? 0;
                       const payablePeople = venue.totalPeoplePayable ?? 0;
                       const showSplitPeople = receivablePeople > 0 && payablePeople > 0;
+                      const receivableOutstanding = venue.receivableOutstanding ?? 0;
+                      const receivableCollected = venue.receivableCollected ?? 0;
+                      const payableOutstanding = venue.payableOutstanding ?? 0;
+                      const payableCollected = venue.payableCollected ?? 0;
+                      const showCollectButton =
+                        receivableOutstanding > 0 || receivableCollected > 0;
+                      const collectDisabled =
+                        !canRecordPayments || venue.venueId === null || receivableOutstanding <= 0;
+                      const showPayButton =
+                        venue.allowsOpenBar === true && (payableOutstanding > 0 || payableCollected > 0);
+                      const payDisabled =
+                        !canRecordPayments || venue.venueId === null || payableOutstanding <= 0;
                       return (
                         <Fragment key={venue.rowKey}>
                           <Table.Tr>
@@ -969,49 +981,35 @@ const VenueNumbersSummary = () => {
                             </Table.Td>
                             <Table.Td>
                               <Stack gap={4}>
-                                <Button
-                                  size="xs"
-                                  variant="light"
-                                  disabled={
-                                    !canRecordPayments ||
-                                    venue.venueId === null ||
-                                    (venue.receivableOutstanding ?? 0) <= 0
-                                  }
-                                  onClick={() => {
-                                    if (canRecordPayments && venue.venueId !== null) {
-                                      openEntryModal("receivable", venue);
-                                    }
-                                  }}
-                                >
-                                  Collect
-                                </Button>
-                                <Button
-                                  size="xs"
-                                  variant="light"
-                                  color="grape"
-                                  disabled={
-                                    !canRecordPayments ||
-                                    venue.venueId === null ||
-                                    (venue.payableOutstanding ?? 0) <= 0
-                                  }
-                                  onClick={() => {
-                                    if (canRecordPayments && venue.venueId !== null) {
-                                      openEntryModal("payable", venue);
-                                    }
-                                  }}
-                                >
-                                  Pay
-                                </Button>
-                                <Stack gap={0} mt="xs">
-                                  <Text size="xs" c="dimmed">
-                                    Commission: {formatCurrency(venue.receivableLedger.opening, venue.currency)} →{" "}
-                                    {formatCurrency(venue.receivableLedger.closing, venue.currency)}
-                                  </Text>
-                                  <Text size="xs" c="dimmed">
-                                    Open bar: {formatCurrency(venue.payableLedger.opening, venue.currency)} →{" "}
-                                    {formatCurrency(venue.payableLedger.closing, venue.currency)}
-                                  </Text>
-                                </Stack>
+                                {showCollectButton && (
+                                  <Button
+                                    size="xs"
+                                    variant="light"
+                                    disabled={collectDisabled}
+                                    onClick={() => {
+                                      if (!collectDisabled && venue.venueId !== null) {
+                                        openEntryModal("receivable", venue);
+                                      }
+                                    }}
+                                  >
+                                    Collect
+                                  </Button>
+                                )}
+                                {showPayButton && (
+                                  <Button
+                                    size="xs"
+                                    variant="light"
+                                    color="grape"
+                                    disabled={payDisabled}
+                                    onClick={() => {
+                                      if (!payDisabled && venue.venueId !== null) {
+                                        openEntryModal("payable", venue);
+                                      }
+                                    }}
+                                  >
+                                    Pay
+                                  </Button>
+                                )}
                               </Stack>
                             </Table.Td>
                           </Table.Tr>
