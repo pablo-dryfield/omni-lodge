@@ -68,7 +68,7 @@ import {
   updateBudget,
   deleteBudget,
 } from '../controllers/budgetController.js';
-import { getFinanceReportsPlaceholder } from '../controllers/reportController.js';
+import { getFinanceReports } from '../controllers/reportController.js';
 
 const router = Router();
 
@@ -148,8 +148,7 @@ router.post('/budgets', createBudget);
 router.put('/budgets/:id', updateBudget);
 router.delete('/budgets/:id', deleteBudget);
 
-// Reports placeholder
-router.get('/reports', getFinanceReportsPlaceholder);
+// Reports
+router.get('/reports', getFinanceReports);
 
 export default router;
-
