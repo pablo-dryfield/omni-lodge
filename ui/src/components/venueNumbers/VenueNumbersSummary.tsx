@@ -399,6 +399,27 @@ const VenueNumbersSummary = () => {
     [],
   );
 
+  const resolveDefaultAccountId = useCallback(
+    (currencyCode: string): string => {
+      if (!accounts.data.length) {
+        return "";
+      }
+      const normalizedCurrency = (currencyCode || DEFAULT_CURRENCY).toUpperCase();
+      const currencyCashAccount = accounts.data.find(
+        (account) => account.type === "cash" && account.currency?.toUpperCase() === normalizedCurrency,
+      );
+      if (currencyCashAccount) {
+        return String(currencyCashAccount.id);
+      }
+      const anyCashAccount = accounts.data.find((account) => account.type === "cash");
+      if (anyCashAccount) {
+        return String(anyCashAccount.id);
+      }
+      return String(accounts.data[0].id);
+    },
+    [accounts.data],
+  );
+
   const openEntryModal = useCallback(
     (kind: "receivable" | "payable", venue: VenuePayoutVenueBreakdown) => {
       if (!summary?.rangeIsCanonical) {
@@ -413,6 +434,7 @@ const VenueNumbersSummary = () => {
       const rangeLabel = summary
         ? `${dayjs(summary.range.startDate).format("MMM D, YYYY")} - ${dayjs(summary.range.endDate).format("MMM D, YYYY")}`
         : "selected period";
+      const defaultAccountId = resolveDefaultAccountId(venue.currency);
       setEntryModal({
         open: true,
         kind,
@@ -420,7 +442,7 @@ const VenueNumbersSummary = () => {
         amount: outstanding > 0 ? outstanding : 0,
         currency: venue.currency,
         date: new Date(),
-        accountId: "",
+        accountId: defaultAccountId,
         categoryId: defaults.categoryId,
         counterpartyId: defaults.counterpartyId,
         description:
@@ -430,7 +452,7 @@ const VenueNumbersSummary = () => {
       });
       setEntryMessage(null);
     },
-    [resolveVenueCounterpartyDefaults, summary],
+    [resolveDefaultAccountId, resolveVenueCounterpartyDefaults, summary],
   );
 
   const closeEntryModal = useCallback(() => {
