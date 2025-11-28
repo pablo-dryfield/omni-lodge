@@ -12,6 +12,7 @@ const DEFAULT_MONTH_WINDOW = 6;
 const BASE_CURRENCY = process.env.FINANCE_BASE_CURRENCY?.trim().toUpperCase() ?? 'PLN';
 const NON_REPORTABLE_STATUSES = ['void'];
 const PNL_KINDS = ['income', 'expense', 'refund'] as const;
+const UNCATEGORIZED_CATEGORY_NAME = 'Uncategorized';
 
 type MonthAggregation = {
   income: number;
@@ -114,7 +115,7 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
         const key = transaction.categoryId ?? 'uncategorized';
         const entry = expenseByCategory.get(key) ?? {
           categoryId: transaction.categoryId ?? null,
-          categoryName: transaction.category?.name ?? 'Uncategorized',
+          categoryName: transaction.category?.name ?? UNCATEGORIZED_CATEGORY_NAME,
           total: 0,
         };
         entry.total += amount;
@@ -146,7 +147,7 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
       const key = budget.categoryId ?? 'uncategorized';
       const entry = budgetByCategory.get(key) ?? {
         categoryId: budget.categoryId ?? null,
-        categoryName: budget.category?.name ?? 'Uncategorized',
+        categoryName: budget.category?.name ?? UNCATEGORIZED_CATEGORY_NAME,
         budget: 0,
       };
       entry.budget += amount;
@@ -164,7 +165,7 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
         const key = transaction.categoryId ?? 'uncategorized';
         const entry = actualByCategory.get(key) ?? {
           categoryId: transaction.categoryId ?? null,
-          categoryName: transaction.category?.name ?? 'Uncategorized',
+          categoryName: transaction.category?.name ?? UNCATEGORIZED_CATEGORY_NAME,
           actual: 0,
         };
         entry.actual += amount;
@@ -176,7 +177,7 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
       const budgetEntry = budgetByCategory.get(key);
       const actualEntry = actualByCategory.get(key);
       const categoryId = budgetEntry?.categoryId ?? actualEntry?.categoryId ?? null;
-      const categoryName = budgetEntry?.categoryName ?? actualEntry?.categoryName ?? 'Uncategorized';
+      const categoryName = budgetEntry?.categoryName ?? actualEntry?.categoryName ?? UNCATEGORIZED_CATEGORY_NAME;
       const budget = budgetEntry?.budget ?? 0;
       const actual = actualEntry?.actual ?? 0;
       const variance = actual - budget;
