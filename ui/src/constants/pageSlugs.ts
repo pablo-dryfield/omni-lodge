@@ -16,6 +16,7 @@ export const PAGE_SLUGS = {
   users: "users",
   userTypes: "user-types",
   venueNumbers: "venue-numbers",
+  channelNumbers: "channel-numbers",
   reviews: "reviews",
   scheduling: "scheduling",
   schedulingAvailability: "scheduling-availability",

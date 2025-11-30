@@ -6,6 +6,7 @@ export const baseNavigationPages: NavigationPage[] = [
   { name: "Ecwid Bookings", path: "/bookings", slug: PAGE_SLUGS.bookings, icon: 'eventAvailable' },
   { name: "Counters", path: "/counters", slug: PAGE_SLUGS.counters, icon: 'person' },
   { name: "Venue Numbers", path: "/venueNumbers", slug: PAGE_SLUGS.venueNumbers, icon: 'formatListNumbered' },
+  { name: "Channel Numbers", path: "/channelNumbers", slug: PAGE_SLUGS.channelNumbers, icon: 'barChart' },
   { name: "Reviews", path: "/reviews", slug: PAGE_SLUGS.reviews, icon: 'star' },
   { name: "Staff Payment", path: "/pays", slug: PAGE_SLUGS.pays, icon: 'person' },
   { name: "Scheduling", path: "/scheduling", slug: PAGE_SLUGS.scheduling, icon: 'calendarMonth' },
