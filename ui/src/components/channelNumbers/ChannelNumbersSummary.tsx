@@ -57,7 +57,7 @@ type ProductTypeGroup = {
 };
 
 const getProductColumnCount = (product: ProductGroup) =>
-  product.addons.length > 0 ? product.addons.length + 2 : 2;
+  product.addons.length > 0 ? product.addons.length * 2 + 2 : 2;
 
 const getTypeColumnCount = (type: ProductTypeGroup) =>
   type.products.reduce((sum, product) => sum + getProductColumnCount(product), 0);
@@ -79,6 +79,7 @@ const CELL_BORDER_STYLE: CSSProperties = {
   textAlign: 'center',
 };
 const EMPHASIS_BORDER = '2px solid var(--mantine-color-gray-6)';
+const NO_LEFT_BORDER: CSSProperties = { borderLeft: '0' };
 const mergeCellStyles = (...styles: Array<CSSProperties | undefined>) =>
   Object.assign({}, CELL_BORDER_STYLE, ...styles.filter(Boolean));
 
@@ -472,7 +473,10 @@ const ChannelNumbersSummary = () => {
                               </th>,
                               <th
                                 key={`label-nonshow-${group.slug}-${product.slug}`}
-                                style={mergeCellStyles({ textAlign: 'center', fontWeight: 600, borderBottom: EMPHASIS_BORDER })}
+                                style={mergeCellStyles(
+                                  { textAlign: 'center', fontWeight: 600, borderBottom: EMPHASIS_BORDER },
+                                  NO_LEFT_BORDER,
+                                )}
                               >
                                 Non-Show
                               </th>,
@@ -489,18 +493,19 @@ const ChannelNumbersSummary = () => {
                                 </th>,
                                 <th
                                   key={`label-addon-nonshow-${group.slug}-${product.slug}-${addon.key}`}
-                                  style={mergeCellStyles({
-                                    textAlign: 'center',
-                                    fontWeight: 600,
-                                    borderRight:
-                                      addonIndex === product.addons.length - 1
-                                        ? groupIndex === visibleTypeGroups.length - 1 &&
-                                          productIndex === group.products.length - 1
-                                          ? undefined
-                                          : EMPHASIS_BORDER
-                                        : undefined,
-                                    borderBottom: EMPHASIS_BORDER,
-                                  })}
+                                  style={mergeCellStyles(
+                                    {
+                                      textAlign: 'center',
+                                      fontWeight: 600,
+                                      borderBottom: EMPHASIS_BORDER,
+                                    },
+                                    NO_LEFT_BORDER,
+                                    addonIndex === product.addons.length - 1 &&
+                                      (groupIndex !== visibleTypeGroups.length - 1 ||
+                                        productIndex !== group.products.length - 1)
+                                      ? { borderRight: EMPHASIS_BORDER }
+                                      : undefined,
+                                  )}
                                 >
                                   {`${addon.name} (Non-Show)`}
                                 </th>,
@@ -512,12 +517,6 @@ const ChannelNumbersSummary = () => {
                                   style={{
                                     ...mergeCellStyles({ textAlign: 'center', fontWeight: 600 }),
                                     borderLeft: EMPHASIS_BORDER,
-                                    borderRight:
-                                      productIndex === group.products.length - 1
-                                        ? groupIndex === visibleTypeGroups.length - 1
-                                          ? undefined
-                                          : EMPHASIS_BORDER
-                                        : undefined,
                                     borderBottom: EMPHASIS_BORDER,
                                   }}
                                 >
@@ -525,17 +524,17 @@ const ChannelNumbersSummary = () => {
                                 </th>,
                                 <th
                                   key={`label-quantity-nonshow-${group.slug}-${product.slug}`}
-                                  style={mergeCellStyles({
-                                    textAlign: 'center',
-                                    fontWeight: 600,
-                                    borderRight:
-                                      productIndex === group.products.length - 1
-                                        ? groupIndex === visibleTypeGroups.length - 1
-                                          ? undefined
-                                          : EMPHASIS_BORDER
-                                        : undefined,
-                                    borderBottom: EMPHASIS_BORDER,
-                                  })}
+                                  style={mergeCellStyles(
+                                    {
+                                      textAlign: 'center',
+                                      fontWeight: 600,
+                                      borderBottom: EMPHASIS_BORDER,
+                                    },
+                                    NO_LEFT_BORDER,
+                                    productIndex === group.products.length - 1 && groupIndex !== visibleTypeGroups.length - 1
+                                      ? { borderRight: EMPHASIS_BORDER }
+                                      : undefined,
+                                  )}
                                 >
                                   Non-Show
                                 </th>,
@@ -572,7 +571,7 @@ const ChannelNumbersSummary = () => {
                                 </td>,
                                 <td
                                   key={`nonshow-${group.slug}-${product.slug}-${channel.channelId}`}
-                                  style={mergeCellStyles()}
+                                  style={mergeCellStyles(NO_LEFT_BORDER)}
                                 >
                                   {renderValue(nonShowValue)}
                                 </td>,
@@ -583,19 +582,20 @@ const ChannelNumbersSummary = () => {
                                   >
                                     {renderValue(productMetrics?.addons?.[addon.key] ?? 0)}
                                   </td>,
-                                  <td
-                                    key={`addon-nonshow-${group.slug}-${product.slug}-${addon.key}-${channel.channelId}`}
-                                    style={mergeCellStyles(
-                                      isLastProductInGroup &&
-                                        addonIndex === product.addons.length - 1 &&
-                                        groupIndex !== visibleTypeGroups.length - 1
-                                        ? { borderRight: EMPHASIS_BORDER }
-                                        : undefined,
-                                    )}
-                                  >
-                                    {renderValue(productMetrics?.addonNonShow?.[addon.key] ?? 0)}
-                                  </td>,
-                                ]),
+                                <td
+                                  key={`addon-nonshow-${group.slug}-${product.slug}-${addon.key}-${channel.channelId}`}
+                                  style={mergeCellStyles(
+                                    NO_LEFT_BORDER,
+                                    isLastProductInGroup &&
+                                      addonIndex === product.addons.length - 1 &&
+                                      groupIndex !== visibleTypeGroups.length - 1
+                                      ? { borderRight: EMPHASIS_BORDER }
+                                      : undefined,
+                                  )}
+                                >
+                                  {renderValue(productMetrics?.addonNonShow?.[addon.key] ?? 0)}
+                                </td>,
+                              ]),
                               ];
                             }
                             return [
@@ -603,9 +603,6 @@ const ChannelNumbersSummary = () => {
                                 key={`quantity-${group.slug}-${product.slug}-${channel.channelId}`}
                                 style={mergeCellStyles(
                                   { borderLeft: EMPHASIS_BORDER },
-                                  isLastProductInGroup && groupIndex !== visibleTypeGroups.length - 1
-                                    ? { borderRight: EMPHASIS_BORDER }
-                                    : undefined,
                                 )}
                               >
                                 {renderValue(getQuantityForProduct(product, productMetrics))}
@@ -613,6 +610,7 @@ const ChannelNumbersSummary = () => {
                               <td
                                 key={`quantity-nonshow-${group.slug}-${product.slug}-${channel.channelId}`}
                                 style={mergeCellStyles(
+                                  NO_LEFT_BORDER,
                                   isLastProductInGroup && groupIndex !== visibleTypeGroups.length - 1
                                     ? { borderRight: EMPHASIS_BORDER }
                                     : undefined,
@@ -667,7 +665,7 @@ const ChannelNumbersSummary = () => {
                               </td>,
                               <td
                                 key={`total-nonshow-${group.slug}-${product.slug}`}
-                                style={mergeCellStyles({ borderTop: EMPHASIS_BORDER })}
+                                style={mergeCellStyles({ borderTop: EMPHASIS_BORDER }, NO_LEFT_BORDER)}
                               >
                                 {renderValue(nonShowTotal)}
                               </td>,
@@ -682,6 +680,7 @@ const ChannelNumbersSummary = () => {
                                   key={`total-addon-nonshow-${group.slug}-${product.slug}-${addon.key}`}
                                   style={mergeCellStyles(
                                     { borderTop: EMPHASIS_BORDER },
+                                    NO_LEFT_BORDER,
                                     isLastProductInGroup &&
                                       addonIndex === product.addons.length - 1 &&
                                       groupIndex !== visibleTypeGroups.length - 1
@@ -699,9 +698,6 @@ const ChannelNumbersSummary = () => {
                               key={`total-quantity-${group.slug}-${product.slug}`}
                               style={mergeCellStyles(
                                 { borderTop: EMPHASIS_BORDER, borderLeft: EMPHASIS_BORDER },
-                                isLastProductInGroup && groupIndex !== visibleTypeGroups.length - 1
-                                  ? { borderRight: EMPHASIS_BORDER }
-                                  : undefined,
                               )}
                             >
                               {renderValue(getQuantityForProduct(product, productTotals))}
@@ -710,6 +706,7 @@ const ChannelNumbersSummary = () => {
                               key={`total-quantity-nonshow-${group.slug}-${product.slug}`}
                               style={mergeCellStyles(
                                 { borderTop: EMPHASIS_BORDER },
+                                NO_LEFT_BORDER,
                                 isLastProductInGroup && groupIndex !== visibleTypeGroups.length - 1
                                   ? { borderRight: EMPHASIS_BORDER }
                                   : undefined,

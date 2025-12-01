@@ -3,6 +3,9 @@ import type { Request, Response } from 'express';
 import dayjs from 'dayjs';
 import ReviewCounter from '../models/ReviewCounter.js';
 import ReviewCounterEntry, { type ReviewCounterEntryCategory } from '../models/ReviewCounterEntry.js';
+import ReviewCounterMonthlyApproval from '../models/ReviewCounterMonthlyApproval.js';
+import CompensationComponentAssignment from '../models/CompensationComponentAssignment.js';
+import CompensationComponent from '../models/CompensationComponent.js';
 import User from '../models/User.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 
@@ -52,6 +55,44 @@ type ContributorAggregate = {
   rawCount: number;
   roundedCount: number;
   counters: number;
+};
+
+type StaffPlatformSummary = {
+  counterId: number;
+  platform: string;
+  rawCount: number;
+  roundedCount: number;
+  needsMinimum: boolean;
+  underMinimumApproved: boolean;
+};
+
+type MonthlyApprovalStatus = {
+  approved: boolean;
+  approvedAt: string | null;
+  approvedByName: string | null;
+};
+
+type StaffMonthlySummary = {
+  userId: number;
+  displayName: string;
+  totalReviews: number;
+  totalRoundedReviews: number;
+  needsMinimum: boolean;
+  pendingPlatformApprovals: boolean;
+  allPlatformsApproved: boolean;
+  eligibleForIncentive: boolean;
+  canApprovePayment: boolean;
+  canApproveIncentive: boolean;
+  paymentApproval: MonthlyApprovalStatus;
+  incentiveApproval: MonthlyApprovalStatus;
+  platforms: StaffPlatformSummary[];
+};
+
+type StaffSummaryPayload = {
+  periodStart: string;
+  periodEnd: string;
+  minimumReviews: number;
+  staff: StaffMonthlySummary[];
 };
 
 const normalizeRoleSlug = (value?: string | null): string | null => {
@@ -166,6 +207,33 @@ const normalizeDate = (value: unknown): string | null => {
     return null;
   }
   return parsed.format('YYYY-MM-DD');
+};
+
+const parsePeriodInput = (value: unknown): dayjs.Dayjs | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const raw = value.trim();
+  if (!raw) {
+    return null;
+  }
+  const monthCandidate = dayjs(raw, 'YYYY-MM', true);
+  if (monthCandidate.isValid()) {
+    return monthCandidate.startOf('month');
+  }
+  const dateCandidate = dayjs(raw);
+  return dateCandidate.isValid() ? dateCandidate.startOf('month') : null;
+};
+
+const formatUserDisplayName = (user?: Pick<User, 'firstName' | 'lastName'> | null, fallback?: string | null) => {
+  const composed = `${user?.firstName ?? ''} ${user?.lastName ?? ''}`.trim();
+  if (composed.length > 0) {
+    return composed;
+  }
+  if (fallback && fallback.trim().length > 0) {
+    return fallback.trim();
+  }
+  return 'Unknown';
 };
 
 const sanitizeReviewCounterPayload = (payload: Record<string, unknown>) => {
@@ -816,6 +884,381 @@ export const getReviewCounterAnalytics = async (req: Request, res: Response): Pr
   }
 };
 
+const formatApprovalStatus = (
+  record: ReviewCounterMonthlyApproval | undefined,
+  mode: 'payment' | 'incentive',
+): MonthlyApprovalStatus => {
+  if (!record) {
+    return { approved: false, approvedAt: null, approvedByName: null };
+  }
+  if (mode === 'payment') {
+    return {
+      approved: Boolean(record.paymentApproved),
+      approvedAt: record.paymentApproved && record.paymentApprovedAt ? dayjs(record.paymentApprovedAt).toISOString() : null,
+      approvedByName:
+        record.paymentApproved && record.paymentApprovedByUser
+          ? formatUserDisplayName(record.paymentApprovedByUser)
+          : null,
+    };
+  }
+  return {
+    approved: Boolean(record.incentiveApproved),
+    approvedAt: record.incentiveApproved && record.incentiveApprovedAt ? dayjs(record.incentiveApprovedAt).toISOString() : null,
+    approvedByName:
+      record.incentiveApproved && record.incentiveApprovedByUser
+        ? formatUserDisplayName(record.incentiveApprovedByUser)
+        : null,
+  };
+};
+
+const buildStaffSummaryForPeriod = async (periodStart: dayjs.Dayjs): Promise<StaffSummaryPayload> => {
+  const start = periodStart.startOf('month');
+  const end = start.endOf('month');
+  const startValue = start.format('YYYY-MM-DD');
+  const endValue = end.format('YYYY-MM-DD');
+
+  const counters = await ReviewCounter.findAll({
+    where: {
+      periodStart: {
+        [Op.between]: [startValue, endValue],
+      },
+    },
+    include: [
+      {
+        model: ReviewCounterEntry,
+        as: 'entries',
+        include: [{ model: User, as: 'user', attributes: ['id', 'firstName', 'lastName', 'userTypeId'] }],
+      },
+    ],
+    order: [
+      ['platform', 'ASC'],
+      ['periodStart', 'ASC'],
+    ],
+  });
+
+type StaffBucket = {
+  userId: number;
+  displayName: string;
+  userTypeId: number | null;
+  totalReviews: number;
+  totalRoundedReviews: number;
+  platforms: StaffPlatformSummary[];
+};
+
+  const staffMap = new Map<number, StaffBucket>();
+
+  counters.forEach((counter) => {
+    (counter.entries ?? []).forEach((entry) => {
+      if (entry.category !== 'staff' || entry.userId == null) {
+        return;
+      }
+      const amount = toNumber(entry.rawCount);
+      const roundedAmount = Number.isFinite(Number(entry.roundedCount)) ? Number(entry.roundedCount) : roundReviewCredit(amount);
+      const bucket =
+        staffMap.get(entry.userId) ??
+        (() => {
+          const nextBucket: StaffBucket = {
+            userId: entry.userId!,
+            displayName: formatUserDisplayName(entry.user ?? null, entry.displayName),
+            userTypeId: entry.user?.userTypeId ?? null,
+            totalReviews: 0,
+            totalRoundedReviews: 0,
+            platforms: [],
+          };
+          staffMap.set(entry.userId!, nextBucket);
+          return nextBucket;
+        })();
+
+      if (bucket.userTypeId == null && entry.user?.userTypeId != null) {
+        bucket.userTypeId = entry.user.userTypeId;
+      }
+
+      bucket.totalReviews += amount;
+      bucket.totalRoundedReviews += roundedAmount;
+      bucket.platforms.push({
+        counterId: entry.counterId,
+        platform: counter.platform,
+        rawCount: amount,
+        roundedCount: roundedAmount,
+        needsMinimum: amount < MINIMUM_REVIEWS_FOR_PAYMENT,
+        underMinimumApproved: Boolean(entry.underMinimumApproved),
+      });
+    });
+  });
+
+  const userIds = Array.from(staffMap.keys());
+
+  const approvals = userIds.length
+    ? await ReviewCounterMonthlyApproval.findAll({
+        where: {
+          userId: { [Op.in]: userIds },
+          periodStart: startValue,
+        },
+        include: [
+          { model: User, as: 'paymentApprovedByUser', attributes: ['id', 'firstName', 'lastName'] },
+          { model: User, as: 'incentiveApprovedByUser', attributes: ['id', 'firstName', 'lastName'] },
+        ],
+      })
+    : [];
+
+  const approvalMap = new Map<number, ReviewCounterMonthlyApproval>();
+  approvals.forEach((approval) => {
+    approvalMap.set(approval.userId, approval);
+  });
+
+  const userTypeIds = Array.from(
+    new Set(
+      Array.from(staffMap.values())
+        .map((bucket) => bucket.userTypeId)
+        .filter((value): value is number => value != null),
+    ),
+  );
+
+  const userAssignments = userIds.length
+    ? await CompensationComponentAssignment.findAll({
+        where: {
+          targetScope: 'user',
+          userId: { [Op.in]: userIds },
+          isActive: true,
+        },
+        include: [
+          {
+            model: CompensationComponent,
+            as: 'component',
+            required: true,
+            where: {
+              category: 'review',
+              isActive: true,
+            },
+            attributes: ['id'],
+          },
+        ],
+      })
+    : [];
+
+  const userTypeAssignments = userTypeIds.length
+    ? await CompensationComponentAssignment.findAll({
+        where: {
+          targetScope: 'user_type',
+          userTypeId: { [Op.in]: userTypeIds },
+          isActive: true,
+        },
+        include: [
+          {
+            model: CompensationComponent,
+            as: 'component',
+            required: true,
+            where: {
+              category: 'review',
+              isActive: true,
+            },
+            attributes: ['id'],
+          },
+        ],
+      })
+    : [];
+
+  const incentiveEligible = new Set<number>();
+  userAssignments.forEach((assignment) => {
+    if (assignment.userId != null) {
+      incentiveEligible.add(assignment.userId);
+    }
+  });
+  if (userTypeAssignments.length > 0) {
+    const eligibleTypes = new Set(
+      userTypeAssignments
+        .map((assignment) => assignment.userTypeId)
+        .filter((value): value is number => value != null),
+    );
+    staffMap.forEach((bucket) => {
+      if (bucket.userTypeId != null && eligibleTypes.has(bucket.userTypeId)) {
+        incentiveEligible.add(bucket.userId);
+      }
+    });
+  }
+
+  const staff: StaffMonthlySummary[] = Array.from(staffMap.values())
+    .map((bucket) => {
+      bucket.platforms.sort((a, b) => a.platform.localeCompare(b.platform) || a.counterId - b.counterId);
+      const needsMinimum = bucket.totalReviews < MINIMUM_REVIEWS_FOR_PAYMENT;
+      const pendingPlatforms = bucket.platforms.some((platform) => platform.needsMinimum && !platform.underMinimumApproved);
+      const allPlatformsApproved = bucket.platforms.every((platform) => !platform.needsMinimum || platform.underMinimumApproved);
+      const canApprovePayment = true;
+      const eligibleForIncentive = incentiveEligible.has(bucket.userId);
+      const approvalRecord = approvalMap.get(bucket.userId);
+      const canApproveIncentive =
+        eligibleForIncentive &&
+        (bucket.totalReviews >= MINIMUM_REVIEWS_FOR_PAYMENT || Boolean(approvalRecord?.paymentApproved));
+
+      return {
+        userId: bucket.userId,
+        displayName: bucket.displayName,
+        totalReviews: bucket.totalReviews,
+        totalRoundedReviews: bucket.totalRoundedReviews,
+        needsMinimum,
+        pendingPlatformApprovals: pendingPlatforms,
+        allPlatformsApproved,
+        eligibleForIncentive,
+        canApprovePayment,
+        canApproveIncentive,
+        paymentApproval: formatApprovalStatus(approvalRecord, 'payment'),
+        incentiveApproval: formatApprovalStatus(approvalRecord, 'incentive'),
+        platforms: bucket.platforms,
+      };
+    })
+    .sort((a, b) => {
+      if (Math.abs(b.totalReviews - a.totalReviews) > FLOAT_TOLERANCE) {
+        return b.totalReviews - a.totalReviews;
+      }
+      return a.displayName.localeCompare(b.displayName);
+    });
+
+  return {
+    periodStart: startValue,
+    periodEnd: endValue,
+    minimumReviews: MINIMUM_REVIEWS_FOR_PAYMENT,
+    staff,
+  };
+};
+
+const autoApprovePlatformEntries = async ({
+  userId,
+  periodStart,
+  periodEnd,
+  actorId,
+}: {
+  userId: number;
+  periodStart: string;
+  periodEnd: string;
+  actorId: number;
+}) => {
+  const counters = await ReviewCounter.findAll({
+    attributes: ['id'],
+    where: {
+      periodStart: { [Op.between]: [periodStart, periodEnd] },
+    },
+  });
+  const counterIds = counters.map((counter) => counter.id);
+  if (counterIds.length === 0) {
+    return;
+  }
+  await ReviewCounterEntry.update(
+    {
+      underMinimumApproved: true,
+      underMinimumApprovedBy: actorId,
+    },
+    {
+      where: {
+        counterId: { [Op.in]: counterIds },
+        userId,
+        category: 'staff',
+        underMinimumApproved: false,
+      },
+    },
+  );
+};
+
+export const getReviewCounterStaffSummary = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const period =
+      parsePeriodInput(req.query.periodStart) ??
+      parsePeriodInput(req.query.period) ??
+      parsePeriodInput(req.query.startDate) ??
+      dayjs().startOf('month');
+    const payload = await buildStaffSummaryForPeriod(period.startOf('month'));
+    res.status(200).json([{ data: [payload], columns: [] }]);
+  } catch (error) {
+    console.error('Failed to load staff review summary', error);
+    res.status(500).json([{ message: 'Failed to load review staff summary' }]);
+  }
+};
+
+export const updateReviewCounterMonthlyApproval = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isFinite(userId)) {
+      res.status(400).json([{ message: 'Provide a valid userId parameter' }]);
+      return;
+    }
+    const actorId = getActorId(req);
+    if (!actorId) {
+      res.status(403).json([{ message: 'Authentication required to approve reviews' }]);
+      return;
+    }
+    const rawPeriod =
+      parsePeriodInput(req.body?.periodStart) ??
+      parsePeriodInput(req.body?.period) ??
+      parsePeriodInput(req.body?.startDate) ??
+      dayjs().startOf('month');
+    const period = rawPeriod.startOf('month');
+    const { paymentApproved, incentiveApproved } = req.body ?? {};
+    if (typeof paymentApproved !== 'boolean' && typeof incentiveApproved !== 'boolean') {
+      res.status(400).json([{ message: 'Provide paymentApproved or incentiveApproved flags to update' }]);
+      return;
+    }
+
+    const periodEndValue = period.endOf('month').format('YYYY-MM-DD');
+    const summary = await buildStaffSummaryForPeriod(period);
+    const staffRecord = summary.staff.find((entry) => entry.userId === userId);
+    if (!staffRecord) {
+      res.status(404).json([{ message: 'No review counters found for the selected period' }]);
+      return;
+    }
+
+    if (incentiveApproved === true && !staffRecord.canApproveIncentive) {
+      res.status(400).json([{ message: 'Staff member is not eligible for incentive approval in this period' }]);
+      return;
+    }
+
+    const periodStart = period.format('YYYY-MM-DD');
+    const now = new Date();
+    const existing = await ReviewCounterMonthlyApproval.findOne({ where: { userId, periodStart } });
+
+    const nextValues: Partial<ReviewCounterMonthlyApproval> = {};
+    if (typeof paymentApproved === 'boolean') {
+      nextValues.paymentApproved = paymentApproved;
+      nextValues.paymentApprovedAt = paymentApproved ? now : null;
+      nextValues.paymentApprovedBy = paymentApproved ? actorId : null;
+      if (paymentApproved) {
+        await autoApprovePlatformEntries({
+          userId,
+          periodStart,
+          periodEnd: periodEndValue,
+          actorId,
+        });
+      }
+    }
+    if (typeof incentiveApproved === 'boolean') {
+      nextValues.incentiveApproved = incentiveApproved;
+      nextValues.incentiveApprovedAt = incentiveApproved ? now : null;
+      nextValues.incentiveApprovedBy = incentiveApproved ? actorId : null;
+    }
+
+    if (existing) {
+      await existing.update(nextValues);
+    } else {
+      await ReviewCounterMonthlyApproval.create({
+        userId,
+        periodStart,
+        paymentApproved: typeof paymentApproved === 'boolean' ? paymentApproved : false,
+        paymentApprovedAt: typeof paymentApproved === 'boolean' && paymentApproved ? now : null,
+        paymentApprovedBy: typeof paymentApproved === 'boolean' && paymentApproved ? actorId : null,
+        incentiveApproved: typeof incentiveApproved === 'boolean' ? incentiveApproved : false,
+        incentiveApprovedAt: typeof incentiveApproved === 'boolean' && incentiveApproved ? now : null,
+        incentiveApprovedBy: typeof incentiveApproved === 'boolean' && incentiveApproved ? actorId : null,
+      });
+    }
+
+    const refreshed = await buildStaffSummaryForPeriod(period);
+    res.status(200).json([{ data: [refreshed], columns: [] }]);
+  } catch (error) {
+    console.error('Failed to update review counter monthly approval', error);
+    res.status(500).json([{ message: 'Failed to update monthly approval' }]);
+  }
+};
 const createDefaultEntriesForCounter = async (counterId: number, actorId: number | null) => {
   const activeUsers = await User.findAll({
     where: { status: true },
