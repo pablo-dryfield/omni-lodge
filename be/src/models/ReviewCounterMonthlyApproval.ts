@@ -75,18 +75,18 @@ export default class ReviewCounterMonthlyApproval extends Model {
   declare baseOverrideApprovedAt: Date | null;
 
   declare subjectUser?: NonAttribute<User | null>;
-  @BelongsTo(() => User, { foreignKey: 'user_id' })
+  @BelongsTo(() => User, { foreignKey: 'user_id', as: 'subjectUser' })
   declare subjectUserRef?: NonAttribute<User | null>;
 
   declare paymentApprovedByUser?: NonAttribute<User | null>;
-  @BelongsTo(() => User, { foreignKey: 'payment_approved_by' })
+  @BelongsTo(() => User, { foreignKey: 'payment_approved_by', as: 'paymentApprovedByUser' })
   declare paymentApprovedByUserRef?: NonAttribute<User | null>;
 
   declare incentiveApprovedByUser?: NonAttribute<User | null>;
-  @BelongsTo(() => User, { foreignKey: 'incentive_approved_by' })
+  @BelongsTo(() => User, { foreignKey: 'incentive_approved_by', as: 'incentiveApprovedByUser' })
   declare incentiveApprovedByUserRef?: NonAttribute<User | null>;
 
   declare baseOverrideApprovedByUser?: NonAttribute<User | null>;
-  @BelongsTo(() => User, { foreignKey: 'base_override_approved_by' })
+  @BelongsTo(() => User, { foreignKey: 'base_override_approved_by', as: 'baseOverrideApprovedByUser' })
   declare baseOverrideApprovedByUserRef?: NonAttribute<User | null>;
 }

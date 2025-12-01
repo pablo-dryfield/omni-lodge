@@ -176,9 +176,6 @@ export function defineAssociations() {
   ReviewCounterEntry.belongsTo(User, { foreignKey: 'created_by', as: 'createdByUserReviewCounters' });
   ReviewCounterEntry.belongsTo(User, { foreignKey: 'updated_by', as: 'updatedByUserReviewCounters' });
   User.hasMany(ReviewCounterMonthlyApproval, { foreignKey: 'user_id', as: 'reviewMonthlyApprovals' });
-  ReviewCounterMonthlyApproval.belongsTo(User, { foreignKey: 'user_id', as: 'reviewCounterSubjectUser' });
-  ReviewCounterMonthlyApproval.belongsTo(User, { foreignKey: 'payment_approved_by', as: 'paymentApprovedByUser' });
-  ReviewCounterMonthlyApproval.belongsTo(User, { foreignKey: 'incentive_approved_by', as: 'incentiveApprovedByUser' });
 
   // Booking Associations
   Booking.belongsTo(Guest, { foreignKey: 'guestId' });
