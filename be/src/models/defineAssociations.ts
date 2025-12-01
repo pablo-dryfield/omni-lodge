@@ -9,6 +9,7 @@ import ProductType from './ProductType.js';
 import Review from './Review.js';
 import ReviewCounter from './ReviewCounter.js';
 import ReviewCounterEntry from './ReviewCounterEntry.js';
+import ReviewCounterMonthlyApproval from './ReviewCounterMonthlyApproval.js';
 import User from './User.js';
 import UserType from './UserType.js';
 import Page from './Page.js';
@@ -174,6 +175,10 @@ export function defineAssociations() {
   ReviewCounterEntry.belongsTo(User, { foreignKey: 'user_id', as: 'userReviewCounters' });
   ReviewCounterEntry.belongsTo(User, { foreignKey: 'created_by', as: 'createdByUserReviewCounters' });
   ReviewCounterEntry.belongsTo(User, { foreignKey: 'updated_by', as: 'updatedByUserReviewCounters' });
+  User.hasMany(ReviewCounterMonthlyApproval, { foreignKey: 'user_id', as: 'reviewMonthlyApprovals' });
+  ReviewCounterMonthlyApproval.belongsTo(User, { foreignKey: 'user_id', as: 'subjectUser' });
+  ReviewCounterMonthlyApproval.belongsTo(User, { foreignKey: 'payment_approved_by', as: 'paymentApprovedByUser' });
+  ReviewCounterMonthlyApproval.belongsTo(User, { foreignKey: 'incentive_approved_by', as: 'incentiveApprovedByUser' });
 
   // Booking Associations
   Booking.belongsTo(Guest, { foreignKey: 'guestId' });

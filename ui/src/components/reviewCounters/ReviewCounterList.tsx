@@ -26,7 +26,7 @@ import {
   updateReviewCounter,
   deleteReviewCounter,
 } from '../../actions/reviewCounterActions';
-import type { ReviewCounter, ReviewCounterEntry } from '../../types/reviewCounters/ReviewCounter';
+import type { ReviewCounter, ReviewCounterEntry, ReviewCounterPayload } from '../../types/reviewCounters/ReviewCounter';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import ReviewCounterEntriesPanel from './ReviewCounterEntriesPanel';
 import axiosInstance from '../../utils/axiosInstance';
@@ -124,6 +124,27 @@ const ReviewCounterList = () => {
     return serverData ? [...serverData] : [];
   }, [reviewCounterState.data]);
 
+  const countersByMonth = useMemo(() => {
+    const groups = new Map<
+      string,
+      { label: string; monthStart: string; counters: ReviewCounter[] }
+    >();
+    counters.forEach((counter) => {
+      const monthStart = dayjs(counter.periodStart ?? CURRENT_MONTH_START).startOf('month');
+      const key = monthStart.format('YYYY-MM');
+      const label = monthStart.format('MMMM YYYY');
+      const bucket =
+        groups.get(key) ??
+        (() => {
+          const next = { label, monthStart: monthStart.format('YYYY-MM-DD'), counters: [] as ReviewCounter[] };
+          groups.set(key, next);
+          return next;
+        })();
+      bucket.counters.push(counter);
+    });
+    return Array.from(groups.values()).sort((a, b) => dayjs(b.monthStart).valueOf() - dayjs(a.monthStart).valueOf());
+  }, [counters]);
+
   const refreshCounters = useCallback(async () => {
     await dispatch(fetchReviewCounters());
   }, [dispatch]);
@@ -192,7 +213,7 @@ const ReviewCounterList = () => {
     setSubmitting(true);
     setFormError(null);
 
-    const payloadSource: Partial<ReviewCounter> = {
+    const payloadSource: ReviewCounterPayload = {
       platform: formState.platform.trim(),
       periodStart: formState.periodStart,
       periodEnd: formState.periodEnd,
@@ -277,73 +298,87 @@ const ReviewCounterList = () => {
             <Text size="sm" c="dimmed">
               No review counters recorded yet. Create your first entry to get started.
             </Text>
-            <Button onClick={openCreateForm} leftSection={<IconPlus size={16} />}>Create Counter</Button>
+            <Button onClick={openCreateForm} leftSection={<IconPlus size={16} />}>
+              Create Counter
+            </Button>
           </Stack>
         </Card>
       ) : (
-        <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
-          {counters.map((counter) => {
-            const periodLabel = counter.periodEnd
-              ? `${counter.periodStart ?? '?'} → ${counter.periodEnd}`
-              : counter.periodStart ?? '—';
-            const platformLabel = platformLabelMap.get(counter.platform ?? '') ?? counter.platform ?? 'Unknown';
-            const isExpanded = expandedCounters.has(counter.id);
-            const entryTotals = summarizeEntries(counter.entries);
-            return (
-              <Card key={counter.id} withBorder radius="md" padding="md">
-                <Stack gap="sm">
-                  <Group justify="space-between" align="flex-start">
-                    <div>
-                      <Group gap="xs">
-                        <Text fw={600}>{platformLabel}</Text>
-                        <Badge color="blue" variant="light">
-                          Period {periodLabel}
-                        </Badge>
-                      </Group>
-                      <Group gap="xs" mt={4}>
-                        <Badge color="teal" variant="light">
-                          {entryTotals.total.toFixed(2)} reviews
-                        </Badge>
-                        <Badge color="yellow" variant="light">
-                          Bad: {entryTotals.bad.toFixed(2)}
-                        </Badge>
-                        <Badge color="gray" variant="light">
-                          No name: {entryTotals.noName.toFixed(2)}
-                        </Badge>
-                      </Group>
-                      {counter.notes && (
-                        <Text size="sm" mt={6}>
-                          {counter.notes}
-                        </Text>
-                      )}
-                    </div>
-                    <Group gap="xs">
-                      <Tooltip label="Manage entries">
-                        <ActionIcon variant="light" onClick={() => toggleExpanded(counter.id)}>
-                          {isExpanded ? <IconChevronUp size={16} /> : <IconChevronDown size={16} />}
-                        </ActionIcon>
-                      </Tooltip>
-                      <Tooltip label="Edit counter">
-                        <ActionIcon variant="light" onClick={() => openEditForm(counter)}>
-                          <IconPencil size={16} />
-                        </ActionIcon>
-                      </Tooltip>
-                      <Tooltip label="Delete counter">
-                        <ActionIcon color="red" variant="light" onClick={() => handleDelete(counter.id)}>
-                          <IconTrash size={16} />
-                        </ActionIcon>
-                      </Tooltip>
-                    </Group>
-                  </Group>
+        <Stack gap="xl">
+          {countersByMonth.map((group) => (
+            <Stack key={group.monthStart} gap="sm">
+              <Group justify="space-between" align="center">
+                <Text fw={600}>{group.label}</Text>
+                <Badge color="gray" variant="light">
+                  {group.counters.length} platform{group.counters.length === 1 ? '' : 's'}
+                </Badge>
+              </Group>
+              <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
+                {group.counters.map((counter) => {
+                  const periodLabel = counter.periodEnd
+                    ? `${counter.periodStart ?? '?'} – ${counter.periodEnd}`
+                    : counter.periodStart ?? '-';
+                  const platformLabel = platformLabelMap.get(counter.platform ?? '') ?? counter.platform ?? 'Unknown';
+                  const isExpanded = expandedCounters.has(counter.id);
+                  const entryTotals = summarizeEntries(counter.entries);
+                  return (
+                    <Card key={counter.id} withBorder radius="md" padding="md">
+                      <Stack gap="sm">
+                        <Group justify="space-between" align="flex-start">
+                          <div>
+                            <Group gap="xs">
+                              <Text fw={600}>{platformLabel}</Text>
+                              <Badge color="blue" variant="light">
+                                Period {periodLabel}
+                              </Badge>
+                            </Group>
+                            <Group gap="xs" mt={4}>
+                              <Badge color="teal" variant="light">
+                                {entryTotals.total.toFixed(2)} reviews
+                              </Badge>
+                              <Badge color="yellow" variant="light">
+                                Bad: {entryTotals.bad.toFixed(2)}
+                              </Badge>
+                              <Badge color="gray" variant="light">
+                                No name: {entryTotals.noName.toFixed(2)}
+                              </Badge>
+                            </Group>
+                            {counter.notes && (
+                              <Text size="sm" mt={6}>
+                                {counter.notes}
+                              </Text>
+                            )}
+                          </div>
+                          <Group gap="xs">
+                            <Tooltip label="Manage entries">
+                              <ActionIcon variant="light" onClick={() => toggleExpanded(counter.id)}>
+                                {isExpanded ? <IconChevronUp size={16} /> : <IconChevronDown size={16} />}
+                              </ActionIcon>
+                            </Tooltip>
+                            <Tooltip label="Edit counter">
+                              <ActionIcon variant="light" onClick={() => openEditForm(counter)}>
+                                <IconPencil size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                            <Tooltip label="Delete counter">
+                              <ActionIcon color="red" variant="light" onClick={() => handleDelete(counter.id)}>
+                                <IconTrash size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                          </Group>
+                        </Group>
 
-                  <Collapse in={isExpanded} transitionDuration={150}>
-                    <ReviewCounterEntriesPanel counter={counter} onRefresh={refreshCounters} />
-                  </Collapse>
-                </Stack>
-              </Card>
-            );
-          })}
-        </SimpleGrid>
+                        <Collapse in={isExpanded} transitionDuration={150}>
+                          <ReviewCounterEntriesPanel counter={counter} onRefresh={refreshCounters} />
+                        </Collapse>
+                      </Stack>
+                    </Card>
+                  );
+                })}
+              </SimpleGrid>
+            </Stack>
+          ))}
+        </Stack>
       )}
 
       <Modal
@@ -363,7 +398,7 @@ const ReviewCounterList = () => {
             required
             value={formState.platform || null}
             onChange={(value) => setFormState((prev) => ({ ...prev, platform: value ?? '' }))}
-            nothingFound="Configure platforms under Settings › Review Platforms"
+            nothingFoundMessage="Configure platforms under Settings › Review Platforms"
           />
           <Group grow>
             <TextInput
@@ -434,4 +469,7 @@ const ReviewCounterList = () => {
 };
 
 export default ReviewCounterList;
+
+
+
 

@@ -4,6 +4,7 @@ import {
   ActionIcon,
   Alert,
   Badge,
+  Button,
   Card,
   Group,
   Loader,
@@ -22,7 +23,17 @@ import type { ReviewAnalyticsPayload } from '../../types/reviewCounters/ReviewAn
 import type { ReviewPlatform as ReviewPlatformDto } from '../../types/reviewPlatforms/ReviewPlatform';
 import type { ServerResponse } from '../../types/general/ServerResponse';
 
-const DEFAULT_RANGE_START = dayjs().subtract(90, 'day').toDate();
+type RangePreset = 'thisMonth' | 'lastMonth' | 'custom';
+
+const DATE_FORMAT = 'YYYY-MM-DD';
+
+const formatDisplayRange = (range: [Date | null, Date | null]) => {
+  const [start, end] = range;
+  if (!start || !end) {
+    return 'Select a date range';
+  }
+  return `${dayjs(start).format('MMM D, YYYY')} - ${dayjs(end).format('MMM D, YYYY')}`;
+};
 
 const groupByOptions = [
   { value: 'day', label: 'Daily' },
@@ -30,8 +41,19 @@ const groupByOptions = [
   { value: 'month', label: 'Monthly' },
 ];
 
+const getPresetRange = (preset: Exclude<RangePreset, 'custom'>): [Date, Date] => {
+  if (preset === 'thisMonth') {
+    const start = dayjs().startOf('month').toDate();
+    const end = dayjs().endOf('month').toDate();
+    return [start, end];
+  }
+  const lastMonthEnd = dayjs().startOf('month').subtract(1, 'day');
+  return [lastMonthEnd.startOf('month').toDate(), lastMonthEnd.endOf('month').toDate()];
+};
+
 const ReviewAnalyticsPanel = () => {
-  const [dateRange, setDateRange] = useState<[Date | null, Date | null]>([DEFAULT_RANGE_START, new Date()]);
+  const [preset, setPreset] = useState<RangePreset>('thisMonth');
+  const [dateRange, setDateRange] = useState<[Date | null, Date | null]>(() => getPresetRange('thisMonth'));
   const [groupBy, setGroupBy] = useState<'day' | 'week' | 'month'>('month');
   const [platform, setPlatform] = useState<string | null>(null);
   const [analytics, setAnalytics] = useState<ReviewAnalyticsPayload | null>(null);
@@ -62,6 +84,16 @@ const ReviewAnalyticsPanel = () => {
     loadPlatforms().catch(() => {});
   }, []);
 
+  const handlePresetChange = useCallback(
+    (value: RangePreset) => {
+      setPreset(value);
+      if (value !== 'custom') {
+        setDateRange(getPresetRange(value));
+      }
+    },
+    [],
+  );
+
   const fetchAnalytics = useCallback(async () => {
     if (!dateRange[0] || !dateRange[1]) {
       return;
@@ -70,8 +102,8 @@ const ReviewAnalyticsPanel = () => {
       setLoading(true);
       setError(null);
       const params: Record<string, string> = {
-        startDate: dayjs(dateRange[0]).format('YYYY-MM-DD'),
-        endDate: dayjs(dateRange[1]).format('YYYY-MM-DD'),
+        startDate: dayjs(dateRange[0]).format(DATE_FORMAT),
+        endDate: dayjs(dateRange[1]).format(DATE_FORMAT),
         groupBy,
       };
       if (platform && platform !== 'all') {
@@ -141,15 +173,51 @@ const ReviewAnalyticsPanel = () => {
         </Group>
 
         <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="sm">
-          <DatePickerInput
-            label="Date range"
-            type="range"
-            value={dateRange}
-            onChange={setDateRange}
-            allowSingleDateInRange={false}
-            valueFormat="MMM D, YYYY"
-            maxDate={new Date()}
-          />
+          <Stack gap={6}>
+            <Text size="sm" fw={500}>
+              Date range
+            </Text>
+            <Group gap="xs">
+              <Button
+                size="xs"
+                variant={preset === 'thisMonth' ? 'filled' : 'light'}
+                onClick={() => handlePresetChange('thisMonth')}
+              >
+                This Month
+              </Button>
+              <Button
+                size="xs"
+                variant={preset === 'lastMonth' ? 'filled' : 'light'}
+                onClick={() => handlePresetChange('lastMonth')}
+              >
+                Last Month
+              </Button>
+              <Button
+                size="xs"
+                variant={preset === 'custom' ? 'filled' : 'light'}
+                onClick={() => handlePresetChange('custom')}
+              >
+                Custom
+              </Button>
+            </Group>
+            {preset === 'custom' ? (
+              <DatePickerInput
+                type="range"
+                value={dateRange}
+                onChange={(rangeValue) => {
+                  setDateRange(rangeValue);
+                  setPreset('custom');
+                }}
+                allowSingleDateInRange={false}
+                valueFormat="MMM D, YYYY"
+                maxDate={new Date()}
+              />
+            ) : (
+              <Text size="sm" c="dimmed">
+                {formatDisplayRange(dateRange)}
+              </Text>
+            )}
+          </Stack>
           <Select
             label="Grouping"
             data={groupByOptions}

@@ -445,7 +445,7 @@ export async function getChannelNumbersSummary(params: {
     const addonNonShow = Object.fromEntries(
       Object.entries(channel.addons).map(([key, bucket]) => [key, bucket.nonShow]),
     );
-    const total = channel.people.attended + Object.values(addonValues).reduce((sum, value) => sum + value, 0);
+    const total = channel.people.attended + channel.people.nonShow;
 
     const productMetrics: Record<string, ChannelProductMetrics> = {};
     productList.forEach((product) => {
@@ -497,7 +497,7 @@ export async function getChannelNumbersSummary(params: {
     normalNonShow: summary.totals.people.nonShow,
     addons: totalAddonValues,
     addonNonShow: totalAddonNonShow,
-    total: summary.totals.people.attended + Object.values(totalAddonValues).reduce((sum, value) => sum + value, 0),
+    total: summary.totals.people.attended + summary.totals.people.nonShow,
   };
 
   const productTotals: Record<string, ChannelProductMetrics> = {};

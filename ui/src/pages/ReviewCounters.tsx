@@ -3,6 +3,7 @@ import { PageAccessGuard } from '../components/access/PageAccessGuard';
 import { PAGE_SLUGS } from '../constants/pageSlugs';
 import ReviewCounterList from '../components/reviewCounters/ReviewCounterList';
 import ReviewAnalyticsPanel from '../components/reviewCounters/ReviewAnalyticsPanel';
+import ReviewMonthlySummary from '../components/reviewCounters/ReviewMonthlySummary';
 
 const ReviewCounters = () => {
   return (
@@ -15,6 +16,7 @@ const ReviewCounters = () => {
           </Text>
         </div>
         <ReviewAnalyticsPanel />
+        <ReviewMonthlySummary />
         <ReviewCounterList />
       </Stack>
     </PageAccessGuard>

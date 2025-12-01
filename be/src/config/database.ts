@@ -58,6 +58,7 @@ import UserHomePreference from "../models/UserHomePreference.js";
 import ReviewCounter from "../models/ReviewCounter.js";
 import ReviewCounterEntry from "../models/ReviewCounterEntry.js";
 import ReviewPlatform from "../models/ReviewPlatform.js";
+import ReviewCounterMonthlyApproval from "../models/ReviewCounterMonthlyApproval.js";
 import CompensationComponent from "../models/CompensationComponent.js";
 import CompensationComponentAssignment from "../models/CompensationComponentAssignment.js";
 import AssistantManagerTaskTemplate from "../models/AssistantManagerTaskTemplate.js";
@@ -115,6 +116,7 @@ const sequelize = new Sequelize({
     Review,
     ReviewCounter,
     ReviewCounterEntry,
+    ReviewCounterMonthlyApproval,
     ReviewPlatform,
     CompensationComponent,
     CompensationComponentAssignment,
