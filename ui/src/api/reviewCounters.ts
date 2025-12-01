@@ -19,7 +19,13 @@ export const fetchReviewStaffSummary = async (params: {
 
 export const updateReviewMonthlyApproval = async (
   userId: number,
-  payload: { periodStart?: string; paymentApproved?: boolean; incentiveApproved?: boolean; componentId?: number },
+  payload: {
+    periodStart?: string;
+    paymentApproved?: boolean;
+    incentiveApproved?: boolean;
+    baseOverrideApproved?: boolean;
+    componentId?: number;
+  },
 ): Promise<ReviewCounterStaffSummary> => {
   const response = await axiosInstance.patch<ServerResponse<ReviewCounterStaffSummary>>(
     `/reviewCounters/staff-summary/${userId}/approval`,

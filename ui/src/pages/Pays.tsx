@@ -51,6 +51,7 @@ import { PageAccessGuard } from '../components/access/PageAccessGuard';
 import { PAGE_SLUGS } from '../constants/pageSlugs';
 import { useMediaQuery } from '@mantine/hooks';
 import axiosInstance from '../utils/axiosInstance';
+import { updateReviewMonthlyApproval } from '../api/reviewCounters';
 import {
   selectFinanceAccounts,
   selectFinanceCategories,
@@ -318,6 +319,8 @@ const renderComponentList = (
   platformGuestBreakdowns?: Record<string, PlatformGuestTierBreakdown[]>,
   platformGuestTotals?: { totalGuests: number; totalBooked: number; totalAttended: number },
   lockedComponents?: LockedComponentSummary[],
+  staff?: Pay,
+  options?: { onApproveBaseOverride?: (staff: Pay) => void; pendingUserIds?: Set<number> },
 ) => {
   const paidComponents = components ?? [];
   const lockedList = lockedComponents ?? [];
@@ -353,27 +356,84 @@ const renderComponentList = (
       {lockedList.length > 0 && (
         <Stack gap={4} pt="xs">
           <Text size="xs" c="red" fw={600}>
-            Incentives locked by review target
+            Components requiring approval
           </Text>
-          {lockedList.map((entry, index) => (
-            <Group key={`${entry.componentId}-${index}`} justify="space-between">
-              <Group gap={6}>
-                <Badge color="red" variant="light">
-                  {entry.category}
-                </Badge>
-                <Text size="sm">
-                  {entry.name}{' '}
-                  <Text component="span" size="xs" c="dimmed">
-                    (needs {entry.requirement.minReviews} reviews, current{' '}
-                    {entry.requirement.actualReviews})
-                  </Text>
+          {lockedList.map((entry, index) => {
+            const requirement = entry.requirement;
+            const reviewRequirement = requirement?.type === 'review_target' ? requirement : null;
+            const baseRequirement = requirement?.type === 'base_override' ? requirement : null;
+            const isBaseOverride = Boolean(baseRequirement);
+            const staffHasCanonicalRange = staff?.rangeIsCanonical !== false;
+            const canApproveBaseOverride =
+              isBaseOverride &&
+              staff &&
+              staff.userId &&
+              staffHasCanonicalRange &&
+              options?.onApproveBaseOverride;
+            const pendingBaseOverride =
+              canApproveBaseOverride && options?.pendingUserIds?.has(staff!.userId!);
+            const requiresMonthlyRangeHint = isBaseOverride && !staffHasCanonicalRange;
+
+            let requirementDetails: React.ReactNode = null;
+            if (reviewRequirement) {
+              const { minReviews, actualReviews } = reviewRequirement;
+              requirementDetails = (
+                <Text component="span" size="xs" c="dimmed">
+                  (needs {minReviews} reviews, current {actualReviews})
                 </Text>
-              </Group>
-              <Text size="sm" fw={600} c="red">
-                {formatCurrency(entry.amount)}
-              </Text>
-            </Group>
-          ))}
+              );
+            } else if (baseRequirement) {
+              requirementDetails = (
+                <Text component="span" size="xs" c="dimmed">
+                  (quota {baseRequirement.allowedUnits} days, worked {baseRequirement.workedUnits} days; extra{' '}
+                  {baseRequirement.extraUnits})
+                </Text>
+              );
+            }
+
+            return (
+              <Stack key={`${entry.componentId}-${index}`} gap={2}>
+                <Group justify="space-between" align="flex-start">
+                  <Group gap={6}>
+                    <Badge color="red" variant="light">
+                      {entry.category}
+                    </Badge>
+                    <Text size="sm">
+                      {entry.name} {requirementDetails}
+                    </Text>
+                  </Group>
+                  <Text size="sm" fw={600} c="red">
+                    {formatCurrency(entry.amount)}
+                  </Text>
+                </Group>
+                {baseRequirement && baseRequirement.extraDays && baseRequirement.extraDays.length > 0 && (
+                  <Text size="xs" c="dimmed">
+                    Extra days:{' '}
+                    {baseRequirement.extraDays
+                      .map((day: string) => dayjs(day).format('MMM D'))
+                      .join(', ')}
+                  </Text>
+                )}
+                {requiresMonthlyRangeHint && (
+                  <Text size="xs" c="dimmed">
+                    Switch to a full monthly range to approve these extra days.
+                  </Text>
+                )}
+                {canApproveBaseOverride && (
+                  <Group justify="flex-end">
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      loading={Boolean(pendingBaseOverride)}
+                      onClick={() => staff && options?.onApproveBaseOverride?.(staff)}
+                    >
+                      Approve extra base days
+                    </Button>
+                  </Group>
+                )}
+              </Stack>
+            );
+          })}
         </Stack>
       )}
     </Stack>
@@ -749,11 +809,16 @@ const renderBucketTotals = (
             lockedList.length > 0
               ? Array.from(
                   new Set(
-                    lockedList.map((entry) => {
-                      const requirement = entry.requirement;
-                      const current = requirement.actualReviews;
-                      return `(needs ${requirement.minReviews} reviews, current ${current})`;
-                    }),
+                    lockedList
+                      .map((entry) => {
+                        const requirement = entry.requirement;
+                        if (requirement?.type !== 'review_target') {
+                          return null;
+                        }
+                        const current = requirement.actualReviews ?? 0;
+                        return `(needs ${requirement.minReviews} reviews, current ${current})`;
+                      })
+                      .filter((value): value is string => Boolean(value)),
                   ),
                 ).join(' • ')
               : null;
@@ -983,7 +1048,10 @@ const renderProductTotals = (
                         <Text size="xs" c="red" fw={600}>
                           Locked incentives
                         </Text>
-                        {lockedForProduct.map((entry, lockedIdx) => (
+                        {lockedForProduct.map((entry, lockedIdx) => {
+                          const requirement = entry.requirement;
+                          const reviewRequirement = requirement?.type === 'review_target' ? requirement : null;
+                          return (
                           <Group key={`${entry.componentId}-locked-${lockedIdx}`} justify="space-between">
                             <Group gap={6}>
                               <Badge size="xs" variant="light" color="red">
@@ -991,17 +1059,18 @@ const renderProductTotals = (
                               </Badge>
                               <Text size="sm">
                                 {entry.name}{' '}
-                                <Text component="span" size="xs" c="dimmed">
-                                  (needs {entry.requirement.minReviews} reviews, current{' '}
-                                  {entry.requirement.actualReviews})
-                                </Text>
+                                {reviewRequirement && (
+                                  <Text component="span" size="xs" c="dimmed">
+                                    (needs {reviewRequirement.minReviews} reviews, current {reviewRequirement.actualReviews})
+                                  </Text>
+                                )}
                               </Text>
                             </Group>
                             <Text size="sm" fw={600} c="red">
                               {formatCurrency(entry.amount)}
                             </Text>
                           </Group>
-                        ))}
+                        )})}
                       </Stack>
                     )}
                   </Stack>
@@ -1046,6 +1115,8 @@ const Pays: React.FC = () => {
   const [entryModal, setEntryModal] = useState<EntryModalState>(createEmptyEntryModalState());
   const [entryMessage, setEntryMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [entrySubmitting, setEntrySubmitting] = useState(false);
+  const [actionAlert, setActionAlert] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [baseOverridePending, setBaseOverridePending] = useState<Set<number>>(new Set());
   const friendlyError = error ? humanizeErrorMessage(error) : null;
   const currencyLabel = (entryModal.currency || DEFAULT_CURRENCY).toUpperCase();
 
@@ -1211,6 +1282,73 @@ const resolveStaffCounterpartyDefaults = useCallback(
       });
     },
     [financeVendorsById],
+  );
+
+  const updateBaseOverridePending = useCallback((userId: number, active: boolean) => {
+    setBaseOverridePending((prev) => {
+      const next = new Set(prev);
+      if (active) {
+        next.add(userId);
+      } else {
+        next.delete(userId);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleApproveBaseOverride = useCallback(
+    async (staff: Pay) => {
+      if (!staff.userId) {
+        setActionAlert({ type: 'error', text: 'Unable to approve base override without a staff member.' });
+        return;
+      }
+      if (staff.rangeIsCanonical === false) {
+        setActionAlert({
+          type: 'error',
+          text: 'Switch to a full monthly range before approving extra base days.',
+        });
+        return;
+      }
+      const resolvedStart =
+        staff.range?.startDate ?? startDate?.startOf('month').format('YYYY-MM-DD') ?? null;
+      if (!resolvedStart) {
+        setActionAlert({ type: 'error', text: 'Unable to determine the approval period.' });
+        return;
+      }
+      const periodStart = dayjs(resolvedStart).startOf('month').format('YYYY-MM-DD');
+      updateBaseOverridePending(staff.userId, true);
+      setActionAlert(null);
+      try {
+        await updateReviewMonthlyApproval(staff.userId, {
+          periodStart,
+          baseOverrideApproved: true,
+        });
+        const refetchStart =
+          startDate?.format('YYYY-MM-DD') ?? staff.range?.startDate ?? periodStart;
+        const refetchEnd =
+          endDate?.format('YYYY-MM-DD') ?? staff.range?.endDate ?? periodStart;
+        await dispatch(
+          fetchPays({
+            startDate: refetchStart,
+            endDate: refetchEnd,
+            scope: scopeParam,
+          }),
+        );
+        setActionAlert({
+          type: 'success',
+          text: `Approved extra base days for ${staff.firstName ?? 'this staff member'}.`,
+        });
+      } catch (approvalError) {
+        const message =
+          approvalError instanceof Error
+            ? approvalError.message
+            : 'Failed to approve extra base days.';
+        setActionAlert({ type: 'error', text: message });
+      } finally {
+        updateBaseOverridePending(staff.userId, false);
+      }
+    },
+    [dispatch, endDate, scopeParam, startDate, updateBaseOverridePending],
   );
 
   const updateLines = useCallback((updater: (lines: EntryPaymentLine[]) => EntryPaymentLine[]) => {
@@ -1912,6 +2050,8 @@ const renderLedgerSnapshot = (staff: Pay) => {
                   item.platformGuestBreakdowns,
                   item.platformGuestTotals,
                   item.lockedComponents,
+                  item,
+                  { onApproveBaseOverride: handleApproveBaseOverride, pendingUserIds: baseOverridePending },
                 )}
                 {renderBucketTotals(item.bucketTotals, item.lockedComponents)}
               </Stack>
@@ -2010,6 +2150,8 @@ const renderLedgerSnapshot = (staff: Pay) => {
                             item.platformGuestBreakdowns,
                             item.platformGuestTotals,
                             item.lockedComponents,
+                            item,
+                            { onApproveBaseOverride: handleApproveBaseOverride, pendingUserIds: baseOverridePending },
                           )}
                           {renderProductTotals(item.productTotals, item.componentTotals, item.lockedComponents)}
                           {item.breakdown.length > 0 &&
@@ -2128,6 +2270,11 @@ const renderLedgerSnapshot = (staff: Pay) => {
                       Details: {friendlyError.details}
                     </Text>
                   )}
+                </Alert>
+              )}
+              {actionAlert && (
+                <Alert color={actionAlert.type === 'error' ? 'red' : 'teal'} title="Staff payouts" variant="light">
+                  <Text size="sm">{actionAlert.text}</Text>
                 </Alert>
               )}
 

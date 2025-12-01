@@ -18,13 +18,22 @@ export type PayComponentSummary = {
   baseDays?: string[];
 };
 
-export type LockedComponentRequirement = {
-  type: 'review_target';
-  minReviews: number;
-  actualReviews: number;
-  missingReviews?: number;
-  totalEligibleReviews?: number;
-};
+export type LockedComponentRequirement =
+  | {
+      type: 'review_target';
+      minReviews: number;
+      actualReviews: number;
+      missingReviews?: number;
+      totalEligibleReviews?: number;
+    }
+  | {
+      type: 'base_override';
+      allowedUnits: number;
+      workedUnits: number;
+      extraUnits: number;
+      extraAmount: number;
+      extraDays?: string[];
+    };
 
 export type LockedComponentSummary = {
   componentId: number;

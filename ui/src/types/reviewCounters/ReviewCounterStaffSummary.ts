@@ -27,6 +27,7 @@ export type ReviewCounterStaffRow = {
   canApproveIncentive: boolean;
   paymentApproval: ReviewCounterMonthlyApprovalStatus;
   incentiveApproval: ReviewCounterMonthlyApprovalStatus;
+  baseOverrideApproval: ReviewCounterMonthlyApprovalStatus;
   platforms: ReviewCounterPlatformSummary[];
   reviewComponents: ReviewCompensationComponent[];
 };
