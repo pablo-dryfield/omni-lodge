@@ -1223,11 +1223,10 @@ type StaffBucket = {
     }
     const componentRequirement = readMinReviewsFromConfig(assignment.component.config ?? null);
     const assignmentRequirement = readMinReviewsFromConfig(assignment.config ?? null);
-    const hasRequirement = Boolean(componentRequirement || assignmentRequirement);
-    if (!hasRequirement) {
-      return false;
+    if (assignment.component.category === 'review') {
+      return true;
     }
-    return assignment.component.category !== 'review';
+    return Boolean(componentRequirement || assignmentRequirement);
   };
 
   const userShiftRoleMap = new Map<number, Set<number>>();

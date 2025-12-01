@@ -176,7 +176,8 @@ type CommissionSummary = {
   counterIncentiveMarkers: Record<string, string[]>;
   counterIncentiveTotals: Record<string, number>;
   reviewTotals: ReviewTotals;
-  reviewIncentiveOverride: boolean;
+  reviewPaymentOverride: boolean;
+  incentiveOverride: boolean;
   platformGuestTotals: PlatformGuestTotals;
   platformGuestBreakdowns: Record<number, PlatformGuestTierBreakdown[]>;
   lockedComponents: LockedComponentEntry[];
@@ -1769,25 +1770,31 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       }
     }
 
+    const paymentOverrideUsers = new Set<number>();
     const incentiveOverrideUsers = new Set<number>();
     if (summaryUserIds.length > 0 && approvalPeriodStarts.length > 0) {
       const approvals = await ReviewCounterMonthlyApproval.findAll({
         where: {
           userId: { [Op.in]: summaryUserIds },
           periodStart: { [Op.in]: approvalPeriodStarts },
-          incentiveApproved: true,
         },
-        attributes: ["userId"],
+        attributes: ["userId", "paymentApproved", "incentiveApproved"],
       });
       approvals.forEach((approval) => {
         if (approval.userId != null) {
-          incentiveOverrideUsers.add(approval.userId);
+          if (approval.paymentApproved) {
+            paymentOverrideUsers.add(approval.userId);
+          }
+          if (approval.incentiveApproved) {
+            incentiveOverrideUsers.add(approval.userId);
+          }
         }
       });
     }
 
     commissionDataByUser.forEach((summary, userId) => {
-      summary.reviewIncentiveOverride = incentiveOverrideUsers.has(userId);
+      summary.reviewPaymentOverride = paymentOverrideUsers.has(userId);
+      summary.incentiveOverride = incentiveOverrideUsers.has(userId);
     });
 
     const assignmentTargets = await resolveAssignmentTargets(commissionDataByUser, typedComponents);
@@ -3223,7 +3230,8 @@ const createEmptySummary = (userId: number, firstName: string, lastName = ""): C
   counterIncentiveMarkers: {},
   counterIncentiveTotals: {},
   reviewTotals: { totalEligibleReviews: 0, totalTrackedReviews: 0 },
-  reviewIncentiveOverride: false,
+  reviewPaymentOverride: false,
+  incentiveOverride: false,
   platformGuestTotals: { totalGuests: 0, totalBooked: 0, totalAttended: 0 },
   platformGuestBreakdowns: {},
   lockedComponents: [],
@@ -3590,8 +3598,10 @@ const computeAssignmentAmount = (
     if (!amount) {
       return { amount: 0 };
     }
+    const hasOverride =
+      component.category === "review" ? summary.reviewPaymentOverride : summary.incentiveOverride;
     if (reviewRequirement && totalEligibleReviews < reviewRequirement.minReviews) {
-      if (summary.reviewIncentiveOverride) {
+      if (hasOverride) {
         return { amount, baseDaysCount, baseDays };
       }
       recordLockedComponent(summary, component, amount, {
@@ -4787,8 +4797,12 @@ const resolveReviewTargetRequirement = (
   const componentRequirement = normalizeReviewRequirementConfig(component.config ?? {});
   const assignmentRequirement = normalizeReviewRequirementConfig(assignment.config ?? {});
 
-  const minReviews =
+  let minReviews =
     assignmentRequirement.minReviews ?? componentRequirement.minReviews ?? null;
+
+  if ((minReviews === null || minReviews <= 0) && component.category === "review") {
+    minReviews = REVIEW_MINIMUM_THRESHOLD;
+  }
 
   if (minReviews === null || minReviews <= 0) {
     return null;
