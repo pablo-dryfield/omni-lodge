@@ -4,6 +4,7 @@ import {
   BelongsTo,
   Column,
   DataType,
+  Default,
   ForeignKey,
   Model,
   PrimaryKey,
@@ -59,6 +60,20 @@ export default class ReviewCounterMonthlyApproval extends Model {
   @Column({ field: 'incentive_approved_at', type: DataType.DATE })
   declare incentiveApprovedAt: Date | null;
 
+  @AllowNull(false)
+  @Default(false)
+  @Column({ field: 'base_override_approved', type: DataType.BOOLEAN })
+  declare baseOverrideApproved: boolean;
+
+  @ForeignKey(() => User)
+  @AllowNull(true)
+  @Column({ field: 'base_override_approved_by', type: DataType.INTEGER })
+  declare baseOverrideApprovedBy: number | null;
+
+  @AllowNull(true)
+  @Column({ field: 'base_override_approved_at', type: DataType.DATE })
+  declare baseOverrideApprovedAt: Date | null;
+
   declare subjectUser?: NonAttribute<User | null>;
   @BelongsTo(() => User, { foreignKey: 'user_id' })
   declare subjectUserRef?: NonAttribute<User | null>;
@@ -70,4 +85,8 @@ export default class ReviewCounterMonthlyApproval extends Model {
   declare incentiveApprovedByUser?: NonAttribute<User | null>;
   @BelongsTo(() => User, { foreignKey: 'incentive_approved_by' })
   declare incentiveApprovedByUserRef?: NonAttribute<User | null>;
+
+  declare baseOverrideApprovedByUser?: NonAttribute<User | null>;
+  @BelongsTo(() => User, { foreignKey: 'base_override_approved_by' })
+  declare baseOverrideApprovedByUserRef?: NonAttribute<User | null>;
 }

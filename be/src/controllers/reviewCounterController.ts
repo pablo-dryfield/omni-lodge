@@ -92,6 +92,7 @@ type StaffMonthlySummary = {
   canApproveIncentive: boolean;
   paymentApproval: MonthlyApprovalStatus;
   incentiveApproval: MonthlyApprovalStatus;
+  baseOverrideApproval: MonthlyApprovalStatus;
   platforms: StaffPlatformSummary[];
   reviewComponents: StaffReviewComponentSummary[];
 };
@@ -924,7 +925,7 @@ export const getReviewCounterAnalytics = async (req: Request, res: Response): Pr
 
 const formatApprovalStatus = (
   record: ReviewCounterMonthlyApproval | undefined,
-  mode: 'payment' | 'incentive',
+  mode: 'payment' | 'incentive' | 'base',
 ): MonthlyApprovalStatus => {
   if (!record) {
     return { approved: false, approvedAt: null, approvedByName: null };
@@ -939,12 +940,22 @@ const formatApprovalStatus = (
           : null,
     };
   }
+  if (mode === 'incentive') {
+    return {
+      approved: Boolean(record.incentiveApproved),
+      approvedAt: record.incentiveApproved && record.incentiveApprovedAt ? dayjs(record.incentiveApprovedAt).toISOString() : null,
+      approvedByName:
+        record.incentiveApproved && record.incentiveApprovedByUser
+          ? formatUserDisplayName(record.incentiveApprovedByUser)
+          : null,
+    };
+  }
   return {
-    approved: Boolean(record.incentiveApproved),
-    approvedAt: record.incentiveApproved && record.incentiveApprovedAt ? dayjs(record.incentiveApprovedAt).toISOString() : null,
+    approved: Boolean(record.baseOverrideApproved),
+    approvedAt: record.baseOverrideApproved && record.baseOverrideApprovedAt ? dayjs(record.baseOverrideApprovedAt).toISOString() : null,
     approvedByName:
-      record.incentiveApproved && record.incentiveApprovedByUser
-        ? formatUserDisplayName(record.incentiveApprovedByUser)
+      record.baseOverrideApproved && record.baseOverrideApprovedByUser
+        ? formatUserDisplayName(record.baseOverrideApprovedByUser)
         : null,
   };
 };
@@ -1030,6 +1041,7 @@ type StaffBucket = {
         include: [
           { model: User, as: 'paymentApprovedByUser', attributes: ['id', 'firstName', 'lastName'] },
           { model: User, as: 'incentiveApprovedByUser', attributes: ['id', 'firstName', 'lastName'] },
+          { model: User, as: 'baseOverrideApprovedByUser', attributes: ['id', 'firstName', 'lastName'] },
         ],
       })
     : [];
@@ -1346,6 +1358,7 @@ type StaffBucket = {
         canApproveIncentive,
         paymentApproval: formatApprovalStatus(approvalRecord, 'payment'),
         incentiveApproval: formatApprovalStatus(approvalRecord, 'incentive'),
+        baseOverrideApproval: formatApprovalStatus(approvalRecord, 'base'),
         platforms: bucket.platforms,
         reviewComponents,
       };
@@ -1401,8 +1414,12 @@ export const updateReviewCounterMonthlyApproval = async (
       parsePeriodInput(req.body?.startDate) ??
       dayjs().startOf('month');
     const period = rawPeriod.startOf('month');
-    const { paymentApproved, incentiveApproved, componentId } = req.body ?? {};
-    if (typeof paymentApproved !== 'boolean' && typeof incentiveApproved !== 'boolean') {
+    const { paymentApproved, incentiveApproved, componentId, baseOverrideApproved } = req.body ?? {};
+    if (
+      typeof paymentApproved !== 'boolean' &&
+      typeof incentiveApproved !== 'boolean' &&
+      typeof baseOverrideApproved !== 'boolean'
+    ) {
       res.status(400).json([{ message: 'Provide paymentApproved or incentiveApproved flags to update' }]);
       return;
     }
@@ -1438,6 +1455,11 @@ export const updateReviewCounterMonthlyApproval = async (
       nextValues.incentiveApprovedAt = incentiveApproved ? now : null;
       nextValues.incentiveApprovedBy = incentiveApproved ? actorId : null;
     }
+    if (typeof baseOverrideApproved === 'boolean') {
+      nextValues.baseOverrideApproved = baseOverrideApproved;
+      nextValues.baseOverrideApprovedAt = baseOverrideApproved ? now : null;
+      nextValues.baseOverrideApprovedBy = baseOverrideApproved ? actorId : null;
+    }
 
     if (existing) {
       await existing.update(nextValues);
@@ -1451,6 +1473,9 @@ export const updateReviewCounterMonthlyApproval = async (
         incentiveApproved: typeof incentiveApproved === 'boolean' ? incentiveApproved : false,
         incentiveApprovedAt: typeof incentiveApproved === 'boolean' && incentiveApproved ? now : null,
         incentiveApprovedBy: typeof incentiveApproved === 'boolean' && incentiveApproved ? actorId : null,
+        baseOverrideApproved: typeof baseOverrideApproved === 'boolean' ? baseOverrideApproved : false,
+        baseOverrideApprovedAt: typeof baseOverrideApproved === 'boolean' && baseOverrideApproved ? now : null,
+        baseOverrideApprovedBy: typeof baseOverrideApproved === 'boolean' && baseOverrideApproved ? actorId : null,
       });
     }
 

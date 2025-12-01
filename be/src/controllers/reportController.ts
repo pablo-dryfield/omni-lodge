@@ -104,13 +104,22 @@ type MonthlyBaseSettings =
       monthlyCap?: number;
     };
 
-type LockedComponentRequirement = {
-  type: "review_target";
-  minReviews: number;
-  actualReviews: number;
-  missingReviews?: number;
-  totalEligibleReviews?: number;
-};
+type LockedComponentRequirement =
+  | {
+      type: "review_target";
+      minReviews: number;
+      actualReviews: number;
+      missingReviews?: number;
+      totalEligibleReviews?: number;
+    }
+  | {
+      type: "base_override";
+      allowedUnits: number;
+      workedUnits: number;
+      extraUnits: number;
+      extraAmount: number;
+      extraDays?: string[];
+    };
 
 type LockedComponentEntry = {
   componentId: number;
@@ -178,6 +187,7 @@ type CommissionSummary = {
   reviewTotals: ReviewTotals;
   reviewPaymentOverride: boolean;
   incentiveOverride: boolean;
+  baseOverrideApproved: boolean;
   platformGuestTotals: PlatformGuestTotals;
   platformGuestBreakdowns: Record<number, PlatformGuestTierBreakdown[]>;
   lockedComponents: LockedComponentEntry[];
@@ -1772,13 +1782,14 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
 
     const paymentOverrideUsers = new Set<number>();
     const incentiveOverrideUsers = new Set<number>();
+    const baseOverrideUsers = new Set<number>();
     if (summaryUserIds.length > 0 && approvalPeriodStarts.length > 0) {
       const approvals = await ReviewCounterMonthlyApproval.findAll({
         where: {
           userId: { [Op.in]: summaryUserIds },
           periodStart: { [Op.in]: approvalPeriodStarts },
         },
-        attributes: ["userId", "paymentApproved", "incentiveApproved"],
+        attributes: ["userId", "paymentApproved", "incentiveApproved", "baseOverrideApproved"],
       });
       approvals.forEach((approval) => {
         if (approval.userId != null) {
@@ -1788,6 +1799,9 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           if (approval.incentiveApproved) {
             incentiveOverrideUsers.add(approval.userId);
           }
+          if (approval.baseOverrideApproved) {
+            baseOverrideUsers.add(approval.userId);
+          }
         }
       });
     }
@@ -1795,6 +1809,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     commissionDataByUser.forEach((summary, userId) => {
       summary.reviewPaymentOverride = paymentOverrideUsers.has(userId);
       summary.incentiveOverride = incentiveOverrideUsers.has(userId);
+      summary.baseOverrideApproved = baseOverrideUsers.has(userId);
     });
 
     const assignmentTargets = await resolveAssignmentTargets(commissionDataByUser, typedComponents);
@@ -3232,6 +3247,7 @@ const createEmptySummary = (userId: number, firstName: string, lastName = ""): C
   reviewTotals: { totalEligibleReviews: 0, totalTrackedReviews: 0 },
   reviewPaymentOverride: false,
   incentiveOverride: false,
+  baseOverrideApproved: false,
   platformGuestTotals: { totalGuests: 0, totalBooked: 0, totalAttended: 0 },
   platformGuestBreakdowns: {},
   lockedComponents: [],
@@ -3657,14 +3673,44 @@ const computeAssignmentAmount = (
     return applyReviewRequirement(proratedAmount, creditedUnits, creditedDates);
   }
   if (component.calculationMethod === "per_unit" && monthlyBaseSettings?.mode === "shift_quota") {
-    const { amount, creditedUnits, creditedDates } = computeShiftQuotaBaseAmount(
+    const {
+      amount,
+      creditedUnits,
+      creditedDates,
+      lockedExtraAmount,
+      lockedExtraUnits,
+      lockedExtraDates,
+    } = computeShiftQuotaBaseAmount(
       assignment,
       monthlyBaseSettings,
       summary,
       rangeStart,
       rangeEnd,
     );
-    return applyReviewRequirement(amount, creditedUnits, creditedDates);
+    let baseAmount = amount;
+    let baseUnits = creditedUnits;
+    let baseDates = creditedDates;
+    if (lockedExtraAmount > 0) {
+      if (summary.baseOverrideApproved) {
+        baseAmount += lockedExtraAmount;
+        baseUnits += lockedExtraUnits;
+        if (lockedExtraDates.length > 0) {
+          baseDates = [...new Set([...baseDates, ...lockedExtraDates])].sort((a, b) =>
+            a < b ? -1 : a > b ? 1 : 0,
+          );
+        }
+      } else {
+        recordLockedComponent(summary, component, lockedExtraAmount, {
+          type: "base_override",
+          allowedUnits: creditedUnits,
+          workedUnits: creditedUnits + lockedExtraUnits,
+          extraUnits: lockedExtraUnits,
+          extraAmount: lockedExtraAmount,
+          extraDays: lockedExtraDates,
+        });
+      }
+    }
+    return applyReviewRequirement(baseAmount, baseUnits, baseDates);
   }
 
   const baseAmount = Number(assignment.baseAmount ?? 0);
@@ -5144,19 +5190,29 @@ const computeShiftQuotaBaseAmount = (
   summary: CommissionSummary,
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
-): { amount: number; creditedUnits: number; creditedDates: string[] } => {
+): {
+  amount: number;
+  creditedUnits: number;
+  creditedDates: string[];
+  lockedExtraAmount: number;
+  lockedExtraUnits: number;
+  lockedExtraDates: string[];
+} => {
   const unitAmount = settings.unitAmountOverride ?? Number(assignment.unitAmount ?? 0);
   if (!Number.isFinite(unitAmount) || unitAmount === 0) {
-    return { amount: 0, creditedUnits: 0, creditedDates: [] };
+    return { amount: 0, creditedUnits: 0, creditedDates: [], lockedExtraAmount: 0, lockedExtraUnits: 0, lockedExtraDates: [] };
   }
   const overlap = getAssignmentOverlapRange(assignment, rangeStart, rangeEnd);
   if (!overlap) {
-    return { amount: 0, creditedUnits: 0, creditedDates: [] };
+    return { amount: 0, creditedUnits: 0, creditedDates: [], lockedExtraAmount: 0, lockedExtraUnits: 0, lockedExtraDates: [] };
   }
 
   let total = 0;
   let creditedUnitsTotal = 0;
   const creditedDaySet = new Set<string>();
+  let lockedExtraAmount = 0;
+  let lockedExtraUnits = 0;
+  const lockedExtraDaySet = new Set<string>();
   const monthlyCap = settings.monthlyCap ?? null;
   let cursor = overlap.start.startOf("month");
   const lastMonth = overlap.end.startOf("month");
@@ -5226,6 +5282,7 @@ const computeShiftQuotaBaseAmount = (
 
     const normalizedDays = normalizeDaysForOverlap(collectRecordedDays(monthKey));
 
+    const extraUnits = Math.max(0, worked - creditedUnits);
     if (creditedUnits > 0) {
       let monthAmount = creditedUnits * unitAmount;
       if (monthlyCap !== null && monthlyCap > 0) {
@@ -5238,11 +5295,28 @@ const computeShiftQuotaBaseAmount = (
       normalizedDays.forEach((day) => creditedDaySet.add(day));
     }
 
+    if (extraUnits > 0) {
+      lockedExtraAmount += extraUnits * unitAmount;
+      lockedExtraUnits += extraUnits;
+      if (normalizedDays.length > 0) {
+        const extraDays = normalizedDays.slice(-extraUnits);
+        extraDays.forEach((day) => lockedExtraDaySet.add(day));
+      }
+    }
+
     cursor = cursor.add(1, "month");
   }
 
   const creditedDates = Array.from(creditedDaySet).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return { amount: total, creditedUnits: creditedUnitsTotal, creditedDates };
+  const lockedExtraDates = Array.from(lockedExtraDaySet).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return {
+    amount: total,
+    creditedUnits: creditedUnitsTotal,
+    creditedDates,
+    lockedExtraAmount,
+    lockedExtraUnits,
+    lockedExtraDates,
+  };
 };
 
 const THIRTY_ONE_DAY_MONTHS = [0, 2, 4, 6, 7, 9, 11];
