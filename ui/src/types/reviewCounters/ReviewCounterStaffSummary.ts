@@ -3,8 +3,6 @@ export type ReviewCounterPlatformSummary = {
   platform: string;
   rawCount: number;
   roundedCount: number;
-  needsMinimum: boolean;
-  underMinimumApproved: boolean;
 };
 
 export type ReviewCounterMonthlyApprovalStatus = {
@@ -13,20 +11,24 @@ export type ReviewCounterMonthlyApprovalStatus = {
   approvedByName: string | null;
 };
 
+export type ReviewCompensationComponent = {
+  componentId: number;
+  name: string;
+  scope: string;
+};
+
 export type ReviewCounterStaffRow = {
   userId: number;
   displayName: string;
   totalReviews: number;
   totalRoundedReviews: number;
   needsMinimum: boolean;
-  pendingPlatformApprovals: boolean;
-  allPlatformsApproved: boolean;
   eligibleForIncentive: boolean;
-  canApprovePayment: boolean;
   canApproveIncentive: boolean;
   paymentApproval: ReviewCounterMonthlyApprovalStatus;
   incentiveApproval: ReviewCounterMonthlyApprovalStatus;
   platforms: ReviewCounterPlatformSummary[];
+  reviewComponents: ReviewCompensationComponent[];
 };
 
 export type ReviewCounterStaffSummary = {

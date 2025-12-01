@@ -4,9 +4,11 @@ import dayjs from 'dayjs';
 import ReviewCounter from '../models/ReviewCounter.js';
 import ReviewCounterEntry, { type ReviewCounterEntryCategory } from '../models/ReviewCounterEntry.js';
 import ReviewCounterMonthlyApproval from '../models/ReviewCounterMonthlyApproval.js';
-import CompensationComponentAssignment from '../models/CompensationComponentAssignment.js';
+import CompensationComponentAssignment, { type CompensationTargetScope } from '../models/CompensationComponentAssignment.js';
 import CompensationComponent from '../models/CompensationComponent.js';
+import StaffProfile from '../models/StaffProfile.js';
 import User from '../models/User.js';
+import UserShiftRole from '../models/UserShiftRole.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 
 const REVIEW_COUNTER_COLUMNS = [
@@ -62,8 +64,6 @@ type StaffPlatformSummary = {
   platform: string;
   rawCount: number;
   roundedCount: number;
-  needsMinimum: boolean;
-  underMinimumApproved: boolean;
 };
 
 type MonthlyApprovalStatus = {
@@ -72,20 +72,28 @@ type MonthlyApprovalStatus = {
   approvedByName: string | null;
 };
 
+type ReviewRequirementConfig = {
+  minReviews: number;
+};
+
+type StaffReviewComponentSummary = {
+  componentId: number;
+  name: string;
+  scope: CompensationTargetScope;
+};
+
 type StaffMonthlySummary = {
   userId: number;
   displayName: string;
   totalReviews: number;
   totalRoundedReviews: number;
   needsMinimum: boolean;
-  pendingPlatformApprovals: boolean;
-  allPlatformsApproved: boolean;
   eligibleForIncentive: boolean;
-  canApprovePayment: boolean;
   canApproveIncentive: boolean;
   paymentApproval: MonthlyApprovalStatus;
   incentiveApproval: MonthlyApprovalStatus;
   platforms: StaffPlatformSummary[];
+  reviewComponents: StaffReviewComponentSummary[];
 };
 
 type StaffSummaryPayload = {
@@ -184,6 +192,36 @@ const toNumber = (value: unknown): number => {
   }
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : 0;
+};
+
+const readMinReviewsFromConfig = (config: unknown): ReviewRequirementConfig | null => {
+  if (!config || typeof config !== 'object') {
+    return null;
+  }
+  const record = config as Record<string, unknown>;
+  const candidate =
+    typeof record.requiresReviewTarget === 'object'
+      ? (record.requiresReviewTarget as Record<string, unknown>)
+      : typeof record.requires_review_target === 'object'
+      ? (record.requires_review_target as Record<string, unknown>)
+      : record;
+  if (!candidate || typeof candidate !== 'object') {
+    return null;
+  }
+  const rawValue =
+    candidate.minReviews ??
+    candidate.min_reviews ??
+    candidate.minimumReviews ??
+    candidate.minimum_reviews ??
+    null;
+  if (rawValue == null) {
+    return null;
+  }
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return null;
+  }
+  return { minReviews: Math.max(1, Math.floor(numeric)) };
 };
 
 const roundReviewCredit = (rawValue: number): number => {
@@ -941,7 +979,6 @@ type StaffBucket = {
   displayName: string;
   userTypeId: number | null;
   totalReviews: number;
-  totalRoundedReviews: number;
   platforms: StaffPlatformSummary[];
 };
 
@@ -962,7 +999,6 @@ type StaffBucket = {
             displayName: formatUserDisplayName(entry.user ?? null, entry.displayName),
             userTypeId: entry.user?.userTypeId ?? null,
             totalReviews: 0,
-            totalRoundedReviews: 0,
             platforms: [],
           };
           staffMap.set(entry.userId!, nextBucket);
@@ -974,14 +1010,11 @@ type StaffBucket = {
       }
 
       bucket.totalReviews += amount;
-      bucket.totalRoundedReviews += roundedAmount;
       bucket.platforms.push({
         counterId: entry.counterId,
         platform: counter.platform,
         rawCount: amount,
         roundedCount: roundedAmount,
-        needsMinimum: amount < MINIMUM_REVIEWS_FOR_PAYMENT,
-        underMinimumApproved: Boolean(entry.underMinimumApproved),
       });
     });
   });
@@ -1027,14 +1060,31 @@ type StaffBucket = {
             as: 'component',
             required: true,
             where: {
-              category: 'review',
               isActive: true,
             },
-            attributes: ['id'],
+            attributes: ['id', 'name', 'slug', 'config', 'category'],
           },
         ],
       })
     : [];
+
+  const staffProfiles =
+    userIds.length === 0
+      ? []
+      : await StaffProfile.findAll({
+          where: {
+            userId: { [Op.in]: userIds },
+            active: true,
+          },
+          attributes: ['userId', 'staffType'],
+        });
+
+  const staffTypeByUserId = new Map<number, StaffProfile['staffType']>();
+  staffProfiles.forEach((profile) => {
+    if (profile.staffType) {
+      staffTypeByUserId.set(profile.userId, profile.staffType);
+    }
+  });
 
   const userTypeAssignments = userTypeIds.length
     ? await CompensationComponentAssignment.findAll({
@@ -1049,61 +1099,256 @@ type StaffBucket = {
             as: 'component',
             required: true,
             where: {
-              category: 'review',
               isActive: true,
             },
-            attributes: ['id'],
+            attributes: ['id', 'name', 'slug', 'config', 'category'],
           },
         ],
       })
     : [];
 
-  const incentiveEligible = new Set<number>();
-  userAssignments.forEach((assignment) => {
-    if (assignment.userId != null) {
-      incentiveEligible.add(assignment.userId);
-    }
-  });
-  if (userTypeAssignments.length > 0) {
-    const eligibleTypes = new Set(
-      userTypeAssignments
-        .map((assignment) => assignment.userTypeId)
+  const staffTypes = Array.from(new Set(staffProfiles.map((profile) => profile.staffType).filter((value): value is StaffProfile['staffType'] => Boolean(value))));
+
+  const staffTypeAssignments = staffTypes.length
+    ? await CompensationComponentAssignment.findAll({
+        where: {
+          targetScope: 'staff_type',
+          staffType: { [Op.in]: staffTypes },
+          isActive: true,
+        },
+        include: [
+          {
+            model: CompensationComponent,
+            as: 'component',
+            required: true,
+            where: {
+              isActive: true,
+            },
+            attributes: ['id', 'name', 'slug', 'config', 'category'],
+          },
+        ],
+      })
+    : [];
+
+  const userShiftRoles =
+    userIds.length === 0
+      ? []
+      : await UserShiftRole.findAll({
+          where: { userId: { [Op.in]: userIds } },
+          attributes: ['userId', 'shiftRoleId'],
+        });
+
+  const shiftRoleIds = Array.from(
+    new Set(
+      userShiftRoles
+        .map((record) => record.shiftRoleId)
         .filter((value): value is number => value != null),
-    );
-    staffMap.forEach((bucket) => {
-      if (bucket.userTypeId != null && eligibleTypes.has(bucket.userTypeId)) {
-        incentiveEligible.add(bucket.userId);
+    ),
+  );
+
+  const shiftRoleAssignments = shiftRoleIds.length
+    ? await CompensationComponentAssignment.findAll({
+        where: {
+          targetScope: 'shift_role',
+          shiftRoleId: { [Op.in]: shiftRoleIds },
+          isActive: true,
+        },
+        include: [
+          {
+            model: CompensationComponent,
+            as: 'component',
+            required: true,
+            where: {
+              isActive: true,
+            },
+            attributes: ['id', 'name', 'slug', 'config', 'category'],
+          },
+        ],
+      })
+    : [];
+
+  const globalAssignments = await CompensationComponentAssignment.findAll({
+    where: {
+      targetScope: 'global',
+      isActive: true,
+    },
+    include: [
+      {
+        model: CompensationComponent,
+        as: 'component',
+        required: true,
+        where: {
+          isActive: true,
+        },
+        attributes: ['id', 'name', 'slug', 'config', 'category'],
+      },
+    ],
+  });
+
+  const buildComponentSummary = (
+    assignment: CompensationComponentAssignment,
+  ): StaffReviewComponentSummary | null => {
+    const componentId = assignment.component?.id ?? assignment.componentId;
+    if (!componentId) {
+      return null;
+    }
+    return {
+      componentId,
+      name: assignment.component?.name ?? `Component #${componentId}`,
+      scope: assignment.targetScope,
+    };
+  };
+
+  const addComponentToCollection = <T>(
+    collection: Map<T, Map<number, StaffReviewComponentSummary>>,
+    key: T | null | undefined,
+    summary: StaffReviewComponentSummary,
+  ) => {
+    if (key == null) {
+      return;
+    }
+    const existing = collection.get(key);
+    if (existing) {
+      existing.set(summary.componentId, summary);
+      return;
+    }
+    const next = new Map<number, StaffReviewComponentSummary>();
+    next.set(summary.componentId, summary);
+    collection.set(key, next);
+  };
+
+  const assignmentRequiresReviews = (assignment: CompensationComponentAssignment): boolean => {
+    if (!assignment.component) {
+      return false;
+    }
+    const componentRequirement = readMinReviewsFromConfig(assignment.component.config ?? null);
+    const assignmentRequirement = readMinReviewsFromConfig(assignment.config ?? null);
+    const hasRequirement = Boolean(componentRequirement || assignmentRequirement);
+    if (!hasRequirement) {
+      return false;
+    }
+    return assignment.component.category !== 'review';
+  };
+
+  const userShiftRoleMap = new Map<number, Set<number>>();
+  userShiftRoles.forEach((record) => {
+    if (record.userId == null || record.shiftRoleId == null) {
+      return;
+    }
+    const current = userShiftRoleMap.get(record.userId) ?? new Set<number>();
+    current.add(record.shiftRoleId);
+    userShiftRoleMap.set(record.userId, current);
+  });
+
+  const reviewComponentsByUser = new Map<number, Map<number, StaffReviewComponentSummary>>();
+  userAssignments.forEach((assignment) => {
+    if (!assignmentRequiresReviews(assignment)) {
+      return;
+    }
+    const summary = buildComponentSummary(assignment);
+    if (!summary) {
+      return;
+    }
+    addComponentToCollection(reviewComponentsByUser, assignment.userId, summary);
+  });
+
+  const reviewComponentsByUserType = new Map<number, Map<number, StaffReviewComponentSummary>>();
+  userTypeAssignments.forEach((assignment) => {
+    if (!assignmentRequiresReviews(assignment)) {
+      return;
+    }
+    const summary = buildComponentSummary(assignment);
+    if (!summary) {
+      return;
+    }
+    addComponentToCollection(reviewComponentsByUserType, assignment.userTypeId, summary);
+  });
+
+  const reviewComponentsByStaffType = new Map<
+    StaffProfile['staffType'],
+    Map<number, StaffReviewComponentSummary>
+  >();
+  staffTypeAssignments.forEach((assignment) => {
+    if (!assignmentRequiresReviews(assignment)) {
+      return;
+    }
+    const summary = buildComponentSummary(assignment);
+    if (!summary) {
+      return;
+    }
+    addComponentToCollection(reviewComponentsByStaffType, assignment.staffType, summary);
+  });
+
+  const reviewComponentsByShiftRole = new Map<number, Map<number, StaffReviewComponentSummary>>();
+  shiftRoleAssignments.forEach((assignment) => {
+    if (!assignmentRequiresReviews(assignment)) {
+      return;
+    }
+    const summary = buildComponentSummary(assignment);
+    if (!summary) {
+      return;
+    }
+    addComponentToCollection(reviewComponentsByShiftRole, assignment.shiftRoleId ?? null, summary);
+  });
+
+  const globalReviewComponents = globalAssignments
+    .map((assignment) => {
+      if (!assignmentRequiresReviews(assignment)) {
+        return null;
       }
+      return buildComponentSummary(assignment);
+    })
+    .filter((value): value is StaffReviewComponentSummary => value != null);
+
+  const collectReviewComponentsForBucket = (bucket: StaffBucket) => {
+    const aggregated = new Map<number, StaffReviewComponentSummary>();
+    const merge = (source?: Map<number, StaffReviewComponentSummary>) => {
+      if (!source) {
+        return;
+      }
+      source.forEach((value, key) => aggregated.set(key, value));
+    };
+    globalReviewComponents.forEach((component) => {
+      aggregated.set(component.componentId, component);
     });
-  }
+    merge(reviewComponentsByUser.get(bucket.userId));
+    if (bucket.userTypeId != null) {
+      merge(reviewComponentsByUserType.get(bucket.userTypeId));
+    }
+    const staffType = staffTypeByUserId.get(bucket.userId);
+    if (staffType) {
+      merge(reviewComponentsByStaffType.get(staffType));
+    }
+    const shiftRoleIdsForUser = userShiftRoleMap.get(bucket.userId);
+    if (shiftRoleIdsForUser && shiftRoleIdsForUser.size > 0) {
+      shiftRoleIdsForUser.forEach((shiftRoleId) => {
+        merge(reviewComponentsByShiftRole.get(shiftRoleId));
+      });
+    }
+    return Array.from(aggregated.values()).sort((a, b) => a.name.localeCompare(b.name));
+  };
 
   const staff: StaffMonthlySummary[] = Array.from(staffMap.values())
     .map((bucket) => {
       bucket.platforms.sort((a, b) => a.platform.localeCompare(b.platform) || a.counterId - b.counterId);
       const needsMinimum = bucket.totalReviews < MINIMUM_REVIEWS_FOR_PAYMENT;
-      const pendingPlatforms = bucket.platforms.some((platform) => platform.needsMinimum && !platform.underMinimumApproved);
-      const allPlatformsApproved = bucket.platforms.every((platform) => !platform.needsMinimum || platform.underMinimumApproved);
-      const canApprovePayment = true;
-      const eligibleForIncentive = incentiveEligible.has(bucket.userId);
+      const reviewComponents = collectReviewComponentsForBucket(bucket);
+      const eligibleForIncentive = reviewComponents.length > 0;
       const approvalRecord = approvalMap.get(bucket.userId);
-      const canApproveIncentive =
-        eligibleForIncentive &&
-        (bucket.totalReviews >= MINIMUM_REVIEWS_FOR_PAYMENT || Boolean(approvalRecord?.paymentApproved));
+      const canApproveIncentive = eligibleForIncentive;
 
       return {
         userId: bucket.userId,
         displayName: bucket.displayName,
         totalReviews: bucket.totalReviews,
-        totalRoundedReviews: bucket.totalRoundedReviews,
+        totalRoundedReviews: roundReviewCredit(bucket.totalReviews),
         needsMinimum,
-        pendingPlatformApprovals: pendingPlatforms,
-        allPlatformsApproved,
         eligibleForIncentive,
-        canApprovePayment,
         canApproveIncentive,
         paymentApproval: formatApprovalStatus(approvalRecord, 'payment'),
         incentiveApproval: formatApprovalStatus(approvalRecord, 'incentive'),
         platforms: bucket.platforms,
+        reviewComponents,
       };
     })
     .sort((a, b) => {
@@ -1119,43 +1364,6 @@ type StaffBucket = {
     minimumReviews: MINIMUM_REVIEWS_FOR_PAYMENT,
     staff,
   };
-};
-
-const autoApprovePlatformEntries = async ({
-  userId,
-  periodStart,
-  periodEnd,
-  actorId,
-}: {
-  userId: number;
-  periodStart: string;
-  periodEnd: string;
-  actorId: number;
-}) => {
-  const counters = await ReviewCounter.findAll({
-    attributes: ['id'],
-    where: {
-      periodStart: { [Op.between]: [periodStart, periodEnd] },
-    },
-  });
-  const counterIds = counters.map((counter) => counter.id);
-  if (counterIds.length === 0) {
-    return;
-  }
-  await ReviewCounterEntry.update(
-    {
-      underMinimumApproved: true,
-      underMinimumApprovedBy: actorId,
-    },
-    {
-      where: {
-        counterId: { [Op.in]: counterIds },
-        userId,
-        category: 'staff',
-        underMinimumApproved: false,
-      },
-    },
-  );
 };
 
 export const getReviewCounterStaffSummary = async (req: Request, res: Response): Promise<void> => {
@@ -1194,13 +1402,12 @@ export const updateReviewCounterMonthlyApproval = async (
       parsePeriodInput(req.body?.startDate) ??
       dayjs().startOf('month');
     const period = rawPeriod.startOf('month');
-    const { paymentApproved, incentiveApproved } = req.body ?? {};
+    const { paymentApproved, incentiveApproved, componentId } = req.body ?? {};
     if (typeof paymentApproved !== 'boolean' && typeof incentiveApproved !== 'boolean') {
       res.status(400).json([{ message: 'Provide paymentApproved or incentiveApproved flags to update' }]);
       return;
     }
 
-    const periodEndValue = period.endOf('month').format('YYYY-MM-DD');
     const summary = await buildStaffSummaryForPeriod(period);
     const staffRecord = summary.staff.find((entry) => entry.userId === userId);
     if (!staffRecord) {
@@ -1217,19 +1424,15 @@ export const updateReviewCounterMonthlyApproval = async (
     const now = new Date();
     const existing = await ReviewCounterMonthlyApproval.findOne({ where: { userId, periodStart } });
 
+    if (typeof componentId === 'number' && incentiveApproved === true) {
+      console.info('Review component approval requested', { userId, componentId, periodStart });
+    }
+
     const nextValues: Partial<ReviewCounterMonthlyApproval> = {};
     if (typeof paymentApproved === 'boolean') {
       nextValues.paymentApproved = paymentApproved;
       nextValues.paymentApprovedAt = paymentApproved ? now : null;
       nextValues.paymentApprovedBy = paymentApproved ? actorId : null;
-      if (paymentApproved) {
-        await autoApprovePlatformEntries({
-          userId,
-          periodStart,
-          periodEnd: periodEndValue,
-          actorId,
-        });
-      }
     }
     if (typeof incentiveApproved === 'boolean') {
       nextValues.incentiveApproved = incentiveApproved;
@@ -1260,14 +1463,29 @@ export const updateReviewCounterMonthlyApproval = async (
   }
 };
 const createDefaultEntriesForCounter = async (counterId: number, actorId: number | null) => {
-  const activeUsers = await User.findAll({
-    where: { status: true },
-    attributes: ['id', 'firstName', 'lastName'],
-    order: [
-      ['firstName', 'ASC'],
-      ['lastName', 'ASC'],
-    ],
+  const roleAssignments = await UserShiftRole.findAll({
+    attributes: ['userId'],
+    raw: true,
   });
+  const roleUserIds = Array.from(
+    new Set(
+      roleAssignments
+        .map((assignment: { userId?: number | null }) => assignment.userId)
+        .filter((userId): userId is number => typeof userId === 'number'),
+    ),
+  );
+
+  const activeUsers =
+    roleUserIds.length === 0
+      ? []
+      : await User.findAll({
+          where: { status: true, id: { [Op.in]: roleUserIds } },
+          attributes: ['id', 'firstName', 'lastName'],
+          order: [
+            ['firstName', 'ASC'],
+            ['lastName', 'ASC'],
+          ],
+        });
 
   const buildDisplayName = (user: { firstName?: string | null; lastName?: string | null; id: number }) => {
     const composed = `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim();
@@ -1317,4 +1535,3 @@ const createDefaultEntriesForCounter = async (counterId: number, actorId: number
     await ReviewCounterEntry.bulkCreate(entryPayloads);
   }
 };
-

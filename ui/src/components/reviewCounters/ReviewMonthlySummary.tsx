@@ -112,18 +112,30 @@ const ReviewMonthlySummary = () => {
     });
   }, []);
 
-  const handleApprovalClick = async (row: ReviewCounterStaffRow, type: 'payment' | 'incentive') => {
+  const handleApprovalClick = async (
+    row: ReviewCounterStaffRow,
+    type: 'payment' | 'incentive',
+    options?: { componentId?: number; actionKey?: string },
+  ) => {
     if (!summary) {
       return;
     }
-    const key = `${row.userId}:${type}`;
+    const key = options?.actionKey ?? `${row.userId}:${type}`;
     setActionState(key, true);
     setError(null);
     try {
-      const payload =
+      const payload: {
+        periodStart: string;
+        paymentApproved?: boolean;
+        incentiveApproved?: boolean;
+        componentId?: number;
+      } =
         type === 'payment'
           ? { periodStart: summary.periodStart, paymentApproved: true }
           : { periodStart: summary.periodStart, incentiveApproved: true };
+      if (options?.componentId != null) {
+        payload.componentId = options.componentId;
+      }
       const updated = await updateReviewMonthlyApproval(row.userId, payload);
       setSummary(updated);
     } catch (err) {
@@ -131,6 +143,16 @@ const ReviewMonthlySummary = () => {
     } finally {
       setActionState(key, false);
     }
+  };
+
+  const handleComponentApprovalClick = (
+    row: ReviewCounterStaffRow,
+    component: ReviewCounterStaffRow['reviewComponents'][number],
+  ) => {
+    handleApprovalClick(row, 'incentive', {
+      componentId: component.componentId,
+      actionKey: `${row.userId}:component:${component.componentId}`,
+    });
   };
 
   const emptyState = useMemo(() => {
@@ -158,19 +180,17 @@ const ReviewMonthlySummary = () => {
     <Stack gap={4}>
       {row.platforms.map((platform) => (
         <Group key={`${row.userId}-${platform.counterId}`} justify="space-between">
-          <Group gap={6}>
-            <Text size="sm" fw={500}>
-              {platform.platform}
+          <Text size="sm" fw={500}>
+            {platform.platform}
+          </Text>
+          <Stack gap={0} align="flex-end">
+            <Badge color="teal" variant="light">
+              {platform.rawCount.toFixed(2)} reviews
+            </Badge>
+            <Text size="xs" c="dimmed">
+              Rounded: {platform.roundedCount.toFixed(0)}
             </Text>
-            {platform.needsMinimum && (
-              <Badge color={platform.underMinimumApproved ? 'yellow' : 'red'} variant="light">
-                {platform.underMinimumApproved ? 'Approved under 15' : 'Needs approval'}
-              </Badge>
-            )}
-          </Group>
-          <Badge color={platform.needsMinimum ? 'gray' : 'teal'} variant="light">
-            {platform.rawCount.toFixed(2)} reviews
-          </Badge>
+          </Stack>
         </Group>
       ))}
     </Stack>
@@ -222,12 +242,11 @@ const ReviewMonthlySummary = () => {
     );
   };
 
-  const renderIncentiveCell = (row: ReviewCounterStaffRow) => {
-    const actionKey = `${row.userId}:incentive`;
-    if (!row.eligibleForIncentive) {
+  const renderCompensationComponentsCell = (row: ReviewCounterStaffRow) => {
+    if (row.reviewComponents.length === 0) {
       return (
         <Text size="xs" c="dimmed">
-          No incentive component
+          No review-based compensation components
         </Text>
       );
     }
@@ -235,32 +254,41 @@ const ReviewMonthlySummary = () => {
       return (
         <Stack gap={4}>
           <Badge color="blue" variant="light">
-            Incentive approved
+            Compensation approved
           </Badge>
           {row.incentiveApproval.approvedByName && (
             <Text size="xs" c="dimmed">
               by {row.incentiveApproval.approvedByName}
             </Text>
           )}
+          <Stack gap={2}>
+            {row.reviewComponents.map((component) => (
+              <Text key={`${row.userId}-${component.componentId}`} size="xs" c="dimmed">
+                {component.name}
+              </Text>
+            ))}
+          </Stack>
         </Stack>
       );
     }
     return (
-      <Stack gap={4}>
-        <Button
-          size="xs"
-          variant="light"
-          onClick={() => handleApprovalClick(row, 'incentive')}
-          disabled={!row.canApproveIncentive || pendingActions.has(actionKey)}
-          loading={pendingActions.has(actionKey)}
-        >
-          Approve for Incentives
-        </Button>
-        {!row.canApproveIncentive && (
-          <Text size="xs" c="dimmed">
-            Complete review payment approval first
-          </Text>
-        )}
+      <Stack gap="xs">
+        {row.reviewComponents.map((component) => {
+          const actionKey = `${row.userId}:component:${component.componentId}`;
+          const isPending = pendingActions.has(actionKey);
+          return (
+            <Button
+              key={`${row.userId}-${component.componentId}`}
+              size="xs"
+              variant="light"
+              onClick={() => handleComponentApprovalClick(row, component)}
+              disabled={isPending}
+              loading={isPending}
+            >
+              Approve for {component.name} Payment
+            </Button>
+          );
+        })}
       </Stack>
     );
   };
@@ -325,7 +353,7 @@ const ReviewMonthlySummary = () => {
                 <Table.Th>Total Reviews</Table.Th>
                 <Table.Th>Platforms</Table.Th>
                 <Table.Th>Review Payment</Table.Th>
-                <Table.Th>Incentives</Table.Th>
+                <Table.Th>Compensation Components</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -343,11 +371,6 @@ const ReviewMonthlySummary = () => {
                           Meets minimum
                         </Badge>
                       )}
-                      {row.pendingPlatformApprovals && (
-                        <Text size="xs" c="dimmed">
-                          Awaiting platform approvals
-                        </Text>
-                      )}
                     </Stack>
                   </Table.Td>
                   <Table.Td>
@@ -360,7 +383,7 @@ const ReviewMonthlySummary = () => {
                   </Table.Td>
                   <Table.Td>{renderPlatformBadges(row)}</Table.Td>
                   <Table.Td>{renderPaymentCell(row)}</Table.Td>
-                  <Table.Td>{renderIncentiveCell(row)}</Table.Td>
+                  <Table.Td>{renderCompensationComponentsCell(row)}</Table.Td>
                 </Table.Tr>
               ))}
             </Table.Tbody>

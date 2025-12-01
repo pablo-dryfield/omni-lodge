@@ -4,10 +4,8 @@ import { IconMinus, IconPlus, IconRefresh } from '@tabler/icons-react';
 import { useAppDispatch } from '../../store/hooks';
 import { updateReviewCounterEntry } from '../../actions/reviewCounterActions';
 import type { ReviewCounter, ReviewCounterEntry, ReviewCounterEntryPayload } from '../../types/reviewCounters/ReviewCounter';
-import { useModuleAccess } from '../../hooks/useModuleAccess';
 
 const AMOUNT_STEP = 1;
-const MINIMUM_REVIEWS_FOR_PAYMENT = 15;
 const CATEGORY_ORDER: Record<ReviewCounterEntry['category'], number> = {
   staff: 0,
   no_name: 1,
@@ -34,23 +32,17 @@ type ReviewCounterEntriesPanelProps = {
 
 const ReviewCounterEntriesPanel = ({ counter, onRefresh }: ReviewCounterEntriesPanelProps) => {
   const dispatch = useAppDispatch();
-  const moduleAccess = useModuleAccess('review-counter-management');
-  const canApproveUnderMinimum = moduleAccess.canUpdate;
 
   const [pendingValues, setPendingValues] = useState<Map<number, number>>(new Map());
-  const [pendingApprovals, setPendingApprovals] = useState<Map<number, boolean>>(new Map());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const nextValues = new Map<number, number>();
-    const nextApprovals = new Map<number, boolean>();
     (counter.entries ?? []).forEach((entry) => {
       nextValues.set(entry.id, Number(entry.rawCount) || 0);
-      nextApprovals.set(entry.id, Boolean(entry.underMinimumApproved));
     });
     setPendingValues(nextValues);
-    setPendingApprovals(nextApprovals);
   }, [counter.entries]);
 
   const originalValues = useMemo(() => {
@@ -61,16 +53,8 @@ const ReviewCounterEntriesPanel = ({ counter, onRefresh }: ReviewCounterEntriesP
     return map;
   }, [counter.entries]);
 
-  const originalApprovals = useMemo(() => {
-    const map = new Map<number, boolean>();
-    (counter.entries ?? []).forEach((entry) => {
-      map.set(entry.id, Boolean(entry.underMinimumApproved));
-    });
-    return map;
-  }, [counter.entries]);
-
   const hasChanges = useMemo(() => {
-    if (pendingValues.size !== originalValues.size || pendingApprovals.size !== originalApprovals.size) {
+    if (pendingValues.size !== originalValues.size) {
       return true;
     }
     for (const [entryId, pending] of pendingValues.entries()) {
@@ -78,14 +62,9 @@ const ReviewCounterEntriesPanel = ({ counter, onRefresh }: ReviewCounterEntriesP
       if (Math.abs(original - pending) > 1e-6) {
         return true;
       }
-      const originalApproval = originalApprovals.get(entryId) ?? false;
-      const pendingApproval = pendingApprovals.get(entryId) ?? originalApproval;
-      if (originalApproval !== pendingApproval) {
-        return true;
-      }
     }
     return false;
-  }, [pendingApprovals, pendingValues, originalApprovals, originalValues]);
+  }, [pendingValues, originalValues]);
 
   const sortedEntries = useMemo(() => {
     return [...(counter.entries ?? [])].sort((a, b) => {
@@ -97,23 +76,14 @@ const ReviewCounterEntriesPanel = ({ counter, onRefresh }: ReviewCounterEntriesP
     });
   }, [counter.entries]);
 
-  const setLocalAmount = useCallback(
-    (entry: ReviewCounterEntry, nextAmount: number) => {
-      const safeAmount = Math.max(0, nextAmount);
-      setPendingValues((prev) => {
-        const next = new Map(prev);
-        next.set(entry.id, safeAmount);
-        return next;
-      });
-      setPendingApprovals((prev) => {
-        const next = new Map(prev);
-        const currentApproval = next.get(entry.id) ?? originalApprovals.get(entry.id) ?? false;
-        next.set(entry.id, safeAmount >= MINIMUM_REVIEWS_FOR_PAYMENT ? false : currentApproval);
-        return next;
-      });
-    },
-    [originalApprovals],
-  );
+  const setLocalAmount = useCallback((entry: ReviewCounterEntry, nextAmount: number) => {
+    const safeAmount = Math.max(0, nextAmount);
+    setPendingValues((prev) => {
+      const next = new Map(prev);
+      next.set(entry.id, safeAmount);
+      return next;
+    });
+  }, []);
 
   const handleAdjustAmount = useCallback(
     (entry: ReviewCounterEntry, delta: number) => {
@@ -134,26 +104,12 @@ const ReviewCounterEntriesPanel = ({ counter, onRefresh }: ReviewCounterEntriesP
     [setLocalAmount],
   );
 
-  const handleApprovalToggle = useCallback(
-    (entryId: number, approved: boolean) => {
-      setPendingApprovals((prev) => {
-        const next = new Map(prev);
-        next.set(entryId, approved);
-        return next;
-      });
-    },
-    [],
-  );
-
   const handleReset = useCallback(() => {
     const nextValues = new Map<number, number>();
-    const nextApprovals = new Map<number, boolean>();
     (counter.entries ?? []).forEach((entry) => {
       nextValues.set(entry.id, Number(entry.rawCount) || 0);
-      nextApprovals.set(entry.id, Boolean(entry.underMinimumApproved));
     });
     setPendingValues(nextValues);
-    setPendingApprovals(nextApprovals);
     setError(null);
   }, [counter.entries]);
 
@@ -166,20 +122,12 @@ const ReviewCounterEntriesPanel = ({ counter, onRefresh }: ReviewCounterEntriesP
     try {
       for (const entry of counter.entries ?? []) {
         const pendingAmount = pendingValues.get(entry.id);
-        const pendingApproval = pendingApprovals.get(entry.id);
         const originalAmount = Number(entry.rawCount) || 0;
-        const originalApproval = Boolean(entry.underMinimumApproved);
 
         const nextAmount = pendingAmount ?? originalAmount;
-        const nextApproval =
-          nextAmount >= MINIMUM_REVIEWS_FOR_PAYMENT
-            ? false
-            : pendingApproval ?? originalApproval;
-
         const amountChanged = Math.abs(nextAmount - originalAmount) > 1e-6;
-        const approvalChanged = nextApproval !== originalApproval;
 
-        if (!amountChanged && !approvalChanged) {
+        if (!amountChanged) {
           continue;
         }
 
@@ -187,9 +135,6 @@ const ReviewCounterEntriesPanel = ({ counter, onRefresh }: ReviewCounterEntriesP
           displayName: entry.displayName,
           rawCount: nextAmount,
         };
-        if (approvalChanged) {
-          payload.underMinimumApproved = nextApproval;
-        }
 
         await dispatch(
           updateReviewCounterEntry({
@@ -206,7 +151,7 @@ const ReviewCounterEntriesPanel = ({ counter, onRefresh }: ReviewCounterEntriesP
     } finally {
       setSaving(false);
     }
-  }, [counter.entries, counter.id, dispatch, hasChanges, onRefresh, pendingApprovals, pendingValues]);
+  }, [counter.entries, counter.id, dispatch, hasChanges, onRefresh, pendingValues]);
 
   return (
     <Stack gap="sm">
@@ -236,11 +181,6 @@ const ReviewCounterEntriesPanel = ({ counter, onRefresh }: ReviewCounterEntriesP
       ) : (
         sortedEntries.map((entry) => {
           const amount = pendingValues.get(entry.id) ?? (Number(entry.rawCount) || 0);
-          const pendingApproval = pendingApprovals.get(entry.id) ?? Boolean(entry.underMinimumApproved);
-          const needsMinimum = amount < MINIMUM_REVIEWS_FOR_PAYMENT;
-          const originalApproval = Boolean(entry.underMinimumApproved);
-          const approvalChanged = pendingApproval !== originalApproval;
-          const approverName = entry.underMinimumApprovedByName ?? null;
           return (
             <Card key={entry.id} withBorder radius="md" padding="sm">
               <Stack gap="xs">
@@ -289,45 +229,6 @@ const ReviewCounterEntriesPanel = ({ counter, onRefresh }: ReviewCounterEntriesP
                     </Tooltip>
                   </Group>
                 </Group>
-                {needsMinimum && (
-                  <Group gap="xs" align="center">
-                    <Badge color={pendingApproval ? 'teal' : 'red'} variant="light">
-                      {pendingApproval ? 'Approved under 15 reviews' : 'Needs 15 reviews or approval'}
-                    </Badge>
-                    {pendingApproval && !approvalChanged && (
-                      <Text size="xs" c="dimmed">
-                        {approverName ? `Approved by ${approverName}` : 'Awaiting approver details'}
-                      </Text>
-                    )}
-                    {approvalChanged && (
-                      <Badge size="xs" color="yellow" variant="light">
-                        Save changes to update approval
-                      </Badge>
-                    )}
-                    {canApproveUnderMinimum &&
-                      (pendingApproval ? (
-                        <Button
-                          size="xs"
-                          variant="outline"
-                          color="red"
-                          disabled={saving}
-                          onClick={() => handleApprovalToggle(entry.id, false)}
-                        >
-                          Revoke approval
-                        </Button>
-                      ) : (
-                        <Button
-                          size="xs"
-                          variant="outline"
-                          color="green"
-                          disabled={saving}
-                          onClick={() => handleApprovalToggle(entry.id, true)}
-                        >
-                          Approve under 15
-                        </Button>
-                      ))}
-                  </Group>
-                )}
               </Stack>
             </Card>
           );
