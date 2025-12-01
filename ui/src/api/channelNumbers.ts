@@ -10,3 +10,15 @@ export const fetchChannelNumbersSummary = async (params: {
   });
   return response.data;
 };
+
+export const recordChannelCashCollection = async (payload: {
+  channelId: number;
+  currency: string;
+  amount: number;
+  rangeStart: string;
+  rangeEnd: string;
+  financeTransactionId?: number | null;
+  note?: string | null;
+}): Promise<void> => {
+  await axiosInstance.post('/channelNumbers/cash-collections', payload, { withCredentials: true });
+};
