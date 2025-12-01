@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import { Op } from 'sequelize';
+import { Op, fn, col } from 'sequelize';
 
 import CounterChannelMetric from '../models/CounterChannelMetric.js';
 import Counter from '../models/Counter.js';
@@ -10,6 +10,8 @@ import ProductAddon from '../models/ProductAddon.js';
 import Product from '../models/Product.js';
 import ProductType from '../models/ProductType.js';
 import HttpError from '../errors/HttpError.js';
+import ChannelCashCollectionLog from '../models/ChannelCashCollectionLog.js';
+import FinanceTransaction from '../finance/models/FinanceTransaction.js';
 import {
   computeSummary,
   type AddonConfig,
@@ -33,6 +35,517 @@ const CHANNEL_ORDER = [
   'XperiencePoland',
   'TopDeck',
 ];
+
+const CASH_SNAPSHOT_START = '-- CASH-SNAPSHOT START --';
+const CASH_SNAPSHOT_END = '-- CASH-SNAPSHOT END --';
+const FREE_SNAPSHOT_START = '-- FREE-SNAPSHOT START --';
+const FREE_SNAPSHOT_END = '-- FREE-SNAPSHOT END --';
+const WALK_IN_CHANNEL_SLUG = 'walk-in';
+
+type CashSnapshotTicketCurrency = {
+  currency: string;
+  people: number;
+  cash: number;
+  addons: Record<string, number>;
+};
+
+type CashSnapshotTicket = {
+  name: string;
+  currencies: CashSnapshotTicketCurrency[];
+};
+
+type CashSnapshotEntry = {
+  currency: string;
+  amount: number;
+  qty: number;
+  tickets?: CashSnapshotTicket[];
+};
+
+type ChannelCashAmount = {
+  currency: string;
+  amount: number;
+};
+
+type ChannelCashEntry = {
+  channelId: number;
+  channelName: string;
+  counterId: number;
+  counterDate: string;
+  ticketSummary: string | null;
+  note: string | null;
+  amounts: ChannelCashAmount[];
+};
+
+type ChannelCashRow = {
+  channelId: number;
+  channelName: string;
+  currency: string;
+  dueAmount: number;
+  collectedAmount: number;
+  outstandingAmount: number;
+};
+
+type ChannelCashSummary = {
+  rangeIsCanonical: boolean;
+  channels: ChannelCashRow[];
+  entries: ChannelCashEntry[];
+  totals: Array<{
+    currency: string;
+    dueAmount: number;
+    collectedAmount: number;
+    outstandingAmount: number;
+  }>;
+};
+
+const isCashCurrency = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0;
+
+const sanitizeCurrency = (value: string | null | undefined): string =>
+  (value ?? 'PLN').trim().toUpperCase().slice(0, 3) || 'PLN';
+
+const extractCashSnapshotMap = (note: string | null | undefined): Map<number, CashSnapshotEntry> => {
+  const entries = new Map<number, CashSnapshotEntry>();
+  if (!note) {
+    return entries;
+  }
+  const startIndex = note.indexOf(CASH_SNAPSHOT_START);
+  if (startIndex === -1) {
+    return entries;
+  }
+  const endIndex = note.indexOf(CASH_SNAPSHOT_END, startIndex + CASH_SNAPSHOT_START.length);
+  if (endIndex === -1) {
+    return entries;
+  }
+  const snapshotRaw = note.slice(startIndex + CASH_SNAPSHOT_START.length, endIndex).trim();
+  if (!snapshotRaw) {
+    return entries;
+  }
+  try {
+    const parsed = JSON.parse(snapshotRaw) as {
+      channels?: Record<
+        string,
+        {
+          currency?: unknown;
+          amount?: unknown;
+          qty?: unknown;
+          tickets?: unknown;
+        }
+      >;
+    };
+    const channels = parsed && typeof parsed === 'object' ? parsed.channels : null;
+    if (!channels || typeof channels !== 'object') {
+      return entries;
+    }
+    Object.entries(channels).forEach(([channelId, value]) => {
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+      const numericChannelId = Number(channelId);
+      if (!Number.isFinite(numericChannelId)) {
+        return;
+      }
+      const currency = sanitizeCurrency(
+        isCashCurrency((value as { currency?: unknown }).currency)
+          ? ((value as { currency?: string }).currency as string)
+          : null,
+      );
+      const numericAmount = Number((value as { amount?: unknown }).amount);
+      const normalizedAmount = Number.isFinite(numericAmount) ? Math.max(0, Number(numericAmount)) : 0;
+      const numericQty = Number((value as { qty?: unknown }).qty);
+      const normalizedQty = Number.isFinite(numericQty) && numericQty > 0 ? Math.round(numericQty) : 0;
+
+      const ticketsRaw = Array.isArray((value as { tickets?: unknown }).tickets)
+        ? ((value as { tickets?: unknown }).tickets as unknown[])
+        : [];
+      const tickets: CashSnapshotTicket[] = [];
+      ticketsRaw.forEach((ticketCandidate) => {
+        if (!ticketCandidate || typeof ticketCandidate !== 'object') {
+          return;
+        }
+        const ticketNameRaw = (ticketCandidate as { name?: unknown }).name;
+        if (typeof ticketNameRaw !== 'string' || ticketNameRaw.trim().length === 0) {
+          return;
+        }
+        const currenciesRaw = Array.isArray((ticketCandidate as { currencies?: unknown }).currencies)
+          ? ((ticketCandidate as { currencies?: unknown }).currencies as unknown[])
+          : [];
+        const currencies: CashSnapshotTicketCurrency[] = [];
+        currenciesRaw.forEach((currencyCandidate) => {
+          if (!currencyCandidate || typeof currencyCandidate !== 'object') {
+            return;
+          }
+          const currencyValue = sanitizeCurrency(
+            isCashCurrency((currencyCandidate as { currency?: unknown }).currency)
+              ? ((currencyCandidate as { currency?: string }).currency as string)
+              : null,
+          );
+          const peopleValue = Number((currencyCandidate as { people?: unknown }).people);
+          const normalizedPeople = Number.isFinite(peopleValue) ? Math.max(0, Math.round(peopleValue)) : 0;
+          const cashValue = Number((currencyCandidate as { cash?: unknown }).cash);
+          const normalizedCash = Number.isFinite(cashValue) ? Math.max(0, Number(cashValue)) : 0;
+          const addonsValue = (currencyCandidate as { addons?: unknown }).addons;
+          const addons: Record<string, number> = {};
+          if (addonsValue && typeof addonsValue === 'object') {
+            Object.entries(addonsValue as Record<string, unknown>).forEach(([addonKey, qty]) => {
+              const numericQty = Number(qty);
+              if (!Number.isFinite(numericQty)) {
+                return;
+              }
+              const normalizedAddonQty = Math.max(0, Math.round(numericQty));
+              if (normalizedAddonQty > 0) {
+                addons[addonKey] = normalizedAddonQty;
+              }
+            });
+          }
+          currencies.push({
+            currency: currencyValue,
+            people: normalizedPeople,
+            cash: normalizedCash,
+            addons,
+          });
+        });
+        if (currencies.length === 0) {
+          return;
+        }
+        tickets.push({
+          name: ticketNameRaw.trim(),
+          currencies,
+        });
+      });
+
+      entries.set(numericChannelId, {
+        currency,
+        amount: normalizedAmount,
+        qty: normalizedQty,
+        tickets: tickets.length > 0 ? tickets : undefined,
+      });
+    });
+  } catch {
+    return entries;
+  }
+
+  return entries;
+};
+
+const stripSnapshotFromNote = (note: string | null | undefined): string => {
+  if (!note) {
+    return '';
+  }
+  const escapedCashStart = CASH_SNAPSHOT_START.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+  const escapedCashEnd = CASH_SNAPSHOT_END.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+  const escapedFreeStart = FREE_SNAPSHOT_START.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+  const escapedFreeEnd = FREE_SNAPSHOT_END.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+  const stripBlock = (input: string, start: string, end: string) => {
+    const pattern = new RegExp(`${start}[\\s\\S]*?${end}`, 'g');
+    return input.replace(pattern, '');
+  };
+  const filteredLines: string[] = [];
+  let skippingSnapshot = false;
+  note.split('\n').forEach((line) => {
+    const trimmed = line.trim();
+    if (trimmed === CASH_SNAPSHOT_START || trimmed === FREE_SNAPSHOT_START) {
+      skippingSnapshot = true;
+      return;
+    }
+    if (trimmed === CASH_SNAPSHOT_END || trimmed === FREE_SNAPSHOT_END) {
+      skippingSnapshot = false;
+      return;
+    }
+    if (skippingSnapshot || !trimmed) {
+      return;
+    }
+    const lower = trimmed.toLowerCase();
+    if (lower.startsWith('walk-in tickets:') || lower.startsWith('cash collected:')) {
+      return;
+    }
+    filteredLines.push(line.trimEnd());
+  });
+
+  let sanitized = filteredLines.join('\n').trim();
+  sanitized = stripBlock(sanitized, escapedCashStart, escapedCashEnd);
+  sanitized = stripBlock(sanitized, escapedFreeStart, escapedFreeEnd);
+  return sanitized.trim();
+};
+
+const aggregateCashTotals = (entry: CashSnapshotEntry): Map<string, number> => {
+  const totals = new Map<string, number>();
+  if (entry.tickets && entry.tickets.length > 0) {
+    entry.tickets.forEach((ticket) => {
+      ticket.currencies.forEach((currencyEntry) => {
+        const amount = Number(currencyEntry.cash);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return;
+        }
+        const currency = sanitizeCurrency(currencyEntry.currency);
+        totals.set(currency, (totals.get(currency) ?? 0) + amount);
+      });
+    });
+  }
+  if ((!entry.tickets || entry.tickets.length === 0) && entry.amount > 0) {
+    const currency = sanitizeCurrency(entry.currency);
+    totals.set(currency, (totals.get(currency) ?? 0) + entry.amount);
+  }
+  return totals;
+};
+
+const buildTicketSummary = (entry: CashSnapshotEntry, channelName: string): string | null => {
+  if (!entry.tickets || entry.tickets.length === 0) {
+    return null;
+  }
+  const parts = entry.tickets
+    .map((ticket) => {
+      const name = ticket.name?.trim() || channelName;
+      const currencyParts = ticket.currencies
+        .map((currencyEntry) => {
+          const amount = Number(currencyEntry.cash);
+          const people = Number(currencyEntry.people);
+          if (!Number.isFinite(amount) || amount <= 0) {
+            return null;
+          }
+          const formattedAmount = amount.toFixed(2);
+          if (Number.isFinite(people) && people > 0) {
+            return `${currencyEntry.currency} ${formattedAmount} (${Math.round(people)} ppl)`;
+          }
+          return `${currencyEntry.currency} ${formattedAmount}`;
+        })
+        .filter((value): value is string => Boolean(value));
+      if (currencyParts.length === 0) {
+        return null;
+      }
+      return `${name}: ${currencyParts.join(', ')}`;
+    })
+    .filter((value): value is string => Boolean(value));
+
+  if (parts.length === 0) {
+    return null;
+  }
+  return parts.join(' | ');
+};
+
+const roundCurrencyValue = (value: number): number => Math.round(Number(value ?? 0) * 100) / 100;
+
+async function buildChannelCashSummary(params: {
+  counters: Array<{ id: number; date: string; notes: string | null }>;
+  metrics: MetricCell[];
+  channels: ChannelConfig[];
+  startIso: string;
+  endIso: string;
+  rangeIsCanonical: boolean;
+}): Promise<ChannelCashSummary> {
+  const { counters, metrics, channels, startIso, endIso, rangeIsCanonical } = params;
+
+  const channelLookup = new Map<number, ChannelConfig>();
+  channels.forEach((channel) => channelLookup.set(channel.id, channel));
+  const cashEligibleChannels = new Set(
+    channels.filter((channel) => channel.cashPaymentEligible).map((channel) => channel.id),
+  );
+
+  const cashMetricsByCounterChannel = new Map<string, number>();
+  metrics.forEach((metric) => {
+    if (metric.kind !== 'cash_payment' || metric.tallyType !== 'attended') {
+      return;
+    }
+    const key = `${metric.counterId}|${metric.channelId}`;
+    const normalizedQty = Number(metric.qty);
+    if (!Number.isFinite(normalizedQty) || normalizedQty <= 0) {
+      return;
+    }
+    cashMetricsByCounterChannel.set(key, roundCurrencyValue(normalizedQty));
+  });
+
+  const processedPairs = new Set<string>();
+  const entries: ChannelCashEntry[] = [];
+  const channelTotals = new Map<string, ChannelCashRow>();
+
+  counters.forEach((counter) => {
+    const snapshotMap = extractCashSnapshotMap(counter.notes);
+    const noteText = stripSnapshotFromNote(counter.notes);
+
+    snapshotMap.forEach((snapshotEntry, channelId) => {
+      if (!cashEligibleChannels.has(channelId)) {
+        return;
+      }
+      const channel = channelLookup.get(channelId);
+      if (!channel) {
+        return;
+      }
+      const amountsMap = aggregateCashTotals(snapshotEntry);
+      const amounts: ChannelCashAmount[] = [];
+      amountsMap.forEach((amount, currency) => {
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return;
+        }
+        amounts.push({
+          currency,
+          amount: roundCurrencyValue(amount),
+        });
+      });
+
+      if (amounts.length === 0) {
+        const metricKey = `${counter.id}|${channelId}`;
+        const fallback = cashMetricsByCounterChannel.get(metricKey);
+        if (fallback && fallback > 0) {
+          amounts.push({
+            currency: sanitizeCurrency(snapshotEntry.currency),
+            amount: roundCurrencyValue(fallback),
+          });
+          processedPairs.add(metricKey);
+        } else {
+          return;
+        }
+      }
+
+      const ticketSummary = buildTicketSummary(snapshotEntry, channel.name);
+      entries.push({
+        channelId,
+        channelName: channel.name,
+        counterId: counter.id,
+        counterDate: counter.date,
+        ticketSummary,
+        note: noteText || null,
+        amounts,
+      });
+
+      const metricKey = `${counter.id}|${channelId}`;
+      processedPairs.add(metricKey);
+
+      amounts.forEach((amount) => {
+        const currency = sanitizeCurrency(amount.currency);
+        const key = `${channelId}|${currency}`;
+        const existing =
+          channelTotals.get(key) ??
+          ({
+            channelId,
+            channelName: channel.name,
+            currency,
+            dueAmount: 0,
+            collectedAmount: 0,
+            outstandingAmount: 0,
+          } as ChannelCashRow);
+        existing.dueAmount = roundCurrencyValue(existing.dueAmount + amount.amount);
+        channelTotals.set(key, existing);
+      });
+    });
+  });
+
+  cashMetricsByCounterChannel.forEach((amount, key) => {
+    if (processedPairs.has(key)) {
+      return;
+    }
+    const [counterIdRaw, channelIdRaw] = key.split('|');
+    const channelId = Number(channelIdRaw);
+    if (!cashEligibleChannels.has(channelId)) {
+      return;
+    }
+    const channel = channelLookup.get(channelId);
+    const counter = counters.find((row) => row.id === Number(counterIdRaw));
+    if (!channel || !counter) {
+      return;
+    }
+    const normalizedAmount = roundCurrencyValue(amount);
+    if (normalizedAmount <= 0) {
+      return;
+    }
+    entries.push({
+      channelId,
+      channelName: channel.name,
+      counterId: counter.id,
+      counterDate: counter.date,
+      ticketSummary: null,
+      note: stripSnapshotFromNote(counter.notes),
+      amounts: [{ currency: 'PLN', amount: normalizedAmount }],
+    });
+    const currency = 'PLN';
+    const totalsKey = `${channelId}|${currency}`;
+    const existing =
+      channelTotals.get(totalsKey) ??
+      ({
+        channelId,
+        channelName: channel.name,
+        currency,
+        dueAmount: 0,
+        collectedAmount: 0,
+        outstandingAmount: 0,
+      } as ChannelCashRow);
+    existing.dueAmount = roundCurrencyValue(existing.dueAmount + normalizedAmount);
+    channelTotals.set(totalsKey, existing);
+  });
+
+  const collectionRows = (await ChannelCashCollectionLog.findAll({
+    attributes: [
+      'channelId',
+      'currencyCode',
+      [fn('COALESCE', fn('SUM', col('amount_minor')), 0), 'totalAmountMinor'],
+    ],
+    where: {
+      rangeStart: startIso,
+      rangeEnd: endIso,
+    },
+    group: ['channel_id', 'currency_code'],
+    raw: true,
+  })) as unknown as Array<{ channelId: number; currencyCode: string; totalAmountMinor: number }>;
+
+  collectionRows.forEach((row) => {
+    const currency = sanitizeCurrency(row.currencyCode);
+    const key = `${row.channelId}|${currency}`;
+    const entry =
+      channelTotals.get(key) ??
+      ({
+        channelId: row.channelId,
+        channelName: channelLookup.get(row.channelId)?.name ?? `Channel ${row.channelId}`,
+        currency,
+        dueAmount: 0,
+        collectedAmount: 0,
+        outstandingAmount: 0,
+      } as ChannelCashRow);
+    const collected = roundCurrencyValue((Number(row.totalAmountMinor ?? 0) || 0) / 100);
+    entry.collectedAmount = roundCurrencyValue(entry.collectedAmount + collected);
+    channelTotals.set(key, entry);
+  });
+
+  channelTotals.forEach((row) => {
+    row.outstandingAmount = roundCurrencyValue(Math.max(0, row.dueAmount - row.collectedAmount));
+  });
+
+  entries.sort((a, b) => {
+    if (a.counterDate === b.counterDate) {
+      if (a.channelName === b.channelName) {
+        return a.counterId - b.counterId;
+      }
+      return a.channelName.localeCompare(b.channelName);
+    }
+    return dayjs(a.counterDate).diff(dayjs(b.counterDate));
+  });
+
+  const totalsByCurrency = new Map<string, { due: number; collected: number }>();
+  channelTotals.forEach((row) => {
+    const entry = totalsByCurrency.get(row.currency) ?? { due: 0, collected: 0 };
+    entry.due = roundCurrencyValue(entry.due + row.dueAmount);
+    entry.collected = roundCurrencyValue(entry.collected + row.collectedAmount);
+    totalsByCurrency.set(row.currency, entry);
+  });
+
+  const totals = Array.from(totalsByCurrency.entries()).map(([currency, sums]) => ({
+    currency,
+    dueAmount: roundCurrencyValue(sums.due),
+    collectedAmount: roundCurrencyValue(sums.collected),
+    outstandingAmount: roundCurrencyValue(Math.max(0, sums.due - sums.collected)),
+  }));
+
+  const rows = Array.from(channelTotals.values()).sort((a, b) => {
+    if (a.channelName === b.channelName) {
+      return a.currency.localeCompare(b.currency);
+    }
+    return a.channelName.localeCompare(b.channelName);
+  });
+
+  return {
+    rangeIsCanonical,
+    channels: rows,
+    entries,
+    totals,
+  };
+}
 
 function normalizeDateInput(value: string | undefined, fallback: dayjs.Dayjs): dayjs.Dayjs {
   if (!value) {
@@ -183,6 +696,7 @@ export type ChannelNumbersSummary = {
     addonNonShow: Record<string, number>;
     total: number;
   };
+  cashSummary: ChannelCashSummary;
 };
 
 async function loadActiveProducts(
@@ -291,14 +805,28 @@ export async function getChannelNumbersSummary(params: {
     throw new HttpError(400, 'endDate must be on or after startDate');
   }
 
+  const startIso = start.format('YYYY-MM-DD');
+  const endIso = end.format('YYYY-MM-DD');
+  const rangeIsCanonical =
+    start.isSame(start.startOf('month'), 'day') &&
+    end.isSame(start.endOf('month'), 'day') &&
+    start.isSame(end, 'month') &&
+    start.year() === end.year();
+
   const counters = await Counter.findAll({
-    where: { date: { [Op.between]: [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')] } },
-    attributes: ['id', 'productId'],
+    where: { date: { [Op.between]: [startIso, endIso] } },
+    attributes: ['id', 'productId', 'date', 'notes'],
   });
 
   const counterProductLookup = new Map<number, number | null>();
+  const counterMeta: Array<{ id: number; date: string; notes: string | null }> = [];
   const counterIds = counters.map((counter) => {
     counterProductLookup.set(counter.id, counter.productId ?? null);
+    counterMeta.push({
+      id: counter.id,
+      date: counter.date,
+      notes: counter.notes ?? null,
+    });
     return counter.id;
   });
 
@@ -341,6 +869,12 @@ export async function getChannelNumbersSummary(params: {
           { productId: product.id, normal: 0, nonShow: 0, addons: {}, addonNonShow: {}, total: 0 },
         ]),
       );
+    const emptyCashSummary: ChannelCashSummary = {
+      rangeIsCanonical,
+      channels: [],
+      entries: [],
+      totals: [],
+    };
     return {
       startDate: start.format('YYYY-MM-DD'),
       endDate: end.format('YYYY-MM-DD'),
@@ -365,6 +899,7 @@ export async function getChannelNumbersSummary(params: {
         addonNonShow: Object.fromEntries(addonConfigs.map((addon) => [addon.key, 0])),
         total: 0,
       },
+      cashSummary: emptyCashSummary,
     };
   }
 
@@ -534,6 +1069,15 @@ export async function getChannelNumbersSummary(params: {
     };
   });
 
+  const cashSummary = await buildChannelCashSummary({
+    counters: counterMeta,
+    metrics,
+    channels: channelConfigs,
+    startIso,
+    endIso,
+    rangeIsCanonical,
+  });
+
   return {
     startDate: start.format('YYYY-MM-DD'),
     endDate: end.format('YYYY-MM-DD'),
@@ -543,5 +1087,80 @@ export async function getChannelNumbersSummary(params: {
     productTypes,
     productTotals,
     totals,
+    cashSummary,
   };
+}
+
+export async function recordChannelCashCollection(params: {
+  channelId: number;
+  currency: string;
+  amount: number;
+  rangeStart: string;
+  rangeEnd: string;
+  financeTransactionId?: number | null;
+  note?: string | null;
+  actorId: number;
+}): Promise<ChannelCashCollectionLog> {
+  const { channelId, currency, amount, rangeStart, rangeEnd, financeTransactionId, note, actorId } = params;
+
+  if (!Number.isInteger(channelId) || channelId <= 0) {
+    throw new HttpError(400, 'channelId must be a positive integer');
+  }
+
+  const channelRecord = await Channel.findByPk(channelId, {
+    include: [{ model: PaymentMethod, as: 'paymentMethod' }],
+  });
+  if (!channelRecord) {
+    throw new HttpError(404, 'Channel not found');
+  }
+  const paymentName = channelRecord.paymentMethod?.name?.toLowerCase() ?? '';
+  if (paymentName !== 'cash') {
+    throw new HttpError(400, 'This channel is not configured for cash payments');
+  }
+
+  const normalizedCurrency = sanitizeCurrency(currency);
+  const normalizedAmount = Number(amount);
+  if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+    throw new HttpError(400, 'Amount must be greater than zero');
+  }
+  const amountMinor = Math.round(normalizedAmount * 100);
+
+  const start = dayjs(rangeStart, 'YYYY-MM-DD', true);
+  const end = dayjs(rangeEnd, 'YYYY-MM-DD', true);
+  if (!start.isValid() || !end.isValid() || end.isBefore(start)) {
+    throw new HttpError(400, 'Invalid date range supplied');
+  }
+  const rangeIsCanonical =
+    start.isSame(start.startOf('month'), 'day') &&
+    end.isSame(start.endOf('month'), 'day') &&
+    start.isSame(end, 'month') &&
+    start.year() === end.year();
+  if (!rangeIsCanonical) {
+    throw new HttpError(400, 'Collections can only be recorded for full calendar months');
+  }
+
+  let financeTransactionIdValue: number | null = null;
+  if (financeTransactionId != null) {
+    if (!Number.isInteger(financeTransactionId) || financeTransactionId <= 0) {
+      throw new HttpError(400, 'financeTransactionId must be a positive integer');
+    }
+    const transactionExists = await FinanceTransaction.count({ where: { id: financeTransactionId } });
+    if (!transactionExists) {
+      throw new HttpError(400, 'Finance transaction not found');
+    }
+    financeTransactionIdValue = financeTransactionId;
+  }
+
+  const record = await ChannelCashCollectionLog.create({
+    channelId,
+    currencyCode: normalizedCurrency,
+    amountMinor,
+    rangeStart: start.format('YYYY-MM-DD'),
+    rangeEnd: end.format('YYYY-MM-DD'),
+    financeTransactionId: financeTransactionIdValue,
+    note: note?.trim() ? note.trim() : null,
+    createdBy: actorId,
+  });
+
+  return record;
 }

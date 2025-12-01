@@ -41,6 +41,42 @@ export type ChannelProductMetrics = {
   total: number;
 };
 
+export type ChannelCashAmount = {
+  currency: string;
+  amount: number;
+};
+
+export type ChannelCashEntry = {
+  channelId: number;
+  channelName: string;
+  counterId: number;
+  counterDate: string;
+  ticketSummary: string | null;
+  note: string | null;
+  amounts: ChannelCashAmount[];
+};
+
+export type ChannelCashRow = {
+  channelId: number;
+  channelName: string;
+  currency: string;
+  dueAmount: number;
+  collectedAmount: number;
+  outstandingAmount: number;
+};
+
+export type ChannelCashSummary = {
+  rangeIsCanonical: boolean;
+  channels: ChannelCashRow[];
+  entries: ChannelCashEntry[];
+  totals: Array<{
+    currency: string;
+    dueAmount: number;
+    collectedAmount: number;
+    outstandingAmount: number;
+  }>;
+};
+
 export type ChannelNumbersSummary = {
   startDate: string;
   endDate: string;
@@ -56,4 +92,5 @@ export type ChannelNumbersSummary = {
     addonNonShow: Record<string, number>;
     total: number;
   };
+  cashSummary: ChannelCashSummary;
 };

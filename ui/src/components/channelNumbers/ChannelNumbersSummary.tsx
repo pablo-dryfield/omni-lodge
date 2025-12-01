@@ -5,25 +5,35 @@ import {
   Button,
   Group,
   LoadingOverlay,
+  Modal,
   MultiSelect,
+  NumberInput,
   Paper,
   ScrollArea,
+  Select,
   SimpleGrid,
   Stack,
   Table,
   Text,
+  Textarea,
   ThemeIcon,
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
 import { IconAlertCircle, IconChartBar, IconInfoCircle } from '@tabler/icons-react';
 import dayjs from 'dayjs';
 
-import { fetchChannelNumbersSummary } from '../../api/channelNumbers';
+import { fetchChannelNumbersSummary, recordChannelCashCollection } from '../../api/channelNumbers';
 import {
   ChannelNumbersAddon,
   ChannelNumbersSummary as ChannelNumbersSummaryType,
   ChannelProductMetrics,
+  ChannelCashRow,
+  ChannelCashEntry,
 } from '../../types/channelNumbers/ChannelNumbersSummary';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { useFinanceBootstrap } from '../../hooks/useFinanceBootstrap';
+import { selectFinanceAccounts, selectFinanceCategories, selectFinanceClients } from '../../selectors/financeSelectors';
+import { createFinanceTransaction } from '../../actions/financeActions';
 
 type Preset = 'thisMonth' | 'lastMonth' | 'custom';
 
@@ -56,6 +66,18 @@ type ProductTypeGroup = {
   products: ProductGroup[];
 };
 
+type CashModalState = {
+  open: boolean;
+  channel: ChannelCashRow | null;
+  amount: number;
+  currency: string;
+  accountId: string;
+  categoryId: string;
+  counterpartyId: string;
+  date: Date;
+  description: string;
+};
+
 const getProductColumnCount = (product: ProductGroup) =>
   product.addons.length > 0 ? product.addons.length * 2 + 2 : 2;
 
@@ -84,6 +106,11 @@ const mergeCellStyles = (...styles: Array<CSSProperties | undefined>) =>
   Object.assign({}, CELL_BORDER_STYLE, ...styles.filter(Boolean));
 
 const ChannelNumbersSummary = () => {
+  const dispatch = useAppDispatch();
+  useFinanceBootstrap();
+  const accountsState = useAppSelector(selectFinanceAccounts);
+  const categoriesState = useAppSelector(selectFinanceCategories);
+  const clientsState = useAppSelector(selectFinanceClients);
   const [preset, setPreset] = useState<Preset>('thisMonth');
   const [range, setRange] = useState<[Date | null, Date | null]>([
     dayjs().startOf('month').toDate(),
@@ -93,6 +120,19 @@ const ChannelNumbersSummary = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedProductTypes, setSelectedProductTypes] = useState<string[]>([]);
+  const [cashModal, setCashModal] = useState<CashModalState>({
+    open: false,
+    channel: null,
+    amount: 0,
+    currency: 'PLN',
+    accountId: '',
+    categoryId: '',
+    counterpartyId: '',
+    date: new Date(),
+    description: '',
+  });
+  const [cashSubmitting, setCashSubmitting] = useState(false);
+  const [cashMessage, setCashMessage] = useState<string | null>(null);
 
   const handlePresetChange = useCallback((value: Preset) => {
     setPreset(value);
@@ -107,43 +147,54 @@ const ChannelNumbersSummary = () => {
     }
   }, []);
 
-  useEffect(() => {
+  const fetchSummary = useCallback(async (): Promise<ChannelNumbersSummaryType | null> => {
     const [start, end] = range;
     if (!start || !end) {
-      return undefined;
+      return null;
     }
-
-    let isMounted = true;
-    setLoading(true);
-    setError(null);
-
-    fetchChannelNumbersSummary({
+    const response = await fetchChannelNumbersSummary({
       startDate: dayjs(start).format(DATE_FORMAT),
       endDate: dayjs(end).format(DATE_FORMAT),
-    })
-      .then((response) => {
-        if (!isMounted) return;
-        setSummary(response);
-      })
-      .catch((err: unknown) => {
-        if (!isMounted) return;
+    });
+    return response;
+  }, [range]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const run = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await fetchSummary();
+        if (!isMounted) {
+          return;
+        }
+        if (response) {
+          setSummary(response);
+        } else {
+          setSummary(null);
+        }
+      } catch (err) {
+        if (!isMounted) {
+          return;
+        }
         const message =
           (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
           (err as { message?: string }).message ??
           'Failed to load channel numbers';
         setError(message);
         setSummary(null);
-      })
-      .finally(() => {
+      } finally {
         if (isMounted) {
           setLoading(false);
         }
-      });
-
+      }
+    };
+    run();
     return () => {
       isMounted = false;
     };
-  }, [range]);
+  }, [fetchSummary]);
 
   const productTypeGroups = useMemo<ProductTypeGroup[]>(() => {
     if (!summary) {
@@ -242,6 +293,58 @@ const ChannelNumbersSummary = () => {
     return Array.from(names);
   }, [productTypeGroups]);
 
+  const accountOptions = useMemo(
+    () =>
+      accountsState.data
+        .filter((account) => (account.type === 'cash' || account.type === 'bank') && (account.isActive ?? true))
+        .map((account) => ({
+          value: String(account.id),
+          label: account.currency ? `${account.name} (${account.currency})` : account.name,
+        })),
+    [accountsState.data],
+  );
+
+  const incomeCategoryOptions = useMemo(
+    () =>
+      categoriesState.data
+        .filter((category) => category.kind === 'income')
+        .map((category) => ({ value: String(category.id), label: category.name })),
+    [categoriesState.data],
+  );
+
+  const clientOptions = useMemo(
+    () => clientsState.data.map((client) => ({ value: String(client.id), label: client.name })),
+    [clientsState.data],
+  );
+
+  const resolveDefaultAccountId = useCallback(
+    (currencyCode: string): string => {
+      if (!accountsState.data.length) {
+        return '';
+      }
+      const normalizedCurrency = currencyCode?.toUpperCase() || 'PLN';
+      const matchingCashAccount = accountsState.data.find(
+        (account) => account.type === 'cash' && (account.currency ?? '').toUpperCase() === normalizedCurrency,
+      );
+      if (matchingCashAccount) {
+        return String(matchingCashAccount.id);
+      }
+      const anyCash = accountsState.data.find((account) => account.type === 'cash');
+      if (anyCash) {
+        return String(anyCash.id);
+      }
+      return String(accountsState.data[0].id);
+    },
+    [accountsState.data],
+  );
+
+  const resolveDefaultCategoryId = useCallback((): string => {
+    if (!incomeCategoryOptions.length) {
+      return '';
+    }
+    return incomeCategoryOptions[0].value;
+  }, [incomeCategoryOptions]);
+
   useEffect(() => {
     if (selectableProductTypes.length === 0) {
       setSelectedProductTypes([]);
@@ -270,6 +373,12 @@ const ChannelNumbersSummary = () => {
     [visibleTypeGroups],
   );
 
+  const cashSummary = summary?.cashSummary;
+  const cashRows = cashSummary?.channels ?? [];
+  const cashEntries = cashSummary?.entries ?? [];
+  const cashTotals = cashSummary?.totals ?? [];
+  const cashRangeIsCanonical = cashSummary?.rangeIsCanonical ?? false;
+
   const numberFormatter = useMemo(
     () =>
       new Intl.NumberFormat('en-US', {
@@ -277,6 +386,115 @@ const ChannelNumbersSummary = () => {
       }),
     [],
   );
+  const formatCurrencyValue = useCallback((value: number, currency: string) => {
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: 'currency',
+        currency: currency || 'PLN',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(value || 0);
+    } catch {
+      return `${currency || 'PLN'} ${value.toFixed(2)}`;
+    }
+  }, []);
+
+  const handleOpenCashModal = useCallback(
+    (row: ChannelCashRow) => {
+      if (!summary) {
+        return;
+      }
+      const rangeLabel = `${dayjs(summary.startDate).format('MMM D, YYYY')} - ${dayjs(summary.endDate).format('MMM D, YYYY')}`;
+      setCashModal({
+        open: true,
+        channel: row,
+        amount: row.outstandingAmount > 0 ? row.outstandingAmount : row.dueAmount,
+        currency: row.currency,
+        accountId: resolveDefaultAccountId(row.currency),
+        categoryId: resolveDefaultCategoryId(),
+        counterpartyId: clientOptions[0]?.value ?? '',
+        date: new Date(),
+        description: `Cash collection for ${row.channelName} (${rangeLabel})`,
+      });
+      setCashMessage(null);
+    },
+    [clientOptions, resolveDefaultAccountId, resolveDefaultCategoryId, summary],
+  );
+
+  const handleCloseCashModal = useCallback(() => {
+    setCashModal({
+      open: false,
+      channel: null,
+      amount: 0,
+      currency: 'PLN',
+      accountId: '',
+      categoryId: '',
+      counterpartyId: '',
+      date: new Date(),
+      description: '',
+    });
+    setCashMessage(null);
+  }, []);
+
+  const handleCashSubmit = useCallback(async () => {
+    if (!summary || !cashModal.channel) {
+      setCashMessage('Select a channel entry before recording a collection.');
+      return;
+    }
+    if (
+      cashModal.amount <= 0 ||
+      !cashModal.accountId ||
+      !cashModal.categoryId ||
+      !cashModal.counterpartyId
+    ) {
+      setCashMessage('Fill in the amount, account, category, and client.');
+      return;
+    }
+    setCashSubmitting(true);
+    setCashMessage(null);
+    try {
+      const transaction = await dispatch(
+        createFinanceTransaction({
+          kind: 'income',
+          date: dayjs(cashModal.date).format('YYYY-MM-DD'),
+          accountId: Number(cashModal.accountId),
+          currency: cashModal.currency,
+          amountMinor: Math.round(cashModal.amount * 100),
+          categoryId: Number(cashModal.categoryId),
+          counterpartyType: 'client',
+          counterpartyId: Number(cashModal.counterpartyId),
+          status: 'paid',
+          description: cashModal.description || null,
+          meta: {
+            source: 'channel-numbers',
+            channelId: cashModal.channel.channelId,
+            rangeStart: summary.startDate,
+            rangeEnd: summary.endDate,
+          },
+        }),
+      ).unwrap();
+
+      await recordChannelCashCollection({
+        channelId: cashModal.channel.channelId,
+        currency: cashModal.currency,
+        amount: cashModal.amount,
+        rangeStart: summary.startDate,
+        rangeEnd: summary.endDate,
+        financeTransactionId: transaction.id,
+        note: cashModal.description,
+      });
+      handleCloseCashModal();
+      await fetchSummary();
+    } catch (err) {
+      const message =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+        (err as { message?: string }).message ??
+        'Failed to record cash collection';
+      setCashMessage(message);
+    } finally {
+      setCashSubmitting(false);
+    }
+  }, [cashModal, dispatch, fetchSummary, handleCloseCashModal, summary]);
   const renderValue = useCallback(
     (value: number) => <Text fw={value > 0 ? 600 : undefined}>{numberFormatter.format(value)}</Text>,
     [numberFormatter],
@@ -379,6 +597,128 @@ const ChannelNumbersSummary = () => {
               )}
               {renderMetricCard('Platform total', summary.totals.total, 'violet')}
             </SimpleGrid>
+            {cashSummary && (
+              <Paper withBorder p="md">
+                <Stack gap="sm">
+                  <Group justify="space-between" align="flex-end">
+                    <div>
+                      <Text fw={600}>Cash collections</Text>
+                      <Text size="sm" c="dimmed">
+                        Outstanding amounts recorded for cash payment channels
+                      </Text>
+                    </div>
+                    {!cashRangeIsCanonical && (
+                      <Text size="sm" c="red">
+                        Collections can only be recorded when viewing a full calendar month.
+                      </Text>
+                    )}
+                  </Group>
+                  {cashRows.length === 0 ? (
+                    <Text size="sm" c="dimmed">
+                      No cash activity recorded for the selected period.
+                    </Text>
+                  ) : (
+                    <ScrollArea>
+                      <Table
+                        highlightOnHover
+                        withColumnBorders
+                        horizontalSpacing="sm"
+                        verticalSpacing="xs"
+                      >
+                        <thead>
+                          <tr>
+                            <th>Channel</th>
+                            <th>Currency</th>
+                            <th>Due</th>
+                            <th>Collected</th>
+                            <th>Outstanding</th>
+                            <th>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cashRows.map((row) => {
+                            const key = `${row.channelId}-${row.currency}`;
+                            const canCollect = cashRangeIsCanonical && row.outstandingAmount > 0;
+                            return (
+                              <tr key={key}>
+                                <td>
+                                  <Text fw={600}>{row.channelName}</Text>
+                                </td>
+                                <td>{row.currency}</td>
+                                <td>{formatCurrencyValue(row.dueAmount, row.currency)}</td>
+                                <td>{formatCurrencyValue(row.collectedAmount, row.currency)}</td>
+                                <td>{formatCurrencyValue(row.outstandingAmount, row.currency)}</td>
+                                <td>
+                                  <Button
+                                    size="xs"
+                                    variant="light"
+                                    disabled={!canCollect}
+                                    onClick={() => handleOpenCashModal(row)}
+                                  >
+                                    Collect
+                                  </Button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </Table>
+                    </ScrollArea>
+                  )}
+                  {cashTotals.length > 0 && (
+                    <Group gap="lg">
+                      {cashTotals.map((total) => (
+                        <Stack gap={0} key={total.currency}>
+                          <Text size="sm" c="dimmed">
+                            {total.currency} totals
+                          </Text>
+                          <Text size="sm">
+                            Due {formatCurrencyValue(total.dueAmount, total.currency)} · Collected{' '}
+                            {formatCurrencyValue(total.collectedAmount, total.currency)} · Outstanding{' '}
+                            {formatCurrencyValue(total.outstandingAmount, total.currency)}
+                          </Text>
+                        </Stack>
+                      ))}
+                    </Group>
+                  )}
+                  {cashEntries.length > 0 && (
+                    <Stack gap="xs">
+                      <Text fw={600}>Ticket and note summary</Text>
+                      <ScrollArea h={240}>
+                        <Table striped withColumnBorders highlightOnHover horizontalSpacing="sm" verticalSpacing="xs">
+                          <thead>
+                            <tr>
+                              <th style={{ width: 140 }}>Date</th>
+                              <th style={{ width: 180 }}>Channel</th>
+                              <th>Tickets</th>
+                              <th style={{ width: 200 }}>Amounts</th>
+                              <th>Notes</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {cashEntries.map((entry: ChannelCashEntry) => (
+                              <tr key={`${entry.counterId}-${entry.channelId}`}>
+                                <td>{dayjs(entry.counterDate).format('MMM D, YYYY')}</td>
+                                <td>{entry.channelName}</td>
+                                <td>{entry.ticketSummary ?? '—'}</td>
+                                <td>
+                                  {entry.amounts.length === 0
+                                    ? '—'
+                                    : entry.amounts
+                                        .map((amount) => formatCurrencyValue(amount.amount, amount.currency))
+                                        .join(', ')}
+                                </td>
+                                <td>{entry.note ?? '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </Table>
+                      </ScrollArea>
+                    </Stack>
+                  )}
+                </Stack>
+              </Paper>
+            )}
             <ScrollArea>
               <Table
                 highlightOnHover
@@ -736,6 +1076,77 @@ const ChannelNumbersSummary = () => {
           </Stack>
         )}
       </Paper>
+      <Modal opened={cashModal.open} onClose={handleCloseCashModal} title="Record cash collection" centered>
+        <Stack gap="sm">
+          {cashModal.channel && (
+            <Stack gap={0}>
+              <Text fw={600}>{cashModal.channel.channelName}</Text>
+              <Text size="sm" c="dimmed">
+                Outstanding: {formatCurrencyValue(cashModal.channel.outstandingAmount, cashModal.currency)}
+              </Text>
+            </Stack>
+          )}
+          <NumberInput
+            label="Amount"
+            value={cashModal.amount}
+            onChange={(value) =>
+              setCashModal((prev) => ({
+                ...prev,
+                amount: typeof value === 'number' ? value : 0,
+              }))
+            }
+            min={0}
+            decimalScale={2}
+            fixedDecimalScale
+            hideControls
+          />
+          <Select
+            label="Account"
+            data={accountOptions}
+            value={cashModal.accountId}
+            onChange={(value) => setCashModal((prev) => ({ ...prev, accountId: value ?? '' }))}
+            placeholder="Select account"
+          />
+          <Select
+            label="Income category"
+            data={incomeCategoryOptions}
+            value={cashModal.categoryId}
+            onChange={(value) => setCashModal((prev) => ({ ...prev, categoryId: value ?? '' }))}
+            placeholder="Select category"
+          />
+          <Select
+            label="Client"
+            data={clientOptions}
+            value={cashModal.counterpartyId}
+            onChange={(value) => setCashModal((prev) => ({ ...prev, counterpartyId: value ?? '' }))}
+            placeholder="Select client"
+          />
+          <DatePickerInput
+            label="Date"
+            value={cashModal.date}
+            onChange={(value) => setCashModal((prev) => ({ ...prev, date: value ?? new Date() }))}
+          />
+          <Textarea
+            label="Description"
+            value={cashModal.description}
+            onChange={(event) => setCashModal((prev) => ({ ...prev, description: event.currentTarget.value }))}
+            minRows={2}
+          />
+          {cashMessage && (
+            <Alert color="red" variant="light">
+              {cashMessage}
+            </Alert>
+          )}
+          <Group justify="flex-end" gap="sm">
+            <Button variant="default" onClick={handleCloseCashModal}>
+              Cancel
+            </Button>
+            <Button onClick={handleCashSubmit} loading={cashSubmitting} disabled={!cashModal.channel}>
+              Record collection
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Stack>
   );
 };

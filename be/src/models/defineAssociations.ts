@@ -27,6 +27,7 @@ import VenueCompensationTerm from './VenueCompensationTerm.js';
 import VenueCompensationTermRate from './VenueCompensationTermRate.js';
 import VenueCompensationCollectionLog from './VenueCompensationCollectionLog.js';
 import VenueCompensationLedger from './VenueCompensationLedger.js';
+import ChannelCashCollectionLog from './ChannelCashCollectionLog.js';
 import {
   FinanceAccount,
   FinanceAuditLog,
@@ -218,6 +219,8 @@ export function defineAssociations() {
   NightReportVenue.belongsTo(VenueCompensationTerm, { foreignKey: 'compensation_term_id', as: 'compensationTermReportVenue' });
   Venue.hasMany(VenueCompensationCollectionLog, { foreignKey: 'venue_id', as: 'collectionLogs' });
   VenueCompensationCollectionLog.belongsTo(Venue, { foreignKey: 'venue_id', as: 'logVenue' });
+  Channel.hasMany(ChannelCashCollectionLog, { foreignKey: 'channel_id', as: 'cashCollectionLogs' });
+  ChannelCashCollectionLog.belongsTo(Channel, { foreignKey: 'channel_id', as: 'logChannel' });
   Venue.hasMany(VenueCompensationLedger, { foreignKey: 'venue_id', as: 'compensationLedgers' });
 
   // Finance associations
