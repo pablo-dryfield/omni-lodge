@@ -51,6 +51,7 @@ import CompensationComponent, {
   type CompensationComponentCategory,
 } from "../models/CompensationComponent.js";
 import CompensationComponentAssignment from "../models/CompensationComponentAssignment.js";
+import ReviewCounterMonthlyApproval from "../models/ReviewCounterMonthlyApproval.js";
 import AssistantManagerTaskLog, { type AssistantManagerTaskStatus } from "../models/AssistantManagerTaskLog.js";
 import { fetchLeaderNightReportStats, type NightReportStatsMap } from "../services/nightReportMetricsService.js";
 import Product from "../models/Product.js";
@@ -175,6 +176,7 @@ type CommissionSummary = {
   counterIncentiveMarkers: Record<string, string[]>;
   counterIncentiveTotals: Record<string, number>;
   reviewTotals: ReviewTotals;
+  reviewIncentiveOverride: boolean;
   platformGuestTotals: PlatformGuestTotals;
   platformGuestBreakdowns: Record<number, PlatformGuestTierBreakdown[]>;
   lockedComponents: LockedComponentEntry[];
@@ -1756,6 +1758,38 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       });
     }
 
+    const summaryUserIds = Array.from(commissionDataByUser.keys());
+    const approvalPeriodStarts: string[] = [];
+    if (summaryUserIds.length > 0) {
+      let cursor = start.startOf("month");
+      const lastPeriod = end.startOf("month");
+      while (cursor.isBefore(lastPeriod, "month") || cursor.isSame(lastPeriod, "month")) {
+        approvalPeriodStarts.push(cursor.format("YYYY-MM-DD"));
+        cursor = cursor.add(1, "month");
+      }
+    }
+
+    const incentiveOverrideUsers = new Set<number>();
+    if (summaryUserIds.length > 0 && approvalPeriodStarts.length > 0) {
+      const approvals = await ReviewCounterMonthlyApproval.findAll({
+        where: {
+          userId: { [Op.in]: summaryUserIds },
+          periodStart: { [Op.in]: approvalPeriodStarts },
+          incentiveApproved: true,
+        },
+        attributes: ["userId"],
+      });
+      approvals.forEach((approval) => {
+        if (approval.userId != null) {
+          incentiveOverrideUsers.add(approval.userId);
+        }
+      });
+    }
+
+    commissionDataByUser.forEach((summary, userId) => {
+      summary.reviewIncentiveOverride = incentiveOverrideUsers.has(userId);
+    });
+
     const assignmentTargets = await resolveAssignmentTargets(commissionDataByUser, typedComponents);
     commissionDataByUser.forEach((summary) => {
       summary.platformGuestTotals = platformGuestTotals;
@@ -1788,7 +1822,6 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       productBucketsByUser,
     );
 
-    const summaryUserIds = Array.from(commissionDataByUser.keys());
     if (summaryUserIds.length > 0) {
       const staffProfiles = await StaffProfile.findAll({
         attributes: ["userId", "financeVendorId", "financeClientId"],
@@ -3190,6 +3223,7 @@ const createEmptySummary = (userId: number, firstName: string, lastName = ""): C
   counterIncentiveMarkers: {},
   counterIncentiveTotals: {},
   reviewTotals: { totalEligibleReviews: 0, totalTrackedReviews: 0 },
+  reviewIncentiveOverride: false,
   platformGuestTotals: { totalGuests: 0, totalBooked: 0, totalAttended: 0 },
   platformGuestBreakdowns: {},
   lockedComponents: [],
@@ -3395,12 +3429,9 @@ const fetchReviewStats = async (
     if (!Number.isFinite(roundedCount) || roundedCount <= 0) {
       return;
     }
-    const approved = Boolean(entry.getDataValue("underMinimumApproved"));
     const current = stats.get(userId) ?? { totalEligibleReviews: 0, totalTrackedReviews: 0 };
     current.totalTrackedReviews += roundedCount;
-    if (roundedCount >= REVIEW_MINIMUM_THRESHOLD || approved) {
-      current.totalEligibleReviews += roundedCount;
-    }
+    current.totalEligibleReviews += roundedCount;
     stats.set(userId, current);
   });
 
@@ -3560,6 +3591,9 @@ const computeAssignmentAmount = (
       return { amount: 0 };
     }
     if (reviewRequirement && totalEligibleReviews < reviewRequirement.minReviews) {
+      if (summary.reviewIncentiveOverride) {
+        return { amount, baseDaysCount, baseDays };
+      }
       recordLockedComponent(summary, component, amount, {
         type: "review_target",
         minReviews: reviewRequirement.minReviews,
