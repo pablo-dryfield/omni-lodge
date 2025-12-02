@@ -1853,6 +1853,8 @@ const resolveStaffCounterpartyDefaults = useCallback(
         ? entryModal.reimbursementEntries.filter((entry) => entry.status === 'awaiting_reimbursement')
         : [];
     const totalReimbursementAmount = awaitingReimbursements.reduce((sum, entry) => sum + entry.amount, 0);
+    const reimbursementCategoryIdForTransaction =
+      entryModal.reimbursementCategoryId || entryModal.categoryId || selectedLines[0]?.categoryId || '';
     if (
       selectedLines.length === 0 ||
       missingCategory ||
@@ -1869,6 +1871,13 @@ const resolveStaffCounterpartyDefaults = useCallback(
       setEntryMessage({
         type: 'error',
         text: 'Select a payout account to reimburse staff expenses.',
+      });
+      return;
+    }
+    if (totalReimbursementAmount > 0 && !reimbursementCategoryIdForTransaction) {
+      setEntryMessage({
+        type: 'error',
+        text: 'Assign a finance category before reimbursing staff expenses.',
       });
       return;
     }
@@ -1927,7 +1936,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
             accountId: resolvedAccountId,
             currency: transactionCurrency,
             amountMinor: toMinorUnits(totalReimbursementAmount),
-            categoryId: Number(entryModal.reimbursementCategoryId || entryModal.categoryId),
+            categoryId: Number(reimbursementCategoryIdForTransaction),
             counterpartyType: 'vendor',
             counterpartyId: Number(entryModal.counterpartyId),
             status: 'paid',
@@ -2794,12 +2803,20 @@ const renderLedgerSnapshot = (staff: Pay) => {
                     })}
                   </Stack>
                   <Group justify="space-between">
-                    <Text size="sm" c="dimmed">
-                      Current total: {formatCurrency(entryModal.amount, entryModal.currency)}
-                    </Text>
-                    <Text size="xs" c="dimmed">
-                      Lines with blank accounts use the payout account above.
-                    </Text>
+                    <Stack gap={2}>
+                      <Text size="sm" c="dimmed">
+                        Component total: {formatCurrency(entryModal.amount, entryModal.currency)}
+                      </Text>
+                      {entryModal.includeReimbursements && reimbursementAddon > 0 && (
+                        <Text size="xs" c="dimmed">
+                          + Reimbursements {formatCurrency(reimbursementAddon, entryModal.currency)} ={' '}
+                          {formatCurrency(modalTotalAmount, entryModal.currency)}
+                        </Text>
+                      )}
+                      <Text size="xs" c="dimmed">
+                        Lines with blank accounts use the payout account above.
+                      </Text>
+                    </Stack>
                   </Group>
                 </Stack>
               </Card>
