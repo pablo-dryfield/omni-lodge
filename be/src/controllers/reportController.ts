@@ -55,6 +55,10 @@ import ReviewCounterMonthlyApproval from "../models/ReviewCounterMonthlyApproval
 import AssistantManagerTaskLog, { type AssistantManagerTaskStatus } from "../models/AssistantManagerTaskLog.js";
 import { fetchLeaderNightReportStats, type NightReportStatsMap } from "../services/nightReportMetricsService.js";
 import Product from "../models/Product.js";
+import FinanceTransaction, {
+  type FinanceTransactionStatus,
+} from "../finance/models/FinanceTransaction.js";
+import FinanceVendor from "../finance/models/FinanceVendor.js";
 
 type CommissionBreakdownEntry = {
   date: string;
@@ -171,6 +175,23 @@ type StaffPayoutReconciliation = {
   receivableOutstanding: number;
 };
 
+type ReimbursementEntry = {
+  transactionId: number;
+  date: string;
+  vendorName: string | null;
+  description: string | null;
+  amount: number;
+  originalAmount: number;
+  originalCurrency: string;
+  status: FinanceTransactionStatus;
+};
+
+type ReimbursementSummary = {
+  awaitingAmount: number;
+  reimbursedAmount: number;
+  entries: ReimbursementEntry[];
+};
+
 type CommissionSummary = {
   userId: number;
   firstName: string;
@@ -201,6 +222,7 @@ type CommissionSummary = {
   payouts: StaffPayoutReconciliation;
   openingBalance: number;
   closingBalance: number;
+  reimbursements: ReimbursementSummary;
 };
 
 type GuideDailyBreakdown = {
@@ -1908,11 +1930,11 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         collectionMap.set(staffProfileId, existing);
       });
 
-      commissionDataByUser.forEach((summary, userId) => {
-        const profile = profileByUserId.get(userId) ?? null;
-        const collection =
-          collectionMap.get(userId) ?? {
-            currency: DEFAULT_PAYOUT_CURRENCY,
+    commissionDataByUser.forEach((summary, userId) => {
+      const profile = profileByUserId.get(userId) ?? null;
+      const collection =
+        collectionMap.get(userId) ?? {
+          currency: DEFAULT_PAYOUT_CURRENCY,
             receivable: 0,
             payable: 0,
           };
@@ -1936,6 +1958,133 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         };
       });
     }
+
+    const vendorIdsByUser = new Map<number, number>();
+    commissionDataByUser.forEach((summary, userId) => {
+      const vendorId = summary.financeVendorId;
+      if (vendorId && vendorId > 0) {
+        vendorIdsByUser.set(userId, vendorId);
+      }
+    });
+
+    const reimbursementsByUserId = new Map<number, FinanceTransaction[]>();
+    const reimbursementsByVendorId = new Map<number, FinanceTransaction[]>();
+
+    if (commissionDataByUser.size > 0) {
+      const reimbursementRows = await FinanceTransaction.findAll({
+        where: {
+          status: {
+            [Op.in]: ["awaiting_reimbursement", "reimbursed"],
+          },
+          date: {
+            [Op.between]: [start.format("YYYY-MM-DD"), end.format("YYYY-MM-DD")],
+          },
+        },
+        include: [
+          {
+            model: FinanceVendor,
+            as: "vendor",
+            attributes: ["id", "name"],
+          },
+        ],
+        order: [
+          ["date", "ASC"],
+          ["id", "ASC"],
+        ],
+      });
+
+      reimbursementRows.forEach((row) => {
+        const meta = (row.meta ?? null) as Record<string, unknown> | null;
+        const paidByUserId = normalizeUserId(meta?.paidByUserId ?? meta?.staffUserId ?? null);
+        if (paidByUserId) {
+          const bucket = reimbursementsByUserId.get(paidByUserId) ?? [];
+          bucket.push(row);
+          reimbursementsByUserId.set(paidByUserId, bucket);
+          return;
+        }
+        const vendorId = row.counterpartyId;
+        if (!vendorId) {
+          return;
+        }
+        const bucket = reimbursementsByVendorId.get(vendorId) ?? [];
+        bucket.push(row);
+        reimbursementsByVendorId.set(vendorId, bucket);
+      });
+    }
+
+    const createReimbursementSummary = (rows: FinanceTransaction[]): ReimbursementSummary => {
+      const entries: ReimbursementEntry[] = rows.map((row) => {
+        const baseAmount = convertMinorUnitsToMajor(row.baseAmountMinor ?? row.amountMinor ?? 0);
+        const originalAmount = convertMinorUnitsToMajor(row.amountMinor ?? 0);
+        return {
+          transactionId: row.id,
+          date: row.date,
+          vendorName: row.vendor?.name ?? null,
+          description: row.description ?? null,
+          amount: roundCurrencyValue(baseAmount),
+          originalAmount: roundCurrencyValue(originalAmount),
+          originalCurrency: row.currency,
+          status: row.status,
+        };
+      });
+
+      const awaitingAmount = roundCurrencyValue(
+        entries
+          .filter((entry) => entry.status === "awaiting_reimbursement")
+          .reduce((sum, entry) => sum + entry.amount, 0),
+      );
+      const reimbursedAmount = roundCurrencyValue(
+        entries.filter((entry) => entry.status === "reimbursed").reduce((sum, entry) => sum + entry.amount, 0),
+      );
+
+      return {
+        awaitingAmount,
+        reimbursedAmount,
+        entries,
+      };
+    };
+
+    const applyReimbursementsToSummary = (
+      summary: CommissionSummary,
+      rows: FinanceTransaction[] | undefined,
+    ): void => {
+      if (!rows || rows.length === 0) {
+        summary.reimbursements = {
+          awaitingAmount: 0,
+          reimbursedAmount: 0,
+          entries: [],
+        };
+        return;
+      }
+
+      const reimbursementSummary = createReimbursementSummary(rows);
+      summary.reimbursements = reimbursementSummary;
+
+      if (reimbursementSummary.awaitingAmount > 0) {
+        summary.bucketTotals.reimbursement =
+          (summary.bucketTotals.reimbursement ?? 0) + reimbursementSummary.awaitingAmount;
+        summary.totalPayout += reimbursementSummary.awaitingAmount;
+      }
+    };
+
+    commissionDataByUser.forEach((summary, userId) => {
+      const rowsByUser = reimbursementsByUserId.get(userId);
+      if (rowsByUser && rowsByUser.length > 0) {
+        applyReimbursementsToSummary(summary, rowsByUser);
+        return;
+      }
+
+      const vendorId = vendorIdsByUser.get(userId);
+      if (vendorId) {
+        applyReimbursementsToSummary(summary, reimbursementsByVendorId.get(vendorId));
+      } else {
+        summary.reimbursements = {
+          awaitingAmount: 0,
+          reimbursedAmount: 0,
+          entries: [],
+        };
+      }
+    });
 
     const commissionUserIds = Array.from(commissionDataByUser.keys());
     const previousLedgerMap = new Map<number, StaffPayoutLedger>();
@@ -3269,6 +3418,11 @@ const createEmptySummary = (userId: number, firstName: string, lastName = ""): C
   },
   openingBalance: 0,
   closingBalance: 0,
+  reimbursements: {
+    awaitingAmount: 0,
+    reimbursedAmount: 0,
+    entries: [],
+  },
 });
 
 const recordCounterIncentiveMarker = (

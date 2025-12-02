@@ -671,20 +671,14 @@ const VenueNumbersSummary = () => {
       setReportPreviewError(null);
       setReportPreviewLoading(day.reportId);
       try {
-        const response = await axiosInstance.get<ServerResponse<NightReport>>(
-          `/nightReports/${day.reportId}`,
-          { withCredentials: true },
-        );
-        const payload = response.data[0]?.data;
-        let report: NightReport | undefined;
-        if (Array.isArray(payload)) {
-          report = payload[0] as NightReport | undefined;
-        } else if (payload) {
-          report = payload as unknown as NightReport;
-        }
+        const response = await axiosInstance.get<NightReport[]>(`/nightReports/${day.reportId}`, {
+          withCredentials: true,
+        });
+        const report = response.data?.[0];
         const photo = report?.photos?.[0];
         if (!photo) {
-          throw new Error("This report does not have a photo attached.");
+          setReportPreviewError("This report does not have a photo attached.");
+          return;
         }
         const downloadHref = resolvePhotoDownloadUrl(photo.downloadUrl);
         const downloadResponse = await axiosInstance.get(downloadHref, {
