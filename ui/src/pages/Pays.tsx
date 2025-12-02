@@ -891,9 +891,8 @@ const ReimbursementEntriesTable = ({
   if (entries.length === 0) {
     return null;
   }
-  return (
-    <ScrollArea h={maxHeight} offsetScrollbars>
-      <Table striped highlightOnHover withColumnBorders>
+  const table = (
+    <Table striped highlightOnHover withColumnBorders>
         <thead>
           <tr>
             <th>Date</th>
@@ -936,9 +935,16 @@ const ReimbursementEntriesTable = ({
             );
           })}
         </tbody>
-      </Table>
-    </ScrollArea>
+    </Table>
   );
+  if (maxHeight && maxHeight > 0) {
+    return (
+      <ScrollArea mah={maxHeight} offsetScrollbars>
+        {table}
+      </ScrollArea>
+    );
+  }
+  return table;
 };
 
 const renderReimbursements = (staff: Pay) => {
@@ -946,7 +952,8 @@ const renderReimbursements = (staff: Pay) => {
   if (!reimbursements || reimbursements.entries.length === 0) {
     return null;
   }
-  const tableHeight = Math.min(360, reimbursements.entries.length * 52 + 60);
+  const tableHeight =
+    reimbursements.entries.length > 6 ? Math.min(360, reimbursements.entries.length * 52 + 60) : undefined;
 
   return (
     <Stack gap="xs">
@@ -970,6 +977,9 @@ const renderReimbursements = (staff: Pay) => {
       </Group>
 
       <ReimbursementEntriesTable entries={reimbursements.entries} maxHeight={tableHeight} />
+      <Text size="xs" c="dimmed">
+        Include reimbursements when recording a staff payout to mark them as reimbursed.
+      </Text>
     </Stack>
   );
 };
@@ -1856,7 +1866,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
     const reimbursementCategoryIdForTransaction =
       entryModal.reimbursementCategoryId || entryModal.categoryId || selectedLines[0]?.categoryId || '';
     if (
-      selectedLines.length === 0 ||
+      (selectedLines.length === 0 && totalReimbursementAmount <= 0) ||
       missingCategory ||
       missingAccount ||
       !entryModal.counterpartyId
