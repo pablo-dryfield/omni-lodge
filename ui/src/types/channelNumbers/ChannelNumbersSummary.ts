@@ -94,3 +94,39 @@ export type ChannelNumbersSummary = {
   };
   cashSummary: ChannelCashSummary;
 };
+
+export type ChannelNumbersDetailMetric = 'normal' | 'nonShow' | 'addon' | 'addonNonShow' | 'total';
+
+export type ChannelNumbersDetailEntry = {
+  counterId: number;
+  counterDate: string;
+  channelId: number;
+  channelName: string;
+  productId: number | null;
+  productName: string | null;
+  addonKey: string | null;
+  addonName: string | null;
+  bookedBefore: number;
+  bookedAfter: number;
+  attended: number;
+  nonShow: number;
+  value: number;
+  note: string | null;
+};
+
+export type ChannelNumbersDetailResponse = {
+  startDate: string;
+  endDate: string;
+  metric: ChannelNumbersDetailMetric;
+  channelId: number | null;
+  productId: number | null;
+  addonKey: string | null;
+  entries: ChannelNumbersDetailEntry[];
+  totals: {
+    bookedBefore: number;
+    bookedAfter: number;
+    attended: number;
+    nonShow: number;
+    value: number;
+  };
+};
