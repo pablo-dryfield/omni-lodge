@@ -23,6 +23,7 @@ import {
 } from "@mantine/core";
 import {
   IconAlertTriangle,
+  IconCalendarPlus,
   IconChevronLeft,
   IconChevronRight,
   IconHistory,
@@ -694,6 +695,8 @@ const BuilderPage = () => {
   const [clearInstancesModalOpen, setClearInstancesModalOpen] = useState(false);
   const [publishWarningModalOpen, setPublishWarningModalOpen] = useState(false);
   const [publishWarningsAcknowledged, setPublishWarningsAcknowledged] = useState(false);
+  const [ensureWeeksLoading, setEnsureWeeksLoading] = useState(false);
+  const [ensureWeeksAlert, setEnsureWeeksAlert] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
   const selectCanAccessBuilder = useMemo(
     () => makeSelectIsModuleActionAllowed("scheduling-builder", "view"),
@@ -756,6 +759,53 @@ const BuilderPage = () => {
     [normalizedShiftRoleIdByName],
   );
   const weekAvailabilityQuery = useWeekAvailability(canAccessBuilder && weekId ? weekId : null);
+
+  const ensureWeekExists = useCallback(
+    async (weekValue: string) => {
+      try {
+        await axiosInstance.get("/schedules/weeks/lookup", { params: { week: weekValue } });
+        return false;
+      } catch (error) {
+        const axiosError = error as AxiosError<{ error?: string; message?: string }>;
+        if (axiosError.response?.status && axiosError.response.status !== 404) {
+          throw new Error(axiosError.response?.data?.error ?? axiosError.response?.data?.message ?? axiosError.message);
+        }
+      }
+      await axiosInstance.post("/schedules/weeks/generate", null, {
+        params: { week: weekValue, autoSpawn: false },
+      });
+      return true;
+    },
+    [],
+  );
+
+  const handleEnsureCurrentAndNextWeeks = useCallback(async () => {
+    if (ensureWeeksLoading) {
+      return;
+    }
+    const targetWeeks = [ensureIsoWeekString(dayjs()), ensureIsoWeekString(dayjs().add(1, "week"))];
+    setEnsureWeeksLoading(true);
+    setEnsureWeeksAlert(null);
+    try {
+      const results: Array<{ week: string; created: boolean }> = [];
+      for (const weekValue of targetWeeks) {
+        const created = await ensureWeekExists(weekValue);
+        results.push({ week: weekValue, created });
+      }
+      await scheduleWeeksQuery.refetch();
+      const createdLabels = results.filter((entry) => entry.created).map((entry) => formatWeekValue(entry.week));
+      const message =
+        createdLabels.length > 0
+          ? `Created ${createdLabels.join(" and ")}.`
+          : "Current and next schedule weeks already exist.";
+      setEnsureWeeksAlert({ type: "success", message });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to ensure schedule weeks.";
+      setEnsureWeeksAlert({ type: "error", message });
+    } finally {
+      setEnsureWeeksLoading(false);
+    }
+  }, [ensureWeekExists, ensureWeeksLoading, scheduleWeeksQuery]);
 
   const assignMutation = useAssignShifts();
   const deleteAssignmentMutation = useDeleteAssignment();
@@ -3034,8 +3084,13 @@ const BuilderPage = () => {
         </Alert>
       ) : null}
       {scheduleWeeksQuery.isError ? (
-        <Alert color="red" title="Unable to load available weeks">
-          <Text size="sm">{(scheduleWeeksQuery.error as Error).message}</Text>
+      <Alert color="red" title="Unable to load available weeks">
+        <Text size="sm">{(scheduleWeeksQuery.error as Error).message}</Text>
+      </Alert>
+    ) : null}
+      {ensureWeeksAlert ? (
+        <Alert color={ensureWeeksAlert.type === "success" ? "teal" : "red"} title="Week generation">
+          <Text size="sm">{ensureWeeksAlert.message}</Text>
         </Alert>
       ) : null}
 
@@ -3079,6 +3134,15 @@ const BuilderPage = () => {
             </Button>
           </Group>
           <Group justify="center" gap="sm" wrap="wrap">
+            <Button
+              variant="white"
+              color="yellow"
+              leftSection={<IconCalendarPlus size={16} />}
+              onClick={handleEnsureCurrentAndNextWeeks}
+              loading={ensureWeeksLoading}
+            >
+              Ensure current & next week
+            </Button>
             <Button
               variant="white"
               color="dark"
