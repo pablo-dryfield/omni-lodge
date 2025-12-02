@@ -1,5 +1,9 @@
 import axiosInstance from '../utils/axiosInstance';
-import { ChannelNumbersSummary } from '../types/channelNumbers/ChannelNumbersSummary';
+import {
+  ChannelNumbersSummary,
+  type ChannelNumbersDetailMetric,
+  type ChannelNumbersDetailResponse,
+} from '../types/channelNumbers/ChannelNumbersSummary';
 
 export const fetchChannelNumbersSummary = async (params: {
   startDate: string;
@@ -21,4 +25,33 @@ export const recordChannelCashCollection = async (payload: {
   note?: string | null;
 }): Promise<void> => {
   await axiosInstance.post('/channelNumbers/cash-collections', payload, { withCredentials: true });
+};
+
+export const fetchChannelNumbersDetails = async (params: {
+  startDate: string;
+  endDate: string;
+  metric: ChannelNumbersDetailMetric;
+  channelId?: number;
+  productId?: number | null;
+  addonKey?: string;
+}): Promise<ChannelNumbersDetailResponse> => {
+  const query: Record<string, string | number> = {
+    startDate: params.startDate,
+    endDate: params.endDate,
+    metric: params.metric,
+  };
+  if (typeof params.channelId === 'number') {
+    query.channelId = params.channelId;
+  }
+  if (params.productId !== undefined) {
+    query.productId = params.productId === null ? 'null' : params.productId;
+  }
+  if (params.addonKey) {
+    query.addonKey = params.addonKey;
+  }
+
+  const response = await axiosInstance.get<ChannelNumbersDetailResponse>('/channelNumbers/details', {
+    params: query,
+  });
+  return response.data;
 };

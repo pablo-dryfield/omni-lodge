@@ -97,6 +97,44 @@ type ChannelCashSummary = {
   }>;
 };
 
+export type ChannelNumbersDetailMetric = 'normal' | 'nonShow' | 'addon' | 'addonNonShow' | 'total';
+
+export type ChannelNumbersDetailEntry = {
+  counterId: number;
+  counterDate: string;
+  channelId: number;
+  channelName: string;
+  productId: number | null;
+  productName: string | null;
+  addonKey: string | null;
+  addonName: string | null;
+  bookedBefore: number;
+  bookedAfter: number;
+  attended: number;
+  nonShow: number;
+  value: number;
+  note: string | null;
+};
+
+type ChannelNumbersDetailTotals = {
+  bookedBefore: number;
+  bookedAfter: number;
+  attended: number;
+  nonShow: number;
+  value: number;
+};
+
+export type ChannelNumbersDetailResponse = {
+  startDate: string;
+  endDate: string;
+  metric: ChannelNumbersDetailMetric;
+  channelId: number | null;
+  productId: number | null;
+  addonKey: string | null;
+  entries: ChannelNumbersDetailEntry[];
+  totals: ChannelNumbersDetailTotals;
+};
+
 const isCashCurrency = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
@@ -558,6 +596,35 @@ function normalizeDateInput(value: string | undefined, fallback: dayjs.Dayjs): d
   }
 
   return parsed;
+}
+
+const SNAPSHOT_BLOCKS = [
+  { start: CASH_SNAPSHOT_START, end: CASH_SNAPSHOT_END },
+  { start: FREE_SNAPSHOT_START, end: FREE_SNAPSHOT_END },
+];
+
+function stripSnapshotBlocks(note: string | null | undefined): string | null {
+  if (!note) {
+    return note ?? null;
+  }
+  let sanitized = note;
+  SNAPSHOT_BLOCKS.forEach(({ start, end }) => {
+    let startIndex = sanitized.indexOf(start);
+    while (startIndex !== -1) {
+      const endIndex = sanitized.indexOf(end, startIndex + start.length);
+      if (endIndex === -1) {
+        sanitized = sanitized.slice(0, startIndex);
+        break;
+      }
+      sanitized =
+        sanitized.slice(0, startIndex).trimEnd() +
+        (sanitized.length > endIndex + end.length ? '\n' : '') +
+        sanitized.slice(endIndex + end.length).trimStart();
+      startIndex = sanitized.indexOf(start);
+    }
+  });
+  sanitized = sanitized.trim();
+  return sanitized.length === 0 ? null : sanitized;
 }
 
 function buildChannelConfigs(
@@ -1088,6 +1155,298 @@ export async function getChannelNumbersSummary(params: {
     productTotals,
     totals,
     cashSummary,
+  };
+}
+
+type ChannelNumbersDetailParams = {
+  startDate?: string;
+  endDate?: string;
+  channelId?: number | null;
+  productId?: number | null;
+  addonKey?: string | null;
+  metric: ChannelNumbersDetailMetric;
+};
+
+const DETAIL_METRICS: Set<ChannelNumbersDetailMetric> = new Set([
+  'normal',
+  'nonShow',
+  'addon',
+  'addonNonShow',
+  'total',
+]);
+
+export async function getChannelNumbersDetails(
+  params: ChannelNumbersDetailParams,
+): Promise<ChannelNumbersDetailResponse> {
+  const { metric } = params;
+  if (!DETAIL_METRICS.has(metric)) {
+    throw new HttpError(400, 'Unsupported metric requested');
+  }
+
+  const channelId =
+    params.channelId === undefined || params.channelId === null ? null : Number(params.channelId);
+  if (channelId != null && (!Number.isInteger(channelId) || channelId <= 0)) {
+    throw new HttpError(400, 'channelId must be a positive integer when provided');
+  }
+
+  const productId =
+    params.productId === undefined
+      ? undefined
+      : params.productId === null
+        ? null
+        : Number(params.productId);
+  if (productId !== undefined && productId !== null && (!Number.isInteger(productId) || productId <= 0)) {
+    throw new HttpError(400, 'productId must be a positive integer when provided');
+  }
+
+  const requiresAddon = metric === 'addon' || metric === 'addonNonShow';
+  const addonKey = requiresAddon ? params.addonKey ?? null : null;
+  if (requiresAddon && (!addonKey || addonKey.trim().length === 0)) {
+    throw new HttpError(400, 'addonKey is required for addon metrics');
+  }
+
+  const today = dayjs().startOf('day');
+  const defaultStart = today.startOf('month');
+  const defaultEnd = today.endOf('month');
+  const start = normalizeDateInput(params.startDate, defaultStart);
+  const end = normalizeDateInput(params.endDate, defaultEnd);
+
+  if (end.isBefore(start)) {
+    throw new HttpError(400, 'endDate must be on or after startDate');
+  }
+
+  const startIso = start.format('YYYY-MM-DD');
+  const endIso = end.format('YYYY-MM-DD');
+
+  const channelRows = await Channel.findAll({ attributes: ['id', 'name'] });
+  const channelLookup = new Map<number, string>();
+  channelRows.forEach((row) => channelLookup.set(row.id, row.name));
+
+  let addonLookup = new Map<
+    number,
+    {
+      key: string;
+      name: string;
+    }
+  >();
+  let targetAddonId: number | null = null;
+
+  if (requiresAddon) {
+    const addonRows = await Addon.findAll({ where: { isActive: true } });
+    const productAddons = await ProductAddon.findAll({
+      include: [
+        {
+          model: Product,
+          as: 'product',
+          include: [{ model: ProductType, as: 'ProductType' }],
+        },
+      ],
+    });
+    const { configs } = buildAddonConfigs(
+      addonRows,
+      productAddons as Array<ProductAddon & { product?: (Product & { ProductType?: ProductType | null }) | null }>,
+      null,
+    );
+    addonLookup = new Map(configs.map((config) => [config.addonId, { key: config.key, name: config.name }]));
+    const matched = configs.find((config) => config.key === addonKey);
+    if (!matched) {
+      throw new HttpError(404, 'Addon not found');
+    }
+    targetAddonId = matched.addonId;
+  }
+
+  const counters = await Counter.findAll({
+    where: { date: { [Op.between]: [startIso, endIso] } },
+    attributes: ['id', 'date', 'productId', 'notes'],
+    include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
+  });
+
+  const filteredCounters = counters.filter((counter) => {
+    if (productId === undefined) {
+      return true;
+    }
+    if (productId === null) {
+      return counter.productId == null;
+    }
+    return counter.productId === productId;
+  });
+
+  const counterLookup = new Map<
+    number,
+    {
+      date: string;
+      productId: number | null;
+      productName: string | null;
+      notes: string | null;
+    }
+  >();
+
+  filteredCounters.forEach((counter) => {
+    counterLookup.set(counter.id, {
+      date: counter.date,
+      productId: counter.productId ?? null,
+      productName: counter.product?.name ?? (counter.productId != null ? `Product ${counter.productId}` : null),
+      notes: counter.notes ?? null,
+    });
+  });
+
+  const counterIds = Array.from(counterLookup.keys());
+  if (counterIds.length === 0) {
+    return {
+      startDate: startIso,
+      endDate: endIso,
+      metric,
+      channelId,
+      productId: productId ?? null,
+      addonKey: addonKey ?? null,
+      entries: [],
+      totals: {
+        bookedBefore: 0,
+        bookedAfter: 0,
+        attended: 0,
+        nonShow: 0,
+        value: 0,
+      },
+    };
+  }
+
+  const metricWhere: Record<string, unknown> = {
+    counterId: { [Op.in]: counterIds },
+    kind: requiresAddon ? 'addon' : 'people',
+  };
+  if (channelId != null) {
+    metricWhere.channelId = channelId;
+  }
+  if (requiresAddon) {
+    metricWhere.addonId = targetAddonId;
+  }
+
+  const metricRows = await CounterChannelMetric.findAll({
+    where: metricWhere,
+    attributes: ['counterId', 'channelId', 'addonId', 'tallyType', 'period', 'qty'],
+  });
+
+  type Bucket = {
+    counterId: number;
+    channelId: number;
+    addonId: number | null;
+    bookedBefore: number;
+    bookedAfter: number;
+    attended: number;
+  };
+
+  const buckets = new Map<string, Bucket>();
+
+  metricRows.forEach((row) => {
+    const addonId = row.addonId ?? null;
+    const key = [row.counterId, row.channelId, addonId ?? 'null'].join('|');
+    const existing =
+      buckets.get(key) ??
+      {
+        counterId: row.counterId,
+        channelId: row.channelId,
+        addonId,
+        bookedBefore: 0,
+        bookedAfter: 0,
+        attended: 0,
+      };
+
+    if (!buckets.has(key)) {
+      buckets.set(key, existing);
+    }
+
+    const qty = Number(row.qty ?? 0);
+    if (row.tallyType === 'booked') {
+      if (row.period === 'before_cutoff') {
+        existing.bookedBefore += qty;
+      } else {
+        existing.bookedAfter += qty;
+      }
+    } else if (row.tallyType === 'attended') {
+      existing.attended += qty;
+    }
+  });
+
+  const entries: ChannelNumbersDetailEntry[] = [];
+
+  buckets.forEach((bucket) => {
+    const counter = counterLookup.get(bucket.counterId);
+    if (!counter) {
+      return;
+    }
+    const sanitizedNote = stripSnapshotBlocks(counter.notes);
+    const nonShow = Math.max(bucket.bookedBefore + bucket.bookedAfter - bucket.attended, 0);
+    const channelName = channelLookup.get(bucket.channelId) ?? `Channel ${bucket.channelId}`;
+    const addonMeta = bucket.addonId != null ? addonLookup.get(bucket.addonId) ?? null : null;
+    let value = 0;
+    switch (metric) {
+      case 'normal':
+      case 'addon':
+        value = bucket.attended;
+        break;
+      case 'nonShow':
+      case 'addonNonShow':
+        value = nonShow;
+        break;
+      case 'total':
+        value = bucket.attended + nonShow;
+        break;
+      default:
+        value = bucket.attended;
+    }
+
+    entries.push({
+      counterId: bucket.counterId,
+      counterDate: counter.date,
+      channelId: bucket.channelId,
+      channelName,
+      productId: counter.productId,
+      productName: counter.productName,
+      addonKey: addonMeta?.key ?? null,
+      addonName: addonMeta?.name ?? null,
+      bookedBefore: bucket.bookedBefore,
+      bookedAfter: bucket.bookedAfter,
+      attended: bucket.attended,
+      nonShow,
+      value,
+      note: sanitizedNote,
+    });
+  });
+
+  entries.sort((a, b) => {
+    if (a.counterDate === b.counterDate) {
+      if (a.channelName === b.channelName) {
+        if (a.channelId === b.channelId) {
+          return (a.counterId ?? 0) - (b.counterId ?? 0);
+        }
+        return a.channelId - b.channelId;
+      }
+      return a.channelName.localeCompare(b.channelName);
+    }
+    return a.counterDate.localeCompare(b.counterDate);
+  });
+
+  const totals = entries.reduce<ChannelNumbersDetailTotals>(
+    (acc, entry) => {
+      acc.bookedBefore += entry.bookedBefore;
+      acc.bookedAfter += entry.bookedAfter;
+      acc.attended += entry.attended;
+      acc.nonShow += entry.nonShow;
+      acc.value += entry.value;
+      return acc;
+    },
+    { bookedBefore: 0, bookedAfter: 0, attended: 0, nonShow: 0, value: 0 },
+  );
+
+  return {
+    startDate: startIso,
+    endDate: endIso,
+    metric,
+    channelId,
+    productId: productId ?? null,
+    addonKey: addonKey ?? null,
+    entries,
+    totals,
   };
 }
 

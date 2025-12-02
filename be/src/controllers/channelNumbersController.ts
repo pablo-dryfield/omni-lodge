@@ -2,7 +2,12 @@ import { Response } from 'express';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import HttpError from '../errors/HttpError.js';
 import logger from '../utils/logger.js';
-import { getChannelNumbersSummary, recordChannelCashCollection } from '../services/channelNumbersService.js';
+import {
+  getChannelNumbersSummary,
+  recordChannelCashCollection,
+  getChannelNumbersDetails,
+  type ChannelNumbersDetailMetric,
+} from '../services/channelNumbersService.js';
 
 function handleError(res: Response, error: unknown): void {
   if (error instanceof HttpError) {
@@ -46,6 +51,32 @@ export const createCashCollectionLog = async (req: AuthenticatedRequest, res: Re
     };
     const record = await recordChannelCashCollection(payload);
     res.status(201).json(record);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const getDetails = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { startDate, endDate, channelId, productId, addonKey, metric } = req.query;
+    if (typeof metric !== 'string') {
+      throw new HttpError(400, 'metric query parameter is required');
+    }
+    const response = await getChannelNumbersDetails({
+      startDate: typeof startDate === 'string' ? startDate : undefined,
+      endDate: typeof endDate === 'string' ? endDate : undefined,
+      channelId:
+        typeof channelId === 'string' && channelId.trim().length > 0 ? Number(channelId) : undefined,
+      productId:
+        typeof productId === 'string'
+          ? productId === 'null'
+            ? null
+            : Number(productId)
+          : undefined,
+      addonKey: typeof addonKey === 'string' ? addonKey : undefined,
+      metric: metric as ChannelNumbersDetailMetric,
+    });
+    res.status(200).json(response);
   } catch (error) {
     handleError(res, error);
   }
