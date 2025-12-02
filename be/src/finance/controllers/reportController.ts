@@ -5,6 +5,9 @@ import { Op } from 'sequelize';
 import FinanceTransaction from '../models/FinanceTransaction.js';
 import FinanceBudget from '../models/FinanceBudget.js';
 import FinanceCategory from '../models/FinanceCategory.js';
+import FinanceAccount from '../models/FinanceAccount.js';
+import FinanceVendor from '../models/FinanceVendor.js';
+import FinanceClient from '../models/FinanceClient.js';
 
 dayjs.extend(isSameOrBefore);
 
@@ -24,6 +27,8 @@ type CashFlowAggregation = {
   inflow: number;
   outflow: number;
 };
+
+const OUTSTANDING_STATUSES = new Set(['planned', 'approved']);
 
 const formatMonthKey = (value: dayjs.Dayjs): string => value.format('YYYY-MM');
 const formatMonthLabel = (value: dayjs.Dayjs): string => value.format('MMM YYYY');
@@ -64,16 +69,32 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
     const startIso = startDate.format('YYYY-MM-DD');
     const endIso = endDate.format('YYYY-MM-DD');
 
-    const transactions = await FinanceTransaction.findAll({
+    const rangeTransactions = await FinanceTransaction.findAll({
       where: {
         date: { [Op.between]: [startIso, endIso] },
         status: { [Op.notIn]: NON_REPORTABLE_STATUSES },
-        kind: { [Op.in]: PNL_KINDS },
       },
-      attributes: ['date', 'kind', 'baseAmountMinor', 'categoryId'],
+      attributes: [
+        'id',
+        'date',
+        'kind',
+        'baseAmountMinor',
+        'amountMinor',
+        'accountId',
+        'currency',
+        'status',
+        'categoryId',
+        'counterpartyType',
+        'counterpartyId',
+        'meta',
+      ],
       include: [{ model: FinanceCategory, attributes: ['id', 'name'] }],
       order: [['date', 'ASC']],
     });
+
+    const transactions = rangeTransactions.filter((transaction) =>
+      (PNL_KINDS as readonly string[]).includes(transaction.kind),
+    );
 
     const monthlyPnL = new Map<string, MonthAggregation>();
     const monthlyCashFlow = new Map<string, CashFlowAggregation>();
@@ -196,6 +217,242 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
     );
     budgetTotals.variance = budgetTotals.actual - budgetTotals.budget;
 
+    const accounts = await FinanceAccount.findAll({
+      attributes: ['id', 'name', 'currency', 'openingBalanceMinor', 'isActive'],
+    });
+    const vendors = await FinanceVendor.findAll({
+      attributes: ['id', 'name'],
+    });
+    const clients = await FinanceClient.findAll({
+      attributes: ['id', 'name'],
+    });
+
+    type AccountSummaryRow = {
+      accountId: number;
+      name: string;
+      currency: string;
+      openingBalance: number;
+      inflow: number;
+      outflow: number;
+      net: number;
+      closingBalance: number;
+      outstanding: number;
+      isActive: boolean;
+    };
+
+    const accountSummaryMap = new Map<number, AccountSummaryRow>();
+    accounts.forEach((account) => {
+      const opening = (account.openingBalanceMinor ?? 0) / 100;
+      accountSummaryMap.set(account.id, {
+        accountId: account.id,
+        name: account.name,
+        currency: account.currency,
+        openingBalance: opening,
+        inflow: 0,
+        outflow: 0,
+        net: 0,
+        closingBalance: opening,
+        outstanding: 0,
+        isActive: account.isActive ?? true,
+      });
+    });
+
+    const getTransferDirection = (meta: Record<string, unknown> | null | undefined): 'in' | 'out' | null => {
+      if (!meta || typeof meta !== 'object') {
+        return null;
+      }
+      const direction = (meta as { direction?: unknown }).direction;
+      if (typeof direction !== 'string') {
+        return null;
+      }
+      const normalized = direction.toLowerCase();
+      if (normalized === 'in' || normalized === 'out') {
+        return normalized;
+      }
+      return null;
+    };
+
+    const determineSignedAmount = (transaction: FinanceTransaction): number => {
+      const amount = (transaction.amountMinor ?? 0) / 100;
+      if (transaction.kind === 'income' || transaction.kind === 'refund') {
+        return amount;
+      }
+      if (transaction.kind === 'expense') {
+        return -amount;
+      }
+      if (transaction.kind === 'transfer') {
+        const direction = getTransferDirection(transaction.meta);
+        return direction === 'in' ? amount : -amount;
+      }
+      return 0;
+    };
+
+    rangeTransactions.forEach((transaction) => {
+      const summary = accountSummaryMap.get(transaction.accountId);
+      if (!summary) {
+        return;
+      }
+      const signedAmount = determineSignedAmount(transaction);
+      if (signedAmount >= 0) {
+        summary.inflow += signedAmount;
+      } else {
+        summary.outflow += Math.abs(signedAmount);
+      }
+      summary.net += signedAmount;
+      summary.closingBalance += signedAmount;
+      if (OUTSTANDING_STATUSES.has(transaction.status)) {
+        summary.outstanding += signedAmount;
+      }
+    });
+
+    const accountSummary = Array.from(accountSummaryMap.values()).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+
+    const categoryIncomeMap = new Map<
+      number | 'uncategorized',
+      { categoryId: number | null; categoryName: string; amount: number }
+    >();
+    const categoryExpenseMap = new Map<
+      number | 'uncategorized',
+      { categoryId: number | null; categoryName: string; amount: number }
+    >();
+
+    rangeTransactions.forEach((transaction) => {
+      const amount = (transaction.baseAmountMinor ?? 0) / 100;
+      const key = transaction.categoryId ?? 'uncategorized';
+      const categoryName = transaction.category?.name ?? UNCATEGORIZED_CATEGORY_NAME;
+      if (transaction.kind === 'income' || transaction.kind === 'refund') {
+        const entry = categoryIncomeMap.get(key) ?? {
+          categoryId: transaction.categoryId ?? null,
+          categoryName,
+          amount: 0,
+        };
+        entry.amount += amount;
+        categoryIncomeMap.set(key, entry);
+      } else if (transaction.kind === 'expense') {
+        const entry = categoryExpenseMap.get(key) ?? {
+          categoryId: transaction.categoryId ?? null,
+          categoryName,
+          amount: 0,
+        };
+        entry.amount += amount;
+        categoryExpenseMap.set(key, entry);
+      }
+    });
+
+    const categorySummary = {
+      income: Array.from(categoryIncomeMap.values()).sort((a, b) => b.amount - a.amount),
+      expense: Array.from(categoryExpenseMap.values()).sort((a, b) => b.amount - a.amount),
+    };
+
+    type VendorSummaryRow = {
+      vendorId: number;
+      vendorName: string;
+      total: number;
+      settled: number;
+      outstanding: number;
+      lastActivity: string | null;
+    };
+
+    const vendorLookup = new Map<number, string>();
+    vendors.forEach((vendor) => vendorLookup.set(vendor.id, vendor.name));
+
+    const vendorSummaryMap = new Map<number, VendorSummaryRow>();
+
+    rangeTransactions.forEach((transaction) => {
+      if (transaction.counterpartyType !== 'vendor' || !transaction.counterpartyId) {
+        return;
+      }
+      const amount = Math.abs((transaction.baseAmountMinor ?? 0) / 100);
+      if (amount === 0) {
+        return;
+      }
+      if (transaction.kind !== 'expense' && transaction.kind !== 'transfer') {
+        return;
+      }
+      if (transaction.kind === 'transfer') {
+        const direction = getTransferDirection(transaction.meta);
+        if (direction !== 'out') {
+          return;
+        }
+      }
+
+      const entry =
+        vendorSummaryMap.get(transaction.counterpartyId) ?? {
+          vendorId: transaction.counterpartyId,
+          vendorName: vendorLookup.get(transaction.counterpartyId) ?? `Vendor ${transaction.counterpartyId}`,
+          total: 0,
+          settled: 0,
+          outstanding: 0,
+          lastActivity: null,
+        };
+      entry.total += amount;
+      if (OUTSTANDING_STATUSES.has(transaction.status)) {
+        entry.outstanding += amount;
+      } else if (transaction.status === 'paid' || transaction.status === 'reimbursed') {
+        entry.settled += amount;
+      }
+      if (!entry.lastActivity || dayjs(transaction.date).isAfter(dayjs(entry.lastActivity))) {
+        entry.lastActivity = transaction.date;
+      }
+      vendorSummaryMap.set(transaction.counterpartyId, entry);
+    });
+
+    type ClientSummaryRow = {
+      clientId: number;
+      clientName: string;
+      total: number;
+      settled: number;
+      outstanding: number;
+      lastActivity: string | null;
+    };
+
+    const clientLookup = new Map<number, string>();
+    clients.forEach((client) => clientLookup.set(client.id, client.name));
+
+    const clientSummaryMap = new Map<number, ClientSummaryRow>();
+
+    rangeTransactions.forEach((transaction) => {
+      if (transaction.counterpartyType !== 'client' || !transaction.counterpartyId) {
+        return;
+      }
+      const amount = Math.abs((transaction.baseAmountMinor ?? 0) / 100);
+      if (amount === 0) {
+        return;
+      }
+      if (!['income', 'refund'].includes(transaction.kind)) {
+        return;
+      }
+      const signed = transaction.kind === 'refund' ? -amount : amount;
+      const entry =
+        clientSummaryMap.get(transaction.counterpartyId) ?? {
+          clientId: transaction.counterpartyId,
+          clientName: clientLookup.get(transaction.counterpartyId) ?? `Client ${transaction.counterpartyId}`,
+          total: 0,
+          settled: 0,
+          outstanding: 0,
+          lastActivity: null,
+        };
+      entry.total += signed;
+      if (OUTSTANDING_STATUSES.has(transaction.status)) {
+        entry.outstanding += signed;
+      } else if (transaction.status === 'paid' || transaction.status === 'reimbursed') {
+        entry.settled += signed;
+      }
+      if (!entry.lastActivity || dayjs(transaction.date).isAfter(dayjs(entry.lastActivity))) {
+        entry.lastActivity = transaction.date;
+      }
+      clientSummaryMap.set(transaction.counterpartyId, entry);
+    });
+
+    const vendorSummary = Array.from(vendorSummaryMap.values()).sort(
+      (a, b) => b.outstanding - a.outstanding || b.total - a.total,
+    );
+    const clientSummary = Array.from(clientSummaryMap.values()).sort(
+      (a, b) => b.total - a.total || (b.lastActivity ? dayjs(b.lastActivity).valueOf() : 0),
+    );
+
     res.status(200).json({
       period: {
         start: startDate.format('YYYY-MM-DD'),
@@ -240,6 +497,10 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
         rows: budgetRows,
         totals: budgetTotals,
       },
+      accountSummary,
+      categorySummary,
+      vendorSummary,
+      clientSummary,
     });
   } catch (error) {
     console.error('Failed to load finance reports', error);

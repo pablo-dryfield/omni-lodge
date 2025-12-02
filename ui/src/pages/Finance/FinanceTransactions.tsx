@@ -10,6 +10,7 @@ import {
   Select,
   Stack,
   Table,
+  Text,
   Textarea,
   TextInput,
   Title,
@@ -55,6 +56,21 @@ type TransactionDraft = {
   invoiceFileId: number | null;
 };
 
+const toFinanceTransactionChanges = (draft: TransactionDraft): Partial<FinanceTransaction> => ({
+  kind: draft.kind,
+  date: draft.date,
+  accountId: draft.accountId ?? undefined,
+  currency: draft.currency,
+  amountMinor: draft.amountMinor,
+  fxRate: draft.fxRate.toString(),
+  categoryId: draft.categoryId,
+  counterpartyType: draft.counterpartyType,
+  counterpartyId: draft.counterpartyId,
+  status: draft.status,
+  description: draft.description,
+  invoiceFileId: draft.invoiceFileId,
+});
+
 const defaultDraft: TransactionDraft = {
   kind: "expense",
   date: dayjs().format("YYYY-MM-DD"),
@@ -94,6 +110,27 @@ const FinanceTransactions = () => {
   }, [dispatch]);
 
   const transactionRows = useMemo(() => {
+    const getSignedAmount = (transaction: FinanceTransaction): number => {
+      const magnitude = Math.abs(transaction.amountMinor);
+      if (transaction.kind === "transfer") {
+        const direction =
+          typeof transaction.meta === "object" && transaction.meta && typeof transaction.meta.direction === "string"
+            ? (transaction.meta.direction as string)
+            : null;
+        if (direction === "in") {
+          return magnitude;
+        }
+        if (direction === "out") {
+          return -magnitude;
+        }
+        return -magnitude;
+      }
+      if (transaction.kind === "income" || transaction.kind === "refund") {
+        return magnitude;
+      }
+      return -magnitude;
+    };
+
     return transactions.data.map((transaction) => {
       const account = accounts.data.find((item) => item.id === transaction.accountId);
       const category = categories.data.find((item) => item.id === transaction.categoryId);
@@ -105,9 +142,10 @@ const FinanceTransactions = () => {
             : null;
       return {
         ...transaction,
-        accountName: account?.name ?? "—",
-        categoryName: category?.name ?? "—",
-        counterpartyName: counterparty ?? "—",
+        accountName: account?.name ?? "??",
+        categoryName: category?.name ?? "??",
+        counterpartyName: counterparty ?? "??",
+        signedAmountMinor: getSignedAmount(transaction),
       };
     });
   }, [transactions.data, accounts.data, categories.data, vendors.data, clients.data]);
@@ -148,6 +186,7 @@ const FinanceTransactions = () => {
     if (!draft.accountId || !draft.date || !draft.currency) {
       return;
     }
+    const commonPayload = toFinanceTransactionChanges({ ...draft, accountId: draft.accountId });
 
     if (draft.kind === "transfer" && draft.targetAccountId && draft.accountId) {
       await dispatch(
@@ -166,18 +205,12 @@ const FinanceTransactions = () => {
       await dispatch(
         updateFinanceTransaction({
           id: editingTransaction.id,
-          changes: {
-            ...editingTransaction,
-            ...draft,
-            fxRate: draft.fxRate,
-          },
+          changes: commonPayload,
         }),
       );
     } else {
       await dispatch(
-        createFinanceTransaction({
-          ...draft,
-        }),
+        createFinanceTransaction(commonPayload),
       );
     }
 
@@ -195,7 +228,7 @@ const FinanceTransactions = () => {
 
   const categoryOptions = categories.data.map((category) => ({
     value: String(category.id),
-    label: `${category.kind === "income" ? "Income" : "Expense"} �- ${category.name}`,
+    label: `${category.kind === "income" ? "Income" : "Expense"} �- ${category.name}`,
   }));
 
   const accountOptions = accounts.data.map((account) => ({
@@ -203,8 +236,9 @@ const FinanceTransactions = () => {
     label: account.name,
   }));
 
-  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const handleFileSelect = async (event: Event) => {
+    const target = event.target as HTMLInputElement | null;
+    const file = target?.files?.[0];
     if (!file) {
       return;
     }
@@ -213,6 +247,9 @@ const FinanceTransactions = () => {
     const result = await dispatch(uploadFinanceFile(formData));
     if (uploadFinanceFile.fulfilled.match(result)) {
       setDraft((state) => ({ ...state, invoiceFileId: result.payload.id }));
+    }
+    if (target) {
+      target.value = "";
     }
   };
 
@@ -295,7 +332,9 @@ const FinanceTransactions = () => {
                 <Table.Td>{transaction.kind.toUpperCase()}</Table.Td>
                 <Table.Td>{transaction.accountName}</Table.Td>
                 <Table.Td>
-                  {(transaction.amountMinor / 100).toFixed(2)} {transaction.currency}
+                  <Text fw={600} c={transaction.signedAmountMinor >= 0 ? "green" : "red"}>
+                    {(transaction.signedAmountMinor >= 0 ? '+' : '-') + Math.abs(transaction.signedAmountMinor / 100).toFixed(2) + ` ${transaction.currency}`}
+                  </Text>
                 </Table.Td>
                 <Table.Td>{transaction.categoryName}</Table.Td>
                 <Table.Td>{transaction.counterpartyName}</Table.Td>
