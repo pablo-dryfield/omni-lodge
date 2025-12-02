@@ -58,6 +58,43 @@ type BudgetRow = {
   variance: number;
 };
 
+type AccountSummaryRow = {
+  accountId: number;
+  name: string;
+  currency: string;
+  openingBalance: number;
+  inflow: number;
+  outflow: number;
+  net: number;
+  closingBalance: number;
+  outstanding: number;
+  isActive: boolean;
+};
+
+type CategorySummaryRow = {
+  categoryId: number | null;
+  categoryName: string;
+  amount: number;
+};
+
+type VendorSummaryRow = {
+  vendorId: number;
+  vendorName: string;
+  total: number;
+  settled: number;
+  outstanding: number;
+  lastActivity: string | null;
+};
+
+type ClientSummaryRow = {
+  clientId: number;
+  clientName: string;
+  total: number;
+  settled: number;
+  outstanding: number;
+  lastActivity: string | null;
+};
+
 type FinanceReportsResponse = {
   period: { start: string; end: string };
   currency: string;
@@ -74,6 +111,13 @@ type FinanceReportsResponse = {
     rows: BudgetRow[];
     totals: { budget: number; actual: number; variance: number };
   };
+  accountSummary: AccountSummaryRow[];
+  categorySummary: {
+    income: CategorySummaryRow[];
+    expense: CategorySummaryRow[];
+  };
+  vendorSummary: VendorSummaryRow[];
+  clientSummary: ClientSummaryRow[];
 };
 
 type DatePreset = "six_months" | "ytd" | "custom";
@@ -137,6 +181,13 @@ const FinanceReports = () => {
       maximumFractionDigits: 2,
       minimumFractionDigits: 2,
     }).format(value);
+  const formatCurrencyWithCode = (value: number, code?: string) =>
+    new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: code ?? currency,
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 2,
+    }).format(value);
 
   const renderSummaryCard = (title: string, value: number, description?: string, color?: string) => (
     <Card withBorder padding="lg">
@@ -159,6 +210,11 @@ const FinanceReports = () => {
   const monthlyPnL = data?.profitAndLoss.monthly ?? [];
   const cashFlowTimeline = data?.cashFlow.timeline ?? [];
   const budgetRows = data?.budgetsVsActual.rows ?? [];
+  const accountSummary = data?.accountSummary ?? [];
+  const incomeCategorySummary = data?.categorySummary?.income ?? [];
+  const expenseCategorySummary = data?.categorySummary?.expense ?? [];
+  const vendorSummary = data?.vendorSummary ?? [];
+  const clientSummary = data?.clientSummary ?? [];
 
   return (
     <Stack gap="md">
@@ -210,6 +266,9 @@ const FinanceReports = () => {
             <Tabs.Tab value="pl">Profit &amp; Loss</Tabs.Tab>
             <Tabs.Tab value="cf">Cash Flow</Tabs.Tab>
             <Tabs.Tab value="bva">Budgets vs Actual</Tabs.Tab>
+            <Tabs.Tab value="accounts">Accounts</Tabs.Tab>
+            <Tabs.Tab value="categories">Categories</Tabs.Tab>
+            <Tabs.Tab value="counterparties">Counterparties</Tabs.Tab>
           </Tabs.List>
 
           <Tabs.Panel value="pl" pt="md">
@@ -405,6 +464,191 @@ const FinanceReports = () => {
                   </Table>
                 </Card>
               )}
+            </Stack>
+          </Tabs.Panel>
+          <Tabs.Panel value="accounts" pt="md">
+            <Card withBorder padding="lg">
+              <Title order={4} mb="sm">
+                Account balances
+              </Title>
+              {accountSummary.length === 0 ? (
+                <Text size="sm" c="dimmed">
+                  No account activity in this range.
+                </Text>
+              ) : (
+                <Table withColumnBorders highlightOnHover>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Account</Table.Th>
+                      <Table.Th>Currency</Table.Th>
+                      <Table.Th>Opening</Table.Th>
+                      <Table.Th>Inflow</Table.Th>
+                      <Table.Th>Outflow</Table.Th>
+                      <Table.Th>Net</Table.Th>
+                      <Table.Th>Closing</Table.Th>
+                      <Table.Th>Outstanding</Table.Th>
+                      <Table.Th>Status</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {accountSummary.map((row) => (
+                      <Table.Tr key={row.accountId}>
+                        <Table.Td>{row.name}</Table.Td>
+                        <Table.Td>{row.currency}</Table.Td>
+                        <Table.Td>{formatCurrencyWithCode(row.openingBalance, row.currency)}</Table.Td>
+                        <Table.Td>{formatCurrencyWithCode(row.inflow, row.currency)}</Table.Td>
+                        <Table.Td>{formatCurrencyWithCode(row.outflow, row.currency)}</Table.Td>
+                        <Table.Td c={row.net >= 0 ? "green" : "red"}>
+                          {formatCurrencyWithCode(row.net, row.currency)}
+                        </Table.Td>
+                        <Table.Td>{formatCurrencyWithCode(row.closingBalance, row.currency)}</Table.Td>
+                        <Table.Td c={row.outstanding >= 0 ? "green" : "red"}>
+                          {formatCurrencyWithCode(row.outstanding, row.currency)}
+                        </Table.Td>
+                        <Table.Td>{row.isActive ? "Active" : "Archived"}</Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              )}
+            </Card>
+          </Tabs.Panel>
+          <Tabs.Panel value="categories" pt="md">
+            <Stack gap="lg">
+              <Grid>
+                <Grid.Col span={{ base: 12, md: 6 }}>
+                  <Card withBorder padding="lg">
+                    <Title order={4} mb="sm">
+                      Income categories
+                    </Title>
+                    {incomeCategorySummary.length === 0 ? (
+                      <Text size="sm" c="dimmed">
+                        No income categories found for this period.
+                      </Text>
+                    ) : (
+                      <Table withColumnBorders highlightOnHover>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>Category</Table.Th>
+                            <Table.Th ta="right">Amount</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {incomeCategorySummary.map((row) => (
+                            <Table.Tr key={`${row.categoryId ?? "uncat"}-income`}>
+                              <Table.Td>{row.categoryName}</Table.Td>
+                              <Table.Td ta="right">{formatCurrency(row.amount)}</Table.Td>
+                            </Table.Tr>
+                          ))}
+                        </Table.Tbody>
+                      </Table>
+                    )}
+                  </Card>
+                </Grid.Col>
+                <Grid.Col span={{ base: 12, md: 6 }}>
+                  <Card withBorder padding="lg">
+                    <Title order={4} mb="sm">
+                      Expense categories
+                    </Title>
+                    {expenseCategorySummary.length === 0 ? (
+                      <Text size="sm" c="dimmed">
+                        No expenses recorded in this period.
+                      </Text>
+                    ) : (
+                      <Table withColumnBorders highlightOnHover>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>Category</Table.Th>
+                            <Table.Th ta="right">Amount</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {expenseCategorySummary.map((row) => (
+                            <Table.Tr key={`${row.categoryId ?? "uncat"}-expense`}>
+                              <Table.Td>{row.categoryName}</Table.Td>
+                              <Table.Td ta="right">{formatCurrency(row.amount)}</Table.Td>
+                            </Table.Tr>
+                          ))}
+                        </Table.Tbody>
+                      </Table>
+                    )}
+                  </Card>
+                </Grid.Col>
+              </Grid>
+            </Stack>
+          </Tabs.Panel>
+          <Tabs.Panel value="counterparties" pt="md">
+            <Stack gap="lg">
+              <Card withBorder padding="lg">
+                <Title order={4} mb="sm">
+                  Vendors
+                </Title>
+                {vendorSummary.length === 0 ? (
+                  <Text size="sm" c="dimmed">
+                    No vendor activity recorded in this period.
+                  </Text>
+                ) : (
+                  <Table withColumnBorders highlightOnHover>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Vendor</Table.Th>
+                        <Table.Th>Total</Table.Th>
+                        <Table.Th>Settled</Table.Th>
+                        <Table.Th>Outstanding</Table.Th>
+                        <Table.Th>Last activity</Table.Th>
+                      </Table.Tr>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {vendorSummary.map((row) => (
+                        <Table.Tr key={row.vendorId}>
+                          <Table.Td>{row.vendorName}</Table.Td>
+                          <Table.Td>{formatCurrency(row.total)}</Table.Td>
+                          <Table.Td>{formatCurrency(row.settled)}</Table.Td>
+                          <Table.Td c={row.outstanding >= 0 ? "red" : "green"}>
+                            {formatCurrency(row.outstanding)}
+                          </Table.Td>
+                          <Table.Td>{row.lastActivity ?? "—"}</Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                )}
+              </Card>
+              <Card withBorder padding="lg">
+                <Title order={4} mb="sm">
+                  Clients
+                </Title>
+                {clientSummary.length === 0 ? (
+                  <Text size="sm" c="dimmed">
+                    No client transactions recorded in this period.
+                  </Text>
+                ) : (
+                  <Table withColumnBorders highlightOnHover>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Client</Table.Th>
+                        <Table.Th>Total</Table.Th>
+                        <Table.Th>Settled</Table.Th>
+                        <Table.Th>Outstanding</Table.Th>
+                        <Table.Th>Last activity</Table.Th>
+                      </Table.Tr>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {clientSummary.map((row) => (
+                        <Table.Tr key={row.clientId}>
+                          <Table.Td>{row.clientName}</Table.Td>
+                          <Table.Td>{formatCurrency(row.total)}</Table.Td>
+                          <Table.Td>{formatCurrency(row.settled)}</Table.Td>
+                          <Table.Td c={row.outstanding >= 0 ? "green" : "red"}>
+                            {formatCurrency(row.outstanding)}
+                          </Table.Td>
+                          <Table.Td>{row.lastActivity ?? "—"}</Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                )}
+              </Card>
             </Stack>
           </Tabs.Panel>
         </Tabs>
