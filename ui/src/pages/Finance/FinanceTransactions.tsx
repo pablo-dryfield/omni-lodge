@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActionIcon,
   Badge,
@@ -29,6 +29,7 @@ import {
   updateFinanceTransaction,
   uploadFinanceFile,
 } from "../../actions/financeActions";
+import { fetchStaffProfiles } from "../../actions/staffProfileActions";
 import {
   selectFinanceAccounts,
   selectFinanceCategories,
@@ -38,7 +39,62 @@ import {
   selectFinanceVendors,
 } from "../../selectors/financeSelectors";
 import { FinanceTransaction } from "../../types/finance";
+import type { StaffProfile } from "../../types/staffProfiles/StaffProfile";
 import dayjs from "dayjs";
+
+const TRANSACTION_STATUS_OPTIONS = [
+  { value: "planned", label: "Planned" },
+  { value: "approved", label: "Approved" },
+  { value: "awaiting_reimbursement", label: "Awaiting reimbursement" },
+  { value: "paid", label: "Paid" },
+  { value: "reimbursed", label: "Reimbursed" },
+  { value: "void", label: "Void" },
+] as const;
+
+const getStatusBadgeColor = (status: string): string => {
+  switch (status) {
+    case "planned":
+      return "gray";
+    case "approved":
+      return "blue";
+    case "awaiting_reimbursement":
+      return "orange";
+    case "paid":
+      return "cyan";
+    case "reimbursed":
+      return "teal";
+    case "void":
+      return "red";
+    default:
+      return "blue";
+  }
+};
+
+const parsePaidByUserIdFromMeta = (meta: unknown): number | null => {
+  if (!meta || typeof meta !== "object") {
+    return null;
+  }
+  const record = meta as Record<string, unknown>;
+  const candidate = record.paidByUserId ?? record.staffUserId ?? null;
+  if (candidate == null) {
+    return null;
+  }
+  const numeric = Number(candidate);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+};
+
+const applyPaidByUserToMeta = (
+  meta: Record<string, unknown> | null,
+  userId: number | null,
+): Record<string, unknown> | null => {
+  const next = { ...(meta ?? {}) };
+  if (!userId) {
+    delete next.paidByUserId;
+  } else {
+    next.paidByUserId = userId;
+  }
+  return Object.keys(next).length > 0 ? next : null;
+};
 
 type TransactionDraft = {
   kind: FinanceTransaction["kind"];
@@ -54,6 +110,7 @@ type TransactionDraft = {
   status: FinanceTransaction["status"];
   description: string | null;
   invoiceFileId: number | null;
+  meta: Record<string, unknown> | null;
 };
 
 const toFinanceTransactionChanges = (draft: TransactionDraft): Partial<FinanceTransaction> => ({
@@ -69,6 +126,7 @@ const toFinanceTransactionChanges = (draft: TransactionDraft): Partial<FinanceTr
   status: draft.status,
   description: draft.description,
   invoiceFileId: draft.invoiceFileId,
+  meta: draft.meta ?? null,
 });
 
 const defaultDraft: TransactionDraft = {
@@ -85,6 +143,7 @@ const defaultDraft: TransactionDraft = {
   status: "planned",
   description: null,
   invoiceFileId: null,
+  meta: null,
 };
 
 const FinanceTransactions = () => {
@@ -95,6 +154,12 @@ const FinanceTransactions = () => {
   const clients = useAppSelector(selectFinanceClients);
   const transactions = useAppSelector(selectFinanceTransactions);
   const files = useAppSelector(selectFinanceFiles);
+  const staffProfileState = useAppSelector((state) => state.staffProfiles[0]);
+  const staffProfiles = useMemo(
+    () =>
+      ((staffProfileState.data[0]?.data as Partial<StaffProfile>[] | undefined) ?? []) as Partial<StaffProfile>[],
+    [staffProfileState.data],
+  );
 
   const [filters, setFilters] = useState<{ status?: string; kind?: string; accountId?: number | null }>({});
   const [modalOpen, setModalOpen] = useState(false);
@@ -107,7 +172,20 @@ const FinanceTransactions = () => {
     dispatch(fetchFinanceVendors());
     dispatch(fetchFinanceClients());
     dispatch(fetchFinanceTransactions({ limit: 100 }));
+    dispatch(fetchStaffProfiles());
   }, [dispatch]);
+
+  const staffNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    staffProfiles.forEach((profile) => {
+      if (typeof profile.userId === "number") {
+        const rawName = (profile.userName ?? "").trim();
+        const label = rawName.length > 0 ? rawName : `User #${profile.userId}`;
+        map.set(profile.userId, label);
+      }
+    });
+    return map;
+  }, [staffProfiles]);
 
   const transactionRows = useMemo(() => {
     const getSignedAmount = (transaction: FinanceTransaction): number => {
@@ -140,22 +218,29 @@ const FinanceTransactions = () => {
           : transaction.counterpartyType === "client"
             ? clients.data.find((item) => item.id === transaction.counterpartyId)?.name
             : null;
+      const paidByUserId = parsePaidByUserIdFromMeta(transaction.meta);
+      const paidByName = paidByUserId ? staffNameById.get(paidByUserId) ?? `User #${paidByUserId}` : "Company";
       return {
         ...transaction,
         accountName: account?.name ?? "??",
         categoryName: category?.name ?? "??",
         counterpartyName: counterparty ?? "??",
         signedAmountMinor: getSignedAmount(transaction),
+        paidByName,
       };
     });
-  }, [transactions.data, accounts.data, categories.data, vendors.data, clients.data]);
+  }, [transactions.data, accounts.data, categories.data, vendors.data, clients.data, staffNameById]);
 
   useEffect(() => {
     if (editingTransaction) {
+      const metaRecord = (editingTransaction.meta as Record<string, unknown> | null) ?? null;
+      const targetAccountId =
+        metaRecord && typeof metaRecord.targetAccountId === "number" ? Number(metaRecord.targetAccountId) : null;
       setDraft({
         kind: editingTransaction.kind,
         date: editingTransaction.date,
         accountId: editingTransaction.accountId,
+        targetAccountId,
         currency: editingTransaction.currency,
         amountMinor: editingTransaction.amountMinor,
         fxRate: Number(editingTransaction.fxRate),
@@ -165,6 +250,7 @@ const FinanceTransactions = () => {
         status: editingTransaction.status,
         description: editingTransaction.description,
         invoiceFileId: editingTransaction.invoiceFileId,
+        meta: metaRecord,
       });
     } else {
       setDraft(defaultDraft);
@@ -228,7 +314,7 @@ const FinanceTransactions = () => {
 
   const categoryOptions = categories.data.map((category) => ({
     value: String(category.id),
-    label: `${category.kind === "income" ? "Income" : "Expense"} �- ${category.name}`,
+    label: `${category.kind === "income" ? "Income" : "Expense"} - ${category.name}`,
   }));
 
   const accountOptions = accounts.data.map((account) => ({
@@ -236,6 +322,39 @@ const FinanceTransactions = () => {
     label: account.name,
   }));
 
+  const paidByOptions = useMemo(
+    () => [
+      { value: "company", label: "Company (paid with company funds)" },
+      ...staffProfiles
+        .filter((profile): profile is StaffProfile => typeof profile?.userId === "number")
+        .map((profile) => ({
+          value: String(profile.userId),
+          label:
+            typeof profile.userName === "string" && profile.userName.trim().length > 0
+              ? profile.userName.trim()
+              : `User #${profile.userId}`,
+        })),
+    ],
+    [staffProfiles],
+  );
+
+  const paidByValue = useMemo(() => {
+    const userId = parsePaidByUserIdFromMeta(draft.meta);
+    return userId ? String(userId) : "company";
+  }, [draft.meta]);
+
+  const handlePaidByChange = useCallback(
+    (value: string | null) => {
+      setDraft((state) => {
+        const nextUserId = !value || value === "company" ? null : Number(value);
+        return {
+          ...state,
+          meta: applyPaidByUserToMeta(state.meta, nextUserId),
+        };
+      });
+    },
+    [],
+  );
   const handleFileSelect = async (event: Event) => {
     const target = event.target as HTMLInputElement | null;
     const file = target?.files?.[0];
@@ -262,13 +381,7 @@ const FinanceTransactions = () => {
             placeholder="Status"
             value={filters.status ?? null}
             onChange={(value) => setFilters((state) => ({ ...state, status: value ?? undefined }))}
-            data={[
-              { value: "planned", label: "Planned" },
-              { value: "approved", label: "Approved" },
-              { value: "paid", label: "Paid" },
-              { value: "reimbursed", label: "Reimbursed" },
-              { value: "void", label: "Void" },
-            ]}
+            data={TRANSACTION_STATUS_OPTIONS}
             allowDeselect
           />
           <Select
@@ -321,6 +434,7 @@ const FinanceTransactions = () => {
               <Table.Th>Amount</Table.Th>
               <Table.Th>Category</Table.Th>
               <Table.Th>Counterparty</Table.Th>
+              <Table.Th>Paid by</Table.Th>
               <Table.Th>Status</Table.Th>
               <Table.Th />
             </Table.Tr>
@@ -338,9 +452,11 @@ const FinanceTransactions = () => {
                 </Table.Td>
                 <Table.Td>{transaction.categoryName}</Table.Td>
                 <Table.Td>{transaction.counterpartyName}</Table.Td>
+                <Table.Td>{transaction.paidByName}</Table.Td>
                 <Table.Td>
-                  <Badge color="blue" variant="light">
-                    {transaction.status.toUpperCase()}
+                  <Badge color={getStatusBadgeColor(transaction.status)} variant="light">
+                    {TRANSACTION_STATUS_OPTIONS.find((option) => option.value === transaction.status)?.label ??
+                      transaction.status.toUpperCase()}
                   </Badge>
                 </Table.Td>
                 <Table.Td width={60}>
@@ -386,6 +502,7 @@ const FinanceTransactions = () => {
                   ...state,
                   kind: (value ?? "expense") as TransactionDraft["kind"],
                   counterpartyType: value === "income" ? "client" : value === "expense" ? "vendor" : "none",
+                  meta: value === "expense" ? state.meta : applyPaidByUserToMeta(state.meta, null),
                 }))
               }
             />
@@ -480,13 +597,7 @@ const FinanceTransactions = () => {
             )}
             <Select
               label="Status"
-              data={[
-                { value: "planned", label: "Planned" },
-                { value: "approved", label: "Approved" },
-                { value: "paid", label: "Paid" },
-                { value: "reimbursed", label: "Reimbursed" },
-                { value: "void", label: "Void" },
-              ]}
+              data={TRANSACTION_STATUS_OPTIONS}
               value={draft.status}
               onChange={(value) =>
                 setDraft((state) => ({
@@ -495,6 +606,9 @@ const FinanceTransactions = () => {
                 }))
               }
             />
+            {draft.kind === "expense" && (
+              <Select label="Paid by" data={paidByOptions} value={paidByValue} onChange={handlePaidByChange} />
+            )}
           </Group>
           <Textarea
             label="Description"
@@ -540,4 +654,6 @@ const FinanceTransactions = () => {
 };
 
 export default FinanceTransactions;
+
+
 

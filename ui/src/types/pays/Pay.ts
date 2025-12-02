@@ -1,3 +1,5 @@
+import type { FinanceTransactionStatus } from '../finance/Transaction';
+
 export type PayBreakdown = {
   date: string;
   commission: number;
@@ -34,6 +36,23 @@ export type LockedComponentRequirement =
       extraAmount: number;
       extraDays?: string[];
     };
+
+export type PayReimbursementEntry = {
+  transactionId: number;
+  date: string;
+  vendorName: string | null;
+  description: string | null;
+  amount: number;
+  originalAmount: number;
+  originalCurrency: string;
+  status: FinanceTransactionStatus;
+};
+
+export type PayReimbursementSummary = {
+  awaitingAmount: number;
+  reimbursedAmount: number;
+  entries: PayReimbursementEntry[];
+};
 
 export type LockedComponentSummary = {
   componentId: number;
@@ -106,4 +125,5 @@ export type Pay = {
     endDate: string;
   };
   rangeIsCanonical?: boolean;
+  reimbursements?: PayReimbursementSummary;
 };

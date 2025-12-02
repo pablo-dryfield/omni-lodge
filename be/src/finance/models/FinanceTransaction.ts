@@ -19,7 +19,13 @@ import FinanceClient from './FinanceClient.js';
 import FinanceFile from './FinanceFile.js';
 
 export type FinanceTransactionKind = 'income' | 'expense' | 'transfer' | 'refund';
-export type FinanceTransactionStatus = 'planned' | 'approved' | 'paid' | 'reimbursed' | 'void';
+export type FinanceTransactionStatus =
+  | 'planned'
+  | 'approved'
+  | 'awaiting_reimbursement'
+  | 'paid'
+  | 'reimbursed'
+  | 'void';
 export type FinanceTransactionCounterpartyType = 'vendor' | 'client' | 'none';
 
 @Table({
@@ -101,7 +107,10 @@ export default class FinanceTransaction extends Model {
 
   @AllowNull(false)
   @Default('planned')
-  @Column({ field: 'status', type: DataType.ENUM('planned', 'approved', 'paid', 'reimbursed', 'void') })
+  @Column({
+    field: 'status',
+    type: DataType.ENUM('planned', 'approved', 'awaiting_reimbursement', 'paid', 'reimbursed', 'void'),
+  })
   declare status: FinanceTransactionStatus;
 
   @AllowNull(true)

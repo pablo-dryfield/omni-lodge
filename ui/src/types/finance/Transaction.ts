@@ -5,7 +5,13 @@ import { FinanceVendor } from './Vendor';
 import { FinanceFile } from './File';
 
 export type FinanceTransactionKind = 'income' | 'expense' | 'transfer' | 'refund';
-export type FinanceTransactionStatus = 'planned' | 'approved' | 'paid' | 'reimbursed' | 'void';
+export type FinanceTransactionStatus =
+  | 'planned'
+  | 'approved'
+  | 'awaiting_reimbursement'
+  | 'paid'
+  | 'reimbursed'
+  | 'void';
 export type FinanceTransactionCounterpartyType = 'vendor' | 'client' | 'none';
 
 export interface FinanceTransaction {
@@ -45,4 +51,3 @@ export interface FinanceTransactionListResponse {
     offset: number;
   };
 }
-

@@ -35,6 +35,7 @@ import {
   type PayComponentSummary,
   type PlatformGuestTierBreakdown,
   type LockedComponentSummary,
+  type PayReimbursementEntry,
 } from '../types/pays/Pay';
 import type { CompensationComponent } from '../types/compensation/CompensationComponent';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
@@ -44,6 +45,7 @@ import {
   fetchFinanceCategories,
   fetchFinanceVendors,
   createFinanceTransaction,
+  updateFinanceTransaction,
 } from '../actions/financeActions';
 import { fetchCompensationComponents } from '../actions/compensationComponentActions';
 import { useModuleAccess } from '../hooks/useModuleAccess';
@@ -469,6 +471,10 @@ type EntryModalState = {
   previousRangeStart?: string;
   previousRangeEnd?: string;
   lines: EntryPaymentLine[];
+  includeReimbursements: boolean;
+  reimbursementEntries: PayReimbursementEntry[];
+  reimbursementsAwaitingAmount: number;
+  reimbursementCategoryId: string;
 };
 
 const createEmptyEntryModalState = (): EntryModalState => ({
@@ -487,6 +493,10 @@ const createEmptyEntryModalState = (): EntryModalState => ({
   previousRangeStart: undefined,
   previousRangeEnd: undefined,
   lines: [],
+  includeReimbursements: false,
+  reimbursementEntries: [],
+  reimbursementsAwaitingAmount: 0,
+  reimbursementCategoryId: '',
 });
 
 const PAYMENT_BUCKET_METADATA: Record<
@@ -506,6 +516,8 @@ const PAYMENT_BUCKET_METADATA: Record<
   reviews: { label: 'Reviews', categoryHint: 'Reviews' },
   bonus: { label: 'Bonus', categoryHint: 'Bonuses' },
   bonuses: { label: 'Bonus', categoryHint: 'Bonuses' },
+  reimbursement: { label: 'Reimbursements', categoryHint: 'Reimbursements' },
+  reimbursements: { label: 'Reimbursements', categoryHint: 'Reimbursements' },
 };
 
 const createLineId = () => `line-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -548,8 +560,12 @@ const buildDefaultPaymentLines = (
     }
   >();
   Object.entries(staff.bucketTotals ?? {}).forEach(([bucket, amount]) => {
+    const normalizedBucket = bucket.toLowerCase();
+    if (normalizedBucket === 'reimbursement' || normalizedBucket === 'reimbursements') {
+      return;
+    }
     if (amount > 0) {
-      bucketBalances.set(bucket.toLowerCase(), {
+      bucketBalances.set(normalizedBucket, {
         label: bucket,
         amount,
       });
@@ -842,6 +858,118 @@ const renderBucketTotals = (
           );
         })}
       </Stack>
+    </Stack>
+  );
+};
+
+const getReimbursementStatusMeta = (status: string | undefined) => {
+  switch (status) {
+    case 'awaiting_reimbursement':
+      return { label: 'Awaiting reimbursement', color: 'orange' as const };
+    case 'reimbursed':
+      return { label: 'Reimbursed', color: 'teal' as const };
+    case 'approved':
+      return { label: 'Approved', color: 'blue' as const };
+    case 'planned':
+      return { label: 'Planned', color: 'gray' as const };
+    case 'paid':
+      return { label: 'Paid', color: 'green' as const };
+    case 'void':
+      return { label: 'Void', color: 'red' as const };
+    default:
+      return { label: status ?? 'Unknown', color: 'gray' as const };
+  }
+};
+
+const ReimbursementEntriesTable = ({
+  entries,
+  maxHeight,
+}: {
+  entries: PayReimbursementEntry[];
+  maxHeight?: number;
+}) => {
+  if (entries.length === 0) {
+    return null;
+  }
+  return (
+    <ScrollArea h={maxHeight} offsetScrollbars>
+      <Table striped highlightOnHover withColumnBorders>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Vendor</th>
+            <th>Description</th>
+            <th>Amount</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map((entry) => {
+            const statusMeta = getReimbursementStatusMeta(entry.status);
+            return (
+              <tr key={entry.transactionId}>
+                <td>{dayjs(entry.date).format('MMM D, YYYY')}</td>
+                <td>{entry.vendorName ?? '—'}</td>
+                <td>{entry.description ?? '—'}</td>
+                <td>
+                  <Stack gap={0}>
+                    <Text size="sm" fw={600}>
+                      {formatCurrency(entry.amount)}
+                    </Text>
+                    {entry.originalCurrency && entry.originalCurrency !== '' && (
+                      <Text size="xs" c="dimmed">
+                        {entry.originalCurrency.toUpperCase()}{' '}
+                        {entry.originalAmount.toLocaleString('en-US', {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </Text>
+                    )}
+                  </Stack>
+                </td>
+                <td>
+                  <Badge color={statusMeta.color} variant={statusMeta.color === 'gray' ? 'outline' : 'light'}>
+                    {statusMeta.label}
+                  </Badge>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </Table>
+    </ScrollArea>
+  );
+};
+
+const renderReimbursements = (staff: Pay) => {
+  const reimbursements = staff.reimbursements;
+  if (!reimbursements || reimbursements.entries.length === 0) {
+    return null;
+  }
+  const tableHeight = Math.min(360, reimbursements.entries.length * 52 + 60);
+
+  return (
+    <Stack gap="xs">
+      <Group justify="space-between" align="flex-start">
+        <div>
+          <Text size="sm" fw={600}>
+            Reimbursements
+          </Text>
+          <Text size="xs" c="dimmed">
+            Expenses covered by staff during the selected range.
+          </Text>
+        </div>
+        <Stack gap={4} align="flex-end">
+          <Badge variant="light" color={reimbursements.awaitingAmount > 0 ? 'orange' : 'gray'}>
+            Awaiting {formatCurrency(reimbursements.awaitingAmount)}
+          </Badge>
+          <Badge variant="light" color={reimbursements.reimbursedAmount > 0 ? 'teal' : 'gray'}>
+            Reimbursed {formatCurrency(reimbursements.reimbursedAmount)}
+          </Badge>
+        </Stack>
+      </Group>
+
+      <ReimbursementEntriesTable entries={reimbursements.entries} maxHeight={tableHeight} />
     </Stack>
   );
 };
@@ -1351,6 +1479,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
     [dispatch, endDate, scopeParam, startDate, updateBaseOverridePending],
   );
 
+
   const updateLines = useCallback((updater: (lines: EntryPaymentLine[]) => EntryPaymentLine[]) => {
     setEntryModal((prev) => {
       const nextLines = updater(prev.lines);
@@ -1460,6 +1589,12 @@ const resolveStaffCounterpartyDefaults = useCallback(
         defaultLines.map((line) => line.accountId).filter((value): value is string => Boolean(value)),
       );
       const defaultLineAccount = uniqueAccounts.size === 1 ? uniqueAccounts.values().next().value ?? '' : '';
+      const reimbursementSummary = staff.reimbursements ?? {
+        awaitingAmount: 0,
+        reimbursedAmount: 0,
+        entries: [],
+      };
+      const reimbursementCategoryId = findCategoryIdByName(categoryLookup, 'reimbursements', defaults.categoryId);
       setEntryModal({
         open: true,
         staff,
@@ -1476,6 +1611,10 @@ const resolveStaffCounterpartyDefaults = useCallback(
         previousRangeStart: previousRange.start.format('YYYY-MM-DD'),
         previousRangeEnd: previousRange.end.format('YYYY-MM-DD'),
         lines: defaultLines,
+        includeReimbursements: reimbursementSummary.awaitingAmount > 0,
+        reimbursementEntries: reimbursementSummary.entries ?? [],
+        reimbursementsAwaitingAmount: reimbursementSummary.awaitingAmount ?? 0,
+        reimbursementCategoryId,
       });
       setEntryMessage(null);
     },
@@ -1709,6 +1848,11 @@ const resolveStaffCounterpartyDefaults = useCallback(
     const selectedLines = entryModal.lines.filter((line) => line.include && line.amount > 0);
     const missingCategory = selectedLines.some((line) => !line.categoryId);
     const missingAccount = selectedLines.some((line) => !(line.accountId || entryModal.accountId));
+    const awaitingReimbursements =
+      entryModal.includeReimbursements && entryModal.reimbursementsAwaitingAmount > 0
+        ? entryModal.reimbursementEntries.filter((entry) => entry.status === 'awaiting_reimbursement')
+        : [];
+    const totalReimbursementAmount = awaitingReimbursements.reduce((sum, entry) => sum + entry.amount, 0);
     if (
       selectedLines.length === 0 ||
       missingCategory ||
@@ -1718,6 +1862,13 @@ const resolveStaffCounterpartyDefaults = useCallback(
       setEntryMessage({
         type: 'error',
         text: 'Select at least one payment line with a category and account, plus vendor.',
+      });
+      return;
+    }
+    if (totalReimbursementAmount > 0 && !entryModal.accountId) {
+      setEntryMessage({
+        type: 'error',
+        text: 'Select a payout account to reimburse staff expenses.',
       });
       return;
     }
@@ -1763,6 +1914,58 @@ const resolveStaffCounterpartyDefaults = useCallback(
             note: line.description ?? entryModal.description ?? null,
           },
           { withCredentials: true },
+        );
+      }
+      if (totalReimbursementAmount > 0 && entryModal.accountId) {
+        const resolvedAccountId = Number(entryModal.accountId);
+        const accountRecord = financeAccountsById.get(resolvedAccountId);
+        const transactionCurrency = accountRecord?.currency ?? entryModal.currency;
+        const reimbursementTransaction = await dispatch(
+          createFinanceTransaction({
+            kind: 'expense',
+            date: dayjs(entryModal.date).format('YYYY-MM-DD'),
+            accountId: resolvedAccountId,
+            currency: transactionCurrency,
+            amountMinor: toMinorUnits(totalReimbursementAmount),
+            categoryId: Number(entryModal.reimbursementCategoryId || entryModal.categoryId),
+            counterpartyType: 'vendor',
+            counterpartyId: Number(entryModal.counterpartyId),
+            status: 'paid',
+            description: `Reimbursements payout for ${entryModal.staff.firstName}`,
+            meta: {
+              source: 'staff-payments',
+              rangeStart: entryModal.rangeStart,
+              rangeEnd: entryModal.rangeEnd,
+              staffUserId: entryModal.staff.userId ?? null,
+              lineLabel: 'Reimbursements',
+            },
+          }),
+        ).unwrap();
+
+        await axiosInstance.post(
+          '/reports/staffPayouts/collections',
+          {
+            staffProfileId: entryModal.staff.staffProfileId,
+            direction: 'payable',
+            currency: entryModal.currency,
+            amount: totalReimbursementAmount,
+            rangeStart: entryModal.rangeStart,
+            rangeEnd: entryModal.rangeEnd,
+            financeTransactionId: reimbursementTransaction.id,
+            note: 'Staff reimbursements payout',
+          },
+          { withCredentials: true },
+        );
+
+        await Promise.all(
+          awaitingReimbursements.map((entry) =>
+            dispatch(
+              updateFinanceTransaction({
+                id: entry.transactionId,
+                changes: { status: 'reimbursed' },
+              }),
+            ).unwrap(),
+          ),
         );
       }
 
@@ -2054,6 +2257,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
                   { onApproveBaseOverride: handleApproveBaseOverride, pendingUserIds: baseOverridePending },
                 )}
                 {renderBucketTotals(item.bucketTotals, item.lockedComponents)}
+                {renderReimbursements(item)}
               </Stack>
 
               {hasDetails && (
@@ -2145,6 +2349,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
                       <td colSpan={canViewFull ? 8 : 7} style={{ backgroundColor: '#fafafa', padding: '12px 8px' }}>
                         <Stack gap="md">
                           {renderBucketTotals(item.bucketTotals, item.lockedComponents)}
+                          {renderReimbursements(item)}
                           {renderComponentList(
                             item.componentTotals,
                             item.platformGuestBreakdowns,
@@ -2305,6 +2510,8 @@ const renderLedgerSnapshot = (staff: Pay) => {
     startDate && endDate
       ? `${startDate.format('MMM D, YYYY')} - ${endDate.format('MMM D, YYYY')}`
       : 'selected period';
+  const reimbursementAddon = entryModal.includeReimbursements ? entryModal.reimbursementsAwaitingAmount : 0;
+  const modalTotalAmount = entryModal.amount + reimbursementAddon;
 
   return (
     <PageAccessGuard pageSlug={PAGE_SLUG}>
@@ -2369,7 +2576,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
                           <Text size="xs" c="dimmed">
                             This payout
                           </Text>
-                          <Text fw={600}>{formatCurrency(entryModal.amount, entryModal.currency)}</Text>
+                          <Text fw={600}>{formatCurrency(modalTotalAmount, entryModal.currency)}</Text>
                         </Stack>
                       </Card>
                       <Card padding="sm" radius="md" withBorder shadow="xs">
@@ -2380,7 +2587,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
                           <Text fw={600}>
                             {formatCurrency(
                               Math.max(
-                                (entryModal.staff.payouts?.payableOutstanding ?? 0) - entryModal.amount,
+                                (entryModal.staff.payouts?.payableOutstanding ?? 0) - modalTotalAmount,
                                 0,
                               ),
                               entryModal.currency,
@@ -2436,6 +2643,46 @@ const renderLedgerSnapshot = (staff: Pay) => {
                   />
                 </Stack>
               </Card>
+
+              {entryModal.reimbursementEntries.length > 0 && (
+                <Card withBorder radius="md" padding="lg">
+                  <Stack gap="sm">
+                    <Group justify="space-between" align="flex-start">
+                      <Stack gap={2}>
+                        <Text fw={600}>Reimbursements</Text>
+                        <Text size="xs" c="dimmed">
+                          Staff-covered expenses within this payout range.
+                        </Text>
+                        <Group gap="xs">
+                          <Badge variant="light" color={entryModal.reimbursementsAwaitingAmount > 0 ? 'orange' : 'gray'}>
+                            Awaiting {formatCurrency(entryModal.reimbursementsAwaitingAmount)}
+                          </Badge>
+                          <Badge
+                            variant="light"
+                            color={
+                              (entryModal.staff?.reimbursements?.reimbursedAmount ?? 0) > 0 ? 'teal' : 'gray'
+                            }
+                          >
+                            Reimbursed {formatCurrency(entryModal.staff?.reimbursements?.reimbursedAmount ?? 0)}
+                          </Badge>
+                        </Group>
+                      </Stack>
+                      <Switch
+                        label="Include in this payout"
+                        checked={entryModal.includeReimbursements && entryModal.reimbursementsAwaitingAmount > 0}
+                        onChange={(event) =>
+                          setEntryModal((prev) => ({
+                            ...prev,
+                            includeReimbursements: event.currentTarget.checked,
+                          }))
+                        }
+                        disabled={entryModal.reimbursementsAwaitingAmount <= 0}
+                      />
+                    </Group>
+                    <ReimbursementEntriesTable entries={entryModal.reimbursementEntries} maxHeight={240} />
+                  </Stack>
+                </Card>
+              )}
 
               <Card withBorder radius="md" padding="lg">
                 <Stack gap="md">
