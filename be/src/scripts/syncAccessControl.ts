@@ -149,6 +149,14 @@ async function syncAccessControl() {
         code === "42701" &&
         /\bvenues\b/i.test(message) &&
         /\bfinance_(vendor|client)_id\b/i.test(message);
+      const isBookingSchemaCollision =
+        typeof code === "string" &&
+        code === "42701" &&
+        /\bbookings\b/i.test(message);
+      const isBookingConstraintMissing =
+        typeof code === "string" &&
+        code === "42704" &&
+        /\bbookings\b/i.test(message);
       if (isShiftRoleSchemaIssue) {
         console.warn(
           'Skipping automatic schema sync for shift role references because the "shift_roles" table is not yet available. Run the migrations to create it.',
@@ -160,6 +168,14 @@ async function syncAccessControl() {
       } else if (isVenueFinanceColumnCollision) {
         console.warn(
           'Skipping schema sync for venue finance mappings because the columns already exist. Ensure the latest migrations have been applied.',
+        );
+      } else if (isBookingSchemaCollision) {
+        console.warn(
+          'Skipping schema sync for bookings because the schema is now managed via migrations. Run migrations to apply the latest structure.',
+        );
+      } else if (isBookingConstraintMissing) {
+        console.warn(
+          'Skipping schema sync for bookings constraints because they are recreated via migrations.',
         );
       } else {
         throw error;

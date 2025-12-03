@@ -1,4 +1,7 @@
 import Booking from './Booking.js';
+import BookingAddon from './BookingAddon.js';
+import BookingEmail from './BookingEmail.js';
+import BookingEvent from './BookingEvent.js';
 import Channel from './Channel.js';
 import Counter from './Counter.js';
 import CounterProduct from './CounterProduct.js';
@@ -183,6 +186,9 @@ export function defineAssociations() {
   Booking.belongsTo(Channel, { foreignKey: 'channelId' });
   Booking.belongsTo(User, { foreignKey: 'createdBy' });
   Booking.belongsTo(User, { foreignKey: 'updatedBy' });
+  Booking.hasMany(BookingAddon, { foreignKey: 'booking_id', as: 'addons' });
+  Booking.hasMany(BookingEvent, { foreignKey: 'booking_id', as: 'events' });
+  BookingEmail.hasMany(BookingEvent, { foreignKey: 'email_id', as: 'events' });
 
   // Guest Associations
   Guest.hasMany(Booking, { foreignKey: 'guestId' });
