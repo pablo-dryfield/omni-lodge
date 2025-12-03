@@ -1,0 +1,258 @@
+import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat.js';
+import type { BookingEmailParser, BookingParserContext, BookingFieldPatch, ParsedBookingEvent } from '../types.js';
+
+dayjs.extend(customParseFormat);
+
+const DATE_FORMATS = ['ddd, MMM D, YYYY', 'ddd, MMM DD, YYYY', 'MMM D, YYYY', 'MMM DD, YYYY', 'MMMM D, YYYY', 'MMMM DD, YYYY'];
+
+const MONEY_PATTERN = /([A-Z]{3})\s*([\d.,]+)/i;
+const TIME_PATTERN = /(\d{1,2}:\d{2})/;
+
+const extractField = (text: string, label: string, nextLabels: string[] = []): string | null => {
+  const lower = text.toLowerCase();
+  const anchor = label.toLowerCase();
+  const start = lower.indexOf(anchor);
+  if (start === -1) {
+    return null;
+  }
+
+  let value = text.slice(start + label.length);
+  if (nextLabels.length > 0) {
+    const lowerValue = value.toLowerCase();
+    let endIndex = -1;
+    for (const candidate of nextLabels) {
+      const idx = lowerValue.indexOf(candidate.toLowerCase());
+      if (idx !== -1 && (endIndex === -1 || idx < endIndex)) {
+        endIndex = idx;
+      }
+    }
+    if (endIndex !== -1) {
+      value = value.slice(0, endIndex);
+    }
+  }
+
+  return value.trim();
+};
+
+const parseMoney = (input: string | null): { currency: string | null; amount: number | null } => {
+  if (!input) {
+    return { currency: null, amount: null };
+  }
+  const match = input.match(MONEY_PATTERN);
+  if (!match) {
+    return { currency: null, amount: null };
+  }
+  const amount = Number.parseFloat(match[2].replace(/,/g, ''));
+  return {
+    currency: match[1]?.toUpperCase() ?? null,
+    amount: Number.isNaN(amount) ? null : amount,
+  };
+};
+
+const parseName = (
+  value: string | null,
+): { firstName: string | null; lastName: string | null } => {
+  if (!value) {
+    return { firstName: null, lastName: null };
+  }
+  const tokens = value
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  if (tokens.length === 0) {
+    return { firstName: null, lastName: null };
+  }
+  const firstName = tokens.shift() ?? null;
+  const lastName = tokens.length > 0 ? tokens.join(' ') : null;
+  return { firstName, lastName };
+};
+
+const parseTravelDate = (
+  value: string | null,
+  timeHint: string | null,
+): { experienceDate: string | null; experienceStartAt: Date | null } => {
+  if (!value) {
+    return { experienceDate: null, experienceStartAt: null };
+  }
+
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  const candidateValues = [normalized];
+  if (/^[A-Za-z]{3},/.test(normalized)) {
+    candidateValues.push(normalized.replace(/^[A-Za-z]{3},\s*/, ''));
+  }
+
+  let parsedDate: dayjs.Dayjs | null = null;
+  for (const candidateValue of candidateValues) {
+    for (const format of DATE_FORMATS) {
+      const candidate = dayjs(candidateValue, format, true);
+      if (candidate.isValid()) {
+        parsedDate = candidate;
+        break;
+      }
+    }
+    if (parsedDate) {
+      break;
+    }
+  }
+
+  if (!parsedDate) {
+    return { experienceDate: null, experienceStartAt: null };
+  }
+
+  if (timeHint) {
+    const timeMatch = timeHint.match(TIME_PATTERN);
+    if (timeMatch?.[1]) {
+      const withTime = dayjs(
+        `${parsedDate.format('YYYY-MM-DD')} ${timeMatch[1]}`,
+        ['YYYY-MM-DD HH:mm'],
+        true,
+      );
+      if (withTime.isValid()) {
+        return {
+          experienceDate: parsedDate.format('YYYY-MM-DD'),
+          experienceStartAt: withTime.toDate(),
+        };
+      }
+    }
+  }
+
+  return {
+    experienceDate: parsedDate.format('YYYY-MM-DD'),
+    experienceStartAt: parsedDate.startOf('day').toDate(),
+  };
+};
+
+const parseTravelerCounts = (
+  input: string | null,
+): { total: number | null; adults: number | null } => {
+  if (!input) {
+    return { total: null, adults: null };
+  }
+  const countMatch = input.match(/(\d+)/);
+  if (!countMatch) {
+    return { total: null, adults: null };
+  }
+  const total = Number.parseInt(countMatch[1], 10);
+  if (Number.isNaN(total)) {
+    return { total: null, adults: null };
+  }
+  return { total, adults: total };
+};
+
+const parsePhone = (value: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const cleaned = value.replace(/Send the customer a message\.?/i, '').trim();
+  const withoutPrefix = cleaned.replace(/^[A-Za-z()\s]+/, '').trim();
+  if (!withoutPrefix) {
+    return null;
+  }
+  const match = withoutPrefix.match(/(\+?\d[\d\s-]+)/);
+  return match ? match[1].replace(/\s+/g, ' ').trim() : withoutPrefix;
+};
+
+export class ViatorBookingParser implements BookingEmailParser {
+  public readonly name = 'viator';
+
+  canParse(context: BookingParserContext): boolean {
+    const haystack = `${context.from ?? ''} ${context.subject ?? ''}`.toLowerCase();
+    if (!haystack.includes('viator')) {
+      return false;
+    }
+    return /booking reference:/i.test(context.textBody ?? context.rawTextBody ?? '');
+  }
+
+  async parse(context: BookingParserContext): Promise<ParsedBookingEvent | null> {
+    const text = context.textBody || context.rawTextBody || context.snippet || '';
+    if (!text) {
+      return null;
+    }
+
+    const bookingReference = extractField(text, 'Booking Reference:', ['Tour Name:']);
+    if (!bookingReference) {
+      return null;
+    }
+
+    const tourName = extractField(text, 'Tour Name:', ['Travel Date:']);
+    const travelDate = extractField(text, 'Travel Date:', ['Lead Traveler Name:']);
+    const leadTraveler = extractField(text, 'Lead Traveler Name:', ['Traveler Names:']);
+    const travelerNames = extractField(text, 'Traveler Names:', ['Travelers:']);
+    const travelers = extractField(text, 'Travelers:', ['Product Code:']);
+    const productCode = extractField(text, 'Product Code:', ['Tour Grade:']);
+    const tourGrade = extractField(text, 'Tour Grade:', ['Tour Grade Code:']);
+    const tourGradeCode = extractField(text, 'Tour Grade Code:', ['Tour Grade Description:']);
+    const gradeDescription = extractField(text, 'Tour Grade Description:', ['Tour Language:']);
+    const tourLanguage = extractField(text, 'Tour Language:', ['Location:']);
+    const location = extractField(text, 'Location:', ['Net Rate:']);
+    const netRate = extractField(text, 'Net Rate:', ['Meeting Point:', 'Special Requirements:', 'Phone:', 'Optional:']);
+    const meetingPoint = extractField(text, 'Meeting Point:', ['Special Requirements:', 'Phone:', 'Optional:']);
+    const specialRequirements = extractField(text, 'Special Requirements:', ['Phone:', 'Optional:', 'Have questions']);
+    const phone = extractField(text, 'Phone:', ['Optional:', 'Have questions', 'Management Center', 'Send the customer a message.']);
+
+    const timeHint = tourGrade ?? tourGradeCode ?? '';
+    const schedule = parseTravelDate(travelDate, timeHint);
+    const counts = parseTravelerCounts(travelers);
+    const nameParts = parseName(leadTraveler);
+    const money = parseMoney(netRate);
+    const guestPhone = parsePhone(phone);
+
+    const bookingFields: BookingFieldPatch = {
+      productName: tourName ?? null,
+      productVariant: tourGrade ?? tourGradeCode ?? null,
+      guestFirstName: nameParts.firstName,
+      guestLastName: nameParts.lastName,
+      guestPhone,
+      partySizeTotal: counts.total,
+      partySizeAdults: counts.adults,
+      experienceDate: schedule.experienceDate,
+      experienceStartAt: schedule.experienceStartAt,
+      currency: money.currency,
+      priceGross: money.amount ?? null,
+      priceNet: money.amount ?? null,
+      baseAmount: money.amount ?? null,
+      pickupLocation: meetingPoint ?? location ?? null,
+    };
+
+    const noteParts: string[] = [];
+    if (travelerNames) {
+      noteParts.push(`Traveler names: ${travelerNames}`);
+    }
+    if (tourLanguage) {
+      noteParts.push(`Tour language: ${tourLanguage}`);
+    }
+    if (location && meetingPoint) {
+      noteParts.push(`Location: ${location}`);
+    }
+    if (gradeDescription) {
+      noteParts.push(`Grade description: ${gradeDescription}`);
+    }
+    if (productCode) {
+      noteParts.push(`Product code: ${productCode}`);
+    }
+    if (tourGradeCode) {
+      noteParts.push(`Grade code: ${tourGradeCode}`);
+    }
+    if (specialRequirements) {
+      noteParts.push(`Special requirements: ${specialRequirements}`);
+    }
+    if (noteParts.length > 0) {
+      bookingFields.notes = noteParts.join(' | ');
+    }
+
+    const paymentStatus = money.amount !== null ? 'paid' : 'unknown';
+
+    return {
+      platform: 'viator',
+      platformBookingId: bookingReference,
+      platformOrderId: bookingReference,
+      eventType: 'created',
+      status: 'confirmed',
+      paymentStatus,
+      bookingFields,
+      occurredAt: context.receivedAt ?? context.internalDate ?? null,
+      sourceReceivedAt: context.receivedAt ?? context.internalDate ?? null,
+    };
+  }
+}
