@@ -3,7 +3,7 @@ import { NavigationState, NavigationPage } from "../types/general/NavigationStat
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 
 export const baseNavigationPages: NavigationPage[] = [
-  { name: "Ecwid Bookings", path: "/bookings", slug: PAGE_SLUGS.bookings, icon: 'eventAvailable' },
+  { name: "Bookings", path: "/bookings", slug: PAGE_SLUGS.bookings, icon: 'eventAvailable' },
   { name: "Counters", path: "/counters", slug: PAGE_SLUGS.counters, icon: 'person' },
   { name: "Venue Numbers", path: "/venueNumbers", slug: PAGE_SLUGS.venueNumbers, icon: 'formatListNumbered' },
   { name: "Channel Numbers", path: "/channelNumbers", slug: PAGE_SLUGS.channelNumbers, icon: 'barChart' },

@@ -1,7 +1,7 @@
 export type UnifiedProduct = {
   id: string;
   name: string;
-  platform: 'ecwid' | string;
+  platform: 'ecwid' | 'fareharbor' | 'viator' | 'getyourguide' | 'freetour' | 'airbnb' | string;
   [key: string]: unknown;
 };
 
@@ -9,6 +9,14 @@ export type OrderExtras = {
   tshirts: number;
   cocktails: number;
   photos: number;
+};
+
+export type PlatformBreakdownEntry = {
+  platform: string;
+  totalPeople: number;
+  men: number;
+  women: number;
+  orderCount: number;
 };
 
 export type UnifiedOrder = {
@@ -22,7 +30,7 @@ export type UnifiedOrder = {
   womenCount: number;
   customerName: string;
   customerPhone?: string;
-  platform: 'ecwid' | string;
+  platform: 'ecwid' | 'fareharbor' | 'viator' | 'getyourguide' | 'freetour' | 'airbnb' | string;
   pickupDateTime?: string;
   extras?: OrderExtras;
   rawData?: unknown;
@@ -38,4 +46,5 @@ export type ManifestGroup = {
   women: number;
   extras: OrderExtras;
   orders: UnifiedOrder[];
+  platformBreakdown: PlatformBreakdownEntry[];
 };

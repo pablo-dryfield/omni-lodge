@@ -54,7 +54,13 @@ import { useModuleAccess } from "../hooks/useModuleAccess";
 
 import axiosInstance from "../utils/axiosInstance";
 
-import { UnifiedOrder, OrderExtras } from "../store/bookingPlatformsTypes";
+import {
+  UnifiedOrder,
+  OrderExtras,
+  ManifestGroup,
+  ManifestSummary,
+  PlatformBreakdownEntry,
+} from "../store/bookingPlatformsTypes";
 
 
 
@@ -86,30 +92,6 @@ const toWhatsAppLink = (raw?: string) => {
   const href = `https://wa.me/${s.replace(/^\+/, '')}`;
   return { display: s, href };
 };
-
-type ManifestGroup = {
-  productId: string;
-  productName: string;
-  date: string;
-  time: string;
-  totalPeople: number;
-  men: number;
-  women: number;
-  extras: OrderExtras;
-  orders: UnifiedOrder[];
-};
-
-
-
-type ManifestSummary = {
-  totalPeople: number;
-  men: number;
-  women: number;
-  totalOrders: number;
-  extras: OrderExtras;
-};
-
-
 
 type ManifestResponse = {
   date: string;
@@ -167,15 +149,114 @@ const deriveGroupKey = (productId: string | null, time: string | null): string =
 
 
 const manifestToOptions = (groups: ManifestGroup[]): SelectOption[] => {
-
   return groups.map((group) => ({
-
     value: `${group.productId}|${group.time}`,
-
     label: `${group.productName} @ ${group.time}`,
-
   }));
+};
 
+const PLATFORM_COLORS: Record<string, string> = {
+  ecwid: "orange",
+  fareharbor: "blue",
+  viator: "teal",
+  getyourguide: "grape",
+  freetour: "gray",
+  airbnb: "pink",
+  unknown: "dark",
+};
+
+const normalizePlatformKey = (value?: string | null): string => {
+  if (!value) {
+    return "unknown";
+  }
+  const key = value.toLowerCase().trim();
+  return PLATFORM_COLORS[key] ? key : "unknown";
+};
+
+const formatPlatformLabel = (value?: string | null): string => {
+  const safe = value ?? "Unknown";
+  return safe
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
+};
+
+const resolvePlatformColor = (value?: string | null): string => {
+  const key = normalizePlatformKey(value);
+  return PLATFORM_COLORS[key] ?? PLATFORM_COLORS.unknown;
+};
+
+const buildPlatformBreakdown = (groups: ManifestGroup[]): PlatformBreakdownEntry[] => {
+  const map = new Map<string, PlatformBreakdownEntry>();
+  groups.forEach((group) => {
+    (group.platformBreakdown ?? []).forEach((entry) => {
+      const key = entry.platform || "unknown";
+      const existing = map.get(key);
+      if (existing) {
+        existing.totalPeople += entry.totalPeople;
+        existing.men += entry.men;
+        existing.women += entry.women;
+        existing.orderCount += entry.orderCount;
+        return;
+      }
+      map.set(key, { ...entry, platform: key });
+    });
+  });
+  return Array.from(map.values()).sort((a, b) => a.platform.localeCompare(b.platform));
+};
+
+const createSummaryFromGroups = (groups: ManifestGroup[]): ManifestSummary => ({
+  totalPeople: groups.reduce((acc, group) => acc + group.totalPeople, 0),
+  men: groups.reduce((acc, group) => acc + group.men, 0),
+  women: groups.reduce((acc, group) => acc + group.women, 0),
+  totalOrders: groups.reduce((acc, group) => acc + group.orders.length, 0),
+  extras: {
+    tshirts: groups.reduce((acc, group) => acc + (group.extras?.tshirts ?? 0), 0),
+    cocktails: groups.reduce((acc, group) => acc + (group.extras?.cocktails ?? 0), 0),
+    photos: groups.reduce((acc, group) => acc + (group.extras?.photos ?? 0), 0),
+  },
+  platformBreakdown: buildPlatformBreakdown(groups),
+});
+
+const OrderPlatformBadge = ({ platform }: { platform?: string }) => {
+  if (!platform) {
+    return null;
+  }
+  return (
+    <Badge size="sm" variant="light" color={resolvePlatformColor(platform)}>
+      {formatPlatformLabel(platform)}
+    </Badge>
+  );
+};
+
+const PlatformBadges = ({
+  entries,
+  prefix,
+  withMargin = true,
+}: {
+  entries?: PlatformBreakdownEntry[];
+  prefix: string;
+  withMargin?: boolean;
+}) => {
+  if (!entries || entries.length === 0) {
+    return null;
+  }
+  return (
+    <Group gap="xs" wrap="wrap" mt={withMargin ? 4 : 0}>
+      {entries.map((entry) => (
+        <Badge
+          key={`${prefix}-${entry.platform}`}
+          variant="light"
+          color={resolvePlatformColor(entry.platform)}
+        >
+          {`${formatPlatformLabel(entry.platform)}: ${entry.totalPeople} (${entry.orderCount} ${
+            entry.orderCount === 1 ? "order" : "orders"
+          })`}
+        </Badge>
+      ))}
+    </Group>
+  );
 };
 
 const formatAddonValue = (value?: number): string => {
@@ -212,7 +293,14 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
   const [manifest, setManifest] = useState<ManifestGroup[]>([]);
 
-  const [summary, setSummary] = useState<ManifestSummary>({ totalPeople: 0, men: 0, women: 0, totalOrders: 0, extras: { tshirts: 0, cocktails: 0, photos: 0 } });
+  const [summary, setSummary] = useState<ManifestSummary>({
+    totalPeople: 0,
+    men: 0,
+    women: 0,
+    totalOrders: 0,
+    extras: { tshirts: 0, cocktails: 0, photos: 0 },
+    platformBreakdown: [],
+  });
 
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>("idle");
 
@@ -332,7 +420,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
       try {
 
-        const response = await axiosInstance.get<ManifestResponse>("/ecwid/manifest", {
+        const response = await axiosInstance.get<ManifestResponse>("/bookings/manifest", {
 
           params: {
 
@@ -358,22 +446,15 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
         setManifest(groups);
 
-        setSummary(
-          payload?.summary ?? {
-            totalPeople: groups.reduce((acc, group) => acc + group.totalPeople, 0),
-            men: groups.reduce((acc, group) => acc + group.men, 0),
-            women: groups.reduce((acc, group) => acc + group.women, 0),
-            totalOrders: groups.reduce((acc, group) => acc + group.orders.length, 0),
-            extras: groups.reduce(
-              (acc, group) => ({
-                tshirts: acc.tshirts + (group.extras?.tshirts ?? 0),
-                cocktails: acc.cocktails + (group.extras?.cocktails ?? 0),
-                photos: acc.photos + (group.extras?.photos ?? 0),
-              }),
-              { tshirts: 0, cocktails: 0, photos: 0 },
-            ),
-          },
-        );
+        const serverSummary = payload?.summary;
+        const computedSummary = serverSummary
+          ? {
+              ...serverSummary,
+              platformBreakdown: serverSummary.platformBreakdown ?? buildPlatformBreakdown(groups),
+            }
+          : createSummaryFromGroups(groups);
+
+        setSummary(computedSummary);
 
         setFetchStatus("success");
 
@@ -681,6 +762,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
               </Badge>
 
+              <PlatformBadges entries={summary.platformBreakdown} prefix="summary" />
+
             </Group>
 
 
@@ -719,6 +802,14 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                 {activeGroups.map((group) => {
                   const readableDate = dayjs(group.date).format("dddd, MMM D");
                   const bookingsLabel = `${group.orders.length} booking${group.orders.length === 1 ? "" : "s"}`;
+                  const sortedOrders = [...group.orders].sort((a, b) => {
+                    const platformA = (a.platform ?? "").toLowerCase();
+                    const platformB = (b.platform ?? "").toLowerCase();
+                    if (platformA !== platformB) {
+                      return platformA.localeCompare(platformB);
+                    }
+                    return (a.customerName ?? "").localeCompare(b.customerName ?? "");
+                  });
 
                   if (isMobile) {
                     return (
@@ -763,18 +854,22 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                 {`Cocktails: ${group.extras.cocktails}`}
                               </Badge>
                             )}
-                            {group.extras.photos > 0 && (
-                              <Badge color="grape" variant="light">
-                                {`Photos: ${group.extras.photos}`}
-                              </Badge>
-                            )}
-                            <Badge color="gray" variant="light">
-                              {bookingsLabel}
+                          {group.extras.photos > 0 && (
+                            <Badge color="grape" variant="light">
+                              {`Photos: ${group.extras.photos}`}
                             </Badge>
-                          </Group>
+                          )}
+                          <Badge color="gray" variant="light">
+                            {bookingsLabel}
+                          </Badge>
+                          <PlatformBadges
+                            entries={group.platformBreakdown}
+                            prefix={`group-desktop-${group.productId}-${group.time}`}
+                          />
+                        </Group>
                           <Divider />
                           <Stack gap="sm">
-                            {group.orders.map((order) => (
+                            {sortedOrders.map((order) => (
                               <Paper
                                 key={order.id}
                                 withBorder
@@ -802,6 +897,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                     <Badge color="pink" variant="light">
                                       {`Women: ${order.womenCount}`}
                                     </Badge>
+                                    <OrderPlatformBadge platform={order.platform} />
                                     {order.extras && (order.extras.tshirts ?? 0) > 0 ? (
                                       <Badge color="blue" variant="light">
                                         {`T-Shirts: ${order.extras.tshirts}`}
@@ -908,16 +1004,21 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                           <Badge color="gray" variant="light">
                             {bookingsLabel}
                           </Badge>
+                          <PlatformBadges
+                            entries={group.platformBreakdown}
+                            prefix={`group-mobile-${group.productId}-${group.time}`}
+                          />
                         </Group>
                       </Flex>
 
                       <Table striped highlightOnHover withColumnBorders mt="md" horizontalSpacing="md" verticalSpacing="sm">
-                        <Table.Thead>
-                          <Table.Tr>
-                            <Table.Th>ID</Table.Th>
-                            <Table.Th>Contact</Table.Th>
-                            <Table.Th>Phone</Table.Th>
-                            <Table.Th align="right">People</Table.Th>
+                          <Table.Thead>
+                            <Table.Tr>
+                              <Table.Th>ID</Table.Th>
+                              <Table.Th>Contact</Table.Th>
+                              <Table.Th>Platform</Table.Th>
+                              <Table.Th>Phone</Table.Th>
+                              <Table.Th align="right">People</Table.Th>
                             <Table.Th align="right">Men</Table.Th>
                             <Table.Th align="right">Women</Table.Th>
                             <Table.Th align="right">T-Shirts</Table.Th>
@@ -926,13 +1027,20 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                             <Table.Th>Pickup time</Table.Th>
                           </Table.Tr>
                         </Table.Thead>
-                        <Table.Tbody>
-                          <Table.Tr style={{ background: "#fff7e6" }}>
-                            <Table.Td fw={600} c="#475569">Summary</Table.Td>
-                            <Table.Td fw={600}>{bookingsLabel}</Table.Td>
-                            <Table.Td />
-                            <Table.Td align="right" fw={600}>
-                              {group.totalPeople}
+                          <Table.Tbody>
+                            <Table.Tr style={{ background: "#fff7e6" }}>
+                              <Table.Td fw={600} c="#475569">Summary</Table.Td>
+                              <Table.Td fw={600}>{bookingsLabel}</Table.Td>
+                              <Table.Td>
+                                <PlatformBadges
+                                  entries={group.platformBreakdown}
+                                  prefix={`table-summary-${group.productId}-${group.time}`}
+                                  withMargin={false}
+                                />
+                              </Table.Td>
+                              <Table.Td />
+                              <Table.Td align="right" fw={600}>
+                                {group.totalPeople}
                             </Table.Td>
                             <Table.Td align="right" fw={600}>
                               {group.men}
@@ -951,10 +1059,13 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                             </Table.Td>
                             <Table.Td fw={600}>{group.time}</Table.Td>
                           </Table.Tr>
-                          {group.orders.map((order) => (
+                          {sortedOrders.map((order) => (
                             <Table.Tr key={order.id}>
                               <Table.Td>{order.id}</Table.Td>
                               <Table.Td>{order.customerName || "-"}</Table.Td>
+                              <Table.Td>
+                                <OrderPlatformBadge platform={order.platform} />
+                              </Table.Td>
                               <Table.Td>
                                 {(() => {
                                   const link = toWhatsAppLink(order.customerPhone);

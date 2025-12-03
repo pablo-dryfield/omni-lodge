@@ -1,4 +1,5 @@
 import type { BookingEmailParser, BookingParserContext, BookingFieldPatch, ParsedBookingEvent } from '../types.js';
+import type { BookingEventType, BookingStatus } from '../../../constants/bookings.js';
 
 const MONEY_PATTERN = /(PLN|USD|EUR|GBP)?\s*([\d.,]+)/i;
 const BOOKING_NUMBER_PATTERN = /Booking\s*#(\d+)/i;
@@ -269,6 +270,40 @@ const buildBookingFields = (contextText: string, scheduleText: string): BookingF
   return fields;
 };
 
+const extractRebookedNewId = (text: string): string | null => {
+  const match = text.match(/New\s+#?(\d{5,})/i);
+  if (match?.[1]) {
+    return match[1];
+  }
+  const altMatch = text.match(/New\s+https?:\/\/[^\s#/]+\/[^\s#]+#?(\d{5,})/i);
+  return altMatch?.[1] ?? null;
+};
+
+const deriveStatusFromContext = (context: BookingParserContext, bodyText: string): BookingStatus => {
+  const haystack = `${context.subject ?? ''}\n${bodyText ?? ''}`.toLowerCase();
+  if (/(?:cancelled|canceled|cancellation)/i.test(haystack)) {
+    return 'cancelled';
+  }
+  if (/(?:amended|modified|updated|changed|rebooked)/i.test(haystack)) {
+    return 'amended';
+  }
+  if (/no[-\s]?show/.test(haystack)) {
+    return 'no_show';
+  }
+  return 'confirmed';
+};
+
+const statusToEventType = (status: BookingStatus): BookingEventType => {
+  switch (status) {
+    case 'cancelled':
+      return 'cancelled';
+    case 'amended':
+      return 'amended';
+    default:
+      return 'created';
+  }
+};
+
 export class FareHarborBookingParser implements BookingEmailParser {
   public readonly name = 'fareharbor';
 
@@ -336,15 +371,34 @@ export class FareHarborBookingParser implements BookingEmailParser {
     const paymentStatus =
       (dueMoney.amount !== null && dueMoney.amount === 0) || paymentDetails.amount !== null ? 'paid' : 'unknown';
 
+    const status = deriveStatusFromContext(context, text);
+    const eventType = statusToEventType(status);
+    const rebookedNewId = status === 'amended' ? extractRebookedNewId(text) : null;
+
+    const noteParts: string[] = [];
+    if (questionnaire) {
+      noteParts.push(questionnaire);
+    }
+    if (status === 'cancelled') {
+      noteParts.push('Parsed from FareHarbor cancellation email.');
+    } else if (status === 'amended') {
+      noteParts.push('Parsed from FareHarbor amendment email.');
+      if (rebookedNewId) {
+        noteParts.push(`New booking id: #${rebookedNewId}.`);
+      }
+    } else {
+      noteParts.push('Parsed from FareHarbor confirmation email.');
+    }
+
     return {
       platform: 'fareharbor',
       platformBookingId: bookingNumber,
       platformOrderId: bookingNumber,
-      eventType: 'created',
-      status: 'confirmed',
+      eventType,
+      status,
       paymentStatus,
       bookingFields,
-      notes: questionnaire ?? 'Parsed from FareHarbor confirmation email.',
+      notes: noteParts.join(' '),
       occurredAt: context.receivedAt ?? context.internalDate ?? null,
       sourceReceivedAt: context.receivedAt ?? context.internalDate ?? null,
     };

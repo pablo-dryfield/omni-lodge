@@ -2,7 +2,7 @@
 export interface UnifiedProduct {
   id: string;
   name: string;
-  platform: 'ecwid' | 'viator' | 'getyourguide' | string;
+  platform: 'ecwid' | 'viator' | 'getyourguide' | 'fareharbor' | 'freetour' | 'airbnb' | string;
   [key: string]: any;
 }
 
@@ -10,6 +10,14 @@ export interface OrderExtras {
   tshirts: number;
   cocktails: number;
   photos: number;
+}
+
+export interface PlatformBreakdownEntry {
+  platform: string;
+  totalPeople: number;
+  men: number;
+  women: number;
+  orderCount: number;
 }
 
 export interface UnifiedOrder {
@@ -23,7 +31,7 @@ export interface UnifiedOrder {
   womenCount: number;
   customerName: string;
   customerPhone?: string;
-  platform: 'ecwid' | 'viator' | 'getyourguide' | string;
+  platform: 'ecwid' | 'viator' | 'getyourguide' | 'fareharbor' | 'freetour' | 'airbnb' | string;
   pickupDateTime?: string;
   extras?: OrderExtras;
   rawData?: any;
@@ -31,4 +39,26 @@ export interface UnifiedOrder {
 
 export type UnifiedOrderMap = {
   [orderId: string]: UnifiedOrder;
+};
+
+export type ManifestGroup = {
+  productId: string;
+  productName: string;
+  date: string;
+  time: string;
+  totalPeople: number;
+  men: number;
+  women: number;
+  extras: OrderExtras;
+  orders: UnifiedOrder[];
+  platformBreakdown: PlatformBreakdownEntry[];
+};
+
+export type ManifestSummary = {
+  totalPeople: number;
+  men: number;
+  women: number;
+  totalOrders: number;
+  extras: OrderExtras;
+  platformBreakdown: PlatformBreakdownEntry[];
 };

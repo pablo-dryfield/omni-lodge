@@ -29,9 +29,15 @@ type ListMessagesParams = {
   pageToken?: string | null;
 };
 
+export type ListMessagesResult = {
+  messages: gmail_v1.Schema$Message[];
+  nextPageToken: string | null;
+  totalSizeEstimate: number | null;
+};
+
 export const listMessages = async (
   params: ListMessagesParams,
-): Promise<gmail_v1.Schema$Message[]> => {
+): Promise<ListMessagesResult> => {
   const gmail = getGmailClient();
   const response = await gmail.users.messages.list({
     userId: 'me',
@@ -39,7 +45,12 @@ export const listMessages = async (
     maxResults: params.maxResults ?? 25,
     pageToken: params.pageToken ?? undefined,
   });
-  return response.data.messages ?? [];
+  return {
+    messages: response.data.messages ?? [],
+    nextPageToken: response.data.nextPageToken ?? null,
+    totalSizeEstimate:
+      typeof response.data.resultSizeEstimate === 'number' ? response.data.resultSizeEstimate : null,
+  };
 };
 
 const decodeBody = (data?: string | null): string => {
