@@ -643,6 +643,32 @@ export const transformEcwidOrders = (ecwidOrders: EcwidOrder[]) => {
   };
 };
 
+const applyPlatformBreakdown = (
+  breakdown: ManifestGroup['platformBreakdown'],
+  platform: string,
+  men: number,
+  women: number,
+): void => {
+  const totalPeople = men + women;
+  const key = platform || 'unknown';
+  const existing = breakdown.find((entry) => entry.platform === key);
+  if (existing) {
+    existing.totalPeople += totalPeople;
+    existing.men += men;
+    existing.women += women;
+    existing.orderCount += 1;
+    return;
+  }
+
+  breakdown.push({
+    platform: key,
+    totalPeople,
+    men,
+    women,
+    orderCount: 1,
+  });
+};
+
 export const groupOrdersForManifest = (orders: UnifiedOrder[]): ManifestGroup[] => {
   const groups = new Map<string, ManifestGroup>();
 
@@ -669,6 +695,7 @@ export const groupOrdersForManifest = (orders: UnifiedOrder[]): ManifestGroup[] 
       existing.extras.cocktails += extras.cocktails;
       existing.extras.photos += extras.photos;
       existing.orders.push(normalizedOrder);
+      applyPlatformBreakdown(existing.platformBreakdown, normalizedOrder.platform, men, women);
       return;
     }
 
@@ -682,6 +709,15 @@ export const groupOrdersForManifest = (orders: UnifiedOrder[]): ManifestGroup[] 
       women,
       extras: { ...extras },
       orders: [normalizedOrder],
+      platformBreakdown: [
+        {
+          platform: normalizedOrder.platform ?? 'unknown',
+          totalPeople,
+          men,
+          women,
+          orderCount: 1,
+        },
+      ],
     });
   });
 

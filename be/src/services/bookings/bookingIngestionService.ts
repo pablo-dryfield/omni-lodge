@@ -356,7 +356,7 @@ export const processBookingEmail = async (messageId: string, options: { force?: 
 
 export const ingestLatestBookingEmails = async (): Promise<void> => {
   try {
-    const messages = await listMessages({
+    const { messages } = await listMessages({
       query: DEFAULT_QUERY,
       maxResults: DEFAULT_BATCH,
     });
@@ -390,5 +390,78 @@ export const reprocessBookingEmails = async (limit = 10): Promise<void> => {
 
   for (const email of pendingEmails) {
     await processBookingEmail(email.messageId, { force: true });
+  }
+};
+
+type IngestAllOptions = {
+  query?: string;
+  batchSize?: number;
+};
+
+export const ingestAllBookingEmails = async (options: IngestAllOptions = {}): Promise<void> => {
+  const query = options.query ?? DEFAULT_QUERY;
+  const batchSize = options.batchSize ?? Math.max(DEFAULT_BATCH, 100);
+  let pageToken: string | null = null;
+  let scanned = 0;
+  let totalEstimate: number | null = null;
+  let exactTotal: number | null = null;
+
+  try {
+    do {
+      const { messages, nextPageToken, totalSizeEstimate } = await listMessages({
+        query,
+        maxResults: batchSize,
+        pageToken,
+      });
+
+      if (totalEstimate === null && totalSizeEstimate !== null) {
+        totalEstimate = totalSizeEstimate;
+        logger.info(
+          `[booking-email] Gmail reports approximately ${totalEstimate} messages matching query "${query}"`,
+        );
+      }
+
+      if (!messages || messages.length === 0) {
+        break;
+      }
+
+      for (const message of messages) {
+        if (!message.id) {
+          continue;
+        }
+        await processBookingEmail(message.id);
+      }
+      scanned += messages.length;
+
+      if (!nextPageToken) {
+        exactTotal = scanned;
+      }
+
+      if (exactTotal !== null) {
+        const completion = Math.min((scanned / exactTotal) * 100, 100);
+        logger.info(
+          `[booking-email] Backfill progress: ${scanned}/${exactTotal} (${completion.toFixed(2)}% exact)`,
+        );
+      } else if (totalEstimate && totalEstimate > 0) {
+        const completion = Math.min((scanned / totalEstimate) * 100, 100);
+        logger.info(
+          `[booking-email] Backfill progress: ${scanned}/${totalEstimate} (~${completion.toFixed(2)}%)`,
+        );
+      } else {
+        logger.info(`[booking-email] Backfill progress: ${scanned} messages processed`);
+      }
+
+      pageToken = nextPageToken;
+      if (!pageToken) {
+        break;
+      }
+    } while (true);
+
+    if (exactTotal === null) {
+      exactTotal = scanned;
+    }
+    logger.info(`[booking-email] Completed full mailbox ingestion. Messages scanned: ${scanned}, total=${exactTotal}`);
+  } catch (error) {
+    logger.error(`[booking-email] Failed full mailbox ingestion: ${(error as Error).message}`);
   }
 };

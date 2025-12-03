@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 import type { BookingEmailParser, BookingParserContext, BookingFieldPatch, ParsedBookingEvent } from '../types.js';
+import type { BookingEventType, BookingStatus } from '../../../constants/bookings.js';
 
 dayjs.extend(customParseFormat);
 
@@ -83,6 +84,28 @@ const extractBookingFields = (text: string): BookingFieldPatch => {
   return fields;
 };
 
+const deriveStatusFromContext = (context: BookingParserContext, text: string): BookingStatus => {
+  const haystack = `${context.subject ?? ''}\n${text}`.toLowerCase();
+  if (/(?:canceled|cancelled|cancellation)/i.test(haystack)) {
+    return 'cancelled';
+  }
+  if (/(?:detail change|booking change|changed|amended|updated|rebook)/i.test(haystack)) {
+    return 'amended';
+  }
+  return 'confirmed';
+};
+
+const statusToEventType = (status: BookingStatus): BookingEventType => {
+  switch (status) {
+    case 'cancelled':
+      return 'cancelled';
+    case 'amended':
+      return 'amended';
+    default:
+      return 'created';
+  }
+};
+
 export class GetYourGuideBookingParser implements BookingEmailParser {
   public readonly name = 'getyourguide';
 
@@ -118,6 +141,9 @@ export class GetYourGuideBookingParser implements BookingEmailParser {
       }
     }
 
+    const status = deriveStatusFromContext(context, text);
+    const eventType = statusToEventType(status);
+
     const tourLanguageMatch = text.match(/Tour language\s+(.+?)\s+Price/i);
     const customerLanguageMatch = text.match(/Language:\s*([A-Za-z]+)/i);
     const notes: string[] = [];
@@ -127,13 +153,18 @@ export class GetYourGuideBookingParser implements BookingEmailParser {
     if (customerLanguageMatch) {
       notes.push(`Customer language: ${customerLanguageMatch[1].trim()}`);
     }
+    if (status === 'cancelled') {
+      notes.push('Email indicates booking was cancelled.');
+    } else if (status === 'amended') {
+      notes.push('Email indicates booking was amended/changed.');
+    }
 
     return {
       platform: 'getyourguide',
       platformBookingId: bookingId,
       platformOrderId: bookingId,
-      eventType: 'created',
-      status: 'confirmed',
+      eventType,
+      status,
       paymentStatus: bookingFields.priceGross ? 'paid' : 'unknown',
       bookingFields,
       notes: notes.length > 0 ? notes.join(' | ') : 'Parsed from GetYourGuide confirmation email.',

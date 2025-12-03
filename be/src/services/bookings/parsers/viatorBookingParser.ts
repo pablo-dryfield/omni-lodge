@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 import type { BookingEmailParser, BookingParserContext, BookingFieldPatch, ParsedBookingEvent } from '../types.js';
+import type { BookingEventType, BookingStatus } from '../../../constants/bookings.js';
 
 dayjs.extend(customParseFormat);
 
@@ -153,6 +154,29 @@ const parsePhone = (value: string | null): string | null => {
   return match ? match[1].replace(/\s+/g, ' ').trim() : withoutPrefix;
 };
 
+const deriveStatusFromContext = (context: BookingParserContext, textBody: string): BookingStatus => {
+  const haystack = `${context.subject ?? ''}\n${textBody ?? ''}`.toLowerCase();
+
+  if (/(?:canceled|cancelled|cancellation)/i.test(haystack)) {
+    return 'cancelled';
+  }
+  if (/(?:amended|amendment|changed|change|modified|updated|rebooked|rebook)/i.test(haystack)) {
+    return 'amended';
+  }
+  return 'confirmed';
+};
+
+const statusToEventType = (status: BookingStatus): BookingEventType => {
+  switch (status) {
+    case 'cancelled':
+      return 'cancelled';
+    case 'amended':
+      return 'amended';
+    default:
+      return 'created';
+  }
+};
+
 export class ViatorBookingParser implements BookingEmailParser {
   public readonly name = 'viator';
 
@@ -215,6 +239,9 @@ export class ViatorBookingParser implements BookingEmailParser {
       pickupLocation: meetingPoint ?? location ?? null,
     };
 
+    const status = deriveStatusFromContext(context, text);
+    const eventType = statusToEventType(status);
+
     const noteParts: string[] = [];
     if (travelerNames) {
       noteParts.push(`Traveler names: ${travelerNames}`);
@@ -237,6 +264,11 @@ export class ViatorBookingParser implements BookingEmailParser {
     if (specialRequirements) {
       noteParts.push(`Special requirements: ${specialRequirements}`);
     }
+    if (status === 'cancelled') {
+      noteParts.push('Email indicates booking was cancelled.');
+    } else if (status === 'amended') {
+      noteParts.push('Email indicates booking was amended.');
+    }
     if (noteParts.length > 0) {
       bookingFields.notes = noteParts.join(' | ');
     }
@@ -247,8 +279,8 @@ export class ViatorBookingParser implements BookingEmailParser {
       platform: 'viator',
       platformBookingId: bookingReference,
       platformOrderId: bookingReference,
-      eventType: 'created',
-      status: 'confirmed',
+      eventType,
+      status,
       paymentStatus,
       bookingFields,
       occurredAt: context.receivedAt ?? context.internalDate ?? null,
