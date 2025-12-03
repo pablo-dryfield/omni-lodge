@@ -44,11 +44,11 @@ const decodeHtmlEntities = (input: string): string => {
       lt: '<',
       gt: '>',
       apos: "'",
-      bull: '•',
-      ndash: '–',
-      mdash: '—',
-      rsquo: '’',
-      lsquo: '‘',
+      bull: '*',
+      ndash: '-',
+      mdash: '-',
+      rsquo: "'",
+      lsquo: "'",
     };
     return lookup[match.toLowerCase()] ?? entity;
   });
@@ -75,7 +75,12 @@ const ensurePlainTextBody = (
   snippet?: string | null,
 ): string => {
   if (textBody && textBody.trim().length > 0) {
-    return normalizeWhitespace(textBody);
+    const looksLikeHtml = /<[^>]+>/.test(textBody);
+    const candidate = looksLikeHtml ? stripHtmlToText(textBody) : textBody;
+    const normalized = normalizeWhitespace(candidate);
+    if (normalized) {
+      return normalized;
+    }
   }
   if (htmlBody) {
     const stripped = normalizeWhitespace(stripHtmlToText(htmlBody));
