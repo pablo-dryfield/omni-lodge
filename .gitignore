@@ -135,3 +135,10 @@ dist
 #VScode
 .history/
 /be/uploads
+# booking ingestion scratch artifacts
+be/tmp_getyourguide_email.json
+be/tmp_getyourguide_email.txt
+be/inspect_text.cjs
+be/parse_getyourguide.cjs
+be/simulate_context.cjs
+be/test_getyourguide.cjs
