@@ -51,6 +51,7 @@ export type BookingParserContext = {
   internalDate?: Date | null;
   headers: Record<string, string>;
   textBody: string;
+  rawTextBody?: string | null;
   htmlBody?: string | null;
 };
 
