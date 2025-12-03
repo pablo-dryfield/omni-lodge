@@ -27,6 +27,68 @@ const decimalKeys = new Set([
   'taxAmount',
 ]);
 
+const decodeHtmlEntities = (input: string): string => {
+  return input.replace(/&(#\d+|#x[\da-f]+|\w+);/gi, (entity, match) => {
+    if (match.startsWith('#x') || match.startsWith('#X')) {
+      const codePoint = Number.parseInt(match.slice(2), 16);
+      return Number.isNaN(codePoint) ? entity : String.fromCodePoint(codePoint);
+    }
+    if (match.startsWith('#')) {
+      const codePoint = Number.parseInt(match.slice(1), 10);
+      return Number.isNaN(codePoint) ? entity : String.fromCodePoint(codePoint);
+    }
+    const lookup: Record<string, string> = {
+      nbsp: ' ',
+      amp: '&',
+      quot: '"',
+      lt: '<',
+      gt: '>',
+      apos: "'",
+      bull: '•',
+      ndash: '–',
+      mdash: '—',
+      rsquo: '’',
+      lsquo: '‘',
+    };
+    return lookup[match.toLowerCase()] ?? entity;
+  });
+};
+
+const stripHtmlToText = (html: string): string => {
+  if (!html) {
+    return '';
+  }
+  const withoutBlocks = html
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<\/(p|div|li|tr|td)>/gi, '$&\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ');
+  return decodeHtmlEntities(withoutBlocks);
+};
+
+const normalizeWhitespace = (input: string): string => input.replace(/\s+/g, ' ').trim();
+
+const ensurePlainTextBody = (
+  textBody?: string | null,
+  htmlBody?: string | null,
+  snippet?: string | null,
+): string => {
+  if (textBody && textBody.trim().length > 0) {
+    return normalizeWhitespace(textBody);
+  }
+  if (htmlBody) {
+    const stripped = normalizeWhitespace(stripHtmlToText(htmlBody));
+    if (stripped) {
+      return stripped;
+    }
+  }
+  if (snippet && snippet.trim().length > 0) {
+    return normalizeWhitespace(snippet);
+  }
+  return '';
+};
+
 const normalizeDecimal = (value: unknown): string | null => {
   if (value === null || value === undefined) {
     return null;
@@ -72,6 +134,7 @@ const buildParserContext = (email: BookingEmail, payload: GmailMessagePayload): 
     from: email.fromAddress ?? payload.headers.from ?? '',
     to: email.toAddresses ?? payload.headers.to ?? '',
   };
+  const normalizedTextBody = ensurePlainTextBody(payload.textBody, payload.htmlBody, email.snippet);
 
   return {
     messageId: email.messageId,
@@ -85,7 +148,8 @@ const buildParserContext = (email: BookingEmail, payload: GmailMessagePayload): 
     receivedAt: email.receivedAt,
     internalDate: email.internalDate,
     headers,
-    textBody: payload.textBody ?? '',
+    textBody: normalizedTextBody,
+    rawTextBody: payload.textBody ?? '',
     htmlBody: payload.htmlBody,
   };
 };
