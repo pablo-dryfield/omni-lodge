@@ -55,6 +55,7 @@ import { financeRouter } from './finance/index.js';
 import { startFinanceRecurringJob } from './finance/jobs/recurringJob.js';
 import { startScheduleJobs } from './jobs/schedules.cron.js';
 import { startDbBackupJob } from './jobs/dbBackup.cron.js';
+import { startBookingEmailIngestionJob } from './jobs/bookingEmailIngestion.cron.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -206,6 +207,7 @@ async function bootstrap(): Promise<void> {
         startFinanceRecurringJob();
         startScheduleJobs();
         startDbBackupJob();
+        startBookingEmailIngestionJob();
       });
     } else {
       app.listen(PORT, '0.0.0.0', () => {
@@ -213,6 +215,7 @@ async function bootstrap(): Promise<void> {
         startFinanceRecurringJob();
         startScheduleJobs();
         startDbBackupJob();
+        startBookingEmailIngestionJob();
       });
     }
   } catch (err) {

@@ -2,6 +2,9 @@ import { Sequelize } from "sequelize-typescript";
 import dotenv from "dotenv";
 import User from "../models/User.js";
 import Booking from "../models/Booking.js";
+import BookingAddon from "../models/BookingAddon.js";
+import BookingEmail from "../models/BookingEmail.js";
+import BookingEvent from "../models/BookingEvent.js";
 import Channel from "../models/Channel.js";
 import Guest from "../models/Guest.js";
 import Review from "../models/Review.js";
@@ -110,6 +113,9 @@ const sequelize = new Sequelize({
     PaymentMethod,
     ProductPrice,
     Booking,
+    BookingAddon,
+    BookingEmail,
+    BookingEvent,
     Channel,
     ChannelCommission,
     ChannelProductPrice,
