@@ -34,6 +34,20 @@ const parseMoney = (input: string): { currency: string | null; amount: number | 
   return { currency, amount };
 };
 
+const extractBookingId = (text: string, subject?: string | null): string | null => {
+  const referenceMatch = text.match(/Reference number[:\s]+([A-Z0-9]+)/i);
+  if (referenceMatch?.[1]) {
+    return referenceMatch[1];
+  }
+  if (subject) {
+    const subjectMatch = subject.match(/[A-Z0-9]{10,}/g);
+    if (subjectMatch && subjectMatch.length > 0) {
+      return subjectMatch[subjectMatch.length - 1];
+    }
+  }
+  return null;
+};
+
 const extractBookingFields = (text: string): BookingFieldPatch => {
   const fields: BookingFieldPatch = {};
 
@@ -121,11 +135,10 @@ export class GetYourGuideBookingParser implements BookingEmailParser {
       return null;
     }
 
-    const referenceMatch = text.match(/Reference number\s+([A-Z0-9]+)/i);
-    if (!referenceMatch) {
+    const bookingId = extractBookingId(text, context.subject);
+    if (!bookingId) {
       return null;
     }
-    const bookingId = referenceMatch[1];
 
     const bookingFields = extractBookingFields(text);
 

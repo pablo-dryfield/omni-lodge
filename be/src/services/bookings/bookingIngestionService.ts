@@ -27,6 +27,33 @@ const decimalKeys = new Set([
   'taxAmount',
 ]);
 
+const bookingStringLimits: Partial<Record<keyof BookingFieldPatch, number>> = {
+  productName: 255,
+  productVariant: 255,
+  guestFirstName: 255,
+  guestLastName: 255,
+  guestEmail: 320,
+  guestPhone: 64,
+  hotelName: 255,
+  currency: 3,
+  paymentMethod: 128,
+  rawPayloadLocation: 512,
+};
+
+const clampString = (value: string, maxLength: number): string => {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return value.slice(0, maxLength);
+};
+
+const clampNullableString = (value: string | null | undefined, maxLength: number): string | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return clampString(value, maxLength);
+};
+
 const decodeHtmlEntities = (input: string): string => {
   return input.replace(/&(#\d+|#x[\da-f]+|\w+);/gi, (entity, match) => {
     if (match.startsWith('#x') || match.startsWith('#X')) {
@@ -120,6 +147,13 @@ const normalizePatch = (patch: BookingFieldPatch | undefined): Record<string, un
       acc[key] = normalizeDecimal(value);
       return acc;
     }
+    if (typeof value === 'string') {
+      const limit = bookingStringLimits[key as keyof BookingFieldPatch];
+      if (limit) {
+        acc[key] = clampString(value, limit);
+        return acc;
+      }
+    }
     acc[key] = value;
     return acc;
   }, {});
@@ -171,10 +205,11 @@ const saveEmailRecord = async (payload: GmailMessagePayload): Promise<BookingEma
 
   record.threadId = message.threadId ?? null;
   record.historyId = message.historyId ?? null;
-  record.fromAddress = payload.headers.from ?? record.fromAddress ?? null;
+  record.fromAddress = clampNullableString(payload.headers.from ?? record.fromAddress ?? null, 512);
   record.toAddresses = payload.headers.to ?? record.toAddresses ?? null;
   record.ccAddresses = payload.headers.cc ?? record.ccAddresses ?? null;
-  record.subject = message.payload?.headers?.find((h) => h.name?.toLowerCase() === 'subject')?.value ?? record.subject ?? null;
+  const subjectHeader = message.payload?.headers?.find((h) => h.name?.toLowerCase() === 'subject')?.value;
+  record.subject = clampNullableString(subjectHeader ?? record.subject ?? null, 512);
   record.snippet = message.snippet ?? textBody.slice(0, 240);
   record.receivedAt = parseDateHeader(payload.headers.date) ?? record.receivedAt ?? null;
   record.internalDate = message.internalDate ? new Date(Number.parseInt(message.internalDate, 10)) : record.internalDate ?? null;
@@ -314,43 +349,70 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
   });
 };
 
-export const processBookingEmail = async (messageId: string, options: { force?: boolean } = {}): Promise<void> => {
+type ProcessResult = 'processed' | 'skipped_lower' | 'skipped_upper' | 'ignored' | 'failed';
+
+export const processBookingEmail = async (
+  messageId: string,
+  options: { force?: boolean; receivedAfter?: Date | null; receivedBefore?: Date | null } = {},
+): Promise<ProcessResult> => {
   let payload: GmailMessagePayload | null = null;
   try {
     payload = await fetchMessagePayload(messageId);
     if (!payload || !payload.message.id) {
       logger.warn(`[booking-email] Gmail message ${messageId} returned no payload`);
-      return;
+      return 'ignored';
     }
   } catch (error) {
     logger.error(`[booking-email] Unable to fetch message ${messageId}: ${(error as Error).message}`);
-    return;
+    return 'failed';
   }
 
   const emailRecord = await saveEmailRecord(payload);
 
   if (emailRecord.ingestionStatus === 'processed' && !options.force) {
     logger.debug(`[booking-email] Message ${messageId} already processed, skipping`);
-    return;
+    return 'ignored';
   }
 
   await updateEmailStatus(emailRecord, 'processing');
+
+  const internalDate = payload.message.internalDate ? new Date(Number(payload.message.internalDate)) : null;
+  if (options.receivedAfter && internalDate && internalDate < options.receivedAfter) {
+    await updateEmailStatus(emailRecord, 'ignored', 'Outside requested date range (before)');
+    return 'skipped_lower';
+  }
+
+  if (options.receivedBefore && internalDate && internalDate > options.receivedBefore) {
+    await updateEmailStatus(emailRecord, 'ignored', 'Outside requested date range (after)');
+    return 'skipped_upper';
+  }
 
   const context = buildParserContext(emailRecord, payload);
   const parsed = await runParsers(context);
 
   if (!parsed) {
     await updateEmailStatus(emailRecord, 'ignored', 'No parser matched this email');
-    return;
+    return 'ignored';
   }
 
+  const pendingEvents: ParsedBookingEvent[] = [parsed];
+
   try {
-    await applyParsedEvent(emailRecord, parsed);
+    while (pendingEvents.length > 0) {
+      const current = pendingEvents.shift()!;
+      const spawned = current.spawnedEvents ?? [];
+      await applyParsedEvent(emailRecord, current);
+      if (spawned.length > 0) {
+        pendingEvents.push(...spawned);
+      }
+    }
     await updateEmailStatus(emailRecord, 'processed');
+    return 'processed';
   } catch (error) {
     const message = (error as Error).message ?? 'Unknown error';
     await updateEmailStatus(emailRecord, 'failed', message);
     logger.error(`[booking-email] Failed to apply parsed booking for ${messageId}: ${message}`);
+    return 'failed';
   }
 };
 
@@ -396,11 +458,26 @@ export const reprocessBookingEmails = async (limit = 10): Promise<void> => {
 type IngestAllOptions = {
   query?: string;
   batchSize?: number;
+  receivedAfter?: Date | string;
+  receivedBefore?: Date | string;
+};
+
+const toDateOrNull = (value?: Date | string): Date | null => {
+  if (!value) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return Number.isNaN(value.valueOf()) ? null : value;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.valueOf()) ? null : parsed;
 };
 
 export const ingestAllBookingEmails = async (options: IngestAllOptions = {}): Promise<void> => {
   const query = options.query ?? DEFAULT_QUERY;
   const batchSize = options.batchSize ?? Math.max(DEFAULT_BATCH, 100);
+  const receivedAfter = toDateOrNull(options.receivedAfter);
+  const receivedBefore = toDateOrNull(options.receivedBefore);
   let pageToken: string | null = null;
   let scanned = 0;
   let totalEstimate: number | null = null;
@@ -425,11 +502,17 @@ export const ingestAllBookingEmails = async (options: IngestAllOptions = {}): Pr
         break;
       }
 
-      for (const message of messages) {
+      let hitLowerBound = false;
+      const sortedMessages = [...messages].reverse();
+
+      for (const message of sortedMessages) {
         if (!message.id) {
           continue;
         }
-        await processBookingEmail(message.id);
+        const result = await processBookingEmail(message.id, { receivedAfter, receivedBefore });
+        if (result === 'skipped_lower') {
+          hitLowerBound = true;
+        }
       }
       scanned += messages.length;
 
@@ -452,6 +535,10 @@ export const ingestAllBookingEmails = async (options: IngestAllOptions = {}): Pr
       }
 
       pageToken = nextPageToken;
+      if (hitLowerBound) {
+        logger.info('[booking-email] Reached earlier than requested range, stopping ingestion.');
+        break;
+      }
       if (!pageToken) {
         break;
       }

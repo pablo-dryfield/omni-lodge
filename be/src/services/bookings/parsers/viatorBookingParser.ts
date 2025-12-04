@@ -194,7 +194,9 @@ export class ViatorBookingParser implements BookingEmailParser {
       return null;
     }
 
-    const bookingReference = extractField(text, 'Booking Reference:', ['Tour Name:']);
+    const bookingReferenceRaw = extractField(text, 'Booking Reference:', ['Tour Name:']);
+    const bookingReferenceMatch = bookingReferenceRaw?.match(/#?[A-Z0-9-]+/);
+    const bookingReference = bookingReferenceMatch?.[0]?.replace(/^#/, '') ?? null;
     if (!bookingReference) {
       return null;
     }
