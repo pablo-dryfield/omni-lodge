@@ -68,6 +68,7 @@ export type ParsedBookingEvent = {
   occurredAt?: Date | null;
   sourceReceivedAt?: Date | null;
   rawPayload?: Record<string, unknown> | null;
+  spawnedEvents?: ParsedBookingEvent[];
 };
 
 export interface BookingEmailParser {

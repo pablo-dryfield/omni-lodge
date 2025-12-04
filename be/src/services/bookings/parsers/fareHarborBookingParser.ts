@@ -279,6 +279,110 @@ const extractRebookedNewId = (text: string): string | null => {
   return altMatch?.[1] ?? null;
 };
 
+const stripHtmlTags = (value: string): string => value.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim();
+
+type FareHarborComparisonRows = Record<string, { old: string; new: string }>;
+
+const extractComparisonRowsFromHtml = (html?: string | null): FareHarborComparisonRows | null => {
+  if (!html) {
+    return null;
+  }
+  const comparisonMatch = html.match(/(<table[\s\S]*?<th[^>]*>\s*Old\s*<\/th>\s*<th[^>]*>\s*New\s*<\/th>[\s\S]*?<\/table>)/i);
+  if (!comparisonMatch) {
+    return null;
+  }
+  const tableHtml = comparisonMatch[1];
+  const rows: FareHarborComparisonRows = {};
+  const rowRegex =
+    /<tr[^>]*>\s*<td[^>]*>\s*<b>([\s\S]*?)<\/b>\s*<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<\/tr>/gi;
+  let rowMatch;
+  while ((rowMatch = rowRegex.exec(tableHtml))) {
+    const label = stripHtmlTags(rowMatch[1]).toLowerCase();
+    if (!label) {
+      continue;
+    }
+    rows[label] = {
+      old: stripHtmlTags(rowMatch[2]),
+      new: stripHtmlTags(rowMatch[3]),
+    };
+  }
+  return Object.keys(rows).length > 0 ? rows : null;
+};
+
+type FareHarborRebookDetails = {
+  newBookingId: string | null;
+  newDateRange: string | null;
+  newTimeRange: string | null;
+  newCustomers: string | null;
+  newProductName: string | null;
+};
+
+const extractRebookDetails = (context: BookingParserContext): FareHarborRebookDetails | null => {
+  const rows = extractComparisonRowsFromHtml(context.htmlBody);
+  if (!rows) {
+    return null;
+  }
+  const getValue = (label: string): string | null => rows[label]?.new ?? null;
+  const sanitize = (value: string | null): string | null => {
+    if (!value) {
+      return null;
+    }
+    return value.replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  };
+  const newBookingRaw = getValue('id');
+  const bookingMatch = newBookingRaw?.match(/(\d{5,})/);
+  const newBookingId = bookingMatch?.[1] ?? null;
+  if (!newBookingId) {
+    return null;
+  }
+  return {
+    newBookingId,
+    newDateRange: getValue('date'),
+    newTimeRange: getValue('time'),
+    newCustomers: sanitize(getValue('customers')),
+    newProductName: sanitize(getValue('item')),
+  };
+};
+
+const splitRange = (value: string | null): [string | null, string | null] => {
+  if (!value) {
+    return [null, null];
+  }
+  const parts = value
+    .split(/\s*-\s*/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  if (parts.length === 0) {
+    return [null, null];
+  }
+  if (parts.length === 1) {
+    return [parts[0], parts[0]];
+  }
+  return [parts[0], parts[1]];
+};
+
+const deriveRebookSchedule = (details: FareHarborRebookDetails): {
+  experienceDate: string | null;
+  experienceStartAt: Date | null;
+  experienceEndAt: Date | null;
+} => {
+  const [startDate, endDate] = splitRange(details.newDateRange);
+  const [startTime, endTime] = splitRange(details.newTimeRange);
+  const experienceStartAt =
+    startDate && startTime ? parseDateTimeTokens(startDate, startTime) : null;
+  let experienceEndAt: Date | null = null;
+  if (endDate && endTime) {
+    experienceEndAt = parseDateTimeTokens(endDate, endTime);
+  } else if (startDate && endTime) {
+    experienceEndAt = parseDateTimeTokens(startDate, endTime);
+  }
+  return {
+    experienceDate: experienceStartAt ? experienceStartAt.toISOString().slice(0, 10) : null,
+    experienceStartAt,
+    experienceEndAt,
+  };
+};
+
 const deriveStatusFromContext = (context: BookingParserContext, bodyText: string): BookingStatus => {
   const haystack = `${context.subject ?? ''}\n${bodyText ?? ''}`.toLowerCase();
   if (/(?:cancelled|canceled|cancellation)/i.test(haystack)) {
@@ -298,6 +402,7 @@ const statusToEventType = (status: BookingStatus): BookingEventType => {
     case 'cancelled':
       return 'cancelled';
     case 'amended':
+    case 'rebooked':
       return 'amended';
     default:
       return 'created';
@@ -371,9 +476,21 @@ export class FareHarborBookingParser implements BookingEmailParser {
     const paymentStatus =
       (dueMoney.amount !== null && dueMoney.amount === 0) || paymentDetails.amount !== null ? 'paid' : 'unknown';
 
-    const status = deriveStatusFromContext(context, text);
+    const baseFieldsForSpawn: BookingFieldPatch = { ...bookingFields };
+
+    let status = deriveStatusFromContext(context, text);
+    const rebookDetails = status === 'amended' ? extractRebookDetails(context) : null;
+    let rebookedNewId = status === 'amended' ? extractRebookedNewId(text) : null;
+    if (rebookDetails?.newBookingId) {
+      rebookedNewId = rebookDetails.newBookingId;
+    }
+    if (status === 'amended' && rebookedNewId) {
+      status = 'rebooked';
+      delete bookingFields.experienceDate;
+      delete bookingFields.experienceStartAt;
+      delete bookingFields.experienceEndAt;
+    }
     const eventType = statusToEventType(status);
-    const rebookedNewId = status === 'amended' ? extractRebookedNewId(text) : null;
 
     const noteParts: string[] = [];
     if (questionnaire) {
@@ -383,11 +500,59 @@ export class FareHarborBookingParser implements BookingEmailParser {
       noteParts.push('Parsed from FareHarbor cancellation email.');
     } else if (status === 'amended') {
       noteParts.push('Parsed from FareHarbor amendment email.');
+    } else if (status === 'rebooked') {
+      noteParts.push('Parsed from FareHarbor rebooking email. Original booking moved to a new slot.');
       if (rebookedNewId) {
         noteParts.push(`New booking id: #${rebookedNewId}.`);
       }
     } else {
       noteParts.push('Parsed from FareHarbor confirmation email.');
+    }
+
+    let spawnedEvents: ParsedBookingEvent[] | undefined;
+    if ((status === 'rebooked' || status === 'amended') && rebookedNewId) {
+      const newEventFields: BookingFieldPatch = { ...baseFieldsForSpawn };
+      if (rebookDetails?.newProductName) {
+        newEventFields.productName = rebookDetails.newProductName;
+      }
+      if (rebookDetails?.newCustomers) {
+        const newCounts = extractPartyCounts(rebookDetails.newCustomers);
+        if (newCounts.total !== null) {
+          newEventFields.partySizeTotal = newCounts.total;
+        }
+        if (newCounts.adults !== null) {
+          newEventFields.partySizeAdults = newCounts.adults;
+        }
+        if (newCounts.children !== null) {
+          newEventFields.partySizeChildren = newCounts.children;
+        }
+      }
+      if (rebookDetails) {
+        const schedule = deriveRebookSchedule(rebookDetails);
+        if (schedule.experienceDate) {
+          newEventFields.experienceDate = schedule.experienceDate;
+        }
+        if (schedule.experienceStartAt) {
+          newEventFields.experienceStartAt = schedule.experienceStartAt;
+        }
+        if (schedule.experienceEndAt) {
+          newEventFields.experienceEndAt = schedule.experienceEndAt;
+        }
+      }
+      spawnedEvents = [
+        {
+          platform: 'fareharbor',
+          platformBookingId: rebookedNewId,
+          platformOrderId: rebookedNewId,
+          eventType: 'amended',
+          status: 'amended',
+          paymentStatus,
+          bookingFields: newEventFields,
+          notes: `Generated from FareHarbor rebooking of #${bookingNumber}.`,
+          occurredAt: context.receivedAt ?? context.internalDate ?? null,
+          sourceReceivedAt: context.receivedAt ?? context.internalDate ?? null,
+        },
+      ];
     }
 
     return {
@@ -401,6 +566,7 @@ export class FareHarborBookingParser implements BookingEmailParser {
       notes: noteParts.join(' '),
       occurredAt: context.receivedAt ?? context.internalDate ?? null,
       sourceReceivedAt: context.receivedAt ?? context.internalDate ?? null,
+      spawnedEvents,
     };
   }
 }

@@ -18,7 +18,7 @@
         "migrate": "cross-env NODE_OPTIONS=--max-old-space-size=4096 npm run build && cross-env NODE_OPTIONS=--max-old-space-size=4096 node dist/scripts/runMigrations.js",
         "migrate:undo": "cross-env NODE_OPTIONS=--max-old-space-size=4096 npm run build && cross-env NODE_OPTIONS=--max-old-space-size=4096 node dist/scripts/runMigrations.js --undo",
         "bookings:backfill": "npm run build && npm run bookings:backfill:run --",
-        "bookings:backfill:run": "node dist/scripts/backfillAllBookingEmails.js --"
+        "bookings:backfill:run": "node dist/scripts/backfillAllBookingEmails.js"
     },
     "jest": {
         "testEnvironment": "node",
