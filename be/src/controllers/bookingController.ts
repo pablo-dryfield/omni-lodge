@@ -10,6 +10,7 @@ import type {
   PlatformBreakdownEntry,
 } from '../types/booking.js';
 import { groupOrdersForManifest } from '../utils/ecwidAdapter.js';
+import { BOOKING_STATUSES } from '../constants/bookings.js';
 
 const DATE_FORMAT = 'YYYY-MM-DD';
 
@@ -54,13 +55,113 @@ const resolveRange = (query: QueryParams): { start: string | null; end: string |
   return { start, end };
 };
 
+const PRODUCT_NAME_STOPWORDS = new Set([
+  'new',
+  'booking',
+  'order',
+  'for',
+  'the',
+  'this',
+  'a',
+  'an',
+  'and',
+  'with',
+  'details',
+  'reservation',
+  'cancelled',
+  'canceled',
+  'rebooked',
+  'view',
+  'fareharbor',
+  'reference',
+  'number',
+  'id',
+  'customer',
+  'customers',
+  'created',
+  'by',
+  'at',
+  'from',
+  'via',
+  'info',
+  'change',
+  'amended',
+  'amendment',
+  'confirmation',
+  'note',
+]);
+
+const decodeHtmlEntities = (value: string): string => {
+  return value
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+};
+
+const sanitizeProductSource = (input: string): string => {
+  let value = decodeHtmlEntities(input);
+  value = value.replace(/#+/g, ' ');
+  value = value.replace(/(Cancelled|Canceled|Rebooked)\s*:?/gi, ' ');
+  value = value.replace(/New\s+order/gi, ' ');
+  value = value.replace(/Booking\s+note:?/gi, ' ');
+  value = value.replace(/View on FareHarbor/gi, ' ');
+  value = value.replace(/Order\s+#\w+/gi, ' ');
+  value = value.replace(/Booking\s+#\w+/gi, ' ');
+  value = value.replace(/\s+/g, ' ');
+  return value.trim();
+};
+
+const tokenizeProductName = (source: string): string[] => {
+  if (!source) {
+    return [];
+  }
+  const tokens = sanitizeProductSource(source)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((token) => !PRODUCT_NAME_STOPWORDS.has(token));
+
+  return tokens;
+};
+
+const canonicalizeProductKey = (booking: Booking): string | null => {
+  const baseName = booking.product?.name ?? booking.productName ?? booking.productVariant;
+  if (!baseName) {
+    return null;
+  }
+
+  const tokens = tokenizeProductName(baseName);
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  const deduped = Array.from(new Set(tokens)).sort();
+  return deduped.join('-');
+};
+
+const prettifyProductName = (booking: Booking): string | null => {
+  const raw = booking.product?.name ?? booking.productName ?? booking.productVariant;
+  if (!raw) {
+    return null;
+  }
+  const sanitized = sanitizeProductSource(raw);
+  return sanitized || null;
+};
+
 const deriveProductId = (booking: Booking): string => {
   if (booking.productId) {
     return String(booking.productId);
   }
-  if (booking.productName) {
-    return `${booking.productName}`.trim().toLowerCase().replace(/\s+/g, '-');
+
+  const canonicalKey = canonicalizeProductKey(booking);
+  if (canonicalKey) {
+    return canonicalKey;
   }
+
   return `${booking.platform}-${booking.id}`;
 };
 
@@ -103,6 +204,7 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
   }
 
   const productId = deriveProductId(booking);
+  const displayProductName = prettifyProductName(booking) ?? 'Unassigned product';
   const pickupMoment = booking.experienceStartAt ? dayjs(booking.experienceStartAt) : null;
   const timeslot = pickupMoment?.isValid() ? pickupMoment.format('HH:mm') : '--:--';
   const menCount = booking.partySizeAdults ?? booking.partySizeTotal ?? 0;
@@ -112,7 +214,7 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
   return {
     id: String(booking.id),
     productId,
-    productName: booking.productName ?? 'Unassigned product',
+    productName: displayProductName,
     date: experienceDate,
     timeslot,
     quantity: booking.partySizeTotal ?? booking.partySizeAdults ?? 0,
@@ -123,6 +225,7 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
     platform: booking.platform,
     pickupDateTime: pickupMoment?.isValid() ? pickupMoment.toISOString() : undefined,
     extras,
+    status: booking.status,
     rawData: {
       bookingId: booking.id,
       platform: booking.platform,
@@ -229,6 +332,7 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
       totalOrders: number;
       extras: OrderExtras;
       platformBreakdown: PlatformBreakdownEntry[];
+      statusCounts: Record<string, number>;
     }>(
       (acc, group: ManifestGroup) => {
         acc.totalPeople += group.totalPeople;
@@ -250,6 +354,9 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
           }
           acc.platformBreakdown.push({ ...entry, platform: key });
         });
+        group.orders.forEach((order) => {
+          acc.statusCounts[order.status] = (acc.statusCounts[order.status] ?? 0) + 1;
+        });
         return acc;
       },
       {
@@ -259,10 +366,16 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
         totalOrders: 0,
         extras: { tshirts: 0, cocktails: 0, photos: 0 },
         platformBreakdown: [],
+        statusCounts: {},
       },
     );
 
     summary.platformBreakdown.sort((a, b) => a.platform.localeCompare(b.platform));
+    for (const status of BOOKING_STATUSES) {
+      if (!(status in summary.statusCounts)) {
+        summary.statusCounts[status] = 0;
+      }
+    }
 
     res.status(200).json({
       date: targetDate,

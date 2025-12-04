@@ -1,3 +1,5 @@
+import type { BookingStatus } from '../constants/bookings.js';
+
 export type UnifiedProduct = {
   id: string;
   name: string;
@@ -33,6 +35,7 @@ export type UnifiedOrder = {
   platform: 'ecwid' | 'fareharbor' | 'viator' | 'getyourguide' | 'freetour' | 'airbnb' | string;
   pickupDateTime?: string;
   extras?: OrderExtras;
+  status: BookingStatus;
   rawData?: unknown;
 };
 

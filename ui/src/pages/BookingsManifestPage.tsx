@@ -60,6 +60,7 @@ import {
   ManifestGroup,
   ManifestSummary,
   PlatformBreakdownEntry,
+  BookingStatus,
 } from "../store/bookingPlatformsTypes";
 
 
@@ -165,6 +166,28 @@ const PLATFORM_COLORS: Record<string, string> = {
   unknown: "dark",
 };
 
+const BOOKING_STATUSES: BookingStatus[] = [
+  "pending",
+  "confirmed",
+  "amended",
+  "rebooked",
+  "cancelled",
+  "completed",
+  "no_show",
+  "unknown",
+];
+
+const STATUS_COLORS: Record<BookingStatus, string> = {
+  pending: "gray",
+  confirmed: "green",
+  amended: "yellow",
+  rebooked: "orange",
+  cancelled: "red",
+  completed: "teal",
+  no_show: "grape",
+  unknown: "dark",
+};
+
 const normalizePlatformKey = (value?: string | null): string => {
   if (!value) {
     return "unknown";
@@ -185,6 +208,38 @@ const formatPlatformLabel = (value?: string | null): string => {
 const resolvePlatformColor = (value?: string | null): string => {
   const key = normalizePlatformKey(value);
   return PLATFORM_COLORS[key] ?? PLATFORM_COLORS.unknown;
+};
+
+const formatStatusLabel = (value?: BookingStatus | null): string => {
+  const status = value ?? "unknown";
+  if (status === "no_show") {
+    return "No show";
+  }
+  if (status === "rebooked") {
+    return "Rebooked";
+  }
+  return status.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const createEmptyStatusCounts = (): Record<BookingStatus, number> => {
+  return BOOKING_STATUSES.reduce((acc, status) => {
+    acc[status] = 0;
+    return acc;
+  }, {} as Record<BookingStatus, number>);
+};
+
+const resolveStatusColor = (value?: BookingStatus | null): string => {
+  const key = value ?? "unknown";
+  return STATUS_COLORS[key] ?? STATUS_COLORS.unknown;
+};
+
+const StatusBadge = ({ status }: { status?: BookingStatus | null }) => {
+  const safeStatus = status ?? "unknown";
+  return (
+    <Badge color={resolveStatusColor(safeStatus)} variant="light">
+      {formatStatusLabel(safeStatus)}
+    </Badge>
+  );
 };
 
 const buildPlatformBreakdown = (groups: ManifestGroup[]): PlatformBreakdownEntry[] => {
@@ -217,6 +272,13 @@ const createSummaryFromGroups = (groups: ManifestGroup[]): ManifestSummary => ({
     photos: groups.reduce((acc, group) => acc + (group.extras?.photos ?? 0), 0),
   },
   platformBreakdown: buildPlatformBreakdown(groups),
+  statusCounts: groups.reduce((acc, group) => {
+    group.orders.forEach((order) => {
+      const status = order.status ?? "unknown";
+      acc[status] = (acc[status] ?? 0) + 1;
+    });
+    return acc;
+  }, createEmptyStatusCounts()),
 });
 
 const OrderPlatformBadge = ({ platform }: { platform?: string }) => {
@@ -263,6 +325,83 @@ const formatAddonValue = (value?: number): string => {
   return value && value > 0 ? String(value) : '';
 };
 
+const normalizeExtrasSnapshot = (extras?: OrderExtras): OrderExtras => ({
+  tshirts: extras?.tshirts ?? 0,
+  cocktails: extras?.cocktails ?? 0,
+  photos: extras?.photos ?? 0,
+});
+
+const mergePlatformBreakdownEntries = (
+  base: PlatformBreakdownEntry[] = [],
+  incoming?: PlatformBreakdownEntry[],
+): PlatformBreakdownEntry[] => {
+  const map = new Map<string, PlatformBreakdownEntry>();
+  const consume = (entries?: PlatformBreakdownEntry[]) => {
+    entries?.forEach((entry) => {
+      if (!entry) {
+        return;
+      }
+      const key = entry.platform || "unknown";
+      const existing = map.get(key);
+      if (existing) {
+        existing.totalPeople += entry.totalPeople;
+        existing.men += entry.men;
+        existing.women += entry.women;
+        existing.orderCount += entry.orderCount;
+        return;
+      }
+      map.set(key, {
+        platform: key,
+        totalPeople: entry.totalPeople,
+        men: entry.men,
+        women: entry.women,
+        orderCount: entry.orderCount,
+      });
+    });
+  };
+  consume(base);
+  consume(incoming);
+  return Array.from(map.values()).sort((a, b) => a.platform.localeCompare(b.platform));
+};
+
+const mergeManifestGroups = (groups: ManifestGroup[]): ManifestGroup[] => {
+  const map = new Map<string, ManifestGroup>();
+  const order: string[] = [];
+
+  groups.forEach((group) => {
+    const key = `${group.productId}|${group.date}|${group.time}`;
+    const normalizedExtras = normalizeExtrasSnapshot(group.extras);
+    const normalizedBreakdown = group.platformBreakdown ?? [];
+
+    if (!map.has(key)) {
+      map.set(key, {
+        ...group,
+        extras: { ...normalizedExtras },
+        orders: [...group.orders],
+        platformBreakdown: [...normalizedBreakdown],
+      });
+      order.push(key);
+      return;
+    }
+
+    const existing = map.get(key)!;
+    existing.totalPeople += group.totalPeople;
+    existing.men += group.men;
+    existing.women += group.women;
+    existing.extras.tshirts += normalizedExtras.tshirts;
+    existing.extras.cocktails += normalizedExtras.cocktails;
+    existing.extras.photos += normalizedExtras.photos;
+    existing.orders = existing.orders.concat(group.orders);
+    existing.platformBreakdown = mergePlatformBreakdownEntries(existing.platformBreakdown, normalizedBreakdown);
+  });
+
+  return order.map((key) => {
+    const merged = map.get(key)!;
+    merged.platformBreakdown = mergePlatformBreakdownEntries(merged.platformBreakdown);
+    return merged;
+  });
+};
+
 const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
   const dispatch = useAppDispatch();
@@ -300,6 +439,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     totalOrders: 0,
     extras: { tshirts: 0, cocktails: 0, photos: 0 },
     platformBreakdown: [],
+    statusCounts: createEmptyStatusCounts(),
   });
 
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>("idle");
@@ -443,16 +583,24 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         const payload = response.data;
 
         const groups = Array.isArray(payload?.manifest) ? payload.manifest : [];
+        const mergedGroups = mergeManifestGroups(groups);
 
-        setManifest(groups);
+        setManifest(mergedGroups);
 
         const serverSummary = payload?.summary;
         const computedSummary = serverSummary
           ? {
               ...serverSummary,
-              platformBreakdown: serverSummary.platformBreakdown ?? buildPlatformBreakdown(groups),
+              platformBreakdown: serverSummary.platformBreakdown ?? buildPlatformBreakdown(mergedGroups),
+              statusCounts: (() => {
+                const normalized = createEmptyStatusCounts();
+                BOOKING_STATUSES.forEach((status) => {
+                  normalized[status] = serverSummary.statusCounts?.[status] ?? 0;
+                });
+                return normalized;
+              })(),
             }
-          : createSummaryFromGroups(groups);
+          : createSummaryFromGroups(mergedGroups);
 
         setSummary(computedSummary);
 
@@ -764,6 +912,23 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
               <PlatformBadges entries={summary.platformBreakdown} prefix="summary" />
 
+              <Stack gap={4} w="100%">
+                <Text fw={600} size="sm">
+                  Booking statuses
+                </Text>
+                <Group gap="xs" wrap="wrap">
+                  {BOOKING_STATUSES.map((status) => (
+                    <Badge
+                      key={`summary-status-${status}`}
+                      color={STATUS_COLORS[status]}
+                      variant="light"
+                    >
+                      {`${formatStatusLabel(status)}: ${summary.statusCounts?.[status] ?? 0}`}
+                    </Badge>
+                  ))}
+                </Group>
+              </Stack>
+
             </Group>
 
 
@@ -891,13 +1056,14 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                     </Badge>
                                   </Group>
                                   <Group gap="xs" wrap="wrap">
-                                    <Badge color="teal" variant="light">
-                                      {`Men: ${order.menCount}`}
-                                    </Badge>
-                                    <Badge color="pink" variant="light">
-                                      {`Women: ${order.womenCount}`}
-                                    </Badge>
-                                    <OrderPlatformBadge platform={order.platform} />
+                                      <Badge color="teal" variant="light">
+                                        {`Men: ${order.menCount}`}
+                                      </Badge>
+                                      <Badge color="pink" variant="light">
+                                        {`Women: ${order.womenCount}`}
+                                      </Badge>
+                                      <OrderPlatformBadge platform={order.platform} />
+                                      <StatusBadge status={order.status} />
                                     {order.extras && (order.extras.tshirts ?? 0) > 0 ? (
                                       <Badge color="blue" variant="light">
                                         {`T-Shirts: ${order.extras.tshirts}`}
@@ -1017,6 +1183,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               <Table.Th>ID</Table.Th>
                               <Table.Th>Contact</Table.Th>
                               <Table.Th>Platform</Table.Th>
+                              <Table.Th>Status</Table.Th>
                               <Table.Th>Phone</Table.Th>
                               <Table.Th align="right">People</Table.Th>
                             <Table.Th align="right">Men</Table.Th>
@@ -1038,6 +1205,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                   withMargin={false}
                                 />
                               </Table.Td>
+                              <Table.Td />
                               <Table.Td />
                               <Table.Td align="right" fw={600}>
                                 {group.totalPeople}
@@ -1065,6 +1233,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               <Table.Td>{order.customerName || "-"}</Table.Td>
                               <Table.Td>
                                 <OrderPlatformBadge platform={order.platform} />
+                              </Table.Td>
+                              <Table.Td>
+                                <StatusBadge status={order.status} />
                               </Table.Td>
                               <Table.Td>
                                 {(() => {

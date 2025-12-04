@@ -20,6 +20,16 @@ export interface PlatformBreakdownEntry {
   orderCount: number;
 }
 
+export type BookingStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'amended'
+  | 'rebooked'
+  | 'cancelled'
+  | 'completed'
+  | 'no_show'
+  | 'unknown';
+
 export interface UnifiedOrder {
   id: string;
   productId: string;
@@ -34,6 +44,7 @@ export interface UnifiedOrder {
   platform: 'ecwid' | 'viator' | 'getyourguide' | 'fareharbor' | 'freetour' | 'airbnb' | string;
   pickupDateTime?: string;
   extras?: OrderExtras;
+  status: BookingStatus;
   rawData?: any;
 }
 
@@ -61,4 +72,5 @@ export type ManifestSummary = {
   totalOrders: number;
   extras: OrderExtras;
   platformBreakdown: PlatformBreakdownEntry[];
+  statusCounts: Record<BookingStatus, number>;
 };

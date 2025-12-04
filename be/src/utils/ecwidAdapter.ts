@@ -630,6 +630,7 @@ export const transformEcwidOrders = (ecwidOrders: EcwidOrder[]) => {
         platform: 'ecwid',
         pickupDateTime: pickupMoment.toISOString(),
         extras,
+        status: 'confirmed',
         rawData: { order, item },
       });
     });
