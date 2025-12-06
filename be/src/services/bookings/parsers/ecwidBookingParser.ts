@@ -1,8 +1,15 @@
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 import type { BookingEmailParser, BookingParserContext, BookingFieldPatch, ParsedBookingEvent } from '../types.js';
 
 dayjs.extend(customParseFormat);
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const DEFAULT_BOOKING_TIMEZONE = process.env.BOOKING_PARSER_TIMEZONE ?? 'Europe/Warsaw';
+const ECWID_TIMEZONE = process.env.ECWID_TIMEZONE ?? DEFAULT_BOOKING_TIMEZONE;
 
 const normalizeText = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
@@ -128,7 +135,7 @@ const buildExperienceMoment = (dateRaw: string | null, timeRaw: string | null): 
   const dateFormats = ['MMM D, YYYY', 'MMMM D, YYYY'];
   const timeFormats = normalizedTime ? ['h:mm A'] : [];
   for (const format of dateFormats) {
-    const datePart = dayjs(normalizedDate, format, true);
+    const datePart = dayjs.tz(normalizedDate, format, ECWID_TIMEZONE);
     if (!datePart.isValid()) {
       continue;
     }
@@ -136,7 +143,11 @@ const buildExperienceMoment = (dateRaw: string | null, timeRaw: string | null): 
       return { experienceDate: datePart.format('YYYY-MM-DD'), startAt: datePart.toDate() };
     }
     for (const timeFormat of timeFormats) {
-      const combined = dayjs(`${datePart.format('YYYY-MM-DD')} ${normalizedTime}`, `YYYY-MM-DD ${timeFormat}`, true);
+      const combined = dayjs.tz(
+        `${datePart.format('YYYY-MM-DD')} ${normalizedTime}`,
+        `YYYY-MM-DD ${timeFormat}`,
+        ECWID_TIMEZONE,
+      );
       if (combined.isValid()) {
         return {
           experienceDate: datePart.format('YYYY-MM-DD'),

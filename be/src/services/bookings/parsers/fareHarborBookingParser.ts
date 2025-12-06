@@ -1,5 +1,16 @@
+import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat.js';
+import timezone from 'dayjs/plugin/timezone.js';
+import utc from 'dayjs/plugin/utc.js';
 import type { BookingEmailParser, BookingParserContext, BookingFieldPatch, ParsedBookingEvent } from '../types.js';
 import type { BookingEventType, BookingStatus } from '../../../constants/bookings.js';
+
+dayjs.extend(customParseFormat);
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const DEFAULT_BOOKING_TIMEZONE = process.env.BOOKING_PARSER_TIMEZONE ?? 'Europe/Warsaw';
+const FAREHARBOR_TIMEZONE = process.env.FAREHARBOR_TIMEZONE ?? DEFAULT_BOOKING_TIMEZONE;
 
 const MONEY_PATTERN = /(PLN|USD|EUR|GBP)?\s*([\d.,]+)/i;
 const BOOKING_NUMBER_PATTERN = /Booking\s*#(\d+)/i;
@@ -65,46 +76,30 @@ const extractPartyCounts = (
   };
 };
 
-const MONTH_LOOKUP: Record<string, number> = {
-  january: 0,
-  february: 1,
-  march: 2,
-  april: 3,
-  may: 4,
-  june: 5,
-  july: 6,
-  august: 7,
-  september: 8,
-  october: 9,
-  november: 10,
-  december: 11,
+const normalizeDateToken = (value: string): string => {
+  const normalized = value.replace(/\u00a0/g, ' ').replace(/@/g, ' ').replace(/\s+/g, ' ').trim();
+  return normalized.replace(/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+/i, '');
 };
 
+const normalizeTimeMarker = (value: string): string =>
+  value.replace(/\b(am|pm)\b/gi, (match) => match.toUpperCase());
+
 const parseDateTimeTokens = (dateToken: string, timeToken: string): Date | null => {
-  const dateMatch = dateToken.match(/([A-Za-z]+),\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/i);
-  const timeMatch = timeToken.match(/(\d{1,2}):(\d{2})\s*(am|pm)/i);
-  if (!dateMatch || !timeMatch) {
-    return null;
+  const sanitizedDate = normalizeDateToken(dateToken);
+  const sanitizedTime = normalizeTimeMarker(normalizeDateToken(timeToken));
+  const dateTime = `${sanitizedDate} ${sanitizedTime}`;
+  const formats = ['D MMMM YYYY h:mm A', 'D MMMM YYYY h:mm a', 'D MMMM YYYY H:mm'];
+  for (const format of formats) {
+    const naive = dayjs(dateTime, format, true);
+    if (!naive.isValid()) {
+      continue;
+    }
+    const zoned = naive.tz(FAREHARBOR_TIMEZONE, true);
+    if (zoned.isValid()) {
+      return zoned.toDate();
+    }
   }
-  const monthIndex = MONTH_LOOKUP[dateMatch[3].toLowerCase()];
-  if (monthIndex === undefined) {
-    return null;
-  }
-  const day = Number.parseInt(dateMatch[2], 10);
-  const year = Number.parseInt(dateMatch[4], 10);
-  let hour = Number.parseInt(timeMatch[1], 10);
-  const minute = Number.parseInt(timeMatch[2], 10);
-  const period = timeMatch[3].toLowerCase();
-  if (period === 'pm' && hour < 12) {
-    hour += 12;
-  }
-  if (period === 'am' && hour === 12) {
-    hour = 0;
-  }
-  if (Number.isNaN(day) || Number.isNaN(year) || Number.isNaN(hour) || Number.isNaN(minute)) {
-    return null;
-  }
-  return new Date(Date.UTC(year, monthIndex, day, hour, minute));
+  return null;
 };
 
 const extractExperience = (

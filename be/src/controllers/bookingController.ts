@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { Op, type WhereOptions } from 'sequelize';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 import Booking from '../models/Booking.js';
 import type {
   UnifiedOrder,
@@ -12,7 +14,15 @@ import type {
 import { groupOrdersForManifest } from '../utils/ecwidAdapter.js';
 import { BOOKING_STATUSES } from '../constants/bookings.js';
 
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
 const DATE_FORMAT = 'YYYY-MM-DD';
+const DISPLAY_TIMEZONE =
+  process.env.BOOKING_DISPLAY_TIMEZONE ??
+  process.env.BOOKING_PARSER_TIMEZONE ??
+  process.env.ECWID_STORE_TIMEZONE ??
+  'Europe/Warsaw';
 
 type RangeBoundary = 'start' | 'end';
 
@@ -103,15 +113,84 @@ const decodeHtmlEntities = (value: string): string => {
 
 const sanitizeProductSource = (input: string): string => {
   let value = decodeHtmlEntities(input);
+  value = value.replace(/&raquo;?/gi, ' ');
   value = value.replace(/#+/g, ' ');
   value = value.replace(/(Cancelled|Canceled|Rebooked)\s*:?/gi, ' ');
   value = value.replace(/New\s+order/gi, ' ');
   value = value.replace(/Booking\s+note:?/gi, ' ');
   value = value.replace(/View on FareHarbor/gi, ' ');
-  value = value.replace(/Order\s+#\w+/gi, ' ');
-  value = value.replace(/Booking\s+#\w+/gi, ' ');
   value = value.replace(/\s+/g, ' ');
   return value.trim();
+};
+
+const EXPERIENCE_KEYWORDS = [
+  'pub crawl',
+  'crawl',
+  'tour',
+  'experience',
+  'brunch',
+  'bar crawl',
+  'open bar',
+  'vip',
+  'entry',
+  'shots',
+  'food',
+  'tasting',
+];
+
+const truncateAtMarkers = (value: string): string => {
+  const markers = ['created by', 'created at', 'cancelled by', 'cancelled at', 'due', 'name:', 'email:', 'phone:'];
+  let result = value;
+  markers.forEach((marker) => {
+    const index = result.toLowerCase().indexOf(marker.toLowerCase());
+    if (index !== -1 && index > 0) {
+      result = result.slice(0, index).trim();
+    }
+  });
+  return result.trim();
+};
+
+const splitCandidateSegments = (value: string): string[] => {
+  return value
+    .split(/(?:####|\n|\r| {2,}|--+|==+|\|)+/g)
+    .map((segment) => truncateAtMarkers(segment.trim()))
+    .filter(Boolean);
+};
+
+const scoreSegment = (segment: string): number => {
+  let score = Math.min(segment.length, 80) / 80;
+  const lower = segment.toLowerCase();
+  EXPERIENCE_KEYWORDS.forEach((keyword) => {
+    if (lower.includes(keyword)) {
+      score += 5;
+    }
+  });
+  return score;
+};
+
+const pickLikelyProductSegment = (segments: string[]): string | null => {
+  if (segments.length === 0) {
+    return null;
+  }
+  const scored = segments
+    .map((segment) => ({ segment, score: scoreSegment(segment) }))
+    .sort((a, b) => b.score - a.score);
+  return scored[0]?.segment ?? null;
+};
+
+const matchKnownProductPatterns = (value: string): string | null => {
+  const patterns = [
+    /(?:tour|product)\s+name\s*:?\s*(.+)$/i,
+    /(?:booking|order)\s+#?[^\s]+\s+(.+)$/i,
+    /customers?:\s*(?:[^A-Za-z0-9]+)?(.+)$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = value.match(pattern);
+    if (match && match[1]) {
+      return truncateAtMarkers(match[1].trim());
+    }
+  }
+  return null;
 };
 
 const tokenizeProductName = (source: string): string[] => {
@@ -129,7 +208,8 @@ const tokenizeProductName = (source: string): string[] => {
 };
 
 const canonicalizeProductKey = (booking: Booking): string | null => {
-  const baseName = booking.product?.name ?? booking.productName ?? booking.productVariant;
+  const baseName =
+    prettifyProductName(booking) ?? booking.product?.name ?? booking.productName ?? booking.productVariant;
   if (!baseName) {
     return null;
   }
@@ -149,7 +229,18 @@ const prettifyProductName = (booking: Booking): string | null => {
     return null;
   }
   const sanitized = sanitizeProductSource(raw);
-  return sanitized || null;
+  if (!sanitized) {
+    return null;
+  }
+
+  const patternHit = matchKnownProductPatterns(sanitized);
+  if (patternHit) {
+    return patternHit;
+  }
+
+  const segments = splitCandidateSegments(sanitized);
+  const chosen = pickLikelyProductSegment(segments);
+  return (chosen ?? sanitized).trim() || null;
 };
 
 const deriveProductId = (booking: Booking): string => {
@@ -195,9 +286,16 @@ const normalizeExtras = (snapshot: unknown): OrderExtras => {
 };
 
 const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
+  const pickupMomentUtc = booking.experienceStartAt ? dayjs(booking.experienceStartAt) : null;
+  const pickupMomentLocal =
+    pickupMomentUtc?.isValid() && DISPLAY_TIMEZONE ? pickupMomentUtc.tz(DISPLAY_TIMEZONE) : pickupMomentUtc;
   const experienceDate =
     booking.experienceDate ??
-    (booking.experienceStartAt ? dayjs(booking.experienceStartAt).format(DATE_FORMAT) : null);
+    (pickupMomentLocal?.isValid()
+      ? pickupMomentLocal.format(DATE_FORMAT)
+      : pickupMomentUtc?.isValid()
+        ? pickupMomentUtc.format(DATE_FORMAT)
+        : null);
 
   if (!experienceDate) {
     return null;
@@ -205,8 +303,7 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
 
   const productId = deriveProductId(booking);
   const displayProductName = prettifyProductName(booking) ?? 'Unassigned product';
-  const pickupMoment = booking.experienceStartAt ? dayjs(booking.experienceStartAt) : null;
-  const timeslot = pickupMoment?.isValid() ? pickupMoment.format('HH:mm') : '--:--';
+  const timeslot = pickupMomentLocal?.isValid() ? pickupMomentLocal.format('HH:mm') : '--:--';
   const menCount = booking.partySizeAdults ?? booking.partySizeTotal ?? 0;
   const womenCount = booking.partySizeChildren ?? 0;
   const extras = normalizeExtras(booking.addonsSnapshot ?? undefined);
@@ -223,7 +320,7 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
     customerName: buildCustomerName(booking),
     customerPhone: booking.guestPhone ?? undefined,
     platform: booking.platform,
-    pickupDateTime: pickupMoment?.isValid() ? pickupMoment.toISOString() : undefined,
+    pickupDateTime: pickupMomentUtc?.isValid() ? pickupMomentUtc.toISOString() : undefined,
     extras,
     status: booking.status,
     rawData: {
