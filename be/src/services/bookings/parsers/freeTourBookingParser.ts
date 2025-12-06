@@ -1,15 +1,24 @@
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 import type { BookingEmailParser, BookingParserContext, BookingFieldPatch, ParsedBookingEvent } from '../types.js';
 import type { BookingEventType, BookingStatus } from '../../../constants/bookings.js';
 
 dayjs.extend(customParseFormat);
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const DEFAULT_BOOKING_TIMEZONE = process.env.BOOKING_PARSER_TIMEZONE ?? 'Europe/Warsaw';
+const FREETOUR_TIMEZONE = process.env.FREETOUR_TIMEZONE ?? DEFAULT_BOOKING_TIMEZONE;
 
 const MONEY_SYMBOLS: Record<string, string> = {
   '\u20ac': 'EUR',
   $: 'USD',
   '\u00a3': 'GBP',
 };
+
+const FREETOUR_DATE_FORMATS = ['h:mm A MMMM D, YYYY', 'h:mm A MMM D, YYYY', 'h:mm A MMMM D YYYY'];
 
 const extractField = (text: string, label: string, nextLabels: string[]): string | null => {
   const lowerText = text.toLowerCase();
@@ -159,9 +168,16 @@ export class FreeTourBookingParser implements BookingEmailParser {
       const firstComma = normalizedDate.indexOf(',');
       normalizedDate = `${normalizedDate.slice(0, firstComma)} ${normalizedDate.slice(firstComma + 1).trim()}`;
     }
-    const parsedDate = normalizedDate
-      ? dayjs(normalizedDate, ['h:mm A MMMM D, YYYY', 'h:mm A MMM D, YYYY', 'h:mm A MMMM D YYYY'], true)
-      : null;
+    let parsedDate: dayjs.Dayjs | null = null;
+    if (normalizedDate) {
+      for (const format of FREETOUR_DATE_FORMATS) {
+        const candidate = dayjs.tz(normalizedDate, format, FREETOUR_TIMEZONE);
+        if (candidate.isValid()) {
+          parsedDate = candidate;
+          break;
+        }
+      }
+    }
     const nameParts = parseName(bookingName);
     const totalMoney = totalCost ? parseMoney(totalCost) : null;
 

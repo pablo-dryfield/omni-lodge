@@ -1,9 +1,16 @@
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 import type { BookingEmailParser, BookingParserContext, BookingFieldPatch, ParsedBookingEvent } from '../types.js';
 import type { BookingEventType, BookingStatus } from '../../../constants/bookings.js';
 
 dayjs.extend(customParseFormat);
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const DEFAULT_BOOKING_TIMEZONE = process.env.BOOKING_PARSER_TIMEZONE ?? 'Europe/Warsaw';
+const GETYOURGUIDE_TIMEZONE = process.env.GETYOURGUIDE_TIMEZONE ?? DEFAULT_BOOKING_TIMEZONE;
 
 const MONEY_SYMBOLS: Record<string, string> = {
   'z\u0142': 'PLN',
@@ -88,7 +95,7 @@ const extractBookingFields = (text: string): BookingFieldPatch => {
 
   const dateMatch = text.match(/Date\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})\s+(\d{1,2}:\d{2}\s*(?:AM|PM))/i);
   if (dateMatch) {
-    const parsed = dayjs(`${dateMatch[1]} ${dateMatch[2]}`, ['MMMM D, YYYY h:mm A'], true);
+    const parsed = dayjs.tz(`${dateMatch[1]} ${dateMatch[2]}`, 'MMMM D, YYYY h:mm A', GETYOURGUIDE_TIMEZONE);
     if (parsed.isValid()) {
       fields.experienceDate = parsed.format('YYYY-MM-DD');
       fields.experienceStartAt = parsed.toDate();

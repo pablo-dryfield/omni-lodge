@@ -1,14 +1,21 @@
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 import type { BookingEmailParser, BookingParserContext, BookingFieldPatch, ParsedBookingEvent } from '../types.js';
 import type { BookingEventType, BookingStatus } from '../../../constants/bookings.js';
 
 dayjs.extend(customParseFormat);
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const DEFAULT_BOOKING_TIMEZONE = process.env.BOOKING_PARSER_TIMEZONE ?? 'Europe/Warsaw';
+const VIATOR_TIMEZONE = process.env.VIATOR_TIMEZONE ?? DEFAULT_BOOKING_TIMEZONE;
 
 const DATE_FORMATS = ['ddd, MMM D, YYYY', 'ddd, MMM DD, YYYY', 'MMM D, YYYY', 'MMM DD, YYYY', 'MMMM D, YYYY', 'MMMM DD, YYYY'];
 
 const MONEY_PATTERN = /([A-Z]{3})\s*([\d.,]+)/i;
-const TIME_PATTERN = /(\d{1,2}:\d{2})/;
+const TIME_PATTERN = /(\d{1,2}:\d{2}\s*(?:a\.m\.|p\.m\.|am|pm)?)\b/i;
 
 const extractField = (text: string, label: string, nextLabels: string[] = []): string | null => {
   const lower = text.toLowerCase();
@@ -86,11 +93,12 @@ const parseTravelDate = (
   let parsedDate: dayjs.Dayjs | null = null;
   for (const candidateValue of candidateValues) {
     for (const format of DATE_FORMATS) {
-      const candidate = dayjs(candidateValue, format, true);
-      if (candidate.isValid()) {
-        parsedDate = candidate;
-        break;
+      const naïve = dayjs(candidateValue, format, true);
+      if (!naïve.isValid()) {
+        continue;
       }
+      parsedDate = dayjs.tz(naïve.format('YYYY-MM-DD'), 'YYYY-MM-DD', VIATOR_TIMEZONE);
+      break;
     }
     if (parsedDate) {
       break;
@@ -104,11 +112,13 @@ const parseTravelDate = (
   if (timeHint) {
     const timeMatch = timeHint.match(TIME_PATTERN);
     if (timeMatch?.[1]) {
-      const withTime = dayjs(
-        `${parsedDate.format('YYYY-MM-DD')} ${timeMatch[1]}`,
-        ['YYYY-MM-DD HH:mm'],
-        true,
-      );
+      let normalizedTime = timeMatch[1].trim();
+      let format = 'YYYY-MM-DD HH:mm';
+      if (/[ap]\.?m\.?/i.test(normalizedTime)) {
+        normalizedTime = normalizedTime.replace(/\./g, '').toUpperCase();
+        format = 'YYYY-MM-DD h:mm A';
+      }
+      const withTime = dayjs.tz(`${parsedDate.format('YYYY-MM-DD')} ${normalizedTime}`, format, VIATOR_TIMEZONE);
       if (withTime.isValid()) {
         return {
           experienceDate: parsedDate.format('YYYY-MM-DD'),
@@ -120,7 +130,7 @@ const parseTravelDate = (
 
   return {
     experienceDate: parsedDate.format('YYYY-MM-DD'),
-    experienceStartAt: parsedDate.startOf('day').toDate(),
+    experienceStartAt: null,
   };
 };
 
@@ -224,22 +234,24 @@ export class ViatorBookingParser implements BookingEmailParser {
     const money = parseMoney(netRate);
     const guestPhone = parsePhone(phone);
 
-    const bookingFields: BookingFieldPatch = {
-      productName: tourName ?? null,
-      productVariant: tourGrade ?? tourGradeCode ?? null,
-      guestFirstName: nameParts.firstName,
-      guestLastName: nameParts.lastName,
-      guestPhone,
-      partySizeTotal: counts.total,
-      partySizeAdults: counts.adults,
-      experienceDate: schedule.experienceDate,
-      experienceStartAt: schedule.experienceStartAt,
-      currency: money.currency,
-      priceGross: money.amount ?? null,
-      priceNet: money.amount ?? null,
-      baseAmount: money.amount ?? null,
-      pickupLocation: meetingPoint ?? location ?? null,
-    };
+  const bookingFields: BookingFieldPatch = {
+    productName: tourName ?? null,
+    productVariant: tourGrade ?? tourGradeCode ?? null,
+    guestFirstName: nameParts.firstName,
+    guestLastName: nameParts.lastName,
+    guestPhone,
+    partySizeTotal: counts.total,
+    partySizeAdults: counts.adults,
+    experienceDate: schedule.experienceDate,
+    currency: money.currency,
+    priceGross: money.amount ?? null,
+    priceNet: money.amount ?? null,
+    baseAmount: money.amount ?? null,
+    pickupLocation: meetingPoint ?? location ?? null,
+  };
+  if (schedule.experienceStartAt) {
+    bookingFields.experienceStartAt = schedule.experienceStartAt;
+  }
 
     const status = deriveStatusFromContext(context, text);
     const eventType = statusToEventType(status);
