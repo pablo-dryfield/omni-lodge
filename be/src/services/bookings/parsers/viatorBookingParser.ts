@@ -151,17 +151,24 @@ const parseTravelerCounts = (
   return { total, adults: total };
 };
 
+const stripHtml = (value: string): string =>
+  value.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim();
+
 const parsePhone = (value: string | null): string | null => {
   if (!value) {
     return null;
   }
-  const cleaned = value.replace(/Send the customer a message\.?/i, '').trim();
+  const normalizedInput = stripHtml(value);
+  const cleaned = normalizedInput.replace(/Send the customer a message\.?/i, '').trim();
   const withoutPrefix = cleaned.replace(/^[A-Za-z()\s]+/, '').trim();
   if (!withoutPrefix) {
     return null;
   }
-  const match = withoutPrefix.match(/(\+?\d[\d\s-]+)/);
-  return match ? match[1].replace(/\s+/g, ' ').trim() : withoutPrefix;
+  const match = withoutPrefix.match(/(\+?\d[\d\s\-()]+)/);
+  if (!match) {
+    return withoutPrefix;
+  }
+  return match[1].replace(/[()\s-]+/g, ' ').replace(/\s+/g, ' ').trim();
 };
 
 const deriveStatusFromContext = (context: BookingParserContext, textBody: string): BookingStatus => {
