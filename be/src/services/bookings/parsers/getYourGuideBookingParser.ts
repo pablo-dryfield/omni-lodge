@@ -55,6 +55,33 @@ const extractBookingId = (text: string, subject?: string | null): string | null 
   return null;
 };
 
+const PRODUCT_NAME_CANONICALS: Array<{ canonical: string; patterns: RegExp[] }> = [
+  {
+    canonical: 'Krawl Through Krakow Pub Crawl',
+    patterns: [
+      /krawl through krakow pub crawl/i,
+      /krakow:\s*pub crawl/i,
+      /krakow pub crawl/i,
+    ],
+  },
+];
+
+const canonicalizeProductName = (rawName: string): { name: string; variant: string | null } => {
+  const trimmed = rawName.trim();
+  for (const candidate of PRODUCT_NAME_CANONICALS) {
+    for (const pattern of candidate.patterns) {
+      if (pattern.test(trimmed)) {
+        const needsVariant = trimmed.localeCompare(candidate.canonical, undefined, { sensitivity: 'accent' }) !== 0;
+        return {
+          name: candidate.canonical,
+          variant: needsVariant ? trimmed : null,
+        };
+      }
+    }
+  }
+  return { name: trimmed, variant: null };
+};
+
 const extractBookingFields = (text: string): BookingFieldPatch => {
   const fields: BookingFieldPatch = {};
 
@@ -64,7 +91,12 @@ const extractBookingFields = (text: string): BookingFieldPatch => {
     const half = Math.floor(rawName.length / 2);
     const firstHalf = rawName.slice(0, half).trim();
     const secondHalf = rawName.slice(half).trim();
-    fields.productName = firstHalf && firstHalf === secondHalf ? firstHalf : rawName;
+    const deduped = firstHalf && firstHalf === secondHalf ? firstHalf : rawName;
+    const canonical = canonicalizeProductName(deduped);
+    fields.productName = canonical.name;
+    if (canonical.variant) {
+      fields.productVariant = canonical.variant;
+    }
   }
 
   const customerMatch = text.match(/Main customer\s+([A-Za-z\u00C0-\u017F' -]+?)(?=\s+[a-z0-9._%+-]+@)/i);
