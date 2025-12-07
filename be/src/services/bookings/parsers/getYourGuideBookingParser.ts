@@ -152,6 +152,26 @@ const canonicalizeProductName = (rawName: string): { name: string; variant: stri
   return { name: working, variant: candidateVariant };
 };
 
+const extractExperienceDateTime = (
+  text: string,
+): { dateText: string; timeText: string } | null => {
+  const patterns = [
+    /Date\s+New[.:]?\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})[^\S\r\n]*(?:at|\@)?[^\S\r\n]*(\d{1,2}:\d{2}\s*(?:AM|PM))/i,
+    /Date[:\s]+([A-Za-z]+\s+\d{1,2},\s+\d{4})[^\S\r\n]*(?:at|\@)?[^\S\r\n]*(\d{1,2}:\d{2}\s*(?:AM|PM))/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return {
+        dateText: match[1],
+        timeText: match[2],
+      };
+    }
+  }
+  return null;
+};
+
 const extractBookingFields = (text: string): BookingFieldPatch => {
   const fields: BookingFieldPatch = {};
 
@@ -196,9 +216,13 @@ const extractBookingFields = (text: string): BookingFieldPatch => {
     fields.addonsSnapshot = mergeExtrasSnapshot(fields.addonsSnapshot, participantInfo.extras);
   }
 
-  const dateMatch = text.match(/Date[:\s]+([A-Za-z]+\s+\d{1,2},\s+\d{4})\s+(\d{1,2}:\d{2}\s*(?:AM|PM))/i);
-  if (dateMatch) {
-    const parsed = dayjs.tz(`${dateMatch[1]} ${dateMatch[2]}`, 'MMMM D, YYYY h:mm A', GETYOURGUIDE_TIMEZONE);
+  const dateInfo = extractExperienceDateTime(text);
+  if (dateInfo) {
+    const parsed = dayjs.tz(
+      `${dateInfo.dateText} ${dateInfo.timeText}`,
+      'MMMM D, YYYY h:mm A',
+      GETYOURGUIDE_TIMEZONE,
+    );
     if (parsed.isValid()) {
       fields.experienceDate = parsed.format('YYYY-MM-DD');
       fields.experienceStartAt = parsed.toDate();
