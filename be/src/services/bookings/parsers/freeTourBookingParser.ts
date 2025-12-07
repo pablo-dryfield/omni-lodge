@@ -100,11 +100,26 @@ const parseName = (value: string | null): { firstName: string | null; lastName: 
 };
 
 const deriveStatusFromContext = (context: BookingParserContext, text: string): BookingStatus => {
-  const haystack = `${context.subject ?? ''}\n${text}`.toLowerCase();
-  if (/(?:canceled|cancelled|cancellation)/i.test(haystack)) {
+  const subject = (context.subject ?? '').toLowerCase();
+  const body = text.toLowerCase();
+  const haystack = `${subject}\n${body}`;
+  const cancelSubjectMarkers = ['cancel', 'cancellation'];
+  const amendSubjectMarkers = ['amend', 'change', 'update', 'modified', 'reschedule'];
+  const cancelBodyPatterns = [
+    /booking (?:has been )?(?:cancelled|canceled)/i,
+    /reservation (?:has been )?(?:cancelled|canceled)/i,
+    /booking cancellation/i,
+    /reservation cancellation/i,
+  ];
+  const amendBodyPatterns = [
+    /booking (?:has been )?(?:amended|changed|updated|modified|rescheduled)/i,
+    /reservation (?:has been )?(?:amended|changed|updated|modified|rescheduled)/i,
+  ];
+
+  if (cancelSubjectMarkers.some((marker) => subject.includes(marker)) || cancelBodyPatterns.some((pattern) => pattern.test(haystack))) {
     return 'cancelled';
   }
-  if (/(?:amended|change|changed|updated|modified|rescheduled)/i.test(haystack)) {
+  if (amendSubjectMarkers.some((marker) => subject.includes(marker)) || amendBodyPatterns.some((pattern) => pattern.test(haystack))) {
     return 'amended';
   }
   return 'confirmed';

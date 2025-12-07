@@ -61,6 +61,19 @@ const extractPartyCounts = (
     if (Number.isNaN(qty)) {
       continue;
     }
+    let precedingChar: string | null = null;
+    if (match.index !== undefined && match.index > 0) {
+      let cursor = match.index - 1;
+      while (cursor >= 0 && /\s/.test(text[cursor])) {
+        cursor -= 1;
+      }
+      if (cursor >= 0) {
+        precedingChar = text[cursor];
+      }
+    }
+    if (precedingChar && /[\d.]/.test(precedingChar)) {
+      continue;
+    }
     const label = match[2].toLowerCase();
     if (ADULT_TERMS.has(label)) {
       adults += qty;
@@ -74,6 +87,32 @@ const extractPartyCounts = (
     adults: adults > 0 ? adults : null,
     children: children > 0 ? children : null,
   };
+};
+
+const extractPartyCountsFromCustomers = (
+  text: string,
+): { total: number | null; adults: number | null; children: number | null } => {
+  const boundaries = ['item', 'details', 'payments', 'booking total', 'total paid'];
+  let customersSection: string | null = null;
+  for (const boundary of boundaries) {
+    customersSection = sliceSection(text, 'customers', boundary);
+    if (customersSection) {
+      break;
+    }
+  }
+  if (!customersSection) {
+    customersSection = sliceSection(text, 'customers') ?? null;
+  }
+
+  if (customersSection) {
+    const counts = extractPartyCounts(customersSection);
+    if (counts.total !== null || counts.children !== null || counts.adults !== null) {
+      return counts;
+    }
+  }
+  const paymentsIdx = text.toLowerCase().indexOf('payments');
+  const headerScope = paymentsIdx === -1 ? text : text.slice(0, paymentsIdx);
+  return extractPartyCounts(headerScope);
 };
 
 const normalizeDateToken = (value: string): string => {
@@ -250,7 +289,7 @@ const buildBookingFields = (contextText: string, scheduleText: string): BookingF
     fields.guestEmail = emailMatch[1].trim();
   }
 
-  const party = extractPartyCounts(contextText);
+  const party = extractPartyCountsFromCustomers(contextText);
   fields.partySizeTotal = party.total;
   fields.partySizeAdults = party.adults;
   fields.partySizeChildren = party.children;
