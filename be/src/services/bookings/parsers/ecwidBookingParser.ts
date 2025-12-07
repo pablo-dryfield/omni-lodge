@@ -214,6 +214,17 @@ export class EcwidBookingParser implements BookingEmailParser {
     const paymentMethod =
       paymentMethodMatch?.[1]?.replace(/View order details/i, '').trim() ?? null;
 
+    const addonsSnapshot: Record<string, unknown> = {};
+    if (party.men !== null || party.women !== null) {
+      addonsSnapshot.partyBreakdown = {
+        men: party.men,
+        women: party.women,
+      };
+    }
+    if (addonsNote) {
+      addonsSnapshot.notes = addonsNote;
+    }
+
     const bookingFields: BookingFieldPatch = {
       productName,
       guestFirstName: firstName,
@@ -232,6 +243,9 @@ export class EcwidBookingParser implements BookingEmailParser {
       pickupLocation: location,
       notes: addonsNote ?? null,
     };
+    if (Object.keys(addonsSnapshot).length > 0) {
+      bookingFields.addonsSnapshot = addonsSnapshot;
+    }
 
     const paymentStatus = /paid/i.test(context.subject ?? '') || /paid/i.test(text) ? 'paid' : 'unknown';
 

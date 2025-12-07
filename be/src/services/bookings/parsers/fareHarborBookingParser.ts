@@ -23,8 +23,18 @@ const BOOKING_TOTAL_PATTERN = /Booking\s+total\s+(PLN|USD|EUR|GBP)?\s*([\d.,]+)/
 const TAXES_PATTERN = /Taxes\s+(PLN|USD|EUR|GBP)?\s*([\d.,]+)/i;
 const DUE_PATTERN = /Due:\s*(PLN|USD|EUR|GBP)?\s*([\d.,]+)/i;
 const PAYMENT_PATTERN = /[•*]?\s*(PLN|USD|EUR|GBP)?\s*([\d.,]+)\s*(?:[-–]\s*)?([^(]+?)\s*\(([^)]+)\)/i;
+const MALE_TERMS = new Set(['man', 'men']);
+const FEMALE_TERMS = new Set(['woman', 'women']);
 const ADULT_TERMS = new Set(['man', 'men', 'woman', 'women', 'guest', 'guests', 'people', 'persons', 'adult', 'adults']);
 const CHILD_TERMS = new Set(['child', 'children', 'kid', 'kids']);
+
+type PartyCounts = {
+  total: number | null;
+  adults: number | null;
+  children: number | null;
+  men: number | null;
+  women: number | null;
+};
 
 const normalize = (value?: string | null): string => value?.trim() ?? '';
 
@@ -50,11 +60,11 @@ const extractProductName = (text: string): string | null => {
   return match?.[1]?.trim() ?? null;
 };
 
-const extractPartyCounts = (
-  text: string,
-): { total: number | null; adults: number | null; children: number | null } => {
+const extractPartyCounts = (text: string): PartyCounts => {
   let adults = 0;
   let children = 0;
+  let men = 0;
+  let women = 0;
   const matches = text.matchAll(PARTY_SEGMENT_PATTERN);
   for (const match of matches) {
     const qty = Number.parseInt(match[1], 10);
@@ -77,6 +87,11 @@ const extractPartyCounts = (
     const label = match[2].toLowerCase();
     if (ADULT_TERMS.has(label)) {
       adults += qty;
+      if (MALE_TERMS.has(label)) {
+        men += qty;
+      } else if (FEMALE_TERMS.has(label)) {
+        women += qty;
+      }
     } else if (CHILD_TERMS.has(label)) {
       children += qty;
     }
@@ -86,12 +101,12 @@ const extractPartyCounts = (
     total: total > 0 ? total : null,
     adults: adults > 0 ? adults : null,
     children: children > 0 ? children : null,
+    men: men > 0 ? men : null,
+    women: women > 0 ? women : null,
   };
 };
 
-const extractPartyCountsFromCustomers = (
-  text: string,
-): { total: number | null; adults: number | null; children: number | null } => {
+const extractPartyCountsFromCustomers = (text: string): PartyCounts => {
   const boundaries = ['item', 'details', 'payments', 'booking total', 'total paid'];
   let customersSection: string | null = null;
   for (const boundary of boundaries) {
@@ -271,7 +286,10 @@ const extractPaymentDetails = (
   };
 };
 
-const buildBookingFields = (contextText: string, scheduleText: string): BookingFieldPatch => {
+const buildBookingFields = (
+  contextText: string,
+  scheduleText: string,
+): { fields: BookingFieldPatch; party: PartyCounts } => {
   const fields: BookingFieldPatch = {};
 
   const nameMatch = contextText.match(NAME_PATTERN);
@@ -301,7 +319,7 @@ const buildBookingFields = (contextText: string, scheduleText: string): BookingF
   fields.experienceStartAt = experience.experienceStartAt;
   fields.experienceEndAt = experience.experienceEndAt;
 
-  return fields;
+  return { fields, party };
 };
 
 const extractRebookedNewId = (text: string): string | null => {
@@ -464,7 +482,7 @@ export class FareHarborBookingParser implements BookingEmailParser {
     }
 
     const scheduleText = (context.subject ?? '').trim();
-    const bookingFields = buildBookingFields(text, scheduleText);
+    const { fields: bookingFields, party } = buildBookingFields(text, scheduleText);
     bookingFields.productName = extractProductName(text);
 
     const bookingTotal = text.match(BOOKING_TOTAL_PATTERN);
@@ -500,11 +518,21 @@ export class FareHarborBookingParser implements BookingEmailParser {
 
     const detailLines = extractDetailLines(text);
     const questionnaire = extractQuestionnaire(text);
-    if (detailLines.length > 0 || questionnaire) {
-      bookingFields.addonsSnapshot = {
-        detailLines,
-        questionnaire,
+    const addonsSnapshot: Record<string, unknown> = {};
+    if (detailLines.length > 0) {
+      addonsSnapshot.detailLines = detailLines;
+    }
+    if (questionnaire) {
+      addonsSnapshot.questionnaire = questionnaire;
+    }
+    if (party.men !== null || party.women !== null) {
+      addonsSnapshot.partyBreakdown = {
+        men: party.men,
+        women: party.women,
       };
+    }
+    if (Object.keys(addonsSnapshot).length > 0) {
+      bookingFields.addonsSnapshot = addonsSnapshot;
     }
 
     const paymentStatus =
@@ -523,6 +551,30 @@ export class FareHarborBookingParser implements BookingEmailParser {
       delete bookingFields.experienceDate;
       delete bookingFields.experienceStartAt;
       delete bookingFields.experienceEndAt;
+      if (rebookDetails?.newProductName) {
+        bookingFields.productName = rebookDetails.newProductName;
+      }
+      if (rebookDetails?.newCustomers) {
+        const rebookCounts = extractPartyCounts(rebookDetails.newCustomers);
+        if (rebookCounts.total !== null) {
+          bookingFields.partySizeTotal = rebookCounts.total;
+        }
+        if (rebookCounts.adults !== null) {
+          bookingFields.partySizeAdults = rebookCounts.adults;
+        }
+        if (rebookCounts.children !== null) {
+          bookingFields.partySizeChildren = rebookCounts.children;
+        }
+        if (rebookCounts.men !== null || rebookCounts.women !== null) {
+          const snapshot =
+            (bookingFields.addonsSnapshot as Record<string, unknown> | undefined) ?? {};
+          snapshot.partyBreakdown = {
+            men: rebookCounts.men,
+            women: rebookCounts.women,
+          };
+          bookingFields.addonsSnapshot = snapshot;
+        }
+      }
     }
     const eventType = statusToEventType(status);
 

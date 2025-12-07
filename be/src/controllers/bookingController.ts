@@ -285,6 +285,36 @@ const normalizeExtras = (snapshot: unknown): OrderExtras => {
   };
 };
 
+const coerceCount = (value: unknown): number | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+};
+
+const extractPartyBreakdown = (
+  snapshot?: Record<string, unknown> | null,
+): { men: number | null; women: number | null } => {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return { men: null, women: null };
+  }
+  const breakdown = (snapshot as { partyBreakdown?: { men?: unknown; women?: unknown } }).partyBreakdown;
+  if (!breakdown || typeof breakdown !== 'object') {
+    return { men: null, women: null };
+  }
+  return {
+    men: coerceCount(breakdown.men),
+    women: coerceCount(breakdown.women),
+  };
+};
+
 const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
   const pickupMomentUtc = booking.experienceStartAt ? dayjs(booking.experienceStartAt) : null;
   const pickupMomentLocal =
@@ -304,9 +334,59 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
   const productId = deriveProductId(booking);
   const displayProductName = prettifyProductName(booking) ?? 'Unassigned product';
   const timeslot = pickupMomentLocal?.isValid() ? pickupMomentLocal.format('HH:mm') : '--:--';
-  const menCount = booking.partySizeAdults ?? booking.partySizeTotal ?? 0;
-  const womenCount = booking.partySizeChildren ?? 0;
+  const snapshotBreakdown = extractPartyBreakdown(booking.addonsSnapshot ?? undefined);
+  const fallbackTotal = booking.partySizeTotal ?? booking.partySizeAdults ?? null;
+  let menCount = snapshotBreakdown.men;
+  let womenCount = snapshotBreakdown.women;
+  if (menCount === null && womenCount === null) {
+    menCount = booking.partySizeAdults ?? booking.partySizeTotal ?? 0;
+    womenCount = booking.partySizeChildren ?? 0;
+  } else {
+    const adultsFallback = booking.partySizeAdults ?? booking.partySizeTotal ?? 0;
+    const childrenFallback = booking.partySizeChildren ?? 0;
+    if (menCount === null && womenCount !== null) {
+      menCount =
+        fallbackTotal !== null
+          ? Math.max(fallbackTotal - womenCount, 0)
+          : Math.max(adultsFallback - womenCount, 0);
+    }
+    if (womenCount === null && menCount !== null) {
+      womenCount =
+        fallbackTotal !== null
+          ? Math.max(fallbackTotal - menCount, 0)
+          : Math.max(childrenFallback, 0);
+    }
+    menCount = menCount ?? adultsFallback;
+    womenCount = womenCount ?? childrenFallback;
+    if (fallbackTotal !== null) {
+      const combined = menCount + womenCount;
+      if (combined === 0) {
+        menCount = fallbackTotal;
+        womenCount = 0;
+      } else if (combined !== fallbackTotal) {
+        const scale = fallbackTotal / combined;
+        menCount = Math.max(Math.round(menCount * scale), 0);
+        womenCount = Math.max(fallbackTotal - menCount, 0);
+      }
+      if (menCount > fallbackTotal) {
+        menCount = fallbackTotal;
+        womenCount = 0;
+      }
+      if (womenCount > fallbackTotal) {
+        womenCount = fallbackTotal;
+      }
+    }
+  }
+  if (booking.status === 'rebooked') {
+    menCount = 0;
+    womenCount = 0;
+  }
   const extras = normalizeExtras(booking.addonsSnapshot ?? undefined);
+  const combinedCount = menCount + womenCount;
+  const quantity =
+    booking.status === 'rebooked'
+      ? 0
+      : fallbackTotal ?? (combinedCount > 0 ? combinedCount : (booking.partySizeAdults ?? 0));
 
   return {
     id: String(booking.id),
@@ -314,7 +394,7 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
     productName: displayProductName,
     date: experienceDate,
     timeslot,
-    quantity: booking.partySizeTotal ?? booking.partySizeAdults ?? 0,
+    quantity,
     menCount,
     womenCount,
     customerName: buildCustomerName(booking),
