@@ -17,6 +17,9 @@ const DATE_FORMATS = ['ddd, MMM D, YYYY', 'ddd, MMM DD, YYYY', 'MMM D, YYYY', 'M
 const MONEY_PATTERN = /([A-Z]{3})\s*([\d.,]+)/i;
 const TIME_PATTERN = /(\d{1,2}:\d{2}\s*(?:a\.m\.|p\.m\.|am|pm)?)\b/i;
 
+const normalizeBookingText = (value: string): string =>
+  value.replace(/[\u00A0\u202F\u2007]/g, ' ');
+
 const extractField = (text: string, label: string, nextLabels: string[] = []): string | null => {
   const lower = text.toLowerCase();
   const anchor = label.toLowerCase();
@@ -211,28 +214,49 @@ export class ViatorBookingParser implements BookingEmailParser {
       return null;
     }
 
-    const bookingReferenceRaw = extractField(text, 'Booking Reference:', ['Tour Name:']);
+    const normalizedText = normalizeBookingText(text);
+
+    const bookingReferenceRaw = extractField(normalizedText, 'Booking Reference:', ['Tour Name:']);
     const bookingReferenceMatch = bookingReferenceRaw?.match(/#?[A-Z0-9-]+/);
     const bookingReference = bookingReferenceMatch?.[0]?.replace(/^#/, '') ?? null;
     if (!bookingReference) {
       return null;
     }
 
-    const tourName = extractField(text, 'Tour Name:', ['Travel Date:']);
-    const travelDate = extractField(text, 'Travel Date:', ['Lead Traveler Name:']);
-    const leadTraveler = extractField(text, 'Lead Traveler Name:', ['Traveler Names:']);
-    const travelerNames = extractField(text, 'Traveler Names:', ['Travelers:']);
-    const travelers = extractField(text, 'Travelers:', ['Product Code:']);
-    const productCode = extractField(text, 'Product Code:', ['Tour Grade:']);
-    const tourGrade = extractField(text, 'Tour Grade:', ['Tour Grade Code:']);
-    const tourGradeCode = extractField(text, 'Tour Grade Code:', ['Tour Grade Description:']);
-    const gradeDescription = extractField(text, 'Tour Grade Description:', ['Tour Language:']);
-    const tourLanguage = extractField(text, 'Tour Language:', ['Location:']);
-    const location = extractField(text, 'Location:', ['Net Rate:']);
-    const netRate = extractField(text, 'Net Rate:', ['Meeting Point:', 'Special Requirements:', 'Phone:', 'Optional:']);
-    const meetingPoint = extractField(text, 'Meeting Point:', ['Special Requirements:', 'Phone:', 'Optional:']);
-    const specialRequirements = extractField(text, 'Special Requirements:', ['Phone:', 'Optional:', 'Have questions']);
-    const phone = extractField(text, 'Phone:', ['Optional:', 'Have questions', 'Management Center', 'Send the customer a message.']);
+    const tourName = extractField(normalizedText, 'Tour Name:', ['Travel Date:']);
+    const travelDate = extractField(normalizedText, 'Travel Date:', ['Lead Traveler Name:']);
+    const leadTraveler = extractField(normalizedText, 'Lead Traveler Name:', [
+      'Traveler Names:',
+      'Travelers:',
+      'Product Code:',
+      'Tour Grade:',
+      'Tour Grade Code:',
+      'Tour Grade Description:',
+      'Tour Language:',
+      'Location:',
+      'Special Requirements:',
+    ]);
+    const travelerNames = extractField(normalizedText, 'Traveler Names:', ['Travelers:']);
+    const travelers = extractField(normalizedText, 'Travelers:', ['Product Code:']);
+    const productCode = extractField(normalizedText, 'Product Code:', ['Tour Grade:']);
+    const tourGrade = extractField(normalizedText, 'Tour Grade:', ['Tour Grade Code:']);
+    const tourGradeCode = extractField(normalizedText, 'Tour Grade Code:', ['Tour Grade Description:']);
+    const gradeDescription = extractField(normalizedText, 'Tour Grade Description:', ['Tour Language:']);
+    const tourLanguage = extractField(normalizedText, 'Tour Language:', ['Location:']);
+    const location = extractField(normalizedText, 'Location:', [
+      'Net Rate:',
+      'Travel Date:',
+      'Lead Traveler Name:',
+      'Meeting Point:',
+      'Special Requirements:',
+      'Phone:',
+      'Optional:',
+      'Have questions',
+    ]);
+    const netRate = extractField(normalizedText, 'Net Rate:', ['Meeting Point:', 'Special Requirements:', 'Phone:', 'Optional:']);
+    const meetingPoint = extractField(normalizedText, 'Meeting Point:', ['Special Requirements:', 'Phone:', 'Optional:']);
+    const specialRequirements = extractField(normalizedText, 'Special Requirements:', ['Phone:', 'Optional:', 'Have questions']);
+    const phone = extractField(normalizedText, 'Phone:', ['Optional:', 'Have questions', 'Management Center', 'Send the customer a message.']);
 
     const timeHint = tourGrade ?? tourGradeCode ?? '';
     const schedule = parseTravelDate(travelDate, timeHint);
@@ -241,26 +265,32 @@ export class ViatorBookingParser implements BookingEmailParser {
     const money = parseMoney(netRate);
     const guestPhone = parsePhone(phone);
 
-  const bookingFields: BookingFieldPatch = {
-    productName: tourName ?? null,
-    productVariant: tourGrade ?? tourGradeCode ?? null,
-    guestFirstName: nameParts.firstName,
-    guestLastName: nameParts.lastName,
-    guestPhone,
-    partySizeTotal: counts.total,
-    partySizeAdults: counts.adults,
-    experienceDate: schedule.experienceDate,
-    currency: money.currency,
-    priceGross: money.amount ?? null,
-    priceNet: money.amount ?? null,
-    baseAmount: money.amount ?? null,
-    pickupLocation: meetingPoint ?? location ?? null,
-  };
-  if (schedule.experienceStartAt) {
-    bookingFields.experienceStartAt = schedule.experienceStartAt;
-  }
+    const bookingFields: BookingFieldPatch = {};
+    const assignField = <K extends keyof BookingFieldPatch>(key: K, value: BookingFieldPatch[K]): void => {
+      if (value !== null && value !== undefined) {
+        bookingFields[key] = value;
+      }
+    };
 
-    const status = deriveStatusFromContext(context, text);
+    assignField('productName', tourName ?? null);
+    assignField('productVariant', tourGrade ?? tourGradeCode ?? null);
+    assignField('guestFirstName', nameParts.firstName);
+    assignField('guestLastName', nameParts.lastName);
+    assignField('guestPhone', guestPhone);
+    assignField('partySizeTotal', counts.total);
+    assignField('partySizeAdults', counts.adults);
+    assignField('experienceDate', schedule.experienceDate);
+    assignField('currency', money.currency);
+    assignField('priceGross', money.amount ?? null);
+    assignField('priceNet', money.amount ?? null);
+    assignField('baseAmount', money.amount ?? null);
+    assignField('pickupLocation', meetingPoint ?? location ?? null);
+
+    if (schedule.experienceStartAt) {
+      bookingFields.experienceStartAt = schedule.experienceStartAt;
+    }
+
+    const status = deriveStatusFromContext(context, normalizedText);
     const eventType = statusToEventType(status);
 
     const noteParts: string[] = [];
