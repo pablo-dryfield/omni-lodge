@@ -64,6 +64,21 @@ const parseMoney = (input: string | null): { currency: string | null; amount: nu
   };
 };
 
+const sanitizeLeadTraveler = (value: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const noiseMarkers = ['Optional:', 'Please visit', 'Manage Bookings', 'Have questions', 'If you need help', 'Management Center'];
+  let result = value;
+  for (const marker of noiseMarkers) {
+    const idx = result.toLowerCase().indexOf(marker.toLowerCase());
+    if (idx !== -1) {
+      result = result.slice(0, idx);
+    }
+  }
+  return result.trim();
+};
+
 const parseName = (
   value: string | null,
 ): { firstName: string | null; lastName: string | null } => {
@@ -257,7 +272,7 @@ export class ViatorBookingParser implements BookingEmailParser {
 
     const tourName = extractField(normalizedText, 'Tour Name:', ['Travel Date:']);
     const travelDate = extractField(normalizedText, 'Travel Date:', ['Lead Traveler Name:']);
-    const leadTraveler = extractField(normalizedText, 'Lead Traveler Name:', [
+    const leadTravelerRaw = extractField(normalizedText, 'Lead Traveler Name:', [
       'Traveler Names:',
       'Travelers:',
       'Product Code:',
@@ -293,6 +308,7 @@ export class ViatorBookingParser implements BookingEmailParser {
     const timeHint = tourGrade ?? tourGradeCode ?? '';
     const schedule = parseTravelDate(travelDate, timeHint);
     const counts = parseTravelerCounts(travelers);
+    const leadTraveler = sanitizeLeadTraveler(leadTravelerRaw);
     const nameParts = parseName(leadTraveler);
     const money = parseMoney(netRate);
     const guestPhone = parsePhone(phone);
