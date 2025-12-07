@@ -204,25 +204,43 @@ const parsePickupLocation = (text: string): string | null => {
 };
 
 const parsePickupDate = (text: string): string | null => {
-  const match = text.match(/Pickup date and time:? ([A-Za-z]+ \d{1,2}, \d{4})/i);
+  const match = text.match(
+    /Pickup date and time:? ([A-Za-z]+ \d{1,2}, \d{4}(?:\s+\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)?)/i,
+  );
   return match?.[1]?.trim() ?? null;
 };
 
 const parsePickupTime = (text: string): string | null => {
-  const match = text.match(/Time\s+([\d:.]+\s*(?:A\.M\.|P\.M\.|AM|PM))/i);
-  return match?.[1]?.trim() ?? null;
+  const directMatch = text.match(/Time\s+([\d:.]+\s*(?:A\.M\.|P\.M\.|AM|PM)?)/i);
+  if (directMatch?.[1]) {
+    return directMatch[1].trim();
+  }
+  const pickupLineMatch = text.match(
+    /Pickup date and time:? [A-Za-z]+\s+\d{1,2},\s+\d{4}[,\s]+(\d{1,2}:\d{2}\s*(?:AM|PM)?)/i,
+  );
+  return pickupLineMatch?.[1]?.trim() ?? null;
 };
 
 const buildExperienceMoment = (dateRaw: string | null, timeRaw: string | null): { experienceDate: string | null; startAt: Date | null } => {
   if (!dateRaw) {
     return { experienceDate: null, startAt: null };
   }
-  const normalizedDate = dateRaw.replace(/\s+/g, ' ').trim();
-  const normalizedTime = timeRaw
+  let normalizedDate = dateRaw.replace(/\s+/g, ' ').trim();
+  let normalizedTime = timeRaw
     ? timeRaw.replace(/A\.M\./gi, 'AM').replace(/P\.M\./gi, 'PM').replace(/CEST|CET|UTC|GMT/gi, '').trim()
     : null;
+  const dateTimeMatch = normalizedDate.match(
+    /([A-Za-z]+\s+\d{1,2},\s+\d{4})(?:[,\s]+(\d{1,2}:\d{2}\s*(?:AM|PM)?))?/i,
+  );
+  if (dateTimeMatch) {
+    normalizedDate = dateTimeMatch[1].trim();
+    if (!normalizedTime && dateTimeMatch[2]) {
+      normalizedTime = dateTimeMatch[2].replace(/A\.M\./gi, 'AM').replace(/P\.M\./gi, 'PM');
+    }
+  }
   const dateFormats = ['MMM D, YYYY', 'MMMM D, YYYY'];
-  const timeFormats = normalizedTime ? ['h:mm A'] : [];
+  const usesAmPm = normalizedTime ? /am|pm/i.test(normalizedTime) : false;
+  const timeFormats = normalizedTime ? (usesAmPm ? ['h:mm A'] : ['H:mm']) : [];
   for (const format of dateFormats) {
     const datePart = dayjs.tz(normalizedDate, format, ECWID_TIMEZONE);
     if (!datePart.isValid()) {
