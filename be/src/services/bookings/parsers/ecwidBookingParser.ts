@@ -67,8 +67,15 @@ const parsePhone = (input: string | null): string | null => {
   if (!input) {
     return null;
   }
-  const match = input.match(/(\+[\d\s-]+)/);
-  return match?.[1]?.replace(/\s+/g, ' ').trim() ?? null;
+  const match = input.match(/(\+?[\d][\d\s-]{5,})/);
+  if (!match) {
+    return null;
+  }
+  let phone = match[1];
+  if (phone && !phone.startsWith('+') && phone.startsWith('00')) {
+    phone = `+${phone.slice(2)}`;
+  }
+  return phone.replace(/\s+/g, ' ').trim();
 };
 
 const parseNameFromCustomerSection = (section: string | null, email: string | null, phone: string | null): string | null => {

@@ -8,6 +8,12 @@ const logLevels: winston.config.AbstractConfigSetLevels = {
   debug: 3,
 };
 
+const LOG_LEVEL_VALUES: Array<keyof typeof logLevels> = ['error', 'warn', 'info', 'debug'];
+const envLevel = (process.env.LOG_LEVEL ?? '').toLowerCase();
+const consoleLevel: keyof typeof logLevels = LOG_LEVEL_VALUES.includes(envLevel as keyof typeof logLevels)
+  ? (envLevel as keyof typeof logLevels)
+  : 'debug';
+
 const logger = winston.createLogger({
   levels: logLevels,
   format: winston.format.combine(
@@ -18,7 +24,7 @@ const logger = winston.createLogger({
     })
   ),
   transports: [
-    new winston.transports.Console({ level: 'debug' }), // Log to console
+    new winston.transports.Console({ level: consoleLevel as string }), // Log to console
     new winston.transports.File({ filename: 'error.log', level: 'error' }), // Log errors to a file
     new winston.transports.File({ filename: 'combined.log' }), // Log all levels to another file
   ],
