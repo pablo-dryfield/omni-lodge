@@ -57,6 +57,14 @@ const BORDER_ACCENT_COLORS: Record<string, string> = {
   default: "#94a3b8",
 };
 
+const COUNTABLE_STATUS_SET = new Set(["confirmed", "amended"]);
+const isCountableStatus = (status?: string | null): boolean => {
+  if (!status) {
+    return false;
+  }
+  return COUNTABLE_STATUS_SET.has(status);
+};
+
 const getRowKey = (name: string): string => {
   const lowered = name.toLowerCase();
   if (lowered.includes("pub crawl")) return "pub";
@@ -222,8 +230,8 @@ const MonthlyCalendar: React.FC<{
                       minHeight: 180,
                     }}
                   >
-                    <div
-                      onClick={() => onSelectDate(date)}
+                      <div
+                        onClick={() => onSelectDate(date)}
                       style={{
                         display: "flex",
                         justifyContent: "space-between",
@@ -244,7 +252,18 @@ const MonthlyCalendar: React.FC<{
                         </Text>
                       </div>
                       <Text size="xs" c="dimmed" fw={600}>
-                        {daySlots.length === 0 ? "No bookings" : daySlots.length === 1 ? "1 booking" : `${daySlots.length} bookings`}
+                        {(() => {
+                          const countableBookings = daySlots.reduce(
+                            (acc, entry) =>
+                              acc +
+                              entry.cell.orders.filter((order) => isCountableStatus(order.status)).length,
+                            0,
+                          );
+                          if (countableBookings === 0) {
+                            return "No bookings";
+                          }
+                          return countableBookings === 1 ? "1 booking" : `${countableBookings} bookings`;
+                        })()}
                       </Text>
                     </div>
 

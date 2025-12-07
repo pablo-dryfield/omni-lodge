@@ -14,6 +14,9 @@ export type BookingCell = {
 
 export type BookingGrid = Record<string, Record<string, BookingCell[]>>;
 
+const COUNTABLE_STATUSES = new Set<UnifiedOrder['status']>(['confirmed', 'amended']);
+const isCountableStatus = (order: UnifiedOrder): boolean => COUNTABLE_STATUSES.has(order.status);
+
 const normalizeCount = (value?: number): number => {
   if (typeof value !== 'number' || Number.isNaN(value)) {
     return 0;
@@ -96,8 +99,10 @@ export function prepareBookingGrid(
       dateCells.push(cell);
     }
 
-    const menCount = normalizeCount(order.menCount);
-    const womenCount = normalizeCount(order.womenCount);
+    const menBase = normalizeCount(order.menCount);
+    const womenBase = normalizeCount(order.womenCount);
+    const menCount = isCountableStatus(order) ? menBase : 0;
+    const womenCount = isCountableStatus(order) ? womenBase : 0;
 
     cell.totalPeople += menCount + womenCount;
     cell.menCount += menCount;
