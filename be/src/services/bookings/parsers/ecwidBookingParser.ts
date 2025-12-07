@@ -63,15 +63,29 @@ const parseEmail = (input: string | null): string | null => {
   return match?.[0]?.toLowerCase() ?? null;
 };
 
-const parsePhone = (input: string | null): string | null => {
+const parsePhone = (input: string | null, email?: string | null): string | null => {
   if (!input) {
     return null;
   }
-  const match = input.match(/(\+?[\d][\d\s-]{5,})/);
-  if (!match) {
+  let normalized = input.replace(/\u00a0/g, ' ');
+  if (email) {
+    normalized = normalized.split(email).join(' ');
+  }
+  const labeledMatch = normalized.match(/(?:phone|tel|mobile)[:\s]+([+0-9()[\]\s.-]+)/i);
+  const haystack = labeledMatch?.[1] ?? normalized;
+  const matches = Array.from(haystack.matchAll(/(\+?\d[\d\s().-]{5,})/g)).map((entry) => entry[1]);
+  if (matches.length === 0) {
     return null;
   }
-  let phone = match[1];
+  let phone =
+    matches.find((value) => value.trim().startsWith('+')) ??
+    matches.find((value) => value.replace(/\D+/g, '').length >= 9) ??
+    matches[0];
+  const extIndex = phone.toLowerCase().indexOf('ext');
+  if (extIndex !== -1) {
+    phone = phone.slice(0, extIndex);
+  }
+  phone = phone.replace(/[().-]/g, ' ');
   if (phone && !phone.startsWith('+') && phone.startsWith('00')) {
     phone = `+${phone.slice(2)}`;
   }
@@ -278,7 +292,7 @@ export class EcwidBookingParser implements BookingEmailParser {
 
     const customerSection = extractCustomerSection(text);
     const email = parseEmail(customerSection);
-    const phone = parsePhone(customerSection);
+  const phone = parsePhone(customerSection, email);
     const customerName = parseNameFromCustomerSection(customerSection, email, phone);
     const nameParts = customerName ? customerName.split(/\s+/) : [];
     const firstName = nameParts.shift() ?? null;
