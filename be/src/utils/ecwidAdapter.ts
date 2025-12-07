@@ -670,14 +670,20 @@ const applyPlatformBreakdown = (
   });
 };
 
+const zeroExtras: OrderExtras = { tshirts: 0, cocktails: 0, photos: 0 };
+
 export const groupOrdersForManifest = (orders: UnifiedOrder[]): ManifestGroup[] => {
   const groups = new Map<string, ManifestGroup>();
 
   orders.forEach((order) => {
     const men = Number.isFinite(order.menCount) ? order.menCount : 0;
     const women = Number.isFinite(order.womenCount) ? order.womenCount : 0;
-    const totalPeople = men + women;
-    const extras = order.extras ?? { tshirts: 0, cocktails: 0, photos: 0 };
+    const extras = order.extras ?? zeroExtras;
+    const countsActive = order.status !== 'cancelled';
+    const effectiveMen = countsActive ? men : 0;
+    const effectiveWomen = countsActive ? women : 0;
+    const effectiveExtras = countsActive ? extras : zeroExtras;
+    const totalPeople = effectiveMen + effectiveWomen;
 
     const displayTime = order.pickupDateTime
       ? dayjs(order.pickupDateTime).tz(STORE_TIMEZONE).format('HH:mm')
@@ -690,13 +696,13 @@ export const groupOrdersForManifest = (orders: UnifiedOrder[]): ManifestGroup[] 
 
     if (existing) {
       existing.totalPeople += totalPeople;
-      existing.men += men;
-      existing.women += women;
-      existing.extras.tshirts += extras.tshirts;
-      existing.extras.cocktails += extras.cocktails;
-      existing.extras.photos += extras.photos;
+      existing.men += effectiveMen;
+      existing.women += effectiveWomen;
+      existing.extras.tshirts += effectiveExtras.tshirts;
+      existing.extras.cocktails += effectiveExtras.cocktails;
+      existing.extras.photos += effectiveExtras.photos;
       existing.orders.push(normalizedOrder);
-      applyPlatformBreakdown(existing.platformBreakdown, normalizedOrder.platform, men, women);
+      applyPlatformBreakdown(existing.platformBreakdown, normalizedOrder.platform, effectiveMen, effectiveWomen);
       return;
     }
 
@@ -706,16 +712,16 @@ export const groupOrdersForManifest = (orders: UnifiedOrder[]): ManifestGroup[] 
       date: order.date,
       time: displayTime,
       totalPeople,
-      men,
-      women,
-      extras: { ...extras },
+      men: effectiveMen,
+      women: effectiveWomen,
+      extras: { ...effectiveExtras },
       orders: [normalizedOrder],
       platformBreakdown: [
         {
           platform: normalizedOrder.platform ?? 'unknown',
           totalPeople,
-          men,
-          women,
+          men: effectiveMen,
+          women: effectiveWomen,
           orderCount: 1,
         },
       ],

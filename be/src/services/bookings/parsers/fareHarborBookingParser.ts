@@ -2,8 +2,13 @@ import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
-import type { BookingEmailParser, BookingParserContext, BookingFieldPatch, ParsedBookingEvent } from '../types.js';
-import type { BookingEventType, BookingStatus } from '../../../constants/bookings.js';
+import type {
+  BookingEmailParser,
+  BookingParserContext,
+  BookingFieldPatch,
+  ParsedBookingEvent,
+} from '../types.js';
+import type { BookingEventType, BookingStatus, NormalizedAddonInput } from '../../../constants/bookings.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
@@ -234,7 +239,7 @@ const extractDetailLines = (text: string): Array<{ label: string; amount: number
     return [];
   }
   const entries = [];
-  const regex = /([A-Za-z0-9 ?'()]+?)\s+(PLN|USD|EUR|GBP)\s*([\d.,]+)/g;
+  const regex = /([A-Za-z0-9 ?'()!:;-]+?)\s+(PLN|USD|EUR|GBP)\s*([\d.,]+)/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(section)) !== null) {
     const amount = Number.parseFloat(match[3].replace(/,/g, ''));
@@ -461,6 +466,171 @@ const statusToEventType = (status: BookingStatus): BookingEventType => {
   }
 };
 
+type FareHarborAddonExtras = {
+  tshirts: number;
+  cocktails: number;
+  photos: number;
+};
+
+const ADDON_BASE_LABELS = new Set(
+  Array.from(ADULT_TERMS.values()).concat(Array.from(CHILD_TERMS.values())).concat(['total']),
+);
+
+const parseQuestionnaireValues = (questionnaire: string | null): FareHarborAddonExtras => {
+  if (!questionnaire) {
+    return { tshirts: 0, cocktails: 0, photos: 0 };
+  }
+  const entries = questionnaire.split('|').map((part) => part.trim()).filter(Boolean);
+  const values: FareHarborAddonExtras = { tshirts: 0, cocktails: 0, photos: 0 };
+  for (const entry of entries) {
+    const match = entry.match(/^(.+?):\s*(.+)$/);
+    if (!match) {
+      continue;
+    }
+    const key = match[1].trim();
+    const rawValue = match[2].trim();
+    const numericValue = Number.parseInt(rawValue, 10);
+    if (Number.isNaN(numericValue)) {
+      continue;
+    }
+    if (/t-?shirts?/i.test(key)) {
+      values.tshirts = numericValue;
+    } else if (/extra cocktails?/i.test(key)) {
+      values.cocktails = numericValue;
+    } else if (/photos?/i.test(key)) {
+      values.photos = numericValue;
+    }
+  }
+  return values;
+};
+
+const deriveAddonsFromDetailLines = (
+  detailLines: Array<{ label: string; amount: number }>,
+  currency: string | null,
+  questionnaire: string | null,
+): { addons: NormalizedAddonInput[]; extras: FareHarborAddonExtras; totalAmount: number } => {
+  const addons: NormalizedAddonInput[] = [];
+  const extras: FareHarborAddonExtras = { tshirts: 0, cocktails: 0, photos: 0 };
+  const questionnaireCounts = parseQuestionnaireValues(questionnaire);
+  let pendingTshirts = questionnaireCounts.tshirts;
+  let pendingCocktails = questionnaireCounts.cocktails;
+  let pendingPhotos = questionnaireCounts.photos;
+  let totalAmount = 0;
+
+  const pushAddon = (name: string, quantity: number, totalPrice: number): void => {
+    if (quantity <= 0 || !Number.isFinite(totalPrice) || totalPrice <= 0) {
+      return;
+    }
+    const unitPrice = Number((totalPrice / quantity).toFixed(2));
+    addons.push({
+      platformAddonName: name,
+      quantity,
+      unitPrice,
+      totalPrice,
+      currency,
+    });
+    totalAmount += totalPrice;
+  };
+
+  const extractNumericFromLabel = (label: string): number | null => {
+    const match = label.match(/(\d+)/);
+    if (!match) {
+      return null;
+    }
+    const value = Number.parseInt(match[1], 10);
+    return Number.isNaN(value) ? null : value;
+  };
+
+  const consumePending = (kind: 'tshirts' | 'cocktails' | 'photos'): number | null => {
+    switch (kind) {
+      case 'tshirts':
+        if (pendingTshirts > 0) {
+          const qty = pendingTshirts;
+          pendingTshirts = 0;
+          return qty;
+        }
+        return null;
+      case 'cocktails':
+        if (pendingCocktails > 0) {
+          const qty = pendingCocktails;
+          pendingCocktails = 0;
+          return qty;
+        }
+        return null;
+      case 'photos':
+        if (pendingPhotos > 0) {
+          const qty = pendingPhotos;
+          pendingPhotos = 0;
+          return qty;
+        }
+        return null;
+      default:
+        return null;
+    }
+  };
+
+  for (const line of detailLines) {
+    const rawLabel = line.label?.trim() ?? '';
+    if (!rawLabel) {
+      continue;
+    }
+    if (!Number.isFinite(line.amount) || line.amount <= 0) {
+      continue;
+    }
+    const normalizedLabel = rawLabel.toLowerCase();
+    if (normalizedLabel.includes('tax')) {
+      continue;
+    }
+    if (ADDON_BASE_LABELS.has(normalizedLabel)) {
+      continue;
+    }
+
+    if (/photos?/i.test(rawLabel)) {
+      const qtyFromLabel = extractNumericFromLabel(rawLabel);
+      const pending = consumePending('photos');
+      const qty = qtyFromLabel ?? pending ?? 1;
+      extras.photos += qty;
+      pushAddon(rawLabel, qty, line.amount);
+      continue;
+    }
+
+    if (/t-?shirts?/i.test(rawLabel)) {
+      const qtyFromLabel = extractNumericFromLabel(rawLabel);
+      const pending = consumePending('tshirts');
+      const qty = qtyFromLabel ?? pending ?? 1;
+      extras.tshirts += qty;
+      pushAddon(rawLabel, qty, line.amount);
+      continue;
+    }
+
+    if (/cocktails?/i.test(rawLabel)) {
+      const qtyFromLabel = extractNumericFromLabel(rawLabel);
+      const pending = consumePending('cocktails');
+      const qty = qtyFromLabel ?? pending ?? 1;
+      extras.cocktails += qty;
+      pushAddon(rawLabel, qty, line.amount);
+      continue;
+    }
+
+    if (/^\d+$/.test(rawLabel)) {
+      const pendingShirts = consumePending('tshirts');
+      if (pendingShirts) {
+        extras.tshirts += pendingShirts;
+        pushAddon('T-Shirts', pendingShirts, line.amount);
+        continue;
+      }
+      const qty = Number.parseInt(rawLabel, 10);
+      if (qty > 0) {
+        extras.cocktails += qty;
+        pushAddon('Extra Cocktails', qty, line.amount);
+        continue;
+      }
+    }
+  }
+
+  return { addons, extras, totalAmount };
+};
+
 export class FareHarborBookingParser implements BookingEmailParser {
   public readonly name = 'fareharbor';
 
@@ -533,6 +703,20 @@ export class FareHarborBookingParser implements BookingEmailParser {
     }
     if (Object.keys(addonsSnapshot).length > 0) {
       bookingFields.addonsSnapshot = addonsSnapshot;
+    }
+    const derivedAddons = deriveAddonsFromDetailLines(detailLines, currency, questionnaire);
+    if (derivedAddons.totalAmount > 0) {
+      bookingFields.addonsAmount = Number(derivedAddons.totalAmount.toFixed(2));
+    }
+    if (
+      derivedAddons.extras.cocktails > 0 ||
+      derivedAddons.extras.photos > 0 ||
+      derivedAddons.extras.tshirts > 0
+    ) {
+      bookingFields.addonsSnapshot = {
+        ...(bookingFields.addonsSnapshot ?? {}),
+        extras: derivedAddons.extras,
+      };
     }
 
     const paymentStatus =
@@ -634,6 +818,7 @@ export class FareHarborBookingParser implements BookingEmailParser {
           status: 'amended',
           paymentStatus,
           bookingFields: newEventFields,
+          addons: derivedAddons.addons,
           notes: `Generated from FareHarbor rebooking of #${bookingNumber}.`,
           occurredAt: context.receivedAt ?? context.internalDate ?? null,
           sourceReceivedAt: context.receivedAt ?? context.internalDate ?? null,
@@ -650,6 +835,7 @@ export class FareHarborBookingParser implements BookingEmailParser {
       paymentStatus,
       bookingFields,
       notes: noteParts.join(' '),
+      addons: derivedAddons.addons,
       occurredAt: context.receivedAt ?? context.internalDate ?? null,
       sourceReceivedAt: context.receivedAt ?? context.internalDate ?? null,
       spawnedEvents,
