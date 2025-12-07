@@ -83,6 +83,13 @@ export default class Booking extends Model<Booking> {
   })
   declare status: BookingStatus;
 
+  @AllowNull(true)
+  @Column({
+    field: 'status_changed_at',
+    type: DataType.DATE,
+  })
+  declare statusChangedAt: Date | null;
+
   @AllowNull(false)
   @Default('unknown')
   @Column({

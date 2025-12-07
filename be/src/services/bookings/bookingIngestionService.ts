@@ -285,6 +285,8 @@ const syncAddons = async (
 
 const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent): Promise<void> => {
   await sequelize.transaction(async (transaction) => {
+    const eventOccurredAt = event.occurredAt ?? event.sourceReceivedAt ?? email.receivedAt ?? new Date();
+
     let booking = await Booking.findOne({
       where: {
         platform: event.platform,
@@ -299,6 +301,8 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
         platformBookingId: event.platformBookingId,
         status: event.status,
         paymentStatus: event.paymentStatus ?? 'unknown',
+        statusChangedAt: eventOccurredAt,
+        cancelledAt: event.status === 'cancelled' ? eventOccurredAt : null,
       } as Booking);
       await booking.save({ transaction });
     }
@@ -308,7 +312,17 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
       booking.set(patch);
     }
 
-    booking.status = event.status;
+    const shouldUpdateStatus = !booking.statusChangedAt || eventOccurredAt >= booking.statusChangedAt;
+    if (shouldUpdateStatus) {
+      booking.status = event.status;
+      booking.statusChangedAt = eventOccurredAt;
+      if (event.status === 'cancelled') {
+        booking.cancelledAt = eventOccurredAt;
+      } else if (booking.cancelledAt) {
+        booking.cancelledAt = null;
+      }
+    }
+
     if (event.paymentStatus) {
       booking.paymentStatus = event.paymentStatus;
     }
@@ -338,7 +352,7 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
         statusAfter: event.status,
         emailMessageId: email.messageId,
         eventPayload: event.rawPayload ?? null,
-        occurredAt: event.occurredAt ?? event.sourceReceivedAt ?? email.receivedAt ?? null,
+        occurredAt: eventOccurredAt,
         ingestedAt: new Date(),
         processedAt: new Date(),
       } as BookingEvent,

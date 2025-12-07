@@ -381,7 +381,10 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
     menCount = 0;
     womenCount = 0;
   }
-  const extras = normalizeExtras(booking.addonsSnapshot ?? undefined);
+  let extras = normalizeExtras(booking.addonsSnapshot ?? undefined);
+  if (booking.status === 'rebooked') {
+    extras = { tshirts: 0, cocktails: 0, photos: 0 };
+  }
   const combinedCount = menCount + womenCount;
   const quantity =
     booking.status === 'rebooked'
