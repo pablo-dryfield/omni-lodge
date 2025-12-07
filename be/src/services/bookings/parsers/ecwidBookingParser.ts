@@ -106,14 +106,82 @@ const parsePartySize = (text: string): { total: number | null; men: number | nul
   };
 };
 
-const parseAddons = (text: string): string | null => {
-  const matches = Array.from(text.matchAll(/([A-Za-z ]+Add-On):\s*([A-Za-z0-9]+)/gi));
-  if (matches.length === 0) {
-    return null;
+type ParsedAddonRow = {
+  label: string;
+  rawValue: string;
+  quantity: number;
+  category: 'cocktails' | 'tshirts' | 'photos' | null;
+};
+
+type ParsedAddonCounters = {
+  cocktails: number;
+  tshirts: number;
+  photos: number;
+};
+
+const detectAddonCategory = (label: string): ParsedAddonRow['category'] => {
+  const normalized = label.toLowerCase();
+  if (normalized.includes('cocktail') || normalized.includes('drink')) {
+    return 'cocktails';
   }
-  return matches
-    .map(([_, label, value]) => `${label.trim()}: ${value.trim()}`)
-    .join(' | ');
+  if (normalized.includes('photo')) {
+    return 'photos';
+  }
+  if (normalized.includes('shirt') || normalized.includes('tee')) {
+    return 'tshirts';
+  }
+  return null;
+};
+
+const parseAddonQuantity = (value: string): number => {
+  const digitMatch = value.replace(/[,]/g, '').match(/(-?\d+)/);
+  if (digitMatch) {
+    const parsed = Number.parseInt(digitMatch[1], 10);
+    if (!Number.isNaN(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+  if (/yes/i.test(value)) {
+    return 1;
+  }
+  return 0;
+};
+
+const parseAddonRows = (text: string): ParsedAddonRow[] => {
+  if (!text) {
+    return [];
+  }
+
+  const normalized = text.replace(/\r\n/g, '\n');
+  const pattern =
+    /([A-Za-z][A-Za-z\s-]*Add-On):\s*([\s\S]*?)(?=(?:\s+[A-Za-z][A-Za-z\s-]*Add-On:|\s+Price per item|\s+Quantity:|\s+Subtotal|$))/gi;
+
+  const rows: ParsedAddonRow[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(normalized))) {
+    const label = match[1].trim();
+    const rawValue = match[2].replace(/\s+/g, ' ').trim();
+    rows.push({
+      label,
+      rawValue,
+      quantity: parseAddonQuantity(rawValue),
+      category: detectAddonCategory(label),
+    });
+  }
+
+  return rows;
+};
+
+const summarizeAddonCategories = (rows: ParsedAddonRow[]): ParsedAddonCounters => {
+  return rows.reduce<ParsedAddonCounters>(
+    (acc, row) => {
+      if (row.category && row.quantity > 0) {
+        acc[row.category] += row.quantity;
+      }
+      return acc;
+    },
+    { cocktails: 0, tshirts: 0, photos: 0 },
+  );
 };
 
 const parsePickupLocation = (text: string): string | null => {
@@ -181,6 +249,7 @@ export class EcwidBookingParser implements BookingEmailParser {
 
   async parse(context: BookingParserContext): Promise<ParsedBookingEvent | null> {
     const text = context.textBody || context.rawTextBody || context.snippet || '';
+    const rawText = context.rawTextBody && context.rawTextBody.trim().length > 0 ? context.rawTextBody : text;
     if (!text) {
       return null;
     }
@@ -196,7 +265,12 @@ export class EcwidBookingParser implements BookingEmailParser {
 
     const totals = parseOrderTotals(text);
     const party = parsePartySize(text);
-    const addonsNote = parseAddons(text);
+    const addonRows = parseAddonRows(rawText);
+    const addonCounters = summarizeAddonCategories(addonRows);
+    const addonsNote =
+      addonRows.length > 0
+        ? addonRows.map((row) => `${row.label}: ${row.rawValue}`).join(' | ')
+        : null;
     const location = parsePickupLocation(text);
     const pickupDate = parsePickupDate(text);
     const pickupTime = parsePickupTime(text);
@@ -221,8 +295,11 @@ export class EcwidBookingParser implements BookingEmailParser {
         women: party.women,
       };
     }
-    if (addonsNote) {
-      addonsSnapshot.notes = addonsNote;
+    if (addonRows.length > 0) {
+      addonsSnapshot.addons = addonRows;
+    }
+    if (Object.values(addonCounters).some((count) => count > 0)) {
+      addonsSnapshot.extras = addonCounters;
     }
 
     const bookingFields: BookingFieldPatch = {
@@ -247,6 +324,18 @@ export class EcwidBookingParser implements BookingEmailParser {
       bookingFields.addonsSnapshot = addonsSnapshot;
     }
 
+    const normalizedAddons =
+      addonRows
+        .filter((row) => row.quantity > 0)
+        .map((row) => ({
+          platformAddonName: row.label,
+          quantity: row.quantity,
+          metadata: {
+            category: row.category ?? undefined,
+            rawValue: row.rawValue,
+          },
+        })) ?? [];
+
     const paymentStatus = /paid/i.test(context.subject ?? '') || /paid/i.test(text) ? 'paid' : 'unknown';
 
     return {
@@ -256,6 +345,7 @@ export class EcwidBookingParser implements BookingEmailParser {
       eventType: 'created',
       status: 'confirmed',
       paymentStatus,
+      addons: normalizedAddons.length > 0 ? normalizedAddons : undefined,
       bookingFields,
       occurredAt: context.receivedAt ?? context.internalDate ?? null,
       sourceReceivedAt: context.receivedAt ?? context.internalDate ?? null,
