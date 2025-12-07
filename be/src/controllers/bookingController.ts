@@ -101,6 +101,27 @@ const PRODUCT_NAME_STOPWORDS = new Set([
   'note',
 ]);
 
+const PRODUCT_CANONICAL_PATTERNS: Array<{ canonical: string; patterns: RegExp[] }> = [
+  {
+    canonical: 'Krawl Through Krakow Pub Crawl',
+    patterns: [
+      /krawl through krakow/i,
+      /pub crawl krawl through/i,
+      /krakow:\s*pub crawl/i,
+      /pub crawl\s+1h\s+open\s+bar/i,
+    ],
+  },
+  {
+    canonical: 'New Years Eve Pub Crawl',
+    patterns: [
+      /new\s*year'?s?\s*eve/i,
+      /\bnye\b/i,
+      /new\s*years?\s*eve\s+crawl/i,
+      /new\s*years?\s*eve\s+pub\s+crawl/i,
+    ],
+  },
+];
+
 const decodeHtmlEntities = (value: string): string => {
   return value
     .replace(/&nbsp;/gi, ' ')
@@ -231,6 +252,12 @@ const prettifyProductName = (booking: Booking): string | null => {
   const sanitized = sanitizeProductSource(raw);
   if (!sanitized) {
     return null;
+  }
+
+  for (const entry of PRODUCT_CANONICAL_PATTERNS) {
+    if (entry.patterns.some((pattern) => pattern.test(sanitized))) {
+      return entry.canonical;
+    }
   }
 
   const patternHit = matchKnownProductPatterns(sanitized);
