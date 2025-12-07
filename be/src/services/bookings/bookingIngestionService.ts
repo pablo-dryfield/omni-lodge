@@ -11,7 +11,9 @@ import { getBookingParsers } from './parsers/index.js';
 import type { BookingFieldPatch, BookingParserContext, ParsedBookingEvent } from './types.js';
 import type { GmailMessagePayload } from './gmailClient.js';
 
-const DEFAULT_QUERY = process.env.BOOKING_GMAIL_QUERY ?? '(subject:(booking OR reservation))';
+const DEFAULT_QUERY =
+  process.env.BOOKING_GMAIL_QUERY ??
+  '(subject:(booking OR reservation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR viator.com OR getyourguide.com))';
 const DEFAULT_BATCH = Number.parseInt(process.env.BOOKING_GMAIL_BATCH_SIZE ?? '20', 10);
 
 const decimalKeys = new Set([

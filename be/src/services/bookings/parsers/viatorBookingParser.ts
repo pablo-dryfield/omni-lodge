@@ -17,6 +17,9 @@ const DATE_FORMATS = ['ddd, MMM D, YYYY', 'ddd, MMM DD, YYYY', 'MMM D, YYYY', 'M
 const MONEY_PATTERN = /([A-Z]{3})\s*([\d.,]+)/i;
 const TIME_PATTERN = /(\d{1,2}:\d{2}\s*(?:a\.m\.|p\.m\.|am|pm)?)\b/i;
 
+const COCKTAIL_GRADE_CODES = new Set(['TG2', 'TG2~21:00', 'TG2-21:00', 'TG2=21:00']);
+const COCKTAIL_KEYWORDS = [/cocktail/i, /open bar/i, /vip entry/i, /welcome shots?/i];
+
 const normalizeBookingText = (value: string): string =>
   value.replace(/[\u00A0\u202F\u2007]/g, ' ');
 
@@ -174,6 +177,35 @@ const parsePhone = (value: string | null): string | null => {
   return match[1].replace(/[()\s-]+/g, ' ').replace(/\s+/g, ' ').trim();
 };
 
+const requiresCocktailAddon = (
+  grade: string | null,
+  gradeCode: string | null,
+  description: string | null,
+): boolean => {
+  const haystacks = [grade, gradeCode, description].filter((value): value is string => Boolean(value));
+  if (gradeCode) {
+    const normalizedCode = gradeCode.toUpperCase();
+    if (COCKTAIL_GRADE_CODES.has(normalizedCode)) {
+      return true;
+    }
+  }
+  return haystacks.some((value) => COCKTAIL_KEYWORDS.some((pattern) => pattern.test(value)));
+};
+
+const mergeCocktailExtras = (
+  snapshot: Record<string, unknown> | null | undefined,
+  quantity: number,
+): Record<string, unknown> => {
+  const next: Record<string, unknown> = snapshot && typeof snapshot === 'object' ? { ...snapshot } : {};
+  const existingExtras =
+    next.extras && typeof next.extras === 'object'
+      ? { ...(next.extras as Record<string, number>) }
+      : { tshirts: 0, cocktails: 0, photos: 0 };
+  existingExtras.cocktails = (existingExtras.cocktails ?? 0) + quantity;
+  next.extras = existingExtras;
+  return next;
+};
+
 const deriveStatusFromContext = (context: BookingParserContext, textBody: string): BookingStatus => {
   const haystack = `${context.subject ?? ''}\n${textBody ?? ''}`.toLowerCase();
 
@@ -292,6 +324,12 @@ export class ViatorBookingParser implements BookingEmailParser {
 
     const status = deriveStatusFromContext(context, normalizedText);
     const eventType = statusToEventType(status);
+    if (requiresCocktailAddon(tourGrade, tourGradeCode, gradeDescription)) {
+      const cocktailQuantity = counts.total ?? counts.adults ?? null;
+      if (cocktailQuantity && cocktailQuantity > 0) {
+        bookingFields.addonsSnapshot = mergeCocktailExtras(bookingFields.addonsSnapshot, cocktailQuantity);
+      }
+    }
 
     const noteParts: string[] = [];
     if (travelerNames) {

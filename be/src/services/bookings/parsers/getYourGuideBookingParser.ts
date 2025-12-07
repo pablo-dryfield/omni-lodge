@@ -23,6 +23,57 @@ const MONEY_SYMBOLS: Record<string, string> = {
 
 const normalizeWhitespace = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
+const addonKeywordMatchers: Array<{ test: RegExp; field: 'tshirts' | 'cocktails' | 'photos' }> = [
+  { test: /cocktail|open\s+bar|vip entry/i, field: 'cocktails' },
+  { test: /instant\s+photos?/i, field: 'photos' },
+  { test: /t-?shirts?|pub\s+crawl\s+t-?shirt/i, field: 'tshirts' },
+];
+
+const extractParticipantsAndExtras = (
+  text: string,
+): { adults: number | null; extras: { tshirts: number; cocktails: number; photos: number } } => {
+  const extras = { tshirts: 0, cocktails: 0, photos: 0 };
+  let adults: number | null = null;
+  const pattern = /(?:^|[\s,>])(\d+)\s*[x×]\s*([A-Za-z][^,\n]+)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    const quantity = Number.parseInt(match[1], 10);
+    if (!Number.isFinite(quantity)) {
+      continue;
+    }
+    const label = match[2].trim();
+    if (!label) {
+      continue;
+    }
+    if (adults === null && /\badults?\b/i.test(label)) {
+      adults = quantity;
+      continue;
+    }
+    const keyword = addonKeywordMatchers.find(({ test }) => test.test(label));
+    if (keyword) {
+      extras[keyword.field] += quantity;
+    }
+  }
+  return { adults, extras };
+};
+
+const mergeExtrasSnapshot = (
+  snapshot: Record<string, unknown> | null | undefined,
+  extras: { tshirts: number; cocktails: number; photos: number },
+): Record<string, unknown> => {
+  const current: Record<string, unknown> = snapshot && typeof snapshot === 'object' ? { ...snapshot } : {};
+  const existing =
+    current.extras && typeof current.extras === 'object'
+      ? { ...(current.extras as { tshirts?: number; cocktails?: number; photos?: number }) }
+      : {};
+  current.extras = {
+    tshirts: (existing.tshirts ?? 0) + extras.tshirts,
+    cocktails: (existing.cocktails ?? 0) + extras.cocktails,
+    photos: (existing.photos ?? 0) + extras.photos,
+  };
+  return current;
+};
+
 const parseMoney = (input: string): { currency: string | null; amount: number | null } => {
   const match = input.match(/([^\d\s]+)?\s*([\d.,]+)/);
   if (!match) {
@@ -67,19 +118,38 @@ const PRODUCT_NAME_CANONICALS: Array<{ canonical: string; patterns: RegExp[] }> 
 ];
 
 const canonicalizeProductName = (rawName: string): { name: string; variant: string | null } => {
-  const trimmed = rawName.trim();
+  const stripMetaMarkers = (value: string): string => {
+    const markers = ['View booking', 'Most important data', 'Number of participants', 'Reference number', 'Main customer', 'Tour language'];
+    let result = value;
+    for (const marker of markers) {
+      const idx = result.toLowerCase().indexOf(marker.toLowerCase());
+      if (idx !== -1) {
+        result = result.slice(0, idx).trim();
+      }
+    }
+    return result;
+  };
+
+  let working = stripMetaMarkers(rawName.trim());
+  const optionMatch = working.match(/(.+?)\s+Option:\s*(.+)$/i);
+  let candidateVariant: string | null = null;
+  if (optionMatch) {
+    working = optionMatch[1].trim();
+    candidateVariant = stripMetaMarkers(optionMatch[2].trim());
+  }
+
   for (const candidate of PRODUCT_NAME_CANONICALS) {
     for (const pattern of candidate.patterns) {
-      if (pattern.test(trimmed)) {
-        const needsVariant = trimmed.localeCompare(candidate.canonical, undefined, { sensitivity: 'accent' }) !== 0;
+      if (pattern.test(working)) {
+        const needsVariant = working.localeCompare(candidate.canonical, undefined, { sensitivity: 'accent' }) !== 0;
         return {
           name: candidate.canonical,
-          variant: needsVariant ? trimmed : null,
+          variant: needsVariant ? candidateVariant ?? working : candidateVariant ?? null,
         };
       }
     }
   }
-  return { name: trimmed, variant: null };
+  return { name: working, variant: candidateVariant };
 };
 
 const extractBookingFields = (text: string): BookingFieldPatch => {
@@ -87,7 +157,7 @@ const extractBookingFields = (text: string): BookingFieldPatch => {
 
   const productMatch = text.match(/has been booked:\s+(.+?)\s+Reference number/i);
   if (productMatch) {
-    const rawName = productMatch[1].trim();
+    let rawName = productMatch[1].trim();
     const half = Math.floor(rawName.length / 2);
     const firstHalf = rawName.slice(0, half).trim();
     const secondHalf = rawName.slice(half).trim();
@@ -99,7 +169,7 @@ const extractBookingFields = (text: string): BookingFieldPatch => {
     }
   }
 
-  const customerMatch = text.match(/Main customer\s+([A-Za-z\u00C0-\u017F' -]+?)(?=\s+[a-z0-9._%+-]+@)/i);
+  const customerMatch = text.match(/Main customer[:\s]+([A-Za-z\u00C0-\u017F' -]+?)(?=\s+[a-z0-9._%+-]+@)/i);
   if (customerMatch) {
     const parts = customerMatch[1].trim().split(/\s+/);
     fields.guestFirstName = parts.shift() ?? null;
@@ -116,16 +186,17 @@ const extractBookingFields = (text: string): BookingFieldPatch => {
     fields.guestPhone = phoneMatch[1].trim();
   }
 
-  const participantsMatch = text.match(/Number of participants\s+(\d+)\s+x\s+([A-Za-z]+)/i);
-  if (participantsMatch) {
-    const qty = Number.parseInt(participantsMatch[1], 10);
-    if (!Number.isNaN(qty)) {
-      fields.partySizeTotal = qty;
-      fields.partySizeAdults = qty;
-    }
+  const participantInfo = extractParticipantsAndExtras(text);
+  if (participantInfo.adults !== null) {
+    fields.partySizeTotal = participantInfo.adults;
+    fields.partySizeAdults = participantInfo.adults;
+  }
+  const hasExtras = Object.values(participantInfo.extras).some((qty) => qty > 0);
+  if (hasExtras) {
+    fields.addonsSnapshot = mergeExtrasSnapshot(fields.addonsSnapshot, participantInfo.extras);
   }
 
-  const dateMatch = text.match(/Date\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})\s+(\d{1,2}:\d{2}\s*(?:AM|PM))/i);
+  const dateMatch = text.match(/Date[:\s]+([A-Za-z]+\s+\d{1,2},\s+\d{4})\s+(\d{1,2}:\d{2}\s*(?:AM|PM))/i);
   if (dateMatch) {
     const parsed = dayjs.tz(`${dateMatch[1]} ${dateMatch[2]}`, 'MMMM D, YYYY h:mm A', GETYOURGUIDE_TIMEZONE);
     if (parsed.isValid()) {
