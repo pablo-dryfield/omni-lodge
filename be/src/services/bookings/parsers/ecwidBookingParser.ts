@@ -103,6 +103,7 @@ const parseNameFromCustomerSection = (section: string | null, email: string | nu
   if (phone) {
     candidate = candidate.replace(phone ?? '', ' ');
   }
+  candidate = candidate.replace(/\+?\d[\d\s().-]{5,}/g, ' ');
   return normalizeText(candidate);
 };
 
@@ -131,6 +132,15 @@ type ParsedAddonCounters = {
   cocktails: number;
   tshirts: number;
   photos: number;
+};
+
+const parseItemQuantity = (text: string): number => {
+  const match = text.match(/Quantity:\s*(\d+)/i);
+  if (!match) {
+    return 1;
+  }
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isNaN(parsed) || parsed <= 0 ? 1 : parsed;
 };
 
 const detectAddonCategory = (label: string): ParsedAddonRow['category'] => {
@@ -296,8 +306,29 @@ export class EcwidBookingParser implements BookingEmailParser {
     const productName = productMatch?.[1]?.trim() ?? null;
 
     const totals = parseOrderTotals(text);
+    const itemQuantity = parseItemQuantity(text);
     const party = parsePartySize(text);
-    const addonRows = parseAddonRows(rawText);
+    let scaledParty = { ...party };
+    let addonRows = parseAddonRows(rawText);
+    if (itemQuantity > 1) {
+      const scale = (value: number | null): number | null => (value !== null ? value * itemQuantity : null);
+      scaledParty = {
+        men: scale(party.men),
+        women: scale(party.women),
+        total: null,
+      };
+      if (scaledParty.men !== null || scaledParty.women !== null) {
+        const menCount = scaledParty.men ?? 0;
+        const womenCount = scaledParty.women ?? 0;
+        scaledParty.total = menCount + womenCount;
+      } else {
+        scaledParty.total = scale(party.total);
+      }
+      addonRows = addonRows.map((row) => ({
+        ...row,
+        quantity: row.quantity * itemQuantity,
+      }));
+    }
     const addonCounters = summarizeAddonCategories(addonRows);
     const addonsNote =
       addonRows.length > 0
@@ -321,10 +352,10 @@ export class EcwidBookingParser implements BookingEmailParser {
       paymentMethodMatch?.[1]?.replace(/View order details/i, '').trim() ?? null;
 
     const addonsSnapshot: Record<string, unknown> = {};
-    if (party.men !== null || party.women !== null) {
+    if (scaledParty.men !== null || scaledParty.women !== null) {
       addonsSnapshot.partyBreakdown = {
-        men: party.men,
-        women: party.women,
+        men: scaledParty.men,
+        women: scaledParty.women,
       };
     }
     if (addonRows.length > 0) {
@@ -342,8 +373,8 @@ export class EcwidBookingParser implements BookingEmailParser {
       guestPhone: phone,
       experienceDate: experienceMoment.experienceDate,
       experienceStartAt: experienceMoment.startAt,
-      partySizeTotal: party.total,
-      partySizeAdults: party.total,
+      partySizeTotal: scaledParty.total,
+      partySizeAdults: scaledParty.total,
       currency: totals.currency ?? 'PLN',
       priceGross: totals.total,
       priceNet: totals.total,

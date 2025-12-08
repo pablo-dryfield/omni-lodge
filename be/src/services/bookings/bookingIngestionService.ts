@@ -309,45 +309,68 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
       await booking.save({ transaction });
     }
 
-    const patch = normalizePatch(event.bookingFields);
-    if (Object.keys(patch).length > 0) {
-      booking.set(patch);
+    const bookingRecord = booking;
+    if (!bookingRecord) {
+      throw new Error('Unable to initialize booking record');
     }
 
-    const shouldUpdateStatus = !booking.statusChangedAt || eventOccurredAt >= booking.statusChangedAt;
+    const bookingFields = { ...(event.bookingFields ?? {}) };
+    const partySizeTotalDelta = bookingFields.partySizeTotalDelta ?? null;
+    const partySizeAdultsDelta = bookingFields.partySizeAdultsDelta ?? null;
+    delete bookingFields.partySizeTotalDelta;
+    delete bookingFields.partySizeAdultsDelta;
+
+    const patch = normalizePatch(bookingFields);
+    if (Object.keys(patch).length > 0) {
+      bookingRecord.set(patch);
+    }
+
+    const applyDelta = (key: 'partySizeTotal' | 'partySizeAdults', delta?: number | null): void => {
+      if (typeof delta !== 'number' || Number.isNaN(delta) || delta === 0) {
+        return;
+      }
+      const current = bookingRecord.getDataValue(key);
+      const next = (current ?? 0) + delta;
+      bookingRecord.setDataValue(key, next < 0 ? 0 : next);
+    };
+
+    applyDelta('partySizeTotal', partySizeTotalDelta ?? null);
+    applyDelta('partySizeAdults', partySizeAdultsDelta ?? null);
+
+    const shouldUpdateStatus = !bookingRecord.statusChangedAt || eventOccurredAt >= bookingRecord.statusChangedAt;
     if (shouldUpdateStatus) {
-      booking.status = event.status;
-      booking.statusChangedAt = eventOccurredAt;
+      bookingRecord.status = event.status;
+      bookingRecord.statusChangedAt = eventOccurredAt;
       if (event.status === 'cancelled') {
-        booking.cancelledAt = eventOccurredAt;
-      } else if (booking.cancelledAt) {
-        booking.cancelledAt = null;
+        bookingRecord.cancelledAt = eventOccurredAt;
+      } else if (bookingRecord.cancelledAt) {
+        bookingRecord.cancelledAt = null;
       }
     }
 
     if (event.paymentStatus) {
-      booking.paymentStatus = event.paymentStatus;
+      bookingRecord.paymentStatus = event.paymentStatus;
     }
     if (event.platformOrderId) {
-      booking.platformOrderId = event.platformOrderId;
+      bookingRecord.platformOrderId = event.platformOrderId;
     }
 
-    booking.lastEmailMessageId = email.messageId;
-    booking.sourceReceivedAt = event.sourceReceivedAt ?? email.receivedAt ?? booking.sourceReceivedAt;
-    booking.processedAt = new Date();
+    bookingRecord.lastEmailMessageId = email.messageId;
+    bookingRecord.sourceReceivedAt = event.sourceReceivedAt ?? email.receivedAt ?? bookingRecord.sourceReceivedAt;
+    bookingRecord.processedAt = new Date();
     const addonsSnapshot =
       event.bookingFields?.addonsSnapshot ??
       (event.addons && event.addons.length > 0 ? { items: event.addons } : null);
-    booking.addonsSnapshot = addonsSnapshot ?? booking.addonsSnapshot ?? null;
+    bookingRecord.addonsSnapshot = addonsSnapshot ?? bookingRecord.addonsSnapshot ?? null;
     if (event.notes) {
-      booking.notes = event.notes;
+      bookingRecord.notes = event.notes;
     }
 
-    await booking.save({ transaction });
+    await bookingRecord.save({ transaction });
 
     const bookingEvent = BookingEvent.build(
       {
-        bookingId: booking.id,
+        bookingId: bookingRecord.id,
         emailId: email.id,
         eventType: event.eventType,
         platform: event.platform,
@@ -361,7 +384,7 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
     );
     await bookingEvent.save({ transaction });
 
-    await syncAddons(booking.id, bookingEvent.id, event.addons, transaction);
+    await syncAddons(bookingRecord.id, bookingEvent.id, event.addons, transaction);
   });
 };
 
