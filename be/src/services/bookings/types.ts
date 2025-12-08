@@ -21,6 +21,8 @@ export type BookingFieldPatch = Partial<{
   partySizeTotal: number | null;
   partySizeAdults: number | null;
   partySizeChildren: number | null;
+  partySizeTotalDelta: number | null;
+  partySizeAdultsDelta: number | null;
   experienceDate: string | null;
   experienceStartAt: Date | null;
   experienceEndAt: Date | null;

@@ -12,7 +12,18 @@ dayjs.extend(timezone);
 const DEFAULT_BOOKING_TIMEZONE = process.env.BOOKING_PARSER_TIMEZONE ?? 'Europe/Warsaw';
 const VIATOR_TIMEZONE = process.env.VIATOR_TIMEZONE ?? DEFAULT_BOOKING_TIMEZONE;
 
-const DATE_FORMATS = ['ddd, MMM D, YYYY', 'ddd, MMM DD, YYYY', 'MMM D, YYYY', 'MMM DD, YYYY', 'MMMM D, YYYY', 'MMMM DD, YYYY'];
+const DATE_FORMATS = [
+  'ddd, MMM D, YYYY',
+  'ddd, MMM DD, YYYY',
+  'MMM D, YYYY',
+  'MMM DD, YYYY',
+  'MMMM D, YYYY',
+  'MMMM DD, YYYY',
+  'D MMM YYYY',
+  'DD MMM YYYY',
+  'D MMMM YYYY',
+  'DD MMMM YYYY',
+];
 
 const MONEY_PATTERN = /([A-Z]{3})\s*([\d.,]+)/i;
 const TIME_PATTERN = /(\d{1,2}:\d{2}\s*(?:a\.m\.|p\.m\.|am|pm)?)\b/i;
@@ -99,6 +110,18 @@ const parseName = (
   const firstName = tokens.shift() ?? null;
   const lastName = tokens.length > 0 ? tokens.join(' ') : null;
   return { firstName, lastName };
+};
+
+const normalizeBookingReferenceValue = (raw: string | null): string | null => {
+  if (!raw) {
+    return null;
+  }
+  const match = raw.match(/#?\s*([A-Z0-9-]+)/i);
+  if (!match) {
+    return null;
+  }
+  const core = match[1].replace(/^BR[-\s]?/i, '').toUpperCase();
+  return `BR-${core}`;
 };
 
 const parseTravelDate = (
@@ -227,8 +250,12 @@ const mergeCocktailExtras = (
 
 const deriveStatusFromContext = (context: BookingParserContext, textBody: string): BookingStatus => {
   const haystack = `${context.subject ?? ''}\n${textBody ?? ''}`.toLowerCase();
+  const fromCustomerCare = /customer\.care@viator\.com/i.test(context.from ?? '');
 
   if (/(?:canceled|cancelled|cancellation)/i.test(haystack)) {
+    return 'cancelled';
+  }
+  if (fromCustomerCare && /refund/i.test(haystack)) {
     return 'cancelled';
   }
   if (/(?:amended|amendment|changed|change|modified|updated|rebooked|rebook)/i.test(haystack)) {
@@ -268,14 +295,19 @@ export class ViatorBookingParser implements BookingEmailParser {
     const normalizedText = normalizeBookingText(text);
 
     const bookingReferenceRaw = extractField(normalizedText, 'Booking Reference:', ['Tour Name:']);
-    const bookingReferenceMatch = bookingReferenceRaw?.match(/#?[A-Z0-9-]+/);
-    const bookingReference = bookingReferenceMatch?.[0]?.replace(/^#/, '') ?? null;
+    const bookingReference = normalizeBookingReferenceValue(bookingReferenceRaw);
     if (!bookingReference) {
       return null;
     }
 
     const tourName = extractField(normalizedText, 'Tour Name:', ['Travel Date:']);
-    const travelDate = extractField(normalizedText, 'Travel Date:', ['Lead Traveler Name:']);
+    const travelDate = extractField(normalizedText, 'Travel Date:', [
+      'Lead Traveler Name:',
+      'Mobile Phone No:',
+      'Mobile Phone Number:',
+      'Booking Net Price:',
+      'Traveler Names:',
+    ]);
     const leadTravelerRaw = extractField(normalizedText, 'Lead Traveler Name:', [
       'Traveler Names:',
       'Travelers:',
@@ -340,6 +372,14 @@ export class ViatorBookingParser implements BookingEmailParser {
 
     if (schedule.experienceStartAt) {
       bookingFields.experienceStartAt = schedule.experienceStartAt;
+    }
+
+    const removalMatches = Array.from(
+      normalizedText.matchAll(/traveller passenger\s+\w+\s+has been removed/gi),
+    );
+    if (removalMatches.length > 0) {
+      bookingFields.partySizeTotalDelta = (bookingFields.partySizeTotalDelta ?? 0) - removalMatches.length;
+      bookingFields.partySizeAdultsDelta = (bookingFields.partySizeAdultsDelta ?? 0) - removalMatches.length;
     }
 
     const status = deriveStatusFromContext(context, normalizedText);
