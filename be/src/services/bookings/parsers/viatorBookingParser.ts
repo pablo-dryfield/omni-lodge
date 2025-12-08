@@ -18,7 +18,11 @@ const MONEY_PATTERN = /([A-Z]{3})\s*([\d.,]+)/i;
 const TIME_PATTERN = /(\d{1,2}:\d{2}\s*(?:a\.m\.|p\.m\.|am|pm)?)\b/i;
 
 const COCKTAIL_GRADE_CODES = new Set(['TG2', 'TG2~21:00', 'TG2-21:00', 'TG2=21:00']);
-const COCKTAIL_KEYWORDS = [/cocktail/i, /open bar/i, /vip entry/i, /welcome shots?/i];
+const COCKTAIL_KEYWORDS = [
+  /unlimited\s+(?:crafted\s+)?cocktails?/i,
+  /upgrade (?:your )?experience:?\s*.*cocktails?/i,
+  /elevate (?:your )?pub crawl.*cocktails?/i,
+];
 
 const normalizeBookingText = (value: string): string =>
   value.replace(/[\u00A0\u202F\u2007]/g, ' ');
