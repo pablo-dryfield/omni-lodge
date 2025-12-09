@@ -175,7 +175,9 @@ const extractExperienceDateTime = (
 const extractBookingFields = (text: string): BookingFieldPatch => {
   const fields: BookingFieldPatch = {};
 
-  const productMatch = text.match(/has been booked:\s+(.+?)\s+Reference number/i);
+  const productMatch =
+    text.match(/has been booked:\s+(.+?)\s+Reference number/i) ?? text.match(/Tour:\s*(.+?)\s+Tour Option/i);
+
   if (productMatch) {
     let rawName = productMatch[1].trim();
     const half = Math.floor(rawName.length / 2);
@@ -189,7 +191,9 @@ const extractBookingFields = (text: string): BookingFieldPatch => {
     }
   }
 
-  const customerMatch = text.match(/Main customer[:\s]+([A-Za-z\u00C0-\u017F' -]+?)(?=\s+[a-z0-9._%+-]+@)/i);
+  const customerMatch =
+    text.match(/Main customer[:\s]+([A-Za-z\u00C0-\u017F' -]+?)(?=\s+[a-z0-9._%+-]+@)/i) ??
+    text.match(/Name:\s*([A-Za-z\u00C0-\u017F' -]+?)(?:\s+Date:|\s+Tour:|\s+Email:|$)/i);
   if (customerMatch) {
     const parts = customerMatch[1].trim().split(/\s+/);
     fields.guestFirstName = parts.shift() ?? null;

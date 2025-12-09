@@ -10,6 +10,7 @@ import { fetchMessagePayload, listMessages } from './gmailClient.js';
 import { getBookingParsers } from './parsers/index.js';
 import type { BookingFieldPatch, BookingParserContext, ParsedBookingEvent } from './types.js';
 import type { GmailMessagePayload } from './gmailClient.js';
+import type { BookingPlatform } from '../../constants/bookings.js';
 
 const DEFAULT_QUERY =
   process.env.BOOKING_GMAIL_QUERY ??
@@ -41,6 +42,22 @@ const bookingStringLimits: Partial<Record<keyof BookingFieldPatch, number>> = {
   paymentMethod: 128,
   rawPayloadLocation: 512,
 };
+
+class StaleBookingEventError extends Error {
+  public readonly platform: BookingPlatform;
+
+  public readonly platformBookingId: string;
+
+  public readonly messageId: string;
+
+  constructor(platform: BookingPlatform, platformBookingId: string, messageId: string) {
+    super('STALE_BOOKING_EVENT');
+    this.name = 'StaleBookingEventError';
+    this.platform = platform;
+    this.platformBookingId = platformBookingId;
+    this.messageId = messageId;
+  }
+}
 
 const clampString = (value: string, maxLength: number): string => {
   if (value.length <= maxLength) {
@@ -314,6 +331,11 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
       throw new Error('Unable to initialize booking record');
     }
 
+    const lastMutationAt = bookingRecord.statusChangedAt ?? bookingRecord.createdAt ?? null;
+    if (lastMutationAt && eventOccurredAt < lastMutationAt) {
+      throw new StaleBookingEventError(event.platform, event.platformBookingId, email.messageId);
+    }
+
     const bookingFields = { ...(event.bookingFields ?? {}) };
     const partySizeTotalDelta = bookingFields.partySizeTotalDelta ?? null;
     const partySizeAdultsDelta = bookingFields.partySizeAdultsDelta ?? null;
@@ -448,10 +470,67 @@ export const processBookingEmail = async (
     await updateEmailStatus(emailRecord, 'processed');
     return 'processed';
   } catch (error) {
+    if (error instanceof StaleBookingEventError) {
+      logger.info(
+        `[booking-email] Detected out-of-order event for ${error.platformBookingId}, rebuilding timeline chronologically`,
+      );
+      await updateEmailStatus(emailRecord, 'pending');
+      await rebuildBookingTimeline(error.platform, error.platformBookingId, emailRecord);
+      return 'processed';
+    }
     const message = (error as Error).message ?? 'Unknown error';
     await updateEmailStatus(emailRecord, 'failed', message);
     logger.error(`[booking-email] Failed to apply parsed booking for ${messageId}: ${message}`);
     return 'failed';
+  }
+};
+
+const rebuildBookingTimeline = async (
+  platform: BookingPlatform,
+  platformBookingId: string,
+  emailRecord: BookingEmail,
+): Promise<void> => {
+  const replayCandidates: { messageId: string; receivedAt: Date | null }[] = [];
+
+  const existingBooking = await Booking.findOne({
+    where: { platform, platformBookingId },
+  });
+
+  if (existingBooking) {
+    const existingEvents = await BookingEvent.findAll({
+      where: { bookingId: existingBooking.id },
+      include: [{ model: BookingEmail, as: 'email' }],
+      order: [['occurredAt', 'ASC']],
+    });
+    for (const event of existingEvents) {
+      if (event.email?.messageId) {
+        replayCandidates.push({
+          messageId: event.email.messageId,
+          receivedAt: event.email.receivedAt ?? null,
+        });
+      }
+    }
+
+    await BookingAddon.destroy({ where: { bookingId: existingBooking.id } });
+    await BookingEvent.destroy({ where: { bookingId: existingBooking.id } });
+    await existingBooking.destroy();
+  }
+
+  replayCandidates.push({
+    messageId: emailRecord.messageId,
+    receivedAt: emailRecord.receivedAt ?? null,
+  });
+
+  const orderedMessageIds = [...new Map(replayCandidates.map((entry) => [entry.messageId, entry.receivedAt]))]
+    .sort((a, b) => {
+      const left = a[1]?.valueOf() ?? 0;
+      const right = b[1]?.valueOf() ?? 0;
+      return left - right;
+    })
+    .map(([id]) => id);
+
+  for (const replayId of orderedMessageIds) {
+    await processBookingEmail(replayId, { force: true });
   }
 };
 

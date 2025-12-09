@@ -19,7 +19,8 @@ const FAREHARBOR_TIMEZONE = process.env.FAREHARBOR_TIMEZONE ?? DEFAULT_BOOKING_T
 
 const MONEY_PATTERN = /(PLN|USD|EUR|GBP)?\s*([\d.,]+)/i;
 const BOOKING_NUMBER_PATTERN = /Booking\s*#(\d+)/i;
-const PRODUCT_LINE_PATTERN = /Booking\s*#\d+\s+(.+?)\s+(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)/i;
+const PRODUCT_LINE_PATTERN =
+  /Booking\s*#\d+\s+(.+?)\s+(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)/gi;
 const PARTY_SEGMENT_PATTERN = /(\d+)\s+(Man|Men|Woman|Women|Guest|Guests|People|Persons|Adult|Adults|Child|Children|Kid|Kids)/gi;
 const EMAIL_PATTERN = /Email:\s*([^\s]+@[^\s]+)/i;
 const PHONE_PATTERN = /Phone:\s*([+()\d\s-]{6,})/i;
@@ -60,9 +61,43 @@ const extractBookingNumber = (text: string): string | null => {
   return match?.[1] ?? null;
 };
 
+const sanitizeProductCandidate = (value: string): string => {
+  const normalized = value.replace(/\u00a0/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').trim();
+  const cleanLine = (line: string): string =>
+    line.replace(/^(Cancelled|Canceled|Rebooked|Booked|Booking|View on FareHarbor)\s*:*/i, '').trim();
+  const lines = normalized
+    .split(/[\r\n]+/)
+    .map((line) => cleanLine(line))
+    .filter((line) => line.length > 0);
+  const preferred = lines.find(
+    (line) => !/^(cancelled|canceled|rebooked|view on fareharbor)/i.test(line),
+  );
+  return (preferred ?? cleanLine(normalized)).replace(/\s+/g, ' ').trim();
+};
+
 const extractProductName = (text: string): string | null => {
-  const match = text.match(PRODUCT_LINE_PATTERN);
-  return match?.[1]?.trim() ?? null;
+  const matches = Array.from(text.matchAll(PRODUCT_LINE_PATTERN))
+    .map((match) => match[1]?.trim())
+    .filter((value): value is string => Boolean(value));
+
+  if (matches.length === 0) {
+    return null;
+  }
+
+  for (let idx = matches.length - 1; idx >= 0; idx -= 1) {
+    let candidate = sanitizeProductCandidate(matches[idx]);
+    const nestedMatch = candidate.match(/Booking\s*#\d+\s+(.+)/i);
+    if (nestedMatch?.[1]) {
+      candidate = sanitizeProductCandidate(nestedMatch[1]);
+    }
+    if (!/view\s+on\s+fareharbor/i.test(candidate) && !/cancelled\s+by/i.test(candidate)) {
+      return candidate;
+    }
+  }
+
+  const fallback = sanitizeProductCandidate(matches[matches.length - 1]);
+  const nestedMatch = fallback.match(/Booking\s*#\d+\s+(.+)/i);
+  return nestedMatch?.[1] ? sanitizeProductCandidate(nestedMatch[1]) : fallback;
 };
 
 const extractPartyCounts = (text: string): PartyCounts => {
