@@ -1,40 +1,26 @@
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
-
   Alert,
-
   Badge,
-
   Box,
-
   Button,
-
   Divider,
-
   Flex,
-
   Group,
-
   Loader,
-
   Paper,
-
   Select,
-
   Stack,
-
   Table,
-
   Text,
-
   Title,
-
+  TextInput,
 } from "@mantine/core";
 
 import { useMediaQuery } from '@mantine/hooks';
 
-import { IconArrowLeft, IconArrowRight, IconCalendar, IconRefresh } from "@tabler/icons-react";
+import { IconArrowLeft, IconArrowRight, IconCalendar, IconRefresh, IconSearch } from "@tabler/icons-react";
 
 import dayjs, { Dayjs } from "dayjs";
 
@@ -150,10 +136,20 @@ const deriveGroupKey = (productId: string | null, time: string | null): string =
 
 
 const manifestToOptions = (groups: ManifestGroup[]): SelectOption[] => {
-  return groups.map((group) => ({
-    value: `${group.productId}|${group.time}`,
-    label: `${group.productName} @ ${group.time}`,
-  }));
+  const seen = new Set<string>();
+  const options: SelectOption[] = [];
+  groups.forEach((group) => {
+    const value = `${group.productId}|${group.time}`;
+    if (seen.has(value)) {
+      return;
+    }
+    seen.add(value);
+    options.push({
+      value,
+      label: `${group.productName} @ ${group.time}`,
+    });
+  });
+  return options;
 };
 
 const PLATFORM_COLORS: Record<string, string> = {
@@ -418,11 +414,18 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
   const timeParam = searchParams.get("time");
 
+  const searchParamValue = searchParams.get("search");
+  const searchParam = searchParamValue ? searchParamValue.trim() : "";
+  const hasSearchParam = searchParam.length > 0;
+
 
 
   const effectiveDate = useMemo(() => deriveDate(dateParam), [dateParam]);
 
-  const effectiveGroupKey = useMemo(() => deriveGroupKey(productIdParam, timeParam), [productIdParam, timeParam]);
+  const effectiveGroupKey = useMemo(
+    () => (hasSearchParam ? "all" : deriveGroupKey(productIdParam, timeParam)),
+    [hasSearchParam, productIdParam, timeParam],
+  );
 
 
 
@@ -447,6 +450,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [reloadToken, setReloadToken] = useState(0);
+  const [searchInput, setSearchInput] = useState(searchParam);
+
+  useEffect(() => {
+    setSearchInput(searchParam);
+  }, [searchParam]);
 
 
 
@@ -503,35 +511,44 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
 
   const updateSearchParamGroup = (groupKey: string, groupLabel?: string) => {
-
     const params = new URLSearchParams(searchParams);
-
     if (groupKey === "all") {
-
       params.delete("productId");
-
       params.delete("time");
-
       params.delete("productName");
-
     } else {
-
       const [productId, time] = groupKey.split("|");
-
       params.set("productId", productId);
-
       params.set("time", time);
-
       if (groupLabel) {
-
         params.set("productName", groupLabel);
-
       }
-
     }
-
     setSearchParams(params);
+  };
 
+  const applySearchParamValue = (value: string) => {
+    const params = new URLSearchParams(searchParams);
+    if (value) {
+      params.set("search", value);
+    } else {
+      params.delete("search");
+    }
+    setSearchParams(params);
+  };
+
+  const handleSearchSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    applySearchParamValue(searchInput.trim());
+  };
+
+  const handleSearchChange = (event: ChangeEvent<HTMLInputElement>) => {
+    setSearchInput(event.currentTarget.value);
+  };
+
+  const handleSearchClear = () => {
+    setSearchInput("");
+    applySearchParamValue("");
   };
 
 
@@ -561,21 +578,14 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       try {
 
         const response = await axiosInstance.get<ManifestResponse>("/bookings/manifest", {
-
           params: {
-
             date: selectedDate.format(DATE_FORMAT),
-
-            productId: productIdParam ?? undefined,
-
-            time: timeParam ?? undefined,
-
+            productId: hasSearchParam ? undefined : productIdParam ?? undefined,
+            time: hasSearchParam ? undefined : timeParam ?? undefined,
+            search: searchParam || undefined,
           },
-
           signal: controller.signal,
-
           withCredentials: true,
-
         });
 
 
@@ -634,7 +644,16 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
     };
 
-  }, [modulePermissions.ready, modulePermissions.canView, selectedDate, productIdParam, timeParam, reloadToken]);
+  }, [
+    modulePermissions.ready,
+    modulePermissions.canView,
+    selectedDate,
+    productIdParam,
+    timeParam,
+    searchParam,
+    hasSearchParam,
+    reloadToken,
+  ]);
 
 
 
@@ -655,18 +674,12 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
 
   const activeGroups = useMemo(() => {
-
-    if (selectedGroupKey === "all") {
-
+    if (hasSearchParam || selectedGroupKey === "all") {
       return manifest;
-
     }
 
-
-
     return manifest.filter((group) => `${group.productId}|${group.time}` === selectedGroupKey);
-
-  }, [manifest, selectedGroupKey]);
+  }, [hasSearchParam, manifest, selectedGroupKey]);
 
 
 
@@ -813,21 +826,14 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               <Group gap="xs" wrap="wrap" align="center">
 
                 <Select
-
                   data={groupOptions}
-
                   value={selectedGroupKey}
-
                   onChange={handleGroupChange}
-
                   size="sm"
-
                   allowDeselect={false}
-
                   style={{ minWidth: 220 }}
-
                   label="Event"
-
+                  disabled={hasSearchParam}
                 />
 
                 <Button
@@ -852,15 +858,47 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
             </Flex>
 
+            <form onSubmit={handleSearchSubmit}>
+              <Stack gap={4}>
+                <Group gap="xs" wrap="wrap" align="flex-end">
+                  <TextInput
+                    value={searchInput}
+                    onChange={handleSearchChange}
+                    placeholder="Search booking id, name, or phone"
+                    leftSection={<IconSearch size={16} />}
+                    size="sm"
+                    w={isMobile ? "100%" : 320}
+                  />
+                  <Button type="submit" size="sm">
+                    Search
+                  </Button>
+                  {hasSearchParam && (
+                    <Button variant="subtle" color="gray" size="sm" onClick={handleSearchClear}>
+                      Clear
+                    </Button>
+                  )}
+                </Group>
+                {hasSearchParam && (
+                  <Text size="sm" c="dimmed">
+                    Showing results for &ldquo;{searchParam}&rdquo;. Date and event filters are ignored while
+                    search is active.
+                  </Text>
+                )}
+              </Stack>
+            </form>
+
 
 
             <Group gap="md" wrap="wrap">
-
-              <Badge size="lg" color="blue" variant="light">
-
-                {selectedDate.format("dddd, MMM D")}
-
-              </Badge>
+              {hasSearchParam ? (
+                <Badge size="lg" color="gray" variant="light">
+                  {`Search: ${searchParam}`}
+                </Badge>
+              ) : (
+                <Badge size="lg" color="blue" variant="light">
+                  {selectedDate.format("dddd, MMM D")}
+                </Badge>
+              )}
 
               <Badge size="lg" color="green" variant="light">
 
@@ -954,11 +992,10 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               </Box>
 
             ) : activeGroups.length === 0 ? (
-
               <Alert color="blue" title="No data">
-
-                No bookings found for the selected date.
-
+                {hasSearchParam
+                  ? `No bookings matched “${searchParam}”.`
+                  : "No bookings found for the selected date."}
               </Alert>
 
             ) : (

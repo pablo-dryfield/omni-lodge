@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Op, type WhereOptions } from 'sequelize';
+import { Op, type WhereOptions, fn, col, where as sequelizeWhere } from 'sequelize';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
@@ -32,6 +32,7 @@ type QueryParams = {
   pickupTo?: string;
   productId?: string;
   time?: string;
+  search?: string;
 };
 
 const normalizeDate = (value?: string, boundary: RangeBoundary = 'start'): string | null => {
@@ -283,6 +284,26 @@ const deriveProductId = (booking: Booking): string => {
   return `${booking.platform}-${booking.id}`;
 };
 
+const escapeSearchTerm = (input: string): string =>
+  input.replace(/[%_]/g, (match) => `\\${match}`);
+
+const buildSearchWhere = (term: string): WhereOptions => {
+  const safeTerm = escapeSearchTerm(term);
+  const likeValue = `%${safeTerm}%`;
+  return {
+    [Op.or]: [
+      { platformBookingId: { [Op.iLike]: likeValue } },
+      { guestPhone: { [Op.iLike]: likeValue } },
+      { guestEmail: { [Op.iLike]: likeValue } },
+      { guestFirstName: { [Op.iLike]: likeValue } },
+      { guestLastName: { [Op.iLike]: likeValue } },
+      sequelizeWhere(fn('concat_ws', ' ', col('guest_first_name'), col('guest_last_name')), {
+        [Op.iLike]: likeValue,
+      }),
+    ],
+  };
+};
+
 const buildCustomerName = (booking: Booking): string => {
   const nameParts = [booking.guestFirstName, booking.guestLastName].filter(Boolean);
   if (nameParts.length > 0) {
@@ -498,7 +519,9 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
 
 export const getManifest = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { date, productId, time } = req.query as QueryParams;
+    const { date, productId, time, search } = req.query as QueryParams;
+    const searchTerm = typeof search === 'string' ? search.trim() : '';
+    const hasSearch = searchTerm.length > 0;
     const targetDate = normalizeDate(date ?? dayjs().format(DATE_FORMAT), 'start');
 
     if (!targetDate) {
@@ -507,28 +530,32 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
     }
 
     const rows = await Booking.findAll({
-      where: {
-        experienceDate: targetDate,
-      },
+      where: hasSearch ? buildSearchWhere(searchTerm) : { experienceDate: targetDate },
       order: [
         ['experienceStartAt', 'ASC'],
         ['id', 'ASC'],
       ],
     });
 
-    const orders = rows
+    const baseOrders = rows
       .map((booking) => bookingToUnifiedOrder(booking))
-      .filter((order): order is UnifiedOrder => order !== null && order.date === targetDate);
+      .filter((order): order is UnifiedOrder => order !== null);
 
-    const filteredOrders = orders.filter((order) => {
-      if (productId && order.productId !== productId) {
-        return false;
-      }
-      if (time && order.timeslot !== time) {
-        return false;
-      }
-      return true;
-    });
+    const scopedOrders = hasSearch
+      ? baseOrders
+      : baseOrders.filter((order) => order.date === targetDate);
+
+    const filteredOrders = hasSearch
+      ? scopedOrders
+      : scopedOrders.filter((order) => {
+          if (productId && order.productId !== productId) {
+            return false;
+          }
+          if (time && order.timeslot !== time) {
+            return false;
+          }
+          return true;
+        });
 
     const manifest = groupOrdersForManifest(filteredOrders);
 
@@ -587,8 +614,9 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
     res.status(200).json({
       date: targetDate,
       filters: {
-        productId: productId ?? null,
-        time: time ?? null,
+        productId: hasSearch ? null : productId ?? null,
+        time: hasSearch ? null : time ?? null,
+        search: hasSearch ? searchTerm : null,
       },
       orders: filteredOrders,
       manifest,
