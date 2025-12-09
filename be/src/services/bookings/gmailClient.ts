@@ -29,8 +29,10 @@ type ListMessagesParams = {
   pageToken?: string | null;
 };
 
+export type GmailMessage = gmail_v1.Schema$Message;
+
 export type ListMessagesResult = {
-  messages: gmail_v1.Schema$Message[];
+  messages: GmailMessage[];
   nextPageToken: string | null;
   totalSizeEstimate: number | null;
 };
