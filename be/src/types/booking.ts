@@ -3,7 +3,7 @@ import type { BookingStatus } from '../constants/bookings.js';
 export type UnifiedProduct = {
   id: string;
   name: string;
-  platform: 'ecwid' | 'fareharbor' | 'viator' | 'getyourguide' | 'freetour' | 'airbnb' | string;
+  platform: 'ecwid' | 'fareharbor' | 'viator' | 'getyourguide' | 'freetour' | 'xperiencepoland' | 'airbnb' | string;
   [key: string]: unknown;
 };
 
@@ -33,7 +33,7 @@ export type UnifiedOrder = {
   womenCount: number;
   customerName: string;
   customerPhone?: string;
-  platform: 'ecwid' | 'fareharbor' | 'viator' | 'getyourguide' | 'freetour' | 'airbnb' | string;
+  platform: 'ecwid' | 'fareharbor' | 'viator' | 'getyourguide' | 'freetour' | 'xperiencepoland' | 'airbnb' | string;
   pickupDateTime?: string;
   extras?: OrderExtras;
   status: BookingStatus;

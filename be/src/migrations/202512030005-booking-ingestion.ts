@@ -19,6 +19,7 @@ const BOOKING_PLATFORMS = [
   'viator',
   'getyourguide',
   'freetour',
+  'xperiencepoland',
   'airbnb',
   'manual',
   'unknown',

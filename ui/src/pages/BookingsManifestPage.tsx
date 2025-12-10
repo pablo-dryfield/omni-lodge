@@ -159,6 +159,7 @@ const PLATFORM_COLORS: Record<string, string> = {
   viator: "teal",
   getyourguide: "grape",
   freetour: "gray",
+  xperiencepoland: "red",
   airbnb: "pink",
   unknown: "dark",
 };

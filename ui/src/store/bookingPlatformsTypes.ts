@@ -2,7 +2,7 @@
 export interface UnifiedProduct {
   id: string;
   name: string;
-  platform: 'ecwid' | 'viator' | 'getyourguide' | 'fareharbor' | 'freetour' | 'airbnb' | string;
+  platform: 'ecwid' | 'viator' | 'getyourguide' | 'fareharbor' | 'freetour' | 'xperiencepoland' | 'airbnb' | string;
   [key: string]: any;
 }
 
@@ -42,7 +42,7 @@ export interface UnifiedOrder {
   womenCount: number;
   customerName: string;
   customerPhone?: string;
-  platform: 'ecwid' | 'viator' | 'getyourguide' | 'fareharbor' | 'freetour' | 'airbnb' | string;
+  platform: 'ecwid' | 'viator' | 'getyourguide' | 'fareharbor' | 'freetour' | 'xperiencepoland' | 'airbnb' | string;
   pickupDateTime?: string;
   extras?: OrderExtras;
   status: BookingStatus;
