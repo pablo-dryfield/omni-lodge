@@ -184,7 +184,7 @@ const PORT: number = parseInt(process.env.PORT || '3001');
 defineAssociations();
 
 const shouldSeedAccessControl = true //process.env.SEED_ACCESS_CONTROL === 'true';
-const shouldSkipDbSync = true //process.env.SKIP_DB_SYNC === 'true';
+const shouldSkipDbSync = false //process.env.SKIP_DB_SYNC === 'true';
 
 if (shouldAlterSchema) {
   logger.warn('DB_SYNC_ALTER=true: sequelize.sync will attempt to alter existing tables. Prefer running migrations instead.');
