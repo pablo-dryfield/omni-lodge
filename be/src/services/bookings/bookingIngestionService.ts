@@ -339,8 +339,12 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
     const bookingFields = { ...(event.bookingFields ?? {}) };
     const partySizeTotalDelta = bookingFields.partySizeTotalDelta ?? null;
     const partySizeAdultsDelta = bookingFields.partySizeAdultsDelta ?? null;
+    const addonsExtrasDelta = bookingFields.addonsExtrasDelta ?? null;
+    const explicitCocktailDelta =
+      addonsExtrasDelta && Object.prototype.hasOwnProperty.call(addonsExtrasDelta, 'cocktails');
     delete bookingFields.partySizeTotalDelta;
     delete bookingFields.partySizeAdultsDelta;
+    delete bookingFields.addonsExtrasDelta;
 
     const patch = normalizePatch(bookingFields);
     if (Object.keys(patch).length > 0) {
@@ -353,11 +357,66 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
       }
       const current = bookingRecord.getDataValue(key);
       const next = (current ?? 0) + delta;
-      bookingRecord.setDataValue(key, next < 0 ? 0 : next);
+      bookingRecord.setDataValue(key, next);
     };
 
     applyDelta('partySizeTotal', partySizeTotalDelta ?? null);
     applyDelta('partySizeAdults', partySizeAdultsDelta ?? null);
+
+    const applyExtrasDelta = (delta?: Record<string, number> | null): void => {
+      if (!delta) {
+        return;
+      }
+      const snapshot =
+        bookingRecord.addonsSnapshot && typeof bookingRecord.addonsSnapshot === 'object'
+          ? { ...bookingRecord.addonsSnapshot }
+          : {};
+      const extras =
+        snapshot.extras && typeof snapshot.extras === 'object'
+          ? { ...(snapshot.extras as Record<string, number>) }
+          : {};
+      let mutated = false;
+      for (const [key, value] of Object.entries(delta)) {
+        if (typeof value !== 'number' || Number.isNaN(value) || value === 0) {
+          continue;
+        }
+        extras[key] = (extras[key] ?? 0) + value;
+        mutated = true;
+      }
+      if (!mutated) {
+        return;
+      }
+      snapshot.extras = extras;
+      bookingRecord.addonsSnapshot = snapshot;
+    };
+
+    applyExtrasDelta(addonsExtrasDelta);
+
+    const inferCocktailDeltaFromPartyChange = (): void => {
+      if (explicitCocktailDelta) {
+        return;
+      }
+      const cocktailDelta = (partySizeAdultsDelta ?? partySizeTotalDelta) ?? null;
+      if (typeof cocktailDelta !== 'number' || Number.isNaN(cocktailDelta) || cocktailDelta === 0) {
+        return;
+      }
+      if (!bookingRecord.addonsSnapshot || typeof bookingRecord.addonsSnapshot !== 'object') {
+        return;
+      }
+      const snapshot = { ...bookingRecord.addonsSnapshot };
+      const extras =
+        snapshot.extras && typeof snapshot.extras === 'object'
+          ? { ...(snapshot.extras as Record<string, number>) }
+          : null;
+      if (!extras || typeof extras.cocktails !== 'number') {
+        return;
+      }
+      extras.cocktails = (extras.cocktails ?? 0) + cocktailDelta;
+      snapshot.extras = extras;
+      bookingRecord.addonsSnapshot = snapshot;
+    };
+
+    inferCocktailDeltaFromPartyChange();
 
     const shouldUpdateStatus = !bookingRecord.statusChangedAt || eventOccurredAt >= bookingRecord.statusChangedAt;
     if (shouldUpdateStatus) {

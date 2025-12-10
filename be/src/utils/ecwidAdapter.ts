@@ -618,6 +618,7 @@ export const transformEcwidOrders = (ecwidOrders: EcwidOrder[]) => {
 
       orders.push({
         id: `${order.id}-${item.id ?? item.productId ?? index}`,
+        platformBookingId: String(order.id),
         productId,
         productName,
         date: pickupMoment.format('YYYY-MM-DD'),

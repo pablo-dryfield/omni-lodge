@@ -2,6 +2,7 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
   Alert,
+  Anchor,
   Badge,
   Box,
   Button,
@@ -204,6 +205,29 @@ const formatPlatformLabel = (value?: string | null): string => {
 const resolvePlatformColor = (value?: string | null): string => {
   const key = normalizePlatformKey(value);
   return PLATFORM_COLORS[key] ?? PLATFORM_COLORS.unknown;
+};
+
+const PLATFORM_BOOKING_LINKS: Record<string, (bookingId: string) => string> = {
+  ecwid: (id: string) => `https://my.ecwid.com/store/100323031#order:id=${encodeURIComponent(id)}`,
+  viator: (id: string) =>
+    `https://supplier.viator.com/bookings/search?bookingRef=${encodeURIComponent(id)}&sortBy=NEW_BOOKINGS&pageNumber=1&pageSize=10`,
+  getyourguide: (id: string) => `https://supplier.getyourguide.com/bookings/${encodeURIComponent(id)}?from=/bookings`,
+};
+
+const getPlatformBookingLink = (platform?: string | null, bookingId?: string | null): string | null => {
+  if (!platform || !bookingId) {
+    return null;
+  }
+  const key = platform.toLowerCase();
+  const builder = PLATFORM_BOOKING_LINKS[key];
+  if (!builder) {
+    return null;
+  }
+  try {
+    return builder(bookingId);
+  } catch {
+    return null;
+  }
 };
 
 const formatStatusLabel = (value?: BookingStatus | null): string => {
@@ -1071,23 +1095,37 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                         </Group>
                           <Divider />
                           <Stack gap="sm">
-                            {sortedOrders.map((order) => (
-                              <Paper
-                                key={order.id}
-                                withBorder
-                                radius="md"
-                                shadow="xs"
-                                p="sm"
-                                style={{ background: "#f8fafc" }}
-                              >
-                                <Stack gap={8}>
-                                  <Group justify="space-between" align="flex-start">
-                                    <Stack gap={2}>
-                                      <Text fw={600}>{order.customerName || "Unnamed guest"}</Text>
-                                      <Text size="xs" c="dimmed">
-                                        {order.id}
-                                      </Text>
-                                    </Stack>
+                            {sortedOrders.map((order) => {
+                              const bookingDisplay = order.platformBookingId ?? order.id;
+                              const bookingLink = getPlatformBookingLink(order.platform, order.platformBookingId);
+                              return (
+                                <Paper
+                                  key={order.id}
+                                  withBorder
+                                  radius="md"
+                                  shadow="xs"
+                                  p="sm"
+                                  style={{ background: "#f8fafc" }}
+                                >
+                                  <Stack gap={8}>
+                                    <Group justify="space-between" align="flex-start">
+                                      <Stack gap={2}>
+                                        <Text fw={600}>{order.customerName || "Unnamed guest"}</Text>
+                                        <Text size="xs" c="dimmed">
+                                          {bookingLink ? (
+                                            <Anchor
+                                              href={bookingLink}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              size="xs"
+                                            >
+                                              {bookingDisplay}
+                                            </Anchor>
+                                          ) : (
+                                            bookingDisplay
+                                          )}
+                                        </Text>
+                                      </Stack>
                                     <Badge color="orange" variant="light">
                                       {`${order.quantity} people`}
                                     </Badge>
@@ -1148,7 +1186,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                   </Stack>
                                 </Stack>
                               </Paper>
-                            ))}
+                            );
+                          })}
                           </Stack>
                         </Stack>
                       </Paper>
@@ -1217,7 +1256,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                       <Table striped highlightOnHover withColumnBorders mt="md" horizontalSpacing="md" verticalSpacing="sm">
                           <Table.Thead>
                             <Table.Tr>
-                              <Table.Th>ID</Table.Th>
+                              <Table.Th>Booking #</Table.Th>
                               <Table.Th>Contact</Table.Th>
                               <Table.Th>Platform</Table.Th>
                               <Table.Th>Status</Table.Th>
@@ -1264,9 +1303,25 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                             </Table.Td>
                             <Table.Td fw={600}>{group.time}</Table.Td>
                           </Table.Tr>
-                          {sortedOrders.map((order) => (
-                            <Table.Tr key={order.id}>
-                              <Table.Td>{order.id}</Table.Td>
+                          {sortedOrders.map((order) => {
+                            const bookingDisplay = order.platformBookingId ?? order.id;
+                            const bookingLink = getPlatformBookingLink(order.platform, order.platformBookingId);
+                            return (
+                              <Table.Tr key={order.id}>
+                                <Table.Td>
+                                  {bookingLink ? (
+                                    <Anchor
+                                      href={bookingLink}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      size="sm"
+                                    >
+                                      {bookingDisplay}
+                                    </Anchor>
+                                  ) : (
+                                    bookingDisplay
+                                  )}
+                                </Table.Td>
                               <Table.Td>{order.customerName || "-"}</Table.Td>
                               <Table.Td>
                                 <OrderPlatformBadge platform={order.platform} />
@@ -1298,7 +1353,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               <Table.Td align="right">{formatAddonValue(order.extras?.photos)}</Table.Td>
                               <Table.Td>{order.timeslot}</Table.Td>
                             </Table.Tr>
-                          ))}
+                          );
+                        })}
                         </Table.Tbody>
                       </Table>
                     </Box>

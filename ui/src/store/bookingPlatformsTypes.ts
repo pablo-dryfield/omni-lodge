@@ -32,6 +32,7 @@ export type BookingStatus =
 
 export interface UnifiedOrder {
   id: string;
+  platformBookingId: string;
   productId: string;
   productName: string;
   date: string; // pickup date in YYYY-MM-DD (UTC-normalized)
