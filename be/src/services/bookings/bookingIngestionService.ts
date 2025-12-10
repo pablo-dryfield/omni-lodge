@@ -5,17 +5,43 @@ import BookingEmail from '../../models/BookingEmail.js';
 import Booking from '../../models/Booking.js';
 import BookingEvent from '../../models/BookingEvent.js';
 import BookingAddon from '../../models/BookingAddon.js';
+import Channel from '../../models/Channel.js';
+import Product from '../../models/Product.js';
 import logger from '../../utils/logger.js';
 import { fetchMessagePayload, listMessages } from './gmailClient.js';
 import { getBookingParsers } from './parsers/index.js';
 import type { BookingFieldPatch, BookingParserContext, ParsedBookingEvent } from './types.js';
 import type { GmailMessagePayload } from './gmailClient.js';
 import type { BookingPlatform } from '../../constants/bookings.js';
+import { canonicalizeProductLabel } from '../../utils/productName.js';
 
 const DEFAULT_QUERY =
   process.env.BOOKING_GMAIL_QUERY ??
   '(subject:(booking OR reservation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR viator.com OR getyourguide.com OR xperiencepoland.com))';
 const DEFAULT_BATCH = Number.parseInt(process.env.BOOKING_GMAIL_BATCH_SIZE ?? '20', 10);
+
+const PLATFORM_CHANNEL_NAMES: Partial<Record<BookingPlatform, string>> = {
+  fareharbor: 'Fareharbor',
+  viator: 'Viator',
+  getyourguide: 'GetYourGuide',
+  freetour: 'FreeTour',
+  ecwid: 'Ecwid',
+  airbnb: 'Email',
+  xperiencepoland: 'XperiencePoland',
+};
+
+const channelIdCache = new Map<string, number | null>();
+
+const CANONICAL_TO_PRODUCT_NAME: Record<string, string> = {
+  'Krawl Through Krakow Pub Crawl': 'Pub Crawl',
+  'NYE Pub Crawl': 'NYE Pub Crawl',
+  'Bottomless Brunch': 'Bottomless Brunch',
+  'Go-Karting': 'Go-Karting',
+  'Private Pub Crawl': 'Private Pub Crawl',
+  'Krawl Through Kazimierz': 'Kazimierz Pub Crawl',
+};
+
+const productIdCache = new Map<string, number | null>();
 
 const decimalKeys = new Set([
   'baseAmount',
@@ -41,6 +67,52 @@ const bookingStringLimits: Partial<Record<keyof BookingFieldPatch, number>> = {
   currency: 3,
   paymentMethod: 128,
   rawPayloadLocation: 512,
+};
+
+const resolveChannelIdForPlatform = async (platform: BookingPlatform): Promise<number | null> => {
+  const channelName = PLATFORM_CHANNEL_NAMES[platform];
+  if (!channelName) {
+    return null;
+  }
+  if (channelIdCache.has(channelName)) {
+    return channelIdCache.get(channelName) ?? null;
+  }
+  const record = await Channel.findOne({
+    where: { name: channelName },
+    attributes: ['id'],
+  });
+  const id = record?.id ?? null;
+  channelIdCache.set(channelName, id);
+  return id;
+};
+
+const canonicalProductNameFromFields = (fields: BookingFieldPatch): string | null => {
+  const sources: Array<string | null | undefined> = [fields.productName, fields.productVariant, fields.notes];
+  for (const source of sources) {
+    const canonical = canonicalizeProductLabel(source ?? null);
+    if (canonical) {
+      return canonical;
+    }
+  }
+  return null;
+};
+
+const resolveProductIdForCanonical = async (canonicalName: string | null): Promise<number | null> => {
+  if (!canonicalName) {
+    return null;
+  }
+  const mappedName = CANONICAL_TO_PRODUCT_NAME[canonicalName] ?? canonicalName;
+  const cacheKey = mappedName.toLowerCase();
+  if (productIdCache.has(cacheKey)) {
+    return productIdCache.get(cacheKey) ?? null;
+  }
+  const record = await Product.findOne({
+    where: { name: { [Op.iLike]: mappedName } },
+    attributes: ['id'],
+  });
+  const id = record?.id ?? null;
+  productIdCache.set(cacheKey, id);
+  return id;
 };
 
 class StaleBookingEventError extends Error {
@@ -337,6 +409,22 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
     }
 
     const bookingFields = { ...(event.bookingFields ?? {}) };
+    if (bookingFields.channelId == null) {
+      const inferredChannelId = await resolveChannelIdForPlatform(event.platform);
+      if (inferredChannelId != null) {
+        bookingFields.channelId = inferredChannelId;
+      }
+    }
+    if (!bookingFields.productId) {
+      const canonicalProductName = canonicalProductNameFromFields(bookingFields);
+      const inferredProductId = await resolveProductIdForCanonical(canonicalProductName);
+      if (inferredProductId != null) {
+        bookingFields.productId = inferredProductId;
+        if (!bookingFields.productName && canonicalProductName) {
+          bookingFields.productName = canonicalProductName;
+        }
+      }
+    }
     const partySizeTotalDelta = bookingFields.partySizeTotalDelta ?? null;
     const partySizeAdultsDelta = bookingFields.partySizeAdultsDelta ?? null;
     const addonsExtrasDelta = bookingFields.addonsExtrasDelta ?? null;
