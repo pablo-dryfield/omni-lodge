@@ -4,6 +4,7 @@ import { FareHarborBookingParser } from './fareHarborBookingParser.js';
 import { FreeTourBookingParser } from './freeTourBookingParser.js';
 import { GetYourGuideBookingParser } from './getYourGuideBookingParser.js';
 import { ViatorBookingParser } from './viatorBookingParser.js';
+import { XperiencePolandBookingParser } from './xperiencePolandBookingParser.js';
 
 const parserInstances: BookingEmailParser[] = [
   new GetYourGuideBookingParser(),
@@ -11,6 +12,7 @@ const parserInstances: BookingEmailParser[] = [
   new EcwidBookingParser(),
   new FreeTourBookingParser(),
   new FareHarborBookingParser(),
+  new XperiencePolandBookingParser(),
 ];
 
 export const getBookingParsers = (): BookingEmailParser[] => parserInstances;
