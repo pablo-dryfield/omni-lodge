@@ -37,6 +37,7 @@ export type BookingFieldPatch = Partial<{
   paymentMethod: string | null;
   notes: string | null;
   addonsSnapshot: Record<string, unknown> | null;
+  addonsExtrasDelta: Record<string, number> | null;
   rawPayloadLocation: string | null;
 }>;
 

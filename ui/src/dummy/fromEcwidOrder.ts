@@ -25,6 +25,7 @@ export function ecwidOrdersToUnifiedOrders(rawOrders: any[]): UnifiedOrder[] {
 
       return {
         id: String(order.id),
+        platformBookingId: String(order.id),
         productId: String(item.productId),
         productName: item.name,
         date,

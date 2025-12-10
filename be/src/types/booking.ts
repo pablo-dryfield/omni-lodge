@@ -23,6 +23,7 @@ export type PlatformBreakdownEntry = {
 
 export type UnifiedOrder = {
   id: string;
+  platformBookingId: string;
   productId: string;
   productName: string;
   date: string;

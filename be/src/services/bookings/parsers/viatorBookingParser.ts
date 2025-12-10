@@ -199,6 +199,38 @@ const parseTravelerCounts = (
   return { total, adults: total };
 };
 
+const extractFallbackTourName = (text: string): string | null => {
+  const headingMatch = text.match(/The following booking for\s+(.+?)\s+on\b/i);
+  if (headingMatch?.[1]) {
+    return headingMatch[1].trim();
+  }
+
+  const referenceIndex = text.toLowerCase().indexOf('booking reference:');
+  if (referenceIndex !== -1) {
+    const tail = text
+      .slice(referenceIndex)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    for (let idx = 1; idx < Math.min(tail.length, 6); idx += 1) {
+      const candidate = tail[idx];
+      if (!candidate) {
+        continue;
+      }
+      if (/^(amended|booking|confirmed)/i.test(candidate)) {
+        continue;
+      }
+      if (/^booking reference/i.test(candidate)) {
+        continue;
+      }
+      return candidate;
+    }
+  }
+
+  return null;
+};
+
 const stripHtml = (value: string): string =>
   value.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim();
 
@@ -300,7 +332,8 @@ export class ViatorBookingParser implements BookingEmailParser {
       return null;
     }
 
-    const tourName = extractField(normalizedText, 'Tour Name:', ['Travel Date:']);
+    const tourName =
+      extractField(normalizedText, 'Tour Name:', ['Travel Date:']) ?? extractFallbackTourName(normalizedText);
     const travelDate = extractField(normalizedText, 'Travel Date:', [
       'Lead Traveler Name:',
       'Mobile Phone No:',
@@ -380,6 +413,11 @@ export class ViatorBookingParser implements BookingEmailParser {
     if (removalMatches.length > 0) {
       bookingFields.partySizeTotalDelta = (bookingFields.partySizeTotalDelta ?? 0) - removalMatches.length;
       bookingFields.partySizeAdultsDelta = (bookingFields.partySizeAdultsDelta ?? 0) - removalMatches.length;
+      if (requiresCocktailAddon(tourGrade, tourGradeCode, gradeDescription)) {
+        const extrasDelta = bookingFields.addonsExtrasDelta ?? {};
+        extrasDelta.cocktails = (extrasDelta.cocktails ?? 0) - removalMatches.length;
+        bookingFields.addonsExtrasDelta = extrasDelta;
+      }
     }
 
     const status = deriveStatusFromContext(context, normalizedText);
