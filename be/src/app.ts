@@ -183,6 +183,9 @@ const PORT: number = parseInt(process.env.PORT || '3001');
 
 defineAssociations();
 
+const shouldSeedAccessControl = process.env.SEED_ACCESS_CONTROL === 'true';
+const shouldSkipDbSync = process.env.SKIP_DB_SYNC === 'true';
+
 if (shouldAlterSchema) {
   logger.warn('DB_SYNC_ALTER=true: sequelize.sync will attempt to alter existing tables. Prefer running migrations instead.');
 }
@@ -190,14 +193,23 @@ if (shouldAlterSchema) {
 const syncOptions = { force: false, alter: shouldAlterSchema } as const;
 
 async function bootstrap(): Promise<void> {
-  logger.info(`Synchronizing database schema (alter=${shouldAlterSchema})`);
   try {
-    await sequelize.sync(syncOptions);
+    if (shouldSkipDbSync) {
+      await sequelize.authenticate();
+      logger.info('[database] SKIP_DB_SYNC=true: skipping sequelize.sync (ensure migrations are up-to-date).');
+    } else {
+      logger.info(`Synchronizing database schema (alter=${shouldAlterSchema})`);
+      await sequelize.sync(syncOptions);
+    }
 
-    try {
-      await initializeAccessControl();
-    } catch (seedError) {
-      logger.error('Failed to initialize access control data', seedError);
+    if (shouldSeedAccessControl) {
+      try {
+        await initializeAccessControl();
+      } catch (seedError) {
+        logger.error('Failed to initialize access control data', seedError);
+      }
+    } else {
+      logger.info('[access-control] Skipping initialization (set SEED_ACCESS_CONTROL=true to enable seeding).');
     }
 
     if (process.env.NODE_ENV === 'production') {

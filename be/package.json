@@ -7,7 +7,7 @@
     "scripts": {
         "build:clean": "rimraf dist",
         "build": "npm run build:clean && tsc",
-        "postbuild": "node dist/scripts/syncAccessControl.js",
+        "postbuild": "node scripts/runAccessControlSeed.js",
         "start": "npm run build && node dist/app.js",
         "start:prod": "cross-env NODE_ENV=production NODE_OPTIONS=--max-old-space-size=4096 npm run build && cross-env NODE_ENV=production NODE_OPTIONS=--max-old-space-size=4096 node dist/app.js",
         "start:dev": "cross-env NODE_ENV=development npm run build && cross-env NODE_ENV=development node dist/app.js",
