@@ -22,25 +22,41 @@ const DATE_TIME_FORMATS = [
   'D/M/YYYY HH:mm',
 ];
 
-const extractField = (text: string, label: string, nextLabels: string[]): string | null => {
+const normalizeLabels = (input: string | string[]): string[] => (Array.isArray(input) ? input : [input]);
+
+const findLabelStart = (text: string, candidates: string[]): { start: number; length: number } | null => {
   const lower = text.toLowerCase();
-  const needle = label.toLowerCase();
-  const start = lower.indexOf(needle);
-  if (start === -1) {
+  for (const candidate of candidates) {
+    const needle = candidate.toLowerCase();
+    const idx = lower.indexOf(needle);
+    if (idx !== -1) {
+      return { start: idx, length: candidate.length };
+    }
+  }
+  return null;
+};
+
+const extractField = (text: string, labels: string | string[], nextLabels: (string | string[])[]): string | null => {
+  const resolvedLabels = normalizeLabels(labels);
+  const match = findLabelStart(text, resolvedLabels);
+  if (!match) {
     return null;
   }
 
-  const afterLabel = text.slice(start + label.length);
+  const afterLabel = text.slice(match.start + match.length);
   if (nextLabels.length === 0) {
     return afterLabel.trim();
   }
 
-  const afterLower = lower.slice(start + label.length);
+  const afterLower = text.toLowerCase().slice(match.start + match.length);
   let endIndex = afterLabel.length;
   for (const next of nextLabels) {
-    const idx = afterLower.indexOf(next.toLowerCase());
-    if (idx !== -1 && idx < endIndex) {
-      endIndex = idx;
+    const options = normalizeLabels(next).map((entry) => entry.toLowerCase());
+    for (const option of options) {
+      const idx = afterLower.indexOf(option);
+      if (idx !== -1 && idx < endIndex) {
+        endIndex = idx;
+      }
     }
   }
 
@@ -98,7 +114,9 @@ const parsePartySize = (value?: string | null): number | null => {
 };
 
 const deriveProductName = (text: string): string | null => {
-  const servicesMatch = text.match(/Basic services\s+([\s\S]+?)Total amount of all services/i);
+  const servicesMatch =
+    text.match(/Basic services\s+([\s\S]+?)Total amount of all services/i) ??
+    text.match(/Usługi podstawowe\s+([\s\S]+?)Łączna kwota wszystkich usług/i);
   if (!servicesMatch) {
     return null;
   }
@@ -137,9 +155,13 @@ const parseExperienceDate = (dateText?: string | null, timeText?: string | null,
 
   for (const candidate of attempts) {
     for (const format of DATE_TIME_FORMATS) {
-      const parsed = dayjs.tz(candidate, format, XPERIENCEPOLAND_TIMEZONE);
-      if (parsed.isValid()) {
-        return parsed;
+      try {
+        const parsed = dayjs.tz(candidate, format, XPERIENCEPOLAND_TIMEZONE);
+        if (parsed.isValid()) {
+          return parsed;
+        }
+      } catch {
+        continue;
       }
     }
   }
@@ -162,17 +184,43 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
       return null;
     }
 
-    const reservation = extractField(body, 'Reservation number:', ['Client:']) ?? context.subject?.match(/\|\s*([A-Z0-9]+)\)/)?.[1];
+    const reservation =
+      extractField(body, ['Reservation number:', 'Numer rezerwacji:'], [['Client:', 'Klient:']]) ??
+      context.subject?.match(/\|\s*([A-Z0-9]+)\)/)?.[1];
     if (!reservation) {
       return null;
     }
 
-    const clientName = extractField(body, 'Client:', ['Customer phone number:', 'Customer nr phone number:', 'Date:']);
-    const phone = extractField(body, 'Customer phone number:', ['Date:', 'Time:']);
-    const dateText = extractField(body, 'Date:', ['Time:', 'Number of people:']);
-    const timeText = extractField(body, 'Time:', ['Number of people:', 'All services']);
-    const peopleText = extractField(body, 'Number of people:', ['All services', 'Basic services', 'Total amount']);
-    const totalAmountText = extractField(body, 'Total amount of all services:', ['Additional information:', 'This is our']);
+    const clientName = extractField(
+      body,
+      ['Client:', 'Klient:'],
+      [['Customer phone number:', 'Customer nr phone number:', 'Telefon klienta:'], ['Date:', 'Data:']],
+    );
+    const phone = extractField(
+      body,
+      ['Customer phone number:', 'Customer nr phone number:', 'Telefon klienta:'],
+      [['Date:', 'Data:'], ['Time:', 'Godzina:']],
+    );
+    const dateText = extractField(body, ['Date:', 'Data:'], [['Time:', 'Godzina:'], ['Number of people:', 'Liczba osób:']]);
+    const timeText = extractField(
+      body,
+      ['Time:', 'Godzina:'],
+      [['Number of people:', 'Liczba osób:'], ['All services', 'Usługi podstawowe'], ['Basic services', 'Usługi podstawowe']],
+    );
+    const peopleText = extractField(
+      body,
+      ['Number of people:', 'Liczba osób:'],
+      [
+        ['All services', 'Usługi podstawowe'],
+        ['Basic services', 'Usługi podstawowe'],
+        ['Total amount of all services:', 'Łączna kwota wszystkich usług:'],
+      ],
+    );
+    const totalAmountText = extractField(
+      body,
+      ['Total amount of all services:', 'Łączna kwota wszystkich usług:'],
+      [['Additional information:', 'Dodatkowe informacje:'], ['This is our']],
+    );
 
     const subjectDateMatch = context.subject?.match(/(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}).*?(\d{1,2}:\d{2})/);
     const subjectDate = subjectDateMatch ? subjectDateMatch[1] : null;
@@ -183,7 +231,7 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
     const partySize = parsePartySize(peopleText);
     const money = parseMoney(totalAmountText);
     const productName = deriveProductName(body);
-    const notes = extractAdditionalInfo(body);
+    const notes = extractAdditionalInfo(body) ?? extractField(body, ['Additional information:', 'Dodatkowe informacje:'], []);
     const { firstName, lastName } = normalizeName(clientName ?? undefined);
 
     const bookingFields: BookingFieldPatch = {
