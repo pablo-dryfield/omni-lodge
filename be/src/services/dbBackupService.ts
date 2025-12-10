@@ -1,13 +1,15 @@
 import { promises as fs } from 'fs';
-import { constants as fsConstants, createReadStream } from 'fs';
+import { constants as fsConstants, createReadStream, createWriteStream } from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import crypto from 'crypto';
 import { pipeline } from 'stream/promises';
+import os from 'os';
 import HttpError from '../errors/HttpError.js';
 import sequelize from '../config/database.js';
 import { initializeAccessControl } from '../utils/initializeAccessControl.js';
 import logger from '../utils/logger.js';
+import { ensureFolderPath, getDriveClient } from './googleDrive.js';
 
 const DEFAULT_BACKUP_DIRECTORY = '/home/postgres/backups';
 const DEFAULT_BACKUP_SCRIPT = '/home/postgres/backup.sh';
@@ -24,6 +26,15 @@ const databasePort = process.env.DB_PORT ?? '5432';
 const adminDatabaseName = process.env.DB_ADMIN_DATABASE ?? 'postgres';
 const shouldAlterSchema = (process.env.DB_SYNC_ALTER ?? 'false').toLowerCase() === 'true';
 const syncOptions = { force: false, alter: shouldAlterSchema } as const;
+type BackupStorageMode = 'local' | 'drive';
+const backupStorageMode: BackupStorageMode =
+  (process.env.DB_BACKUP_STORAGE ?? 'local').toLowerCase() === 'drive' ? 'drive' : 'local';
+const driveBackupRootFolder = process.env.DB_BACKUP_DRIVE_FOLDER ?? 'Backups';
+const nodeEnv = (process.env.NODE_ENV ?? 'development').trim().toLowerCase();
+const driveEnvironmentFolderName = nodeEnv === 'production' ? 'Production' : 'Development';
+const utcMonthFormatter = new Intl.DateTimeFormat('en-US', { month: 'long', timeZone: 'UTC' });
+const driveEnvironmentPath = `${driveBackupRootFolder}/${driveEnvironmentFolderName}`;
+let driveEnvironmentFolderIdPromise: Promise<string> | null = null;
 
 export type BackupFileDescriptor = {
   filename: string;
@@ -31,6 +42,8 @@ export type BackupFileDescriptor = {
   sizeBytes: number;
   createdAt: string;
   modifiedAt: string;
+  driveFileId?: string;
+  location: BackupStorageMode;
 };
 
 export type CommandResult = {
@@ -133,6 +146,183 @@ const runCommand = (command: string, args: string[], workingDirectory?: string):
   });
 };
 
+const getDriveEnvironmentFolderId = async (): Promise<string> => {
+  if (!driveEnvironmentFolderIdPromise) {
+    driveEnvironmentFolderIdPromise = ensureFolderPath(driveEnvironmentPath).then((result) => result.id);
+  }
+  return driveEnvironmentFolderIdPromise;
+};
+
+const getDriveFolderIdForDate = async (date: Date): Promise<string> => {
+  const year = date.getUTCFullYear().toString();
+  const month = utcMonthFormatter.format(date);
+  const folderPath = `${driveEnvironmentPath}/${year}/${month}`;
+  const folder = await ensureFolderPath(folderPath);
+  return folder.id;
+};
+
+type DriveFileMetadata = {
+  id: string;
+  name: string;
+  sizeBytes: number;
+  createdAt: string;
+  modifiedAt: string;
+};
+
+const listDriveFiles = async (): Promise<DriveFileMetadata[]> => {
+  const drive = await getDriveClient();
+  const envFolderId = await getDriveEnvironmentFolderId();
+
+  const gather = async (parentId: string): Promise<DriveFileMetadata[]> => {
+    const result: DriveFileMetadata[] = [];
+    let pageToken: string | undefined;
+
+    do {
+      const { data } = await drive.files.list({
+        q: `'${parentId}' in parents and trashed = false`,
+        fields: 'nextPageToken, files(id, name, size, mimeType, createdTime, modifiedTime)',
+        pageSize: 100,
+        pageToken,
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+      });
+
+      pageToken = data.nextPageToken ?? undefined;
+      for (const file of data.files ?? []) {
+        const id = file.id;
+        const name = file.name;
+        if (!id || !name) {
+          continue;
+        }
+
+        if (file.mimeType === 'application/vnd.google-apps.folder') {
+          const childFiles = await gather(id);
+          result.push(...childFiles);
+          continue;
+        }
+
+        const size = file.size ? Number(file.size) : 0;
+        const created = file.createdTime ?? new Date().toISOString();
+        const modified = file.modifiedTime ?? created;
+        result.push({
+          id,
+          name,
+          sizeBytes: size,
+          createdAt: created,
+          modifiedAt: modified,
+        });
+      }
+    } while (pageToken);
+
+    return result;
+  };
+
+  const files = await gather(envFolderId);
+  files.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
+  return files;
+};
+
+const findDriveFileByName = async (filename: string): Promise<DriveFileMetadata | null> => {
+  const files = await listDriveFiles();
+  const match = files.find((file) => file.name === filename);
+  return match ?? null;
+};
+
+const uploadFileToDrive = async (filePath: string, filename: string, fileDate: Date): Promise<string> => {
+  const drive = await getDriveClient();
+  const folderId = await getDriveFolderIdForDate(fileDate);
+  const stream = createReadStream(filePath);
+
+  const response = await drive.files.create({
+    requestBody: {
+      name: filename,
+      parents: [folderId],
+    },
+    media: {
+      mimeType: 'application/octet-stream',
+      body: stream,
+    },
+    fields: 'id',
+    supportsAllDrives: true,
+  });
+
+  const fileId = response.data.id;
+  if (!fileId) {
+    throw new Error(`Drive upload failed for ${filename}`);
+  }
+  return fileId;
+};
+
+const downloadDriveFileToPath = async (fileId: string, destinationPath: string): Promise<void> => {
+  const drive = await getDriveClient();
+  const { data } = await drive.files.get(
+    { fileId, alt: 'media' },
+    { responseType: 'stream' },
+  );
+  const destination = createWriteStream(destinationPath);
+  await pipeline(data as unknown as NodeJS.ReadableStream, destination);
+};
+
+const streamDriveFileToDestination = async (fileId: string, destination: NodeJS.WritableStream): Promise<void> => {
+  const drive = await getDriveClient();
+  const { data } = await drive.files.get(
+    { fileId, alt: 'media' },
+    { responseType: 'stream' },
+  );
+  await pipeline(data as unknown as NodeJS.ReadableStream, destination);
+};
+
+type SyncOptions = {
+  deleteAfterUpload?: boolean;
+  skipExisting?: boolean;
+};
+
+export const syncLocalBackupsToDrive = async (options: SyncOptions = {}): Promise<{
+  uploaded: string[];
+  skipped: string[];
+}> => {
+  if (backupStorageMode !== 'drive') {
+    return { uploaded: [], skipped: [] };
+  }
+
+  const backups = await listLocalBackupFiles();
+  if (backups.length === 0) {
+    return { uploaded: [], skipped: [] };
+  }
+
+  const uploaded: string[] = [];
+  const skipped: string[] = [];
+  const driveExistingFiles = await listDriveFiles();
+  const driveExistingNames = new Set(driveExistingFiles.map((file) => file.name));
+
+  for (const backup of backups) {
+    if (driveExistingNames.has(backup.filename) && options.skipExisting) {
+      skipped.push(backup.filename);
+      continue;
+    }
+
+    try {
+      const backupDate = new Date(backup.modifiedAt ?? backup.createdAt ?? new Date().toISOString());
+      const fileId = await uploadFileToDrive(backup.fullPath, backup.filename, backupDate);
+      uploaded.push(backup.filename);
+      driveExistingNames.add(backup.filename);
+      logger.info(`[db-backup] Uploaded ${backup.filename} to Drive (fileId=${fileId})`);
+
+      if (options.deleteAfterUpload) {
+        try {
+          await fs.unlink(backup.fullPath);
+        } catch (error) {
+          logger.warn(`Failed to delete local backup ${backup.fullPath}: ${(error as Error).message}`);
+        }
+      }
+    } catch (error) {
+      logger.error(`Failed to upload backup ${backup.filename} to Drive`, error);
+    }
+  }
+
+  return { uploaded, skipped };
+};
+
 const runSqlCommand = (sql: string, targetDatabase: string = databaseName): Promise<CommandResult> => {
   const args = [
     '-h',
@@ -153,12 +343,21 @@ const runSqlCommand = (sql: string, targetDatabase: string = databaseName): Prom
 };
 
 export const streamBackupFile = async (filename: string, destination: NodeJS.WritableStream): Promise<void> => {
+  if (backupStorageMode === 'drive') {
+    const driveFile = await findDriveFileByName(filename);
+    if (!driveFile) {
+      throw new HttpError(404, 'Backup file not found on Drive');
+    }
+    await streamDriveFileToDestination(driveFile.id, destination);
+    return;
+  }
+
   const filePath = await resolveBackupPath(filename);
   const stream = createReadStream(filePath);
   await pipeline(stream, destination);
 };
 
-export const listBackupFiles = async (): Promise<BackupFileDescriptor[]> => {
+const listLocalBackupFiles = async (): Promise<BackupFileDescriptor[]> => {
   await ensureDirectory(backupDirectory);
 
   const entries = await fs.readdir(backupDirectory, { withFileTypes: true });
@@ -185,6 +384,7 @@ export const listBackupFiles = async (): Promise<BackupFileDescriptor[]> => {
       sizeBytes: stats.size,
       createdAt: stats.birthtime.toISOString(),
       modifiedAt: stats.mtime.toISOString(),
+      location: 'local',
     });
   }
 
@@ -207,7 +407,51 @@ export const listBackupFiles = async (): Promise<BackupFileDescriptor[]> => {
   return result;
 };
 
+const listDriveBackupFiles = async (): Promise<BackupFileDescriptor[]> => {
+  const files = await listDriveFiles();
+  files.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
+
+  return files.map((file) => ({
+    filename: file.name,
+    fullPath: '',
+    sizeBytes: file.sizeBytes,
+    createdAt: file.createdAt,
+    modifiedAt: file.modifiedAt,
+    driveFileId: file.id,
+    location: 'drive',
+  }));
+};
+
+export const listBackupFiles = async (): Promise<BackupFileDescriptor[]> => {
+  return backupStorageMode === 'drive' ? listDriveBackupFiles() : listLocalBackupFiles();
+};
+
 export const restoreBackupByFilename = async (filename: string): Promise<CommandResult> => {
+  if (backupStorageMode === 'drive') {
+    const driveFile = await findDriveFileByName(filename);
+    if (!driveFile) {
+      throw new HttpError(404, 'Backup file not found on Drive');
+    }
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'db-drive-backup-'));
+    const tempPath = path.resolve(tempDir, filename);
+    try {
+      await downloadDriveFileToPath(driveFile.id, tempPath);
+      return await restoreBackupFromPath(tempPath);
+    } finally {
+      try {
+        await fs.unlink(tempPath);
+      } catch {
+        // ignore cleanup errors
+      }
+      try {
+        await fs.rmdir(tempDir);
+      } catch {
+        // ignore cleanup errors
+      }
+    }
+  }
+
   const filePath = await resolveBackupPath(filename);
   return restoreBackupFromPath(filePath);
 };
@@ -336,15 +580,28 @@ export const executeBackupScript = async (): Promise<CommandResult> => {
     throw error;
   }
 
-  return runCommand(backupScriptPath, [], path.dirname(backupScriptPath));
+  const result = await runCommand(backupScriptPath, [], path.dirname(backupScriptPath));
+
+  if (backupStorageMode === 'drive') {
+    await ensureDirectory(backupDirectory);
+    await syncLocalBackupsToDrive({ deleteAfterUpload: true, skipExisting: true });
+  }
+
+  return result;
 };
 
 export const persistUploadedBackup = async (tempPath: string, originalName: string): Promise<string> => {
-  await ensureDirectory(backupDirectory);
-
   const sanitizedName = path.basename(originalName).replace(/\s+/g, '_');
   const uniqueSuffix = crypto.randomBytes(6).toString('hex');
   const targetName = `${Date.now()}_${uniqueSuffix}_${sanitizedName}`;
+
+  if (backupStorageMode === 'drive') {
+    await uploadFileToDrive(tempPath, targetName, new Date());
+    logger.info(`[db-backup] Uploaded manual backup ${targetName} to Drive`);
+    return targetName;
+  }
+
+  await ensureDirectory(backupDirectory);
   const destination = path.resolve(backupDirectory, targetName);
 
   if (!isSubPath(backupDirectory, destination)) {
