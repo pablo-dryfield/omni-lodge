@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const shouldSeed = true //process.env.SEED_ACCESS_CONTROL === 'true';
+const shouldSeed = process.env.SEED_ACCESS_CONTROL === 'true';
 
 const log = (message) => {
   console.log(`[access-control] ${message}`);
