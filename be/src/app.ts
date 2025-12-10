@@ -78,7 +78,7 @@ const environment = (process.env.NODE_ENV || 'development').trim();
 const envFile = environment === 'production' ? '.env.prod' : '.env.dev';
 dotenv.config({ path: envFile });
 
-const shouldAlterSchema = (process.env.DB_SYNC_ALTER ?? 'false').toLowerCase() === 'true';
+const shouldAlterSchema = true//(process.env.DB_SYNC_ALTER ?? 'false').toLowerCase() === 'true';
 
 // API Requests limiter
 const apiLimiter = rateLimit({
@@ -183,8 +183,8 @@ const PORT: number = parseInt(process.env.PORT || '3001');
 
 defineAssociations();
 
-const shouldSeedAccessControl = process.env.SEED_ACCESS_CONTROL === 'true';
-const shouldSkipDbSync = process.env.SKIP_DB_SYNC === 'true';
+const shouldSeedAccessControl = true //process.env.SEED_ACCESS_CONTROL === 'true';
+const shouldSkipDbSync = true //process.env.SKIP_DB_SYNC === 'true';
 
 if (shouldAlterSchema) {
   logger.warn('DB_SYNC_ALTER=true: sequelize.sync will attempt to alter existing tables. Prefer running migrations instead.');

@@ -24,7 +24,7 @@ const restoreRole = process.env.DB_BACKUP_ROLE ?? databaseUser;
 const databaseHost = process.env.DB_HOST ?? '127.0.0.1';
 const databasePort = process.env.DB_PORT ?? '5432';
 const adminDatabaseName = process.env.DB_ADMIN_DATABASE ?? 'postgres';
-const shouldAlterSchema = (process.env.DB_SYNC_ALTER ?? 'false').toLowerCase() === 'true';
+const shouldAlterSchema = true //(process.env.DB_SYNC_ALTER ?? 'false').toLowerCase() === 'true';
 const syncOptions = { force: false, alter: shouldAlterSchema } as const;
 type BackupStorageMode = 'local' | 'drive';
 const backupStorageMode: BackupStorageMode =
