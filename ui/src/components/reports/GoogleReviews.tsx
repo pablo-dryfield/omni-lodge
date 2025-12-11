@@ -12,7 +12,12 @@ import {
   Text,
   Group,
   Box,
+  Stack,
+  Paper,
+  Title,
+  useMantineTheme,
 } from "@mantine/core";
+import { useMediaQuery } from "@mantine/hooks";
 import { IconStarFilled } from "@tabler/icons-react";
 import { fetchGoogleReviews } from "../../actions/reviewsActions";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
@@ -31,6 +36,8 @@ const GoogleReviews: React.FC = () => {
   const reviews = reviewsState[0]?.data?.[0]?.data ?? [];
   const nextPageToken = reviewsState[0]?.data?.[0]?.columns[0] ?? '';
   const loaderRef = useRef<HTMLDivElement | null>(null);
+  const theme = useMantineTheme();
+  const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
 
   useEffect(() => {
     dispatch(fetchGoogleReviews({}));
@@ -80,75 +87,131 @@ const GoogleReviews: React.FC = () => {
     return created.getMonth() !== updated.getMonth() || created.getFullYear() !== updated.getFullYear();
   };
 
+  const renderRatingBadge = (starRating?: string) => (
+    <Badge
+      color={ratingColor[starRating as keyof typeof ratingColor] || "gray"}
+      leftSection={<IconStarFilled size={14} />}
+      variant="light"
+    >
+      {starRating ? starRating.charAt(0) + starRating.slice(1).toLowerCase() : "Unknown"}
+    </Badge>
+  );
+
+  const renderStatusBadge = (createTime?: string, updateTime?: string) =>
+    isSuspicious(createTime, updateTime) ? (
+      <Badge color="red" variant="filled">
+        Suspicious
+      </Badge>
+    ) : (
+      <Badge color="green" variant="light">
+        Not Suspicious
+      </Badge>
+    );
+
+  const desktopTable = (
+    <Box style={{ maxHeight: 520, overflowY: "auto" }}>
+      <Table striped highlightOnHover withColumnBorders horizontalSpacing="md" verticalSpacing="sm">
+        <TableThead>
+          <TableTr>
+            <TableTh style={{ minWidth: 160 }}>User</TableTh>
+            <TableTh style={{ minWidth: 110 }}>Rating</TableTh>
+            <TableTh>Comment</TableTh>
+            <TableTh style={{ minWidth: 170 }}>Creation Date</TableTh>
+            <TableTh style={{ minWidth: 170 }}>Update Date</TableTh>
+            <TableTh style={{ minWidth: 130 }}>Status</TableTh>
+          </TableTr>
+        </TableThead>
+        <TableTbody>
+          {reviews.map((review, index) => (
+            <TableTr key={review.reviewId || index}>
+              <TableTd>
+                <Group gap="sm">
+                  <Avatar src={review.reviewer?.profilePhotoUrl} radius="xl" size="md" />
+                  <Text fw={500}>{review.reviewer?.displayName ?? "Anonymous guest"}</Text>
+                </Group>
+              </TableTd>
+              <TableTd>{renderRatingBadge(review.starRating)}</TableTd>
+              <TableTd>
+                <Text size="sm" c="dimmed" style={{ whiteSpace: "pre-wrap" }}>
+                  {review.comment || "No written comment provided."}
+                </Text>
+              </TableTd>
+              <TableTd>
+                <Text size="xs" c="gray.6">
+                  {formatDate(review.createTime)}
+                </Text>
+              </TableTd>
+              <TableTd>
+                <Text size="xs" c="gray.6">
+                  {formatDate(review.updateTime)}
+                </Text>
+              </TableTd>
+              <TableTd>{renderStatusBadge(review.createTime, review.updateTime)}</TableTd>
+            </TableTr>
+          ))}
+        </TableTbody>
+      </Table>
+      <div ref={loaderRef} style={{ height: 1 }} />
+    </Box>
+  );
+
+  const mobileCards = (
+    <Stack gap="sm">
+      {reviews.map((review, index) => (
+        <Paper key={review.reviewId || index} withBorder radius="md" p="md" shadow="xs">
+          <Group justify="space-between" align="flex-start">
+            <Group gap="sm" align="flex-start">
+              <Avatar src={review.reviewer?.profilePhotoUrl} radius="xl" size="md" />
+              <Stack gap={2}>
+                <Text fw={600}>{review.reviewer?.displayName ?? "Anonymous guest"}</Text>
+                <Text size="xs" c="dimmed">
+                  {formatDate(review.createTime)}
+                </Text>
+              </Stack>
+            </Group>
+            {renderRatingBadge(review.starRating)}
+          </Group>
+          <Text size="sm" mt="sm" style={{ whiteSpace: "pre-wrap" }}>
+            {review.comment || "No written comment provided."}
+          </Text>
+          <Group justify="space-between" mt="sm" align="flex-start" gap="xs">
+            <Stack gap={2}>
+              <Text size="xs" c="gray.6">
+                Updated {formatDate(review.updateTime) || "—"}
+              </Text>
+            </Stack>
+            {renderStatusBadge(review.createTime, review.updateTime)}
+          </Group>
+        </Paper>
+      ))}
+      <div ref={loaderRef} style={{ height: 1 }} />
+    </Stack>
+  );
+
   return (
     <Card shadow="sm" padding="lg" radius="md" withBorder>
-      <Text size="xl" fw={700} mb="md">
-        Google Reviews
-      </Text>
-
-      <Box style={{ height: 600, overflowY: "auto" }}>
-        <Table striped highlightOnHover withColumnBorders>
-          <TableThead>
-            <TableTr>
-              <TableTh>User</TableTh>
-              <TableTh>Rating</TableTh>
-              <TableTh>Comment</TableTh>
-              <TableTh>Creation Date</TableTh>
-              <TableTh>Update Date</TableTh>
-              <TableTh>Status</TableTh>
-            </TableTr>
-          </TableThead>
-          <TableTbody>
-            {reviews.map((review, index) => (
-              <TableTr key={review.reviewId || index}>
-                <TableTd>
-                  <Group>
-                    <Avatar src={review.reviewer?.profilePhotoUrl} radius="xl" size="md" />
-                    <Text fw={500}>{review.reviewer?.displayName}</Text>
-                  </Group>
-                </TableTd>
-                <TableTd>
-                  <Badge
-                    color={ratingColor[review.starRating as keyof typeof ratingColor] || "gray"}
-                    leftSection={<IconStarFilled size={14} />}
-                  >
-                    {review.starRating
-                      ? review.starRating.charAt(0) + review.starRating.slice(1).toLowerCase()
-                      : "Unknown"}
-                  </Badge>
-                </TableTd>
-                <TableTd>
-                  <Text size="sm" c="dimmed" lineClamp={4}>
-                    {review.comment}
-                  </Text>
-                </TableTd>
-                <TableTd>
-                  <Text size="xs" c="gray">
-                    {formatDate(review.createTime)}
-                  </Text>
-                </TableTd>
-                <TableTd>
-                  <Text size="xs" c="gray">
-                    {formatDate(review.updateTime)}
-                  </Text>
-                </TableTd>
-                <TableTd>
-                  {isSuspicious(review.createTime, review.updateTime) ? (
-                    <Badge color="red" >
-                      Suspicious
-                    </Badge>
-                  ) : (
-                    <Badge color="green">
-                      Not Suspicious
-                    </Badge>
-                  )}
-                </TableTd>
-              </TableTr>
-            ))}
-          </TableTbody>
-        </Table>
-        <div ref={loaderRef} style={{ height: 1 }} />
-      </Box>
+      <Stack gap="sm">
+        <Group justify="space-between" align="flex-start" wrap="wrap">
+          <div>
+            <Title order={3}>Google Reviews</Title>
+            <Text size="sm" c="dimmed">
+              Real-time sentiment directly from Google so you can read every word guests share about your experience.
+            </Text>
+          </div>
+          <Badge variant="light" color="indigo">
+            Live feed
+          </Badge>
+        </Group>
+        {reviews.length === 0 ? (
+          <Text size="sm" c="dimmed">
+            No reviews available yet.
+          </Text>
+        ) : isMobile ? (
+          mobileCards
+        ) : (
+          desktopTable
+        )}
+      </Stack>
     </Card>
   );
 };

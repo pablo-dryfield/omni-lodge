@@ -5,7 +5,9 @@ export type NavigationIconKey =
   | 'settings'
   | 'calendarMonth'
   | 'accountBalance'
-  | 'formatListNumbered';
+  | 'formatListNumbered'
+  | 'barChart'
+  | 'star';
 
 export type NavigationPage = {
   name: string;

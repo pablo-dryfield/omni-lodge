@@ -10,11 +10,12 @@ import {
   IconTemplate,
   IconUsersGroup,
 } from "@tabler/icons-react";
-import { useAppSelector } from "../../store/hooks";
+import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import {
   makeSelectIsModuleActionAllowed,
   selectModulePermissionsMap,
 } from "../../selectors/accessControlSelectors";
+import { navigateToPage } from "../../actions/navigationActions";
 
 type SchedulingTabDefinition = {
   label: string;
@@ -36,7 +37,7 @@ const BASE_TABS: SchedulingTabDefinition[] = [
 const SchedulingLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
-
+  const dispatch = useAppDispatch();
   const modulePermissions = useAppSelector(selectModulePermissionsMap);
   const selectCanManageTemplates = useMemo(
     () => makeSelectIsModuleActionAllowed("scheduling-builder", "create"),
@@ -94,6 +95,10 @@ const SchedulingLayout = () => {
       navigate(`/scheduling/${availableTabs[0].value}`, { replace: true });
     }
   }, [activeTab, availableTabs, navigate]);
+
+  useEffect(() => {
+    dispatch(navigateToPage("Scheduling"));
+  }, [dispatch]);
 
   if (!availableTabs.length) {
     return (
