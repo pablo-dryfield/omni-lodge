@@ -59,8 +59,14 @@ const reviewsSlice = createSlice({
         fetchTripAdvisorReviews.fulfilled,
         (state, action: PayloadAction<ServerResponse<Partial<Review>>>) => {
           state.tripadvisor[0].loading = false;
-          state.tripadvisor[0].data[0].data = action.payload[0].data;
-          state.tripadvisor[0].data[0].columns[0] = action.payload[0].columns[0] ?? "";
+          const metadata = action.payload[0].columns?.[0] ?? {};
+          const offset = metadata?.offset ?? 0;
+          if (offset > 0) {
+            state.tripadvisor[0].data[0].data.push(...action.payload[0].data);
+          } else {
+            state.tripadvisor[0].data[0].data = action.payload[0].data;
+          }
+          state.tripadvisor[0].data[0].columns[0] = metadata;
           state.tripadvisor[0].error = null;
         },
       )

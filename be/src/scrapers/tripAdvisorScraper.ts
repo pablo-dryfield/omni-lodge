@@ -69,7 +69,7 @@ type TripAdvisorApiPage = {
 const GRAPHQL_ENDPOINT = 'https://www.tripadvisor.com/data/graphql/ids';
 
 const LOCATION_ID = Number.parseInt(process.env.TRIP_ADVISOR_LOCATION_ID ?? '2725527', 10);
-const PAGE_SIZE = Number.parseInt(process.env.TRIP_ADVISOR_PAGE_SIZE ?? '20', 10);
+export const TRIP_ADVISOR_PAGE_SIZE = Number.parseInt(process.env.TRIP_ADVISOR_PAGE_SIZE ?? '20', 10);
 const LANGUAGE = process.env.TRIP_ADVISOR_LANGUAGE ?? 'en';
 
 const GRAPHQL_HEADERS = {
@@ -100,7 +100,7 @@ const GRAPHQL_BODY_TEMPLATE = [
     variables: {
       locationId: LOCATION_ID,
       filters: [] as Array<{ key: string; value: string }>,
-      limit: PAGE_SIZE,
+      limit: TRIP_ADVISOR_PAGE_SIZE,
       offset: 0,
       sortType: null as string | null,
       sortBy: 'SERVER_DETERMINED',
@@ -119,7 +119,7 @@ const clonePayload = () => JSON.parse(JSON.stringify(GRAPHQL_BODY_TEMPLATE)) as 
 const requestTripAdvisorData = async (offset: number) => {
   const body = clonePayload();
   body[0].variables.offset = offset;
-  body[0].variables.limit = PAGE_SIZE;
+  body[0].variables.limit = TRIP_ADVISOR_PAGE_SIZE;
   return axios.post(GRAPHQL_ENDPOINT, body, { headers: GRAPHQL_HEADERS, timeout: 15000 });
 };
 
