@@ -1,10 +1,11 @@
-import { useEffect } from "react";
+﻿import { useEffect } from "react";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
-import { Badge, Button, Group, Stack, Text, Title } from "@mantine/core";
+import { Badge, Button, Group, Stack, Text, Title, useMantineTheme } from "@mantine/core";
 import { useAppDispatch } from "../../store/hooks";
 import { navigateToPage } from "../../actions/navigationActions";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
+import { useMediaQuery } from "@mantine/hooks";
 
 const quickLinks = [
   { label: "Transactions", path: "/finance/transactions" },
@@ -20,6 +21,8 @@ const FinanceLayout = () => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const location = useLocation();
+  const theme = useMantineTheme();
+  const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
 
   useEffect(() => {
     dispatch(navigateToPage("Finance"));
@@ -29,13 +32,13 @@ const FinanceLayout = () => {
     <PageAccessGuard pageSlug={PAGE_SLUGS.finance}>
       <Stack gap="lg">
         <Stack gap="xs">
-          <Group justify="space-between" align="flex-start">
-            <div>
+          <Group justify="space-between" align="flex-start" gap="sm" wrap="wrap">
+            <Stack gap={4} style={{ flex: "1 1 260px", minWidth: 0 }}>
               <Title order={2}>Finance</Title>
               <Text size="sm" c="dimmed">
                 Track income, expenses, vendors, clients, and approvals in one place.
               </Text>
-            </div>
+            </Stack>
             <Badge color="blue" variant="light" size="lg">
               Finance Hub
             </Badge>
@@ -49,6 +52,7 @@ const FinanceLayout = () => {
                   variant={active ? "filled" : "light"}
                   color={active ? "blue" : "gray"}
                   onClick={() => navigate(link.path)}
+                  fullWidth={isMobile}
                 >
                   {link.label}
                 </Button>
@@ -63,4 +67,6 @@ const FinanceLayout = () => {
 };
 
 export default FinanceLayout;
+
+
 

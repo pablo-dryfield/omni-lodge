@@ -4,13 +4,16 @@ import {
   Button,
   Group,
   Modal,
+  ScrollArea,
   Select,
+  SimpleGrid,
   Stack,
   Switch,
   Table,
   Textarea,
   TextInput,
   Title,
+  useMantineTheme,
 } from "@mantine/core";
 import { IconEdit, IconPlus, IconTrash } from "@tabler/icons-react";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
@@ -23,6 +26,7 @@ import {
 } from "../../actions/financeActions";
 import { selectFinanceCategories, selectFinanceVendors } from "../../selectors/financeSelectors";
 import { FinanceVendor } from "../../types/finance";
+import { useMediaQuery } from "@mantine/hooks";
 
 type DraftVendor = {
   name: string;
@@ -51,6 +55,8 @@ const FinanceVendors = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingVendor, setEditingVendor] = useState<FinanceVendor | null>(null);
   const [draft, setDraft] = useState<DraftVendor>(defaultDraft);
+  const theme = useMantineTheme();
+  const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
 
   useEffect(() => {
     dispatch(fetchFinanceVendors());
@@ -79,7 +85,7 @@ const FinanceVendors = () => {
         .filter((category) => category.isActive)
         .map((category) => ({
           value: String(category.id),
-          label: `${category.kind === "income" ? "Income" : "Expense"} Â- ${category.name}`,
+          label: `${category.kind === "income" ? "Income" : "Expense"} - ${category.name}`,
         })),
     [categories.data],
   );
@@ -119,7 +125,7 @@ const FinanceVendors = () => {
 
   return (
     <Stack gap="lg">
-      <Group justify="space-between">
+      <Group justify="space-between" align={isMobile ? "stretch" : "center"} gap="sm" wrap="wrap">
         <Title order={3}>Vendors</Title>
         <Button
           leftSection={<IconPlus size={18} />}
@@ -127,56 +133,59 @@ const FinanceVendors = () => {
             setEditingVendor(null);
             setModalOpen(true);
           }}
+          fullWidth={isMobile}
         >
           New Vendor
         </Button>
       </Group>
 
-      <Table striped withColumnBorders highlightOnHover>
-        <Table.Thead>
-          <Table.Tr>
-            <Table.Th>Name</Table.Th>
-            <Table.Th>Tax ID</Table.Th>
-            <Table.Th>Email</Table.Th>
-            <Table.Th>Phone</Table.Th>
-            <Table.Th>Default Category</Table.Th>
-            <Table.Th>Status</Table.Th>
-            <Table.Th />
-          </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {sortedVendors.map((vendor) => (
-            <Table.Tr key={vendor.id}>
-              <Table.Td>{vendor.name}</Table.Td>
-              <Table.Td>{vendor.taxId ?? "â€”"}</Table.Td>
-              <Table.Td>{vendor.email ?? "â€”"}</Table.Td>
-              <Table.Td>{vendor.phone ?? "â€”"}</Table.Td>
-              <Table.Td>
-                {vendor.defaultCategoryId
-                  ? categories.data.find((category) => category.id === vendor.defaultCategoryId)?.name ?? "â€”"
-                  : "â€”"}
-              </Table.Td>
-              <Table.Td>{vendor.isActive ? "Active" : "Inactive"}</Table.Td>
-              <Table.Td width={120}>
-                <Group gap={4} justify="flex-end">
-                  <ActionIcon
-                    variant="subtle"
-                    onClick={() => {
-                      setEditingVendor(vendor);
-                      setModalOpen(true);
-                    }}
-                  >
-                    <IconEdit size={18} />
-                  </ActionIcon>
-                  <ActionIcon color="red" variant="subtle" onClick={() => handleDelete(vendor.id)}>
-                    <IconTrash size={18} />
-                  </ActionIcon>
-                </Group>
-              </Table.Td>
+      <ScrollArea offsetScrollbars type="auto">
+        <Table striped withColumnBorders highlightOnHover miw={900}>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Name</Table.Th>
+              <Table.Th>Tax ID</Table.Th>
+              <Table.Th>Email</Table.Th>
+              <Table.Th>Phone</Table.Th>
+              <Table.Th>Default Category</Table.Th>
+              <Table.Th>Status</Table.Th>
+              <Table.Th />
             </Table.Tr>
-          ))}
-        </Table.Tbody>
-      </Table>
+          </Table.Thead>
+          <Table.Tbody>
+            {sortedVendors.map((vendor) => (
+              <Table.Tr key={vendor.id}>
+                <Table.Td>{vendor.name}</Table.Td>
+                <Table.Td>{vendor.taxId ?? ""}</Table.Td>
+                <Table.Td>{vendor.email ?? ""}</Table.Td>
+                <Table.Td>{vendor.phone ?? ""}</Table.Td>
+                <Table.Td>
+                  {vendor.defaultCategoryId
+                    ? categories.data.find((category) => category.id === vendor.defaultCategoryId)?.name ?? ""
+                    : ""}
+                </Table.Td>
+                <Table.Td>{vendor.isActive ? "Active" : "Inactive"}</Table.Td>
+                <Table.Td width={120}>
+                  <Group gap={4} justify="flex-end">
+                    <ActionIcon
+                      variant="subtle"
+                      onClick={() => {
+                        setEditingVendor(vendor);
+                        setModalOpen(true);
+                      }}
+                    >
+                      <IconEdit size={18} />
+                    </ActionIcon>
+                    <ActionIcon color="red" variant="subtle" onClick={() => handleDelete(vendor.id)}>
+                      <IconTrash size={18} />
+                    </ActionIcon>
+                  </Group>
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      </ScrollArea>
 
       <Modal
         opened={modalOpen}
@@ -186,6 +195,7 @@ const FinanceVendors = () => {
         }}
         title={editingVendor ? "Edit Vendor" : "New Vendor"}
         size="lg"
+        scrollAreaComponent={ScrollArea.Autosize}
       >
         <Stack gap="md">
           <TextInput
@@ -194,7 +204,7 @@ const FinanceVendors = () => {
             value={draft.name}
             onChange={(event) => setDraft((state) => ({ ...state, name: event.currentTarget.value }))}
           />
-          <Group grow>
+          <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
             <TextInput
               label="Tax ID"
               value={draft.taxId ?? ""}
@@ -210,7 +220,7 @@ const FinanceVendors = () => {
               value={draft.phone ?? ""}
               onChange={(event) => setDraft((state) => ({ ...state, phone: event.currentTarget.value || null }))}
             />
-          </Group>
+          </SimpleGrid>
           <Select
             label="Default Category"
             placeholder="Optional"
@@ -236,11 +246,13 @@ const FinanceVendors = () => {
             checked={draft.isActive}
             onChange={(event) => setDraft((state) => ({ ...state, isActive: event.currentTarget.checked }))}
           />
-          <Group justify="flex-end" mt="md">
-            <Button variant="light" onClick={() => setModalOpen(false)}>
+          <Group justify="flex-end" gap="sm" wrap="wrap" mt="md">
+            <Button variant="light" onClick={() => setModalOpen(false)} fullWidth={isMobile}>
               Cancel
             </Button>
-            <Button onClick={handleSubmit}>{editingVendor ? "Save changes" : "Create vendor"}</Button>
+            <Button onClick={handleSubmit} fullWidth={isMobile}>
+              {editingVendor ? "Save changes" : "Create vendor"}
+            </Button>
           </Group>
         </Stack>
       </Modal>
@@ -249,5 +261,7 @@ const FinanceVendors = () => {
 };
 
 export default FinanceVendors;
+
+
 
 

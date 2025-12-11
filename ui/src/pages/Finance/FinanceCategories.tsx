@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import {
   ActionIcon,
   Badge,
@@ -6,12 +6,15 @@ import {
   Card,
   Group,
   Modal,
+  ScrollArea,
   Select,
+  SimpleGrid,
   Stack,
   Switch,
   Text,
   TextInput,
   Title,
+  useMantineTheme,
 } from "@mantine/core";
 import { IconEdit, IconPlus, IconTrash } from "@tabler/icons-react";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
@@ -23,6 +26,7 @@ import {
 } from "../../actions/financeActions";
 import { selectFinanceCategories } from "../../selectors/financeSelectors";
 import type { FinanceCategory } from "../../types/finance";
+import { useMediaQuery } from "@mantine/hooks";
 
 type DraftCategory = {
   name: string;
@@ -46,6 +50,8 @@ const FinanceCategories = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<FinanceCategory | null>(null);
   const [draft, setDraft] = useState<DraftCategory>(DEFAULT_DRAFT);
+  const theme = useMantineTheme();
+  const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
 
   useEffect(() => {
     dispatch(fetchFinanceCategories());
@@ -94,7 +100,7 @@ const FinanceCategories = () => {
       nodes.forEach((node) => {
         options.push({
           value: String(node.id),
-          label: `${"• ".repeat(depth)}${node.name} (${node.kind === "income" ? "Income" : "Expense"})`,
+          label: `${" ".repeat(depth)}${node.name} (${node.kind === "income" ? "Income" : "Expense"})`,
         });
         if (node.children.length > 0) {
           traverse(node.children, depth + 1);
@@ -187,7 +193,7 @@ const FinanceCategories = () => {
 
   return (
     <Stack gap="lg">
-      <Group justify="space-between">
+      <Group justify="space-between" align={isMobile ? "stretch" : "center"} gap="sm" wrap="wrap">
         <Title order={3}>Categories</Title>
         <Button
           leftSection={<IconPlus size={18} />}
@@ -195,6 +201,7 @@ const FinanceCategories = () => {
             setEditingCategory(null);
             setModalOpen(true);
           }}
+          fullWidth={isMobile}
         >
           New Category
         </Button>
@@ -218,6 +225,7 @@ const FinanceCategories = () => {
         }}
         title={editingCategory ? "Edit Category" : "New Category"}
         size="lg"
+        scrollAreaComponent={ScrollArea.Autosize}
       >
         <Stack gap="md">
           <TextInput
@@ -226,7 +234,7 @@ const FinanceCategories = () => {
             value={draft.name}
             onChange={(event) => setDraft((state) => ({ ...state, name: event.currentTarget.value }))}
           />
-          <Group grow>
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
             <Select
               label="Kind"
               data={[
@@ -252,17 +260,19 @@ const FinanceCategories = () => {
               clearable
               searchable
             />
-          </Group>
+          </SimpleGrid>
           <Switch
             label="Category is active"
             checked={draft.isActive}
             onChange={(event) => setDraft((state) => ({ ...state, isActive: event.currentTarget.checked }))}
           />
-          <Group justify="flex-end">
-            <Button variant="light" onClick={() => setModalOpen(false)}>
+          <Group justify="flex-end" gap="sm" wrap="wrap">
+            <Button variant="light" onClick={() => setModalOpen(false)} fullWidth={isMobile}>
               Cancel
             </Button>
-            <Button onClick={handleSubmit}>{editingCategory ? "Save changes" : "Create category"}</Button>
+            <Button onClick={handleSubmit} fullWidth={isMobile}>
+              {editingCategory ? "Save changes" : "Create category"}
+            </Button>
           </Group>
         </Stack>
       </Modal>
@@ -271,3 +281,5 @@ const FinanceCategories = () => {
 };
 
 export default FinanceCategories;
+
+

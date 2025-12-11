@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Card,
@@ -222,7 +222,7 @@ const FinanceReports = () => {
         <Stack gap={4}>
           <Title order={3}>Finance reports</Title>
           <Text size="sm" c="dimmed">
-            Showing {startDate.format("MMM YYYY")} – {endDate.format("MMM YYYY")}
+            Showing {startDate.format("MMM YYYY")}  {endDate.format("MMM YYYY")}
           </Text>
         </Stack>
         <Group wrap="wrap" gap="sm">
@@ -607,7 +607,7 @@ const FinanceReports = () => {
                           <Table.Td c={row.outstanding >= 0 ? "red" : "green"}>
                             {formatCurrency(row.outstanding)}
                           </Table.Td>
-                          <Table.Td>{row.lastActivity ?? "—"}</Table.Td>
+                          <Table.Td>{row.lastActivity ?? ""}</Table.Td>
                         </Table.Tr>
                       ))}
                     </Table.Tbody>
@@ -642,7 +642,7 @@ const FinanceReports = () => {
                           <Table.Td c={row.outstanding >= 0 ? "green" : "red"}>
                             {formatCurrency(row.outstanding)}
                           </Table.Td>
-                          <Table.Td>{row.lastActivity ?? "—"}</Table.Td>
+                          <Table.Td>{row.lastActivity ?? ""}</Table.Td>
                         </Table.Tr>
                       ))}
                     </Table.Tbody>
@@ -658,3 +658,5 @@ const FinanceReports = () => {
 };
 
 export default FinanceReports;
+
+

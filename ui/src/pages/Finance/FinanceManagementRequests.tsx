@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import {
   ActionIcon,
   Badge,
@@ -104,7 +104,7 @@ const FinanceManagementRequests = () => {
                   </Badge>
                 </Table.Td>
                 <Table.Td>{dayjs(request.createdAt).format("YYYY-MM-DD HH:mm")}</Table.Td>
-                <Table.Td>{request.dueAt ? dayjs(request.dueAt).format("YYYY-MM-DD") : "—"}</Table.Td>
+                <Table.Td>{request.dueAt ? dayjs(request.dueAt).format("YYYY-MM-DD") : ""}</Table.Td>
                 <Table.Td width={140}>
                   <Group gap={4} justify="flex-end">
                     <ActionIcon variant="subtle" onClick={() => setSelectedRequest(request)}>
@@ -216,4 +216,6 @@ const FinanceManagementRequests = () => {
 };
 
 export default FinanceManagementRequests;
+
+
 

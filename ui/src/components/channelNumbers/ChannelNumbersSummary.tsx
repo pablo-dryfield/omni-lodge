@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react';
 import {
   Alert,
   Badge,
+  Box,
   Button,
   Center,
   Group,
@@ -20,7 +21,9 @@ import {
   Textarea,
   ThemeIcon,
   UnstyledButton,
+  useMantineTheme,
 } from '@mantine/core';
+import { useMediaQuery } from '@mantine/hooks';
 import { DatePickerInput } from '@mantine/dates';
 import { IconAlertCircle, IconChartBar, IconInfoCircle } from '@tabler/icons-react';
 import dayjs from 'dayjs';
@@ -155,6 +158,8 @@ const mergeCellStyles = (...styles: Array<CSSProperties | undefined>) =>
 const ChannelNumbersSummary = () => {
   const dispatch = useAppDispatch();
   useFinanceBootstrap();
+  const theme = useMantineTheme();
+  const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
   const accountsState = useAppSelector(selectFinanceAccounts);
   const categoriesState = useAppSelector(selectFinanceCategories);
   const clientsState = useAppSelector(selectFinanceClients);
@@ -717,10 +722,10 @@ const ChannelNumbersSummary = () => {
     <Stack mt="lg">
       <Paper withBorder p="md">
         <Stack gap="sm">
-          <Group justify="space-between" align="flex-end">
-            <Stack gap={4}>
+          <Group justify="space-between" align={isMobile ? 'stretch' : 'flex-end'} gap="sm" wrap="wrap">
+            <Stack gap={4} style={{ flex: '1 1 260px', minWidth: 0 }}>
               <Text fw={600}>Reporting period</Text>
-              <Group gap="xs">
+              <Group gap="xs" wrap="wrap">
                 <Button
                   size="xs"
                   variant={preset === 'thisMonth' ? 'filled' : 'light'}
@@ -744,20 +749,26 @@ const ChannelNumbersSummary = () => {
                 </Button>
               </Group>
             </Stack>
-            {preset === 'custom' ? (
-              <DatePickerInput
-                type="range"
-                value={range}
-                onChange={setRange}
-                maxDate={dayjs().endOf('day').toDate()}
-                placeholder="Select range"
-                allowSingleDateInRange
-              />
-            ) : (
-              <Text size="sm" c="dimmed">
-                {formatDisplayRange(range)}
-              </Text>
-            )}
+            <Box
+              w={isMobile ? '100%' : 'auto'}
+              style={{ display: 'flex', justifyContent: isMobile ? 'flex-start' : 'flex-end' }}
+            >
+              {preset === 'custom' ? (
+                <DatePickerInput
+                  type="range"
+                  value={range}
+                  onChange={setRange}
+                  maxDate={dayjs().endOf('day').toDate()}
+                  placeholder="Select range"
+                  allowSingleDateInRange
+                  style={{ width: isMobile ? '100%' : 260 }}
+                />
+              ) : (
+                <Text size="sm" c="dimmed" style={{ textAlign: isMobile ? 'left' : 'right', width: '100%' }}>
+                  {formatDisplayRange(range)}
+                </Text>
+              )}
+            </Box>
           </Group>
           {selectableProductTypes.length > 0 && (
             <MultiSelect
@@ -793,17 +804,24 @@ const ChannelNumbersSummary = () => {
             {cashSummary && (
               <Paper withBorder p="md">
                 <Stack gap="sm">
-                  <Group justify="space-between" align="flex-end">
-                    <div>
+                  <Group
+                    justify="space-between"
+                    align={isMobile ? 'flex-start' : 'flex-end'}
+                    gap="sm"
+                    wrap="wrap"
+                  >
+                    <div style={{ flex: '1 1 260px', minWidth: 0 }}>
                       <Text fw={600}>Cash collections</Text>
                       <Text size="sm" c="dimmed">
                         Outstanding amounts recorded for cash payment channels
                       </Text>
                     </div>
                     {!cashRangeIsCanonical && (
-                      <Text size="sm" c="red">
-                        Collections can only be recorded when viewing a full calendar month.
-                      </Text>
+                      <Box w={isMobile ? '100%' : 'auto'}>
+                        <Text size="sm" c="red" ta={isMobile ? 'left' : 'right'}>
+                          Collections can only be recorded when viewing a full calendar month.
+                        </Text>
+                      </Box>
                     )}
                   </Group>
                   {cashRows.length === 0 ? (
@@ -811,12 +829,13 @@ const ChannelNumbersSummary = () => {
                       No cash activity recorded for the selected period.
                     </Text>
                   ) : (
-                    <ScrollArea>
+                    <ScrollArea offsetScrollbars type="auto">
                       <Table
                         highlightOnHover
                         withColumnBorders
                         horizontalSpacing="sm"
                         verticalSpacing="xs"
+                        miw={600}
                       >
                         <thead>
                           <tr>
@@ -859,7 +878,7 @@ const ChannelNumbersSummary = () => {
                     </ScrollArea>
                   )}
                   {cashTotals.length > 0 && (
-                    <Group gap="lg">
+                    <Group gap="lg" wrap="wrap">
                       {cashTotals.map((total) => (
                         <Stack gap={0} key={total.currency}>
                           <Text size="sm" c="dimmed">
@@ -877,8 +896,15 @@ const ChannelNumbersSummary = () => {
                   {cashEntries.length > 0 && (
                     <Stack gap="xs">
                       <Text fw={600}>Ticket and note summary</Text>
-                      <ScrollArea h={240}>
-                        <Table striped withColumnBorders highlightOnHover horizontalSpacing="sm" verticalSpacing="xs">
+                      <ScrollArea h={240} offsetScrollbars type="auto">
+                        <Table
+                          striped
+                          withColumnBorders
+                          highlightOnHover
+                          horizontalSpacing="sm"
+                          verticalSpacing="xs"
+                          miw={720}
+                        >
                           <thead>
                             <tr>
                               <th style={{ width: 140 }}>Date</th>
