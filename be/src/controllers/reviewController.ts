@@ -118,8 +118,8 @@ export const getTripAdvisorReviews = async (req: Request, res: Response) => {
     const normalized = scrapedReviews.map((review, index) => ({
       reviewId: review.reviewId ?? `tripadvisor-${index}-${review.date ?? Date.now()}`,
       comment: review.description ?? "",
-      createTime: review.date ?? new Date().toISOString(),
-      updateTime: review.date ?? new Date().toISOString(),
+      createTime: review.createdDate ?? review.date ?? new Date().toISOString(),
+      updateTime: review.publishedDate ?? review.date ?? new Date().toISOString(),
       starRating: mapScoreToStarRating(review.score),
       reviewer: {
         displayName: review.name ?? "TripAdvisor guest",
