@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Card,
   Avatar,
@@ -25,25 +25,77 @@ import { fetchTripAdvisorReviews } from "../../actions/reviewsActions";
 const ratingColor = {
   ONE: "red",
   TWO: "red",
-  THREE: "yellow",
+  THREE: "red",
   FOUR: "blue",
   FIVE: "green",
 };
+
+const INITIAL_VISIBLE_COUNT = 40;
+const VISIBLE_BATCH_SIZE = 40;
 
 const TripAdvisorReviews: React.FC = () => {
   const dispatch = useAppDispatch();
   const reviewsState = useAppSelector((state) => state.reviews.tripadvisor);
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
+  const loaderRef = useRef<HTMLDivElement | null>(null);
 
   const tripAdvisorState = reviewsState?.[0];
   const reviews = tripAdvisorState?.data?.[0]?.data ?? [];
+
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
+  const visibleReviews = reviews.slice(0, visibleCount);
 
   useEffect(() => {
     if (!tripAdvisorState?.loading && reviews.length === 0) {
       dispatch(fetchTripAdvisorReviews());
     }
   }, [dispatch, tripAdvisorState?.loading, reviews.length]);
+
+  useEffect(() => {
+    setVisibleCount(INITIAL_VISIBLE_COUNT);
+  }, [reviews.length]);
+
+  useEffect(() => {
+    const sentinel = loaderRef.current;
+    if (!sentinel) return undefined;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const first = entries[0];
+        if (first.isIntersecting && visibleCount < reviews.length) {
+          setVisibleCount((prev) => Math.min(prev + VISIBLE_BATCH_SIZE, reviews.length));
+        }
+      },
+      { threshold: 1 },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [visibleCount, reviews.length]);
+
+  const formatDate = (dateStr?: string) => {
+    if (!dateStr) return "";
+    const date = new Date(dateStr);
+    const hasTime =
+      date.getUTCHours() !== 0 || date.getUTCMinutes() !== 0 || date.getUTCSeconds() !== 0;
+    return date.toLocaleString("en-GB", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: hasTime ? "2-digit" : undefined,
+      minute: hasTime ? "2-digit" : undefined,
+      second: hasTime ? "2-digit" : undefined,
+      timeZone: "UTC",
+    });
+  };
+
+  const isSuspicious = (createTime?: string, updateTime?: string) => {
+    if (!createTime || !updateTime) return false;
+    const created = new Date(createTime);
+    const updated = new Date(updateTime);
+    return created.getMonth() !== updated.getMonth() || created.getFullYear() !== updated.getFullYear();
+  };
 
   const renderRatingBadge = (starRating?: string) => (
     <Badge
@@ -55,14 +107,14 @@ const TripAdvisorReviews: React.FC = () => {
     </Badge>
   );
 
-  const renderStatusBadge = (date?: string) =>
-    date ? (
-      <Badge color="green" variant="light">
-        Verified
+  const renderStatusBadge = (createTime?: string, updateTime?: string) =>
+    isSuspicious(createTime, updateTime) ? (
+      <Badge color="red" variant="filled">
+        Suspicious
       </Badge>
     ) : (
-      <Badge color="yellow" variant="light">
-        Undated
+      <Badge color="green" variant="light">
+        Not Suspicious
       </Badge>
     );
 
@@ -74,12 +126,13 @@ const TripAdvisorReviews: React.FC = () => {
             <TableTh style={{ minWidth: 160 }}>User</TableTh>
             <TableTh style={{ minWidth: 110 }}>Rating</TableTh>
             <TableTh>Comment</TableTh>
-            <TableTh style={{ minWidth: 170 }}>Date</TableTh>
+            <TableTh style={{ minWidth: 170 }}>Creation Date</TableTh>
+            <TableTh style={{ minWidth: 170 }}>Update Date</TableTh>
             <TableTh style={{ minWidth: 130 }}>Status</TableTh>
           </TableTr>
         </TableThead>
         <TableTbody>
-          {reviews.map((review, index) => (
+          {visibleReviews.map((review, index) => (
             <TableTr key={review.reviewId || index}>
               <TableTd>
                 <Group gap="sm">
@@ -95,20 +148,26 @@ const TripAdvisorReviews: React.FC = () => {
               </TableTd>
               <TableTd>
                 <Text size="xs" c="gray.6">
-                  {review.createTime ? new Date(review.createTime).toLocaleDateString() : "—"}
+                  {formatDate(review.createTime)}
                 </Text>
               </TableTd>
-              <TableTd>{renderStatusBadge(review.createTime)}</TableTd>
+              <TableTd>
+                <Text size="xs" c="gray.6">
+                  {formatDate(review.updateTime)}
+                </Text>
+              </TableTd>
+              <TableTd>{renderStatusBadge(review.createTime, review.updateTime)}</TableTd>
             </TableTr>
           ))}
         </TableTbody>
       </Table>
+      <div ref={loaderRef} style={{ height: 1 }} />
     </Box>
   );
 
   const mobileCards = (
     <Stack gap="sm">
-      {reviews.map((review, index) => (
+      {visibleReviews.map((review, index) => (
         <Paper key={review.reviewId || index} withBorder radius="md" p="md" shadow="xs">
           <Group justify="space-between" align="flex-start">
             <Group gap="sm" align="flex-start">
@@ -116,7 +175,7 @@ const TripAdvisorReviews: React.FC = () => {
               <Stack gap={2}>
                 <Text fw={600}>{review.reviewer?.displayName ?? "TripAdvisor guest"}</Text>
                 <Text size="xs" c="dimmed">
-                  {review.createTime ? new Date(review.createTime).toLocaleDateString() : ""}
+                  {formatDate(review.createTime)}
                 </Text>
               </Stack>
             </Group>
@@ -128,13 +187,14 @@ const TripAdvisorReviews: React.FC = () => {
           <Group justify="space-between" mt="sm" align="flex-start" gap="xs">
             <Stack gap={2}>
               <Text size="xs" c="gray.6">
-                Added {review.updateTime ? new Date(review.updateTime).toLocaleDateString() : "-"}
+                Updated {formatDate(review.updateTime) || "-"}
               </Text>
             </Stack>
-            {renderStatusBadge(review.createTime)}
+            {renderStatusBadge(review.createTime, review.updateTime)}
           </Group>
         </Paper>
       ))}
+      <div ref={loaderRef} style={{ height: 1 }} />
     </Stack>
   );
 
@@ -145,12 +205,11 @@ const TripAdvisorReviews: React.FC = () => {
           <div>
             <Title order={3}>TripAdvisor Reviews</Title>
             <Text size="sm" c="dimmed">
-              Latest TripAdvisor comments gathered via automated scraping. Use this feed to spot patterns that
-              differ from Google feedback.
+              Mirrors the Google layout so both feeds feel consistent while you scroll through the full TripAdvisor history.
             </Text>
           </div>
-          <Badge variant="outline" color="teal">
-            Scraped feed
+          <Badge variant="light" color="teal">
+            Live feed
           </Badge>
         </Group>
         {tripAdvisorState?.loading ? (

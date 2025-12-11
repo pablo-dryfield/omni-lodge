@@ -70,17 +70,21 @@ const GoogleReviews: React.FC = () => {
 }, [dispatch, nextPageToken]);
 
 
-  const formatDate = (dateStr?: string) =>
-    dateStr
-      ? new Date(dateStr).toLocaleDateString("en-GB", {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        })
-      : "";
+  const formatDate = (dateStr?: string) => {
+    if (!dateStr) return "";
+    const date = new Date(dateStr);
+    const hasTime =
+      date.getUTCHours() !== 0 || date.getUTCMinutes() !== 0 || date.getUTCSeconds() !== 0;
+    return date.toLocaleString("en-GB", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: hasTime ? "2-digit" : undefined,
+      minute: hasTime ? "2-digit" : undefined,
+      second: hasTime ? "2-digit" : undefined,
+      timeZone: "UTC",
+    });
+  };
 
   const isSuspicious = (createTime?: string, updateTime?: string) => {
     if (!createTime || !updateTime) return false;
