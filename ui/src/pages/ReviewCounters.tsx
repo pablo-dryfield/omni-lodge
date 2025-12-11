@@ -16,8 +16,7 @@ const ReviewCounters = () => {
           <Title order={2}>Reviews</Title>
         </div>
         <Tabs defaultValue="overview" radius="md" variant="outline">
-          <Tabs.List>
-            
+          <Tabs.List>  
             <Tabs.Tab value="google">Google Reviews</Tabs.Tab>
             <Tabs.Tab value="tripadvisor">TripAdvisor Reviews</Tabs.Tab>
             <Tabs.Tab value="getyourguide">GetYourGuide Reviews</Tabs.Tab>
