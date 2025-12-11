@@ -112,6 +112,14 @@ const requestBlocks = async (page: Page, body: Record<string, any>) =>
         }
       });
 
+      const getCookieValue = (name: string): string | undefined => {
+        return (
+          cookieMap[name] ??
+          cookieMap[name.replace(/-/g, '_')] ??
+          cookieMap[name.replace(/_/g, '-')]
+        );
+      };
+
       const headers = new Headers({
         'content-type': 'application/json',
         accept: 'application/json, text/plain, */*',
@@ -140,15 +148,18 @@ const requestBlocks = async (page: Page, body: Record<string, any>) =>
         'x-gyg-time-zone': 'Europe/Warsaw',
       });
 
-      if (cookieMap.visitor_id) {
-        headers.set('visitor-id', cookieMap.visitor_id);
-        headers.set('x-gyg-visitor-id', cookieMap.visitor_id);
+      const visitorId = getCookieValue('visitor-id');
+      if (visitorId) {
+        headers.set('visitor-id', visitorId);
+        headers.set('x-gyg-visitor-id', visitorId);
       }
-      if (cookieMap.csrfToken) {
-        headers.set('x-gyg-csrf-token', cookieMap.csrfToken);
+      const csrfToken = getCookieValue('csrfToken') ?? getCookieValue('csrf-token');
+      if (csrfToken) {
+        headers.set('x-gyg-csrf-token', csrfToken);
       }
-      if (cookieMap.session_id) {
-        headers.set('x-gyg-session-id', cookieMap.session_id);
+      const sessionId = getCookieValue('session-id');
+      if (sessionId) {
+        headers.set('x-gyg-session-id', sessionId);
       }
 
       const response = await fetch(endpoint, {
