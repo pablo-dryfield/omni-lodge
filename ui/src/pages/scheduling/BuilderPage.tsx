@@ -3375,13 +3375,20 @@ const BuilderPage = () => {
 
       <Card radius="lg" shadow="xl" padding="lg" style={{ background: palette.heroGradient, color: "#fff" }}>
         <Stack gap="md">
-          <Group justify="space-between" align="center" wrap="wrap">
+          <Group
+            justify={isMobile ? "center" : "space-between"}
+            align={isMobile ? "stretch" : "center"}
+            wrap="wrap"
+            gap="sm"
+            style={{ flexDirection: isMobile ? "column" : "row" }}
+          >
             <Button
               variant="white"
               color="dark"
               leftSection={<IconChevronLeft size={16} />}
               onClick={() => handleNavigateWeek(-1)}
               disabled={loading || !canNavigateBackward}
+              fullWidth={isMobile}
             >
               Previous Week
             </Button>
@@ -3408,17 +3415,24 @@ const BuilderPage = () => {
               rightSection={<IconChevronRight size={16} />}
               onClick={() => handleNavigateWeek(1)}
               disabled={loading || !canNavigateForward}
+              fullWidth={isMobile}
             >
               Next Week
             </Button>
           </Group>
-          <Group justify="center" gap="sm" wrap="wrap">
+          <Group
+            justify="center"
+            gap="sm"
+            wrap="wrap"
+            style={{ flexDirection: isMobile ? "column" : "row" }}
+          >
             <Button
               variant="white"
               color="yellow"
               leftSection={<IconCalendarPlus size={16} />}
               onClick={handleEnsureCurrentAndNextWeeks}
               loading={ensureWeeksLoading}
+              fullWidth={isMobile}
             >
               Ensure current & next week
             </Button>
@@ -3428,6 +3442,7 @@ const BuilderPage = () => {
               leftSection={<IconPlus size={16} />}
               onClick={() => setShowAddInstance(true)}
               disabled={!canModifyWeek}
+              fullWidth={isMobile}
             >
               Add shift
             </Button>
@@ -3436,6 +3451,7 @@ const BuilderPage = () => {
               color="teal"
               onClick={handleOpenGenerateInstancesModal}
               disabled={!canModifyWeek || templateOptions.length === 0}
+              fullWidth={isMobile}
             >
               Generate shift instances
             </Button>
@@ -3444,6 +3460,7 @@ const BuilderPage = () => {
               color="red"
               onClick={() => setClearInstancesModalOpen(true)}
               disabled={!canModifyWeek || !hasWeek || shiftInstances.length === 0}
+              fullWidth={isMobile}
             >
               Clear week
             </Button>
@@ -3453,6 +3470,7 @@ const BuilderPage = () => {
               onClick={handleAutoAssign}
               loading={autoAssignMutation.isPending}
               disabled={!canModifyWeek}
+              fullWidth={isMobile}
             >
               Auto assign volunteers
             </Button>
@@ -3462,6 +3480,7 @@ const BuilderPage = () => {
               onClick={handleLockWeek}
               loading={lockWeekMutation.isPending}
               disabled={!canModifyWeek}
+              fullWidth={isMobile}
             >
               Lock week
             </Button>
@@ -3471,6 +3490,7 @@ const BuilderPage = () => {
               onClick={handlePublishWeek}
               loading={publishWeekMutation.isPending}
               disabled={!canModifyWeek}
+              fullWidth={isMobile}
             >
               Publish
             </Button>
@@ -3482,6 +3502,7 @@ const BuilderPage = () => {
                 onClick={handleReopenWeek}
                 loading={reopenWeekMutation.isPending}
                 disabled={!weekId}
+                fullWidth={isMobile}
               >
                 Reopen week
               </Button>
