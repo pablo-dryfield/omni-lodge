@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect } from "react";
 import {
   Card,
   Avatar,
@@ -19,75 +19,31 @@ import {
 } from "@mantine/core";
 import { useMediaQuery } from "@mantine/hooks";
 import { IconStarFilled } from "@tabler/icons-react";
-import { fetchGoogleReviews } from "../../actions/reviewsActions";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
+import { fetchTripAdvisorReviews } from "../../actions/reviewsActions";
 
 const ratingColor = {
   ONE: "red",
   TWO: "red",
-  THREE: "red",
+  THREE: "yellow",
   FOUR: "blue",
   FIVE: "green",
 };
 
-const GoogleReviews: React.FC = () => {
+const TripAdvisorReviews: React.FC = () => {
   const dispatch = useAppDispatch();
-  const reviewsState = useAppSelector((state) => state.reviews.google);
-  const loaderRef = useRef<HTMLDivElement | null>(null);
+  const reviewsState = useAppSelector((state) => state.reviews.tripadvisor);
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
 
-  const googleState = reviewsState?.[0];
-  const reviews = googleState?.data?.[0]?.data ?? [];
-  const nextPageToken = googleState?.data?.[0]?.columns?.[0] ?? "";
+  const tripAdvisorState = reviewsState?.[0];
+  const reviews = tripAdvisorState?.data?.[0]?.data ?? [];
 
   useEffect(() => {
-    dispatch(fetchGoogleReviews({}));
-  }, [dispatch]);
-
-  useEffect(() => {
-  const currentRef = loaderRef.current;
-
-  const observer = new IntersectionObserver(
-    (entries) => {
-      const first = entries[0];
-      if (first.isIntersecting && nextPageToken) {
-        dispatch(fetchGoogleReviews({ nextPageToken }));
-      }
-    },
-    { threshold: 1.0 }
-  );
-
-  if (currentRef) {
-    observer.observe(currentRef);
-  }
-
-  return () => {
-    if (currentRef) {
-      observer.unobserve(currentRef);
+    if (!tripAdvisorState?.loading && reviews.length === 0) {
+      dispatch(fetchTripAdvisorReviews());
     }
-  };
-}, [dispatch, nextPageToken]);
-
-
-  const formatDate = (dateStr?: string) =>
-    dateStr
-      ? new Date(dateStr).toLocaleDateString("en-GB", {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        })
-      : "";
-
-  const isSuspicious = (createTime?: string, updateTime?: string) => {
-    if (!createTime || !updateTime) return false;
-    const created = new Date(createTime);
-    const updated = new Date(updateTime);
-    return created.getMonth() !== updated.getMonth() || created.getFullYear() !== updated.getFullYear();
-  };
+  }, [dispatch, tripAdvisorState?.loading, reviews.length]);
 
   const renderRatingBadge = (starRating?: string) => (
     <Badge
@@ -99,14 +55,14 @@ const GoogleReviews: React.FC = () => {
     </Badge>
   );
 
-  const renderStatusBadge = (createTime?: string, updateTime?: string) =>
-    isSuspicious(createTime, updateTime) ? (
-      <Badge color="red" variant="filled">
-        Suspicious
+  const renderStatusBadge = (date?: string) =>
+    date ? (
+      <Badge color="green" variant="light">
+        Verified
       </Badge>
     ) : (
-      <Badge color="green" variant="light">
-        Not Suspicious
+      <Badge color="yellow" variant="light">
+        Undated
       </Badge>
     );
 
@@ -118,8 +74,7 @@ const GoogleReviews: React.FC = () => {
             <TableTh style={{ minWidth: 160 }}>User</TableTh>
             <TableTh style={{ minWidth: 110 }}>Rating</TableTh>
             <TableTh>Comment</TableTh>
-            <TableTh style={{ minWidth: 170 }}>Creation Date</TableTh>
-            <TableTh style={{ minWidth: 170 }}>Update Date</TableTh>
+            <TableTh style={{ minWidth: 170 }}>Date</TableTh>
             <TableTh style={{ minWidth: 130 }}>Status</TableTh>
           </TableTr>
         </TableThead>
@@ -129,7 +84,7 @@ const GoogleReviews: React.FC = () => {
               <TableTd>
                 <Group gap="sm">
                   <Avatar src={review.reviewer?.profilePhotoUrl} radius="xl" size="md" />
-                  <Text fw={500}>{review.reviewer?.displayName ?? "Anonymous guest"}</Text>
+                  <Text fw={500}>{review.reviewer?.displayName ?? "TripAdvisor guest"}</Text>
                 </Group>
               </TableTd>
               <TableTd>{renderRatingBadge(review.starRating)}</TableTd>
@@ -140,20 +95,14 @@ const GoogleReviews: React.FC = () => {
               </TableTd>
               <TableTd>
                 <Text size="xs" c="gray.6">
-                  {formatDate(review.createTime)}
+                  {review.createTime ? new Date(review.createTime).toLocaleDateString() : "—"}
                 </Text>
               </TableTd>
-              <TableTd>
-                <Text size="xs" c="gray.6">
-                  {formatDate(review.updateTime)}
-                </Text>
-              </TableTd>
-              <TableTd>{renderStatusBadge(review.createTime, review.updateTime)}</TableTd>
+              <TableTd>{renderStatusBadge(review.createTime)}</TableTd>
             </TableTr>
           ))}
         </TableTbody>
       </Table>
-      <div ref={loaderRef} style={{ height: 1 }} />
     </Box>
   );
 
@@ -165,9 +114,9 @@ const GoogleReviews: React.FC = () => {
             <Group gap="sm" align="flex-start">
               <Avatar src={review.reviewer?.profilePhotoUrl} radius="xl" size="md" />
               <Stack gap={2}>
-                <Text fw={600}>{review.reviewer?.displayName ?? "Anonymous guest"}</Text>
+                <Text fw={600}>{review.reviewer?.displayName ?? "TripAdvisor guest"}</Text>
                 <Text size="xs" c="dimmed">
-                  {formatDate(review.createTime)}
+                  {review.createTime ? new Date(review.createTime).toLocaleDateString() : ""}
                 </Text>
               </Stack>
             </Group>
@@ -179,14 +128,13 @@ const GoogleReviews: React.FC = () => {
           <Group justify="space-between" mt="sm" align="flex-start" gap="xs">
             <Stack gap={2}>
               <Text size="xs" c="gray.6">
-                Updated {formatDate(review.updateTime) || "—"}
+                Added {review.updateTime ? new Date(review.updateTime).toLocaleDateString() : "-"}
               </Text>
             </Stack>
-            {renderStatusBadge(review.createTime, review.updateTime)}
+            {renderStatusBadge(review.createTime)}
           </Group>
         </Paper>
       ))}
-      <div ref={loaderRef} style={{ height: 1 }} />
     </Stack>
   );
 
@@ -195,26 +143,27 @@ const GoogleReviews: React.FC = () => {
       <Stack gap="sm">
         <Group justify="space-between" align="flex-start" wrap="wrap">
           <div>
-            <Title order={3}>Google Reviews</Title>
+            <Title order={3}>TripAdvisor Reviews</Title>
             <Text size="sm" c="dimmed">
-              Real-time sentiment directly from Google so you can read every word guests share about your experience.
+              Latest TripAdvisor comments gathered via automated scraping. Use this feed to spot patterns that
+              differ from Google feedback.
             </Text>
           </div>
-          <Badge variant="light" color="indigo">
-            Live feed
+          <Badge variant="outline" color="teal">
+            Scraped feed
           </Badge>
         </Group>
-        {googleState?.loading ? (
+        {tripAdvisorState?.loading ? (
           <Text size="sm" c="dimmed">
-            Loading Google reviews...
+            Loading TripAdvisor reviews...
           </Text>
-        ) : googleState?.error ? (
+        ) : tripAdvisorState?.error ? (
           <Text size="sm" c="red">
-            {googleState.error}
+            {tripAdvisorState.error}
           </Text>
         ) : reviews.length === 0 ? (
           <Text size="sm" c="dimmed">
-            No reviews available yet.
+            No TripAdvisor reviews available yet.
           </Text>
         ) : isMobile ? (
           mobileCards
@@ -226,4 +175,4 @@ const GoogleReviews: React.FC = () => {
   );
 };
 
-export default GoogleReviews;
+export default TripAdvisorReviews;
