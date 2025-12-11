@@ -10,6 +10,7 @@ import {
   Grid,
   Modal,
   NumberInput,
+  ScrollArea,
   Select,
   SegmentedControl,
   Stack,
@@ -18,7 +19,9 @@ import {
   Textarea,
   Title,
   Box,
+  useMantineTheme,
 } from "@mantine/core";
+import { useMediaQuery } from "@mantine/hooks";
 import { DatePickerInput } from "@mantine/dates";
 import dayjs from "dayjs";
 import isSameOrBefore from "dayjs/plugin/isSameOrBefore";
@@ -142,6 +145,8 @@ const LEDGER_LINE_CONFIG = [
 const VenueNumbersSummary = () => {
   const dispatch = useAppDispatch();
   useFinanceBootstrap();
+  const theme = useMantineTheme();
+  const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
   const accounts = useAppSelector(selectFinanceAccounts);
   const categories = useAppSelector(selectFinanceCategories);
   const vendors = useAppSelector(selectFinanceVendors);
@@ -711,8 +716,8 @@ const VenueNumbersSummary = () => {
     <Stack gap="xl">
       <Card withBorder padding="md">
         <Stack gap="md">
-          <Group justify="space-between" align="flex-end">
-            <div>
+          <Group justify="space-between" align="flex-end" gap="sm" wrap="wrap">
+            <Stack gap={4} style={{ flex: "1 1 260px", minWidth: 0 }}>
               <Text fw={600}>Reporting period</Text>
               <SegmentedControl
                 value={period}
@@ -721,12 +726,15 @@ const VenueNumbersSummary = () => {
                 size="sm"
                 fullWidth
               />
-            </div>
-            <div>
-              <Button onClick={fetchSummary} disabled={!canFetch || loading}>
+            </Stack>
+            <Box
+              w={isMobile ? "100%" : "auto"}
+              style={{ display: "flex", justifyContent: "flex-end", flexGrow: 0 }}
+            >
+              <Button onClick={fetchSummary} disabled={!canFetch || loading} fullWidth={isMobile}>
                 Refresh
               </Button>
-            </div>
+            </Box>
           </Group>
           {period === "custom" && (
             <DatePickerInput
@@ -904,24 +912,25 @@ const VenueNumbersSummary = () => {
               {summary.venues.length === 0 ? (
                 <Text>No venue data for this range.</Text>
               ) : (
-                <Table highlightOnHover withColumnBorders>
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th />
-                      <Table.Th>Venue</Table.Th>
-                      <Table.Th>Total People</Table.Th>
-                      <Table.Th>Commission Owed</Table.Th>
-                      <Table.Th>Commission Collected</Table.Th>
-                      <Table.Th>Commission Outstanding</Table.Th>
-                      <Table.Th>Payout Owed</Table.Th>
-                      <Table.Th>Payout Paid</Table.Th>
-                      <Table.Th>Payout Outstanding</Table.Th>
-                      <Table.Th>Net</Table.Th>
-                      <Table.Th>Actions</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {summary.venues.map((venue) => {
+                  <ScrollArea offsetScrollbars type="auto">
+                    <Table highlightOnHover withColumnBorders miw={900}>
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th />
+                          <Table.Th>Venue</Table.Th>
+                          <Table.Th>Total People</Table.Th>
+                          <Table.Th>Commission Owed</Table.Th>
+                          <Table.Th>Commission Collected</Table.Th>
+                          <Table.Th>Commission Outstanding</Table.Th>
+                          <Table.Th>Payout Owed</Table.Th>
+                          <Table.Th>Payout Paid</Table.Th>
+                          <Table.Th>Payout Outstanding</Table.Th>
+                          <Table.Th>Net</Table.Th>
+                          <Table.Th>Actions</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {summary.venues.map((venue) => {
                       const isExpanded = expandedRows.has(venue.rowKey);
                       const dailyRows = buildDailyRows(venue);
                       const receivablePeople = venue.totalPeopleReceivable ?? 0;
@@ -1024,21 +1033,22 @@ const VenueNumbersSummary = () => {
                                       No submitted reports match this venue during the selected period.
                                     </Text>
                                   ) : (
-                                    <Table striped withColumnBorders>
-                                      <Table.Thead>
-                                        <Table.Tr>
-                                          <Table.Th>Date</Table.Th>
-                                          <Table.Th>Total People</Table.Th>
-                                          <Table.Th>Normal</Table.Th>
-                                          <Table.Th>Cocktail</Table.Th>
-                                          <Table.Th>Brunch</Table.Th>
-                                          <Table.Th>Report</Table.Th>
-                                          <Table.Th>Type</Table.Th>
-                                          <Table.Th>Amount</Table.Th>
-                                        </Table.Tr>
-                                      </Table.Thead>
-                                      <Table.Tbody>
-                                        {dailyRows.map((day) => {
+                                    <ScrollArea offsetScrollbars type="auto">
+                                      <Table striped withColumnBorders miw={720}>
+                                        <Table.Thead>
+                                          <Table.Tr>
+                                            <Table.Th>Date</Table.Th>
+                                            <Table.Th>Total People</Table.Th>
+                                            <Table.Th>Normal</Table.Th>
+                                            <Table.Th>Cocktail</Table.Th>
+                                            <Table.Th>Brunch</Table.Th>
+                                            <Table.Th>Report</Table.Th>
+                                            <Table.Th>Type</Table.Th>
+                                            <Table.Th>Amount</Table.Th>
+                                          </Table.Tr>
+                                        </Table.Thead>
+                                        <Table.Tbody>
+                                          {dailyRows.map((day) => {
                                           const placeholder = Boolean(day.placeholder);
                                           const amountColor = placeholder
                                             ? "dimmed"
@@ -1096,8 +1106,9 @@ const VenueNumbersSummary = () => {
                                             </Table.Tr>
                                           );
                                         })}
-                                      </Table.Tbody>
-                                    </Table>
+                                        </Table.Tbody>
+                                      </Table>
+                                    </ScrollArea>
                                   )}
                                 </Stack>
                               </Table.Td>
@@ -1107,7 +1118,8 @@ const VenueNumbersSummary = () => {
                       );
                     })}
                   </Table.Tbody>
-                </Table>
+                  </Table>
+                </ScrollArea>
               )}
               {reportPreviewError && <Alert color="red">{reportPreviewError}</Alert>}
             </Stack>
