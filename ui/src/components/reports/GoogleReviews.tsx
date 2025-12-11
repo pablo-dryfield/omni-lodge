@@ -210,9 +210,6 @@ const GoogleReviews: React.FC = () => {
         <Group justify="space-between" align="flex-start" wrap="wrap">
           <div>
             <Title order={3}>Google Reviews</Title>
-            <Text size="sm" c="dimmed">
-              Real-time sentiment directly from Google so you can read every word guests share about your experience.
-            </Text>
           </div>
           <Badge variant="light" color="indigo">
             Live feed
