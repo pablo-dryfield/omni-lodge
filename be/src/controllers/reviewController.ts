@@ -13,11 +13,13 @@ dotenv.config({ path: envFile });
 const {
   GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET,
-  GOOGLE_REFRESH_TOKEN
+  GOOGLE_REFRESH_TOKEN,
+  TRIP_ADVISOR_URL
 } = process.env;
 
 const ACCOUNT_ID = '113350814099227260053';
 const LOCATION_ID = '13077434667897843628';
+const DEFAULT_TRIP_ADVISOR_URL = TRIP_ADVISOR_URL || 'https://www.tripadvisor.com/AttractionProductReview-g274772-d13998447-Pub_Crawl_Krawl_Through_Krakow-Krakow_Lesser_Poland_Province_Southern_Poland.html';
 
 export const getAllGoogleReviews = async (req: Request, res: Response) => {
   try {
@@ -98,12 +100,44 @@ export const getAllGoogleReviews = async (req: Request, res: Response) => {
 //   }
 // };
 
-// // Scrape
-// export const scrapeTripadvisor = async (req: Request, res: Response) => {
-//     try {
-//       const reviews = await scrapeTripAdvisor('https://www.tripadvisor.com/AttractionProductReview-g274772-d13998447-Pub_Crawl_Krawl_Through_Krakow-Krakow_Lesser_Poland_Province_Southern_Poland.html');
-//     } catch (error) {
-//       console.error('Error scraping TripAdvisor:', error);
-//       res.status(500).send('Error scraping TripAdvisor');
-//     }
-// }
+const mapScoreToStarRating = (score?: number): "ONE" | "TWO" | "THREE" | "FOUR" | "FIVE" => {
+  if (!score || score <= 1) return "ONE";
+  if (score <= 2) return "TWO";
+  if (score <= 3) return "THREE";
+  if (score <= 4) return "FOUR";
+  return "FIVE";
+};
+
+export const getTripAdvisorReviews = async (req: Request, res: Response) => {
+  try {
+    const targetUrl = (req.query.url as string) || DEFAULT_TRIP_ADVISOR_URL;
+    if (!targetUrl) {
+      res.status(400).json({ error: "TripAdvisor URL not configured" });
+      return;
+    }
+
+    const scrapedReviews = await scrapeTripAdvisor(targetUrl);
+    if (!scrapedReviews.length) {
+      console.warn("[TripAdvisor] Scraper returned no reviews for url:", targetUrl);
+    } else {
+      console.info("[TripAdvisor] Scraper retrieved", scrapedReviews.length, "reviews");
+      console.debug("[TripAdvisor] First review sample:", scrapedReviews[0]);
+    }
+    const normalized = scrapedReviews.map((review, index) => ({
+      reviewId: review.reviewId ?? `tripadvisor-${index}-${review.date ?? Date.now()}`,
+      comment: review.description ?? "",
+      createTime: review.date ?? new Date().toISOString(),
+      updateTime: review.date ?? new Date().toISOString(),
+      starRating: mapScoreToStarRating(review.score),
+      reviewer: {
+        displayName: review.name ?? "TripAdvisor guest",
+        profilePhotoUrl: review.profilePhotoUrl ?? "",
+      },
+    }));
+
+    res.status(200).json([{ data: normalized, columns: [""] }]);
+  } catch (error) {
+    console.error('Error scraping TripAdvisor:', error);
+    res.status(500).json({ error: 'Failed to fetch reviews from TripAdvisor' });
+  }
+};

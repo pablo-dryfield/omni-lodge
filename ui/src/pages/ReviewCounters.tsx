@@ -1,10 +1,11 @@
-import { Paper, Stack, Tabs, Text, Title } from '@mantine/core';
-import { PageAccessGuard } from '../components/access/PageAccessGuard';
-import { PAGE_SLUGS } from '../constants/pageSlugs';
-import ReviewCounterList from '../components/reviewCounters/ReviewCounterList';
-import ReviewAnalyticsPanel from '../components/reviewCounters/ReviewAnalyticsPanel';
-import ReviewMonthlySummary from '../components/reviewCounters/ReviewMonthlySummary';
-import GoogleReviews from '../components/reports/GoogleReviews';
+import { Paper, Stack, Tabs, Text, Title } from "@mantine/core";
+import { PageAccessGuard } from "../components/access/PageAccessGuard";
+import { PAGE_SLUGS } from "../constants/pageSlugs";
+import ReviewCounterList from "../components/reviewCounters/ReviewCounterList";
+import ReviewAnalyticsPanel from "../components/reviewCounters/ReviewAnalyticsPanel";
+import ReviewMonthlySummary from "../components/reviewCounters/ReviewMonthlySummary";
+import GoogleReviews from "../components/reports/GoogleReviews";
+import TripAdvisorReviews from "../components/reports/TripAdvisorReviews";
 
 const ReviewCounters = () => {
   return (
@@ -20,6 +21,7 @@ const ReviewCounters = () => {
           <Tabs.List>
             <Tabs.Tab value="overview">Review Performance</Tabs.Tab>
             <Tabs.Tab value="google">Google Reviews</Tabs.Tab>
+            <Tabs.Tab value="tripadvisor">TripAdvisor Reviews</Tabs.Tab>
           </Tabs.List>
           <Tabs.Panel value="overview" pt="md">
             <Stack gap="md">
@@ -35,6 +37,16 @@ const ReviewCounters = () => {
               </Text>
               <Paper radius="md" withBorder shadow="xs" p="md">
                 <GoogleReviews />
+              </Paper>
+            </Stack>
+          </Tabs.Panel>
+          <Tabs.Panel value="tripadvisor" pt="md">
+            <Stack gap="sm">
+              <Text size="sm" c="dimmed">
+                Cross-check Google feedback with the TripAdvisor community to surface trends from a different audience.
+              </Text>
+              <Paper radius="md" withBorder shadow="xs" p="md">
+                <TripAdvisorReviews />
               </Paper>
             </Stack>
           </Tabs.Panel>

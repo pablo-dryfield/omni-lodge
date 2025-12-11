@@ -13,8 +13,7 @@ const router: Router = express.Router();
 // // Create a new review
 // router.post('/', reviewController.createReview);
 
-// // Scrape Tripadvisor
-// router.get('/scrape/Tripadvisor', reviewController.scrapeTripadvisor);
+router.get('/tripadvisorReviews', authMiddleware, reviewController.getTripAdvisorReviews);
 
 // Google revies
 router.get('/googleReviews', authMiddleware, reviewController.getAllGoogleReviews);
