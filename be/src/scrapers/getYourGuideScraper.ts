@@ -198,6 +198,8 @@ const requestBlocks = async (page: Page, body: Record<string, any>) => {
         method: 'POST',
         headers,
         body: JSON.stringify(payload),
+        credentials: 'include',
+        mode: 'cors',
       });
 
       if (!response.ok) {
