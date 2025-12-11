@@ -2,18 +2,22 @@
 import {
   ActionIcon,
   Badge,
+  Box,
   Button,
   Card,
   Group,
   Modal,
   NumberInput,
+  ScrollArea,
   Select,
+  SimpleGrid,
   Stack,
   Table,
   Text,
   Textarea,
   TextInput,
   Title,
+  useMantineTheme,
 } from "@mantine/core";
 import { DateInput } from "@mantine/dates";
 import { IconArrowsLeftRight, IconEdit, IconFileUpload, IconPlus } from "@tabler/icons-react";
@@ -41,6 +45,7 @@ import {
 import { FinanceTransaction } from "../../types/finance";
 import type { StaffProfile } from "../../types/staffProfiles/StaffProfile";
 import dayjs from "dayjs";
+import { useMediaQuery } from "@mantine/hooks";
 
 const TRANSACTION_STATUS_OPTIONS = [
   { value: "planned", label: "Planned" },
@@ -165,6 +170,9 @@ const FinanceTransactions = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [draft, setDraft] = useState<TransactionDraft>(defaultDraft);
   const [editingTransaction, setEditingTransaction] = useState<FinanceTransaction | null>(null);
+  const theme = useMantineTheme();
+  const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
+  const isTablet = useMediaQuery(`(max-width: ${theme.breakpoints.md})`);
 
   useEffect(() => {
     dispatch(fetchFinanceAccounts());
@@ -374,106 +382,114 @@ const FinanceTransactions = () => {
 
   return (
     <Stack gap="lg">
-      <Group justify="space-between" align="flex-end">
+      <Group justify="space-between" align={isMobile ? "stretch" : "flex-end"} gap="sm" wrap="wrap">
         <Title order={3}>Transactions</Title>
-        <Group>
-          <Select
-            placeholder="Status"
-            value={filters.status ?? null}
-            onChange={(value) => setFilters((state) => ({ ...state, status: value ?? undefined }))}
-            data={TRANSACTION_STATUS_OPTIONS}
-            allowDeselect
-          />
-          <Select
-            placeholder="Kind"
-            value={filters.kind ?? null}
-            onChange={(value) => setFilters((state) => ({ ...state, kind: value ?? undefined }))}
-            data={[
-              { value: "income", label: "Income" },
-              { value: "expense", label: "Expense" },
-              { value: "transfer", label: "Transfer" },
-              { value: "refund", label: "Refund" },
-            ]}
-            allowDeselect
-          />
-          <Select
-            placeholder="Account"
-            data={accountOptions}
-            value={filters.accountId ? String(filters.accountId) : null}
-            onChange={(value) =>
-              setFilters((state) => ({
-                ...state,
-                accountId: value ? Number(value) : null,
-              }))
-            }
-            searchable
-            allowDeselect
-          />
-          <Button variant="light" onClick={handleApplyFilters}>
-            Apply filters
-          </Button>
-        </Group>
+        <Box style={{ flex: "1 1 320px", minWidth: 0 }}>
+          <Group gap="sm" wrap="wrap" justify={isMobile ? "flex-start" : "flex-end"}>
+            <Select
+              placeholder="Status"
+              value={filters.status ?? null}
+              onChange={(value) => setFilters((state) => ({ ...state, status: value ?? undefined }))}
+              data={TRANSACTION_STATUS_OPTIONS}
+              allowDeselect
+              w={isMobile ? "100%" : 180}
+            />
+            <Select
+              placeholder="Kind"
+              value={filters.kind ?? null}
+              onChange={(value) => setFilters((state) => ({ ...state, kind: value ?? undefined }))}
+              data={[
+                { value: "income", label: "Income" },
+                { value: "expense", label: "Expense" },
+                { value: "transfer", label: "Transfer" },
+                { value: "refund", label: "Refund" },
+              ]}
+              allowDeselect
+              w={isMobile ? "100%" : 180}
+            />
+            <Select
+              placeholder="Account"
+              data={accountOptions}
+              value={filters.accountId ? String(filters.accountId) : null}
+              onChange={(value) =>
+                setFilters((state) => ({
+                  ...state,
+                  accountId: value ? Number(value) : null,
+                }))
+              }
+              searchable
+              allowDeselect
+              w={isMobile ? "100%" : 200}
+            />
+            <Button variant="light" onClick={handleApplyFilters} fullWidth={isMobile}>
+              Apply filters
+            </Button>
+          </Group>
+        </Box>
         <Button
           leftSection={<IconPlus size={18} />}
           onClick={() => {
             setEditingTransaction(null);
             setModalOpen(true);
           }}
+          fullWidth={isMobile}
         >
           New Transaction
         </Button>
       </Group>
 
       <Card withBorder padding="0">
-        <Table striped highlightOnHover verticalSpacing="sm">
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Date</Table.Th>
-              <Table.Th>Kind</Table.Th>
-              <Table.Th>Account</Table.Th>
-              <Table.Th>Amount</Table.Th>
-              <Table.Th>Category</Table.Th>
-              <Table.Th>Counterparty</Table.Th>
-              <Table.Th>Paid by</Table.Th>
-              <Table.Th>Status</Table.Th>
-              <Table.Th />
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {transactionRows.map((transaction) => (
-              <Table.Tr key={transaction.id}>
-                <Table.Td>{transaction.date}</Table.Td>
-                <Table.Td>{transaction.kind.toUpperCase()}</Table.Td>
-                <Table.Td>{transaction.accountName}</Table.Td>
-                <Table.Td>
-                  <Text fw={600} c={transaction.signedAmountMinor >= 0 ? "green" : "red"}>
-                    {(transaction.signedAmountMinor >= 0 ? '+' : '-') + Math.abs(transaction.signedAmountMinor / 100).toFixed(2) + ` ${transaction.currency}`}
-                  </Text>
-                </Table.Td>
-                <Table.Td>{transaction.categoryName}</Table.Td>
-                <Table.Td>{transaction.counterpartyName}</Table.Td>
-                <Table.Td>{transaction.paidByName}</Table.Td>
-                <Table.Td>
-                  <Badge color={getStatusBadgeColor(transaction.status)} variant="light">
-                    {TRANSACTION_STATUS_OPTIONS.find((option) => option.value === transaction.status)?.label ??
-                      transaction.status.toUpperCase()}
-                  </Badge>
-                </Table.Td>
-                <Table.Td width={60}>
-                  <ActionIcon
-                    variant="subtle"
-                    onClick={() => {
-                      setEditingTransaction(transaction);
-                      setModalOpen(true);
-                    }}
-                  >
-                    <IconEdit size={18} />
-                  </ActionIcon>
-                </Table.Td>
+        <ScrollArea offsetScrollbars type="auto">
+          <Table striped highlightOnHover verticalSpacing="sm" miw={900}>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Date</Table.Th>
+                <Table.Th>Kind</Table.Th>
+                <Table.Th>Account</Table.Th>
+                <Table.Th>Amount</Table.Th>
+                <Table.Th>Category</Table.Th>
+                <Table.Th>Counterparty</Table.Th>
+                <Table.Th>Paid by</Table.Th>
+                <Table.Th>Status</Table.Th>
+                <Table.Th />
               </Table.Tr>
-            ))}
-          </Table.Tbody>
-        </Table>
+            </Table.Thead>
+            <Table.Tbody>
+              {transactionRows.map((transaction) => (
+                <Table.Tr key={transaction.id}>
+                  <Table.Td>{transaction.date}</Table.Td>
+                  <Table.Td>{transaction.kind.toUpperCase()}</Table.Td>
+                  <Table.Td>{transaction.accountName}</Table.Td>
+                  <Table.Td>
+                    <Text fw={600} c={transaction.signedAmountMinor >= 0 ? "green" : "red"}>
+                      {(transaction.signedAmountMinor >= 0 ? '+' : '-') + Math.abs(transaction.signedAmountMinor / 100).toFixed(2) + ` ${transaction.currency}`}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>{transaction.categoryName}</Table.Td>
+                  <Table.Td>{transaction.counterpartyName}</Table.Td>
+                  <Table.Td>{transaction.paidByName}</Table.Td>
+                  <Table.Td>
+                    <Badge color={getStatusBadgeColor(transaction.status)} variant="light">
+                      {TRANSACTION_STATUS_OPTIONS.find((option) => option.value === transaction.status)?.label ??
+                        transaction.status.toUpperCase()}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td width={60}>
+                    <ActionIcon
+                      variant="subtle"
+                      onClick={() => {
+                        setEditingTransaction(transaction);
+                        setModalOpen(true);
+                      }}
+                    >
+                      <IconEdit size={18} />
+                    </ActionIcon>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        </ScrollArea>
       </Card>
 
       <Modal
@@ -485,9 +501,11 @@ const FinanceTransactions = () => {
         title={editingTransaction ? "Edit Transaction" : "New Transaction"}
         size="xl"
         centered
+        fullScreen={isMobile}
+        scrollAreaComponent={ScrollArea.Autosize}
       >
         <Stack gap="md">
-          <Group grow>
+          <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="sm">
             <Select
               label="Kind"
               data={[
@@ -535,8 +553,8 @@ const FinanceTransactions = () => {
                 searchable
               />
             )}
-          </Group>
-          <Group grow>
+          </SimpleGrid>
+          <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
             <NumberInput
               label="Amount"
               decimalScale={2}
@@ -565,8 +583,8 @@ const FinanceTransactions = () => {
                 }))
               }
             />
-          </Group>
-          <Group grow>
+          </SimpleGrid>
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
             <Select
               label="Category"
               data={categoryOptions}
@@ -609,15 +627,15 @@ const FinanceTransactions = () => {
             {draft.kind === "expense" && (
               <Select label="Paid by" data={paidByOptions} value={paidByValue} onChange={handlePaidByChange} />
             )}
-          </Group>
+          </SimpleGrid>
           <Textarea
             label="Description"
             minRows={3}
             value={draft.description ?? ""}
             onChange={(event) => setDraft((state) => ({ ...state, description: event.currentTarget.value || null }))}
           />
-          <Group justify="space-between" align="center">
-            <Group gap="xs">
+          <Stack gap="sm">
+            <Group gap="xs" wrap="wrap" justify={isMobile ? "center" : "flex-start"}>
               <Button
                 variant="light"
                 leftSection={<IconFileUpload size={16} />}
@@ -638,15 +656,15 @@ const FinanceTransactions = () => {
               )}
               {files.latest && <Badge>Last upload: {files.latest.originalName}</Badge>}
             </Group>
-            <Group>
-              <Button variant="light" onClick={() => setModalOpen(false)}>
+            <Group gap="sm" wrap="wrap" justify="center">
+              <Button variant="light" onClick={() => setModalOpen(false)} fullWidth={isMobile}>
                 Cancel
               </Button>
-              <Button leftSection={<IconArrowsLeftRight size={16} />} onClick={handleSubmit}>
+              <Button leftSection={<IconArrowsLeftRight size={16} />} onClick={handleSubmit} fullWidth={isMobile}>
                 {draft.kind === "transfer" ? "Create transfer" : editingTransaction ? "Save changes" : "Create transaction"}
               </Button>
             </Group>
-          </Group>
+          </Stack>
         </Stack>
       </Modal>
     </Stack>
