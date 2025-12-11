@@ -6,6 +6,8 @@ import AccountBalanceIcon from "@mui/icons-material/AccountBalance";
 import FormatListNumberedIcon from "@mui/icons-material/FormatListNumbered";
 import PersonIcon from "@mui/icons-material/Person";
 import SettingsIcon from "@mui/icons-material/Settings";
+import BarChartIcon from "@mui/icons-material/BarChart";
+import StarIcon from "@mui/icons-material/Star";
 import Grid from "@mui/material/Grid";
 import {
   Alert,
@@ -347,6 +349,10 @@ const renderNavigationIcon = (icon: NavigationIconKey) => {
       return <PersonIcon fontSize="large" />;
     case "settings":
       return <SettingsIcon fontSize="large" />;
+    case "barChart":
+      return <BarChartIcon fontSize="large" />;
+    case "star":
+      return <StarIcon fontSize="large" />;
     default:
       return <PersonIcon fontSize="large" />;
   }

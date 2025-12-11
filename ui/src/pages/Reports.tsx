@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import {
-  Accordion,
   ActionIcon,
   Alert,
   Badge,
@@ -78,7 +77,6 @@ import type { Formatter, Payload } from "recharts/types/component/DefaultTooltip
 import { useAppDispatch } from "../store/hooks";
 import { navigateToPage } from "../actions/navigationActions";
 import { GenericPageProps } from "../types/general/GenericPageProps";
-import GoogleReviews from "../components/reports/GoogleReviews";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { parseDerivedFieldExpression } from "../utils/derivedFieldParser";
@@ -8904,21 +8902,6 @@ const Reports = (props: GenericPageProps) => {
                   </Flex>
                 </Paper>
 
-                <Accordion variant="separated">
-                  <Accordion.Item value="google-reviews">
-                    <Accordion.Control icon={<IconMessage2 size={16} />}>
-                      Guest sentiment (Google reviews preview)
-                    </Accordion.Control>
-                    <Accordion.Panel>
-                      <Text fz="sm" c="dimmed" mb="md">
-                        Blend external review intelligence alongside operational reporting to surface leading indicators of guest satisfaction.
-                      </Text>
-                      <Paper radius="md" withBorder shadow="xs" p="md">
-                        <GoogleReviews />
-                      </Paper>
-                    </Accordion.Panel>
-                  </Accordion.Item>
-                </Accordion>
               </Stack>
             </Flex>
           )}

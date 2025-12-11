@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, useLocation } from "react-router-dom";
 import {
   AppShell,
   Center,
@@ -24,7 +24,8 @@ import { NavBarRouter } from "./components/main/NavBarRouter";
 
 const queryClient = new QueryClient();
 
-const App = () => {
+const AppContent = () => {
+  const location = useLocation();
   const { authenticated, checkingSession } = useAppSelector((state) => state.session);
   const { currentPage } = useAppSelector((state) => state.navigation);
   const {
@@ -37,7 +38,10 @@ const App = () => {
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
   const [sidebarOpened, { toggle: toggleSidebar, close: closeSidebar }] = useDisclosure(false);
 
-  const rawNavbarSettings = useMemo(() => getNavbarSettings(currentPage), [currentPage]);
+  const rawNavbarSettings = useMemo(
+    () => getNavbarSettings(currentPage, location.pathname),
+    [currentPage, location.pathname],
+  );
   const computedNavbarSettings = useMemo(() => {
     if (!rawNavbarSettings) {
       return undefined;
@@ -63,6 +67,12 @@ const App = () => {
   }, [currentPage, closeSidebar]);
 
   useEffect(() => {
+    if (!rawNavbarSettings) {
+      closeSidebar();
+    }
+  }, [rawNavbarSettings, closeSidebar]);
+
+  useEffect(() => {
     if (!authenticated) {
       dispatch(fetchSession());
     }
@@ -86,70 +96,72 @@ const App = () => {
     dispatch(fetchAccessSnapshot());
   };
 
-  return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        {authenticated ? (
-        <AppShell
-          header={{ height: isMobile ? 56 : 68 }}
-          navbar={computedNavbarSettings}
-          padding={isMobile ? "sm" : "md"}
-          styles={{
-            main: {
-              backgroundColor: "#f4f4f7",
-              minHeight: "100vh",
-            },
+  return authenticated ? (
+    <AppShell
+      header={{ height: isMobile ? 56 : 68 }}
+      navbar={computedNavbarSettings}
+      padding={isMobile ? "sm" : "md"}
+      styles={{
+        main: {
+          backgroundColor: "#f4f4f7",
+          minHeight: "100vh",
+        },
+      }}
+    >
+      <AppShell.Header>
+        <MainTabs
+          hasSidebar={Boolean(rawNavbarSettings)}
+          onSidebarToggle={toggleSidebar}
+          sidebarOpened={sidebarOpened}
+        />
+      </AppShell.Header>
+      {rawNavbarSettings && (
+        <AppShell.Navbar
+          p="md"
+          withBorder={false}
+          style={{
+            boxShadow: "2px 0 35px -2px rgba(60, 60, 60, 0.07)",
+            zIndex: 12,
           }}
         >
-          <AppShell.Header>
-            <MainTabs
-              hasSidebar={Boolean(rawNavbarSettings)}
-              onSidebarToggle={toggleSidebar}
-              sidebarOpened={sidebarOpened}
-            />
-          </AppShell.Header>
-          {rawNavbarSettings && (
-            <AppShell.Navbar
-              p="md"
-              withBorder={false}
-              style={{
-                boxShadow: "2px 0 35px -2px rgba(60, 60, 60, 0.07)",
-                zIndex: 12,
-              }}
-            >
-              <ScrollArea style={{ height: "100%" }} type="hover" offsetScrollbars>
-                <NavBarRouter currentPage={currentPage} />
-              </ScrollArea>
-            </AppShell.Navbar>
+          <ScrollArea style={{ height: "100%" }} type="hover" offsetScrollbars>
+            <NavBarRouter currentPage={currentPage} />
+          </ScrollArea>
+        </AppShell.Navbar>
+      )}
+      <AppShell.Main>
+        <Stack gap="md">
+          {accessError && (
+            <Alert color="red" title="Permission sync failed" mb="md">
+              <Stack gap="xs">
+                <Text>{accessError}</Text>
+                <Button
+                  size="xs"
+                  color="red"
+                  variant="light"
+                  onClick={handleRetryAccess}
+                  loading={accessLoading}
+                >
+                  Retry fetch
+                </Button>
+              </Stack>
+            </Alert>
           )}
-          <AppShell.Main>
-            <Stack gap="md">
-              {accessError && (
-                <Alert color="red" title="Permission sync failed" mb="md">
-                  <Stack gap="xs">
-                    <Text>{accessError}</Text>
-                    <Button
-                      size="xs"
-                      color="red"
-                      variant="light"
-                      onClick={handleRetryAccess}
-                      loading={accessLoading}
-                    >
-                      Retry fetch
-                    </Button>
-                  </Stack>
-                </Alert>
-              )}
-              <Routes />
-            </Stack>
-          </AppShell.Main>
-        </AppShell>
-        ) : (
-          <Login />
-        )}
-      </BrowserRouter>
-    </QueryClientProvider>
+          <Routes />
+        </Stack>
+      </AppShell.Main>
+    </AppShell>
+  ) : (
+    <Login />
   );
 };
+
+const App = () => (
+  <QueryClientProvider client={queryClient}>
+    <BrowserRouter>
+      <AppContent />
+    </BrowserRouter>
+  </QueryClientProvider>
+);
 
 export default App;
