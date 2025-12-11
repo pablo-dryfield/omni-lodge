@@ -136,7 +136,12 @@ const TripAdvisorReviews: React.FC = () => {
             <TableTr key={review.reviewId || index}>
               <TableTd>
                 <Group gap="sm">
-                  <Avatar src={review.reviewer?.profilePhotoUrl} radius="xl" size="md" />
+                  <Avatar
+                    src={review.reviewer?.profilePhotoUrl}
+                    radius="xl"
+                    size="md"
+                    imageProps={{ referrerPolicy: "no-referrer" }}
+                  />
                   <Text fw={500}>{review.reviewer?.displayName ?? "TripAdvisor guest"}</Text>
                 </Group>
               </TableTd>
@@ -171,7 +176,12 @@ const TripAdvisorReviews: React.FC = () => {
         <Paper key={review.reviewId || index} withBorder radius="md" p="md" shadow="xs">
           <Group justify="space-between" align="flex-start">
             <Group gap="sm" align="flex-start">
-              <Avatar src={review.reviewer?.profilePhotoUrl} radius="xl" size="md" />
+              <Avatar
+                src={review.reviewer?.profilePhotoUrl}
+                radius="xl"
+                size="md"
+                imageProps={{ referrerPolicy: "no-referrer" }}
+              />
               <Stack gap={2}>
                 <Text fw={600}>{review.reviewer?.displayName ?? "TripAdvisor guest"}</Text>
                 <Text size="xs" c="dimmed">

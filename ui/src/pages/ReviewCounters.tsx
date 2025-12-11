@@ -6,6 +6,7 @@ import ReviewAnalyticsPanel from "../components/reviewCounters/ReviewAnalyticsPa
 import ReviewMonthlySummary from "../components/reviewCounters/ReviewMonthlySummary";
 import GoogleReviews from "../components/reports/GoogleReviews";
 import TripAdvisorReviews from "../components/reports/TripAdvisorReviews";
+import GetYourGuideReviews from "../components/reports/GetYourGuideReviews";
 
 const ReviewCounters = () => {
   return (
@@ -22,6 +23,7 @@ const ReviewCounters = () => {
             <Tabs.Tab value="overview">Review Performance</Tabs.Tab>
             <Tabs.Tab value="google">Google Reviews</Tabs.Tab>
             <Tabs.Tab value="tripadvisor">TripAdvisor Reviews</Tabs.Tab>
+            <Tabs.Tab value="getyourguide">GetYourGuide Reviews</Tabs.Tab>
           </Tabs.List>
           <Tabs.Panel value="overview" pt="md">
             <Stack gap="md">
@@ -47,6 +49,17 @@ const ReviewCounters = () => {
               </Text>
               <Paper radius="md" withBorder shadow="xs" p="md">
                 <TripAdvisorReviews />
+              </Paper>
+            </Stack>
+          </Tabs.Panel>
+          <Tabs.Panel value="getyourguide" pt="md">
+            <Stack gap="sm">
+              <Text size="sm" c="dimmed">
+                Track public reviews from GetYourGuide to understand how booking platform guests describe their
+                experience.
+              </Text>
+              <Paper radius="md" withBorder shadow="xs" p="md">
+                <GetYourGuideReviews />
               </Paper>
             </Stack>
           </Tabs.Panel>
