@@ -14,12 +14,10 @@ const {
   GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET,
   GOOGLE_REFRESH_TOKEN,
-  TRIP_ADVISOR_URL
 } = process.env;
 
 const ACCOUNT_ID = '113350814099227260053';
 const LOCATION_ID = '13077434667897843628';
-const DEFAULT_TRIP_ADVISOR_URL = TRIP_ADVISOR_URL || 'https://www.tripadvisor.com/AttractionProductReview-g274772-d13998447-Pub_Crawl_Krawl_Through_Krakow-Krakow_Lesser_Poland_Province_Southern_Poland.html';
 
 export const getAllGoogleReviews = async (req: Request, res: Response) => {
   try {
@@ -110,15 +108,9 @@ const mapScoreToStarRating = (score?: number): "ONE" | "TWO" | "THREE" | "FOUR" 
 
 export const getTripAdvisorReviews = async (req: Request, res: Response) => {
   try {
-    const targetUrl = (req.query.url as string) || DEFAULT_TRIP_ADVISOR_URL;
-    if (!targetUrl) {
-      res.status(400).json({ error: "TripAdvisor URL not configured" });
-      return;
-    }
-
-    const scrapedReviews = await scrapeTripAdvisor(targetUrl);
+    const scrapedReviews = await scrapeTripAdvisor();
     if (!scrapedReviews.length) {
-      console.warn("[TripAdvisor] Scraper returned no reviews for url:", targetUrl);
+      console.warn("[TripAdvisor] Scraper returned no reviews");
     } else {
       console.info("[TripAdvisor] Scraper retrieved", scrapedReviews.length, "reviews");
       console.debug("[TripAdvisor] First review sample:", scrapedReviews[0]);
