@@ -114,101 +114,82 @@ const buildNextPayload = (payload: Record<string, any>) => ({
 
 const requestBlocks = async (page: Page, body: Record<string, any>) => {
   const cookies = await page.cookies();
+  const cookieMap: Record<string, string> = {};
+  cookies.forEach((cookie) => {
+    if (cookie?.name) {
+      cookieMap[cookie.name] = cookie.value ?? '';
+    }
+  });
 
-  return page.evaluate(
-    async ({
-      endpoint,
-      payload,
-      cookiesFromPage,
-    }: {
-      endpoint: string;
-      payload: Record<string, any>;
-      cookiesFromPage: Array<{ name: string; value: string }>;
-    }) => {
-      const cookieMap: Record<string, string> = {};
-
-      const fromDocument = document.cookie
-        .split(';')
-        .map((entry) => entry.trim())
-        .filter(Boolean);
-      fromDocument.forEach((entry) => {
-        const [key, ...valueParts] = entry.split('=');
-        if (key) {
-          cookieMap[key] = valueParts.join('=');
-        }
-      });
-      cookiesFromPage?.forEach((cookie) => {
-        if (cookie?.name) {
-          cookieMap[cookie.name] = cookie.value ?? '';
-        }
-      });
-
-      const getCookieValue = (name: string): string | undefined => {
-        return (
-          cookieMap[name] ??
-          cookieMap[name.replace(/-/g, '_')] ??
-          cookieMap[name.replace(/_/g, '-')]
-        );
-      };
-
-      const headers = new Headers({
-        'content-type': 'application/json',
-        accept: 'application/json, text/plain, */*',
-        'accept-currency': cookieMap.cur ?? 'PLN',
-        'accept-language': `${cookieMap.locale_code ?? 'en-US'},en;q=0.9`,
-        'geo-ip-country': 'PL',
-        'visitor-platform': 'desktop',
-        'sec-ch-ua': '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        priority: 'u=1, i',
-        Referer: 'https://www.getyourguide.com/krawl-through-krakow-pubcrawl-s264786/',
-        origin: 'https://www.getyourguide.com',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-site',
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
-        'partner-id': '',
-        'x-gyg-app-type': 'Web',
-        'x-gyg-geoip-city': 'Krakow',
-        'x-gyg-geoip-country': 'PL',
-        'x-gyg-is-new-visitor': 'false',
-        'x-gyg-partner-hash': '',
-        'x-gyg-referrer': 'https://www.getyourguide.com/',
-        'x-gyg-time-zone': 'Europe/Warsaw',
-      });
-
-      const visitorId = getCookieValue('visitor-id') ?? getCookieValue('visitor_id');
-      if (visitorId) {
-        headers.set('visitor-id', visitorId);
-        headers.set('x-gyg-visitor-id', visitorId);
+  const getCookieValue = (name: string): string | undefined => {
+    const variants = [name, name.replace(/-/g, '_'), name.replace(/_/g, '-')];
+    for (const variant of variants) {
+      if (cookieMap[variant]) {
+        return cookieMap[variant];
       }
-      const csrfToken = getCookieValue('csrfToken') ?? getCookieValue('csrf-token');
-      if (csrfToken) {
-        headers.set('x-gyg-csrf-token', csrfToken);
-      }
-      const sessionId = getCookieValue('session-id');
-      if (sessionId) {
-        headers.set('x-gyg-session-id', sessionId);
-      }
+    }
+    return undefined;
+  };
 
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-      });
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    accept: 'application/json, text/plain, */*',
+    'accept-currency': cookieMap.cur ?? 'PLN',
+    'accept-language': `${cookieMap.locale_code ?? 'en-US'},en;q=0.9`,
+    'geo-ip-country': 'PL',
+    'visitor-platform': 'desktop',
+    'sec-ch-ua': '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    priority: 'u=1, i',
+    Referer: SESSION_PRODUCT_URL,
+    origin: 'https://www.getyourguide.com',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-site',
+    'User-Agent': BROWSER_HEADERS['User-Agent'],
+    'partner-id': '',
+    'x-gyg-app-type': 'Web',
+    'x-gyg-geoip-city': 'Krakow',
+    'x-gyg-geoip-country': 'PL',
+    'x-gyg-is-new-visitor': 'false',
+    'x-gyg-partner-hash': '',
+    'x-gyg-referrer': 'https://www.getyourguide.com/',
+    'x-gyg-time-zone': 'Europe/Warsaw',
+  };
 
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`GetYourGuide API ${response.status}: ${text.slice(0, 200)}`);
-      }
+  const visitorId = getCookieValue('visitor-id') ?? getCookieValue('visitor_id');
+  if (visitorId) {
+    headers['visitor-id'] = visitorId;
+    headers['x-gyg-visitor-id'] = visitorId;
+  }
+  const csrfToken = getCookieValue('csrfToken') ?? getCookieValue('csrf-token');
+  if (csrfToken) {
+    headers['x-gyg-csrf-token'] = csrfToken;
+  }
+  const sessionId = getCookieValue('session-id');
+  if (sessionId) {
+    headers['x-gyg-session-id'] = sessionId;
+  }
 
-      const data = (await response.json()) as GetYourGuideBlocksResponse;
-      return data.content ?? [];
-    },
-    { endpoint: DEFAULT_ENDPOINT, payload: body, cookiesFromPage: cookies },
-  );
+  const cookieHeader = cookies.map((cookie) => `${cookie.name}=${cookie.value ?? ''}`).join('; ');
+  if (cookieHeader) {
+    headers.cookie = cookieHeader;
+  }
+
+  const response = await fetch(DEFAULT_ENDPOINT, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`GetYourGuide API ${response.status}: ${text.slice(0, 200)}`);
+  }
+
+  const data = (await response.json()) as GetYourGuideBlocksResponse;
+  return data.content ?? [];
 };
 
 const parseAuthor = (title?: string) => {
