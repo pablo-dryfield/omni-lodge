@@ -55,6 +55,14 @@ const createBrowserPage = async () => {
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
   const page = await browser.newPage();
+  await page.setRequestInterception(true);
+  page.on('request', (request) => {
+    if (['image', 'stylesheet', 'font', 'media'].includes(request.resourceType())) {
+      request.abort().catch(() => {});
+      return;
+    }
+    request.continue().catch(() => {});
+  });
   await page.setUserAgent(BROWSER_HEADERS['User-Agent']);
   await page.setExtraHTTPHeaders({
     accept: BROWSER_HEADERS.accept,
@@ -62,11 +70,12 @@ const createBrowserPage = async () => {
   });
   await page.goto(SESSION_PRIMER_URL, { waitUntil: 'networkidle2', timeout: 30000 });
   try {
-    await page.goto(SESSION_PRODUCT_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.goto(SESSION_PRODUCT_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
   } catch (error) {
     // ignore, we'll still attempt requests with whatever cookies we have
     console.warn('[getyourguide] Unable to load product page for session priming', error);
   }
+  await page.setRequestInterception(false);
   return { browser, page };
 };
 
