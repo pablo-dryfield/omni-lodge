@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+ï»¿import { useEffect, useMemo, useState } from "react";
 import {
   ActionIcon,
   Button,
@@ -125,7 +125,7 @@ const FinanceRecurring = () => {
     () =>
       categories.data.map((category) => ({
         value: String(category.id),
-        label: `${category.kind === "income" ? "Income" : "Expense"} Â- ${category.name}`,
+        label: `${category.kind === "income" ? "Income" : "Expense"} - ${category.name}`,
       })),
     [categories.data],
   );
@@ -168,15 +168,15 @@ const FinanceRecurring = () => {
           {recurring.data.map((rule) => (
             <Table.Tr key={rule.id}>
               <Table.Td>
-                {rule.kind.toUpperCase()} Â- {(rule.templateJson as { amountMinor?: number })?.amountMinor
+                {rule.kind.toUpperCase()} - {(rule.templateJson as { amountMinor?: number })?.amountMinor
                   ? ((rule.templateJson as { amountMinor?: number }).amountMinor! / 100).toFixed(2)
-                  : "â€”"}
+                  : ""}
               </Table.Td>
               <Table.Td>
                 Every {rule.interval} {rule.frequency}
                 {rule.byMonthDay ? ` on day ${rule.byMonthDay}` : ""}
               </Table.Td>
-              <Table.Td>{rule.nextRunDate ? dayjs(rule.nextRunDate).format("YYYY-MM-DD") : "â€”"}</Table.Td>
+              <Table.Td>{rule.nextRunDate ? dayjs(rule.nextRunDate).format("YYYY-MM-DD") : ""}</Table.Td>
               <Table.Td>{rule.status.toUpperCase()}</Table.Td>
               <Table.Td width={80}>
                 <ActionIcon
@@ -331,3 +331,5 @@ const FinanceRecurring = () => {
 };
 
 export default FinanceRecurring;
+
+

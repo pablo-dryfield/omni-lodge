@@ -1,15 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import {
   ActionIcon,
   Button,
   Group,
   Modal,
   NumberInput,
+  ScrollArea,
   Select,
+  SimpleGrid,
   Stack,
   Table,
   TextInput,
   Title,
+  useMantineTheme,
 } from "@mantine/core";
 import { IconEdit, IconPlus, IconTrash } from "@tabler/icons-react";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
@@ -22,6 +25,7 @@ import {
 } from "../../actions/financeActions";
 import { selectFinanceBudgets, selectFinanceCategories } from "../../selectors/financeSelectors";
 import { FinanceBudget } from "../../types/finance";
+import { useMediaQuery } from "@mantine/hooks";
 
 type DraftBudget = {
   period: string;
@@ -45,6 +49,8 @@ const FinanceBudgets = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingBudget, setEditingBudget] = useState<FinanceBudget | null>(null);
   const [draft, setDraft] = useState<DraftBudget>(defaultDraft);
+  const theme = useMantineTheme();
+  const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
 
   useEffect(() => {
     dispatch(fetchFinanceBudgets());
@@ -68,7 +74,7 @@ const FinanceBudgets = () => {
     () =>
       categories.data.map((category) => ({
         value: String(category.id),
-        label: `${category.kind === "income" ? "Income" : "Expense"} �- ${category.name}`,
+        label: `${category.kind === "income" ? "Income" : "Expense"} - ${category.name}`,
       })),
     [categories.data],
   );
@@ -84,6 +90,11 @@ const FinanceBudgets = () => {
     [budgets.data],
   );
 
+  const normalizeBudgetPayload = (payload: DraftBudget) => ({
+    ...payload,
+    categoryId: payload.categoryId ?? undefined,
+  });
+
   const handleSubmit = async () => {
     if (!draft.period || !draft.categoryId) {
       return;
@@ -93,14 +104,13 @@ const FinanceBudgets = () => {
       await dispatch(
         updateFinanceBudget({
           id: editingBudget.id,
-          changes: {
-            ...editingBudget,
+          changes: normalizeBudgetPayload({
             ...draft,
-          },
+          }),
         }),
       );
     } else {
-      await dispatch(createFinanceBudget(draft));
+      await dispatch(createFinanceBudget(normalizeBudgetPayload(draft)));
     }
 
     setModalOpen(false);
@@ -113,50 +123,52 @@ const FinanceBudgets = () => {
 
   return (
     <Stack gap="lg">
-      <Group justify="space-between">
+      <Group justify="space-between" align={isMobile ? "stretch" : "center"} gap="sm" wrap="wrap">
         <Title order={3}>Budgets</Title>
-        <Button leftSection={<IconPlus size={18} />} onClick={() => setModalOpen(true)}>
+        <Button leftSection={<IconPlus size={18} />} onClick={() => setModalOpen(true)} fullWidth={isMobile}>
           New Budget
         </Button>
       </Group>
 
-      <Table striped highlightOnHover withColumnBorders>
-        <Table.Thead>
-          <Table.Tr>
-            <Table.Th>Period</Table.Th>
-            <Table.Th>Category</Table.Th>
-            <Table.Th ta="right">Amount</Table.Th>
-            <Table.Th />
-          </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {sortedBudgets.map((budget) => (
-            <Table.Tr key={budget.id}>
-              <Table.Td>{budget.period}</Table.Td>
-              <Table.Td>{categories.data.find((category) => category.id === budget.categoryId)?.name ?? "—"}</Table.Td>
-              <Table.Td ta="right">
-                {(budget.amountMinor / 100).toFixed(2)} {budget.currency}
-              </Table.Td>
-              <Table.Td width={120}>
-                <Group gap={4} justify="flex-end">
-                  <ActionIcon
-                    variant="subtle"
-                    onClick={() => {
-                      setEditingBudget(budget);
-                      setModalOpen(true);
-                    }}
-                  >
-                    <IconEdit size={18} />
-                  </ActionIcon>
-                  <ActionIcon variant="subtle" color="red" onClick={() => handleDelete(budget.id)}>
-                    <IconTrash size={18} />
-                  </ActionIcon>
-                </Group>
-              </Table.Td>
+      <ScrollArea offsetScrollbars type="auto">
+        <Table striped highlightOnHover withColumnBorders miw={700}>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Period</Table.Th>
+              <Table.Th>Category</Table.Th>
+              <Table.Th ta="right">Amount</Table.Th>
+              <Table.Th />
             </Table.Tr>
-          ))}
-        </Table.Tbody>
-      </Table>
+          </Table.Thead>
+          <Table.Tbody>
+            {sortedBudgets.map((budget) => (
+              <Table.Tr key={budget.id}>
+                <Table.Td>{budget.period}</Table.Td>
+                <Table.Td>{categories.data.find((category) => category.id === budget.categoryId)?.name ?? ""}</Table.Td>
+                <Table.Td ta="right">
+                  {(budget.amountMinor / 100).toFixed(2)} {budget.currency}
+                </Table.Td>
+                <Table.Td width={120}>
+                  <Group gap={4} justify="flex-end">
+                    <ActionIcon
+                      variant="subtle"
+                      onClick={() => {
+                        setEditingBudget(budget);
+                        setModalOpen(true);
+                      }}
+                    >
+                      <IconEdit size={18} />
+                    </ActionIcon>
+                    <ActionIcon variant="subtle" color="red" onClick={() => handleDelete(budget.id)}>
+                      <IconTrash size={18} />
+                    </ActionIcon>
+                  </Group>
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      </ScrollArea>
 
       <Modal
         opened={modalOpen}
@@ -166,6 +178,7 @@ const FinanceBudgets = () => {
         }}
         title={editingBudget ? "Edit Budget" : "New Budget"}
         size="lg"
+        scrollAreaComponent={ScrollArea.Autosize}
       >
         <Stack gap="md">
           <TextInput
@@ -188,7 +201,7 @@ const FinanceBudgets = () => {
             searchable
             withAsterisk
           />
-          <Group grow>
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
             <NumberInput
               label="Amount"
               decimalScale={2}
@@ -206,12 +219,14 @@ const FinanceBudgets = () => {
               onChange={(event) => setDraft((state) => ({ ...state, currency: event.currentTarget.value.toUpperCase() }))}
               maxLength={3}
             />
-          </Group>
-          <Group justify="flex-end">
-            <Button variant="light" onClick={() => setModalOpen(false)}>
+          </SimpleGrid>
+          <Group justify="flex-end" gap="sm" wrap="wrap">
+            <Button variant="light" onClick={() => setModalOpen(false)} fullWidth={isMobile}>
               Cancel
             </Button>
-            <Button onClick={handleSubmit}>{editingBudget ? "Save changes" : "Create budget"}</Button>
+            <Button onClick={handleSubmit} fullWidth={isMobile}>
+              {editingBudget ? "Save changes" : "Create budget"}
+            </Button>
           </Group>
         </Stack>
       </Modal>
@@ -220,4 +235,10 @@ const FinanceBudgets = () => {
 };
 
 export default FinanceBudgets;
+
+
+
+
+
+
 

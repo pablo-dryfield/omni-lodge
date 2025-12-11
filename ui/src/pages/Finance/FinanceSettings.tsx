@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { Alert, Button, Grid, Group, NumberInput, Stack, Switch, TextInput, Title } from "@mantine/core";
 import { IconInfoCircle } from "@tabler/icons-react";
 
@@ -95,4 +95,6 @@ const FinanceSettings = () => {
 };
 
 export default FinanceSettings;
+
+
 

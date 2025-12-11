@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+﻿import { useEffect, useMemo } from "react";
 import { Card, Grid, Group, Stack, Text, Title } from "@mantine/core";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { fetchFinanceBudgets, fetchFinanceManagementRequests, fetchFinanceTransactions } from "../../actions/financeActions";
@@ -122,4 +122,6 @@ const FinanceDashboard = () => {
 };
 
 export default FinanceDashboard;
+
+
 
