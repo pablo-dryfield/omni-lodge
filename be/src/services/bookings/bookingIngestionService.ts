@@ -404,8 +404,12 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
     }
 
     const lastMutationAt = bookingRecord.statusChangedAt ?? bookingRecord.createdAt ?? null;
-    if (lastMutationAt && eventOccurredAt < lastMutationAt) {
-      throw new StaleBookingEventError(event.platform, event.platformBookingId, email.messageId);
+    const isOlderEvent = Boolean(lastMutationAt && eventOccurredAt < lastMutationAt);
+    if (isOlderEvent) {
+      const canApplyOlderEvent = event.eventType === 'created' || event.eventType === 'amended';
+      if (!canApplyOlderEvent) {
+        throw new StaleBookingEventError(event.platform, event.platformBookingId, email.messageId);
+      }
     }
 
     const bookingFields = { ...(event.bookingFields ?? {}) };

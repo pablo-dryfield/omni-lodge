@@ -151,7 +151,22 @@ export class FreeTourBookingParser implements BookingEmailParser {
       return null;
     }
 
-    const bookingReference = extractField(text, 'Booking Reference Number:', ['Booking Total Cost:']);
+    let bookingReference = extractField(text, 'Booking Reference Number:', ['Booking Total Cost:']);
+
+    if (!bookingReference) {
+      const inlineMatch = text.match(/#([\w-]{6,})/);
+      if (inlineMatch) {
+        bookingReference = inlineMatch[1];
+      }
+    }
+
+    if (!bookingReference && context.subject) {
+      const subjectMatch = context.subject.match(/#([\w-]{6,})/);
+      if (subjectMatch) {
+        bookingReference = subjectMatch[1];
+      }
+    }
+
     if (!bookingReference) {
       return null;
     }
