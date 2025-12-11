@@ -33,3 +33,21 @@ export const fetchTripAdvisorReviews = createAsyncThunk(
     }
   },
 );
+
+export const fetchGetYourGuideReviews = createAsyncThunk(
+  "getYourGuideReviews/fetchGetYourGuideReviews",
+  async ({ forceRefresh = false }: { forceRefresh?: boolean } = {}, { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.get<ServerResponse<Partial<Review>>>(
+        "/reviews/getyourguideReviews",
+        {
+          withCredentials: true,
+          params: forceRefresh ? { forceRefresh: true } : undefined,
+        },
+      );
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error instanceof Error ? error.message : "Unknown error");
+    }
+  },
+);

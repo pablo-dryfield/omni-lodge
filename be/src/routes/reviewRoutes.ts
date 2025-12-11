@@ -17,5 +17,6 @@ router.get('/tripadvisorReviews', authMiddleware, reviewController.getTripAdviso
 
 // Google revies
 router.get('/googleReviews', authMiddleware, reviewController.getAllGoogleReviews);
+router.get('/getyourguideReviews', authMiddleware, reviewController.getGetYourGuideReviews);
 
 export default router;

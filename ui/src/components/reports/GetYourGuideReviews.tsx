@@ -1,97 +1,82 @@
 import React, { useEffect, useRef } from "react";
 import {
-  Card,
+  Button,
   Avatar,
+  Badge,
+  Box,
+  Card,
+  Group,
+  Paper,
+  Stack,
   Table,
+  TableTbody,
+  TableTd,
+  TableTh,
   TableThead,
   TableTr,
-  TableTh,
-  TableTd,
-  TableTbody,
-  Badge,
   Text,
-  Group,
-  Box,
-  Stack,
-  Paper,
   Title,
   useMantineTheme,
 } from "@mantine/core";
 import { useMediaQuery } from "@mantine/hooks";
 import { IconStarFilled } from "@tabler/icons-react";
-import { fetchGoogleReviews } from "../../actions/reviewsActions";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
+import { fetchGetYourGuideReviews } from "../../actions/reviewsActions";
 
 const ratingColor = {
   ONE: "red",
   TWO: "red",
-  THREE: "red",
+  THREE: "orange",
   FOUR: "blue",
   FIVE: "green",
 };
 
-const GoogleReviews: React.FC = () => {
+const formatDate = (dateStr?: string) => {
+  if (!dateStr) return "";
+  const date = new Date(dateStr);
+  const hasTime =
+    date.getUTCHours() !== 0 || date.getUTCMinutes() !== 0 || date.getUTCSeconds() !== 0;
+  return date.toLocaleString("en-GB", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: hasTime ? "2-digit" : undefined,
+    minute: hasTime ? "2-digit" : undefined,
+    second: hasTime ? "2-digit" : undefined,
+    timeZone: "UTC",
+  });
+};
+
+const GetYourGuideReviews: React.FC = () => {
   const dispatch = useAppDispatch();
-  const reviewsState = useAppSelector((state) => state.reviews.google);
-  const loaderRef = useRef<HTMLDivElement | null>(null);
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
-
-  const googleState = reviewsState?.[0];
-  const reviews = googleState?.data?.[0]?.data ?? [];
-  const nextPageToken = googleState?.data?.[0]?.columns?.[0] ?? "";
+  const gygState = useAppSelector((state) => state.reviews.getyourguide);
+  const reviews = gygState?.[0]?.data?.[0]?.data ?? [];
+  const metadata = gygState?.[0]?.data?.[0]?.columns?.[0] as
+    | { lastFetched?: number; fromCache?: boolean; cacheTtlMs?: number }
+    | undefined;
+  const loading = gygState?.[0]?.loading;
+  const error = gygState?.[0]?.error;
+  const hasRequestedInitial = useRef(false);
 
   useEffect(() => {
-    dispatch(fetchGoogleReviews({}));
+    if (hasRequestedInitial.current) return;
+    hasRequestedInitial.current = true;
+    dispatch(fetchGetYourGuideReviews({}));
   }, [dispatch]);
 
-  useEffect(() => {
-  const currentRef = loaderRef.current;
-
-  const observer = new IntersectionObserver(
-    (entries) => {
-      const first = entries[0];
-      if (first.isIntersecting && nextPageToken) {
-        dispatch(fetchGoogleReviews({ nextPageToken }));
-      }
-    },
-    { threshold: 1.0 }
-  );
-
-  if (currentRef) {
-    observer.observe(currentRef);
-  }
-
-  return () => {
-    if (currentRef) {
-      observer.unobserve(currentRef);
-    }
-  };
-}, [dispatch, nextPageToken]);
-
-
-  const formatDate = (dateStr?: string) => {
-    if (!dateStr) return "";
-    const date = new Date(dateStr);
-    const hasTime =
-      date.getUTCHours() !== 0 || date.getUTCMinutes() !== 0 || date.getUTCSeconds() !== 0;
-    return date.toLocaleString("en-GB", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: hasTime ? "2-digit" : undefined,
-      minute: hasTime ? "2-digit" : undefined,
-      second: hasTime ? "2-digit" : undefined,
-      timeZone: "UTC",
-    });
+  const handleRetry = (forceRefresh?: boolean) => {
+    dispatch(fetchGetYourGuideReviews(forceRefresh ? { forceRefresh: true } : {}));
   };
 
-  const isSuspicious = (createTime?: string, updateTime?: string) => {
-    if (!createTime || !updateTime) return false;
-    const created = new Date(createTime);
-    const updated = new Date(updateTime);
-    return created.getMonth() !== updated.getMonth() || created.getFullYear() !== updated.getFullYear();
-  };
+  const lastFetchedLabel = metadata?.lastFetched
+    ? formatDate(new Date(metadata.lastFetched).toISOString())
+    : null;
+  const cacheTtlMinutes =
+    metadata?.cacheTtlMs && metadata.cacheTtlMs >= 60000
+      ? Math.round(metadata.cacheTtlMs / 60000)
+      : null;
 
   const renderRatingBadge = (starRating?: string) => (
     <Badge
@@ -103,17 +88,6 @@ const GoogleReviews: React.FC = () => {
     </Badge>
   );
 
-  const renderStatusBadge = (createTime?: string, updateTime?: string) =>
-    isSuspicious(createTime, updateTime) ? (
-      <Badge color="red" variant="filled">
-        Suspicious
-      </Badge>
-    ) : (
-      <Badge color="green" variant="light">
-        Not Suspicious
-      </Badge>
-    );
-
   const desktopTable = (
     <Box style={{ maxHeight: 520, overflowY: "auto" }}>
       <Table striped highlightOnHover withColumnBorders horizontalSpacing="md" verticalSpacing="sm">
@@ -122,9 +96,7 @@ const GoogleReviews: React.FC = () => {
             <TableTh style={{ minWidth: 160 }}>User</TableTh>
             <TableTh style={{ minWidth: 110 }}>Rating</TableTh>
             <TableTh>Comment</TableTh>
-            <TableTh style={{ minWidth: 170 }}>Creation Date</TableTh>
-            <TableTh style={{ minWidth: 170 }}>Update Date</TableTh>
-            <TableTh style={{ minWidth: 130 }}>Status</TableTh>
+            <TableTh style={{ minWidth: 170 }}>Date</TableTh>
           </TableTr>
         </TableThead>
         <TableTbody>
@@ -138,7 +110,7 @@ const GoogleReviews: React.FC = () => {
                     size="md"
                     imageProps={{ referrerPolicy: "no-referrer" }}
                   />
-                  <Text fw={500}>{review.reviewer?.displayName ?? "Anonymous guest"}</Text>
+                  <Text fw={500}>{review.reviewer?.displayName ?? "GetYourGuide traveler"}</Text>
                 </Group>
               </TableTd>
               <TableTd>{renderRatingBadge(review.starRating)}</TableTd>
@@ -152,17 +124,10 @@ const GoogleReviews: React.FC = () => {
                   {formatDate(review.createTime)}
                 </Text>
               </TableTd>
-              <TableTd>
-                <Text size="xs" c="gray.6">
-                  {formatDate(review.updateTime)}
-                </Text>
-              </TableTd>
-              <TableTd>{renderStatusBadge(review.createTime, review.updateTime)}</TableTd>
             </TableTr>
           ))}
         </TableTbody>
       </Table>
-      <div ref={loaderRef} style={{ height: 1 }} />
     </Box>
   );
 
@@ -179,7 +144,7 @@ const GoogleReviews: React.FC = () => {
                 imageProps={{ referrerPolicy: "no-referrer" }}
               />
               <Stack gap={2}>
-                <Text fw={600}>{review.reviewer?.displayName ?? "Anonymous guest"}</Text>
+                <Text fw={600}>{review.reviewer?.displayName ?? "GetYourGuide traveler"}</Text>
                 <Text size="xs" c="dimmed">
                   {formatDate(review.createTime)}
                 </Text>
@@ -190,17 +155,8 @@ const GoogleReviews: React.FC = () => {
           <Text size="sm" mt="sm" style={{ whiteSpace: "pre-wrap" }}>
             {review.comment || "No written comment provided."}
           </Text>
-          <Group justify="space-between" mt="sm" align="flex-start" gap="xs">
-            <Stack gap={2}>
-              <Text size="xs" c="gray.6">
-                Updated {formatDate(review.updateTime) || "—"}
-              </Text>
-            </Stack>
-            {renderStatusBadge(review.createTime, review.updateTime)}
-          </Group>
         </Paper>
       ))}
-      <div ref={loaderRef} style={{ height: 1 }} />
     </Stack>
   );
 
@@ -209,26 +165,50 @@ const GoogleReviews: React.FC = () => {
       <Stack gap="sm">
         <Group justify="space-between" align="flex-start" wrap="wrap">
           <div>
-            <Title order={3}>Google Reviews</Title>
+            <Title order={3}>GetYourGuide Reviews</Title>
             <Text size="sm" c="dimmed">
-              Real-time sentiment directly from Google so you can read every word guests share about your experience.
+              Tap into GetYourGuide feedback scraped directly from the public listing to complement our Google and
+              TripAdvisor feeds.
             </Text>
           </div>
-          <Badge variant="light" color="indigo">
-            Live feed
-          </Badge>
+          <Group gap="xs">
+            <Badge variant="light" color="grape">
+              Scraped feed
+            </Badge>
+            {metadata?.fromCache !== undefined && (
+              <Badge variant="light" color={metadata.fromCache ? "yellow" : "green"}>
+                {metadata.fromCache ? "Cached result" : "Fresh scrape"}
+              </Badge>
+            )}
+          </Group>
         </Group>
-        {googleState?.loading ? (
+        <Group justify="space-between" align="center" wrap="wrap">
+          <Text size="xs" c="dimmed">
+            {lastFetchedLabel
+              ? `Last updated ${lastFetchedLabel}${metadata?.fromCache ? " · served from cache" : ""}`
+              : "Awaiting first successful scrape..."}
+            {cacheTtlMinutes ? ` · Cache refresh window: ~${cacheTtlMinutes} min` : ""}
+          </Text>
+          <Button onClick={() => handleRetry(true)} variant="outline" size="xs" loading={loading}>
+            Refresh now
+          </Button>
+        </Group>
+        {loading ? (
           <Text size="sm" c="dimmed">
-            Loading Google reviews...
+            Loading GetYourGuide reviews...
           </Text>
-        ) : googleState?.error ? (
-          <Text size="sm" c="red">
-            {googleState.error}
-          </Text>
+        ) : error ? (
+          <Stack gap="xs">
+            <Text size="sm" c="red">
+              {error}
+            </Text>
+            <Button onClick={() => handleRetry(true)} variant="light" size="xs" loading={loading}>
+              Retry loading reviews
+            </Button>
+          </Stack>
         ) : reviews.length === 0 ? (
           <Text size="sm" c="dimmed">
-            No reviews available yet.
+            No GetYourGuide reviews available yet.
           </Text>
         ) : isMobile ? (
           mobileCards
@@ -240,4 +220,4 @@ const GoogleReviews: React.FC = () => {
   );
 };
 
-export default GoogleReviews;
+export default GetYourGuideReviews;

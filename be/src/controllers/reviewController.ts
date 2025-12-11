@@ -3,6 +3,7 @@ import { DataType } from 'sequelize-typescript';
 import Review from '../models/Review.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { scrapeTripAdvisor } from '../scrapers/tripAdvisorScraper.js';
+import { scrapeGetYourGuideReviews } from '../scrapers/getYourGuideScraper.js';
 import axios from 'axios';
 import dotenv from 'dotenv';
 
@@ -14,10 +15,12 @@ const {
   GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET,
   GOOGLE_REFRESH_TOKEN,
+  GYG_CACHE_TTL_MS,
 } = process.env;
 
 const ACCOUNT_ID = '113350814099227260053';
 const LOCATION_ID = '13077434667897843628';
+const GET_YOUR_GUIDE_TTL = Number(GYG_CACHE_TTL_MS ?? 5 * 60 * 1000);
 
 export const getAllGoogleReviews = async (req: Request, res: Response) => {
   try {
@@ -110,10 +113,6 @@ export const getTripAdvisorReviews = async (req: Request, res: Response) => {
   try {
     const scrapedReviews = await scrapeTripAdvisor();
     if (!scrapedReviews.length) {
-      console.warn("[TripAdvisor] Scraper returned no reviews");
-    } else {
-      console.info("[TripAdvisor] Scraper retrieved", scrapedReviews.length, "reviews");
-      console.debug("[TripAdvisor] First review sample:", scrapedReviews[0]);
     }
     const normalized = scrapedReviews.map((review, index) => ({
       reviewId: review.reviewId ?? `tripadvisor-${index}-${review.date ?? Date.now()}`,
@@ -131,5 +130,40 @@ export const getTripAdvisorReviews = async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error scraping TripAdvisor:', error);
     res.status(500).json({ error: 'Failed to fetch reviews from TripAdvisor' });
+  }
+};
+
+export const getGetYourGuideReviews = async (req: Request, res: Response) => {
+  try {
+    const forceRefresh = typeof req.query.forceRefresh === 'string' && req.query.forceRefresh === 'true';
+    const { reviews: scrapedReviews, fetchedAt, fromCache } = await scrapeGetYourGuideReviews({
+      forceRefresh,
+    });
+    const normalized = scrapedReviews.map((review, index) => ({
+      reviewId: review.reviewId ?? `getyourguide-${index}-${review.date ?? Date.now()}`,
+      comment: review.comment ?? '',
+      createTime: review.date ?? new Date().toISOString(),
+      updateTime: review.date ?? new Date().toISOString(),
+      starRating: mapScoreToStarRating(review.rating),
+      reviewer: {
+        displayName: review.location ? `${review.name} (${review.location})` : review.name,
+        profilePhotoUrl: review.avatarUrl ?? '',
+      },
+    }));
+    res.status(200).json([
+      {
+        data: normalized,
+        columns: [
+          {
+            lastFetched: fetchedAt,
+            fromCache,
+            cacheTtlMs: GET_YOUR_GUIDE_TTL,
+          },
+        ],
+      },
+    ]);
+  } catch (error) {
+    console.error('Error scraping GetYourGuide:', error);
+    res.status(500).json({ error: 'Failed to fetch reviews from GetYourGuide' });
   }
 };
