@@ -183,33 +183,9 @@ const GetYourGuideReviews: React.FC = () => {
               TripAdvisor feeds.
             </Text>
           </div>
-          <Group gap="xs">
-            <Badge variant="light" color="grape">
-              Scraped feed
-            </Badge>
-            {metadata?.fromCache !== undefined && (
-              <Badge variant="light" color={metadata.fromCache ? "yellow" : "green"}>
-                {metadata.fromCache ? "Cached result" : "Fresh scrape"}
-              </Badge>
-            )}
-          </Group>
-        </Group>
-        <Group justify="space-between" align="center" wrap="wrap">
-          <Text size="xs" c="dimmed">
-            {lastFetchedLabel
-              ? `Last updated ${lastFetchedLabel}${metadata?.fromCache ? " · served from cache" : ""}`
-              : "Awaiting first successful scrape..."}
-            {cacheTtlMinutes ? ` · Cache refresh window: ~${cacheTtlMinutes} min` : ""}
-            {` · Showing ${reviews.length} of ${limitInUse} requested reviews`}
-          </Text>
-          <Group gap="xs">
-            <Button onClick={() => handleLoadMore()} variant="light" size="xs" disabled={limitInUse >= maxLimit || loading}>
-              {limitInUse >= maxLimit ? "Maximum loaded" : "Load more reviews"}
-            </Button>
-            <Button onClick={() => handleRetry(true)} variant="outline" size="xs" loading={loading}>
-              Refresh now
-            </Button>
-          </Group>
+          <Badge variant="light" color="teal">
+            Live feed
+          </Badge>
         </Group>
         {loading ? (
           <Text size="sm" c="dimmed">
@@ -232,6 +208,24 @@ const GetYourGuideReviews: React.FC = () => {
           mobileCards
         ) : (
           desktopTable
+        )}
+        <Group justify="center">
+          <Badge variant="light" color="gray">
+            Showing {reviews.length}
+            {metadata?.limit ? ` of ${metadata.limit}` : ""} requested reviews
+          </Badge>
+        </Group>
+        {limitInUse < maxLimit && (
+          <Group justify="center">
+            <Button
+              onClick={handleLoadMore}
+              loading={loading}
+              variant="light"
+              disabled={limitInUse >= maxLimit}
+            >
+              {limitInUse >= maxLimit ? "Maximum loaded" : "Load more reviews"}
+            </Button>
+          </Group>
         )}
       </Stack>
     </Card>

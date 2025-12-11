@@ -22,11 +22,15 @@ export const fetchGoogleReviews = createAsyncThunk(
 
 export const fetchTripAdvisorReviews = createAsyncThunk(
   "tripAdvisorReviews/fetchTripAdvisorReviews",
-  async (_, { rejectWithValue }) => {
+  async ({ offset = 0 }: { offset?: number } = {}, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<Review>>>("/reviews/tripadvisorReviews", {
-        withCredentials: true,
-      });
+      const response = await axiosInstance.get<ServerResponse<Partial<Review>>>(
+        "/reviews/tripadvisorReviews",
+        {
+          withCredentials: true,
+          params: offset ? { offset } : undefined,
+        },
+      );
       return response.data;
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : "Unknown error");

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect } from "react";
 import {
   Card,
   Avatar,
@@ -15,6 +15,7 @@ import {
   Stack,
   Paper,
   Title,
+  Button,
   useMantineTheme,
 } from "@mantine/core";
 import { useMediaQuery } from "@mantine/hooks";
@@ -30,49 +31,29 @@ const ratingColor = {
   FIVE: "green",
 };
 
-const INITIAL_VISIBLE_COUNT = 40;
-const VISIBLE_BATCH_SIZE = 40;
-
 const TripAdvisorReviews: React.FC = () => {
   const dispatch = useAppDispatch();
   const reviewsState = useAppSelector((state) => state.reviews.tripadvisor);
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
-  const loaderRef = useRef<HTMLDivElement | null>(null);
 
   const tripAdvisorState = reviewsState?.[0];
   const reviews = tripAdvisorState?.data?.[0]?.data ?? [];
-
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
-  const visibleReviews = reviews.slice(0, visibleCount);
+  const metadata = tripAdvisorState?.data?.[0]?.columns?.[0] as
+    | {
+        offset?: number;
+        nextOffset?: number;
+        totalCount?: number;
+        hasMore?: boolean;
+        pageSize?: number;
+      }
+    | undefined;
 
   useEffect(() => {
     if (!tripAdvisorState?.loading && reviews.length === 0) {
       dispatch(fetchTripAdvisorReviews());
     }
   }, [dispatch, tripAdvisorState?.loading, reviews.length]);
-
-  useEffect(() => {
-    setVisibleCount(INITIAL_VISIBLE_COUNT);
-  }, [reviews.length]);
-
-  useEffect(() => {
-    const sentinel = loaderRef.current;
-    if (!sentinel) return undefined;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const first = entries[0];
-        if (first.isIntersecting && visibleCount < reviews.length) {
-          setVisibleCount((prev) => Math.min(prev + VISIBLE_BATCH_SIZE, reviews.length));
-        }
-      },
-      { threshold: 1 },
-    );
-
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [visibleCount, reviews.length]);
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return "";
@@ -132,7 +113,7 @@ const TripAdvisorReviews: React.FC = () => {
           </TableTr>
         </TableThead>
         <TableTbody>
-          {visibleReviews.map((review, index) => (
+          {reviews.map((review, index) => (
             <TableTr key={review.reviewId || index}>
               <TableTd>
                 <Group gap="sm">
@@ -166,13 +147,12 @@ const TripAdvisorReviews: React.FC = () => {
           ))}
         </TableTbody>
       </Table>
-      <div ref={loaderRef} style={{ height: 1 }} />
     </Box>
   );
 
   const mobileCards = (
     <Stack gap="sm">
-      {visibleReviews.map((review, index) => (
+      {reviews.map((review, index) => (
         <Paper key={review.reviewId || index} withBorder radius="md" p="md" shadow="xs">
           <Group justify="space-between" align="flex-start">
             <Group gap="sm" align="flex-start">
@@ -204,9 +184,14 @@ const TripAdvisorReviews: React.FC = () => {
           </Group>
         </Paper>
       ))}
-      <div ref={loaderRef} style={{ height: 1 }} />
     </Stack>
   );
+
+  const handleLoadMore = () => {
+    if (tripAdvisorState?.loading) return;
+    const nextOffset = metadata?.nextOffset ?? reviews.length;
+    dispatch(fetchTripAdvisorReviews({ offset: nextOffset }));
+  };
 
   return (
     <Card shadow="sm" padding="lg" radius="md" withBorder>
@@ -238,6 +223,19 @@ const TripAdvisorReviews: React.FC = () => {
           mobileCards
         ) : (
           desktopTable
+        )}
+        <Group justify="center">
+          <Badge variant="light" color="gray">
+            Showing {reviews.length}
+            {metadata?.totalCount ? ` of ${metadata.totalCount}` : ""} reviews
+          </Badge>
+        </Group>
+        {metadata?.hasMore && (
+          <Group justify="center">
+            <Button onClick={handleLoadMore} loading={tripAdvisorState?.loading} variant="light">
+              Load more reviews
+            </Button>
+          </Group>
         )}
       </Stack>
     </Card>

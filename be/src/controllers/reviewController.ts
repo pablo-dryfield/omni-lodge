@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { DataType } from 'sequelize-typescript';
 import Review from '../models/Review.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
-import { scrapeTripAdvisor } from '../scrapers/tripAdvisorScraper.js';
+import { fetchTripAdvisorRaw, TRIP_ADVISOR_PAGE_SIZE } from '../scrapers/tripAdvisorScraper.js';
 import { scrapeGetYourGuideReviews } from '../scrapers/getYourGuideScraper.js';
 import axios from 'axios';
 import dotenv from 'dotenv';
@@ -115,11 +115,14 @@ const mapScoreToStarRating = (score?: number): "ONE" | "TWO" | "THREE" | "FOUR" 
 
 export const getTripAdvisorReviews = async (req: Request, res: Response) => {
   try {
-    const scrapedReviews = await scrapeTripAdvisor();
-    if (!scrapedReviews.length) {
-    }
-    const normalized = scrapedReviews.map((review, index) => ({
-      reviewId: review.reviewId ?? `tripadvisor-${index}-${review.date ?? Date.now()}`,
+    const offsetParam =
+      typeof req.query.offset === 'string' && !Number.isNaN(Number(req.query.offset))
+        ? Number(req.query.offset)
+        : 0;
+    const safeOffset = Math.max(0, offsetParam);
+    const page = await fetchTripAdvisorRaw(safeOffset);
+    const normalized = (page.reviews ?? []).map((review, index) => ({
+      reviewId: review.reviewId ?? `tripadvisor-${safeOffset + index}-${review.date ?? Date.now()}`,
       comment: review.description ?? "",
       createTime: review.createdDate ?? review.date ?? new Date().toISOString(),
       updateTime: review.publishedDate ?? review.date ?? new Date().toISOString(),
@@ -130,7 +133,17 @@ export const getTripAdvisorReviews = async (req: Request, res: Response) => {
       },
     }));
 
-    res.status(200).json([{ data: normalized, columns: [""] }]);
+    const nextOffset = safeOffset + normalized.length;
+    res.status(200).json([{
+      data: normalized,
+      columns: [{
+        offset: safeOffset,
+        nextOffset,
+        pageSize: TRIP_ADVISOR_PAGE_SIZE,
+        totalCount: page.totalCount ?? normalized.length,
+        hasMore: nextOffset < (page.totalCount ?? nextOffset),
+      }],
+    }]);
   } catch (error) {
     console.error('Error scraping TripAdvisor:', error);
     res.status(500).json({ error: 'Failed to fetch reviews from TripAdvisor' });
