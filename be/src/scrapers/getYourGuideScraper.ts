@@ -27,6 +27,9 @@ const MAX_LIMIT = Number(process.env.GYG_MAX_LIMIT ?? 150);
 const CACHE_TTL_MS = Number(process.env.GYG_CACHE_TTL_MS ?? 5 * 60 * 1000);
 
 const SESSION_PRIMER_URL = process.env.GYG_SESSION_URL ?? 'https://www.getyourguide.com/';
+const SESSION_PRODUCT_URL =
+  process.env.GYG_PRODUCT_URL ??
+  'https://www.getyourguide.com/krawl-through-krakow-pubcrawl-s264786/';
 
 const BROWSER_HEADERS = {
   accept:
@@ -58,6 +61,12 @@ const createBrowserPage = async () => {
     'accept-language': BROWSER_HEADERS['accept-language'],
   });
   await page.goto(SESSION_PRIMER_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+  try {
+    await page.goto(SESSION_PRODUCT_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+  } catch (error) {
+    // ignore, we'll still attempt requests with whatever cookies we have
+    console.warn('[getyourguide] Unable to load product page for session priming', error);
+  }
   return { browser, page };
 };
 
@@ -94,21 +103,34 @@ const buildNextPayload = (payload: Record<string, any>) => ({
   payload,
 });
 
-const requestBlocks = async (page: Page, body: Record<string, any>) =>
-  page.evaluate(
+const requestBlocks = async (page: Page, body: Record<string, any>) => {
+  const cookies = await page.cookies();
+
+  return page.evaluate(
     async ({
       endpoint,
       payload,
+      cookiesFromPage,
     }: {
       endpoint: string;
       payload: Record<string, any>;
+      cookiesFromPage: Array<{ name: string; value: string }>;
     }) => {
-      const cookiePairs = document.cookie.split(';').map((entry) => entry.trim()).filter(Boolean);
       const cookieMap: Record<string, string> = {};
-      cookiePairs.forEach((entry) => {
+
+      const fromDocument = document.cookie
+        .split(';')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      fromDocument.forEach((entry) => {
         const [key, ...valueParts] = entry.split('=');
         if (key) {
           cookieMap[key] = valueParts.join('=');
+        }
+      });
+      cookiesFromPage?.forEach((cookie) => {
+        if (cookie?.name) {
+          cookieMap[cookie.name] = cookie.value ?? '';
         }
       });
 
@@ -148,7 +170,7 @@ const requestBlocks = async (page: Page, body: Record<string, any>) =>
         'x-gyg-time-zone': 'Europe/Warsaw',
       });
 
-      const visitorId = getCookieValue('visitor-id');
+      const visitorId = getCookieValue('visitor-id') ?? getCookieValue('visitor_id');
       if (visitorId) {
         headers.set('visitor-id', visitorId);
         headers.set('x-gyg-visitor-id', visitorId);
@@ -176,8 +198,9 @@ const requestBlocks = async (page: Page, body: Record<string, any>) =>
       const data = (await response.json()) as GetYourGuideBlocksResponse;
       return data.content ?? [];
     },
-    { endpoint: DEFAULT_ENDPOINT, payload: body },
+    { endpoint: DEFAULT_ENDPOINT, payload: body, cookiesFromPage: cookies },
   );
+};
 
 const parseAuthor = (title?: string) => {
   if (!title) return { name: 'GetYourGuide traveler', location: undefined };
