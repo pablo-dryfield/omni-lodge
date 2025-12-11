@@ -36,6 +36,7 @@ import type { Dayjs } from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
 import type { AxiosError } from "axios";
 import axiosInstance from "../../utils/axiosInstance";
+import { useMediaQuery } from "@mantine/hooks";
 import { useAppSelector } from "../../store/hooks";
 import { makeSelectIsModuleActionAllowed } from "../../selectors/accessControlSelectors";
 import {
@@ -203,6 +204,11 @@ const palette = {
   tableShadow: "0 18px 40px rgba(124, 77, 255, 0.18)",
   cardShadow: "0 12px 28px rgba(124, 77, 255, 0.22)",
 };
+
+const MOBILE_CARD_SHADOW = "0 20px 36px rgba(46, 52, 70, 0.12)";
+const MOBILE_SECTION_SHADOW = "0 14px 28px rgba(82, 36, 199, 0.12)";
+const MOBILE_SECTION_BACKGROUND = "#F6F1FF";
+const MOBILE_SECONDARY_SECTION_BACKGROUND = "#F8F9FD";
 
 const HEADER_FONT_STACK = "'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif";
 
@@ -673,6 +679,7 @@ const BuilderPage = () => {
   const [draggedAssignmentIds, setDraggedAssignmentIds] = useState<number[] | null>(null);
   const [dragHoverInstanceId, setDragHoverInstanceId] = useState<number | null>(null);
   const [pendingAssignmentUserId, setPendingAssignmentUserId] = useState<number | null>(null);
+  const isMobile = useMediaQuery("(max-width: 900px)");
   const [pendingAssignmentRoleRequirement, setPendingAssignmentRoleRequirement] = useState<RoleRequirementInput | null>(null);
   const [pendingMoveAssignmentIds, setPendingMoveAssignmentIds] = useState<number[] | null>(null);
   const [selectedRosterUserId, setSelectedRosterUserId] = useState<number | null>(null);
@@ -2676,6 +2683,247 @@ const BuilderPage = () => {
     );
   };
 
+  const renderMobileInstanceCard = (
+    instance: ShiftInstance,
+    options?: { sectionLabel?: string; roleRequirement?: RoleRequirementInput | null },
+  ) => {
+    const assignments = instance.assignments ?? [];
+    const grouped = groupAssignmentsByUser(assignments);
+    const label = formatShiftTimeRange(instance.timeStart, instance.timeEnd) || "Any time";
+    const title = instance.template?.name ?? options?.sectionLabel ?? "Shift";
+    const roleRequirement = options?.roleRequirement ?? null;
+    const handleOpenCard = () => {
+      if (!canModifyWeek) {
+        return;
+      }
+      void openAssignmentForShift(instance, {
+        userId: selectedRosterUserId,
+        preferredRequirement: roleRequirement,
+      });
+    };
+
+    return (
+      <Card
+        withBorder
+        radius="md"
+        padding="md"
+        shadow="sm"
+        onClick={handleOpenCard}
+        style={{
+          width: "100%",
+          cursor: canModifyWeek ? "pointer" : "default",
+          backgroundColor: "#fff",
+          borderColor: palette.border,
+          boxShadow: MOBILE_SECTION_SHADOW,
+        }}
+      >
+        <Stack gap="sm" style={{ width: "100%" }}>
+          <Group justify="space-between" align="flex-start" wrap="nowrap">
+            <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
+              <Text fw={700} style={{ fontFamily: HEADER_FONT_STACK, color: palette.slate }}>
+                {title}
+              </Text>
+              <Text size="xs" c="dimmed" style={{ fontFamily: HEADER_FONT_STACK }}>
+                {label}
+              </Text>
+            </Stack>
+            {canModifyWeek ? (
+              <ActionIcon
+                variant="subtle"
+                color="red"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleDeleteInstance(instance);
+                }}
+              >
+                <IconTrash size={16} />
+              </ActionIcon>
+            ) : null}
+          </Group>
+          <Stack gap={6} style={{ width: "100%" }}>
+            {grouped.length > 0 ? (
+              grouped
+                .map((groupAssignments) =>
+                  renderAssignmentCard(groupAssignments, { allowManage: canModifyWeek }),
+                )
+                .filter((node): node is JSX.Element => Boolean(node))
+            ) : (
+              <Text size="sm" c="dimmed" ta="center">
+                No staff assigned yet
+              </Text>
+            )}
+          </Stack>
+          {canModifyWeek ? (
+            <Button
+              size="xs"
+              variant="light"
+              leftSection={<IconPlus size={14} />}
+              onClick={(event) => {
+                event.stopPropagation();
+                void openAssignmentForShift(instance, {
+                  userId: selectedRosterUserId,
+                  preferredRequirement: roleRequirement,
+                });
+              }}
+            >
+              Add staff
+            </Button>
+          ) : null}
+        </Stack>
+      </Card>
+    );
+  };
+
+  const renderMobileBuilderSchedule = () => {
+    if (daysOfWeek.length === 0) {
+      return (
+        <Text size="sm" c="dimmed" ta="center" style={{ fontFamily: HEADER_FONT_STACK }}>
+          No schedule data available for this week.
+        </Text>
+      );
+    }
+
+    const dayCards = daysOfWeek.map((day) => {
+      const isoDate = day.format("YYYY-MM-DD");
+      const pubInstances = pubCrawlInstancesByDate.get(isoDate) ?? [];
+      const otherSections = otherShiftGroups.flatMap((group) =>
+        group.timeBuckets.map((bucket) => ({
+          key: `${group.key}-${bucket.label}-${isoDate}`,
+          heading: group.heading,
+          label: bucket.label,
+          instances: bucket.instancesByDate.get(isoDate) ?? [],
+        })),
+      );
+      const hasAnyContent =
+        pubInstances.length > 0 || otherSections.some((section) => section.instances.length > 0);
+
+      return (
+        <Card
+          key={`mobile-day-${isoDate}`}
+          radius="lg"
+          shadow="xl"
+          padding="lg"
+          withBorder
+          style={{
+            width: "100%",
+            backgroundColor: "#ffffff",
+            borderColor: palette.border,
+            boxShadow: MOBILE_CARD_SHADOW,
+          }}
+        >
+          <Stack gap="lg" align="center" style={{ width: "100%" }}>
+            <Stack gap={6} align="center" style={{ width: "100%" }}>
+              <Text
+                size="lg"
+                fw={700}
+                ta="center"
+                style={{ fontFamily: HEADER_FONT_STACK, color: palette.slate }}
+              >
+                {day.format("dddd")}
+              </Text>
+              <Text size="sm" c="dimmed" ta="center" style={{ fontFamily: HEADER_FONT_STACK }}>
+                {day.format("MMM D, YYYY")}
+              </Text>
+              <Box style={{ width: 56, height: 2, backgroundColor: palette.border }} />
+            </Stack>
+
+            <Card
+              withBorder
+              radius="md"
+              padding="md"
+              shadow="sm"
+              style={{
+                width: "100%",
+                backgroundColor: MOBILE_SECTION_BACKGROUND,
+                borderColor: "rgba(124, 77, 255, 0.14)",
+                boxShadow: MOBILE_SECTION_SHADOW,
+              }}
+            >
+              <Stack gap="sm" style={{ width: "100%" }}>
+                <Text
+                  size="sm"
+                  fw={700}
+                  ta="center"
+                  style={{ fontFamily: HEADER_FONT_STACK, letterSpacing: "0.08em", color: palette.plumDark }}
+                >
+                  Pub Crawl
+                </Text>
+                <Stack gap="sm" style={{ width: "100%" }}>
+                  {pubInstances.length > 0 ? (
+                    pubInstances.map((instance) => (
+                      <Box key={`pub-instance-${isoDate}-${instance.id}`} style={{ width: "100%" }}>
+                        {renderMobileInstanceCard(instance)}
+                      </Box>
+                    ))
+                  ) : (
+                    <Text size="sm" c="dimmed" ta="center">
+                      No shifts scheduled yet
+                    </Text>
+                  )}
+                </Stack>
+              </Stack>
+            </Card>
+
+            {otherSections.map((section) => (
+              <Card
+                key={section.key}
+                withBorder
+                radius="md"
+                padding="md"
+                shadow="sm"
+                style={{
+                  width: "100%",
+                  backgroundColor: MOBILE_SECONDARY_SECTION_BACKGROUND,
+                  borderColor: "rgba(46, 52, 70, 0.1)",
+                  boxShadow: MOBILE_SECTION_SHADOW,
+                }}
+              >
+                <Stack gap="xs" style={{ width: "100%" }}>
+                  <Text
+                    size="sm"
+                    fw={700}
+                    ta="center"
+                    style={{ fontFamily: HEADER_FONT_STACK, letterSpacing: "0.06em", color: palette.plumDark }}
+                  >
+                    {section.heading}
+                  </Text>
+                  <Text size="xs" c="dimmed" ta="center" style={{ fontFamily: HEADER_FONT_STACK }}>
+                    {section.label}
+                  </Text>
+                  <Stack gap="sm" style={{ width: "100%" }}>
+                    {section.instances.length > 0 ? (
+                      section.instances.map((instance) => (
+                        <Box key={`${section.key}-${instance.id}`} style={{ width: "100%" }}>
+                          {renderMobileInstanceCard(instance)}
+                        </Box>
+                      ))
+                    ) : (
+                      <Text size="sm" c="dimmed" ta="center">
+                        No shifts scheduled yet
+                      </Text>
+                    )}
+                  </Stack>
+                </Stack>
+              </Card>
+            ))}
+
+            {!hasAnyContent ? (
+              <Text size="sm" c="dimmed" ta="center" style={{ fontFamily: HEADER_FONT_STACK }}>
+                No shifts scheduled for this day.
+              </Text>
+            ) : null}
+          </Stack>
+        </Card>
+      );
+    });
+
+    return (
+      <Stack gap="lg" align="center" style={{ width: "100%" }}>
+        {dayCards}
+      </Stack>
+    );
+  };
+
   const renderScheduleTable = (
     key: string,
     heading: string,
@@ -2832,13 +3080,23 @@ const BuilderPage = () => {
     );
   });
 
-  const rosterPanel = (
-    <Card
-      withBorder
-      shadow="md"
-      radius="lg"
-      padding="lg"
-      style={{
+  const rosterCardStyle: CSSProperties = isMobile
+    ? {
+        flex: "0 0 auto",
+        width: "100%",
+        minWidth: "100%",
+        maxWidth: "100%",
+        height: "60vh",
+        maxHeight: "60vh",
+        position: "sticky",
+        top: 16,
+        zIndex: 5,
+        backgroundColor: "#fff",
+        borderColor: palette.border,
+        display: "flex",
+        flexDirection: "column",
+      }
+    : {
         flex: `1 1 ${ROSTER_PANEL_WIDTH}px`,
         minWidth: 260,
         maxWidth: 420,
@@ -2848,7 +3106,28 @@ const BuilderPage = () => {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-      }}
+      };
+
+  const rosterScrollStyle: CSSProperties = isMobile
+    ? {
+        flex: 1,
+        overflowY: "auto",
+        marginTop: 8,
+        paddingRight: 6,
+      }
+    : {
+        flex: 1,
+        overflowY: "auto",
+        marginTop: 12,
+      };
+
+  const rosterPanel = (
+    <Card
+      withBorder
+      shadow="md"
+      radius="lg"
+      padding="lg"
+      style={rosterCardStyle}
     >
       <Stack gap="xs">
         <Group justify="space-between" align="flex-start" wrap="nowrap">
@@ -2881,7 +3160,7 @@ const BuilderPage = () => {
           </Stack>
         </Group>
       </Stack>
-      <Box style={{ flex: 1, overflowY: "auto", marginTop: 12 }}>
+      <Box style={rosterScrollStyle}>
         {staffCards.length ? (
           <Stack gap="sm">
             {staffCards.map((staffer) => {
@@ -3320,6 +3599,58 @@ const BuilderPage = () => {
         <Center py="xl">
           <Loader />
         </Center>
+      ) : isMobile ? (
+        <Stack gap="lg" style={{ width: "100%" }}>
+          {!hasWeek ? (
+            <Alert color="yellow" variant="light" radius="md" title="Week not available">
+              <Text size="sm">
+                Schedule data for {formatWeekValue(selectedWeek)} is not available yet. Generate the week to begin
+                assigning staff.
+              </Text>
+            </Alert>
+          ) : (
+            <Card
+              withBorder
+              shadow="xl"
+              radius="lg"
+              padding="xl"
+              style={{ backgroundColor: palette.lavender, borderColor: palette.border }}
+            >
+              <Stack gap="md" style={{ width: "100%", minWidth: 0 }}>
+                <Text size="sm" c="dimmed" ta="center">
+                  {selectedRosterUserName
+                    ? `Selected: ${selectedRosterUserName}. Tap a shift to manage assignments.`
+                    : "Tip: Select someone from the roster first to prefill assignments."}
+                </Text>
+                <Box
+                  style={{
+                    width: "100%",
+                    maxHeight: "60vh",
+                    overflowY: "auto",
+                    paddingRight: 6,
+                  }}
+                >
+                  {renderMobileBuilderSchedule()}
+                </Box>
+                {pubCrawlInstances.length === 0 ? (
+                  <Alert
+                    mb={0}
+                    color="yellow"
+                    variant="light"
+                    radius="md"
+                    icon={<IconAlertTriangle size={16} />}
+                    title="No pub crawl shifts found"
+                  >
+                    <Text size="sm">
+                      There are no assignments for the pub crawl shift during {formatWeekValue(selectedWeek)}.
+                    </Text>
+                  </Alert>
+                ) : null}
+              </Stack>
+            </Card>
+          )}
+          <Box style={{ width: "100%" }}>{rosterPanel}</Box>
+        </Stack>
       ) : (
         <Group align="flex-start" gap="lg" wrap="wrap" style={{ width: "100%" }}>
           <Box style={{ flex: "2 1 600px", minWidth: 0 }}>
