@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Button,
   Avatar,
@@ -51,23 +51,35 @@ const GetYourGuideReviews: React.FC = () => {
   const dispatch = useAppDispatch();
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
+  const [requestedLimit, setRequestedLimit] = useState(40);
   const gygState = useAppSelector((state) => state.reviews.getyourguide);
   const reviews = gygState?.[0]?.data?.[0]?.data ?? [];
   const metadata = gygState?.[0]?.data?.[0]?.columns?.[0] as
-    | { lastFetched?: number; fromCache?: boolean; cacheTtlMs?: number }
+    | {
+        lastFetched?: number;
+        fromCache?: boolean;
+        cacheTtlMs?: number;
+        limit?: number;
+        requestedLimit?: number | null;
+        maxLimit?: number;
+        minLimit?: number;
+      }
     | undefined;
   const loading = gygState?.[0]?.loading;
   const error = gygState?.[0]?.error;
-  const hasRequestedInitial = useRef(false);
+  const maxLimit = metadata?.maxLimit ?? 150;
+  const limitInUse = metadata?.limit ?? requestedLimit;
 
   useEffect(() => {
-    if (hasRequestedInitial.current) return;
-    hasRequestedInitial.current = true;
-    dispatch(fetchGetYourGuideReviews({}));
-  }, [dispatch]);
+    dispatch(fetchGetYourGuideReviews({ limit: requestedLimit }));
+  }, [dispatch, requestedLimit]);
 
   const handleRetry = (forceRefresh?: boolean) => {
-    dispatch(fetchGetYourGuideReviews(forceRefresh ? { forceRefresh: true } : {}));
+    dispatch(fetchGetYourGuideReviews({ limit: requestedLimit, forceRefresh }));
+  };
+
+  const handleLoadMore = () => {
+    setRequestedLimit((prev) => Math.min(prev + 20, maxLimit));
   };
 
   const lastFetchedLabel = metadata?.lastFetched
@@ -188,10 +200,16 @@ const GetYourGuideReviews: React.FC = () => {
               ? `Last updated ${lastFetchedLabel}${metadata?.fromCache ? " · served from cache" : ""}`
               : "Awaiting first successful scrape..."}
             {cacheTtlMinutes ? ` · Cache refresh window: ~${cacheTtlMinutes} min` : ""}
+            {` · Showing ${reviews.length} of ${limitInUse} requested reviews`}
           </Text>
-          <Button onClick={() => handleRetry(true)} variant="outline" size="xs" loading={loading}>
-            Refresh now
-          </Button>
+          <Group gap="xs">
+            <Button onClick={() => handleLoadMore()} variant="light" size="xs" disabled={limitInUse >= maxLimit || loading}>
+              {limitInUse >= maxLimit ? "Maximum loaded" : "Load more reviews"}
+            </Button>
+            <Button onClick={() => handleRetry(true)} variant="outline" size="xs" loading={loading}>
+              Refresh now
+            </Button>
+          </Group>
         </Group>
         {loading ? (
           <Text size="sm" c="dimmed">

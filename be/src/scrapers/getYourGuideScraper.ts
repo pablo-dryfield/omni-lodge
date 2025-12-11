@@ -22,6 +22,9 @@ const DEFAULT_ACTIVITY_ID = Number(process.env.GYG_ACTIVITY_ID ?? 443425);
 const DEFAULT_RANKING_UUID = process.env.GYG_RANKING_UUID ?? '2abbc102-010b-4c47-b440-376e2af70475';
 const DEFAULT_LIMIT = Number(process.env.GYG_REVIEWS_LIMIT ?? 30);
 const PAGE_LIMIT = Number(process.env.GYG_PAGE_LIMIT ?? 10);
+const MIN_LIMIT = Number(process.env.GYG_MIN_LIMIT ?? 20);
+const MAX_LIMIT = Number(process.env.GYG_MAX_LIMIT ?? 150);
+const CACHE_TTL_MS = Number(process.env.GYG_CACHE_TTL_MS ?? 5 * 60 * 1000);
 
 const SESSION_PRIMER_URL = process.env.GYG_SESSION_URL ?? 'https://www.getyourguide.com/';
 
@@ -58,14 +61,12 @@ const createBrowserPage = async () => {
   return { browser, page };
 };
 
-const CACHE_TTL_MS = Number(process.env.GYG_CACHE_TTL_MS ?? 5 * 60 * 1000);
-
 type CacheEntry = {
   reviews: GetYourGuideReview[];
   fetchedAt: number;
 };
 
-let cachedReviews: CacheEntry | null = null;
+const cacheByLimit: Record<number, CacheEntry> = {};
 
 const buildInitialPayload = () => ({
   events: [
@@ -206,23 +207,29 @@ const findLoadMorePayload = (content: Array<Record<string, any>>): Record<string
 
 type ScrapeOptions = {
   forceRefresh?: boolean;
+  limit?: number;
 };
 
 type ScrapeResult = {
   reviews: GetYourGuideReview[];
   fetchedAt: number;
   fromCache: boolean;
+  limit: number;
 };
 
 export const scrapeGetYourGuideReviews = async (
   options?: ScrapeOptions,
 ): Promise<ScrapeResult> => {
+  const requestedLimit = options?.limit ?? DEFAULT_LIMIT;
+  const normalizedLimit = Math.max(MIN_LIMIT, Math.min(MAX_LIMIT, requestedLimit));
   const now = Date.now();
-  if (!options?.forceRefresh && cachedReviews && now - cachedReviews.fetchedAt < CACHE_TTL_MS) {
+  const cachedEntry = cacheByLimit[normalizedLimit];
+  if (!options?.forceRefresh && cachedEntry && now - cachedEntry.fetchedAt < CACHE_TTL_MS) {
     return {
-      reviews: cachedReviews.reviews,
-      fetchedAt: cachedReviews.fetchedAt,
+      reviews: cachedEntry.reviews,
+      fetchedAt: cachedEntry.fetchedAt,
       fromCache: true,
+      limit: normalizedLimit,
     };
   }
 
@@ -233,12 +240,12 @@ export const scrapeGetYourGuideReviews = async (
     let body: Record<string, any> | undefined = buildInitialPayload();
     let iterations = 0;
 
-    while (body && reviews.length < DEFAULT_LIMIT && iterations < 10) {
+    while (body && reviews.length < normalizedLimit && iterations < 10) {
       const content = await requestBlocks(page, body);
       reviews.push(...extractReviews(content));
       const loadMorePayload = findLoadMorePayload(content);
 
-      if (!loadMorePayload || reviews.length >= DEFAULT_LIMIT) {
+      if (!loadMorePayload || reviews.length >= normalizedLimit) {
         break;
       }
 
@@ -251,15 +258,16 @@ export const scrapeGetYourGuideReviews = async (
       iterations += 1;
     }
 
-    const trimmed = reviews.slice(0, DEFAULT_LIMIT);
-    cachedReviews = {
+    const trimmed = reviews.slice(0, normalizedLimit);
+    cacheByLimit[normalizedLimit] = {
       reviews: trimmed,
       fetchedAt: Date.now(),
     };
     return {
       reviews: trimmed,
-      fetchedAt: cachedReviews.fetchedAt,
+      fetchedAt: cacheByLimit[normalizedLimit].fetchedAt,
       fromCache: false,
+      limit: normalizedLimit,
     };
   } finally {
     await browser.close();

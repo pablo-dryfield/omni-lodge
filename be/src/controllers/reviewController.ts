@@ -16,11 +16,15 @@ const {
   GOOGLE_CLIENT_SECRET,
   GOOGLE_REFRESH_TOKEN,
   GYG_CACHE_TTL_MS,
+  GYG_MAX_LIMIT,
+  GYG_MIN_LIMIT,
 } = process.env;
 
 const ACCOUNT_ID = '113350814099227260053';
 const LOCATION_ID = '13077434667897843628';
 const GET_YOUR_GUIDE_TTL = Number(GYG_CACHE_TTL_MS ?? 5 * 60 * 1000);
+const GET_YOUR_GUIDE_MAX = Number(GYG_MAX_LIMIT ?? 150);
+const GET_YOUR_GUIDE_MIN = Number(GYG_MIN_LIMIT ?? 20);
 
 export const getAllGoogleReviews = async (req: Request, res: Response) => {
   try {
@@ -136,8 +140,10 @@ export const getTripAdvisorReviews = async (req: Request, res: Response) => {
 export const getGetYourGuideReviews = async (req: Request, res: Response) => {
   try {
     const forceRefresh = typeof req.query.forceRefresh === 'string' && req.query.forceRefresh === 'true';
-    const { reviews: scrapedReviews, fetchedAt, fromCache } = await scrapeGetYourGuideReviews({
+    const requestedLimit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : undefined;
+    const { reviews: scrapedReviews, fetchedAt, fromCache, limit } = await scrapeGetYourGuideReviews({
       forceRefresh,
+      limit: requestedLimit,
     });
     const normalized = scrapedReviews.map((review, index) => ({
       reviewId: review.reviewId ?? `getyourguide-${index}-${review.date ?? Date.now()}`,
@@ -158,6 +164,10 @@ export const getGetYourGuideReviews = async (req: Request, res: Response) => {
             lastFetched: fetchedAt,
             fromCache,
             cacheTtlMs: GET_YOUR_GUIDE_TTL,
+            limit,
+            requestedLimit: requestedLimit ?? null,
+            maxLimit: GET_YOUR_GUIDE_MAX,
+            minLimit: GET_YOUR_GUIDE_MIN,
           },
         ],
       },

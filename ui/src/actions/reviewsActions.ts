@@ -36,15 +36,18 @@ export const fetchTripAdvisorReviews = createAsyncThunk(
 
 export const fetchGetYourGuideReviews = createAsyncThunk(
   "getYourGuideReviews/fetchGetYourGuideReviews",
-  async ({ forceRefresh = false }: { forceRefresh?: boolean } = {}, { rejectWithValue }) => {
+  async (
+    { forceRefresh = false, limit }: { forceRefresh?: boolean; limit?: number } = {},
+    { rejectWithValue },
+  ) => {
     try {
-      const response = await axiosInstance.get<ServerResponse<Partial<Review>>>(
-        "/reviews/getyourguideReviews",
-        {
-          withCredentials: true,
-          params: forceRefresh ? { forceRefresh: true } : undefined,
-        },
-      );
+      const params: Record<string, any> = {};
+      if (forceRefresh) params.forceRefresh = true;
+      if (typeof limit === "number") params.limit = limit;
+      const response = await axiosInstance.get<ServerResponse<Partial<Review>>>("/reviews/getyourguideReviews", {
+        withCredentials: true,
+        params: Object.keys(params).length ? params : undefined,
+      });
       return response.data;
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : "Unknown error");
