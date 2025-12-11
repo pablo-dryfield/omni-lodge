@@ -178,10 +178,6 @@ const GetYourGuideReviews: React.FC = () => {
         <Group justify="space-between" align="flex-start" wrap="wrap">
           <div>
             <Title order={3}>GetYourGuide Reviews</Title>
-            <Text size="sm" c="dimmed">
-              Tap into GetYourGuide feedback scraped directly from the public listing to complement our Google and
-              TripAdvisor feeds.
-            </Text>
           </div>
           <Badge variant="light" color="teal">
             Live feed

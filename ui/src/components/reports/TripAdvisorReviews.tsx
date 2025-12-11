@@ -51,7 +51,7 @@ const TripAdvisorReviews: React.FC = () => {
 
   useEffect(() => {
     if (!tripAdvisorState?.loading && reviews.length === 0) {
-      dispatch(fetchTripAdvisorReviews());
+      dispatch(fetchTripAdvisorReviews({ offset: 0 }));
     }
   }, [dispatch, tripAdvisorState?.loading, reviews.length]);
 
@@ -199,9 +199,6 @@ const TripAdvisorReviews: React.FC = () => {
         <Group justify="space-between" align="flex-start" wrap="wrap">
           <div>
             <Title order={3}>TripAdvisor Reviews</Title>
-            <Text size="sm" c="dimmed">
-              Mirrors the Google layout so both feeds feel consistent while you scroll through the full TripAdvisor history.
-            </Text>
           </div>
           <Badge variant="light" color="teal">
             Live feed
