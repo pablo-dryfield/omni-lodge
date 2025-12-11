@@ -12,6 +12,7 @@ import {
   persistUploadedBackup,
   type CommandResult,
 } from '../services/dbBackupService.js';
+import logger from '../utils/logger.js';
 
 const summarizeCommandResult = (result: CommandResult) => {
   const truncate = (value: string): string => {
@@ -107,15 +108,23 @@ export const restoreDbBackup = async (req: AuthenticatedRequest, res: Response):
 };
 
 export const createDbBackup = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    const result = await executeBackupScript();
-    res.status(201).json({
-      message: 'Backup script executed successfully',
-      result: summarizeCommandResult(result),
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
+  const startedAt = new Date().toISOString();
+  setImmediate(async () => {
+    try {
+      const result = await executeBackupScript();
+      logger.info('[db-backup] Manual backup completed', {
+        startedAt,
+        result: summarizeCommandResult(result),
+      });
+    } catch (error) {
+      logger.error('[db-backup] Manual backup failed', error);
+    }
+  });
+
+  res.status(202).json({
+    message: 'Backup request accepted. Refresh the list in a couple of minutes to see the new entry.',
+    startedAt,
+  });
 };
 
 export const uploadAndRestoreDbBackup = async (req: AuthenticatedRequest, res: Response): Promise<void> => {

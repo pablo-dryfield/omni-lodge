@@ -34,11 +34,10 @@ const upload = multer({
 
 router.use(authMiddleware, requireRoles(['admin']));
 
-router.get('/', getDbBackups);
 router.post('/create', createDbBackup);
+router.get('/', getDbBackups);
 router.post('/upload/restore', upload.single('backup'), uploadAndRestoreDbBackup);
 router.post('/:filename/restore', restoreDbBackup);
 router.get('/:filename/download', downloadDbBackup);
 
 export default router;
-
