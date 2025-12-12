@@ -10,6 +10,7 @@ import {
   Flex,
   Group,
   Loader,
+  Modal,
   Paper,
   Select,
   Stack,
@@ -19,11 +20,15 @@ import {
   TextInput,
 } from "@mantine/core";
 
+import { DatePickerInput, TimeInput } from "@mantine/dates";
 import { useMediaQuery } from '@mantine/hooks';
 
 import { IconArrowLeft, IconArrowRight, IconCalendar, IconRefresh, IconSearch } from "@tabler/icons-react";
 
 import dayjs, { Dayjs } from "dayjs";
+import customParseFormat from "dayjs/plugin/customParseFormat";
+
+dayjs.extend(customParseFormat);
 
 import { useSearchParams } from "react-router-dom";
 
@@ -423,6 +428,92 @@ const mergeManifestGroups = (groups: ManifestGroup[]): ManifestGroup[] => {
   });
 };
 
+const isEcwidOrder = (order: UnifiedOrder): boolean => {
+  return (order.platform ?? '').toLowerCase() === 'ecwid';
+};
+
+const getBookingIdFromOrder = (order: UnifiedOrder): number | null => {
+  if (!order || !order.rawData) {
+    return null;
+  }
+  const candidate = (order.rawData as { bookingId?: unknown }).bookingId;
+  if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+    return candidate;
+  }
+  if (typeof candidate === 'string' && candidate.trim().length > 0) {
+    const parsed = Number.parseInt(candidate.trim(), 10);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+};
+
+const normalizeTimeInput = (value: string): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const formats = ['HH:mm', 'H:mm'];
+  for (const format of formats) {
+    const parsed = dayjs(trimmed, format, true);
+    if (parsed.isValid()) {
+      return parsed.format('HH:mm');
+    }
+  }
+  const fallback = dayjs(`1970-01-01 ${trimmed}`);
+  return fallback.isValid() ? fallback.format('HH:mm') : null;
+};
+
+const extractErrorMessage = (error: unknown): string => {
+  if (!error) {
+    return 'Something went wrong';
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  if (typeof error === 'object') {
+    const withMessage = error as { message?: string };
+    if ('response' in error && error.response) {
+      const responseData = (error as { response: { data?: unknown } }).response.data;
+      if (typeof responseData === 'string') {
+        return responseData;
+      }
+      if (responseData && typeof responseData === 'object' && 'message' in responseData) {
+        const nested = responseData as { message?: string };
+        if (nested.message) {
+          return nested.message;
+        }
+      }
+    }
+    if (withMessage.message) {
+      return withMessage.message;
+    }
+  }
+  return 'Something went wrong';
+};
+
+type AmendModalState = {
+  opened: boolean;
+  order: UnifiedOrder | null;
+  bookingId: number | null;
+  formDate: Date | null;
+  formTime: string;
+  submitting: boolean;
+  error: string | null;
+};
+
+const createDefaultAmendState = (): AmendModalState => ({
+  opened: false,
+  order: null,
+  bookingId: null,
+  formDate: null,
+  formTime: '',
+  submitting: false,
+  error: null,
+});
+
 const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
   const dispatch = useAppDispatch();
@@ -476,6 +567,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
   const [reloadToken, setReloadToken] = useState(0);
   const [searchInput, setSearchInput] = useState(searchParam);
+  const [amendState, setAmendState] = useState<AmendModalState>(createDefaultAmendState());
 
   useEffect(() => {
     setSearchInput(searchParam);
@@ -574,6 +666,62 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const handleSearchClear = () => {
     setSearchInput("");
     applySearchParamValue("");
+  };
+
+  const openAmendModal = (order: UnifiedOrder) => {
+    const baseState = createDefaultAmendState();
+    baseState.opened = true;
+    baseState.order = order;
+    baseState.bookingId = getBookingIdFromOrder(order);
+    baseState.formDate = order.date && dayjs(order.date, DATE_FORMAT, true).isValid()
+      ? dayjs(order.date, DATE_FORMAT).toDate()
+      : null;
+    baseState.formTime = order.timeslot && /^\d{1,2}:\d{2}$/.test(order.timeslot) ? order.timeslot : '';
+    if (!baseState.bookingId) {
+      baseState.error = "Unable to locate OmniLodge booking reference for this order.";
+    }
+    setAmendState(baseState);
+  };
+
+  const closeAmendModal = () => {
+    setAmendState(createDefaultAmendState());
+  };
+
+  const handleAmendDateChange = (value: Date | null) => {
+    setAmendState((prev) => ({ ...prev, formDate: value }));
+  };
+
+  const handleAmendTimeChange = (value: string | Date | null) => {
+    const nextValue = value instanceof Date ? dayjs(value).format("HH:mm") : value ?? "";
+    setAmendState((prev) => ({ ...prev, formTime: nextValue }));
+  };
+
+  const handleAmendSubmit = async () => {
+    if (!amendState.bookingId) {
+      setAmendState((prev) => ({ ...prev, error: "Missing OmniLodge booking reference." }));
+      return;
+    }
+    if (!amendState.formDate || !amendState.formTime) {
+      setAmendState((prev) => ({ ...prev, error: "Pickup date and time are required." }));
+      return;
+    }
+    const normalizedTime = normalizeTimeInput(amendState.formTime);
+    if (!normalizedTime) {
+      setAmendState((prev) => ({ ...prev, error: "Please provide a valid pickup time (HH:mm)." }));
+      return;
+    }
+    setAmendState((prev) => ({ ...prev, submitting: true, error: null }));
+    try {
+      await axiosInstance.post(`/bookings/${amendState.bookingId}/amend-ecwid`, {
+        pickupDate: dayjs(amendState.formDate).format(DATE_FORMAT),
+        pickupTime: normalizedTime,
+      });
+      setAmendState(createDefaultAmendState());
+      setReloadToken((token) => token + 1);
+    } catch (error) {
+      const message = extractErrorMessage(error);
+      setAmendState((prev) => ({ ...prev, submitting: false, error: message }));
+    }
   };
 
 
@@ -1099,6 +1247,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                             {sortedOrders.map((order) => {
                               const bookingDisplay = order.platformBookingId ?? order.id;
                               const bookingLink = getPlatformBookingLink(order.platform, order.platformBookingId);
+                              const bookingId = getBookingIdFromOrder(order);
+                              const canAmend = isEcwidOrder(order) && Boolean(bookingId);
                               return (
                                 <Paper
                                   key={order.id}
@@ -1184,6 +1334,16 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                         </Text>
                                       );
                                     })()}
+                                    {canAmend && (
+                                      <Button
+                                        size="xs"
+                                        variant="light"
+                                        onClick={() => openAmendModal(order)}
+                                        style={{ alignSelf: "flex-start" }}
+                                      >
+                                        Amend
+                                      </Button>
+                                    )}
                                   </Stack>
                                 </Stack>
                               </Paper>
@@ -1263,17 +1423,18 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               <Table.Th>Status</Table.Th>
                               <Table.Th>Phone</Table.Th>
                               <Table.Th align="right">People</Table.Th>
-                            <Table.Th align="right">Men</Table.Th>
-                            <Table.Th align="right">Women</Table.Th>
-                            <Table.Th align="right">T-Shirts</Table.Th>
-                            <Table.Th align="right">Cocktails</Table.Th>
-                            <Table.Th align="right">Photos</Table.Th>
-                            <Table.Th>Pickup time</Table.Th>
-                          </Table.Tr>
-                        </Table.Thead>
-                          <Table.Tbody>
-                            <Table.Tr style={{ background: "#fff7e6" }}>
-                              <Table.Td fw={600} c="#475569">Summary</Table.Td>
+                          <Table.Th align="right">Men</Table.Th>
+                          <Table.Th align="right">Women</Table.Th>
+                          <Table.Th align="right">T-Shirts</Table.Th>
+                          <Table.Th align="right">Cocktails</Table.Th>
+                          <Table.Th align="right">Photos</Table.Th>
+                          <Table.Th>Pickup time</Table.Th>
+                          <Table.Th>Actions</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                        <Table.Tbody>
+                          <Table.Tr style={{ background: "#fff7e6" }}>
+                            <Table.Td fw={600} c="#475569">Summary</Table.Td>
                               <Table.Td fw={600}>{bookingsLabel}</Table.Td>
                               <Table.Td>
                                 <PlatformBadges
@@ -1303,10 +1464,13 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               {formatAddonValue(group.extras.photos)}
                             </Table.Td>
                             <Table.Td fw={600}>{group.time}</Table.Td>
+                            <Table.Td />
                           </Table.Tr>
                           {sortedOrders.map((order) => {
                             const bookingDisplay = order.platformBookingId ?? order.id;
                             const bookingLink = getPlatformBookingLink(order.platform, order.platformBookingId);
+                            const bookingId = getBookingIdFromOrder(order);
+                            const canAmend = isEcwidOrder(order) && Boolean(bookingId);
                             return (
                               <Table.Tr key={order.id}>
                                 <Table.Td>
@@ -1353,6 +1517,21 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               <Table.Td align="right">{formatAddonValue(order.extras?.cocktails)}</Table.Td>
                               <Table.Td align="right">{formatAddonValue(order.extras?.photos)}</Table.Td>
                               <Table.Td>{order.timeslot}</Table.Td>
+                              <Table.Td>
+                                {canAmend ? (
+                                  <Button
+                                    size="xs"
+                                    variant="light"
+                                    onClick={() => openAmendModal(order)}
+                                  >
+                                    Amend
+                                  </Button>
+                                ) : (
+                                  <Text size="sm" c="dimmed">
+                                    -
+                                  </Text>
+                                )}
+                              </Table.Td>
                             </Table.Tr>
                           );
                         })}
@@ -1372,6 +1551,63 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
       </Stack>
 
+      <Modal
+        opened={amendState.opened}
+        onClose={closeAmendModal}
+        title={
+          amendState.order
+            ? `Amend booking ${amendState.order.platformBookingId ?? amendState.order.id}`
+            : "Amend Ecwid booking"
+        }
+        size="md"
+        centered
+      >
+        <Stack gap="md">
+          <Text size="sm" c="dimmed">
+            Updating the pickup details will sync the change to Ecwid first and then to OmniLodge.
+          </Text>
+          {amendState.order && (
+            <Stack gap={2}>
+              <Text fw={600}>{amendState.order.customerName || "Unnamed guest"}</Text>
+              <Text size="sm" c="dimmed">
+                Current pickup: {amendState.order.date} @ {amendState.order.timeslot}
+              </Text>
+            </Stack>
+          )}
+          <DatePickerInput
+            label="Pickup date"
+            value={amendState.formDate}
+            onChange={handleAmendDateChange}
+            required
+            placeholder="Select new pickup date"
+          />
+          <TimeInput
+            label="Pickup time"
+            value={amendState.formTime}
+            onChange={handleAmendTimeChange}
+            required
+            placeholder="HH:mm"
+          />
+          {amendState.error && (
+            <Alert color="red" title="Unable to update booking">
+              {amendState.error}
+            </Alert>
+          )}
+          <Group justify="flex-end">
+            <Button variant="default" onClick={closeAmendModal}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAmendSubmit}
+              loading={amendState.submitting}
+              disabled={!amendState.formDate || !amendState.formTime || amendState.submitting}
+            >
+              Save changes
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
     </PageAccessGuard>
 
   );
@@ -1381,14 +1617,6 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
 
 export default BookingsManifestPage;
-
-
-
-
-
-
-
-
 
 
 

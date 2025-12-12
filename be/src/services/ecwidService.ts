@@ -62,6 +62,10 @@ export type EcwidExtraField = {
   id?: string;
   name?: string;
   value?: string | number | null;
+  customerInputType?: string;
+  title?: string;
+  orderDetailsDisplaySection?: string;
+  orderBy?: string | number;
 };
 
 export type EcwidOrderItem = {
@@ -128,3 +132,37 @@ export const fetchEcwidOrders = async (params: FetchOrdersParams = {}): Promise<
   return response.data;
 };
 
+export const getEcwidOrder = async (orderId: string | number): Promise<EcwidOrder> => {
+  const trimmedId = String(orderId ?? '').trim();
+  if (!trimmedId) {
+    throw new Error('Order ID is required');
+  }
+
+  const ecwidClient = getEcwidClient();
+  const response = await ecwidClient.get<EcwidOrder>(`/orders/${encodeURIComponent(trimmedId)}`);
+  return response.data;
+};
+
+export type UpdateEcwidOrderPayload = {
+  pickupTime?: string;
+  orderExtraFields?: EcwidExtraField[];
+  [key: string]: unknown;
+};
+
+export const updateEcwidOrder = async (
+  orderId: string | number,
+  payload: UpdateEcwidOrderPayload,
+): Promise<unknown> => {
+  const trimmedId = String(orderId ?? '').trim();
+  if (!trimmedId) {
+    throw new Error('Order ID is required to update Ecwid');
+  }
+
+  if (!payload || Object.keys(payload).length === 0) {
+    throw new Error('No update payload provided for Ecwid order');
+  }
+
+  const ecwidClient = getEcwidClient();
+  const response = await ecwidClient.put(`/orders/${encodeURIComponent(trimmedId)}`, payload);
+  return response.data;
+};

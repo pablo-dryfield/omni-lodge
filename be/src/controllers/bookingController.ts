@@ -1,9 +1,11 @@
 import { Request, Response } from 'express';
+import { isAxiosError } from 'axios';
 import { Op, type WhereOptions, fn, col, where as sequelizeWhere } from 'sequelize';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import Booking from '../models/Booking.js';
+import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { canonicalizeProductKeyFromSources, canonicalizeProductLabelFromSources } from '../utils/productName.js';
 import type {
   UnifiedOrder,
@@ -14,6 +16,7 @@ import type {
 } from '../types/booking.js';
 import { groupOrdersForManifest } from '../utils/ecwidAdapter.js';
 import { BOOKING_STATUSES } from '../constants/bookings.js';
+import { getEcwidOrder, updateEcwidOrder, type EcwidExtraField } from '../services/ecwidService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -24,6 +27,7 @@ const DISPLAY_TIMEZONE =
   process.env.BOOKING_PARSER_TIMEZONE ??
   process.env.ECWID_STORE_TIMEZONE ??
   'Europe/Warsaw';
+const STORE_TIMEZONE = process.env.ECWID_STORE_TIMEZONE ?? DISPLAY_TIMEZONE ?? 'Europe/Warsaw';
 
 type RangeBoundary = 'start' | 'end';
 
@@ -34,6 +38,11 @@ type QueryParams = {
   productId?: string;
   time?: string;
   search?: string;
+};
+
+type AmendEcwidRequestBody = {
+  pickupDate?: string;
+  pickupTime?: string;
 };
 
 const normalizeDate = (value?: string, boundary: RangeBoundary = 'start'): string | null => {
@@ -65,6 +74,52 @@ const resolveRange = (query: QueryParams): { start: string | null; end: string |
     return { start: end, end };
   }
   return { start, end };
+};
+
+const parsePickupMoment = (pickupDate: string, pickupTime: string): dayjs.Dayjs | null => {
+  const safeDate = pickupDate?.trim();
+  const safeTime = pickupTime?.trim();
+  if (!safeDate || !safeTime) {
+    return null;
+  }
+
+  const patterns = ['YYYY-MM-DD HH:mm', 'YYYY-MM-DD H:mm'];
+  for (const pattern of patterns) {
+    const candidate = dayjs.tz(`${safeDate} ${safeTime}`, pattern, STORE_TIMEZONE);
+    if (candidate.isValid()) {
+      return candidate;
+    }
+  }
+  return null;
+};
+
+const buildPickupExtraFieldPayload = (
+  fields: EcwidExtraField[] | undefined,
+  nextValue: string,
+): EcwidExtraField => {
+  const template =
+    fields?.find((field) => field?.id === 'ecwid_order_pickup_time' || field?.name === 'ecwid_order_pickup_time') ??
+    null;
+
+  if (!template) {
+    return {
+      id: 'ecwid_order_pickup_time',
+      value: nextValue,
+      customerInputType: 'DATETIME',
+      title: 'Pickup date and time',
+      orderDetailsDisplaySection: 'shipping_info',
+      orderBy: '0',
+    };
+  }
+
+  return {
+    ...template,
+    value: nextValue,
+    customerInputType: template.customerInputType ?? 'DATETIME',
+    title: template.title ?? template.name ?? 'Pickup date and time',
+    orderDetailsDisplaySection: template.orderDetailsDisplaySection ?? 'shipping_info',
+    orderBy: template.orderBy ?? '0',
+  };
 };
 
 const canonicalizeProductKey = (booking: Booking): string | null => {
@@ -437,5 +492,86 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to build manifest';
     res.status(500).json({ message });
+  }
+};
+
+export const amendEcwidBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const { pickupDate, pickupTime } = req.body as AmendEcwidRequestBody;
+    if (!pickupDate || !pickupTime) {
+      res.status(400).json({ message: 'Both pickupDate and pickupTime are required' });
+      return;
+    }
+
+    const pickupMoment = parsePickupMoment(pickupDate, pickupTime);
+    if (!pickupMoment) {
+      res.status(400).json({ message: 'Invalid pickup date or time' });
+      return;
+    }
+
+    const booking = await Booking.findByPk(bookingIdParam);
+    if (!booking) {
+      res.status(404).json({ message: 'Booking not found' });
+      return;
+    }
+
+    if (booking.platform !== 'ecwid') {
+      res.status(400).json({ message: 'Only Ecwid bookings can be amended through this endpoint' });
+      return;
+    }
+
+    const orderId = booking.platformBookingId?.trim();
+    if (!orderId) {
+      res.status(400).json({ message: 'Booking is missing Ecwid platform reference' });
+      return;
+    }
+
+    const pickupUtc = pickupMoment.utc();
+    const ecwidPickupTime = pickupUtc.format('YYYY-MM-DD HH:mm:ss ZZ');
+
+    const ecwidOrder = await getEcwidOrder(orderId);
+    const pickupExtraField = buildPickupExtraFieldPayload(ecwidOrder.orderExtraFields, ecwidPickupTime);
+
+    await updateEcwidOrder(orderId, {
+      pickupTime: ecwidPickupTime,
+      orderExtraFields: [pickupExtraField],
+    });
+
+    booking.experienceDate = pickupMoment.format(DATE_FORMAT);
+    booking.experienceStartAt = pickupUtc.toDate();
+    booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
+
+    await booking.save();
+
+    res.status(200).json({
+      message: 'Pickup time updated successfully',
+      booking: {
+        id: booking.id,
+        experienceDate: booking.experienceDate,
+        experienceStartAt: booking.experienceStartAt,
+        pickupTimeUtc: pickupUtc.toISOString(),
+      },
+    });
+  } catch (error) {
+    const status = isAxiosError(error) ? error.response?.status ?? 502 : 500;
+    let message = 'Failed to amend Ecwid booking';
+    if (isAxiosError(error)) {
+      if (typeof error.response?.data === 'string') {
+        message = error.response.data;
+      } else if (error.response?.data?.message) {
+        message = error.response.data.message;
+      } else if (error.message) {
+        message = error.message;
+      }
+    } else if (error instanceof Error) {
+      message = error.message;
+    }
+    res.status(status).json({ message });
   }
 };
