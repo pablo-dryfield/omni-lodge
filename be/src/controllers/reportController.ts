@@ -1953,7 +1953,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     }
 
     commissionDataByUser.forEach((summary, userId) => {
-      const profile = profileByUserId?.get(userId) ?? null;
+      const profile = profileByUserId.get(userId) ?? null;
       const staffProfileId = profile?.id ?? null;
       const collection =
         (staffProfileId ? collectionMap.get(staffProfileId) : undefined) ?? {
@@ -1964,23 +1964,24 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       summary.staffProfileId = staffProfileId;
       summary.financeVendorId = profile?.financeVendorId ?? null;
       summary.financeClientId = profile?.financeClientId ?? null;
-        const payableDue =
-          summary.totalPayout > 0 ? roundCurrencyValue(summary.totalPayout) : 0;
-        const receivableDue =
-          summary.totalPayout < 0 ? roundCurrencyValue(Math.abs(summary.totalPayout)) : 0;
-        summary.payouts = {
-          currency: collection.currency ?? DEFAULT_PAYOUT_CURRENCY,
-          payableDue,
-          payablePaid: roundCurrencyValue(collection.payable),
-          payableOutstanding: roundCurrencyValue(Math.max(payableDue - collection.payable, 0)),
-          receivableDue,
-          receivableCollected: roundCurrencyValue(collection.receivable),
-          receivableOutstanding: roundCurrencyValue(
-            Math.max(receivableDue - collection.receivable, 0),
-          ),
-        };
-      });
-    }
+
+      const payableDue =
+        summary.totalPayout > 0 ? roundCurrencyValue(summary.totalPayout) : 0;
+      const receivableDue =
+        summary.totalPayout < 0 ? roundCurrencyValue(Math.abs(summary.totalPayout)) : 0;
+
+      summary.payouts = {
+        currency: collection.currency ?? DEFAULT_PAYOUT_CURRENCY,
+        payableDue,
+        payablePaid: roundCurrencyValue(collection.payable),
+        payableOutstanding: roundCurrencyValue(Math.max(payableDue - collection.payable, 0)),
+        receivableDue,
+        receivableCollected: roundCurrencyValue(collection.receivable),
+        receivableOutstanding: roundCurrencyValue(
+          Math.max(receivableDue - collection.receivable, 0),
+        ),
+      };
+    });
 
     const vendorIdsByUser = new Map<number, number>();
     commissionDataByUser.forEach((summary, userId) => {
