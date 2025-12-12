@@ -107,17 +107,14 @@ export const createUser = createAsyncThunk(
 export const updateUser = createAsyncThunk(
   'users/updateUser',
   async (
-    { userId, userData }: { userId: number; userData: Partial<User> },
+    { userId, userData }: { userId: number; userData: Partial<User> | FormData },
     { rejectWithValue },
   ) => {
     try {
-      const response = await axiosInstance.put<Partial<User>>(
-        `/users/${userId}`,
-        userData,
-        {
-          withCredentials: true,
-        },
-      );
+      const response = await axiosInstance.put<Partial<User>>(`/users/${userId}`, userData, {
+        withCredentials: true,
+        headers: userData instanceof FormData ? { 'Content-Type': 'multipart/form-data' } : undefined,
+      });
       return response.data;
     } catch (error) {
       return rejectWithValue(extractErrorMessage(error));

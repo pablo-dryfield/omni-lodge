@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   ActionIcon,
+  Avatar,
   Box,
   Button,
   Burger,
@@ -9,6 +10,7 @@ import {
   Drawer,
   Group,
   ScrollArea,
+  Menu,
   Stack,
   Tabs,
   Text,
@@ -17,12 +19,22 @@ import {
   rem,
   useMantineTheme,
 } from "@mantine/core";
+import type { MantineTheme, TabsProps } from "@mantine/core";
 import { useDisclosure, useMediaQuery } from "@mantine/hooks";
-import { IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand, IconLogout } from "@tabler/icons-react";
+import {
+  IconChevronDown,
+  IconLayoutSidebarLeftCollapse,
+  IconLayoutSidebarLeftExpand,
+  IconLogout,
+} from "@tabler/icons-react";
 
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
-import { logoutUser } from "../../actions/userActions";
+import { fetchUsers, logoutUser } from "../../actions/userActions";
 import { selectAllowedNavigationPages } from "../../selectors/accessControlSelectors";
+import type { User } from "../../types/users/User";
+
+const NAV_GAP = 8;
+const OVERFLOW_TRIGGER_RESERVE = 72;
 
 type MainTabsProps = {
   hasSidebar?: boolean;
@@ -38,6 +50,9 @@ const MainTabs = ({
   const dispatch = useAppDispatch();
   const allowedPages = useAppSelector(selectAllowedNavigationPages);
   const { currentPage } = useAppSelector((state) => state.navigation);
+  const sessionUserName = useAppSelector((state) => state.session.user);
+  const loggedUserId = useAppSelector((state) => state.session.loggedUserId);
+  const usersState = useAppSelector((state) => state.users);
   const navigate = useNavigate();
   const location = useLocation();
   const theme = useMantineTheme();
@@ -46,6 +61,41 @@ const MainTabs = ({
   const isTablet = useMediaQuery(`(max-width: ${theme.breakpoints.lg})`);
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
   const showSidebarToggle = hasSidebar && isTablet && Boolean(onSidebarToggle);
+  const [visiblePages, setVisiblePages] = useState(allowedPages);
+  const [overflowPages, setOverflowPages] = useState<typeof allowedPages>([]);
+  const navContainerRef = useRef<HTMLDivElement | null>(null);
+  const navMeasurementRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const requestedUsersRef = useRef(false);
+
+  const userRecords = useMemo(
+    () => (usersState?.[0]?.data?.[0]?.data ?? []) as Partial<User>[],
+    [usersState],
+  );
+  const currentUserRecord = useMemo(
+    () => userRecords.find((record) => record.id === loggedUserId),
+    [userRecords, loggedUserId],
+  );
+
+  const profileInitials = useMemo(() => {
+    if (!sessionUserName) {
+      return "OL";
+    }
+
+    const parts = sessionUserName
+      .split(" ")
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    if (parts.length === 0) {
+      return "OL";
+    }
+
+    if (parts.length === 1) {
+      return parts[0].slice(0, 2).toUpperCase();
+    }
+
+    return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  }, [sessionUserName]);
 
   const activeTab = useMemo(() => {
     if (allowedPages.length === 0) {
@@ -73,6 +123,11 @@ const MainTabs = ({
     window.location.href = "/";
   };
 
+  const handleProfileClick = () => {
+    closeDrawer();
+    navigate("/account");
+  };
+
   const handleNavigate = (path: string) => {
     navigate(path);
     closeDrawer();
@@ -86,6 +141,85 @@ const MainTabs = ({
   useEffect(() => {
     closeDrawer();
   }, [location.pathname, closeDrawer]);
+
+  useEffect(() => {
+    if (!loggedUserId) {
+      requestedUsersRef.current = false;
+      return;
+    }
+    if (currentUserRecord || usersState?.[0]?.loading || requestedUsersRef.current) {
+      return;
+    }
+    requestedUsersRef.current = true;
+    dispatch(fetchUsers());
+  }, [loggedUserId, currentUserRecord, usersState, dispatch]);
+
+  useEffect(() => {
+    setVisiblePages(allowedPages);
+    setOverflowPages([]);
+  }, [allowedPages]);
+
+  const updateNavVisibility = useCallback(() => {
+    if (isTablet || allowedPages.length === 0) {
+      setVisiblePages(allowedPages);
+      setOverflowPages([]);
+      return;
+    }
+
+    const containerWidth = navContainerRef.current?.offsetWidth ?? 0;
+
+    if (containerWidth === 0) {
+      setVisiblePages(allowedPages);
+      setOverflowPages([]);
+      return;
+    }
+
+    const measurements = allowedPages.map((page) => ({
+      page,
+      width: navMeasurementRefs.current[page.path]?.offsetWidth ?? 0,
+    }));
+
+    if (measurements.some(({ width }) => width === 0)) {
+      setVisiblePages(allowedPages);
+      setOverflowPages([]);
+      return;
+    }
+
+    const totalWidth =
+      measurements.reduce((sum, { width }) => sum + width, 0) +
+      Math.max(0, measurements.length - 1) * NAV_GAP;
+
+    if (totalWidth <= containerWidth) {
+      setVisiblePages(allowedPages);
+      setOverflowPages([]);
+      return;
+    }
+
+    const availableWidth = Math.max(containerWidth - OVERFLOW_TRIGGER_RESERVE, measurements[0]?.width ?? 0);
+    const nextVisible: typeof allowedPages = [];
+    const nextOverflow: typeof allowedPages = [];
+    let usedWidth = 0;
+
+    measurements.forEach(({ page, width }) => {
+      const requiredWidth = width + (nextVisible.length > 0 ? NAV_GAP : 0);
+      if (usedWidth + requiredWidth <= availableWidth || nextVisible.length === 0) {
+        usedWidth += requiredWidth;
+        nextVisible.push(page);
+      } else {
+        nextOverflow.push(page);
+      }
+    });
+
+    setVisiblePages(nextVisible);
+    setOverflowPages(nextOverflow);
+  }, [allowedPages, isTablet]);
+
+  useEffect(() => {
+    updateNavVisibility();
+    const handleResize = () => updateNavVisibility();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [updateNavVisibility]);
 
   const shellStyle: React.CSSProperties = {
     background: `linear-gradient(135deg, ${theme.colors.dark[7]} 0%, ${theme.colors.dark[8]} 45%, ${theme.colors.dark[9]} 100%)`,
@@ -113,6 +247,7 @@ const MainTabs = ({
     alignItems: "center",
     width: "100%",
     justifySelf: "center",
+    overflow: "hidden",
   };
 
   const actionsStyle: React.CSSProperties = {
@@ -122,8 +257,86 @@ const MainTabs = ({
     justifySelf: "end",
   };
 
+  const tabsStyles: TabsProps["styles"] = (
+    currentTheme: MantineTheme,
+    _props,
+    _ctx
+  ) => ({
+    root: {
+      background: "transparent",
+      width: "100%",
+    },
+    list: {
+      background: "transparent",
+      display: "flex",
+      gap: rem(NAV_GAP),
+      paddingBottom: 0,
+      flexWrap: "nowrap" as const,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    tab: {
+      position: "relative",
+      backgroundColor: "#050505",
+      color: currentTheme.white,
+      border: "1px solid rgba(255, 255, 255, 0.35)",
+      fontWeight: 600,
+      fontSize: rem(15),
+      padding: `${rem(10)} ${rem(isMobile ? 18 : 22)}`,
+      minHeight: rem(38),
+      borderRadius: rem(999),
+      margin: 0,
+      transition: "all 120ms ease",
+      cursor: "pointer",
+      "&:hover": {
+        backgroundColor: currentTheme.white,
+        color: currentTheme.black,
+        borderColor: "transparent",
+      },
+      "&[data-active]": {
+        backgroundColor: currentTheme.white,
+        color: currentTheme.black,
+        borderColor: "transparent",
+        boxShadow: "0 10px 25px rgba(0, 0, 0, 0.25)",
+        transform: "translateY(-1px)",
+      },
+      "&:active": {
+        transform: "translateY(0)",
+      },
+    },
+  });
+
   return (
     <>
+      <div
+        aria-hidden
+        style={{
+          position: "absolute",
+          top: "-9999px",
+          left: "-9999px",
+          pointerEvents: "none",
+          opacity: 0,
+        }}
+      >
+        {allowedPages.length > 0 && (
+          <Tabs value={null} styles={tabsStyles}>
+            <Tabs.List>
+              {allowedPages.map((page) => (
+                <Tabs.Tab
+                  value={page.path}
+                  key={`measure-${page.path}`}
+                  ref={(node) => {
+                    navMeasurementRefs.current[page.path] = node;
+                  }}
+                >
+                  {page.name}
+                </Tabs.Tab>
+              ))}
+            </Tabs.List>
+          </Tabs>
+        )}
+      </div>
+
       <header style={shellStyle}>
         <div style={innerStyle}>
           <Group
@@ -181,67 +394,60 @@ const MainTabs = ({
             </UnstyledButton>
           </Group>
 
-          <Box style={navContainerStyle}>
+          <Box style={navContainerStyle} ref={navContainerRef}>
             {allowedPages.length > 0 && (
-              <ScrollArea type="never" scrollHideDelay={500} style={{ width: "100%" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: "100%",
+                  gap: rem(8),
+                }}
+              >
                 <Tabs
                   value={activeTab ?? null}
                   onChange={(val) => val && handleNavigate(val)}
                   variant="pills"
                   radius="xl"
-                  styles={(theme) => ({
-                    root: {
-                      background: "transparent",
-                    },
-                    list: {
-                      background: "transparent",
-                      display: "flex",
-                      gap: rem(8),
-                      paddingBottom: 0,
-                      flexWrap: "nowrap",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    },
-                    tab: {
-                      position: "relative",
-                      backgroundColor: "#050505",
-                      color: theme.white,
-                      border: "1px solid rgba(255, 255, 255, 0.35)",
-                      fontWeight: 600,
-                      fontSize: rem(15),
-                      padding: "10px 22px",
-                      minHeight: rem(38),
-                      borderRadius: rem(999),
-                      margin: 0,
-                      transition: "all 120ms ease",
-                      cursor: "pointer",
-                      "&:hover": {
-                        backgroundColor: theme.white,
-                        color: theme.black,
-                        borderColor: "transparent",
-                      },
-                      "&[dataActive]": {
-                        backgroundColor: theme.white,
-                        color: theme.black,
-                        borderColor: "transparent",
-                        boxShadow: "0 10px 25px rgba(0, 0, 0, 0.25)",
-                        transform: "translateY(-1px)",
-                      },
-                      "&:active": {
-                        transform: "translateY(0)",
-                      },
-                    },
-                  })}
+                  styles={tabsStyles}
                 >
                   <Tabs.List>
-                    {allowedPages.map((page) => (
+                    {visiblePages.map((page) => (
                       <Tabs.Tab value={page.path} key={page.name}>
                         {page.name}
                       </Tabs.Tab>
                     ))}
                   </Tabs.List>
                 </Tabs>
-              </ScrollArea>
+                {overflowPages.length > 0 && (
+                  <Menu withinPortal position="bottom-end" offset={4}>
+                    <Menu.Target>
+                      <ActionIcon
+                        variant="filled"
+                        color="dark"
+                        size={isMobile ? 34 : 36}
+                        radius="xl"
+                        aria-label="Show more sections"
+                        style={{
+                          backgroundColor: "rgba(255, 255, 255, 0.1)",
+                          color: theme.white,
+                          border: "1px solid rgba(255, 255, 255, 0.35)",
+                        }}
+                      >
+                        <IconChevronDown size={18} />
+                      </ActionIcon>
+                    </Menu.Target>
+                    <Menu.Dropdown>
+                      {overflowPages.map((page) => (
+                        <Menu.Item key={page.name} onClick={() => handleNavigate(page.path)}>
+                          {page.name}
+                        </Menu.Item>
+                      ))}
+                    </Menu.Dropdown>
+                  </Menu>
+                )}
+              </div>
             )}
           </Box>
 
@@ -273,6 +479,42 @@ const MainTabs = ({
                 </ActionIcon>
               </Tooltip>
             )}
+            <Tooltip label="My profile" position="bottom" offset={4} withArrow>
+              <ActionIcon
+                variant="subtle"
+                size={isMobile ? 34 : 36}
+                onClick={handleProfileClick}
+                aria-label="Open profile"
+                radius="xl"
+                style={{
+                  color: theme.white,
+                  backgroundColor: "rgba(255, 255, 255, 0.08)",
+                }}
+              >
+                <Avatar
+                  size={isMobile ? 26 : 28}
+                  radius="xl"
+                  src={
+                    currentUserRecord?.profilePhotoUrl &&
+                    currentUserRecord.profilePhotoUrl.trim().length > 0
+                      ? currentUserRecord.profilePhotoUrl
+                      : undefined
+                  }
+                  style={{
+                    background:
+                      currentUserRecord?.profilePhotoUrl &&
+                      currentUserRecord.profilePhotoUrl.trim().length > 0
+                        ? "transparent"
+                        : `linear-gradient(135deg, ${theme.colors.blue[6]}, ${theme.colors.indigo[5]})`,
+                    fontWeight: 600,
+                    fontSize: rem(13),
+                    color: currentUserRecord?.profilePhotoUrl ? theme.black : theme.white,
+                  }}
+                >
+                  {!currentUserRecord?.profilePhotoUrl && profileInitials}
+                </Avatar>
+              </ActionIcon>
+            </Tooltip>
             <ActionIcon
               variant="transparent"
               size={isMobile ? 34 : 36}
