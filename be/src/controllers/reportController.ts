@@ -1866,6 +1866,8 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       productBucketsByUser,
     );
 
+    const hydratedSummaryUserIds = Array.from(commissionDataByUser.keys());
+
     const profileByUserId = new Map<
       number,
       {
@@ -1879,12 +1881,12 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       { currency: string; receivable: number; payable: number }
     >();
     let staffProfileIds: number[] = [];
-    if (summaryUserIds.length > 0) {
+    if (hydratedSummaryUserIds.length > 0) {
       const staffProfiles = (await StaffProfile.findAll({
         attributes: ["userId", "financeVendorId", "financeClientId"],
         where: {
           userId: {
-            [Op.in]: summaryUserIds,
+            [Op.in]: hydratedSummaryUserIds,
           },
         },
         raw: true,
