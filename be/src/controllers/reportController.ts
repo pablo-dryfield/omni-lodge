@@ -1866,45 +1866,66 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       productBucketsByUser,
     );
 
+    const profileByUserId = new Map<
+      number,
+      {
+        id: number;
+        financeVendorId: number | null;
+        financeClientId: number | null;
+      }
+    >();
+    const collectionMap = new Map<
+      number,
+      { currency: string; receivable: number; payable: number }
+    >();
+    let staffProfileIds: number[] = [];
     if (summaryUserIds.length > 0) {
-      const staffProfiles = await StaffProfile.findAll({
-        attributes: ["userId", "financeVendorId", "financeClientId"],
+      const staffProfiles = (await StaffProfile.findAll({
+        attributes: ["id", "userId", "financeVendorId", "financeClientId"],
         where: {
           userId: {
             [Op.in]: summaryUserIds,
           },
         },
         raw: true,
-      });
+      })) as Array<{
+        id: number;
+        userId: number;
+        financeVendorId: number | null;
+        financeClientId: number | null;
+      }>;
 
-      const profileByUserId = new Map<number, { userId: number; financeVendorId: number | null; financeClientId: number | null }>();
+      staffProfileIds = staffProfiles.map((profile) => profile.id);
+
       staffProfiles.forEach((profile) => {
-        profileByUserId.set(profile.userId, profile);
+        profileByUserId.set(profile.userId, {
+          id: profile.id,
+          financeVendorId: profile.financeVendorId,
+          financeClientId: profile.financeClientId,
+        });
       });
 
       const collectionRows =
-        (await StaffPayoutCollectionLog.findAll({
-          attributes: [
-            ["staff_profile_id", "staffProfileId"],
-            ["currency_code", "currencyCode"],
-            "direction",
-            [fn("COALESCE", fn("SUM", col("amount_minor")), 0), "totalAmountMinor"],
-          ],
-          where: {
-            staffProfileId: {
-              [Op.in]: summaryUserIds,
-            },
-            rangeStart: start.format("YYYY-MM-DD"),
-            rangeEnd: end.format("YYYY-MM-DD"),
-          },
-          group: ["staff_profile_id", "currency_code", "direction"],
-          raw: true,
-        })) as unknown as StaffCollectionAggregate[];
+        staffProfileIds.length > 0
+          ? ((await StaffPayoutCollectionLog.findAll({
+              attributes: [
+                ["staff_profile_id", "staffProfileId"],
+                ["currency_code", "currencyCode"],
+                "direction",
+                [fn("COALESCE", fn("SUM", col("amount_minor")), 0), "totalAmountMinor"],
+              ],
+              where: {
+                staffProfileId: {
+                  [Op.in]: staffProfileIds,
+                },
+                rangeStart: start.format("YYYY-MM-DD"),
+                rangeEnd: end.format("YYYY-MM-DD"),
+              },
+              group: ["staff_profile_id", "currency_code", "direction"],
+              raw: true,
+            })) as unknown as StaffCollectionAggregate[])
+          : [];
 
-      const collectionMap = new Map<
-        number,
-        { currency: string; receivable: number; payable: number }
-      >();
       collectionRows.forEach((row) => {
         const staffProfileId = Number(row.staffProfileId ?? NaN);
         if (!Number.isFinite(staffProfileId)) {
@@ -1929,18 +1950,20 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         existing.currency = currency;
         collectionMap.set(staffProfileId, existing);
       });
+    }
 
     commissionDataByUser.forEach((summary, userId) => {
-      const profile = profileByUserId.get(userId) ?? null;
+      const profile = profileByUserId?.get(userId) ?? null;
+      const staffProfileId = profile?.id ?? null;
       const collection =
-        collectionMap.get(userId) ?? {
+        (staffProfileId ? collectionMap.get(staffProfileId) : undefined) ?? {
           currency: DEFAULT_PAYOUT_CURRENCY,
-            receivable: 0,
-            payable: 0,
-          };
-        summary.staffProfileId = profile?.userId ?? null;
-        summary.financeVendorId = profile?.financeVendorId ?? null;
-        summary.financeClientId = profile?.financeClientId ?? null;
+          receivable: 0,
+          payable: 0,
+        };
+      summary.staffProfileId = staffProfileId;
+      summary.financeVendorId = profile?.financeVendorId ?? null;
+      summary.financeClientId = profile?.financeClientId ?? null;
         const payableDue =
           summary.totalPayout > 0 ? roundCurrencyValue(summary.totalPayout) : 0;
         const receivableDue =
