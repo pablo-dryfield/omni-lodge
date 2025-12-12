@@ -1869,7 +1869,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     const profileByUserId = new Map<
       number,
       {
-        id: number;
+        staffProfileKey: number | null;
         financeVendorId: number | null;
         financeClientId: number | null;
       }
@@ -1881,7 +1881,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     let staffProfileIds: number[] = [];
     if (summaryUserIds.length > 0) {
       const staffProfiles = (await StaffProfile.findAll({
-        attributes: ["id", "userId", "financeVendorId", "financeClientId"],
+        attributes: ["userId", "financeVendorId", "financeClientId"],
         where: {
           userId: {
             [Op.in]: summaryUserIds,
@@ -1889,17 +1889,16 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         },
         raw: true,
       })) as Array<{
-        id: number;
         userId: number;
         financeVendorId: number | null;
         financeClientId: number | null;
       }>;
 
-      staffProfileIds = staffProfiles.map((profile) => profile.id);
+      staffProfileIds = staffProfiles.map((profile) => profile.userId);
 
       staffProfiles.forEach((profile) => {
         profileByUserId.set(profile.userId, {
-          id: profile.id,
+          staffProfileKey: profile.userId,
           financeVendorId: profile.financeVendorId,
           financeClientId: profile.financeClientId,
         });
@@ -1954,14 +1953,14 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
 
     commissionDataByUser.forEach((summary, userId) => {
       const profile = profileByUserId.get(userId) ?? null;
-      const staffProfileId = profile?.id ?? null;
+      const staffProfileKey = profile?.staffProfileKey ?? null;
       const collection =
-        (staffProfileId ? collectionMap.get(staffProfileId) : undefined) ?? {
+        (staffProfileKey ? collectionMap.get(staffProfileKey) : undefined) ?? {
           currency: DEFAULT_PAYOUT_CURRENCY,
           receivable: 0,
           payable: 0,
         };
-      summary.staffProfileId = staffProfileId;
+      summary.staffProfileId = staffProfileKey;
       summary.financeVendorId = profile?.financeVendorId ?? null;
       summary.financeClientId = profile?.financeClientId ?? null;
 
