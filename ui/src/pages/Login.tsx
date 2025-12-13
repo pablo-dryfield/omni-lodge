@@ -18,12 +18,9 @@ import {
   Group,
   Progress,
   FileInput,
-  Combobox,
-  InputBase,
-  ScrollArea,
-  useCombobox,
+  Switch,
 } from '@mantine/core';
-import { IconUser, IconLock, IconCheck, IconX, IconChevronDown } from '@tabler/icons-react';
+import { IconUser, IconLock, IconCheck, IconX } from '@tabler/icons-react';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { setUserState } from '../actions/sessionActions';
 import { loginUser, createUser } from '../actions/userActions';
@@ -31,83 +28,13 @@ import { clearSessionError } from '../reducers/sessionReducer';
 import { useShiftRoles } from '../api/shiftRoles';
 import type { ShiftRole } from '../types/shiftRoles/ShiftRole';
 import { useMediaQuery } from '@mantine/hooks';
+import PhoneCodeSelectField from '../components/common/PhoneCodeSelectField';
+import { PRONOUN_OPTIONS } from '../constants/pronouns';
+import { DEFAULT_PHONE_CODE } from '../constants/phoneCodes';
+import { DISCOVERY_SOURCE_OPTIONS } from '../constants/discoverySources';
+import { EMAIL_REGEX, isPhoneNumberValid, normalizePhoneNumber } from '../utils/contactValidation';
+import { buildPhoneFromParts, splitPhoneNumber } from '../utils/phone';
 
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const DEFAULT_PHONE_CODE = '+48';
-const PHONE_CODE_OPTIONS = [
-  { value: '+1', label: '+1 · United States / Canada' },
-  { value: '+20', label: '+20 · Egypt' },
-  { value: '+27', label: '+27 · South Africa' },
-  { value: '+30', label: '+30 · Greece' },
-  { value: '+31', label: '+31 · Netherlands' },
-  { value: '+32', label: '+32 · Belgium' },
-  { value: '+33', label: '+33 · France' },
-  { value: '+34', label: '+34 · Spain' },
-  { value: '+36', label: '+36 · Hungary' },
-  { value: '+39', label: '+39 · Italy' },
-  { value: '+40', label: '+40 · Romania' },
-  { value: '+41', label: '+41 · Switzerland' },
-  { value: '+43', label: '+43 · Austria' },
-  { value: '+44', label: '+44 · United Kingdom' },
-  { value: '+45', label: '+45 · Denmark' },
-  { value: '+46', label: '+46 · Sweden' },
-  { value: '+47', label: '+47 · Norway' },
-  { value: '+48', label: '+48 · Poland' },
-  { value: '+49', label: '+49 · Germany' },
-  { value: '+51', label: '+51 · Peru' },
-  { value: '+52', label: '+52 · Mexico' },
-  { value: '+53', label: '+53 · Cuba' },
-  { value: '+54', label: '+54 · Argentina' },
-  { value: '+55', label: '+55 · Brazil' },
-  { value: '+56', label: '+56 · Chile' },
-  { value: '+57', label: '+57 · Colombia' },
-  { value: '+58', label: '+58 · Venezuela' },
-  { value: '+60', label: '+60 · Malaysia' },
-  { value: '+61', label: '+61 · Australia' },
-  { value: '+62', label: '+62 · Indonesia' },
-  { value: '+63', label: '+63 · Philippines' },
-  { value: '+64', label: '+64 · New Zealand' },
-  { value: '+65', label: '+65 · Singapore' },
-  { value: '+66', label: '+66 · Thailand' },
-  { value: '+81', label: '+81 · Japan' },
-  { value: '+82', label: '+82 · South Korea' },
-  { value: '+84', label: '+84 · Vietnam' },
-  { value: '+86', label: '+86 · China' },
-  { value: '+90', label: '+90 · Turkey' },
-  { value: '+91', label: '+91 · India' },
-  { value: '+92', label: '+92 · Pakistan' },
-  { value: '+93', label: '+93 · Afghanistan' },
-  { value: '+94', label: '+94 · Sri Lanka' },
-  { value: '+95', label: '+95 · Myanmar' },
-  { value: '+98', label: '+98 · Iran' },
-  { value: '+212', label: '+212 · Morocco' },
-  { value: '+213', label: '+213 · Algeria' },
-  { value: '+216', label: '+216 · Tunisia' },
-  { value: '+218', label: '+218 · Libya' },
-  { value: '+254', label: '+254 · Kenya' },
-  { value: '+255', label: '+255 · Tanzania' },
-  { value: '+256', label: '+256 · Uganda' },
-  { value: '+260', label: '+260 · Zambia' },
-  { value: '+263', label: '+263 · Zimbabwe' },
-  { value: '+351', label: '+351 · Portugal' },
-  { value: '+352', label: '+352 · Luxembourg' },
-  { value: '+353', label: '+353 · Ireland' },
-  { value: '+354', label: '+354 · Iceland' },
-  { value: '+355', label: '+355 · Albania' },
-  { value: '+356', label: '+356 · Malta' },
-  { value: '+357', label: '+357 · Cyprus' },
-  { value: '+358', label: '+358 · Finland' },
-  { value: '+380', label: '+380 · Ukraine' },
-  { value: '+381', label: '+381 · Serbia' },
-  { value: '+386', label: '+386 · Slovenia' },
-  { value: '+420', label: '+420 · Czechia' },
-  { value: '+421', label: '+421 · Slovakia' },
-  { value: '+507', label: '+507 · Panama' },
-  { value: '+509', label: '+509 · Haiti' },
-  { value: '+593', label: '+593 · Ecuador' },
-  { value: '+595', label: '+595 · Paraguay' },
-  { value: '+598', label: '+598 · Uruguay' },
-];
 const COUNTRY_NAMES = [
   'Afghanistan',
   'Albania',
@@ -307,24 +234,6 @@ const COUNTRY_NAMES = [
 ];
 
 const COUNTRY_OPTIONS = COUNTRY_NAMES.map((name) => ({ value: name, label: name }));
-const PHONE_CODE_LOOKUP: Record<string, { value: string; label: string }> = PHONE_CODE_OPTIONS.reduce(
-  (acc, option) => {
-    acc[option.value] = option;
-    return acc;
-  },
-  {} as Record<string, { value: string; label: string }>,
-);
-
-const PRONOUN_OPTIONS = [
-  { value: 'She / Her', label: 'She / Her' },
-  { value: 'He / Him', label: 'He / Him' },
-  { value: 'They / Them', label: 'They / Them' },
-  { value: 'Prefer not to say', label: 'Prefer not to say' },
-  { value: 'custom', label: 'Self describe' },
-];
-
-const PHONE_MIN_DIGITS = 7;
-const PHONE_MAX_DIGITS = 15;
 
 const SIGNUP_STEPS = [
   { key: 'profile', label: 'Profile', description: 'Contact & identity' },
@@ -336,87 +245,6 @@ const SIGNUP_STEPS = [
 ] as const;
 
 const PROFILE_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
-
-type PhoneCodeSelectFieldProps = {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-};
-
-const PhoneCodeSelectField: React.FC<PhoneCodeSelectFieldProps> = ({ label, value, onChange, placeholder = 'Select code' }) => {
-  const [search, setSearch] = useState('');
-  const combobox = useCombobox({
-    onDropdownClose: () => setSearch(''),
-  });
-
-  const filteredOptions = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) {
-      return PHONE_CODE_OPTIONS;
-    }
-    return PHONE_CODE_OPTIONS.filter((option) => {
-      const normalized = option.label.toLowerCase();
-      return normalized.includes(query) || option.value.replace('+', '').includes(query.replace('+', ''));
-    });
-  }, [search]);
-
-  const selectedLabel = value ? PHONE_CODE_LOOKUP[value]?.label ?? value : null;
-
-  const handleSelect = (optionValue: string) => {
-    onChange(optionValue);
-    combobox.closeDropdown();
-    setSearch('');
-  };
-
-  return (
-    <Combobox store={combobox} onOptionSubmit={handleSelect} withinPortal>
-      <Combobox.Target>
-        <InputBase
-          component="button"
-          type="button"
-          pointer
-          onClick={() => combobox.toggleDropdown()}
-          rightSection={<IconChevronDown size={16} />}
-          rightSectionPointerEvents="none"
-          label={label}
-          styles={{ input: { textAlign: 'left' } }}
-        >
-          {selectedLabel ? (
-            <Text size="sm" c="dark">
-              {selectedLabel}
-            </Text>
-          ) : (
-            <Text size="sm" c="dimmed">
-              {placeholder}
-            </Text>
-          )}
-        </InputBase>
-      </Combobox.Target>
-      <Combobox.Dropdown>
-        <Combobox.Search
-          value={search}
-          onChange={(event) => setSearch(event.currentTarget.value)}
-          placeholder="Search by country or code"
-          aria-label="Search country calling codes"
-        />
-        <ScrollArea h={220} scrollHideDelay={0}>
-          {filteredOptions.length > 0 ? (
-            filteredOptions.map((option) => (
-              <Combobox.Option value={option.value} key={option.value}>
-                {option.label}
-              </Combobox.Option>
-            ))
-          ) : (
-            <Text size="sm" c="dimmed" px="sm" py="xs">
-              No matches
-            </Text>
-          )}
-        </ScrollArea>
-      </Combobox.Dropdown>
-    </Combobox>
-  );
-};
 
 const LoginPage: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -446,6 +274,10 @@ const LoginPage: React.FC = () => {
   const [allergies, setAllergies] = useState('');
   const [medicalNotes, setMedicalNotes] = useState('');
   const [whatsappHandle, setWhatsappHandle] = useState('');
+  const [useSameWhatsappNumber, setUseSameWhatsappNumber] = useState(true);
+  const [whatsappCountryCode, setWhatsappCountryCode] = useState(DEFAULT_PHONE_CODE);
+  const [whatsappLocalNumber, setWhatsappLocalNumber] = useState('');
+  const [whatsappPhoneError, setWhatsappPhoneError] = useState<string | null>(null);
   const [facebookProfileUrl, setFacebookProfileUrl] = useState('');
   const [instagramProfileUrl, setInstagramProfileUrl] = useState('');
   const [discoverySource, setDiscoverySource] = useState('');
@@ -485,20 +317,15 @@ const LoginPage: React.FC = () => {
       }
     };
   }, [profilePhotoPreview]);
-
-  const discoveryOptions = useMemo(
-    () => [
-      { value: 'worldpackers', label: 'Worldpackers' },
-      { value: 'workaway', label: 'Workaway' },
-      { value: 'referral', label: 'Friend referral' },
-      { value: 'email', label: 'Email newsletter' },
-      { value: 'social_media', label: 'Social media' },
-      { value: 'search', label: 'Web search' },
-      { value: 'returning', label: 'I am a returning volunteer' },
-      { value: 'other', label: 'Other' },
-    ],
-    [],
-  );
+  useEffect(() => {
+    if (!useSameWhatsappNumber) {
+      return;
+    }
+    setWhatsappCountryCode(phoneCountryCode);
+    setWhatsappLocalNumber(phoneLocalNumber);
+    setWhatsappHandle(phone);
+    setWhatsappPhoneError(null);
+  }, [useSameWhatsappNumber, phone, phoneCountryCode, phoneLocalNumber]);
 
   const rules = [
     { regex: /(?=.*[0-9])/, description: 'At least one digit' },
@@ -548,6 +375,10 @@ const LoginPage: React.FC = () => {
     setAllergies('');
     setMedicalNotes('');
     setWhatsappHandle('');
+    setUseSameWhatsappNumber(true);
+    setWhatsappCountryCode(DEFAULT_PHONE_CODE);
+    setWhatsappLocalNumber('');
+    setWhatsappPhoneError(null);
     setFacebookProfileUrl('');
     setInstagramProfileUrl('');
     setDiscoverySource('');
@@ -614,6 +445,16 @@ const LoginPage: React.FC = () => {
       }
       return;
     }
+    if (!useSameWhatsappNumber) {
+      if (whatsappLocalNumber.length === 0) {
+        setWhatsappPhoneError('WhatsApp number is required');
+        return;
+      }
+      if (!isPhoneNumberValid(normalizePhoneNumber(whatsappHandle))) {
+        setWhatsappPhoneError('Enter a valid phone number');
+        return;
+      }
+    }
     setLoading(true);
     try {
       const numericRoleIds = selectedShiftRoles
@@ -662,7 +503,7 @@ const LoginPage: React.FC = () => {
       appendField('dietaryRestrictions', sanitize(dietaryRestrictions));
       appendField('allergies', sanitize(allergies));
       appendField('medicalNotes', sanitize(medicalNotes));
-      appendField('whatsappHandle', sanitize(whatsappHandle));
+      appendField('whatsappHandle', normalizePhoneNumber(whatsappHandle));
       appendField('facebookProfileUrl', sanitize(facebookProfileUrl));
       appendField('instagramProfileUrl', sanitize(instagramProfileUrl));
       appendField('discoverySource', sanitize(discoverySource));
@@ -770,6 +611,7 @@ const LoginPage: React.FC = () => {
     }
   };
 
+
   const handleEmergencyEmailChange = (event: ChangeEvent<HTMLInputElement>) => {
     const value = event.target.value;
     setEmergencyContactEmail(value);
@@ -795,38 +637,6 @@ const sanitize = (value: string) => {
   return trimmed.length === 0 ? undefined : trimmed;
 };
 
-const isPhoneNumberValid = (value: string) => {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith('+')) {
-    return false;
-  }
-  const digits = trimmed
-    .slice(1)
-    .replace(/\D/g, '')
-    .trim();
-  return digits.length >= PHONE_MIN_DIGITS && digits.length <= PHONE_MAX_DIGITS;
-};
-
-const normalizePhoneNumber = (value: string) => {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith('+')) {
-    return trimmed;
-  }
-  const digits = trimmed
-    .slice(1)
-    .replace(/\D/g, '')
-    .trim();
-  return digits.length > 0 ? `+${digits}` : trimmed;
-};
-
-const buildPhoneFromParts = (code: string, digits: string) => {
-  const cleanedDigits = digits.replace(/\D/g, '');
-  if (code.trim().length === 0 || cleanedDigits.length === 0) {
-    return '';
-  }
-  return `${code}${cleanedDigits}`;
-};
-
   const phoneIsValid = isPhoneNumberValid(phone);
   const countrySelected = countryOfCitizenship.trim().length > 0;
   const pronounValid =
@@ -837,6 +647,10 @@ const buildPhoneFromParts = (code: string, digits: string) => {
   const emergencyEmailIsValid =
     emergencyContactEmail.trim().length === 0 ||
     EMAIL_REGEX.test(emergencyContactEmail.trim().toLowerCase());
+  const normalizedWhatsappHandle = normalizePhoneNumber(whatsappHandle);
+  const whatsappIsValid = useSameWhatsappNumber
+    ? phoneIsValid
+    : normalizedWhatsappHandle.length > 0 && isPhoneNumberValid(normalizedWhatsappHandle);
 
   const signupRequirementsMet =
     passwordsMatch &&
@@ -850,6 +664,7 @@ const buildPhoneFromParts = (code: string, digits: string) => {
     emergencyContactName.trim().length > 0 &&
     emergencyPhoneIsValid &&
     emergencyEmailIsValid &&
+    whatsappIsValid &&
     discoverySource.trim().length > 0 &&
     pronounValid;
 
@@ -900,6 +715,9 @@ const buildPhoneFromParts = (code: string, digits: string) => {
   const handleNextStep = () => {
     if (activeStepKey === 'profile') {
       handlePhoneBlur();
+    }
+    if (activeStepKey === 'connect') {
+      handleWhatsappBlur();
     }
     if (activeStep < totalSignupSteps - 1 && canAdvanceFromStep(activeStep)) {
       goToStep(activeStep + 1);
@@ -1116,7 +934,7 @@ const buildPhoneFromParts = (code: string, digits: string) => {
             <Select
               label="How did you hear about the experience?"
               placeholder="Select one"
-              data={discoveryOptions}
+              data={DISCOVERY_SOURCE_OPTIONS}
               value={discoverySource || null}
               onChange={(value) => setDiscoverySource(value ?? '')}
               required
@@ -1238,12 +1056,42 @@ const buildPhoneFromParts = (code: string, digits: string) => {
       default:
         return (
           <Stack gap="sm">
-            <TextInput
-              label="WhatsApp or preferred messaging handle"
-              placeholder="WhatsApp number or @handle"
-              value={whatsappHandle}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setWhatsappHandle(event.target.value)}
-            />
+            <Stack gap="xs">
+              <Switch
+                label="Use same number for WhatsApp"
+                checked={useSameWhatsappNumber}
+                onChange={(event) => handleWhatsappSameToggle(event.currentTarget.checked)}
+              />
+              {!useSameWhatsappNumber && (
+                <Grid gutter="xs">
+                  <Grid.Col span={{ base: 12, sm: 5 }}>
+                    <PhoneCodeSelectField
+                      label="WhatsApp code"
+                      value={whatsappCountryCode}
+                      onChange={handleWhatsappCountryCodeChange}
+                      placeholder="+48"
+                    />
+                  </Grid.Col>
+                  <Grid.Col span={{ base: 12, sm: 7 }}>
+                    <TextInput
+                      label="WhatsApp number"
+                      placeholder="600 000 000"
+                      value={whatsappLocalNumber}
+                      onChange={handleWhatsappLocalNumberChange}
+                      onBlur={handleWhatsappBlur}
+                      type="tel"
+                      description="Digits only"
+                      error={whatsappPhoneError ?? undefined}
+                    />
+                  </Grid.Col>
+                </Grid>
+              )}
+              <Text size="sm" c={whatsappPhoneError ? 'red.6' : 'dimmed'}>
+                {useSameWhatsappNumber
+                  ? 'We will reuse your primary phone number for WhatsApp updates.'
+                  : whatsappPhoneError ?? 'Enter digits only; we will format it automatically.'}
+              </Text>
+            </Stack>
             <Grid gutter="md">
               <Grid.Col span={{ base: 12, md: 6 }}>
                 <TextInput
@@ -1423,3 +1271,80 @@ const buildPhoneFromParts = (code: string, digits: string) => {
   );
 };
 export default LoginPage;
+  const updateWhatsappFromParts = (code: string, digits: string) => {
+    const cleaned = digits.replace(/\D/g, '');
+    if (cleaned.length === 0) {
+      setWhatsappHandle('');
+      return '';
+    }
+    const full = buildPhoneFromParts(code, cleaned);
+    setWhatsappHandle(full);
+    return full;
+  };
+
+  const handleWhatsappSameToggle = (checked: boolean) => {
+    setUseSameWhatsappNumber(checked);
+    if (checked) {
+      setWhatsappHandle(phone);
+      setWhatsappPhoneError(null);
+      return;
+    }
+    const parts = splitPhoneNumber(whatsappHandle || phone);
+    setWhatsappCountryCode(parts.code);
+    setWhatsappLocalNumber(parts.digits);
+    if (parts.digits.length === 0) {
+      setWhatsappHandle('');
+      setWhatsappPhoneError('WhatsApp number is required');
+    } else {
+      const full = buildPhoneFromParts(parts.code, parts.digits);
+      setWhatsappHandle(full);
+      setWhatsappPhoneError(
+        isPhoneNumberValid(normalizePhoneNumber(full)) ? null : 'Enter a valid phone number',
+      );
+    }
+  };
+
+  const handleWhatsappCountryCodeChange = (code: string) => {
+    setWhatsappCountryCode(code);
+    if (useSameWhatsappNumber) {
+      return;
+    }
+    if (whatsappLocalNumber.length === 0) {
+      setWhatsappHandle('');
+      return;
+    }
+    const full = updateWhatsappFromParts(code, whatsappLocalNumber);
+    setWhatsappPhoneError(
+      isPhoneNumberValid(normalizePhoneNumber(full)) ? null : 'Enter a valid phone number',
+    );
+  };
+
+  const handleWhatsappLocalNumberChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const digitsOnly = event.target.value.replace(/\D/g, '');
+    setWhatsappLocalNumber(digitsOnly);
+    if (useSameWhatsappNumber) {
+      return;
+    }
+    if (digitsOnly.length === 0) {
+      setWhatsappHandle('');
+      setWhatsappPhoneError('WhatsApp number is required');
+      return;
+    }
+    const full = updateWhatsappFromParts(whatsappCountryCode, digitsOnly);
+    setWhatsappPhoneError(
+      isPhoneNumberValid(normalizePhoneNumber(full)) ? null : 'Enter a valid phone number',
+    );
+  };
+
+  const handleWhatsappBlur = () => {
+    if (useSameWhatsappNumber) {
+      return;
+    }
+    if (whatsappLocalNumber.length === 0) {
+      setWhatsappPhoneError('WhatsApp number is required');
+      return;
+    }
+    if (!isPhoneNumberValid(normalizePhoneNumber(whatsappHandle))) {
+      setWhatsappPhoneError('Enter a valid phone number');
+    }
+  };

@@ -146,7 +146,29 @@ export async function deleteProfilePhoto(storagePath: string | null | undefined)
   }
 }
 
-export async function openProfilePhotoStream(storagePath: string): Promise<Readable> {
+type ProfilePhotoStreamResult = {
+  stream: Readable;
+  mimeType: string;
+};
+
+function guessMimeTypeFromPath(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') {
+    return 'image/jpeg';
+  }
+  if (ext === '.png') {
+    return 'image/png';
+  }
+  if (ext === '.webp') {
+    return 'image/webp';
+  }
+  if (ext === '.heic' || ext === '.heif') {
+    return 'image/heic';
+  }
+  return 'application/octet-stream';
+}
+
+export async function openProfilePhotoStream(storagePath: string): Promise<ProfilePhotoStreamResult> {
   if (!storagePath) {
     throw new Error('Missing storage path for profile photo');
   }
@@ -156,14 +178,26 @@ export async function openProfilePhotoStream(storagePath: string): Promise<Reada
     if (!fileId) {
       throw new Error('Invalid Drive storage identifier');
     }
-    const drive = await getDriveClient();
-    const response = await drive.files.get(
+    const driveClient = await getDriveClient();
+    const metadata = await driveClient.files.get({
+      fileId,
+      fields: 'mimeType',
+      supportsAllDrives: true,
+    });
+    const mimeType = metadata.data.mimeType ?? 'application/octet-stream';
+    const response = await driveClient.files.get(
       { fileId, alt: 'media' },
       { responseType: 'stream' },
     );
-    return response.data as unknown as Readable;
+    return {
+      stream: response.data as unknown as Readable,
+      mimeType,
+    };
   }
 
   const absolutePath = toAbsolutePath(storagePath);
-  return createReadStream(absolutePath);
+  return {
+    stream: createReadStream(absolutePath),
+    mimeType: guessMimeTypeFromPath(absolutePath),
+  };
 }

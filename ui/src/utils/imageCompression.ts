@@ -3,6 +3,7 @@ type ImageCompressionOptions = {
   maxHeight?: number;
   quality?: number;
   maxSizeBytes?: number;
+  force?: boolean;
   outputMimeType?: 'image/jpeg' | 'image/png' | 'image/webp';
 };
 
@@ -11,6 +12,7 @@ const DEFAULT_OPTIONS: Required<Omit<ImageCompressionOptions, 'outputMimeType'>>
   maxHeight: 1600,
   quality: 0.82,
   maxSizeBytes: 800 * 1024,
+  force: false,
 };
 
 const MIME_EXTENSION_MAP: Record<string, string> = {
@@ -119,10 +121,11 @@ export const compressImageFile = async (
     maxHeight,
     quality,
     maxSizeBytes,
+    force,
     outputMimeType,
   } = mergedOptions;
 
-  const requiresCompression = file.size > maxSizeBytes;
+  const requiresCompression = force || file.size > maxSizeBytes;
   let source: ImageBitmap | HTMLImageElement;
 
   try {
@@ -184,4 +187,3 @@ export const compressImageFile = async (
 
   return newFile;
 };
-

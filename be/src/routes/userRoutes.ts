@@ -49,8 +49,23 @@ router.post('/logout', validate, userController.logoutUser);
 router.get('/', authMiddleware, authorizeModuleAction('user-directory', 'view'), validate, userController.getAllUsers);
 router.get('/active', authMiddleware, authorizeModuleAction('user-directory', 'view'), validate, userController.getAllActiveUsers);
 router.get('/:id', authMiddleware, authorizeModuleAction('user-directory', 'view'), validateId, validate, userController.getUserById);
-router.put('/:id', authMiddleware, authorizeModuleAction('user-directory', 'update'), [...validateId, ...validateUserPUT], validate, userController.updateUser);
+router.get(
+  '/:id/profile-photo',
+  authMiddleware,
+  authorizeModuleAction('user-directory', 'view'),
+  validateId,
+  validate,
+  userController.streamProfilePhoto,
+);
+router.put(
+  '/:id',
+  authMiddleware,
+  authorizeModuleAction('user-directory', 'update'),
+  upload.single('profilePhoto'),
+  [...validateId, ...validateUserPUT],
+  validate,
+  userController.updateUser,
+);
 router.delete('/:id', authMiddleware, authorizeModuleAction('user-directory', 'delete'), validateId, validate, userController.deleteUser);
 
 export default router;
-
