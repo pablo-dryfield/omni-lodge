@@ -8,7 +8,7 @@ import UserType from '../models/UserType.js';
 import StaffProfile from '../models/StaffProfile.js';
 import ShiftRole from '../models/ShiftRole.js';
 import UserShiftRole from '../models/UserShiftRole.js';
-import { deleteProfilePhoto, storeProfilePhoto, StoreProfilePhotoResult } from '../services/profilePhotoStorageService.js';
+import { deleteProfilePhoto, storeProfilePhoto, StoreProfilePhotoResult, openProfilePhotoStream } from '../services/profilePhotoStorageService.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { Env } from '../types/Env.js';
 import logger from '../utils/logger.js';
@@ -452,22 +452,82 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
 export const updateUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const data = { ...req.body };
+    const profilePhotoFile = req.file;
+    const existingUser = await User.findByPk(id);
 
-    if (data.password) {
-      const salt = await bcrypt.genSalt(10);
-      data.password = await bcrypt.hash(data.password, salt);
-    }
-
-    const [updated] = await User.update(data, { where: { id } });
-
-    if (!updated) {
+    if (!existingUser) {
       res.status(404).json([{ message: 'User not found' }]);
       return;
     }
 
-    const updatedUser = await User.findByPk(id);
-    res.status(200).json([updatedUser]);
+    const data: Record<string, unknown> = { ...req.body };
+
+    if (typeof data.password === 'string' && data.password.trim().length > 0) {
+      const salt = await bcrypt.genSalt(10);
+      data.password = await bcrypt.hash(data.password, salt);
+    } else {
+      delete data.password;
+    }
+
+    const normalizeNullableValue = (value: unknown) => {
+      if (value === undefined) {
+        return undefined;
+      }
+      if (value === null) {
+        return null;
+      }
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed.length === 0) {
+          return null;
+        }
+        if (trimmed.toLowerCase() === 'null') {
+          return null;
+        }
+        return trimmed;
+      }
+      return value;
+    };
+
+    const cleanupPreviousPhoto = async () => {
+      if (existingUser.profilePhotoPath) {
+        await deleteProfilePhoto(existingUser.profilePhotoPath).catch(() => {});
+      }
+    };
+
+    if (profilePhotoFile) {
+      let uploadResult: StoreProfilePhotoResult | null = null;
+      try {
+        uploadResult = await storeProfilePhoto({
+          userId: existingUser.id,
+          originalName: profilePhotoFile.originalname,
+          mimeType: profilePhotoFile.mimetype,
+          data: profilePhotoFile.buffer,
+        });
+      } catch (error) {
+        logger.warn(`Failed to upload profile photo for user ${existingUser.id}: ${(error as Error).message}`);
+      }
+
+      if (uploadResult) {
+        await cleanupPreviousPhoto();
+        data.profilePhotoPath = uploadResult.relativePath;
+        data.profilePhotoUrl = uploadResult.driveWebViewLink ?? null;
+      }
+    } else if (
+      Object.prototype.hasOwnProperty.call(data, 'profilePhotoPath') ||
+      Object.prototype.hasOwnProperty.call(data, 'profilePhotoUrl')
+    ) {
+      const normalizedPath = normalizeNullableValue(data.profilePhotoPath);
+      const normalizedUrl = normalizeNullableValue(data.profilePhotoUrl);
+      if (normalizedPath === null) {
+        await cleanupPreviousPhoto();
+      }
+      data.profilePhotoPath = normalizedPath;
+      data.profilePhotoUrl = normalizedUrl;
+    }
+
+    await existingUser.update(data);
+    res.status(200).json([existingUser]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);
@@ -485,6 +545,38 @@ export const deleteUser = async (req: Request, res: Response): Promise<void> => 
     }
 
     res.status(204).send();
+  } catch (error) {
+    const errorMessage = (error as ErrorWithMessage).message;
+    res.status(500).json([{ message: errorMessage }]);
+  }
+};
+
+export const streamProfilePhoto = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const user = await User.findByPk(id);
+
+    if (!user || !user.profilePhotoPath) {
+      res.status(404).json([{ message: 'Profile photo not found' }]);
+      return;
+    }
+
+    try {
+      const { stream, mimeType } = await openProfilePhotoStream(user.profilePhotoPath);
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      stream.on('error', () => {
+        if (!res.headersSent) {
+          res.status(500).json([{ message: 'Unable to read profile photo' }]);
+        } else {
+          res.end();
+        }
+      });
+      stream.pipe(res);
+    } catch (error) {
+      const message = (error as ErrorWithMessage).message;
+      res.status(500).json([{ message }]);
+    }
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);

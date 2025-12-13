@@ -32,6 +32,7 @@ import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { fetchUsers, logoutUser } from "../../actions/userActions";
 import { selectAllowedNavigationPages } from "../../selectors/accessControlSelectors";
 import type { User } from "../../types/users/User";
+import { buildUserProfilePhotoUrl } from "../../utils/profilePhoto";
 
 const NAV_GAP = 8;
 const OVERFLOW_TRIGGER_RESERVE = 72;
@@ -74,6 +75,10 @@ const MainTabs = ({
   const currentUserRecord = useMemo(
     () => userRecords.find((record) => record.id === loggedUserId),
     [userRecords, loggedUserId],
+  );
+  const userProfilePhotoUrl = useMemo(
+    () => buildUserProfilePhotoUrl({ user: currentUserRecord }),
+    [currentUserRecord],
   );
 
   const profileInitials = useMemo(() => {
@@ -494,24 +499,17 @@ const MainTabs = ({
                 <Avatar
                   size={isMobile ? 26 : 28}
                   radius="xl"
-                  src={
-                    currentUserRecord?.profilePhotoUrl &&
-                    currentUserRecord.profilePhotoUrl.trim().length > 0
-                      ? currentUserRecord.profilePhotoUrl
-                      : undefined
-                  }
+                  src={userProfilePhotoUrl ?? undefined}
                   style={{
-                    background:
-                      currentUserRecord?.profilePhotoUrl &&
-                      currentUserRecord.profilePhotoUrl.trim().length > 0
-                        ? "transparent"
-                        : `linear-gradient(135deg, ${theme.colors.blue[6]}, ${theme.colors.indigo[5]})`,
+                    background: userProfilePhotoUrl
+                      ? "transparent"
+                      : `linear-gradient(135deg, ${theme.colors.blue[6]}, ${theme.colors.indigo[5]})`,
                     fontWeight: 600,
                     fontSize: rem(13),
-                    color: currentUserRecord?.profilePhotoUrl ? theme.black : theme.white,
+                    color: userProfilePhotoUrl ? theme.black : theme.white,
                   }}
                 >
-                  {!currentUserRecord?.profilePhotoUrl && profileInitials}
+                  {!userProfilePhotoUrl && profileInitials}
                 </Avatar>
               </ActionIcon>
             </Tooltip>
