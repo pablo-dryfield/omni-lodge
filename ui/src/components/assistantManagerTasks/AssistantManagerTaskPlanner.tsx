@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import dayjs from 'dayjs';
-import { ActionIcon, Alert, Badge, Button, Card, Center, Group, Modal, Select, Stack, Text, Textarea, TextInput, Tooltip } from '@mantine/core';
+import { ActionIcon, Alert, Badge, Button, Card, Center, Group, Modal, SegmentedControl, Select, Stack, Text, Textarea, TextInput, Tooltip } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
 import { IconCheck, IconCircleX, IconLoader2, IconAdjustments, IconCalendar, IconRefresh, IconPencil } from '@tabler/icons-react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
@@ -100,6 +100,7 @@ const AssistantManagerTaskPlanner = () => {
   const [logDateRange, setLogDateRange] = useState<[Date | null, Date | null]>([new Date(), dayjs().add(6, 'day').toDate()]);
   const [logScope, setLogScope] = useState<'self' | 'all'>('all');
   const [logFilterStatus, setLogFilterStatus] = useState<TaskStatusFilterValue>('all');
+  const [activeSection, setActiveSection] = useState<'setup' | 'dashboard'>('dashboard');
 
   useEffect(() => {
     dispatch(fetchAmTaskTemplates());
@@ -311,100 +312,120 @@ const AssistantManagerTaskPlanner = () => {
 
   return (
     <Stack gap="lg">
-      <Group justify="space-between" align="center">
-        <div>
+      <Group justify="space-between" align="flex-start" wrap="wrap">
+        <Stack gap={4} style={{ flex: 1, minWidth: 240 }}>
           <Text size="lg" fw={600}>
             Assistant Manager Task Planner
           </Text>
           <Text size="sm" c="dimmed">
             Configure the checklist templates and track completion to support base salary proration.
           </Text>
-        </div>
-        <Group gap="xs">
-          <Tooltip label="Refresh logs">
-            <ActionIcon variant="light" onClick={refreshLogs}>
-              <IconRefresh size={16} />
-            </ActionIcon>
-          </Tooltip>
-          {canManage && (
-            <Button leftSection={<IconAdjustments size={16} />} onClick={() => openTemplateModal()}>
-              New Template
-            </Button>
-          )}
+        </Stack>
+        <Group gap="md" align="center" wrap="wrap">
+          <SegmentedControl
+            value={activeSection}
+            onChange={(value) => setActiveSection((value as 'setup' | 'dashboard') ?? 'dashboard')}
+            data={[
+              { label: 'Setup', value: 'setup' },
+              { label: 'Dashboard', value: 'dashboard' },
+            ]}
+            aria-label="Task planner view"
+          />
+          <Group gap="xs">
+            {activeSection === 'dashboard' && (
+              <Tooltip label="Refresh logs">
+                <ActionIcon variant="light" onClick={refreshLogs}>
+                  <IconRefresh size={16} />
+                </ActionIcon>
+              </Tooltip>
+            )}
+            {canManage && activeSection === 'setup' && (
+              <Button leftSection={<IconAdjustments size={16} />} onClick={() => openTemplateModal()}>
+                New Template
+              </Button>
+            )}
+          </Group>
         </Group>
       </Group>
 
-      {templateState.error && (
-        <Alert color="red" title="Templates">
-          {templateState.error}
-        </Alert>
-      )}
+      {activeSection === 'setup' && (
+        <>
+          {templateState.error && (
+            <Alert color="red" title="Templates">
+              {templateState.error}
+            </Alert>
+          )}
 
-      <Stack>
-        {templates.map((template) => (
-          <Card key={template.id} withBorder radius="md" padding="md">
-            <Stack gap="xs">
-              <Group justify="space-between" align="flex-start">
-                <Stack gap={2}>
-                  <Group gap="xs">
-                    <Text fw={600}>{template.name}</Text>
-                    <Badge color="blue" variant="light">
-                      {CADENCE_LABELS[template.cadence]}
-                    </Badge>
+          <Stack>
+            {templates.map((template) => (
+              <Card key={template.id} withBorder radius="md" padding="md">
+                <Stack gap="xs">
+                  <Group justify="space-between" align="flex-start">
+                    <Stack gap={2}>
+                      <Group gap="xs">
+                        <Text fw={600}>{template.name}</Text>
+                        <Badge color="blue" variant="light">
+                          {CADENCE_LABELS[template.cadence]}
+                        </Badge>
+                      </Group>
+                      {template.description && (
+                        <Text size="sm" c="dimmed">
+                          {template.description}
+                        </Text>
+                      )}
+                    </Stack>
+                    {canManage && (
+                      <Group gap="xs">
+                        <Button size="xs" variant="subtle" onClick={() => openAssignmentModal(template)}>
+                          Assign
+                        </Button>
+                        <Button size="xs" variant="subtle" onClick={() => openTemplateModal(template)}>
+                          Edit
+                        </Button>
+                      </Group>
+                    )}
                   </Group>
-                  {template.description && (
-                    <Text size="sm" c="dimmed">
-                      {template.description}
-                    </Text>
+                  {template.assignments && template.assignments.length > 0 && (
+                    <Stack gap={4}>
+                      {template.assignments.map((assignment) => (
+                        <Group key={assignment.id} justify="space-between">
+                          <Group gap="xs">
+                            <Badge variant="outline">
+                              {assignment.targetScope === 'user' ? 'Specific user' : assignment.staffType ?? 'staff'}
+                            </Badge>
+                            {assignment.userName && <Text size="sm">{assignment.userName}</Text>}
+                            <Text size="xs" c="dimmed">
+                              {assignment.effectiveStart || 'start'} ƒÅ' {assignment.effectiveEnd || 'open'}
+                            </Text>
+                          </Group>
+                          {canManage && (
+                            <Group gap="xs">
+                              <Tooltip label="Edit assignment">
+                                <ActionIcon variant="light" onClick={() => openAssignmentModal(template, assignment)}>
+                                  <IconPencil size={16} />
+                                </ActionIcon>
+                              </Tooltip>
+                              <Tooltip label="Delete assignment">
+                                <ActionIcon color="red" variant="light" onClick={() => handleAssignmentDelete(template.id, assignment.id)}>
+                                  <IconCircleX size={16} />
+                                </ActionIcon>
+                              </Tooltip>
+                            </Group>
+                          )}
+                        </Group>
+                      ))}
+                    </Stack>
                   )}
                 </Stack>
-                {canManage && (
-                  <Group gap="xs">
-                    <Button size="xs" variant="subtle" onClick={() => openAssignmentModal(template)}>
-                      Assign
-                    </Button>
-                    <Button size="xs" variant="subtle" onClick={() => openTemplateModal(template)}>
-                      Edit
-                    </Button>
-                  </Group>
-                )}
-              </Group>
-              {template.assignments && template.assignments.length > 0 && (
-                <Stack gap={4}>
-                  {template.assignments.map((assignment) => (
-                    <Group key={assignment.id} justify="space-between">
-                      <Group gap="xs">
-                        <Badge variant="outline">{assignment.targetScope === 'user' ? 'Specific user' : assignment.staffType ?? 'staff'}</Badge>
-                        {assignment.userName && <Text size="sm">{assignment.userName}</Text>}
-                        <Text size="xs" c="dimmed">
-                          {assignment.effectiveStart || 'start'} → {assignment.effectiveEnd || 'open'}
-                        </Text>
-                      </Group>
-                      {canManage && (
-                        <Group gap="xs">
-                          <Tooltip label="Edit assignment">
-                            <ActionIcon variant="light" onClick={() => openAssignmentModal(template, assignment)}>
-                              <IconPencil size={16} />
-                            </ActionIcon>
-                          </Tooltip>
-                          <Tooltip label="Delete assignment">
-                            <ActionIcon color="red" variant="light" onClick={() => handleAssignmentDelete(template.id, assignment.id)}>
-                              <IconCircleX size={16} />
-                            </ActionIcon>
-                          </Tooltip>
-                        </Group>
-                      )}
-                    </Group>
-                  ))}
-                </Stack>
-              )}
-            </Stack>
-          </Card>
-        ))}
-      </Stack>
+              </Card>
+            ))}
+        </Stack>
+        </>
+      )}
 
-      <Card withBorder radius="md" padding="md">
-        <Stack gap="sm">
+      {activeSection === 'dashboard' && (
+        <Card withBorder radius="md" padding="md">
+          <Stack gap="sm">
           <Group justify="space-between" align="center">
             <Group gap="xs">
               <IconCalendar size={16} />
@@ -506,6 +527,7 @@ const AssistantManagerTaskPlanner = () => {
           </Stack>
         </Stack>
       </Card>
+      )}
 
       <Modal opened={templateModalOpen} onClose={closeTemplateModal} title={editingTemplate ? 'Edit Template' : 'New Template'} centered>
         <Stack gap="md">

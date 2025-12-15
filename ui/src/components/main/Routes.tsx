@@ -42,7 +42,7 @@ import SettingsDbBackups from "../../pages/settings/SettingsDbBackups";
 import SettingsHomeExperience from "../../pages/settings/SettingsHomeExperience";
 import SettingsReviewPlatforms from "../../pages/settings/SettingsReviewPlatforms";
 import SettingsCompensationComponents from "../../pages/settings/SettingsCompensationComponents";
-import SettingsAssistantManagerTasks from "../../pages/settings/SettingsAssistantManagerTasks";
+import AssistantManagerTasks from "../../pages/AssistantManagerTasks";
 import SchedulingLayout from "../../pages/scheduling/SchedulingLayout";
 import AvailabilityPage from "../../pages/scheduling/AvailabilityPage";
 import BuilderPage from "../../pages/scheduling/BuilderPage";
@@ -78,6 +78,7 @@ const Routes = () => {
       <Route path="/channelNumbers" element={<ChannelNumbers title="Channel Numbers" />} />
       <Route path="/reviews" element={<ReviewCounters />} />
       <Route path="/pays" element={<Pays />} />
+      <Route path="/assistant-manager-tasks" element={<AssistantManagerTasks />} />
       <Route path="/reports" element={<Reports title={"Reports"} />} />
       <Route path="/reports/derived-fields" element={<DerivedFieldsManager title="Derived fields" />} />
       <Route path="/reports/dashboards" element={<ReportDashboards title="Dashboards" />} />
@@ -134,7 +135,6 @@ const Routes = () => {
         <Route path="user-shift-roles" element={<SettingsUserShiftRoles />} />
         <Route path="review-platforms" element={<SettingsReviewPlatforms />} />
         <Route path="compensation-components" element={<SettingsCompensationComponents />} />
-        <Route path="assistant-manager-tasks" element={<SettingsAssistantManagerTasks />} />
         <Route path="home-experience" element={<SettingsHomeExperience />} />
       </Route>
     </ReactRoutes>
