@@ -55,7 +55,7 @@ export const PAGE_SLUGS = {
   settingsChannelProductPrices: "settings-channel-product-prices",
   settingsChannelCommissions: "settings-channel-commissions",
   settingsCompensationComponents: "settings-compensation-components",
-  settingsAssistantManagerTasks: "settings-am-tasks",
+  assistantManagerTasks: "assistant-manager-tasks",
   settingsReviewPlatforms: "settings-review-platforms",
   settingsActions: "settings-actions",
   settingsChannels: "settings-channels",

@@ -25,7 +25,6 @@ import {
   IconDatabase,
   IconCloudDownload,
   IconCoin,
-  IconCalendar,
 } from "@tabler/icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ActiveNavLink } from "./ActiveNavLink";
@@ -167,12 +166,6 @@ const settingsNav: SettingsNavSection[] = [
         to: "/settings/compensation-components",
         slug: PAGE_SLUGS.settingsCompensationComponents,
         icon: <IconCoin size={20} />,
-      },
-      {
-        label: "Assistant Manager Tasks",
-        to: "/settings/assistant-manager-tasks",
-        slug: PAGE_SLUGS.settingsAssistantManagerTasks,
-        icon: <IconCalendar size={20} />,
       },
     ],
   },

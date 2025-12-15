@@ -2,22 +2,35 @@ import { createSelector } from "@reduxjs/toolkit";
 import { baseNavigationPages } from "../reducers/navigationReducer";
 import { NavigationPage } from "../types/general/NavigationState";
 import { RootState } from "../store/store";
+import { PAGE_SLUGS } from "../constants/pageSlugs";
 
 const selectAccessControlState = (state: RootState) => state.accessControl;
 
-export const selectAllowedPageSlugs = createSelector(
-  selectAccessControlState,
-  ({ pages }) => new Set(pages),
-);
+const MODULE_SLUG_TO_PAGE_SLUG: Record<string, string> = {
+  "am-task-management": PAGE_SLUGS.assistantManagerTasks,
+};
+
+export const selectAllowedPageSlugs = createSelector(selectAccessControlState, ({ pages, modules }) => {
+  const allowedSlugs = new Set(pages);
+
+  Object.keys(modules).forEach((moduleSlug) => {
+    const mappedPageSlug = MODULE_SLUG_TO_PAGE_SLUG[moduleSlug];
+    if (mappedPageSlug) {
+      allowedSlugs.add(mappedPageSlug);
+    }
+  });
+
+  return allowedSlugs;
+});
 
 export const selectAllowedNavigationPages = createSelector(
   selectAccessControlState,
-  ({ loaded, pages }): NavigationPage[] => {
+  selectAllowedPageSlugs,
+  ({ loaded }, allowedSlugs): NavigationPage[] => {
     if (!loaded) {
       return [];
     }
 
-    const allowedSlugs = new Set(pages);
     return baseNavigationPages.filter((page) => allowedSlugs.has(page.slug));
   },
 );
