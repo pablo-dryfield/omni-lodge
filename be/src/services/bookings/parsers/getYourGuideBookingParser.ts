@@ -29,30 +29,72 @@ const addonKeywordMatchers: Array<{ test: RegExp; field: 'tshirts' | 'cocktails'
   { test: /t-?shirts?|pub\s+crawl\s+t-?shirt/i, field: 'tshirts' },
 ];
 
+const sectionStopMarkers: RegExp[] = [
+  /\bMain customer\b/i,
+  /\bCustomer language\b/i,
+  /\bTour language\b/i,
+  /\bPickup (?:time|method)\b/i,
+  /\bPhone\b/i,
+  /\bPrice\b/i,
+  /\bOpen booking\b/i,
+  /\bWe['’]re here\b/i,
+];
+
 const extractParticipantsAndExtras = (
   text: string,
 ): { adults: number | null; extras: { tshirts: number; cocktails: number; photos: number } } => {
   const extras = { tshirts: 0, cocktails: 0, photos: 0 };
   let adults: number | null = null;
-  const pattern = /(?:^|[\s,>])(\d+)\s*[x×]\s*([A-Za-z][^,\n]+)/gi;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text)) !== null) {
-    const quantity = Number.parseInt(match[1], 10);
+  const leadingQuantityPattern =
+    /(?:^|[\s,>])(\d+)\s*[xÆ×-]\s*([A-Za-z][^,\n]+?)(?=(?:\s+\d+\s*[xÆ×-]\s*[A-Za-z])|\s+(?:Main customer|Customer language|Tour language|Pickup (?:time|method)|Phone|Language|Price|Open booking|We['’]re here)|$)/gi;
+  const trailingQuantityPattern = /([A-Za-z][^,\n]+?)\s*[xÆ×-]\s*(\d+)(?:\s|$)/gi;
+  const nextQuantityPattern = /\s+\d+\s*[xÆ×-]\s+[A-Za-z]/i;
+
+  const processMatch = (quantityRaw: string, labelRaw: string) => {
+    const quantity = Number.parseInt(quantityRaw, 10);
     if (!Number.isFinite(quantity)) {
-      continue;
+      return;
     }
-    const label = match[2].trim();
+    let label = labelRaw.trim();
     if (!label) {
-      continue;
+      return;
+    }
+
+    const quantityIdx = label.search(nextQuantityPattern);
+    if (quantityIdx !== -1) {
+      label = label.slice(0, quantityIdx).trim();
+    }
+
+    let stopIdx: number | null = null;
+    for (const marker of sectionStopMarkers) {
+      const idx = label.search(marker);
+      if (idx !== -1 && (stopIdx === null || idx < stopIdx)) {
+        stopIdx = idx;
+      }
+    }
+    if (stopIdx !== null && stopIdx >= 0) {
+      label = label.slice(0, stopIdx).trim();
+    }
+
+    if (!label) {
+      return;
     }
     if (adults === null && /\badults?\b/i.test(label)) {
       adults = quantity;
-      continue;
+      return;
     }
     const keyword = addonKeywordMatchers.find(({ test }) => test.test(label));
     if (keyword) {
       extras[keyword.field] += quantity;
     }
+  };
+
+  let match: RegExpExecArray | null;
+  while ((match = leadingQuantityPattern.exec(text)) !== null) {
+    processMatch(match[1], match[2]);
+  }
+  while ((match = trailingQuantityPattern.exec(text)) !== null) {
+    processMatch(match[2], match[1]);
   }
   return { adults, extras };
 };
