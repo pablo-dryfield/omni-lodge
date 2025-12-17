@@ -724,6 +724,24 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
   };
 
+  const handleCancelOrder = async (order: UnifiedOrder) => {
+    const bookingId = getBookingIdFromOrder(order);
+    if (!bookingId) {
+      window.alert("Unable to locate OmniLodge booking reference for this order.");
+      return;
+    }
+    if (!window.confirm("Cancel this Ecwid booking? This will only update OmniLodge for now.")) {
+      return;
+    }
+    try {
+      await axiosInstance.post(`/bookings/${bookingId}/cancel-ecwid`);
+      setReloadToken((token) => token + 1);
+    } catch (error) {
+      const message = extractErrorMessage(error);
+      window.alert(message);
+    }
+  };
+
 
 
   useEffect(() => {
@@ -1249,6 +1267,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               const bookingLink = getPlatformBookingLink(order.platform, order.platformBookingId);
                               const bookingId = getBookingIdFromOrder(order);
                               const canAmend = isEcwidOrder(order) && Boolean(bookingId);
+                              const canCancel = canAmend && order.status !== "cancelled";
                               return (
                                 <Paper
                                   key={order.id}
@@ -1334,16 +1353,27 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                         </Text>
                                       );
                                     })()}
-                                    {canAmend && (
-                                      <Button
-                                        size="xs"
-                                        variant="light"
-                                        onClick={() => openAmendModal(order)}
-                                        style={{ alignSelf: "flex-start" }}
-                                      >
-                                        Amend
-                                      </Button>
-                                    )}
+                                    <Group gap="xs">
+                                      {canAmend && (
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          onClick={() => openAmendModal(order)}
+                                        >
+                                          Amend
+                                        </Button>
+                                      )}
+                                      {canCancel && (
+                                        <Button
+                                          size="xs"
+                                          color="red"
+                                          variant="outline"
+                                          onClick={() => handleCancelOrder(order)}
+                                        >
+                                          Cancel
+                                        </Button>
+                                      )}
+                                    </Group>
                                   </Stack>
                                 </Stack>
                               </Paper>
@@ -1471,6 +1501,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                             const bookingLink = getPlatformBookingLink(order.platform, order.platformBookingId);
                             const bookingId = getBookingIdFromOrder(order);
                             const canAmend = isEcwidOrder(order) && Boolean(bookingId);
+                            const canCancel = canAmend && order.status !== "cancelled";
                             return (
                               <Table.Tr key={order.id}>
                                 <Table.Td>
@@ -1518,14 +1549,24 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               <Table.Td align="right">{formatAddonValue(order.extras?.photos)}</Table.Td>
                               <Table.Td>{order.timeslot}</Table.Td>
                               <Table.Td>
-                                {canAmend ? (
-                                  <Button
-                                    size="xs"
-                                    variant="light"
-                                    onClick={() => openAmendModal(order)}
-                                  >
-                                    Amend
-                                  </Button>
+                                {canAmend || canCancel ? (
+                                  <Group gap="xs">
+                                    {canAmend && (
+                                      <Button size="xs" variant="light" onClick={() => openAmendModal(order)}>
+                                        Amend
+                                      </Button>
+                                    )}
+                                    {canCancel && (
+                                      <Button
+                                        size="xs"
+                                        color="red"
+                                        variant="outline"
+                                        onClick={() => handleCancelOrder(order)}
+                                      >
+                                        Cancel
+                                      </Button>
+                                    )}
+                                  </Group>
                                 ) : (
                                   <Text size="sm" c="dimmed">
                                     -
@@ -1617,10 +1658,6 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
 
 export default BookingsManifestPage;
-
-
-
-
 
 
 

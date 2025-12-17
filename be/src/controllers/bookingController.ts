@@ -5,6 +5,7 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import Booking from '../models/Booking.js';
+import Product from '../models/Product.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { canonicalizeProductKeyFromSources, canonicalizeProductLabelFromSources } from '../utils/productName.js';
 import type {
@@ -133,7 +134,7 @@ const canonicalizeProductKey = (booking: Booking): string | null => {
 };
 
 const prettifyProductName = (booking: Booking): string | null => {
-  const sources = [booking.product?.name ?? null, booking.productName ?? null, booking.productVariant ?? null];
+  const sources = [booking.productName ?? null, booking.product?.name ?? null, booking.productVariant ?? null];
   return canonicalizeProductLabelFromSources(sources);
 };
 
@@ -359,6 +360,7 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
 
     const rows = await Booking.findAll({
       where,
+      include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
       order: [
         ['experienceDate', 'ASC'],
         ['experienceStartAt', 'ASC'],
@@ -398,6 +400,7 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
 
     const rows = await Booking.findAll({
       where: hasSearch ? buildSearchWhere(searchTerm) : { experienceDate: targetDate },
+      include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
       order: [
         ['experienceStartAt', 'ASC'],
         ['id', 'ASC'],
@@ -573,5 +576,51 @@ export const amendEcwidBooking = async (req: AuthenticatedRequest, res: Response
       message = error.message;
     }
     res.status(status).json({ message });
+  }
+};
+
+export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const booking = await Booking.findByPk(bookingIdParam);
+    if (!booking) {
+      res.status(404).json({ message: 'Booking not found' });
+      return;
+    }
+
+    if (booking.platform !== 'ecwid') {
+      res.status(400).json({ message: 'Only Ecwid bookings can be cancelled through this endpoint' });
+      return;
+    }
+
+    if (booking.status === 'cancelled') {
+      res.status(400).json({ message: 'Booking is already cancelled' });
+      return;
+    }
+
+    const now = new Date();
+    booking.status = 'cancelled';
+    booking.statusChangedAt = now;
+    booking.cancelledAt = now;
+    booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
+
+    await booking.save();
+
+    res.status(200).json({
+      message: 'Booking cancelled successfully',
+      booking: {
+        id: booking.id,
+        status: booking.status,
+        cancelledAt: booking.cancelledAt,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to cancel booking';
+    res.status(500).json({ message });
   }
 };

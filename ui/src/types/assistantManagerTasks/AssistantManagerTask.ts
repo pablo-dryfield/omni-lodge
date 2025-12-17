@@ -12,6 +12,34 @@ export type AssistantManagerTaskTemplate = {
   assignments?: AssistantManagerTaskAssignment[];
 };
 
+export type TaskCommentEntry = {
+  id: string;
+  body: string;
+  authorId: number | null;
+  authorName?: string | null;
+  createdAt: string;
+};
+
+export type AssistantManagerTaskLogMeta = {
+  time?: string | null;
+  durationHours?: number | null;
+  priority?: 'high' | 'medium' | 'low' | null;
+  points?: number | null;
+  tags?: string[];
+  evidence?: string[];
+  manual?: boolean;
+  comments?: TaskCommentEntry[];
+  requireShift?: boolean;
+  scheduleConflict?: boolean;
+  onShift?: boolean;
+  offDay?: boolean;
+  shiftInstanceId?: number | null;
+  shiftAssignmentId?: number | null;
+  shiftTimeStart?: string | null;
+  shiftTimeEnd?: string | null;
+  [key: string]: unknown;
+};
+
 export type AssistantManagerTaskAssignment = {
   id: number;
   templateId: number;
@@ -36,7 +64,38 @@ export type AssistantManagerTaskLog = {
   status: 'pending' | 'completed' | 'missed' | 'waived';
   completedAt?: string | null;
   notes?: string | null;
-  meta: Record<string, unknown>;
+  meta: AssistantManagerTaskLogMeta;
   createdAt?: string | null;
   updatedAt?: string | null;
+};
+
+export type ManualAssistantManagerTaskPayload = {
+  templateId: number;
+  userId: number;
+  taskDate: string;
+  assignmentId?: number | null;
+  status?: AssistantManagerTaskLog['status'];
+  notes?: string | null;
+  time?: string | null;
+  durationHours?: number | null;
+  priority?: AssistantManagerTaskLogMeta['priority'];
+  points?: number | null;
+  tags?: string[];
+  evidence?: string[];
+  comment?: string;
+  requireShift?: boolean;
+};
+
+export type TaskLogMetaUpdatePayload = {
+  time?: string | null;
+  durationHours?: number | null;
+  priority?: AssistantManagerTaskLogMeta['priority'];
+  points?: number | null;
+  tags?: string[] | null;
+  evidence?: string[] | null;
+  manual?: boolean;
+  comment?: string;
+  notes?: string | null;
+  taskDate?: string;
+  requireShift?: boolean;
 };

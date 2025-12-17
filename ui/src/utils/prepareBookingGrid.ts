@@ -90,7 +90,7 @@ export function prepareBookingGrid(
         time: displayTime,
         date: order.date,
         productId: order.productId,
-        productName: order.productName,
+        productName: order.productName ?? order.productId,
         totalPeople: 0,
         menCount: 0,
         womenCount: 0,

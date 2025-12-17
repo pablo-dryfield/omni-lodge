@@ -6,6 +6,26 @@ import Action from "../models/Action.js";
 import RolePagePermission from "../models/RolePagePermission.js";
 import RoleModulePermission from "../models/RoleModulePermission.js";
 
+const normalizeRole = (value?: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim().toLowerCase();
+  const withHyphens = trimmed.replace(/[\s_]+/g, "-");
+  const collapsed = withHyphens.replace(/-/g, "");
+
+  if (collapsed === "administrator") {
+    return "admin";
+  }
+  if (collapsed === "assistantmanager" || collapsed === "assistmanager") {
+    return "assistant-manager";
+  }
+  if (collapsed === "mgr" || collapsed === "manager") {
+    return "manager";
+  }
+  return withHyphens;
+};
+
 export const getCurrentUserAccess = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const userTypeId = req.authContext?.userTypeId;
 

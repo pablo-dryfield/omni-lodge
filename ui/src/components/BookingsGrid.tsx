@@ -276,7 +276,7 @@ const MonthlyCalendar: React.FC<{
                         daySlots.map(({ product, rowKey, cell }) => {
                           const target: ManifestTarget = {
                             productId: product.id,
-                            productName: product.name,
+                            productName: cell.productName ?? product.name,
                             date: cell.date,
                             time: cell.time,
                           };
@@ -291,7 +291,7 @@ const MonthlyCalendar: React.FC<{
                                   onSelectDate(date);
                                   onToggleCell(target);
                                 }}
-                                productName={product.name}
+                                productName={cell.productName ?? product.name}
                                 variant="calendar"
                               />
                               {isOpen && (
@@ -302,7 +302,7 @@ const MonthlyCalendar: React.FC<{
                                     onOpenManifest?.(
                                       {
                                         productId: product.id,
-                                        productName: product.name,
+                                        productName: cell.productName ?? product.name,
                                         date: cell.date,
                                         time: cell.time,
                                       },
@@ -469,7 +469,7 @@ export const BookingsGrid: React.FC<BookingsGridProps> = ({
                           cells.map((cell) => {
                             const target: ManifestTarget = {
                               productId: product.id,
-                              productName: product.name,
+                              productName: cell.productName ?? product.name,
                               date: cell.date,
                               time: cell.time,
                             };
