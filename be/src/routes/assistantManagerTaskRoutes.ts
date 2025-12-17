@@ -12,10 +12,12 @@ import {
   deleteTaskAssignment,
   listTaskLogs,
   updateTaskLogStatus,
+  createManualTaskLog,
+  updateTaskLogMeta,
 } from '../controllers/assistantManagerTaskController.js';
 
 const router: Router = express.Router();
-const managerGuard = requireRoles(['admin', 'owner', 'manager']);
+const managerGuard = requireRoles(['admin', 'owner', 'manager', 'assistant-manager']);
 
 router.get('/templates', authMiddleware, managerGuard, listTaskTemplates);
 router.post('/templates', authMiddleware, managerGuard, createTaskTemplate);
@@ -29,5 +31,7 @@ router.delete('/templates/:id/assignments/:assignmentId', authMiddleware, manage
 
 router.get('/logs', authMiddleware, managerGuard, listTaskLogs);
 router.put('/logs/:id', authMiddleware, managerGuard, updateTaskLogStatus);
+router.post('/logs/manual', authMiddleware, managerGuard, createManualTaskLog);
+router.patch('/logs/:id/meta', authMiddleware, managerGuard, updateTaskLogMeta);
 
 export default router;

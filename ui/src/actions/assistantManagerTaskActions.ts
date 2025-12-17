@@ -4,6 +4,8 @@ import type {
   AssistantManagerTaskTemplate,
   AssistantManagerTaskAssignment,
   AssistantManagerTaskLog,
+  ManualAssistantManagerTaskPayload,
+  TaskLogMetaUpdatePayload,
 } from '../types/assistantManagerTasks/AssistantManagerTask';
 import type { ServerResponse } from '../types/general/ServerResponse';
 
@@ -161,6 +163,36 @@ export const updateAmTaskLogStatus = createAsyncThunk(
         return rejectWithValue(error.message);
       }
       return rejectWithValue('Failed to update task log');
+    }
+  },
+);
+
+export const createManualAmTaskLog = createAsyncThunk(
+  'assistantManagerTasks/createManualLog',
+  async (payload: ManualAssistantManagerTaskPayload, { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.post('/assistantManagerTasks/logs/manual', payload, { withCredentials: true });
+      return response.data;
+    } catch (error) {
+      if (error instanceof Error) {
+        return rejectWithValue(error.message);
+      }
+      return rejectWithValue('Failed to create manual task log');
+    }
+  },
+);
+
+export const updateAmTaskLogMeta = createAsyncThunk(
+  'assistantManagerTasks/updateLogMeta',
+  async ({ logId, payload }: { logId: number; payload: TaskLogMetaUpdatePayload }, { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.patch(`/assistantManagerTasks/logs/${logId}/meta`, payload, { withCredentials: true });
+      return response.data;
+    } catch (error) {
+      if (error instanceof Error) {
+        return rejectWithValue(error.message);
+      }
+      return rejectWithValue('Failed to update task log metadata');
     }
   },
 );

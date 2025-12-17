@@ -55,8 +55,12 @@ const PRODUCT_CANONICAL_PATTERNS: Array<{ canonical: string; patterns: RegExp[] 
     ],
   },
   {
+    canonical: 'Food Tour',
+    patterns: [/food tour/i],
+  },
+  {
     canonical: 'Bottomless Brunch',
-    patterns: [/bottomless brunch/i, /food tour/i, /brunch\s+with\s+3-course/i],
+    patterns: [/bottomless brunch/i, /brunch\s+with\s+3-course/i],
   },
   {
     canonical: 'Go-Karting',

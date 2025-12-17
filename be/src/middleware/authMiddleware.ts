@@ -7,6 +7,26 @@ import { AuthenticatedRequest } from '../types/AuthenticatedRequest';
 
 dotenv.config();
 
+const normalizeRoleSlug = (value?: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim().toLowerCase();
+  const withHyphens = trimmed.replace(/[\s_]+/g, '-');
+  const collapsed = withHyphens.replace(/-/g, '');
+
+  if (collapsed === 'administrator') {
+    return 'admin';
+  }
+  if (collapsed === 'assistantmanager' || collapsed === 'assistmanager') {
+    return 'assistant-manager';
+  }
+  if (collapsed === 'mgr' || collapsed === 'manager') {
+    return 'manager';
+  }
+  return withHyphens;
+};
+
 const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
   const token = req.cookies['token'];
 
@@ -34,7 +54,7 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
 
     const role = (user as unknown as { role?: UserType | null }).role ?? null;
     const explicitRole = (user as unknown as { roleKey?: string | null }).roleKey ?? null;
-    const roleSlug = role?.slug ?? explicitRole ?? null;
+    const roleSlug = normalizeRoleSlug(role?.slug ?? explicitRole ?? null);
 
     req.user = decoded;
     req.authContext = {
@@ -51,4 +71,3 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
 };
 
 export default authenticateJWT;
-
