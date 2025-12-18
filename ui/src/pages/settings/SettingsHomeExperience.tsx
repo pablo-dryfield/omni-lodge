@@ -75,10 +75,6 @@ const applyPreferencePatch = (
     next.activeDashboardId = candidate;
   }
 
-  if (next.activeDashboardId && !next.savedDashboardIds.includes(next.activeDashboardId)) {
-    next.savedDashboardIds = [...next.savedDashboardIds, next.activeDashboardId];
-  }
-
   if (next.viewMode === "dashboard" && next.savedDashboardIds.length === 0) {
     next.activeDashboardId = null;
   }

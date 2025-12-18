@@ -469,6 +469,14 @@ export type PreviewFilterClausePayload = {
   };
 };
 
+export type PreviewFilterGroupPayload = {
+  type: "group";
+  logic: "and" | "or" | "not";
+  children: PreviewFilterNode[];
+};
+
+export type PreviewFilterNode = string | PreviewFilterClausePayload | PreviewFilterGroupPayload;
+
 export type PreviewOrderClausePayload = {
   source: "model" | "derived";
   modelId?: string | null;
@@ -582,7 +590,7 @@ export type ReportPreviewRequest = {
     joinType?: "inner" | "left" | "right" | "full";
     description?: string;
   }>;
-  filters?: Array<string | PreviewFilterClausePayload>;
+  filters?: PreviewFilterNode[];
   orderBy?: PreviewOrderClausePayload[];
   limit?: number;
   derivedFields?: DerivedFieldQueryPayload[];
@@ -6211,26 +6219,52 @@ function buildJoinClauses(
   return { clauses, joinedModels: joined, unresolvedJoins: unresolved };
 }
 
+const isFilterGroupNode = (node: PreviewFilterNode): node is PreviewFilterGroupPayload =>
+  Boolean(node && typeof node === "object" && (node as { type?: unknown }).type === "group");
+
 function buildWhereClauses(
-  filters: Array<string | PreviewFilterClausePayload>,
+  filters: PreviewFilterNode[],
   aliasMap: Map<string, string>,
   derivedFieldLookup: Map<string, DerivedFieldQueryPayload>,
 ): string[] {
   if (!filters || filters.length === 0) {
     return [];
   }
-  const clauses: string[] = [];
-  filters.forEach((filter) => {
-    if (typeof filter === "string") {
-      const trimmed = filter.trim();
-      if (trimmed.length > 0 && !trimmed.includes(";") && !trimmed.includes("--")) {
-        clauses.push(trimmed);
-      }
-      return;
+  return filters
+    .map((node) => renderFilterNode(node, aliasMap, derivedFieldLookup))
+    .filter((clause): clause is string => Boolean(clause));
+}
+
+function renderFilterNode(
+  node: PreviewFilterNode,
+  aliasMap: Map<string, string>,
+  derivedFieldLookup: Map<string, DerivedFieldQueryPayload>,
+): string | null {
+  if (typeof node === "string") {
+    const trimmed = node.trim();
+    if (trimmed.length === 0 || trimmed.includes(";") || trimmed.includes("--")) {
+      return null;
     }
-    clauses.push(renderPreviewFilterClause(filter, aliasMap, derivedFieldLookup));
-  });
-  return clauses;
+    return trimmed;
+  }
+  if (isFilterGroupNode(node)) {
+    const children = Array.isArray(node.children) ? node.children : [];
+    const renderedChildren = children
+      .map((child) => renderFilterNode(child, aliasMap, derivedFieldLookup))
+      .filter((clause): clause is string => Boolean(clause));
+    if (renderedChildren.length === 0) {
+      return null;
+    }
+    if (node.logic === "not") {
+      return `NOT (${renderedChildren[0]})`;
+    }
+    if (renderedChildren.length === 1) {
+      return renderedChildren[0];
+    }
+    const joiner = node.logic === "or" ? " OR " : " AND ";
+    return `(${renderedChildren.join(joiner)})`;
+  }
+  return renderPreviewFilterClause(node, aliasMap, derivedFieldLookup);
 }
 
 function renderPreviewFilterClause(

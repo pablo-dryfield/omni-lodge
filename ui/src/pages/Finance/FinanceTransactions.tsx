@@ -501,7 +501,7 @@ const FinanceTransactions = () => {
         title={editingTransaction ? "Edit Transaction" : "New Transaction"}
         size="xl"
         centered
-        fullScreen={isMobile}
+        fullScreen={isTablet}
         scrollAreaComponent={ScrollArea.Autosize}
       >
         <Stack gap="md">
