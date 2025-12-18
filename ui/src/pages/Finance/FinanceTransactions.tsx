@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionIcon,
   Badge,
@@ -175,6 +175,7 @@ const FinanceTransactions = () => {
   const [uploadingInvoice, setUploadingInvoice] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
   const isTablet = useMediaQuery(`(max-width: ${theme.breakpoints.md})`);
@@ -671,16 +672,17 @@ const FinanceTransactions = () => {
           />
           <Stack gap="sm">
             <Group gap="xs" wrap="wrap" justify={isMobile ? "center" : "flex-start"}>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,application/pdf"
+                style={{ display: "none" }}
+                onChange={handleFileSelect}
+              />
               <Button
                 variant="light"
                 leftSection={<IconFileUpload size={16} />}
-                onClick={() => {
-                  const input = document.createElement("input");
-                  input.type = "file";
-                  input.accept = "image/*,application/pdf";
-                  input.onchange = handleFileSelect;
-                  input.click();
-                }}
+                onClick={() => fileInputRef.current?.click()}
                 disabled={uploadingInvoice}
               >
                 Upload invoice
