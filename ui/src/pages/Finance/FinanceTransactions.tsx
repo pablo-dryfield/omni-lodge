@@ -8,6 +8,7 @@ import {
   Group,
   Modal,
   NumberInput,
+  Progress,
   ScrollArea,
   Select,
   SimpleGrid,
@@ -171,6 +172,9 @@ const FinanceTransactions = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [draft, setDraft] = useState<TransactionDraft>(defaultDraft);
   const [editingTransaction, setEditingTransaction] = useState<FinanceTransaction | null>(null);
+  const [uploadingInvoice, setUploadingInvoice] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
   const isTablet = useMediaQuery(`(max-width: ${theme.breakpoints.md})`);
@@ -370,6 +374,9 @@ const FinanceTransactions = () => {
     if (!file) {
       return;
     }
+    setUploadError(null);
+    setUploadingInvoice(true);
+    setUploadProgress(0);
     let preparedFile: File = file;
     if (file.type?.startsWith("image/")) {
       try {
@@ -385,9 +392,23 @@ const FinanceTransactions = () => {
     }
     const formData = new FormData();
     formData.append("file", preparedFile);
-    const result = await dispatch(uploadFinanceFile(formData));
-    if (uploadFinanceFile.fulfilled.match(result)) {
-      setDraft((state) => ({ ...state, invoiceFileId: result.payload.id }));
+    try {
+      const result = await dispatch(
+        uploadFinanceFile({
+          formData,
+          onUploadProgress: (percent) => {
+            setUploadProgress(percent);
+          },
+        }),
+      );
+      if (uploadFinanceFile.fulfilled.match(result)) {
+        setDraft((state) => ({ ...state, invoiceFileId: result.payload.id }));
+      } else {
+        setUploadError(result.error.message ?? "Failed to upload invoice");
+      }
+    } finally {
+      setUploadingInvoice(false);
+      setUploadProgress(0);
     }
     if (target) {
       target.value = "";
@@ -660,9 +681,18 @@ const FinanceTransactions = () => {
                   input.onchange = handleFileSelect;
                   input.click();
                 }}
+                disabled={uploadingInvoice}
               >
                 Upload invoice
               </Button>
+              {uploadingInvoice && (
+                <Group gap="xs" align="center">
+                  <Progress value={uploadProgress} w={isMobile ? 140 : 200} />
+                  <Text size="sm" c="dimmed">
+                    {uploadProgress}%
+                  </Text>
+                </Group>
+              )}
               {draft.invoiceFileId && (
                 <Badge color="green" variant="light">
                   File #{draft.invoiceFileId}
@@ -670,6 +700,11 @@ const FinanceTransactions = () => {
               )}
               {files.latest && <Badge>Last upload: {files.latest.originalName}</Badge>}
             </Group>
+            {uploadError && (
+              <Text size="sm" c="red" ta="center">
+                {uploadError}
+              </Text>
+            )}
             <Group gap="sm" wrap="wrap" justify="center">
               <Button variant="light" onClick={() => setModalOpen(false)} fullWidth={isMobile}>
                 Cancel
