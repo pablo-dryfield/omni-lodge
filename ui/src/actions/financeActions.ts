@@ -1,4 +1,5 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
+import type { AxiosProgressEvent } from 'axios';
 import axiosInstance from '../utils/axiosInstance';
 import {
   FinanceAccount,
@@ -379,16 +380,29 @@ export const fetchFinanceFiles = createAsyncThunk<FinanceFile[]>(
   },
 );
 
-export const uploadFinanceFile = createAsyncThunk<FinanceFile, FormData>(
+type UploadFinanceFilePayload = {
+  formData: FormData;
+  onUploadProgress?: (percent: number) => void;
+};
+
+export const uploadFinanceFile = createAsyncThunk<FinanceFile, UploadFinanceFilePayload>(
   'finance/files/upload',
-  async (formData) => {
+  async ({ formData, onUploadProgress }) => {
     const response = await axiosInstance.post<FinanceFile>(buildFinanceUrl('/files'), formData, {
       withCredentials: true,
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      onUploadProgress: (event: AxiosProgressEvent) => {
+        if (!onUploadProgress) {
+          return;
+        }
+        if (typeof event.total === 'number' && event.total > 0) {
+          const percent = Math.min(100, Math.round((event.loaded / event.total) * 100));
+          onUploadProgress(percent);
+        }
+      },
     });
     return response.data;
   },
 );
-
