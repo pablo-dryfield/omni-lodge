@@ -1,3 +1,5 @@
+import heic2any from "heic2any";
+
 type ImageCompressionOptions = {
   maxWidth?: number;
   maxHeight?: number;
@@ -45,6 +47,31 @@ const canvasToBlob = (canvas: HTMLCanvasElement, mimeType: string, quality: numb
       quality,
     );
   });
+
+const HEIC_MIME_TYPES = new Set([
+  "image/heic",
+  "image/heif",
+  "image/heic-sequence",
+  "image/heif-sequence",
+]);
+
+const convertHeicToJpeg = async (file: File): Promise<File> => {
+  try {
+    const converted = (await heic2any({
+      blob: file,
+      toType: "image/jpeg",
+      quality: 0.88,
+    })) as Blob | Blob[];
+    const blob = Array.isArray(converted) ? converted[0] : converted;
+    return new File([blob], renameFileByMime(file.name, "image/jpeg"), {
+      type: "image/jpeg",
+      lastModified: Date.now(),
+    });
+  } catch (error) {
+    console.error("Failed to convert HEIC to JPEG", error);
+    return file;
+  }
+};
 
 const loadImageElement = (file: File): Promise<HTMLImageElement> =>
   new Promise((resolve, reject) => {
@@ -108,8 +135,14 @@ export const compressImageFile = async (
   file: File,
   options: ImageCompressionOptions = {},
 ): Promise<File> => {
-  if (!file.type.startsWith('image/')) {
-    return file;
+  let workingFile = file;
+  const normalizedMime = file.type?.toLowerCase() ?? "";
+  if (HEIC_MIME_TYPES.has(normalizedMime)) {
+    workingFile = await convertHeicToJpeg(file);
+  }
+
+  if (!workingFile.type.startsWith('image/')) {
+    return workingFile;
   }
 
   const mergedOptions = {
@@ -129,14 +162,14 @@ export const compressImageFile = async (
   let source: ImageBitmap | HTMLImageElement;
 
   try {
-    source = await loadImageSource(file);
+    source = await loadImageSource(workingFile);
   } catch {
-    return file;
+    return workingFile;
   }
 
   const { width, height } = getSourceDimensions(source);
   if (!width || !height) {
-    return file;
+    return workingFile;
   }
 
   const scale = Math.min(maxWidth / width, maxHeight / height, 1);
@@ -147,13 +180,13 @@ export const compressImageFile = async (
     if (isImageBitmap(source)) {
       source.close();
     }
-    return file;
+    return workingFile;
   }
 
   const canvas = drawImageToCanvas(source, targetWidth, targetHeight);
   const preferredMime =
     outputMimeType ??
-    (file.type === 'image/png' || file.type === 'image/webp' ? file.type : 'image/jpeg');
+    (workingFile.type === 'image/png' || workingFile.type === 'image/webp' ? workingFile.type : 'image/jpeg');
 
   const attemptBlob = async (mimeType: string, currentQuality: number) => {
     try {
@@ -176,11 +209,11 @@ export const compressImageFile = async (
     }
   }
 
-  if (compressedBlob.size >= file.size) {
-    return file;
+  if (compressedBlob.size >= workingFile.size) {
+    return workingFile;
   }
 
-  const newFile = new File([compressedBlob], renameFileByMime(file.name, compressedBlob.type), {
+  const newFile = new File([compressedBlob], renameFileByMime(workingFile.name, compressedBlob.type), {
     type: compressedBlob.type,
     lastModified: Date.now(),
   });
