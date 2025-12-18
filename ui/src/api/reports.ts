@@ -72,6 +72,14 @@ export type PreviewFilterClausePayload = {
   };
 };
 
+export type PreviewFilterGroupPayload = {
+  type: "group";
+  logic: "and" | "or" | "not";
+  children: PreviewFilterNode[];
+};
+
+export type PreviewFilterNode = string | PreviewFilterClausePayload | PreviewFilterGroupPayload;
+
 export type PreviewOrderRuleDto = {
   id: string;
   source: "model" | "derived";
@@ -237,6 +245,7 @@ export type DashboardVisualCardViewConfig = {
     operator: FilterOperator;
     filterIndex?: number;
     clauseSql?: string;
+    filterPath?: number[];
   };
   visual: {
     id: string;
@@ -281,6 +290,7 @@ export type DashboardSpotlightCardViewConfig = {
     operator: FilterOperator;
     filterIndex?: number;
     clauseSql?: string;
+    filterPath?: number[];
   };
 };
 
@@ -316,6 +326,7 @@ export type DashboardPreviewTableCardViewConfig = {
     operator: FilterOperator;
     filterIndex?: number;
     clauseSql?: string;
+    filterPath?: number[];
   };
 };
 
@@ -546,7 +557,7 @@ export type ReportPreviewRequest = {
     joinType?: "inner" | "left" | "right" | "full";
     description?: string;
   }>;
-  filters?: Array<string | PreviewFilterClausePayload>;
+  filters?: PreviewFilterNode[];
   orderBy?: PreviewOrderClausePayload[];
   limit?: number;
   derivedFields?: QueryConfigDerivedField[];
@@ -970,7 +981,6 @@ export const runReportQueryWithPolling = async (
   const response = await axiosInstance.post("/reports/query", payload);
   return resolveReportQueryResult(response.data as ReportQueryResult, options);
 };
-
 
 
 

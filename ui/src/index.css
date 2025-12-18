@@ -44,3 +44,14 @@ code {
 .mantine-NavLink-root:hover {
   background-color: var(--nl-hover, #eaf3fc) !important;
 }
+
+@media (max-width: 768px) {
+  /* Prevent iOS from auto-zooming focused fields, which distorts the finance modal */
+  input,
+  select,
+  textarea,
+  .mantine-Input-input,
+  .mantine-Textarea-input {
+    font-size: 16px !important;
+  }
+}

@@ -123,6 +123,8 @@ import {
   type ReportPreviewRequest,
   type ReportPreviewResponse,
   type PreviewOrderClausePayload,
+  type PreviewFilterNode,
+  type PreviewFilterGroupPayload,
   type PreviewGroupingRuleDto,
   type PreviewAggregationRuleDto,
   type PreviewHavingRuleDto,
@@ -240,6 +242,7 @@ type FilterOperator =
 
 type ReportFilter = {
   id: string;
+  parentGroupId: string;
   leftModelId: string;
   leftFieldId: string;
   operator: FilterOperator;
@@ -252,6 +255,22 @@ type ReportFilter = {
     from?: string;
     to?: string;
   };
+};
+
+type ReportFilterGroup = {
+  id: string;
+  parentGroupId: string | null;
+  logic: "and" | "or" | "not";
+  childOrder: string[];
+};
+
+type FilterClauseMetadata = {
+  filterId: string;
+  modelId: string;
+  fieldId: string;
+  operator: FilterOperator;
+  valueKind: FilterValueKind;
+  filterPath: number[];
 };
 
 type FilterFieldOption = {
@@ -312,6 +331,7 @@ type PreviewHavingRule = {
 type DerivedFieldStatus = "active" | "stale";
 type ReportDerivedField = DerivedFieldDefinitionDto & { status?: DerivedFieldStatus };
 const DERIVED_FIELD_VISIBILITY_FLAG = "__includeInBuilder";
+const ROOT_FILTER_GROUP_ID = "filter-group-root";
 
 const isDerivedFieldVisibleInBuilder = (field: DerivedFieldDefinitionDto): boolean => {
   if (field.status === "stale") {
@@ -354,6 +374,8 @@ type ReportTemplate = {
   visuals: VisualDefinition[];
   metrics: string[];
   filters: ReportFilter[];
+  filterGroups: ReportFilterGroup[];
+  rawFilterSql: string[];
   columnOrder: string[];
   columnAliases: Record<string, string>;
   queryConfig: QueryConfig | null;
@@ -543,6 +565,135 @@ const getDefaultKey = (model: DataModelDefinition): string =>
 
 const deepClone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 const generateId = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+const buildChildToken = (kind: "filter" | "group", id: string) => `${kind}:${id}`;
+const parseChildToken = (
+  token: string,
+): { kind: "filter" | "group"; id: string } | null => {
+  if (typeof token !== "string" || token.length === 0) {
+    return null;
+  }
+  const [kind, id] = token.split(":");
+  if ((kind === "filter" || kind === "group") && id) {
+    return { kind, id };
+  }
+  return null;
+};
+
+const createFilterGroup = (
+  logic: ReportFilterGroup["logic"],
+  parentGroupId: string | null,
+  childOrder: string[] = [],
+): ReportFilterGroup => ({
+  id: generateId("filter-group"),
+  parentGroupId,
+  logic,
+  childOrder,
+});
+
+const detachChildTokenFromGroup = (
+  groups: ReportFilterGroup[],
+  targetGroupId: string | null,
+  childToken: string,
+): ReportFilterGroup[] => {
+  let updated = false;
+  const next = groups.map((group) => {
+    if (targetGroupId && group.id !== targetGroupId) {
+      return group;
+    }
+    if (!group.childOrder.includes(childToken)) {
+      return group;
+    }
+    updated = true;
+    return {
+      ...group,
+      childOrder: group.childOrder.filter((token) => token !== childToken),
+    };
+  });
+  if (updated || targetGroupId) {
+    return next;
+  }
+  let fallbackUpdated = false;
+  return groups.map((group) => {
+    if (!group.childOrder.includes(childToken)) {
+      return group;
+    }
+    fallbackUpdated = true;
+    return {
+      ...group,
+      childOrder: group.childOrder.filter((token) => token !== childToken),
+    };
+  });
+};
+
+const collectGroupDescendants = (
+  groups: ReportFilterGroup[],
+  groupId: string,
+): { filterIds: Set<string>; groupIds: Set<string> } => {
+  const map = new Map(groups.map((group) => [group.id, group]));
+  const filterIds = new Set<string>();
+  const groupIds = new Set<string>();
+  const visit = (currentId: string) => {
+    if (groupIds.has(currentId)) {
+      return;
+    }
+    const current = map.get(currentId);
+    if (!current) {
+      return;
+    }
+    groupIds.add(currentId);
+    current.childOrder.forEach((token) => {
+      const parsed = parseChildToken(token);
+      if (!parsed) {
+        return;
+      }
+      if (parsed.kind === "group") {
+        visit(parsed.id);
+      } else {
+        filterIds.add(parsed.id);
+      }
+    });
+  };
+  visit(groupId);
+  return { filterIds, groupIds };
+};
+
+const pruneFilterGroups = (
+  groups: ReportFilterGroup[],
+  filtersToRemove: Set<string>,
+  groupsToRemove: Set<string>,
+): ReportFilterGroup[] => {
+  return groups
+    .filter((group) => !groupsToRemove.has(group.id))
+    .map((group) => {
+      const nextOrder = group.childOrder.filter((token) => {
+        const parsed = parseChildToken(token);
+        if (!parsed) {
+          return false;
+        }
+        if (parsed.kind === "group") {
+          return !groupsToRemove.has(parsed.id);
+        }
+        return !filtersToRemove.has(parsed.id);
+      });
+      return nextOrder.length === group.childOrder.length ? group : { ...group, childOrder: nextOrder };
+    });
+};
+
+const ensureRootFilterGroup = (groups: ReportFilterGroup[]): ReportFilterGroup[] => {
+  if (groups.some((group) => group.id === ROOT_FILTER_GROUP_ID)) {
+    return groups;
+  }
+  return [
+    ...groups,
+    { id: ROOT_FILTER_GROUP_ID, parentGroupId: null, logic: "and", childOrder: [] },
+  ];
+};
+
+const FILTER_GROUP_LOGIC_OPTIONS: { value: ReportFilterGroup["logic"]; label: string }[] = [
+  { value: "and", label: "All (AND)" },
+  { value: "or", label: "Any (OR)" },
+  { value: "not", label: "NOT" },
+];
 
 const createEmptyTemplate = (): ReportTemplate => ({
   id: "template-empty",
@@ -561,6 +712,8 @@ const createEmptyTemplate = (): ReportTemplate => ({
   visuals: [],
   metrics: [],
   filters: [],
+  filterGroups: [{ id: ROOT_FILTER_GROUP_ID, parentGroupId: null, logic: "and", childOrder: [] }],
+  rawFilterSql: [],
   columnOrder: [],
   columnAliases: {},
   queryConfig: null,
@@ -571,6 +724,223 @@ const createEmptyTemplate = (): ReportTemplate => ({
   previewAggregations: [],
   previewHaving: [],
 });
+
+const inferValueKindFromClause = (clause: PreviewFilterClausePayload): FilterValueKind => {
+  if (clause.valueKind === "number" || clause.valueKind === "date" || clause.valueKind === "boolean") {
+    return clause.valueKind;
+  }
+  if (clause.operator === "is_true" || clause.operator === "is_false") {
+    return "boolean";
+  }
+  return "string";
+};
+
+const deserializeTemplateFilters = (
+  payload: unknown,
+): { filters: ReportFilter[]; filterGroups: ReportFilterGroup[]; rawSql: string[] } => {
+  const filters: ReportFilter[] = [];
+  const rawSql: string[] = [];
+  const groupMap = new Map<string, ReportFilterGroup>();
+  const rootGroup: ReportFilterGroup = {
+    id: ROOT_FILTER_GROUP_ID,
+    parentGroupId: null,
+    logic: "and",
+    childOrder: [],
+  };
+  groupMap.set(rootGroup.id, rootGroup);
+
+  const appendChildToGroup = (groupId: string, token: string) => {
+    const target = groupMap.get(groupId);
+    if (!target) {
+      return;
+    }
+    groupMap.set(groupId, { ...target, childOrder: [...target.childOrder, token] });
+  };
+
+  const visitNode = (node: unknown, parentGroupId: string) => {
+    if (typeof node === "string") {
+      rawSql.push(node);
+      return;
+    }
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (!Array.isArray(node) && (node as { type?: unknown }).type === "group") {
+      const groupNode = node as { logic?: string; children?: unknown[] };
+      const logic = groupNode.logic === "or" || groupNode.logic === "not" ? groupNode.logic : "and";
+      const childGroup = createFilterGroup(logic as ReportFilterGroup["logic"], parentGroupId);
+      groupMap.set(childGroup.id, childGroup);
+      appendChildToGroup(parentGroupId, buildChildToken("group", childGroup.id));
+      const children = Array.isArray(groupNode.children) ? groupNode.children : [];
+      children.forEach((child) => visitNode(child, childGroup.id));
+      return;
+    }
+    const clause = node as Partial<PreviewFilterClausePayload>;
+    if (typeof clause.leftModelId !== "string" || typeof clause.leftFieldId !== "string") {
+      return;
+    }
+    const filter: ReportFilter = {
+      id: generateId("filter"),
+      parentGroupId,
+      leftModelId: clause.leftModelId,
+      leftFieldId: clause.leftFieldId,
+      operator: (clause.operator as FilterOperator) ?? "eq",
+      rightType: (clause.rightType as FilterComparisonMode) ?? "value",
+      rightModelId: clause.rightModelId,
+      rightFieldId: clause.rightFieldId,
+      value:
+        clause.value === null || clause.value === undefined ? undefined : String(clause.value),
+      valueKind: inferValueKindFromClause(clause as PreviewFilterClausePayload),
+      range: clause.range
+        ? {
+            from:
+              clause.range.from === null || clause.range.from === undefined
+                ? undefined
+                : String(clause.range.from),
+            to:
+              clause.range.to === null || clause.range.to === undefined
+                ? undefined
+                : String(clause.range.to),
+          }
+        : undefined,
+    };
+    filters.push(filter);
+    appendChildToGroup(parentGroupId, buildChildToken("filter", filter.id));
+  };
+
+  const normalizedNodes = Array.isArray(payload) ? (payload as unknown[]) : [];
+  if (normalizedNodes.length === 0) {
+    return { filters, filterGroups: Array.from(groupMap.values()), rawSql };
+  }
+  normalizedNodes.forEach((node) => visitNode(node, ROOT_FILTER_GROUP_ID));
+  return { filters, filterGroups: Array.from(groupMap.values()), rawSql };
+};
+
+const serializeFilterClause = (filter: ReportFilter): PreviewFilterClausePayload => ({
+  leftModelId: filter.leftModelId,
+  leftFieldId: filter.leftFieldId,
+  operator: filter.operator,
+  rightType: filter.rightType,
+  rightModelId: filter.rightModelId,
+  rightFieldId: filter.rightFieldId,
+  value: filter.rightType === "value" ? filter.value ?? null : undefined,
+  valueKind: filter.valueKind,
+  range: filter.range
+    ? {
+        from: filter.range.from ?? undefined,
+        to: filter.range.to ?? undefined,
+      }
+    : undefined,
+});
+
+const serializeFiltersToPreviewNodes = (
+  clauses: Map<string, PreviewFilterClausePayload>,
+  filterGroups: ReportFilterGroup[],
+  rawSql: string[],
+): { nodes: PreviewFilterNode[]; metadata: FilterClauseMetadata[] } => {
+  const groupMap = new Map<string, ReportFilterGroup>();
+  filterGroups.forEach((group) => {
+    groupMap.set(group.id, group);
+  });
+
+  type InternalMetadata = Omit<FilterClauseMetadata, "filterPath"> & {
+    pathSegments: number[];
+    filterPath?: number[];
+  };
+  const metadata: InternalMetadata[] = [];
+
+  const buildGroupNode = (
+    group: ReportFilterGroup,
+    pathPrefix: number[],
+  ): PreviewFilterGroupPayload | null => {
+    const children: PreviewFilterNode[] = [];
+    group.childOrder.forEach((token) => {
+      const parsed = parseChildToken(token);
+      if (!parsed) {
+        return;
+      }
+      const nextChildIndex = children.length;
+      if (parsed.kind === "group") {
+        const childGroup = groupMap.get(parsed.id);
+        if (childGroup) {
+          const childNode = buildGroupNode(childGroup, [...pathPrefix, nextChildIndex]);
+          if (childNode) {
+            children.push(childNode);
+          }
+        }
+      } else {
+        const clause = clauses.get(parsed.id);
+        if (clause) {
+          children.push(clause);
+          metadata.push({
+            filterId: parsed.id,
+            modelId: clause.leftModelId,
+            fieldId: clause.leftFieldId,
+            operator: clause.operator,
+            valueKind: (clause.valueKind as FilterValueKind) ?? "string",
+            pathSegments: [...pathPrefix, nextChildIndex],
+          });
+        }
+      }
+    });
+    if (children.length === 0) {
+      return null;
+    }
+    return {
+      type: "group",
+      logic: group.logic,
+      children,
+    };
+  };
+
+  const rootGroup = groupMap.get(ROOT_FILTER_GROUP_ID);
+  const nodes: PreviewFilterNode[] = [];
+  if (rootGroup) {
+    const rootNode = buildGroupNode(rootGroup, []);
+    if (rootNode) {
+      if (rootGroup.logic === "and") {
+        rootNode.children.forEach((child, childIndex) => {
+          const topIndex = nodes.length;
+          nodes.push(child);
+          metadata.forEach((entry) => {
+            if (entry.pathSegments[0] === childIndex && !entry.filterPath) {
+              const remaining = entry.pathSegments.slice(1);
+              entry.filterPath = [topIndex, ...remaining];
+            }
+          });
+        });
+      } else {
+        const rootIndex = nodes.length;
+        nodes.push(rootNode);
+        metadata.forEach((entry) => {
+          entry.filterPath = [rootIndex, ...entry.pathSegments];
+        });
+      }
+    } else {
+      metadata.length = 0;
+    }
+  } else {
+    metadata.forEach((entry) => {
+      entry.filterPath = [...entry.pathSegments];
+    });
+  }
+  rawSql.forEach((sql) => {
+    if (typeof sql === "string" && sql.trim().length > 0) {
+      nodes.push(sql);
+    }
+  });
+  const finalizedMetadata = metadata
+    .filter((entry): entry is InternalMetadata & { filterPath: number[] } => Boolean(entry.filterPath))
+    .map<FilterClauseMetadata>((entry) => ({
+      filterId: entry.filterId,
+      modelId: entry.modelId,
+      fieldId: entry.fieldId,
+      operator: entry.operator,
+      valueKind: entry.valueKind,
+      filterPath: entry.filterPath,
+    }));
+  return { nodes, metadata: finalizedMetadata };
+};
 
 const buildJoinKey = (left: string, right: string) => {
   const normalized = [left.trim(), right.trim()].filter((entry) => entry.length > 0).sort();
@@ -1865,6 +2235,8 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
         .filter((visual): visual is VisualDefinition => visual !== null)
     : [];
 
+  const { filters, filterGroups, rawSql } = deserializeTemplateFilters(template.filters);
+
   return {
     id: template.id,
     name: template.name ?? "Untitled report",
@@ -1886,7 +2258,9 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
             typeof metric === "string" && metric.trim().length > 0 && metric.includes("__"),
         )
       : [],
-    filters: Array.isArray(template.filters) ? (template.filters as ReportFilter[]) : [],
+    filters,
+    filterGroups,
+    rawFilterSql: rawSql,
     columnOrder,
     columnAliases,
     queryConfig,
@@ -4233,256 +4607,174 @@ const Reports = (props: GenericPageProps) => {
     return true;
   };
 
-  const buildFilterClausesForRequest = useCallback(
-    (filters: ReportFilter[], aliasLookup: Map<string, string>) => {
-      const clauses: string[] = [];
-      const errors: string[] = [];
+  const filterMetadataRef = useRef<Map<string, FilterClauseMetadata>>(new Map());
 
-      const resolveColumnExpressionForFilter = (modelId: string, fieldId: string): string | null => {
-        const alias = aliasLookup.get(modelId);
-        const model = modelMap.get(modelId);
-        if (!alias || !model) {
-          return null;
-        }
-        const field = model.fields.find((candidate) => candidate.id === fieldId);
-        if (!field) {
-          return null;
-        }
-        const column = field.sourceColumn ?? field.id;
-        return `${alias}.${quoteIdentifier(column)}`;
-      };
+  const prepareFiltersForRequest = useCallback((): {
+    nodes: PreviewFilterNode[];
+    metadata: Map<string, FilterClauseMetadata>;
+    errors: string[];
+  } => {
+    if (!draft.filters || draft.filters.length === 0) {
+      const trimmedSql = draft.rawFilterSql.filter(
+        (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+      );
+      return trimmedSql.length > 0
+        ? { nodes: trimmedSql, metadata: new Map(), errors: [] }
+        : { nodes: [], metadata: new Map(), errors: [] };
+    }
 
-      const buildDerivedExpressionSql = (fieldId: string): string | null => {
-        const derivedField = derivedFieldMap.get(fieldId);
-        if (!derivedField || !derivedField.expressionAst) {
-          return null;
-        }
+    const errors: string[] = [];
+    const clauses = new Map<string, PreviewFilterClausePayload>();
 
-        const renderNode = (node: DerivedFieldExpressionAst): string | null => {
-          switch (node.type) {
-            case "column":
-              return resolveColumnExpressionForFilter(node.modelId, node.fieldId);
-            case "literal":
-              if (node.valueType === "number") {
-                return Number(node.value).toString();
-              }
-              if (node.valueType === "boolean") {
-                return node.value ? "TRUE" : "FALSE";
-              }
-              return `'${escapeSqlLiteral(String(node.value ?? ""))}'`;
-            case "binary": {
-              const left = renderNode(node.left);
-              const right = renderNode(node.right);
-              if (!left || !right) {
-                return null;
-              }
-              return `(${left} ${node.operator} ${right})`;
-            }
-            case "unary": {
-              const argument = renderNode(node.argument);
-              if (!argument) {
-                return null;
-              }
-              return `${node.operator}(${argument})`;
-            }
-            case "function": {
-              const args = node.args.map((arg) => renderNode(arg));
-              if (args.some((arg) => !arg)) {
-                return null;
-              }
-              return `${node.name}(${args.join(", ")})`;
-            }
-            default:
-              return null;
-          }
-        };
+    draft.filters.forEach((filter) => {
+      const leftOption = filterFieldLookup.get(buildFilterOptionKey(filter.leftModelId, filter.leftFieldId));
+      if (!leftOption) {
+        errors.push("A filter references a field that is no longer available.");
+        return;
+      }
 
-        return renderNode(derivedField.expressionAst);
-      };
+      const operatorDefinition = FILTER_OPERATOR_LOOKUP.get(filter.operator);
+      if (!operatorDefinition) {
+        errors.push(`"${leftOption.label}" uses an unsupported operator.`);
+        return;
+      }
 
-      const resolveFieldExpression = (option: FilterFieldOption): string | null => {
-        if (option.modelId === DERIVED_FIELD_SENTINEL) {
-          return buildDerivedExpressionSql(option.fieldId);
-        }
-        return resolveColumnExpressionForFilter(option.modelId, option.fieldId);
-      };
+      const requiresValue = operatorDefinition.requiresValue;
+      const allowFieldComparison = operatorDefinition.allowFieldComparison ?? false;
 
-      filters.forEach((filter) => {
-        const leftOption = filterFieldLookup.get(buildFilterOptionKey(filter.leftModelId, filter.leftFieldId));
-        if (!leftOption) {
-          errors.push("A filter references a field that is no longer available.");
+      if (!requiresValue) {
+        clauses.set(filter.id, {
+          leftModelId: filter.leftModelId,
+          leftFieldId: filter.leftFieldId,
+          operator: filter.operator,
+          rightType: "value",
+          valueKind: filter.valueKind,
+        });
+        return;
+      }
+
+      if (filter.rightType === "field") {
+        if (!allowFieldComparison) {
+          errors.push(`The operator on "${leftOption.label}" does not support comparing against a field.`);
           return;
         }
-
-        const operatorDefinition = FILTER_OPERATOR_LOOKUP.get(filter.operator);
-        if (!operatorDefinition) {
+        if (!filter.rightModelId || !filter.rightFieldId) {
+          errors.push(`Select a comparison field for "${leftOption.label}".`);
           return;
         }
-
-        const leftExpression = resolveFieldExpression(leftOption);
-        if (!leftExpression) {
-          errors.push(`"${leftOption.label}" is not available in the current preview.`);
+        const rightOption = filterFieldLookup.get(
+          buildFilterOptionKey(filter.rightModelId, filter.rightFieldId),
+        );
+        if (!rightOption) {
+          errors.push("The comparison field is no longer available.");
           return;
         }
+        clauses.set(filter.id, {
+          leftModelId: filter.leftModelId,
+          leftFieldId: filter.leftFieldId,
+          operator: filter.operator,
+          rightType: "field",
+          rightModelId: filter.rightModelId,
+          rightFieldId: filter.rightFieldId,
+          valueKind: filter.valueKind,
+        });
+        return;
+      }
 
-        const requiresValue = operatorDefinition.requiresValue;
-        const allowFieldComparison = operatorDefinition.allowFieldComparison ?? false;
-        const fieldLabel = leftOption.label;
-
-        if (!requiresValue) {
-          switch (filter.operator) {
-            case "is_null":
-              clauses.push(`${leftExpression} IS NULL`);
-              break;
-            case "is_not_null":
-              clauses.push(`${leftExpression} IS NOT NULL`);
-              break;
-            case "is_true":
-              clauses.push(`${leftExpression} IS TRUE`);
-              break;
-            case "is_false":
-              clauses.push(`${leftExpression} IS FALSE`);
-              break;
-            default:
-              break;
-          }
+      if (filter.operator === "between") {
+        const rangeFrom = (filter.range?.from ?? "").trim();
+        const rangeTo = (filter.range?.to ?? "").trim();
+        if (!rangeFrom || !rangeTo) {
+          errors.push(`Provide both start and end values for "${leftOption.label}".`);
           return;
         }
-
-        if (filter.rightType === "field") {
-          if (!allowFieldComparison) {
-            errors.push(`The operator on "${fieldLabel}" does not support comparing against a field.`);
+        if (filter.valueKind === "number") {
+          const fromNumeric = Number(rangeFrom);
+          const toNumeric = Number(rangeTo);
+          if (!Number.isFinite(fromNumeric) || !Number.isFinite(toNumeric)) {
+            errors.push(`Enter valid numeric bounds for "${leftOption.label}".`);
             return;
           }
-          if (!filter.rightModelId || !filter.rightFieldId) {
-            errors.push(`Select a comparison field for "${fieldLabel}".`);
-            return;
-          }
-          const rightOption = filterFieldLookup.get(
-            buildFilterOptionKey(filter.rightModelId, filter.rightFieldId),
-          );
-          if (!rightOption) {
-            errors.push("The comparison field is no longer available.");
-            return;
-          }
-          const rightExpression = resolveFieldExpression(rightOption);
-          if (!rightExpression) {
-            errors.push("The comparison field is not available in the current preview.");
-            return;
-          }
-          const operatorSqlMap: Partial<Record<FilterOperator, string>> = {
-            eq: "=",
-            neq: "<>",
-            gt: ">",
-            gte: ">=",
-            lt: "<",
-            lte: "<=",
-          };
-          const sqlOperator = operatorSqlMap[filter.operator];
-          if (!sqlOperator) {
-            errors.push(`"${fieldLabel}" operator requires a literal value.`);
-            return;
-          }
-          clauses.push(`${leftExpression} ${sqlOperator} ${rightExpression}`);
+          clauses.set(filter.id, {
+            leftModelId: filter.leftModelId,
+            leftFieldId: filter.leftFieldId,
+            operator: filter.operator,
+            rightType: "value",
+            valueKind: filter.valueKind,
+            range: { from: fromNumeric, to: toNumeric },
+          });
           return;
         }
+        clauses.set(filter.id, {
+          leftModelId: filter.leftModelId,
+          leftFieldId: filter.leftFieldId,
+          operator: filter.operator,
+          rightType: "value",
+          valueKind: filter.valueKind,
+          range: { from: rangeFrom, to: rangeTo },
+        });
+        return;
+      }
 
-        const buildLiteral = (kind: FilterValueKind, value: string): string | null => {
-          if (kind === "number") {
-            const numeric = Number(value);
-            if (!Number.isFinite(numeric)) {
-              errors.push(`Enter a valid number for "${fieldLabel}".`);
-              return null;
-            }
-            return String(numeric);
-          }
-          if (kind === "boolean") {
-            const normalized = value.toLowerCase();
-            if (normalized !== "true" && normalized !== "false") {
-              errors.push(`Select true or false for "${fieldLabel}".`);
-              return null;
-            }
-            return normalized === "true" ? "TRUE" : "FALSE";
-          }
-          return `'${escapeSqlLiteral(value)}'`;
-        };
-
-        if (filter.operator === "between") {
-          const rangeFrom = (filter.range?.from ?? "").trim();
-          const rangeTo = (filter.range?.to ?? "").trim();
-          if (!rangeFrom || !rangeTo) {
-            errors.push(`Provide both start and end values for "${fieldLabel}".`);
-            return;
-          }
-          const fromLiteral = buildLiteral(filter.valueKind, rangeFrom);
-          const toLiteral = buildLiteral(filter.valueKind, rangeTo);
-          if (!fromLiteral || !toLiteral) {
-            return;
-          }
-          clauses.push(`${leftExpression} BETWEEN ${fromLiteral} AND ${toLiteral}`);
+      let value: string | number | boolean | null = filter.valueKind === "boolean" ? filter.value ?? "true" : filter.value ?? "";
+      if (filter.valueKind === "boolean") {
+        const normalized = (value ?? "").toString().toLowerCase();
+        if (normalized !== "true" && normalized !== "false") {
+          errors.push(`Select true or false for "${leftOption.label}".`);
           return;
         }
-
-        const trimmedValue = (filter.value ?? "").trim();
-        if (filter.valueKind !== "boolean" && trimmedValue.length === 0) {
-          errors.push(`Provide a value for the filter on "${fieldLabel}".`);
+        value = normalized === "true";
+      } else if (filter.valueKind === "number") {
+        const numeric = Number((value ?? "").toString());
+        if (!Number.isFinite(numeric)) {
+          errors.push(`Enter a valid number for "${leftOption.label}".`);
           return;
         }
-
-        switch (filter.operator) {
-          case "eq":
-          case "neq":
-          case "gt":
-          case "gte":
-          case "lt":
-          case "lte": {
-            const operatorSqlMap: Record<FilterOperator, string> = {
-              eq: "=",
-              neq: "<>",
-              gt: ">",
-              gte: ">=",
-              lt: "<",
-              lte: "<=",
-              between: "",
-              contains: "",
-              starts_with: "",
-              ends_with: "",
-              is_null: "IS NULL",
-              is_not_null: "IS NOT NULL",
-              is_true: "IS TRUE",
-              is_false: "IS FALSE",
-            };
-            const literal = buildLiteral(filter.valueKind, trimmedValue);
-            if (!literal) {
-              return;
-            }
-            clauses.push(`${leftExpression} ${operatorSqlMap[filter.operator]} ${literal}`);
-            break;
-          }
-          case "contains": {
-            const literal = `'${`%${escapeSqlLiteral(trimmedValue)}%`}'`;
-            clauses.push(`${leftExpression} ILIKE ${literal}`);
-            break;
-          }
-          case "starts_with": {
-            const literal = `'${`${escapeSqlLiteral(trimmedValue)}%`}'`;
-            clauses.push(`${leftExpression} ILIKE ${literal}`);
-            break;
-          }
-          case "ends_with": {
-            const literal = `'${`%${escapeSqlLiteral(trimmedValue)}`}'`;
-            clauses.push(`${leftExpression} ILIKE ${literal}`);
-            break;
-          }
-          default:
-            break;
+        value = numeric;
+      } else {
+        const trimmed = (value ?? "").toString().trim();
+        if (!trimmed) {
+          errors.push(`Provide a value for "${leftOption.label}".`);
+          return;
         }
+        value = trimmed;
+      }
+
+      clauses.set(filter.id, {
+        leftModelId: filter.leftModelId,
+        leftFieldId: filter.leftFieldId,
+        operator: filter.operator,
+        rightType: "value",
+        valueKind: filter.valueKind,
+        value,
       });
+    });
 
-      return { clauses, errors };
-    },
-    [derivedFieldMap, filterFieldLookup, modelMap],
-  );
+    if (errors.length > 0) {
+      return { nodes: [], metadata: new Map(), errors };
+    }
+
+    const serialization = serializeFiltersToPreviewNodes(clauses, draft.filterGroups, draft.rawFilterSql);
+    const usedFilterIds = new Set(serialization.metadata.map((entry) => entry.filterId));
+    if (clauses.size > usedFilterIds.size) {
+      errors.push("Attach every filter to a group.");
+      return { nodes: [], metadata: new Map(), errors };
+    }
+
+    const metadataMap = new Map<string, FilterClauseMetadata>();
+    serialization.metadata.forEach((entry) => {
+      metadataMap.set(entry.filterId, entry);
+    });
+
+    return { nodes: serialization.nodes, metadata: metadataMap, errors: [] };
+  }, [draft.filterGroups, draft.filters, draft.rawFilterSql, filterFieldLookup]);
+
+  useEffect(() => {
+    const prepared = prepareFiltersForRequest();
+    if (prepared.errors.length === 0) {
+      filterMetadataRef.current = prepared.metadata;
+    }
+  }, [prepareFiltersForRequest]);
 
   const buildPreviewRequestPayload = useCallback((): {
     payload?: ReportPreviewRequest;
@@ -4521,15 +4813,7 @@ const Reports = (props: GenericPageProps) => {
       };
     }
 
-    const aliasMap = new Map<string, string>();
-    draft.models.forEach((modelId, index) => {
-      aliasMap.set(modelId, `m${index}`);
-    });
-
-    const { clauses: filterClauses, errors: filterErrors } = buildFilterClausesForRequest(
-      draft.filters,
-      aliasMap,
-    );
+    const { nodes: filterNodes, metadata, errors: filterErrors } = prepareFiltersForRequest();
 
     if (filterErrors.length > 0) {
       const message = filterErrors.join(" | ");
@@ -4538,6 +4822,8 @@ const Reports = (props: GenericPageProps) => {
         visualError: message,
       };
     }
+
+    filterMetadataRef.current = metadata;
 
     const orderByPayload = draft.previewOrder.reduce<PreviewOrderClausePayload[]>(
       (accumulator, rule) => {
@@ -4576,7 +4862,7 @@ const Reports = (props: GenericPageProps) => {
           description,
         }),
       ),
-      filters: filterClauses,
+      filters: filterNodes.length > 0 ? filterNodes : undefined,
       orderBy: orderByPayload.length > 0 ? orderByPayload : undefined,
       limit: 500,
       derivedFields: derivedFieldPayloads.length > 0 ? derivedFieldPayloads : undefined,
@@ -4628,65 +4914,45 @@ const Reports = (props: GenericPageProps) => {
     };
 
     return { payload };
-  }, [draft, derivedFieldPayloads, hasStaleDerivedFields, staleDerivedFieldNames, buildFilterClausesForRequest]);
+  }, [draft, derivedFieldPayloads, hasStaleDerivedFields, staleDerivedFieldNames, prepareFiltersForRequest]);
 
-  const findDateFilterMetadata = useCallback(
-    (
-      filterClauses?: ReportPreviewRequest["filters"],
-    ): {
+  const findDateFilterMetadata = useCallback((): ({
+    modelId: string;
+    fieldId: string;
+    operator: FilterOperator;
+    filterIndex?: number;
+    filterPath?: number[];
+  } | null) => {
+    const entries = Array.from(filterMetadataRef.current.values());
+    let fallback: {
       modelId: string;
       fieldId: string;
       operator: FilterOperator;
-      filterIndex: number;
-      clauseSql?: string;
-    } | null => {
-      let fallback: {
-        modelId: string;
-        fieldId: string;
-        operator: FilterOperator;
-        filterIndex: number;
-        clauseSql?: string;
-      } | null = null;
-      for (let index = 0; index < draft.filters.length; index += 1) {
-        const filter = draft.filters[index];
-        if (!filter.leftModelId || !filter.leftFieldId) {
-          continue;
-        }
-        const leftOption = filterFieldLookup.get(buildFilterOptionKey(filter.leftModelId, filter.leftFieldId));
-        if (!leftOption || leftOption.modelId === DERIVED_FIELD_SENTINEL) {
-          continue;
-        }
-        const isDateFilter = filter.valueKind === "date" || leftOption.field.type === "date";
-        if (!isDateFilter) {
-          continue;
-        }
-        if (
-          filter.operator === "between" ||
-          filter.operator === "gte" ||
-          filter.operator === "lte"
-        ) {
-          const clauseInput = Array.isArray(filterClauses) ? filterClauses[index] : undefined;
-          const clauseSql =
-            typeof clauseInput === "string" && clauseInput.trim().length > 0 ? clauseInput.trim() : undefined;
-          const metadata = {
-            modelId: filter.leftModelId,
-            fieldId: filter.leftFieldId,
-            operator: filter.operator,
-            filterIndex: index,
-            ...(clauseSql ? { clauseSql } : {}),
-          };
-          if (filter.operator === "between") {
-            return metadata;
-          }
-          if (!fallback) {
-            fallback = metadata;
-          }
-        }
+      filterIndex?: number;
+      filterPath?: number[];
+    } | null = null;
+
+    for (const entry of entries) {
+      if (entry.valueKind !== "date") {
+        continue;
       }
-      return fallback;
-    },
-    [draft.filters, filterFieldLookup],
-  );
+      const candidate = {
+        modelId: entry.modelId,
+        fieldId: entry.fieldId,
+        operator: entry.operator,
+        ...(entry.filterPath.length === 1 ? { filterIndex: entry.filterPath[0] } : {}),
+        filterPath: entry.filterPath,
+      };
+      if (entry.operator === "between") {
+        return candidate;
+      }
+      if (!fallback) {
+        fallback = candidate;
+      }
+    }
+
+    return fallback;
+  }, [filterMetadataRef]);
 
   const buildVisualCardViewConfig = useCallback(
     (
@@ -4800,7 +5066,7 @@ const Reports = (props: GenericPageProps) => {
         }
         return null;
       }
-      const dateFilterMetadata = findDateFilterMetadata(payload.filters);
+      const dateFilterMetadata = findDateFilterMetadata();
       return {
         mode: "preview_table",
         description,
@@ -5339,6 +5605,13 @@ const Reports = (props: GenericPageProps) => {
 
     setTemplateError(null);
 
+    const preparedFilters = prepareFiltersForRequest();
+    if (preparedFilters.errors.length > 0) {
+      setTemplateError(preparedFilters.errors.join(" | "));
+      return;
+    }
+    filterMetadataRef.current = preparedFilters.metadata;
+
     const payload: SaveReportTemplateRequest = {
       id: templates.some((template) => template.id === draft.id) ? draft.id : undefined,
       name: draft.name.trim(),
@@ -5350,7 +5623,7 @@ const Reports = (props: GenericPageProps) => {
       joins: deepClone(draft.joins),
       visuals: deepClone(draft.visuals),
       metrics: [...draft.metrics],
-      filters: deepClone(draft.filters),
+      filters: preparedFilters.nodes,
       options: {
         autoDistribution: draft.autoDistribution,
         notifyTeam: draft.notifyTeam,
@@ -5849,10 +6122,429 @@ const Reports = (props: GenericPageProps) => {
   };
 
   const handleRemoveFilter = (filterId: string) => {
+    setDraft((current) => {
+      const filter = current.filters.find((entry) => entry.id === filterId);
+      if (!filter) {
+        return current;
+      }
+      const nextGroups = detachChildTokenFromGroup(
+        current.filterGroups,
+        filter.parentGroupId,
+        buildChildToken("filter", filterId),
+      );
+      return {
+        ...current,
+        filters: current.filters.filter((entry) => entry.id !== filterId),
+        filterGroups: nextGroups,
+      };
+    });
+  };
+
+  const handleAddFilterGroup = (parentGroupId: string) => {
+    setDraft((current) => {
+      const groups = ensureRootFilterGroup(current.filterGroups);
+      const resolvedParentId = groups.some((group) => group.id === parentGroupId)
+        ? parentGroupId
+        : ROOT_FILTER_GROUP_ID;
+      const childGroup = createFilterGroup("and", resolvedParentId, []);
+      const nextGroups = groups.map((group) =>
+        group.id === resolvedParentId
+          ? {
+              ...group,
+              childOrder: [...group.childOrder, buildChildToken("group", childGroup.id)],
+            }
+          : group,
+      );
+      return {
+        ...current,
+        filterGroups: [...nextGroups, childGroup],
+      };
+    });
+  };
+
+  const handleRemoveFilterGroup = (groupId: string) => {
+    if (groupId === ROOT_FILTER_GROUP_ID) {
+      return;
+    }
+    setDraft((current) => {
+      const groups = ensureRootFilterGroup(current.filterGroups);
+      const { filterIds, groupIds } = collectGroupDescendants(groups, groupId);
+      if (!groupIds.has(groupId)) {
+        return current;
+      }
+      const nextGroups = pruneFilterGroups(groups, filterIds, groupIds);
+      return {
+        ...current,
+        filters: current.filters.filter((filter) => !filterIds.has(filter.id)),
+        filterGroups: nextGroups,
+      };
+    });
+  };
+
+  const handleGroupLogicChange = (groupId: string, logic: ReportFilterGroup["logic"]) => {
     setDraft((current) => ({
       ...current,
-      filters: current.filters.filter((filter) => filter.id !== filterId),
+      filterGroups: current.filterGroups.map((group) =>
+        group.id === groupId ? { ...group, logic } : group,
+      ),
     }));
+  };
+
+  const handleRemoveRawSql = (index: number) => {
+    setDraft((current) => ({
+      ...current,
+      rawFilterSql: current.rawFilterSql.filter((_, idx) => idx !== index),
+    }));
+  };
+
+  const filterLookup = useMemo(
+    () => new Map(draft.filters.map((filter) => [filter.id, filter])),
+    [draft.filters],
+  );
+  const groupLookup = useMemo(
+    () => new Map(draft.filterGroups.map((group) => [group.id, group])),
+    [draft.filterGroups],
+  );
+  const rootFilterGroup = groupLookup.get(ROOT_FILTER_GROUP_ID);
+
+  const renderFilterClause = (filter: ReportFilter): JSX.Element => {
+    const leftKey = buildFilterOptionKey(filter.leftModelId, filter.leftFieldId);
+    const leftOption = filterFieldLookup.get(leftKey);
+
+    if (!leftOption) {
+      return (
+        <Paper key={filter.id} withBorder radius="md" p="sm">
+          <Group justify="space-between" align="center">
+            <Text c="red" fz="sm">
+              Filter references a field that is no longer available.
+            </Text>
+            <ActionIcon
+              variant="subtle"
+              color="red"
+              onClick={() => handleRemoveFilter(filter.id)}
+              aria-label="Remove filter"
+            >
+              <IconTrash size={16} />
+            </ActionIcon>
+          </Group>
+        </Paper>
+      );
+    }
+
+    const operatorOptions = getOperatorOptionsForFieldType(leftOption.field.type);
+    const operatorDefinition =
+      operatorOptions.find((definition) => definition.value === filter.operator) ??
+      FILTER_OPERATOR_LOOKUP.get(filter.operator);
+    const operatorSelectData = operatorOptions.map((definition) => ({
+      value: definition.value,
+      label: definition.label,
+    }));
+    const requiresValue = operatorDefinition?.requiresValue ?? true;
+    const allowFieldComparison = operatorDefinition?.allowFieldComparison ?? false;
+    const comparisonModeOptions =
+      allowFieldComparison && requiresValue
+        ? [
+            { label: "Value", value: "value" },
+            { label: "Field", value: "field" },
+          ]
+        : [{ label: "Value", value: "value" }];
+    const targetKind = getValueKindForFieldType(leftOption.field.type);
+    const comparableFieldOptions = filterFieldOptions
+      .filter(
+        (option) =>
+          getValueKindForFieldType(option.field.type) === targetKind &&
+          !(option.modelId === leftOption.modelId && option.fieldId === leftOption.fieldId),
+      )
+      .map((option) => ({
+        value: option.value,
+        label: option.label,
+      }));
+    const comparisonMode =
+      filter.rightType === "field" && comparableFieldOptions.length === 0
+        ? "value"
+        : filter.rightType;
+    const rightFieldValue =
+      filter.rightModelId && filter.rightFieldId
+        ? buildFilterOptionKey(filter.rightModelId, filter.rightFieldId)
+        : null;
+
+    let valueControl: JSX.Element | null = null;
+    if (filter.operator === "between") {
+      if (filter.valueKind === "date") {
+        const dateRange: [Date | null, Date | null] = [
+          parseDateForFilter(filter.range?.from),
+          parseDateForFilter(filter.range?.to),
+        ];
+        valueControl = (
+          <DatePickerInput
+            label="Between"
+            type="range"
+            allowSingleDateInRange
+            value={dateRange}
+            onChange={(value) =>
+              handleFilterDateRangeChange(filter.id, value as [Date | null, Date | null])
+            }
+            valueFormat="MMM DD, YYYY"
+          />
+        );
+      } else if (filter.valueKind === "number") {
+        const fromNumeric =
+          filter.range?.from && filter.range.from.length > 0 ? Number(filter.range.from) : undefined;
+        const toNumeric =
+          filter.range?.to && filter.range.to.length > 0 ? Number(filter.range.to) : undefined;
+        valueControl = (
+          <Group align="flex-end" gap="sm" wrap="wrap">
+            <NumberInput
+              label="From"
+              value={
+                typeof fromNumeric === "number" && Number.isFinite(fromNumeric) ? fromNumeric : undefined
+              }
+              onChange={(value) =>
+                handleFilterRangeChange(filter.id, {
+                  from: value === null || value === "" ? undefined : String(value),
+                })
+              }
+              allowDecimal
+              w={140}
+            />
+            <NumberInput
+              label="To"
+              value={
+                typeof toNumeric === "number" && Number.isFinite(toNumeric) ? toNumeric : undefined
+              }
+              onChange={(value) =>
+                handleFilterRangeChange(filter.id, {
+                  to: value === null || value === "" ? undefined : String(value),
+                })
+              }
+              allowDecimal
+              w={140}
+            />
+          </Group>
+        );
+      } else {
+        valueControl = (
+          <Group align="flex-end" gap="sm" wrap="wrap">
+            <TextInput
+              label="From"
+              value={filter.range?.from ?? ""}
+              onChange={(event) =>
+                handleFilterRangeChange(filter.id, {
+                  from: event.currentTarget.value,
+                })
+              }
+              w={200}
+            />
+            <TextInput
+              label="To"
+              value={filter.range?.to ?? ""}
+              onChange={(event) =>
+                handleFilterRangeChange(filter.id, {
+                  to: event.currentTarget.value,
+                })
+              }
+              w={200}
+            />
+          </Group>
+        );
+      }
+    } else if (requiresValue) {
+      if (comparisonMode === "field" && comparableFieldOptions.length > 0) {
+        valueControl = (
+          <Select
+            label="Compare to"
+            data={comparableFieldOptions}
+            value={rightFieldValue}
+            onChange={(value) => handleFilterRightFieldChange(filter.id, value)}
+            w={260}
+          />
+        );
+      } else if (comparisonMode === "value") {
+        if (filter.valueKind === "boolean") {
+          valueControl = (
+            <Select
+              label="Value"
+              data={[
+                { value: "true", label: "True" },
+                { value: "false", label: "False" },
+              ]}
+              value={filter.value ?? "true"}
+              onChange={(value) => handleFilterValueChange(filter.id, value ?? "true")}
+              w={140}
+            />
+          );
+        } else if (filter.valueKind === "number") {
+          const parsedValue =
+            filter.value !== undefined && filter.value !== "" ? Number(filter.value) : undefined;
+          valueControl = (
+            <NumberInput
+              label="Value"
+              value={
+                parsedValue !== undefined && Number.isFinite(parsedValue) ? parsedValue : undefined
+              }
+              onChange={(value) =>
+                handleFilterValueChange(
+                  filter.id,
+                  value === "" || value === null ? "" : String(value),
+                )
+              }
+              allowDecimal
+              w={180}
+            />
+          );
+        } else {
+          valueControl = (
+            <TextInput
+              label="Value"
+              placeholder={filter.valueKind === "date" ? "YYYY-MM-DD" : "Enter value"}
+              value={filter.value ?? ""}
+              onChange={(event) => handleFilterValueChange(filter.id, event.currentTarget.value)}
+              w={240}
+            />
+          );
+        }
+      }
+    }
+
+    return (
+      <Paper key={filter.id} withBorder radius="md" p="sm">
+        <Stack gap="xs">
+          <Group align="flex-end" gap="sm" wrap="wrap">
+            <Select
+              label="Field"
+              data={filterFieldOptions.map((option) => ({
+                value: option.value,
+                label: option.label,
+              }))}
+              value={leftOption.value}
+              onChange={(value) => handleFilterFieldChange(filter.id, value)}
+              w={260}
+            />
+            <Select
+              label="Operator"
+              data={operatorSelectData}
+              value={filter.operator}
+              onChange={(value) =>
+                handleFilterOperatorChange(filter.id, (value ?? filter.operator) as FilterOperator)
+              }
+              w={200}
+            />
+            {requiresValue && allowFieldComparison && (
+              <Stack gap={4} style={{ width: 160 }}>
+                <Text fz="xs" fw={500}>
+                  Compare with
+                </Text>
+                <SegmentedControl
+                  value={comparisonMode}
+                  onChange={(value) =>
+                    handleFilterComparisonModeChange(filter.id, value as FilterComparisonMode)
+                  }
+                  data={comparisonModeOptions}
+                  disabled={comparableFieldOptions.length === 0}
+                />
+              </Stack>
+            )}
+            {valueControl}
+            <ActionIcon
+              variant="subtle"
+              color="red"
+              onClick={() => handleRemoveFilter(filter.id)}
+              aria-label="Remove filter"
+            >
+              <IconTrash size={16} />
+            </ActionIcon>
+          </Group>
+          {filter.operator === "contains" ||
+          filter.operator === "starts_with" ||
+          filter.operator === "ends_with" ? (
+            <Text fz="xs" c="dimmed">
+              Text comparisons use case-insensitive matching.
+            </Text>
+          ) : null}
+        </Stack>
+      </Paper>
+    );
+  };
+
+  const renderFilterGroup = (group: ReportFilterGroup, depth = 0): JSX.Element => {
+    const children = group.childOrder
+      .map((token) => {
+        const parsed = parseChildToken(token);
+        if (!parsed) {
+          return null;
+        }
+        if (parsed.kind === "group") {
+          const childGroup = groupLookup.get(parsed.id);
+          return childGroup ? renderFilterGroup(childGroup, depth + 1) : null;
+        }
+        const clause = filterLookup.get(parsed.id);
+        return clause ? renderFilterClause(clause) : null;
+      })
+      .filter((node): node is JSX.Element => Boolean(node));
+
+    return (
+      <Paper
+        key={group.id}
+        withBorder
+        radius="md"
+        p="sm"
+        style={{ marginLeft: depth > 0 ? depth * 12 : 0 }}
+      >
+        <Stack gap="sm">
+          <Group justify="space-between" align="flex-start" wrap="wrap">
+            <Stack gap={4} style={{ flex: 1, minWidth: 220 }}>
+              <Text fw={500} fz="sm">
+                {group.id === ROOT_FILTER_GROUP_ID ? "Root group" : "Filter group"}
+              </Text>
+              <SegmentedControl
+                size="xs"
+                value={group.logic}
+                data={FILTER_GROUP_LOGIC_OPTIONS}
+                onChange={(value) =>
+                  handleGroupLogicChange(group.id, value as ReportFilterGroup["logic"])
+                }
+              />
+            </Stack>
+            {group.id !== ROOT_FILTER_GROUP_ID && (
+              <ActionIcon
+                variant="subtle"
+                color="red"
+                onClick={() => handleRemoveFilterGroup(group.id)}
+                aria-label="Remove filter group"
+              >
+                <IconTrash size={16} />
+              </ActionIcon>
+            )}
+          </Group>
+          {children.length === 0 ? (
+            <Text c="dimmed" fz="sm">
+              No filters in this group. Add a condition or subgroup.
+            </Text>
+          ) : (
+            <Stack gap="sm">{children}</Stack>
+          )}
+          <Group gap="xs">
+            <Button
+              variant="light"
+              leftSection={<IconPlus size={16} />}
+              onClick={() => handleAddFilterRow(group.id)}
+              disabled={filterFieldOptions.length === 0}
+            >
+              Add condition
+            </Button>
+            <Button
+              variant="subtle"
+              size="sm"
+              leftSection={<IconPlus size={12} />}
+              onClick={() => handleAddFilterGroup(group.id)}
+              disabled={filterFieldOptions.length === 0}
+            >
+              Add subgroup
+            </Button>
+          </Group>
+        </Stack>
+      </Paper>
+    );
   };
 
   useEffect(() => {
@@ -6175,7 +6867,7 @@ const Reports = (props: GenericPageProps) => {
     }));
   };
 
-  const handleAddFilterRow = () => {
+  const handleAddFilterRow = (targetGroupId: string = ROOT_FILTER_GROUP_ID) => {
     const defaultOption = filterFieldOptions[0];
     if (!defaultOption) {
       return;
@@ -6189,7 +6881,7 @@ const Reports = (props: GenericPageProps) => {
     const requiresValue = operatorDefinition?.requiresValue ?? true;
     const defaultKind = getValueKindForFieldType(defaultOption.field.type);
 
-    const newFilter: ReportFilter = {
+    const baseFilter: ReportFilter = {
       id: `filter-${Date.now()}`,
       leftModelId: defaultOption.modelId,
       leftFieldId: defaultOption.fieldId,
@@ -6200,18 +6892,34 @@ const Reports = (props: GenericPageProps) => {
     };
 
     if (!requiresValue) {
-      newFilter.value = undefined;
+      baseFilter.value = undefined;
     }
 
-    if (newFilter.operator === "between") {
-      newFilter.value = undefined;
-      newFilter.range = {};
+    if (baseFilter.operator === "between") {
+      baseFilter.value = undefined;
+      baseFilter.range = {};
     }
 
-    setDraft((current) => ({
-      ...current,
-      filters: [...current.filters, newFilter],
-    }));
+    setDraft((current) => {
+      const groups = ensureRootFilterGroup(current.filterGroups);
+      const resolvedGroupId = groups.some((group) => group.id === targetGroupId)
+        ? targetGroupId
+        : ROOT_FILTER_GROUP_ID;
+      const newFilter: ReportFilter = { ...baseFilter, parentGroupId: resolvedGroupId };
+      const nextGroups = groups.map((group) =>
+        group.id === resolvedGroupId
+          ? {
+              ...group,
+              childOrder: [...group.childOrder, buildChildToken("filter", newFilter.id)],
+            }
+          : group,
+      );
+      return {
+        ...current,
+        filters: [...current.filters, newFilter],
+        filterGroups: nextGroups,
+      };
+    });
   };
 
   const handleFilterFieldChange = (filterId: string, optionValue: string | null) => {
@@ -6453,6 +7161,7 @@ const Reports = (props: GenericPageProps) => {
   useEffect(() => {
     setDraft((current) => {
       let changed = false;
+      const removedFilterIds = new Set<string>();
       const nextFilters = current.filters
         .map((filter) => {
           const leftOption = filterFieldLookup.get(
@@ -6460,6 +7169,7 @@ const Reports = (props: GenericPageProps) => {
           );
           if (!leftOption) {
             changed = true;
+            removedFilterIds.add(filter.id);
             return null;
           }
 
@@ -6558,9 +7268,14 @@ const Reports = (props: GenericPageProps) => {
       if (!changed) {
         return current;
       }
+      const nextGroups =
+        removedFilterIds.size > 0
+          ? pruneFilterGroups(current.filterGroups, removedFilterIds, new Set())
+          : current.filterGroups;
       return {
         ...current,
         filters: nextFilters,
+        filterGroups: nextGroups,
       };
     });
   }, [filterFieldLookup, filterFieldOptions]);
@@ -8039,317 +8754,44 @@ const Reports = (props: GenericPageProps) => {
                     </Group>
                   </Group>
                   <Stack gap="sm">
-                    {draft.filters.length === 0 ? (
-                      filterFieldOptions.length === 0 ? (
-                        <Text c="dimmed" fz="sm">
-                          Select at least one data model to start defining filter conditions.
-                        </Text>
-                      ) : (
-                        <Text c="dimmed" fz="sm">
-                          No filters applied. Add a condition to focus your preview.
-                        </Text>
-                      )
+                    {filterFieldOptions.length === 0 &&
+                    (!rootFilterGroup || rootFilterGroup.childOrder.length === 0) ? (
+                      <Text c="dimmed" fz="sm">
+                        Select at least one data model to start defining filter conditions.
+                      </Text>
+                    ) : rootFilterGroup ? (
+                      renderFilterGroup(rootFilterGroup)
                     ) : (
-                      draft.filters.map((filter) => {
-                        const leftKey = buildFilterOptionKey(filter.leftModelId, filter.leftFieldId);
-                        const leftOption = filterFieldLookup.get(leftKey);
-
-                        if (!leftOption) {
-                          return (
-                            <Paper key={filter.id} withBorder radius="md" p="sm">
-                              <Group justify="space-between" align="center">
-                                <Text c="red" fz="sm">
-                                  Filter references a field that is no longer available.
-                                </Text>
-                                <ActionIcon
-                                  variant="subtle"
-                                  color="red"
-                                  onClick={() => handleRemoveFilter(filter.id)}
-                                  aria-label="Remove filter"
-                                >
-                                  <IconTrash size={16} />
-                                </ActionIcon>
-                              </Group>
-                            </Paper>
-                          );
-                        }
-
-                        const operatorOptions = getOperatorOptionsForFieldType(leftOption.field.type);
-                        const operatorDefinition =
-                          operatorOptions.find((definition) => definition.value === filter.operator) ??
-                          FILTER_OPERATOR_LOOKUP.get(filter.operator);
-                        const operatorSelectData = operatorOptions.map((definition) => ({
-                          value: definition.value,
-                          label: definition.label,
-                        }));
-                        const requiresValue = operatorDefinition?.requiresValue ?? true;
-                        const allowFieldComparison = operatorDefinition?.allowFieldComparison ?? false;
-                        const comparisonModeOptions =
-                          allowFieldComparison && requiresValue
-                            ? [
-                                { label: "Value", value: "value" },
-                                { label: "Field", value: "field" },
-                              ]
-                            : [{ label: "Value", value: "value" }];
-                        const targetKind = getValueKindForFieldType(leftOption.field.type);
-                        const comparableFieldOptions = filterFieldOptions
-                          .filter(
-                            (option) =>
-                              getValueKindForFieldType(option.field.type) === targetKind &&
-                              !(option.modelId === leftOption.modelId && option.fieldId === leftOption.fieldId),
-                          )
-                          .map((option) => ({
-                            value: option.value,
-                            label: option.label,
-                          }));
-                        const comparisonMode =
-                          filter.rightType === "field" && comparableFieldOptions.length === 0
-                            ? "value"
-                            : filter.rightType;
-                        const rightFieldValue =
-                          filter.rightModelId && filter.rightFieldId
-                            ? buildFilterOptionKey(filter.rightModelId, filter.rightFieldId)
-                            : null;
-
-                        let valueControl: JSX.Element | null = null;
-                        if (filter.operator === "between") {
-                          if (filter.valueKind === "date") {
-                            const dateRange: [Date | null, Date | null] = [
-                              parseDateForFilter(filter.range?.from),
-                              parseDateForFilter(filter.range?.to),
-                            ];
-                            valueControl = (
-                              <DatePickerInput
-                                label="Between"
-                                type="range"
-                                allowSingleDateInRange
-                                value={dateRange}
-                                onChange={(value) =>
-                                  handleFilterDateRangeChange(
-                                    filter.id,
-                                    value as [Date | null, Date | null],
-                                  )
-                                }
-                                valueFormat="MMM DD, YYYY"
-                              />
-                            );
-                          } else if (filter.valueKind === "number") {
-                            const fromNumeric =
-                              filter.range?.from && filter.range.from.length > 0
-                                ? Number(filter.range.from)
-                                : undefined;
-                            const toNumeric =
-                              filter.range?.to && filter.range.to.length > 0
-                                ? Number(filter.range.to)
-                                : undefined;
-                            valueControl = (
-                              <Group align="flex-end" gap="sm" wrap="wrap">
-                                <NumberInput
-                                  label="From"
-                                  value={
-                                    typeof fromNumeric === "number" && Number.isFinite(fromNumeric)
-                                      ? fromNumeric
-                                      : undefined
-                                  }
-                                  onChange={(value) =>
-                                    handleFilterRangeChange(filter.id, {
-                                      from:
-                                        value === null || value === ""
-                                          ? undefined
-                                          : String(value),
-                                    })
-                                  }
-                                  allowDecimal
-                                  w={140}
-                                />
-                                <NumberInput
-                                  label="To"
-                                  value={
-                                    typeof toNumeric === "number" && Number.isFinite(toNumeric)
-                                      ? toNumeric
-                                      : undefined
-                                  }
-                                  onChange={(value) =>
-                                    handleFilterRangeChange(filter.id, {
-                                      to:
-                                        value === null || value === ""
-                                          ? undefined
-                                          : String(value),
-                                    })
-                                  }
-                                  allowDecimal
-                                  w={140}
-                                />
-                              </Group>
-                            );
-                          } else {
-                            valueControl = (
-                              <Group align="flex-end" gap="sm" wrap="wrap">
-                                <TextInput
-                                  label="From"
-                                  value={filter.range?.from ?? ""}
-                                  onChange={(event) =>
-                                    handleFilterRangeChange(filter.id, {
-                                      from: event.currentTarget.value,
-                                    })
-                                  }
-                                  w={200}
-                                />
-                                <TextInput
-                                  label="To"
-                                  value={filter.range?.to ?? ""}
-                                  onChange={(event) =>
-                                    handleFilterRangeChange(filter.id, {
-                                      to: event.currentTarget.value,
-                                    })
-                                  }
-                                  w={200}
-                                />
-                              </Group>
-                            );
-                          }
-                        } else if (requiresValue) {
-                          if (comparisonMode === "field" && comparableFieldOptions.length > 0) {
-                            valueControl = (
-                              <Select
-                                label="Compare to"
-                                data={comparableFieldOptions}
-                                value={rightFieldValue}
-                                onChange={(value) => handleFilterRightFieldChange(filter.id, value)}
-                                w={260}
-                              />
-                            );
-                          } else if (comparisonMode === "value") {
-                            if (filter.valueKind === "boolean") {
-                              valueControl = (
-                                <Select
-                                  label="Value"
-                                  data={[
-                                    { value: "true", label: "True" },
-                                    { value: "false", label: "False" },
-                                  ]}
-                                  value={filter.value ?? "true"}
-                                  onChange={(value) =>
-                                    handleFilterValueChange(filter.id, value ?? "true")
-                                  }
-                                  w={140}
-                                />
-                              );
-                            } else if (filter.valueKind === "number") {
-                              const parsedValue =
-                                filter.value !== undefined && filter.value !== ""
-                                  ? Number(filter.value)
-                                  : undefined;
-                              valueControl = (
-                                <NumberInput
-                                  label="Value"
-                                  value={
-                                    parsedValue !== undefined && Number.isFinite(parsedValue)
-                                      ? parsedValue
-                                      : undefined
-                                  }
-                                  onChange={(value) =>
-                                    handleFilterValueChange(
-                                      filter.id,
-                                      value === "" || value === null ? "" : String(value),
-                                    )
-                                  }
-                                  allowDecimal
-                                  w={180}
-                                />
-                              );
-                            } else {
-                              valueControl = (
-                                <TextInput
-                                  label="Value"
-                                  placeholder={
-                                    filter.valueKind === "date" ? "YYYY-MM-DD" : "Enter value"
-                                  }
-                                  value={filter.value ?? ""}
-                                  onChange={(event) =>
-                                    handleFilterValueChange(filter.id, event.currentTarget.value)
-                                  }
-                                  w={240}
-                                />
-                              );
-                            }
-                          }
-                        }
-
-                        return (
-                          <Paper key={filter.id} withBorder radius="md" p="sm">
-                            <Stack gap="xs">
-                              <Group align="flex-end" gap="sm" wrap="wrap">
-                                <Select
-                                  label="Field"
-                                  data={filterFieldOptions.map((option) => ({
-                                    value: option.value,
-                                    label: option.label,
-                                  }))}
-                                  value={leftOption.value}
-                                  onChange={(value) => handleFilterFieldChange(filter.id, value)}
-                                  w={260}
-                                />
-                                <Select
-                                  label="Operator"
-                                  data={operatorSelectData}
-                                  value={filter.operator}
-                                  onChange={(value) =>
-                                    handleFilterOperatorChange(
-                                      filter.id,
-                                      (value ?? filter.operator) as FilterOperator,
-                                    )
-                                  }
-                                  w={200}
-                                />
-                                {requiresValue && allowFieldComparison && (
-                                  <Stack gap={4} style={{ width: 160 }}>
-                                    <Text fz="xs" fw={500}>
-                                      Compare with
-                                    </Text>
-                                    <SegmentedControl
-                                      value={comparisonMode}
-                                      onChange={(value) =>
-                                        handleFilterComparisonModeChange(
-                                          filter.id,
-                                          value as FilterComparisonMode,
-                                        )
-                                      }
-                                      data={comparisonModeOptions}
-                                      disabled={comparableFieldOptions.length === 0}
-                                    />
-                                  </Stack>
-                                )}
-                                {valueControl}
-                                <ActionIcon
-                                  variant="subtle"
-                                  color="red"
-                                  onClick={() => handleRemoveFilter(filter.id)}
-                                  aria-label="Remove filter"
-                                >
-                                  <IconTrash size={16} />
-                                </ActionIcon>
-                              </Group>
-                              {filter.operator === "contains" ||
-                              filter.operator === "starts_with" ||
-                              filter.operator === "ends_with" ? (
-                                <Text fz="xs" c="dimmed">
-                                  Text comparisons use case-insensitive matching.
-                                </Text>
-                              ) : null}
-                            </Stack>
-                          </Paper>
-                        );
-                      })
+                      <Text c="dimmed" fz="sm">
+                        No filters applied. Add a condition to focus your preview.
+                      </Text>
                     )}
-                    <Button
-                      variant="light"
-                      leftSection={<IconPlus size={16} />}
-                      onClick={handleAddFilterRow}
-                      disabled={filterFieldOptions.length === 0}
-                    >
-                      Add condition
-                    </Button>
+                    {draft.rawFilterSql.length > 0 && (
+                      <Stack gap="xs">
+                        {draft.rawFilterSql.map((entry, index) => (
+                          <Alert
+                            key={`raw-filter-${index}`}
+                            color="blue"
+                            variant="light"
+                            title="Custom SQL filter"
+                          >
+                            <Group justify="space-between" align="flex-start" gap="sm">
+                              <Text fz="xs" style={{ whiteSpace: "pre-wrap" }}>
+                                {entry}
+                              </Text>
+                              <ActionIcon
+                                variant="subtle"
+                                color="red"
+                                onClick={() => handleRemoveRawSql(index)}
+                                aria-label="Remove SQL filter"
+                              >
+                                <IconTrash size={16} />
+                              </ActionIcon>
+                            </Group>
+                          </Alert>
+                        ))}
+                      </Stack>
+                    )}
                     <Divider my="sm" />
                     <Stack gap="xs">
                       <Group justify="space-between" align="center">
@@ -9327,10 +9769,3 @@ const Reports = (props: GenericPageProps) => {
 };
 
 export default Reports;
-
-
-
-
-
-
-

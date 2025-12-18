@@ -11,11 +11,14 @@ import StarIcon from "@mui/icons-material/Star";
 import Grid from "@mui/material/Grid";
 import {
   Alert,
+  Chip,
   Box,
   Button,
   Card,
   CardContent,
   CircularProgress,
+  Divider,
+  MenuItem,
   Paper,
   Stack,
   ThemeProvider,
@@ -533,6 +536,98 @@ const pickColumnKey = (
   return null;
 };
 
+type PreviewInsight = {
+  headline: string;
+  detail?: string;
+  tone: "positive" | "neutral" | "negative";
+  metricLabel?: string;
+};
+
+const formatPercent = (value: number): string => {
+  if (!Number.isFinite(value)) {
+    return "0%";
+  }
+  return `${(value * 100).toFixed(1)}%`;
+};
+
+const guessDimensionColumn = (
+  rows: Array<Record<string, unknown>>,
+  columns: string[],
+): string | null => {
+  if (!rows.length || columns.length === 0) {
+    return null;
+  }
+  for (const column of columns) {
+    const hasString = rows.some((row) => typeof row?.[column] === "string" && (row[column] as string).trim().length > 0);
+    if (hasString) {
+      return column;
+    }
+  }
+  return columns[0] ?? null;
+};
+
+const guessMetricColumn = (
+  rows: Array<Record<string, unknown>>,
+  columns: string[],
+  exclude?: string | null,
+): string | null => {
+  if (!rows.length) {
+    return null;
+  }
+  for (const column of columns) {
+    if (exclude && column === exclude) {
+      continue;
+    }
+    const hasNumber = rows.some((row) => typeof row?.[column] === "number" && Number.isFinite(row[column] as number));
+    if (hasNumber) {
+      return column;
+    }
+  }
+  return null;
+};
+
+const buildPreviewInsight = (
+  rows: Array<Record<string, unknown>>,
+  columns: string[],
+  columnAliases: Record<string, string>,
+): PreviewInsight | null => {
+  if (!rows.length || columns.length === 0) {
+    return null;
+  }
+  const dimensionColumn = guessDimensionColumn(rows, columns);
+  const metricColumn = guessMetricColumn(rows, columns, dimensionColumn);
+  if (!dimensionColumn || !metricColumn) {
+    return null;
+  }
+  const topRow = rows[0];
+  const dimensionValue = formatPreviewTableValue(topRow[dimensionColumn]);
+  const metricValue = toNumeric(topRow[metricColumn]);
+  if (metricValue === null) {
+    return null;
+  }
+  const metricLabel = columnAliases[metricColumn] ?? metricColumn;
+  const secondRow = rows[1];
+  const secondValue = secondRow ? toNumeric(secondRow[metricColumn]) : null;
+  let detail: string | undefined;
+  let tone: PreviewInsight["tone"] = "neutral";
+  if (secondValue !== null && secondValue !== 0) {
+    const delta = metricValue - secondValue;
+    const percent = formatPercent(delta / Math.abs(secondValue));
+    tone = delta >= 0 ? "positive" : "negative";
+    detail = `${delta >= 0 ? "+" : ""}${percent} vs runner-up`;
+  } else if (secondValue !== null) {
+    const delta = metricValue - secondValue;
+    tone = delta >= 0 ? "positive" : "negative";
+    detail = `${delta >= 0 ? "+" : ""}${formatPreviewTableValue(delta)} vs runner-up`;
+  }
+  return {
+    headline: `${dimensionValue} leads ${metricLabel} at ${formatPreviewTableValue(metricValue)}`,
+    detail,
+    tone,
+    metricLabel,
+  };
+};
+
 const parseDashboardLayout = (
   layout: Record<string, unknown> | null | undefined,
   fallback: DashboardCardLayout = DEFAULT_CARD_LAYOUT,
@@ -827,6 +922,18 @@ const Home = (props: GenericPageProps) => {
         }),
     [activeCards],
   );
+  const heroSpotlightCards = useMemo(
+    () =>
+      orderedActiveCards
+        .filter((card) => isSpotlightCardViewConfig((card.viewConfig as DashboardCardViewConfig) ?? null))
+        .slice(0, 3),
+    [orderedActiveCards],
+  );
+  const heroCardIds = useMemo(() => new Set(heroSpotlightCards.map((card) => card.id)), [heroSpotlightCards]);
+  const remainingDashboardCards = useMemo(
+    () => orderedActiveCards.filter((card) => !heroCardIds.has(card.id)),
+    [orderedActiveCards, heroCardIds],
+  );
   const isMediumScreen = useMediaQuery(theme.breakpoints.down("md"));
   const isSmallScreen = useMediaQuery(theme.breakpoints.down("sm"));
   const gridColumns = isSmallScreen ? 1 : isMediumScreen ? 6 : 12;
@@ -841,6 +948,7 @@ const Home = (props: GenericPageProps) => {
   const [globalPeriodSelection, setGlobalPeriodSelection] = useState<PreviewPeriodValue>("this_month");
   const [globalCustomInputs, setGlobalCustomInputs] = useState<{ from: string; to: string }>({ from: "", to: "" });
   const [globalCustomAppliedRange, setGlobalCustomAppliedRange] = useState<{ from: string; to: string } | null>(null);
+  const [globalSegmentValue, setGlobalSegmentValue] = useState<string | null>(null);
   const globalPeriodOverride = useMemo<DashboardPreviewPeriodPreset | DashboardPreviewPeriodOverride | null>(() => {
     if (!cardsSupportPeriod) {
       return null;
@@ -1115,6 +1223,47 @@ const Home = (props: GenericPageProps) => {
     return map;
   }, [cardHydrationDescriptors, cardLiveQueries, effectiveViewMode, shouldHydrateLiveData]);
 
+  const globalSegmentOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    orderedActiveCards.forEach((card) => {
+      const liveState = liveCardSamples.get(card.id);
+      if (!liveState) {
+        return;
+      }
+      if (liveState.previewSample && liveState.previewSample.rows.length > 0) {
+        const { rows, columns } = liveState.previewSample;
+        const dimensionColumn = guessDimensionColumn(rows, columns);
+        if (!dimensionColumn) {
+          return;
+        }
+        rows.slice(0, 50).forEach((row) => {
+          const label = formatPreviewTableValue(row[dimensionColumn]);
+          if (label && label !== "-") {
+            counts.set(label, (counts.get(label) ?? 0) + 1);
+          }
+        });
+        return;
+      }
+      if (liveState.visualSample && liveState.visualSample.length > 0) {
+        liveState.visualSample.slice(0, 50).forEach((point) => {
+          if (point.dimension) {
+            counts.set(point.dimension, (counts.get(point.dimension) ?? 0) + 1);
+          }
+        });
+      }
+    });
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([value]) => value)
+      .slice(0, 12);
+  }, [liveCardSamples, orderedActiveCards]);
+
+  useEffect(() => {
+    if (globalSegmentValue && !globalSegmentOptions.includes(globalSegmentValue)) {
+      setGlobalSegmentValue(null);
+    }
+  }, [globalSegmentOptions, globalSegmentValue]);
+
   const renderNavigationTiles = () => (
     <Card sx={{backgroundColor: 'transparent', boxShadow: 'none'}}>
       <CardContent>
@@ -1145,6 +1294,7 @@ const Home = (props: GenericPageProps) => {
   const renderDashboardControls = () => {
     const isCustom = globalPeriodSelection === "custom";
     const lastUpdatedLabel = lastRefreshedAt ? dayjs(lastRefreshedAt).format("DD/MM/YYYY, HH:mm:ss") : "Never refreshed";
+    const hasSegments = globalSegmentOptions.length > 0;
     return (
       <Stack gap={isCustom ? 1.5 : 1} alignItems="center" justifyContent="center">
         <Stack direction={{ xs: "column", md: "row" }} gap={2} alignItems="center" justifyContent="center">
@@ -1167,6 +1317,28 @@ const Home = (props: GenericPageProps) => {
             Last updated {lastUpdatedLabel}
           </Typography>
         </Stack>
+        {hasSegments && (
+          <Stack direction={{ xs: "column", md: "row" }} gap={1} alignItems="center" justifyContent="center">
+            <TextField
+              select
+              size="small"
+              label="Focus segment"
+              value={globalSegmentValue ?? ""}
+              onChange={(event) => setGlobalSegmentValue(event.target.value.length > 0 ? event.target.value : null)}
+              sx={{ minWidth: 220 }}
+            >
+              <MenuItem value="">All segments</MenuItem>
+              {globalSegmentOptions.map((option) => (
+                <MenuItem key={option} value={option}>
+                  {option}
+                </MenuItem>
+              ))}
+            </TextField>
+            {globalSegmentValue && (
+              <Chip size="small" color="info" label={`Focused on ${globalSegmentValue}`} variant="outlined" />
+            )}
+          </Stack>
+        )}
         {cardsSupportPeriod && (
           <>
             <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="center">
@@ -1263,6 +1435,13 @@ const Home = (props: GenericPageProps) => {
     return (
       <Stack gap={2}>
         {renderDashboardControls()}
+        {heroSpotlightCards.length > 0 && (
+          <Stack gap={0.5}>
+            <Typography variant="h6">Today&apos;s KPI pulse</Typography>
+            <HeroSpotlightRow cards={heroSpotlightCards} liveCardSamples={liveCardSamples} />
+          </Stack>
+        )}
+        {heroSpotlightCards.length > 0 && <Divider flexItem />}
         <Box
           sx={{
             display: "grid",
@@ -1271,7 +1450,7 @@ const Home = (props: GenericPageProps) => {
             gap: gridGap,
           }}
         >
-        {orderedActiveCards.map((card) => {
+        {remainingDashboardCards.map((card) => {
           const layout = parseDashboardLayout(card.layout);
           let columnSpan = Math.max(1, Math.min(gridColumns, layout.w));
           let rowSpan = Math.max(1, layout.h);
@@ -1301,6 +1480,7 @@ const Home = (props: GenericPageProps) => {
                 liveState={liveCardSamples.get(card.id)}
                 layoutMetrics={{ columnSpan, rowSpan, approxHeightPx }}
                 periodOverride={cardPeriodOverride}
+                segmentFilter={globalSegmentValue}
               />
             </Box>
           );
@@ -1330,11 +1510,13 @@ const DashboardCard = ({
   liveState,
   layoutMetrics,
   periodOverride,
+  segmentFilter,
 }: {
   card: DashboardCardDto;
   liveState?: DashboardCardLiveState;
   layoutMetrics?: CardLayoutMetrics;
   periodOverride?: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null;
+  segmentFilter?: string | null;
 }) => {
   const viewConfig = card.viewConfig as DashboardCardViewConfig;
   if (!viewConfig || typeof viewConfig !== "object") {
@@ -1365,6 +1547,7 @@ const DashboardCard = ({
         config={viewConfig}
         liveState={liveState ?? { status: "idle" }}
         layoutMetrics={layoutMetrics}
+        segmentFilter={segmentFilter}
       />
     );
   }
@@ -1388,6 +1571,7 @@ const DashboardCard = ({
         liveState={liveState ?? { status: "idle" }}
         layoutMetrics={layoutMetrics}
         periodOverride={periodOverride ?? null}
+        segmentFilter={segmentFilter}
       />
     );
   }
@@ -1414,13 +1598,18 @@ const VisualDashboardCard = ({
   config,
   liveState,
   layoutMetrics,
+  segmentFilter,
 }: {
   card: DashboardCardDto;
   config: DashboardVisualCardViewConfig;
   liveState: DashboardCardLiveState;
   layoutMetrics?: CardLayoutMetrics;
+  segmentFilter?: string | null;
 }) => {
   const sample = liveState.visualSample ?? buildVisualSample(config);
+  const filteredSample = segmentFilter ? sample.filter((point) => point.dimension === segmentFilter) : sample;
+  const chartSample = filteredSample.length > 0 ? filteredSample : sample;
+  const filterEmptyState = Boolean(segmentFilter && filteredSample.length === 0 && sample.length > 0);
   const isLoading = liveState.status === "loading";
   const error = liveState.status === "error" ? liveState.error : null;
   const [cardRef, cardSize] = useElementSize<HTMLDivElement>();
@@ -1446,6 +1635,9 @@ const VisualDashboardCard = ({
           <CardTitle variant="subtitle1">{card.title}</CardTitle>
           {config.description && <CardSubtitle variant="body2">{config.description}</CardSubtitle>}
         </Stack>
+        {segmentFilter && (
+          <Chip size="small" color="info" label={`Focused on ${segmentFilter}`} variant="outlined" />
+        )}
         {liveState.warning && <Alert severity="warning">{liveState.warning}</Alert>}
         {isLoading && (
           <Stack direction="row" gap={1} alignItems="center" justifyContent="center">
@@ -1454,6 +1646,11 @@ const VisualDashboardCard = ({
           </Stack>
         )}
         {error && <Alert severity="error">{error}</Alert>}
+        {filterEmptyState && (
+          <Alert severity="info" variant="outlined">
+            No data available for “{segmentFilter}”. Showing the full trend for context.
+          </Alert>
+        )}
         <Box
           sx={{
             flexGrow: 1,
@@ -1463,9 +1660,9 @@ const VisualDashboardCard = ({
             minHeight: plotHeight,
           }}
         >
-          {sample.length > 0 ? (
+          {chartSample.length > 0 ? (
             <Box sx={{ flexGrow: 1, height: "100%" }}>
-              {renderVisualChart(config, sample)}
+              {renderVisualChart(config, chartSample)}
             </Box>
           ) : (
             <CardSubtitle variant="body2" sx={{ textAlign: "center" }}>
@@ -1473,6 +1670,19 @@ const VisualDashboardCard = ({
             </CardSubtitle>
           )}
         </Box>
+        <Stack direction="row" gap={1} justifyContent="center">
+          <Button
+            component={RouterLink}
+            to={`/reports?templateId=${card.templateId}`}
+            variant="outlined"
+            size="small"
+          >
+            Open template
+          </Button>
+          <Button component={RouterLink} to="/reports/dashboards" variant="text" size="small">
+            Edit card
+          </Button>
+        </Stack>
       </CardContent>
     </StyledDashboardCard>
   );
@@ -1583,12 +1793,14 @@ const PreviewTableDashboardCard = ({
   liveState,
   layoutMetrics,
   periodOverride,
+  segmentFilter,
 }: {
   card: DashboardCardDto;
   config: DashboardPreviewTableCardViewConfig;
   liveState: DashboardCardLiveState;
   layoutMetrics?: CardLayoutMetrics;
   periodOverride: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null;
+  segmentFilter?: string | null;
 }) => {
   const sample = liveState.previewSample;
   const isLoading = liveState.status === "loading";
@@ -1605,14 +1817,21 @@ const PreviewTableDashboardCard = ({
       : sample?.columns ?? [];
   const columns = columnOrder.length > 0 ? columnOrder : sample?.columns ?? [];
   const columnAliases = sample?.columnAliases ?? config.columnAliases ?? {};
-  const rows = sample?.rows ?? [];
+  const rawRows = sample?.rows ?? [];
   const canOverridePeriod = Boolean(config.dateFilter);
   const effectivePeriodOverride = canOverridePeriod ? periodOverride : null;
   const [page, setPage] = useState(0);
   const rowsPerPage = 10;
   useEffect(() => {
     setPage(0);
-  }, [card.id, sample?.executedAt, rows.length]);
+  }, [card.id, sample?.executedAt, segmentFilter]);
+  const dimensionColumn = guessDimensionColumn(rawRows, columns);
+  const filteredRows =
+    segmentFilter && dimensionColumn
+      ? rawRows.filter((row) => formatPreviewTableValue(row[dimensionColumn]) === segmentFilter)
+      : rawRows;
+  const filterEmptyState = Boolean(segmentFilter && dimensionColumn && rawRows.length > 0 && filteredRows.length === 0);
+  const rows = filterEmptyState ? rawRows : filteredRows;
   const totalPages = Math.max(1, Math.ceil(rows.length / rowsPerPage));
   const safePage = Math.min(page, totalPages - 1);
   const startIndex = safePage * rowsPerPage;
@@ -1620,6 +1839,7 @@ const PreviewTableDashboardCard = ({
   const executedLabel = sample?.executedAt
     ? new Date(sample.executedAt).toLocaleString()
     : null;
+  const previewInsight = buildPreviewInsight(rows, columns, columnAliases);
 
   return (
     <StyledDashboardCard ref={cardRef} variant="outlined">
@@ -1637,6 +1857,9 @@ const PreviewTableDashboardCard = ({
           <CardTitle variant="subtitle1">{card.title}</CardTitle>
           {config.description && <CardSubtitle variant="body2">{config.description}</CardSubtitle>}
         </Stack>
+        {segmentFilter && (
+          <Chip size="small" color="info" label={`Focused on ${segmentFilter}`} variant="outlined" />
+        )}
         {liveState.warning && <Alert severity="warning">{liveState.warning}</Alert>}
         {isLoading && (
           <Stack direction="row" gap={1} alignItems="center" justifyContent="center">
@@ -1645,6 +1868,32 @@ const PreviewTableDashboardCard = ({
           </Stack>
         )}
         {error && <Alert severity="error">{error}</Alert>}
+        {filterEmptyState && (
+          <Alert severity="info" variant="outlined">
+            No rows returned for “{segmentFilter}”. Showing all rows for context.
+          </Alert>
+        )}
+        {previewInsight && rows.length > 0 && !error && (
+          <Paper
+            variant="outlined"
+            sx={{
+              p: 2,
+              borderRadius: 2,
+              borderColor: previewInsight.tone === "positive" ? "success.light" : previewInsight.tone === "negative" ? "error.light" : "rgba(15,23,42,0.12)",
+              background:
+                previewInsight.tone === "positive"
+                  ? "rgba(46, 125, 50, 0.08)"
+                  : previewInsight.tone === "negative"
+                    ? "rgba(211, 47, 47, 0.08)"
+                    : "rgba(15, 23, 42, 0.04)",
+            }}
+          >
+            <Typography variant="subtitle2" fontWeight={600}>
+              {previewInsight.headline}
+            </Typography>
+            {previewInsight.detail && <CardSubtitle variant="body2">{previewInsight.detail}</CardSubtitle>}
+          </Paper>
+        )}
         {!error && !isLoading && columns.length === 0 && (
           <CardSubtitle variant="body2" sx={{ textAlign: "center" }}>
             No preview columns available yet. Re-run the report preview and re-save this card.
@@ -1690,10 +1939,10 @@ const PreviewTableDashboardCard = ({
             </Table>
           </TableContainer>
         )}
-        {rows.length > 0 && (
+        {rows.length > 0 ? (
           <Stack direction="row" alignItems="center" justifyContent="space-between">
             <CardSubtitle variant="caption">
-              Showing {rows.length === 0 ? 0 : startIndex + 1}-{startIndex + displayedRows.length} of {rows.length} rows
+              Showing {startIndex + 1}-{startIndex + displayedRows.length} of {rows.length} rows
             </CardSubtitle>
             <Stack direction="row" gap={1}>
               <Button
@@ -1714,7 +1963,129 @@ const PreviewTableDashboardCard = ({
               </Button>
             </Stack>
           </Stack>
+        ) : (
+          <CardSubtitle variant="caption" sx={{ textAlign: "center" }}>
+            No preview rows matched the current filters.
+          </CardSubtitle>
         )}
+        {executedLabel && (
+          <CardSubtitle variant="caption" sx={{ textAlign: "center" }}>
+            Last executed: {executedLabel}
+          </CardSubtitle>
+        )}
+        <Stack direction="row" gap={1} justifyContent="center">
+          <Button
+            component={RouterLink}
+            to={`/reports?templateId=${card.templateId}`}
+            variant="outlined"
+            size="small"
+          >
+            Investigate in Reports
+          </Button>
+          <Button component={RouterLink} to="/reports/dashboards" variant="text" size="small">
+            Edit card
+          </Button>
+        </Stack>
+      </CardContent>
+    </StyledDashboardCard>
+  );
+};
+
+const HeroSpotlightRow = ({
+  cards,
+  liveCardSamples,
+}: {
+  cards: DashboardCardDto[];
+  liveCardSamples: Map<string, DashboardCardLiveState>;
+}) => {
+  if (cards.length === 0) {
+    return null;
+  }
+  return (
+    <Grid container spacing={{ xs: 2, md: 3 }}>
+      {cards.map((card) => (
+        <Grid key={card.id} size={{ xs: 12, sm: 6, md: cards.length === 1 ? 12 : cards.length === 2 ? 6 : 4 }}>
+          <HeroSpotlightCard card={card} liveState={liveCardSamples.get(card.id)} />
+        </Grid>
+      ))}
+    </Grid>
+  );
+};
+
+const HeroSpotlightCard = ({
+  card,
+  liveState,
+}: {
+  card: DashboardCardDto;
+  liveState: DashboardCardLiveState | undefined;
+}) => {
+  const config = (card.viewConfig as DashboardCardViewConfig) ?? null;
+  if (!isSpotlightCardViewConfig(config)) {
+    return null;
+  }
+  const sampleCards = liveState?.spotlightSample?.cards ?? config.sample?.cards ?? [];
+  const primary = sampleCards[0];
+  const supporting = sampleCards.slice(1, 3);
+  return (
+    <StyledDashboardCard variant="outlined">
+      <CardAccent />
+      <CardContent
+        sx={{
+          flexGrow: 1,
+          display: "flex",
+          flexDirection: "column",
+          gap: 1,
+          p: { xs: 2, md: 2.5 },
+        }}
+      >
+        <Typography variant="overline" color="textSecondary">
+          Directive KPI
+        </Typography>
+        <CardTitle variant="subtitle1">{card.title}</CardTitle>
+        {primary ? (
+          <>
+            <Typography
+              variant="h3"
+              fontWeight={700}
+              sx={{ color: SpotlightTone[primary.tone] ?? "text.primary" }}
+            >
+              {primary.value}
+            </Typography>
+            {primary.delta && (
+              <Chip
+                size="small"
+                color={primary.tone === "negative" ? "error" : primary.tone === "positive" ? "success" : "default"}
+                label={`${primary.delta} vs prior`}
+                variant="outlined"
+              />
+            )}
+            {primary.context && <CardSubtitle variant="body2">{primary.context}</CardSubtitle>}
+          </>
+        ) : (
+          <CardSubtitle variant="body2">No live values yet. Refresh to hydrate this card.</CardSubtitle>
+        )}
+        {supporting.length > 0 && (
+          <Stack gap={0.5}>
+            {supporting.map((item) => (
+              <CardSubtitle key={item.id} variant="caption">
+                {item.label}: {item.value}
+              </CardSubtitle>
+            ))}
+          </Stack>
+        )}
+        <Stack direction="row" gap={1} justifyContent="flex-start" sx={{ mt: "auto" }}>
+          <Button
+            component={RouterLink}
+            to={`/reports?templateId=${card.templateId}`}
+            size="small"
+            variant="contained"
+          >
+            View details
+          </Button>
+          <Button component={RouterLink} to="/reports/dashboards" size="small" variant="text">
+            Adjust card
+          </Button>
+        </Stack>
       </CardContent>
     </StyledDashboardCard>
   );
@@ -1752,9 +2123,3 @@ const useElementSize = <T extends HTMLElement>() => {
 
   return [ref, size] as const;
 };
-
-
-
-
-
-
