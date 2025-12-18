@@ -46,6 +46,7 @@ import { FinanceTransaction } from "../../types/finance";
 import type { StaffProfile } from "../../types/staffProfiles/StaffProfile";
 import dayjs from "dayjs";
 import { useMediaQuery } from "@mantine/hooks";
+import { compressImageFile } from "../../utils/imageCompression";
 
 const TRANSACTION_STATUS_OPTIONS = [
   { value: "planned", label: "Planned" },
@@ -369,8 +370,21 @@ const FinanceTransactions = () => {
     if (!file) {
       return;
     }
+    let preparedFile: File = file;
+    if (file.type?.startsWith("image/")) {
+      try {
+        preparedFile = await compressImageFile(file, {
+          maxWidth: 1600,
+          maxHeight: 1600,
+          quality: 0.8,
+          maxSizeBytes: 700 * 1024,
+        });
+      } catch (compressionError) {
+        console.error("Failed to compress invoice before upload", compressionError);
+      }
+    }
     const formData = new FormData();
-    formData.append("file", file);
+    formData.append("file", preparedFile);
     const result = await dispatch(uploadFinanceFile(formData));
     if (uploadFinanceFile.fulfilled.match(result)) {
       setDraft((state) => ({ ...state, invoiceFileId: result.payload.id }));
