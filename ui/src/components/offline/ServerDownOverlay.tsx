@@ -4,11 +4,16 @@ import DinoGame from "./DinoGame";
 
 type ServerDownOverlayProps = {
   status?: number;
-  onRetry: () => void;
+  onRetry?: () => void;
   isChecking?: boolean;
+  mode?: "server-down" | "freeplay";
+  onClose?: () => void;
 };
 
-const ServerDownOverlay = ({ status, onRetry, isChecking }: ServerDownOverlayProps) => {
+const ServerDownOverlay = ({ status, onRetry, isChecking, mode = "server-down", onClose }: ServerDownOverlayProps) => {
+  const isServerDown = mode === "server-down";
+  const title = isServerDown ? "OmniLodge server is unavailable" : "OmniLodge Runner";
+  const subtitle = isServerDown ? "While we reconnect, enjoy the offline runner." : "Play the Krakow runner anytime.";
   return (
     <Box
       style={{
@@ -23,18 +28,26 @@ const ServerDownOverlay = ({ status, onRetry, isChecking }: ServerDownOverlayPro
       <Stack gap="md" style={{ height: "100%", width: "100%" }}>
         <Group justify="space-between" align="center" style={{ padding: "16px" }}>
           <Stack gap={4}>
-            <Title order={2}>OmniLodge server is unavailable</Title>
+            <Title order={2}>{title}</Title>
             <Text size="sm" c="dimmed">
-              While we reconnect, enjoy the offline runner.
+              {subtitle}
             </Text>
           </Stack>
           <Group gap="sm">
-            <Badge color="orange" size="lg" variant="light">
-              {status ? `Status ${status}` : "Connection lost"}
-            </Badge>
-            <Button onClick={onRetry} loading={isChecking} variant="outline" color="dark">
-              Retry connection
-            </Button>
+            {isServerDown && (
+              <Badge color="orange" size="lg" variant="light">
+                {status ? `Status ${status}` : "Connection lost"}
+              </Badge>
+            )}
+            {isServerDown ? (
+              <Button onClick={onRetry} loading={isChecking} variant="outline" color="dark">
+                Retry connection
+              </Button>
+            ) : (
+              <Button onClick={onClose} variant="outline" color="dark">
+                Back to app
+              </Button>
+            )}
           </Group>
         </Group>
 

@@ -882,6 +882,13 @@ const buildSpotlightSampleFromResult = (
 const Home = (props: GenericPageProps) => {
   const dispatch = useAppDispatch();
 
+  const handleOpenMiniGame = useCallback(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.dispatchEvent(new CustomEvent("omni-open-game"));
+  }, []);
+
   useEffect(() => {
     dispatch(navigateToPage(props.title));
   }, [dispatch, props.title]);
@@ -1275,16 +1282,31 @@ const Home = (props: GenericPageProps) => {
               </Typography>
             </Grid>
           ) : (
-            allowedPages.map((page) => (
-              <Grid key={page.name} size={{ xs: 12, sm: 6, md: 4, lg: 3 }}>
-                <TileLink to={page.path} aria-label={`Go to ${page.name}`}>
-                  <LogoTile elevation={3}>
-                    {renderNavigationIcon(page.icon)}
-                    <PageName variant="subtitle1">{page.name}</PageName>
-                  </LogoTile>
-                </TileLink>
+            <>
+              {allowedPages.map((page) => (
+                <Grid key={page.name} size={{ xs: 12, sm: 6, md: 4, lg: 3 }}>
+                  <TileLink to={page.path} aria-label={`Go to ${page.name}`}>
+                    <LogoTile elevation={3}>
+                      {renderNavigationIcon(page.icon)}
+                      <PageName variant="subtitle1">{page.name}</PageName>
+                    </LogoTile>
+                  </TileLink>
+                </Grid>
+              ))}
+              <Grid size={{ xs: 12, sm: 6, md: 4, lg: 3 }}>
+                <LogoTile
+                  component="button"
+                  type="button"
+                  elevation={3}
+                  onClick={handleOpenMiniGame}
+                  sx={{ cursor: "pointer", border: "none" }}
+                  aria-label="Play Krakow Runner"
+                >
+                  <StarIcon fontSize="large" />
+                  <PageName variant="subtitle1">Krakow Runner</PageName>
+                </LogoTile>
               </Grid>
-            ))
+            </>
           )}
         </Grid>
       </CardContent>
@@ -1497,6 +1519,13 @@ const Home = (props: GenericPageProps) => {
           <TilesContainer>
             <Stack gap={3}>
               {effectiveViewMode === "dashboard" ? renderDashboardSummary() : renderNavigationTiles()}
+              {effectiveViewMode === "dashboard" ? (
+                <Box sx={{ display: "flex", justifyContent: "center", mt: 3, pb: 1 }}>
+                  <Button variant="outlined" onClick={handleOpenMiniGame}>
+                    Play Krakow Runner
+                  </Button>
+                </Box>
+              ) : null}
             </Stack>
           </TilesContainer>
         </PageWrapper>

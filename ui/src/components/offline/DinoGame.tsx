@@ -734,6 +734,9 @@ const DinoGame = () => {
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastGameOverRef = useRef(false);
+  const crouchTimerRef = useRef<number | null>(null);
+  const touchCrouchActiveRef = useRef(false);
+  const pointerDownRef = useRef(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -865,13 +868,55 @@ const DinoGame = () => {
       }
     };
 
-    const handlePointer = () => jump();
+    const clearCrouchTimer = () => {
+      if (crouchTimerRef.current) {
+        window.clearTimeout(crouchTimerRef.current);
+        crouchTimerRef.current = null;
+      }
+    };
+
+    const handlePointerDown = (event: PointerEvent) => {
+      event.preventDefault();
+      pointerDownRef.current = true;
+      clearCrouchTimer();
+      crouchTimerRef.current = window.setTimeout(() => {
+        if (pointerDownRef.current) {
+          touchCrouchActiveRef.current = true;
+          setCrouch(true);
+        }
+      }, 160);
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      event.preventDefault();
+      pointerDownRef.current = false;
+      clearCrouchTimer();
+      if (!touchCrouchActiveRef.current) {
+        jump();
+      }
+      if (touchCrouchActiveRef.current) {
+        touchCrouchActiveRef.current = false;
+        setCrouch(false);
+      }
+    };
+
+    const handlePointerLeave = () => {
+      pointerDownRef.current = false;
+      clearCrouchTimer();
+      if (touchCrouchActiveRef.current) {
+        touchCrouchActiveRef.current = false;
+        setCrouch(false);
+      }
+    };
 
     resize();
     window.addEventListener("resize", resize);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
-    canvas.addEventListener("pointerdown", handlePointer);
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
+    window.addEventListener("pointerleave", handlePointerLeave);
 
     const loop = (time: number) => {
       const game = gameRef.current;
@@ -898,7 +943,10 @@ const DinoGame = () => {
       window.removeEventListener("resize", resize);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
-      canvas.removeEventListener("pointerdown", handlePointer);
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+      window.removeEventListener("pointerleave", handlePointerLeave);
     };
   }, []);
 
