@@ -20,7 +20,7 @@
         "test": "jest",
         "migrate:dev": "cross-env NODE_OPTIONS=--max-old-space-size=4096 SKIP_DB_SYNC=false SEED_ACCESS_CONTROL=true DB_SYNC_ALTER=true npm run build:dev && cross-env NODE_OPTIONS=--max-old-space-size=4096 SKIP_DB_SYNC=false SEED_ACCESS_CONTROL=true DB_SYNC_ALTER=true node dist/scripts/runMigrations.js",
         "migrate:dev:undo": "cross-env NODE_OPTIONS=--max-old-space-size=4096 npm run build:dev && cross-env NODE_OPTIONS=--max-old-space-size=4096 node dist/scripts/runMigrations.js --undo",
-        "migrate:prod": "cross-env NODE_OPTIONS=--max-old-space-size=4096 SKIP_DB_SYNC=false SEED_ACCESS_CONTROL=true DB_SYNC_ALTER=true npm run build:prod && cross-env NODE_OPTIONS=--max-old-space-size=4096 SKIP_DB_SYNC=false SEED_ACCESS_CONTROL=true DB_SYNC_ALTER=true node dist/scripts/runMigrations.js",
+        "migrate:prod": "cross-env NODE_OPTIONS=--max-old-space-size=4096 SEED_ACCESS_CONTROL=true npm run build:prod && cross-env NODE_OPTIONS=--max-old-space-size=4096 SKIP_DB_SYNC=false SEED_ACCESS_CONTROL=true DB_SYNC_ALTER=true node dist/scripts/runMigrations.js",
         "migrate:prod:undo": "cross-env NODE_OPTIONS=--max-old-space-size=4096 npm run build:prod && cross-env NODE_OPTIONS=--max-old-space-size=4096 node dist/scripts/runMigrations.js --undo",
         "bookings:backfill": "npm run build:prod && npm run bookings:backfill:run --",
         "bookings:backfill:run": "node dist/scripts/backfillAllBookingEmails.js --"
