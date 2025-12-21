@@ -23,6 +23,9 @@ const ServerDownOverlay = ({ status, onRetry, isChecking, mode = "server-down", 
         background: "linear-gradient(135deg, #f8f4ed 0%, #fef3c7 40%, #fde68a 100%)",
         padding: 0,
         overflow: "hidden",
+        userSelect: "none",
+        WebkitUserSelect: "none",
+        touchAction: "none",
       }}
     >
       <Stack gap="md" style={{ height: "100%", width: "100%" }}>
