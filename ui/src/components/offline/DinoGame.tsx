@@ -390,17 +390,93 @@ const drawKrakowLandmarks = (ctx: CanvasRenderingContext2D, game: GameState) => 
     ctx.fillRect(ax, ay, Math.round(archW * 0.6), archH);
   }
 
+  // Market Hall central tower
+  const hallTowerW = Math.round(hallW * 0.12);
+  const hallTowerH = Math.round(hallH * 0.55);
+  const hallTowerX = hallX + Math.round(hallW * 0.5) - Math.round(hallTowerW / 2);
+  const hallTowerY = hallY - hallTowerH;
+  ctx.fillStyle = "#6b4027";
+  ctx.fillRect(hallTowerX, hallTowerY, hallTowerW, hallTowerH);
+  ctx.fillStyle = "#4c2a1d";
+  ctx.beginPath();
+  ctx.moveTo(hallTowerX, hallTowerY);
+  ctx.lineTo(hallTowerX + hallTowerW / 2, hallTowerY - Math.round(14 * game.scale));
+  ctx.lineTo(hallTowerX + hallTowerW, hallTowerY);
+  ctx.closePath();
+  ctx.fill();
+
   // Adam Mickiewicz Monument (center)
   const statueX = Math.round(game.width * 0.46);
   const pedestalW = Math.round(game.width * 0.08);
   const pedestalH = Math.round(game.height * 0.12);
-  ctx.fillStyle = "#9a6a47";
+  ctx.fillStyle = "#8f6445";
   ctx.fillRect(statueX, horizonY - pedestalH, pedestalW, pedestalH);
+
+  // Base tiers
   ctx.fillStyle = "#6b4a32";
-  ctx.fillRect(statueX + Math.round(pedestalW * 0.35), horizonY - pedestalH - Math.round(pedestalH * 0.7), Math.round(pedestalW * 0.3), Math.round(pedestalH * 0.7));
+  const baseTierH = Math.round(pedestalH * 0.22);
+  ctx.fillRect(statueX - Math.round(pedestalW * 0.08), horizonY - pedestalH - baseTierH, Math.round(pedestalW * 1.16), baseTierH);
+  const upperTierH = Math.round(pedestalH * 0.18);
+  ctx.fillRect(statueX + Math.round(pedestalW * 0.1), horizonY - pedestalH - baseTierH - upperTierH, Math.round(pedestalW * 0.8), upperTierH);
+
+  // Column
+  const columnW = Math.round(pedestalW * 0.45);
+  const columnH = Math.round(pedestalH * 0.85);
+  const columnX = statueX + Math.round(pedestalW * 0.27);
+  const columnY = horizonY - pedestalH - baseTierH - upperTierH - columnH;
+  ctx.fillRect(columnX, columnY, columnW, columnH);
+
+  // Adam statue silhouette (head, neck, shoulders, torso, legs, cloak, arm)
+  ctx.fillStyle = "#935e52ff";
+  const headR = Math.round(pedestalW * 0.10);
+  const neckW = Math.round(pedestalW * 0.10);
+  const torsoW = Math.round(pedestalW * 0.30);
+  const torsoH = Math.round(pedestalH * 0.70);
+  const torsoX = statueX + Math.round(pedestalW * 0.34);
+  const torsoY = columnY - torsoH  - 8;
+  const headCx = statueX + Math.round(pedestalW * 0.5);
+  const headCy = torsoY - headR;
   ctx.beginPath();
-  ctx.arc(statueX + Math.round(pedestalW * 0.5), horizonY - pedestalH - Math.round(pedestalH * 0.85), Math.round(pedestalW * 0.16), 0, Math.PI * 2);
+  ctx.arc(headCx, headCy, headR, 0, Math.PI * 2);
   ctx.fill();
+  ctx.fillRect(headCx - Math.round(neckW / 2), headCy + headR, neckW, Math.round(headR * 0.9));
+  ctx.fillRect(torsoX, torsoY, torsoW, torsoH);
+
+  // Shoulders
+  ctx.beginPath();
+  ctx.moveTo(torsoX - Math.round(torsoW * 0.2), torsoY + Math.round(torsoH * 0.1));
+  ctx.lineTo(torsoX + Math.round(torsoW * 1.2), torsoY + Math.round(torsoH * 0.1));
+  ctx.lineTo(torsoX + Math.round(torsoW * 1.05), torsoY + Math.round(torsoH * 0.3));
+  ctx.lineTo(torsoX - Math.round(torsoW * 0.05), torsoY + Math.round(torsoH * 0.3));
+  ctx.closePath();
+  ctx.fill();
+
+  // Cloak drape
+  ctx.beginPath();
+  ctx.moveTo(torsoX + torsoW, torsoY);
+  ctx.lineTo(torsoX + Math.round(torsoW * 1.55), torsoY + Math.round(torsoH * 0.3));
+  ctx.lineTo(torsoX + Math.round(torsoW * 1.1), torsoY + Math.round(torsoH * 0.85));
+  ctx.lineTo(torsoX + Math.round(torsoW * 0.6), torsoY + torsoH);
+  ctx.closePath();
+  ctx.fill();
+
+  // Arm
+  ctx.fillRect(torsoX - Math.round(torsoW * 0.22), torsoY + Math.round(torsoH * 0.25), Math.round(torsoW * 0.18), Math.round(torsoH * 0.5));
+
+  // Legs
+  const legW = Math.round(torsoW * 0.28);
+  const legH = Math.round(torsoH * 0.45);
+  const legY = torsoY + torsoH;
+  ctx.fillRect(torsoX + Math.round(torsoW * 0.08), legY - Math.round(legH * 0.2), legW, legH);
+  ctx.fillRect(torsoX + Math.round(torsoW * 0.6), legY - Math.round(legH * 0.15), legW, legH);
+
+  // Corner figures
+  ctx.fillStyle = "#5b3c2a";
+  const figureW = Math.round(pedestalW * 0.2);
+  const figureH = Math.round(pedestalH * 0.28);
+  ctx.fillRect(statueX - Math.round(pedestalW * 0.06), horizonY - Math.round(pedestalH * 0.52), figureW, figureH);
+  ctx.fillRect(statueX + Math.round(pedestalW * 0.86), horizonY - Math.round(pedestalH * 0.52), figureW, figureH);
+
 
   // St. Mary's Basilica (right)
   const churchW = Math.round(game.width * 0.13);
@@ -518,15 +594,16 @@ const drawScore = (ctx: CanvasRenderingContext2D, game: GameState) => {
   ctx.fillText(score, game.width - 60, 22);
 };
 
-const drawMessage = (ctx: CanvasRenderingContext2D, game: GameState, text: string, subtext?: string) => {
+const drawMessage = (ctx: CanvasRenderingContext2D, game: GameState, text: string, subtext?: string, y?: number) => {
   ctx.fillStyle = "#111827";
   ctx.font = `${Math.round(18 * Math.max(0.9, game.scale))}px Roboto Slab, serif`;
   const textWidth = ctx.measureText(text).width;
-  ctx.fillText(text, (game.width - textWidth) / 2, game.height / 2 - 8);
+  const baseY = y ?? game.height / 2 - 8;
+  ctx.fillText(text, (game.width - textWidth) / 2, baseY);
   if (subtext) {
     ctx.font = `${Math.round(13 * Math.max(0.9, game.scale))}px Open Sans, sans-serif`;
     const subWidth = ctx.measureText(subtext).width;
-    ctx.fillText(subtext, (game.width - subWidth) / 2, game.height / 2 + 18);
+    ctx.fillText(subtext, (game.width - subWidth) / 2, baseY + 26);
   }
 };
 
@@ -609,7 +686,8 @@ const drawGame = (ctx: CanvasRenderingContext2D, game: GameState) => {
   drawScore(ctx, game);
 
   if (!game.isRunning && game.score === 0 && !game.isGameOver) {
-    drawMessage(ctx, game, "Press Space or Tap to Start", "Jump over cactus and birds.");
+    const topY = Math.max(28, Math.round(36 * game.scale));
+    drawMessage(ctx, game, "Press Space or Tap to Start", "Jump over cactus and birds.", topY);
   }
 
   if (game.isGameOver) {
