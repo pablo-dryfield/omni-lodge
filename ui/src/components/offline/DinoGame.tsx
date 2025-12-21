@@ -777,7 +777,7 @@ const drawGame = (ctx: CanvasRenderingContext2D, game: GameState) => {
 
   if (!game.isRunning && game.score === 0 && !game.isGameOver) {
     const topY = Math.max(28, Math.round(36 * game.scale));
-    drawMessage(ctx, game, "Press Space or Tap to Start", "Jump over cactus and birds.", topY);
+    drawMessage(ctx, game, "Press Space or Tap to Start", "Jump over bottles and birds.", topY);
   }
 
   if (game.isGameOver) {
