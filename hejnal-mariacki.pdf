@@ -1,0 +1,2503 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script type="text/javascript" src="https://img.free-scores.com/javascripts/prototype.1.7.3.min.js"></script>
+<script type="text/javascript" src="https://img.free-scores.com/javascripts/scriptaculous-1.9.0/src/scriptaculous.js"></script>
+<script type="text/javascript" src="https://img.free-scores.com/javascripts/lazysizes.min.js" async=""></script>
+
+<script type="text/javascript" src="https://img.free-scores.com/highslide/highslide-full.packed.js"></script>
+<link rel="stylesheet" type="text/css" href="https://img.free-scores.com/highslide/highslide.css" />
+<script type="text/javascript">
+ 	// 897cfb6671e50cb91a4ac768a1a4da36
+	hs.graphicsDir = 'https://img.free-scores.com/highslide/graphics/';
+	// hs.align = 'center';
+    hs.showCredits = false;
+	hs.transitions = ['expand', 'crossfade'];
+	// hs.outlineType = 'drop-shadow';
+	hs.outlineType = 'rounded-white';
+
+
+
+hs.easing = 'easeInCirc';
+hs.outlineWhileAnimating = 1;
+
+    hs.wrapperClassName = 'draggable-header';
+	//hs.wrapperClassName = 'no-header no-footer'
+	hs.fadeInOut = true;
+	 hs.dimmingOpacity = 0.5;
+	 hs.dimmingDuration = 0;
+	 hs.zIndexCounter = 99999999;
+
+	 hs.expandDuration = 0;
+     hs.restoreDuration = 0;
+	 // hs.allowHeightReduction = false;
+	hs.allowWidthReduction = true; 
+
+hs.allowHeightReduction = true; 
+	
+	// Add the controlbar
+	hs.registerOverlay({
+	html: '<div class="close-simple-white" onclick="return hs.close(this)" title="Fermer"></div>',	position: 'top right',
+	useOnHtml: true,
+	fade: 2 // fading the semi-transparent overlay looks bad in IE
+});
+
+
+if (hs.addSlideshow) hs.addSlideshow({
+   slideshowGroup: ['group1'],
+		interval: 5000,
+		repeat: false,
+		useControls: true,
+		fixedControls: 'fit',
+		overlayOptions: {
+			opacity: .75,
+			position: 'bottom center',
+			hideOnMouseOut: true
+		}
+
+	});
+	
+</script>
+<SCRIPT LANGUAGE="javascript" src="../ajax/client/power-search-uk-free-sheet-music-m.js"></SCRIPT>
+<SCRIPT LANGUAGE='javascript' src='../javascripts/classique_en.js'></SCRIPT>
+
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>Index E-Space Membre</title>
+<link rel="stylesheet" href="https://img.free-scores.com/style-m.css" type="text/css">
+<link rel="stylesheet" href="https://img.free-scores.com/style-nav.css" type="text/css">
+<meta name="viewport" content="width=device-width">
+<style>
+        /* Styles pour les notifications et éléments d'adhésion */
+.notification-premium {
+    background-color: #FFF4E6;
+    border-left: 4px solid #FF8C00;
+    border-radius: 6px;
+    padding: 25px;
+    margin: 15px 0;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    transition: all 0.3s ease;
+}
+
+.notification-premium:hover {
+    box-shadow: 0 4px 8px rgba(255, 140, 0, 0.2);
+    transform: translateY(-2px);
+}
+
+.notification-premium h3 {
+    color: #FF6600;
+    margin: 0 0 10px 0;
+    font-size: 1.3em;
+    font-weight: 600;
+}
+
+.notification-premium p {
+    margin: 0 0 12px 0;
+    line-height: 1.5;
+    color: #444;
+}
+
+.notification-premium p:last-child {
+    margin-bottom: 0;
+}
+
+.notification-premium strong {
+    color: #FF6600;
+    font-weight: 600;
+}
+
+.membership-benefits {
+    background-color: #F0F8FF;
+    border-radius: 6px;
+    padding: 18px;
+    margin: 15px 0;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    font-family: 'Segoe UI', Arial, sans-serif;
+    transition: all 0.3s ease;
+}
+
+.membership-benefits:hover {
+    box-shadow: 0 4px 12px rgba(48, 96, 160, 0.15);
+}
+
+.membership-benefits h3 {
+    color: #3060A0;
+    margin: 0 0 12px 0;
+    font-size: 1.2em;
+    font-weight: 600;
+}
+
+.membership-benefits p {
+    margin: 0 0 10px 0;
+    line-height: 1.5;
+    color: #333;
+}
+
+.membership-benefits ul {
+    margin: 0 0 15px 20px;
+    padding: 0;
+    list-style-type: none;
+}
+
+.membership-benefits li {
+    margin-bottom: 6px;
+    position: relative;
+    padding-left: 20px;
+    line-height: 1.4;
+}
+
+.membership-benefits li:before {
+    content: "✓";
+    color: #3060A0;
+    position: absolute;
+    left: 0;
+    font-weight: bold;
+}
+
+.membership-benefits li:last-child {
+    margin-bottom: 0;
+}
+
+.membership-benefits .note {
+    font-size: 0.9em;
+    font-style: italic;
+    margin: 10px 0 0 0;
+    color: #666;
+}
+
+/* Styles pour les boutons d'action */
+.btn-action {
+    display: inline-block;
+    background-color: #FF8C00;
+    color: white;
+    padding: 8px 16px;
+    border-radius: 4px;
+    text-decoration: none;
+    font-weight: 600;
+    margin-top: 10px;
+    transition: background-color 0.2s ease;
+}
+
+.btn-action:hover {
+    background-color: #FF6600;
+    text-decoration: none;
+    color: white;
+}
+
+.btn-secondary {
+    display: inline-block;
+    background-color: #3060A0;
+    color: white;
+    padding: 8px 16px;
+    border-radius: 4px;
+    text-decoration: none;
+    font-weight: 600;
+    margin-top: 10px;
+    transition: background-color 0.2s ease;
+}
+
+.btn-secondary:hover {
+    background-color: #254B80;
+    text-decoration: none;
+    color: white;
+}
+</style>
+</head>
+<body leftmargin="0" topmargin="0" marginwidth="0" marginheight="0">
+<SCRIPT LANGUAGE="JavaScript">
+
+        function change_secteur()
+        {
+            if (document.getElementById('searchDropdownBox'))
+            {
+                document.getElementById('secteur_affiche').innerHTML = document.getElementById('searchDropdownBox').options[document.getElementById('searchDropdownBox').selectedIndex].innerHTML;
+            }
+            if (document.getElementById('search_auto'))
+            {
+                gestionClic_auto_recherche(document.getElementById('search_auto').value);
+            }
+        }
+
+function saveSearch() {
+    sessionStorage.setItem('searchQuery', $('search_auto').value);
+}
+
+// Fonction pour restaurer la recherche
+function restoreSearch() {
+    const savedQuery = sessionStorage.getItem('searchQuery');
+
+    if (savedQuery) {
+        $('search_auto').value = savedQuery;
+    }
+    else
+    {
+	document.getElementById('clear-search')?.style?.setProperty('display', 'none');
+   }
+}
+
+// Sauvegarder la requête avant de quitter la page
+window.addEventListener('beforeunload', saveSearch);
+
+// Restaurer la recherche quand la page est chargée
+window.addEventListener('load', restoreSearch);
+
+function effacerchamp_VI()
+{
+document.criteres_VI.search.value = '';
+//return false;
+}
+
+function effacerchamp_VP()
+{
+document.criteres_VP.search.value = '';
+//return false;
+}
+
+function effacerchamp_VDA()
+{
+document.criteres_VDA.search.value = '';
+//return false;
+}
+
+function effacerchamp_RP()
+{
+document.criteres_RP.search.value = '';
+//return false;
+}
+function effacerchamp() {
+  var searchInput = document.querySelector('form[name="criteres"] input[name="search"]');
+  if (searchInput) {
+    searchInput.value = '';
+  }
+}
+
+
+function gestionClic_auto_recherche(start, ordrepar,age, instrument, search_auto, page, CATEGORIE, alpha, statut)
+{
+        elementHTML = document.getElementById('resultat_auto_recherche');
+
+        var url2 = 'https://www.free-scores.com/ajax/include_auto_recherche.php';
+        o_options = new Object();
+        o_options = {method: 'post'};
+//        var laRequete = new Ajax.Updater(elementHTML,url2,o_options);
+
+
+        var compteurRequetesEnCours = 0;
+
+       ref=$('searchDropdownBox').options[$('searchDropdownBox').selectedIndex].value;
+        //ref='';
+
+        Params= new Hash();
+
+        Params.set('search_auto', search_auto);
+        Params.set('langue_site', 'uk');
+        Params.set('mobile', 1);
+        Params.set('width', window.innerWidth);
+        Params.set('height', window.innerHeight);
+        Params.set('verbose', 1);
+        if (ref=='partitions')
+                {
+                Params.set('secteur_auto', 1);
+                }
+        else if (ref=='accessoires')
+                {
+                Params.set('secteur_auto', 2);
+                }
+
+                else if (ref=='digitales')
+                {
+                Params.set('secteur_auto', 3);
+                }
+        else if (ref=='gratuit')
+                {
+                Params.set('secteur_auto', 0);
+                }
+
+
+    var myAjax = new Ajax.Request(
+        url2,
+        {
+        method: 'post',
+        parameters : Params,
+                 onLoading: function (xhr2)
+            {
+               Element.show('chargement_auto_recherche');
+                                compteurRequetesEnCours++;
+
+
+            },
+          onSuccess: function (xhr2)
+        {
+	if (search_auto==$('search_auto').value)
+                {
+                $('resultat_auto_recherche').innerHTML = xhr2.responseText;
+                }
+                else
+                {
+                gestionClic_auto_recherche('0','','','',$('search_auto').value,'','','');
+                }
+
+
+
+        },
+onComplete: function()
+        {
+        if (!--compteurRequetesEnCours)
+        {
+
+        Element.hide('chargement_auto_recherche');
+
+        }
+
+        }
+        });
+}
+change_secteur();
+</SCRIPT>
+<div class='header-hauteur'>
+<div class='header-fixed' id='navbar'>
+<div>
+
+          <nav role="navigation">
+<div id="menuOverlay"></div>
+            
+<span id="menuToggle">
+              <input type="checkbox" id="menu-toggle" style='top:-8px;left:-8px;' />
+              
+            
+<label for="menu-toggle" id="menuToggle">      
+                <span></span>
+                <span></span>
+                <span></span>
+                </label>
+ 
+            <ul id="menu" style="display: none;">
+<li><div><a href='https://www.free-scores.com/list_playlist_en.php' class='g' style='display:block;position:relative;padding:8px 0px 8px 4px;text-align:left;'><svg xmlns='https://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' style='vertical-align:middle'><path d='M19 9H2v2h17V9zm0-4H2v2h17V5zM2 15h13v-2H2v2zm15-2v6l5-3-5-3z' stroke-width='0.2' stroke='#ccc' fill='#ccc'></path></svg> <b>MUSIC LIBRARY</b></a></div></li><li><div class='hr-elegant'></div></li><div style="display: flex; justify-content: center;">
+<a href="#" onclick="toggleParcourir()" class='nav-button' style='padding:20px;width:230px;text-align:center'>
+    <span class="menu-icon menu-icon-yellow"></span>
+             BROWSE FREE-SCORES
+                <span class="menu-arrow menu-arrow-down"></span>
+    </a></div>
+    <div id="parcourir" style="display: none;">
+    <div class='central-partition-container'>
+    <li class='menu-item'><a href='/free-sheet-music.php' class='menu-link'><span class='menu-icon menu-icon-yellow'></span><span class='menu-text'>All Free Sheet Music</span></a></li><li class='menu-item' style='padding:0px 15px'><a href='https://www.free-scores.com/free-sheet-music_composers.php' class='menu-link'><span class='menu-icon menu-icon-yellow'></span><span class='menu-text'>Composers</span></a></li><li class='menu-item' style='padding:0px 15px'><a href='https://www.free-scores.com/formations-uk.php' class='menu-link'><span class='menu-icon menu-icon-yellow'></span><span class='menu-text'>Instrumentations</span></a></li><li class='menu-item' style='padding:0px 15px'>    <div class="collapsible-menu">
+        <div class="collapsible-header" id="ouvrir_TOP">
+            <a href="#" onclick="toggleSection('TOP'); return false;" class="menu-link">
+                <span class="menu-icon menu-icon-yellow"></span>
+                <span class="menu-text">Tops</span>
+                <span class="menu-arrow menu-arrow-down" id="tops-arrow"></span>
+            </a>
+        </div>
+        
+        <div class="collapsible-content" id="TOP" style="display:none;">
+            <ul class="menu-list">
+         <li class="menu-item">
+                    <a href="https://www.free-scores.com/top-freesheetmusic.php" class="menu-link sub-menu-link">
+                        <span class="menu-text">Top 100</span>
+                    </a>
+                </li>
+
+                <li class="menu-item">
+                    <a href="https://www.free-scores.com/free-sheet-music.php?ordrepar=clicks" class="menu-link sub-menu-link">
+                        <span class="menu-text"> Top downloads</span>
+                    </a>
+                </li>
+            </ul>
+        </div>
+    </div>
+    <script>
+       
+                // Combine with previous toggle function
+        function toggleSection(id) {
+            var content = document.getElementById(id);
+            var arrow = document.getElementById(id.toLowerCase() + '-arrow');
+            
+            if (content.style.display === "none") {
+                content.style.display = "block";
+                if (arrow) arrow.classList.replace("menu-arrow-down", "menu-arrow-up");
+            } else {
+                content.style.display = "none";
+                if (arrow) arrow.classList.replace("menu-arrow-up", "menu-arrow-down");
+            }
+        }
+        </script>
+
+</li><li class='menu-item' style='padding:0px 15px'><a href='https://www.free-scores.com/nouveautes_uk.php' class='menu-link'><span class='menu-icon menu-icon-yellow'></span><span class='menu-text'>New additions</span></a></li>    <li class='menu-item' style='padding:0px 15px'>
+<div id='ouvrir_autres'><a href="#"   onclick="Effect.BlindDown('AUTRES',{ duration: 0.2 });  $('ouvrir_autres').style.display='none'; $('fermer_autres').style.display='';return false"  class='menu-link'><div class='menu-icon menu-icon-yellow'></div> <span class='menu-text'>Tools</span>
+<span class="menu-arrow menu-arrow-down" id="tops-arrow"></span>
+</a></div>
+<div  id='fermer_autres' style='display:none' style='border-top:0px;'><a href="#"  onclick="Effect.BlindUp('AUTRES',{ duration: 0.2 });  $('ouvrir_autres').style.display='';$('fermer_autres').style.display='none'; return false" class='menu-link'><div class='menu-icon menu-icon-yellow'></div> <span class='menu-text'>Tools</span>
+<span class="menu-arrow menu-arrow-up" id="tops-arrow"></span>
+</a></div>
+</li>
+<div id="AUTRES" 
+style='display:none;width:auto; text-align:left;'><li><a href='https://www.free-scores.com/blanksheetmusic-generator.php'  class='menu-link sub-menu-link'> Staff Paper Generator</a></li><li><a href='https://www.free-scores.com/onlinetuner.php'  class='menu-link sub-menu-link'>Online Tuner</a></li><li><a href='https://www.free-scores.com/metronome-en.php'  class='menu-link sub-menu-link'> Online Metronome</a></li><li><a href='https://www.free-scores.com/notesgame.php'  class='menu-link sub-menu-link'> Game "NoteQuest"</a></li><li><a href='https://www.free-scores.com/directory-free-sheet-music.php' class='menu-link sub-menu-link'> Web Directory</a></li></div></li><li><div class='d' style='display:block;height:20px;text-align:left;'><b>Musician's shop</b></span></div><div style='height:0.5em'></div></li><li><a href='https://www.free-scores.com/boutique/boutique1-uk.php' style='display:block;position:relative;padding:8px 0px 8px 4px;border-bottom:solid 1px #e2e2e2;text-align:left;background-color:#FFF;' class='g'><div class='sprite-image bloc_rouge_mini' style='display:inline-block;height:7px;width:6px;border-radius:0px;top:4px'></div> Sheet music books</a></li><li><a href='https://www.free-scores.com/boutique/digital-sheet-music.php' style='display:block;position:relative;padding:8px 0px 8px 4px;border-bottom:solid 1px #e2e2e2;text-align:left;background-color:#FFF;' class='g'><div class='sprite-image bloc_gris_mini' style='display:inline-block;height:7px;width:6px;border-radius:0px;top:4px'></div> Digital sheet music</a></li><li><a href='https://www.free-scores.com/musical-equipment/' style='display:block;position:relative;padding:8px 0px 8px 4px;border-bottom:solid 1px #e2e2e2;text-align:left;background-color:#FFF;' class='g'><div class='sprite-image bloc_bleu_mini' style='display:inline-block;height:7px;width:6px;border-radius:0px;top:4px'></div> Music equipment</a></li><li><a href='https://www.free-scores.com/musical-equipment/17_gifts-ideas-for-musicians.htm' style='display:block;position:relative;padding:8px 0px 8px 4px;border-bottom:solid 1px #e2e2e2;text-align:left;background-color:#FFF;' class='g'><div class='sprite-image bloc_bleu_mini' style='display:inline-block;height:7px;width:6px;border-radius:0px;top:4px'></div> Gift ideas</a></li><li>&nbsp;</li><li><a href='//www.free-scores.com/about.php' target='_top' style='display:block;position:relative;padding:8px 0px 8px 4px;border-bottom:solid 1px #e2e2e2;background-color:#FFF;text-align:left;height:30px' class='g'><img src='//www.free-scores.com/favicon.png' style='background-color:transparent;display:inline-block;margin:0;width:28px;vertical-align:text-top;padding:3px;float:left;' /> About free-scores.com</font></a></li></div>
+</div>
+<script>
+function toggleParcourir() {
+if (event) event.preventDefault(); 
+    const section = document.getElementById('parcourir');
+    section.style.display = section.style.display === 'none' ? 'block' : 'none';
+}
+</script>
+<li></li>
+<li>
+</li><li></li><li><div class='hr-elegant'></div></li><li><div style='display:block;position:relative;padding:8px 0px 8px 4px;text-align:left;background-color:#FFF;' class='g'><form action='https://www.free-scores.com/free-sheet-music.php' method='get' name='instrreC' id='instrreC'>
+<div class='custom-dropdown custom-dropdown--white'><select name='CATEGORIE' onChange='window.document.instrreC.submit()' class='custom-dropdown__select custom-dropdown__select--white' style='width:200px;'><option selected value="" selected >Instruments</option><option value="200">ACCORDION</option><option value="115">BAGPIPE</option><option value="15">BALALAIKA</option><option value="10">BANJO</option><option value="20">BASS</option><option value="90">BASSOON</option><option value="900">BLANK SHEET&hellip;</option><option value="601">BOOKS</option><option value="95">BOUZOUKI</option><option value="166">BUGLE</option><option value="301">CELLO - VIO&hellip;</option><option value="97">CHARANGO</option><option value="270">CHOIR - VOC&hellip;</option><option value="100">CLARINET</option><option value="340">CORNET</option><option value="605">DOBRO - GUI&hellip;</option><option value="604">DOUBLE BASS</option><option value="250">DRUM</option><option value="158">DULCIMER</option><option value="230">ELECTRONIC &hellip;</option><option value="310">ENGLISH HOR&hellip;</option><option value="609">EUPHONIUM</option><option value="330">FLUGELHORN</option><option value="120">FLUTE</option><option value="290">FRENCH HORN</option><option value="999">GUITAR</option><option value="265">HANDBELLS</option><option value="140">HARMONICA</option><option value="30">HARP</option><option value="210">HARPSICHORD</option><option value="60">LUTE, THEOR&hellip;</option><option value="50">MANDOLIN</option><option value="631">MARCHING BA&hellip;</option><option value="608">MARIMBA</option><option value="640">MUSICAL COU&hellip;</option><option value="1">NO SCORES</option><option value="150">OBOE</option><option value="240">ORCHESTRA -&hellip;</option><option value="630">ORCHESTRA P&hellip;</option><option value="220">ORGAN</option><option value="300">OTHER INSTR&hellip;</option><option value="225">OUD</option><option value="400">PANPIPES</option><option value="606">PEDAL STEEL&hellip;</option><option value="260">PERCUSSION</option><option value="70">PIANO</option><option value="130">RECORDER</option><option value="295">SAXHORN</option><option value="160">SAXOPHONE</option><option value="170">TROMBONE</option><option value="180">TRUMPET</option><option value="190">TUBA</option><option value="256">UKULELE</option><option value="93">VIBRAPHONE</option><option value="92">VIELLE A RO&hellip;</option><option value="320">VIOLA</option><option value="321">VIOLA DA GA&hellip;</option><option value="80">VIOLIN - FI&hellip;</option><option value="603">WHISTLE</option><option value="607">XYLOPHONE</option><option value="99">ZITHER</option></select></div></form></div></li><li class='menu-section donate-section'>     
+      <div class='flex-item_accueil artist-card-inner  flex_moitie navigation-menu'>
+     
+           <a href='https://www.free-scores.com/pleasedonate.php' class="donate-image-link"><img src="https://img.free-scores.com/IMAGES/donate-tree.jpg" class="donate-image" border="0"/></a>
+             
+            <div class="donate-text">
+            <span class="dp"><em>&quot;For over 25 years we have provided legal access to free sheet music.<br />
+                  <br />
+                  If you use and like Free-scores.com, please consider making a donation.&quot;</em></span><br /><br>
+
+            <a href='https://www.free-scores.com/pleasedonate.php'><img src="https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif" border="0"/></a>
+</div>       
+</div>
+ 
+</li><div style='height:15px'></div>
+<script>
+    stickyElem = document.querySelector(".sticky-div");
+
+    /* Gets the amount of height
+    of the element from the
+    viewport and adds the
+    pageYOffset to get the height
+    relative to the page */
+    currStickyPos = stickyElem.getBoundingClientRect().top + window.pageYOffset;
+    window.onscroll = function() {
+
+        /* Check if the current Y offset
+        is greater than the position of
+        the element */
+        if(window.pageYOffset > currStickyPos) {
+            stickyElem.style.position = "fixed";
+                        stickyElem.style.top = "initial";
+
+
+
+        } else {
+            stickyElem.style.position = "relative";
+            stickyElem.style.top = "initial";
+        }
+    }
+    </script>
+  <div style='height:17em'></div>
+</ul></span>
+<header class="header_top">
+<div class="left-section">
+<span id="menuLogo">
+  <!-- Logo pour mobile -->
+  <span class="logo-mobile">
+    <a href="https://www.free-scores.com/index_uk.php">
+      <img src="https://img.free-scores.com/IMAGES/logo-m-uk.png" alt="Free-scores.com" style="max-width: 100%;">
+    </a>
+  </span>
+
+  <!-- Logo pour desktop -->
+  <span class="logo-desktop">
+    <a href="https://www.free-scores.com/index_uk.php">
+      <img src="https://img.free-scores.com/IMAGES/logo_fs_m.png" alt="Free-scores.com" style="width:201px;height:41px">
+    </a>
+  </span>
+</span>
+</div>
+<div class="middle-section">
+<form name="criteres" method="GET" id='formsearch' role='search' class="search-box" onsubmit="soumettre(); return false;">
+                
+                <!-- Section dropdown compacte -->
+                <div class="search-category">
+                    <div class="category-icon">
+                        <span class="icon-all" id="current-icon"></span>
+                        <span class="category-text" id="secteur_affiche">All</span>
+                    </div>
+                    
+                    <select class="category-select" id="searchDropdownBox" title="Search within" onChange="change_secteur();">
+                        <option value="">All site</option>
+                        <option  value="gratuit">Free Sheet Music</option>
+                        <option  value="partitions">Sheet Music Books</option>
+                        <option  value="digitales">Digital Sheet Music</option>
+                        <option  value="accessoires">Music Equipment</option>
+                    </select>
+                    
+            
+                </div>
+
+                <!-- Input de recherche -->
+                <input 
+                    name="search" 
+                    type="text" 
+                    id="search_auto" 
+                    class="search-input" 
+                    autocomplete="off" 
+                    value=""
+                    placeholder="Search..." 
+                    onKeyUp="handleSearchInput(this.value);" 
+                    onfocus="handleSearchInput(this.value);"
+                />
+
+                <!-- Bouton clear (à l'intérieur de l'input visuellement) -->
+                <button type="button" class="clear-btn" id="clear-btn" onClick="clearSearch();">
+                    <svg viewBox="0 0 24 24" width="14" height="14">
+                        <path fill="#999" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                    </svg>
+                </button>
+
+                <!-- Bouton de recherche -->
+                <button type="button" title="Rechercher" class="search-btn" onClick="soumettre();return false;">
+                    <svg viewBox="0 0 24 24" width="18" height="18">
+                        <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                    </svg>
+                </button>
+            </form>
+        </div>
+
+        <script>
+        function soumettre()
+        {
+            var ref = document.getElementById('searchDropdownBox').options[document.getElementById('searchDropdownBox').selectedIndex].value;
+            var form = document.getElementById('formsearch');
+            
+            if (ref=='gratuit')
+            {
+                form.action='//www.free-scores.com/free-sheet-music.php';
+            }
+            else if (ref=='partitions')
+            {
+                form.action='//www.free-scores.com/boutique/boutique-search-engine-uk.php';
+            }
+            else if (ref=='digitales')
+            {
+                form.action='//www.free-scores.com/boutique/digital-sheet-music.php';
+            }
+            else if (ref=='accessoires')
+            {
+                form.action='//www.free-scores.com/boutique/search-engine-accessoires-uk.php';
+            }
+            else
+            {
+                form.action='//www.free-scores.com/search-uk.php';
+            }
+            
+            form.submit();
+        }
+
+        function handleSearchInput(value) {
+            const clearBtn = document.getElementById('clear-btn');
+            
+            // Afficher/cacher le bouton clear
+            if (value.trim()) {
+                clearBtn.classList.add('show');
+            } else {
+                clearBtn.classList.remove('show');
+            }
+            
+            // Appel à votre fonction AJAX
+            gestionClic_auto_recherche(value);
+        }
+        function clearSearch() {
+            const searchInput = document.getElementById('search_auto');
+            const clearBtn = document.getElementById('clear-btn');
+            
+            searchInput.value = '';
+            clearBtn.classList.remove('show');
+            searchInput.focus();
+            
+            // Appel à votre fonction AJAX pour vider les résultats
+            gestionClic_auto_recherche('');
+        }
+
+        function effacerchamp() {
+            document.getElementById('search_auto').value = '';
+            document.getElementById('search_auto').focus();
+        }
+    </script>
+<div class="right-section">
+
+<script>
+document.cookie = "user_language=en; path=/; max-age=2592000";
+</script>
+<div class='icone_currency'><div id='ouvrir_menu_currency'><a onclick="$('liste_currency').toggle();$('ouvrir_menu_currency').style.display='none'; $('fermer_menu_currency').style.display='';return false;" href="#" style='min-height:23px;' class='bouton_chg_devise'>&#x24; <div class='sprite-image triangle_utd'></div></a></div><div id='fermer_menu_currency' style='display:none'><a onclick="$('liste_currency').toggle();$('ouvrir_menu_currency').style.display=''; $('fermer_menu_currency').style.display='none';return false;" href="#" style='min-height:23px;' class='bouton_chg_devise'>&#x24; <div class='sprite-image triangle_up'></div></a></div><div id="liste_currency"  style="width:60px;display:none;top:35px">
+<a href="//www.free-scores.com/espace-membres-uk/?devise=EUR"  class="bouton_chg_devise" style='top:10px'><div>EUR &euro;</div></a><a href="//www.free-scores.com/espace-membres-uk/?devise=USD"  class="bouton_chg_devise" style='top:10px'><div>USD &#x24;</div></a><a href="//www.free-scores.com/espace-membres-uk/?devise=GBP"  class="bouton_chg_devise" style='top:10px'><div>GBP &pound;</div></a><a href="//www.free-scores.com/espace-membres-uk/?devise=CAD"  class="bouton_chg_devise" style='top:10px'><div>CAD &#x24;</div></a><a href="//www.free-scores.com/espace-membres-uk/?devise=CNY"  class="bouton_chg_devise" style='top:10px'><div>CNY &yen;</div></a></div></div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class='icone_langue'>
+<div id='ouvrir_menu_langue'>
+<a onclick="$('liste_langue').toggle();$('ouvrir_menu_langue').style.display='none'; $('fermer_menu_langue').style.display='';return false;" href="#" class="bg_ bg_jaune bouton_chg_langue" style='min-height:23px;'>
+EN <div class='sprite-image triangle_utd'></div></a>
+</div>
+
+<div  id='fermer_menu_langue' style='display:none'>
+<a onclick="$('liste_langue').toggle();$('ouvrir_menu_langue').style.display=''; $('fermer_menu_langue').style.display='none';return false;" href="#" class="bg_ bg_jaune bouton_chg_langue" style='min-height:23px;'>
+EN <div class='sprite-image triangle_up'></div></a>
+</div>
+<div id="liste_langue" style="display:none;">
+<a href="//www.free-scores.com/espace-membres/index.php"  onclick="document.cookie='user_language=fr;path=/;max-age=2592000'" class="bg_ bg_jaune bouton_chg_langue" ><div>FR</div></a>
+
+
+</div>
+</div>
+<span id='menuToggle_right'>
+<div class='icone_membre_position' id='inscriptionTrigger' style='cursor:pointer;'><div class='icone_membre_cercle'><svg xmlns='https://www.w3.org/2000/svg' width='20' height='20' viewBox='2 0 24 24' style='vertical-align:middle'><path d='M12 5.9c1.16 0 2.1.94 2.1 2.1s-.94 2.1-2.1 2.1S9.9 9.16 9.9 8s.94-2.1 2.1-2.1m0 9c2.97 0 6.1 1.46 6.1 2.1v1.1H5.9V17c0-.64 3.13-2.1 6.1-2.1M12 4C9.79 4 8 5.79 8 8s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm0 9c-2.67 0-8 1.34-8 4v3h16v-3c0-2.66-5.33-4-8-4z' stroke-width='0.2' stroke='#333' fill='#333'></path></svg></div><div class='icone_membre_titre dp'>Log in</div></div><ul id='menu2' style='right:-35px'></ul></span></nav><script>
+
+document.addEventListener('DOMContentLoaded', function() {
+    var checkbox = document.querySelector('#menuToggle input[type="checkbox"]');
+    var checkboxRight = document.querySelector('#menuToggle_right input[type="checkbox"]');
+    var overlay = document.getElementById('menuOverlay');
+
+    function updateOverlayVisibility() {
+        if (checkbox && checkboxRight && overlay) {
+            if (checkbox.checked || checkboxRight.checked) {
+                overlay.style.display = 'block';
+            } else {
+                overlay.style.display = 'none';
+            }
+        }
+    }
+
+    if (overlay) {
+        overlay.addEventListener('click', function() {
+            if (checkbox) checkbox.checked = false;
+            if (checkboxRight) checkboxRight.checked = false;
+            updateOverlayVisibility();
+        });
+    }
+
+    if (checkbox) {
+        checkbox.addEventListener('change', updateOverlayVisibility);
+    }
+
+    if (checkboxRight) {
+        checkboxRight.addEventListener('change', updateOverlayVisibility);
+    }
+});
+
+</script>
+
+</div><div id="resultat_auto_recherche" style="z-index:3000; position: absolute; height:auto;"></div>
+</div></div></header><script type="text/javascript">
+function sdLoadAdSense() {
+    var tagAds = document.createElement('script');
+    tagAds.async = true;
+    tagAds.src = 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js';
+    document.getElementsByTagName('head')[0].appendChild(tagAds);
+}
+var _0x5336=['useractioncomplete','listenerId','function','vendor','SDDAN','gdprApplies','consents','tcString','removeEventListener','purpose','addEventListener','publisherCC','cmpuishown','object','tcloaded','eventStatus','__tcfapi','legitimateInterests'];(function(_0x24fd1b,_0x533614){var _0x1de3af=function(_0x17d403){while(--_0x17d403){_0x24fd1b['push'](_0x24fd1b['shift']());}};_0x1de3af(++_0x533614);}(_0x5336,0xff));var _0x1de3=function(_0x24fd1b,_0x533614){_0x24fd1b = _0x24fd1b - 0x0;var _0x1de3af=_0x5336[_0x24fd1b];return _0x1de3af;};(function(){var _0x17d403=0x0,_0x31f128=setInterval(function(){_0x17d403++>=0xc8&&(clearInterval(_0x31f128),sdLoadAdSense()),typeof window[_0x1de3('0xd')]===_0x1de3('0x11')&&(clearInterval(_0x31f128),window[_0x1de3('0xd')](_0x1de3('0x7'),0x2,function(_0x2fbbc8,_0x20e8fc){if(!_0x20e8fc||!_0x2fbbc8[_0x1de3('0xc')]&&_0x2fbbc8['gdprApplies'])return;(!_0x2fbbc8[_0x1de3('0x2')]||(_0x2fbbc8[_0x1de3('0xc')]===_0x1de3('0xb')||_0x2fbbc8['eventStatus']===_0x1de3('0xf')||_0x2fbbc8[_0x1de3('0xc')]===_0x1de3('0x9'))&&(_0x2fbbc8[_0x1de3('0x4')]&&_0x2fbbc8[_0x1de3('0x0')][_0x1de3('0x3')][0x2f3]&&(_0x2fbbc8[_0x1de3('0x6')]['consents'][0x1]||(_0x2fbbc8['purpose']['consents'][0x2]||_0x2fbbc8[_0x1de3('0x6')][_0x1de3('0xe')][0x2])&&_0x2fbbc8[_0x1de3('0x8')]==='DE'&&_0x2fbbc8['purposeOneTreatment'])))&&(typeof window[_0x1de3('0x1')]===_0x1de3('0xa')&&sdLoadAdSense(),__tcfapi(_0x1de3('0x5'),0x2,function(){},_0x2fbbc8[_0x1de3('0x10')]));}));},0xa);}());
+</script>
+
+<script>
+   // SCRIPT POUR DISPARITION BARRE FIXE DU HAUT
+   document.addEventListener('DOMContentLoaded', function() {
+    let lastScrollTop = 0;
+    const navbar = document.getElementById('navbar');
+    const subMenu = document.querySelector('.header_sub_menu');
+    const scrollThreshold = 5;
+
+    if (!navbar) {
+        console.error('Element #navbar non trouvé');
+        return;
+    }
+
+    function handleScroll() {
+        const currentScrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        
+        if (Math.abs(currentScrollTop - lastScrollTop) < scrollThreshold) {
+            return;
+        }
+        
+        const isMobile = window.innerWidth <= 1300;
+        
+        if (currentScrollTop <= 0) {
+            // En haut : header principal visible, sous-menu en position normale
+            navbar.classList.remove('header-hidden');
+            if (subMenu) {
+                subMenu.style.top = isMobile ? '100px' : '60px';
+            }
+        }
+        else if (currentScrollTop > lastScrollTop) {
+            // Scroll down : CACHER le header principal, sous-menu remonte en haut
+            navbar.classList.add('header-hidden');
+            if (subMenu) {
+                subMenu.style.top = '0px';
+            }
+        }
+        else {
+            // Scroll up : MONTRER le header principal, sous-menu redescend
+            navbar.classList.remove('header-hidden');
+            if (subMenu) {
+                subMenu.style.top = isMobile ? '100px' : '60px';
+            }
+        }
+        
+        lastScrollTop = currentScrollTop;
+    }
+
+    let ticking = false;
+    
+    function requestTick() {
+        if (!ticking) {
+            requestAnimationFrame(() => {
+                handleScroll();
+                ticking = false;
+            });
+            ticking = true;
+        }
+    }
+
+    window.addEventListener('scroll', requestTick, { passive: true });
+    
+    window.addEventListener('resize', () => {
+        const isMobile = window.innerWidth <= 1300;
+        if (subMenu && !navbar.classList.contains('header-hidden')) {
+            subMenu.style.top = isMobile ? '100px' : '60px';
+        } else if (subMenu && navbar.classList.contains('header-hidden')) {
+            subMenu.style.top = '0px';
+        }
+    });
+});
+    </script>
+<div style='height:67px'></div>
+
+
+<div class='header_sub_menu'> 
+
+
+
+<div class="menus_principaux">
+<a href='//www.free-scores.com/free-sheet-music.php' class='main-service-button selected orange-border'><div style='display: flex;flex-wrap: nowrap;justify-content: center;'><div><div class='visible_full'><img src='https://img.free-scores.com/IMAGES/icon_public_100.png' class='picto selected'></div></div><div> Free Sheet Music<span class="small-text">200 000+</span>
+</div></div></a>
+
+<div class="submenu submenu-1">
+<div style='width:100%;text-align:left;vertical-align:middle;margin:3px;line-height:10px'>
+
+<form method='get' name=ss3s_h action='//www.free-scores.com/free-sheet-music.php'> <style>
+.container {
+  display: grid;
+  place-items: center;
+  min-height: 400px;
+}
+
+.floating-stack {
+  background: #455A64;
+  color: #fff;
+  height: 80vh;
+  width: 320px;
+  border-radius: 1rem;
+  overflow-y: auto;
+}
+
+.floating-stack > dl {
+  margin: 0 0 1rem;
+  display: grid;
+  grid-template-columns: 2.5rem 1fr;
+  align-items: center;
+}
+
+.floating-stack {
+  position: sticky;
+  top: 0.5rem;
+  left: 0.5rem;
+  font-weight: bold;
+  background: #263238;
+  color: #cfd8dc;
+  height: 2rem;
+  width: 2rem;
+  border-radius: 50%;
+  padding: 0.25rem 1rem;
+  grid-column: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.floating-stack {
+  grid-column: 2;
+  margin: 0;
+  padding: 0.75rem;
+}
+
+.floating-stack > dl:first-of-type > dd:first-of-type {
+  margin-top: 0.25rem;
+}
+</style>
+
+<select name='CATEGORIE' class='form_select' onChange='window.document.ss3s_h.submit()'>
+<option value=''>&#x25BD; INSTRUMENTS</option><option value="200">ACCORDION</option><option value="15">BALALAIKA</option><option value="10">BANJO</option><option value="20">BASS</option><option value="90">BASSOON</option><option value="900">BLANK SHEET M&hellip;</option><option value="601">BOOKS</option><option value="95">BOUZOUKI</option><option value="301">CELLO - VIOLO&hellip;</option><option value="97">CHARANGO</option><option value="270">CHOIR - VOCAL</option><option value="100" >CLARINET</option><option value="340">CORNET</option><option value="605">DOBRO - GUIT.&hellip;</option><option value="604">DOUBLE BASS</option><option value="250">DRUM</option><option value="158">DULCIMER</option><option value="310">ENGLISH HORN</option><option value="609">EUPHONIUM</option><option value="330">FLUGELHORN</option><option value="120">FLUTE</option><option value="999">GUITAR</option><option value="265">HANDBELLS</option><option value="140">HARMONICA</option><option value="30">HARP</option><option value="210">HARPSICHORD</option><option value="290">HORN</option><option value="60">LUTE, THEORB</option><option value="50">MANDOLIN</option><option value="631">MARCHING BAND</option><option value="608">MARIMBA</option><option value="150">OBOE</option><option value="240">ORCHESTRA - B&hellip;</option><option value="220">ORGAN - ORGAO</option><option value="300">OTHER INSTRUM&hellip;</option><option value="400">PANPIPES</option><option value="260">PERCUSSION</option><option value="70">PIANO</option><option value="130">RECORDER</option><option value="160">SAXOPHONE</option><option value="170">TROMBONE</option><option value="180">TRUMPET</option><option value="190">TUBA</option><option value="256">UKULELE</option><option value="93">VIBRAPHONE</option><option value="320">VIOLA</option><option value="321">VIOLA DA GAMB&hellip;</option><option value="80">VIOLIN - FIDD&hellip;</option><option value="607">XYLOPHONE</option><option value="99">ZITHER</option></select>
+
+
+<font class=dp>
+ 
+<a href="//www.free-scores.com/index_uk.php" class="bouton_submit_menu_jaune" style="display:inline">
+<div class='icone_svg_menu'><svg xmlns='https://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' style='vertical-align:middle'><path d='M12,3c0,0-6.186,5.34-9.643,8.232C2.154,11.416,2,11.684,2,12c0,0.553,0.447,1,1,1h2v7c0,0.553,0.447,1,1,1h3  c0.553,0,1-0.448,1-1v-4h4v4c0,0.552,0.447,1,1,1h3c0.553,0,1-0.447,1-1v-7h2c0.553,0,1-0.447,1-1c0-0.316-0.154-0.584-0.383-0.768  C18.184,8.34,12,3,12,3z' stroke-width='0.2' stroke='#fff' fill='#FF9900'></path></svg></div>
+</a> <font color="#ff9900">|</font>
+
+<a href="//www.free-scores.com/nouveautes_uk.php?temps=1" class="bouton_submit_menu_jaune" style="display:inline">NEW ADDITIONS</a> <font color="#ff9900">|</font>  
+
+
+<div class="dropdown"><a href="//www.free-scores.com/free-sheet-music_composers.php" class="bouton_submit_menu_jaune" style="display:inline">COMPOSERS</a> <font color="#ff9900">|</font>
+<div class="dropdown-content" style='min-width: 270px;'>
+<a href='//www.free-scores.com/free-sheet-music_composers.php?actifs=1' class="bouton_submit_menu_jaune">Member composers</a>
+<a href='//www.free-scores.com/free-sheet-music_composers.php?historiques=1' class="bouton_submit_menu_jaune">Historical composers</a>
+<a href='//www.free-scores.com/free-sheet-music_composers.php' class="bouton_submit_menu_jaune"><b>All composers</b></a>
+
+</div></div>
+
+
+<div class="dropdown"><a href="#" class="bouton_submit_menu_jaune" style="display:inline">GENRES</a> <font color="#ff9900">|</font> 
+<div class="dropdown-content" style='min-width: 450px;'>
+<div style='display:block;float:left;width:25%'>    
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Early+20th+century' class="bouton_submit_menu_jaune"><b>20th century</b></a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Afro-Americans' class="bouton_submit_menu_jaune">Afro-americans</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Ballad' class="bouton_submit_menu_jaune">Ballad</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Baroque' class="bouton_submit_menu_jaune"><b>Baroque</b></a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Country+-+Bluegrass' class="bouton_submit_menu_jaune">Bluegrass</a>
+
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Blues' class="bouton_submit_menu_jaune">Blues</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Brazilian+-+Choro+-+Chorinho' class="bouton_submit_menu_jaune">Brazilian/Choro</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Celtic' class="bouton_submit_menu_jaune">Celtic</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Celebratory' class="bouton_submit_menu_jaune">Celebrations</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Classical' class="bouton_submit_menu_jaune"><b>Classical</b></a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Modern+classical' class="bouton_submit_menu_jaune"><b>Classical modern</b></a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Contemporary' class="bouton_submit_menu_jaune"><b>Contemporary</b></a>
+
+
+
+<a href='//www.free-scores.com/free-sheet-music.php?genre=National+Anthems' class="bouton_submit_menu_jaune">National Anthems</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Jazz' class="bouton_submit_menu_jaune">Jazz</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=New+age+-+Ambient' class="bouton_submit_menu_jaune">New age</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Opera' class="bouton_submit_menu_jaune">Opera</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Ragtime' class="bouton_submit_menu_jaune">Ragtime</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Renaissance' class="bouton_submit_menu_jaune"><b>Renaissance</b></a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Romantic' class="bouton_submit_menu_jaune"><b>Romantic</b></a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Sonata' class="bouton_submit_menu_jaune">Sonata</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Tango' class="bouton_submit_menu_jaune">Tango</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Traditional' class="bouton_submit_menu_jaune"><b>Traditional</b></a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Waltz' class="bouton_submit_menu_jaune">Waltz</a>
+</div>
+
+<div style='display:block;float:left;width:25%'>
+
+
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Occitan+song' class="bouton_submit_menu_jaune">Occitan song</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Song' class="bouton_submit_menu_jaune">Song</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Chinese+Traditional' class="bouton_submit_menu_jaune">Chinese traditional</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Ethnic' class="bouton_submit_menu_jaune">Ethnic</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Jewish+-+Klezmer' class="bouton_submit_menu_jaune">Klezmer</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Flamenco' class="bouton_submit_menu_jaune">Flamenco</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Folk' class="bouton_submit_menu_jaune">Folk</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Japanese+Traditional+Music' class="bouton_submit_menu_jaune">Japanese traditional</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=March' class="bouton_submit_menu_jaune">March</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Medieval' class="bouton_submit_menu_jaune">Medieval</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Musette' class="bouton_submit_menu_jaune">Musette</a>
+
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Orientale' class="bouton_submit_menu_jaune">Orientale</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Pasodoble' class="bouton_submit_menu_jaune">Pasodoble</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=French+popular+song' class="bouton_submit_menu_jaune">French popular</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Popular+-+Dance' class="bouton_submit_menu_jaune">Popular Dance</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Reggae' class="bouton_submit_menu_jaune">Reggae</a>
+
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Swing' class="bouton_submit_menu_jaune">Swing</a>
+
+
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Latin' class="bouton_submit_menu_jaune">Latin/World</a>
+</div>
+
+<div style='display:block;float:right;width:25%'><span class='d'><b>INSTRUCTIONAL</b>:</span><br>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Blank+sheet+music' class="bouton_submit_menu_jaune">Blank sheet music</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Children' class="bouton_submit_menu_jaune">Children</a>
+<a href='//www.free-scores.com/free-sheet-music.php?instrument_ID=6595&CATEGORIE=601' class="bouton_submit_menu_jaune">Dictionaries</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Instructional' class="bouton_submit_menu_jaune">Instructional methods</a>
+<a href='//www.free-scores.com/free-sheet-music.php?instrument_ID=6046&CATEGORIE=640' class="bouton_submit_menu_jaune">Music theory</a>
+<a href='//www.free-scores.com/free-sheet-music.php?instrument_ID=7159&CATEGORIE=601' class="bouton_submit_menu_jaune">Musicology</a>
+<a href='//www.free-scores.com/free-sheet-musicphp?instrument_ID=8968&CATEGORIE=640' class="bouton_submit_menu_jaune">Rhythmic Solfege</a>
+<a href='//www.free-scores.com/free-sheet-music.php?instrument_ID=6045&CATEGORIE=640' class="bouton_submit_menu_jaune">Solfeges</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Studies' class="bouton_submit_menu_jaune">Studies</a>
+</div>
+
+
+
+<div style='display:block;float:right;width:25%'><span class='d'><b>SACRED</b>:</span><br>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=African+Traditional+Hymns' class="bouton_submit_menu_jaune">African Hymns</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Chassidic' class="bouton_submit_menu_jaune">Chassidic</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Christian' class="bouton_submit_menu_jaune">Christian</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Christmas+-+Carols' class="bouton_submit_menu_jaune"><b>Christmas</b> <svg xmlns='https://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' style='vertical-align:middle'><path d='M12 2 L2 22 L22 22 Z M10 22 V24 H14 V22 H10 Z M8 12 m -1,0 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0 M8 11 L8 8 M14 16 m -1,0 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0 M14 15 L14 12 M10 18 m -1,0 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0 M10 17 L10 14 M16 14 m -1,0 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0 M16 13 L16 10' stroke-width='0.2' stroke='#669900' fill='#669900'></path></svg></a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Gospel' class="bouton_submit_menu_jaune">Gospel</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Gregorian' class="bouton_submit_menu_jaune">Gregorian</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Israeli' class="bouton_submit_menu_jaune">Israeli</a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Hymn+-+Sacred' class="bouton_submit_menu_jaune"><b>Sacred Hymns</b></a>
+<a href='//www.free-scores.com/free-sheet-music.php?genre=Wedding+music' class="bouton_submit_menu_jaune">Wedding</a>
+
+
+
+</div>
+</div>
+</div>
+
+
+<div class="dropdown"><a href="#" class="bouton_submit_menu_jaune" style="display:inline">DIFFICULTY</a> <font color="#99cc00">|</font> 
+<div class="dropdown-content" style='min-width: 270px;'>
+<div style='display:block;float:left;width:70%'>    
+<a href='//www.free-scores.com/free-sheet-music.php?niveau=1' class="bouton_submit_menu_jaune">Beginner</a>
+<a href='//www.free-scores.com/free-sheet-music.php?niveau=2' class="bouton_submit_menu_jaune">Easy</a>
+<a href='//www.free-scores.com/free-sheet-music.php?niveau=3' class="bouton_submit_menu_jaune">Intermediate</a>
+<a href='//www.free-scores.com/free-sheet-music.php?niveau=4' class="bouton_submit_menu_jaune">Intermediate/advanced</a>
+<a href='//www.free-scores.com/free-sheet-music.php?niveau=5' class="bouton_submit_menu_jaune">Advanced</a>
+<a href='//www.free-scores.com/free-sheet-music.php?niveau=10' class="bouton_submit_menu_jaune"><i>Not defined (help evaluate)</i></a>
+
+</div>
+</div>
+</div>
+
+
+<div class="dropdown"><a href="//www.free-scores.com/free-sheet-music.php?ordrepar=clicks" class="bouton_submit_menu_jaune" style="display:inline">TOP DOWNLOADS</a> <font color="#ff9900">|</font>  
+<div class="dropdown-content" style='min-width: 270px;'>
+<a href='//www.free-scores.com/free-sheet-music.php?ordrepar=clicks' class="bouton_submit_menu_jaune">TOP DOWNLOADS</a>
+<a href='//www.free-scores.com/top-freesheetmusic.php' class="bouton_submit_menu_jaune">TOP 100 SOCIAL RANKING</a>
+</div></div>
+
+
+
+<div class="dropdown"><a href="//www.free-scores.com/formations-uk.php" class="bouton_submit_menu_jaune" style="display:inline">INSTRUMENTATIONS</a> <font color="#ff9900">|</font>  
+<div class="dropdown-content" style='min-width: 270px;'>
+
+<a href='//www.free-scores.com/formations-uk.php?formation=1' class="bouton_submit_menu_jaune">SOLO</a>
+<a href='//www.free-scores.com/formations-uk.php?formation=2' class="bouton_submit_menu_jaune">DUET</a>
+<a href='//www.free-scores.com/formations-uk.php?formation=3' class="bouton_submit_menu_jaune">TRIO</a>
+<a href='//www.free-scores.com/formations-uk.php?formation=4' class="bouton_submit_menu_jaune">QUARTET</a>
+<a href='//www.free-scores.com/formations-uk.php?formation=5' class="bouton_submit_menu_jaune">QUINTET</a>
+<a href='//www.free-scores.com/formations-uk.php?formation=6' class="bouton_submit_menu_jaune">ENSEMBLE</a>
+<a href='//www.free-scores.com/formations-uk.php' class="bouton_submit_menu_jaune"><b>ALL</b></a>
+</div></div>
+<a href="//www.free-scores.com/power-search-uk.php" class="bouton_submit_menu_jaune"  style="display:inline">ADVANCED SEARCH</a> <font color="#ff9900">|</font> 
+
+
+<div class="dropdown"><a href="//www.free-scores.com/formations-uk.php" class="bouton_submit_menu_jaune" style="display:inline">OTHER</a> <font color="#ff9900">|</font>
+<div class="dropdown-content" style='min-width: 270px;'>
+<a href='//www.free-scores.com/sheet-music-reader-musicxml.php' class="bouton_submit_menu_jaune">Interactive Score Reader</a>
+<a href='//www.free-scores.com/blanksheetmusic-generator.php' class="bouton_submit_menu_jaune">Staff paper generator</a>
+<a href='//www.free-scores.com/onlinetuner.php' class="bouton_submit_menu_jaune">Online Tuner</a>
+
+<a href='//www.free-scores.com/metronome-en.php' class="bouton_submit_menu_jaune">Online Metronome</a>
+<a href='//www.free-scores.com/notesgame.php' class="bouton_submit_menu_jaune">Game "NoteQuest"</a>
+
+<a href='//www.free-scores.com/directory-free-sheet-music.php' class="bouton_submit_menu_jaune">Web directory</a>
+<a href='//www.free-scores.com/about.php' class="bouton_submit_menu_jaune">About</a>
+<a href='//www.free-scores.com/licences-uk.php' class="bouton_submit_menu_jaune">License service</a>
+
+<a href='//www.free-scores.com/mentions-legales-uk.php' class="bouton_submit_menu_jaune">Contact</a>
+</div></div>
+
+
+
+
+</font>
+
+</form>
+</div>
+</div>
+</div>
+
+
+
+<div class="menus_principaux"><a href="//www.free-scores.com/boutique/digital-sheet-music.php" class='main-service-button green-border'><div style='display: flex;flex-wrap: nowrap;justify-content: center;'><div><div class='visible_full'><img src='https://img.free-scores.com/IMAGES/icon_vda.png' class='picto'></div></div> <div> Digital Sheet Music<span class="small-text">2,000,000+</span></div></div></a>
+
+<div class="submenu submenu-2">
+<div style='width:100%;text-align:middle;vertical-align:middle;margin:5px'><font class='dp'>
+<a href="//www.free-scores.com/boutique/digital-sheet-music.php" class="bouton_submit_menu_noir" style="display:inline">
+<div class='icone_svg_menu'><svg xmlns='https://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' style='vertical-align:middle'><path d='M12,3c0,0-6.186,5.34-9.643,8.232C2.154,11.416,2,11.684,2,12c0,0.553,0.447,1,1,1h2v7c0,0.553,0.447,1,1,1h3  c0.553,0,1-0.448,1-1v-4h4v4c0,0.552,0.447,1,1,1h3c0.553,0,1-0.447,1-1v-7h2c0.553,0,1-0.447,1-1c0-0.316-0.154-0.584-0.383-0.768  C18.184,8.34,12,3,12,3z' stroke-width='0.2' stroke='#fff' fill='#99cc00'></path></svg></div></a> <font color="#99cc00">|</font> 
+<a href="//www.free-scores.com/boutique/digital-sheet-music.php?ordrepar=new" class="bouton_submit_menu_noir" style="display:inline">NEW ADDITIONS</a> <font color="#99cc00">|</font> 
+
+
+<div class="dropdown"><a href="//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=70" class="bouton_submit_menu_noir" style="display:inline">PIANO</a> <font color="#99cc00">|</font> 
+<div class="dropdown-content" style='min-width: 330px;'>
+<div style='display:block;float:left;width:110px'>   
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=70' class="bouton_submit_menu_noir"><b>Piano sheet music</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=70&instrumentation=4' class="bouton_submit_menu_noir">Piano solo</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=70&instrumentation=2' class="bouton_submit_menu_noir">Piano, Voice, Guitar</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=70&instrumentation=54' class="bouton_submit_menu_noir">Piano duet</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=70&instrumentation=126' class="bouton_submit_menu_noir">Easy Piano</a>
+
+</div>
+<div style='display:block;float:right;width:110px'>  
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=70&style=1' class="bouton_submit_menu_noir"><b>Piano Method</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=70&style=1' class="bouton_submit_menu_noir">Methods</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=70&style=55' class="bouton_submit_menu_noir">Studies</a>
+</div>
+<div style='display:block;float:right;width:110px'>  
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=220' class="bouton_submit_menu_noir"><b>Organ sheet music</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=220&instrumentation=65' class="bouton_submit_menu_noir">Organ solo</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=220&instrumentation=182' class="bouton_submit_menu_noir">Organ duet</a>
+
+</div>
+</div>
+</div>
+
+
+<div class="dropdown"><a href="#" class="bouton_submit_menu_noir" style="display:inline">INSTRUMENTAL</a> <font color="#99cc00">|</font> 
+<div class="dropdown-content" style='min-width: 650px;'>
+<div style='display:block;float:left;width:108px'>   
+<a href='#' class="d" style='font-weight:bold;color:#ccc;'><b>Strings</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=80' class="bouton_submit_menu_noir">Violin</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=320' class="bouton_submit_menu_noir">Viola</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=301' class="bouton_submit_menu_noir">Cello</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=604' class="bouton_submit_menu_noir">Doublebass</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=30' class="bouton_submit_menu_noir">Harp</a>
+
+</div>
+<div style='display:block;float:right;width:108px'>  
+<a href='#' class="d" style='font-weight:bold;color:#ccc;'><b>Woodwinds</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=120' class="bouton_submit_menu_noir">Flute</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=100' class="bouton_submit_menu_noir">Clarinet</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=150' class="bouton_submit_menu_noir">Oboe</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=160' class="bouton_submit_menu_noir">Saxophone</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=90' class="bouton_submit_menu_noir">Bassoon</a>
+</div>
+<div style='display:block;float:right;width:108px'>  
+<a href='#' class="d" style='font-weight:bold;color:#ccc;'><b>Brass</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=180' class="bouton_submit_menu_noir">Trumpet</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=290' class="bouton_submit_menu_noir">Horn</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=170' class="bouton_submit_menu_noir">Trombone</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=190' class="bouton_submit_menu_noir">Tuba</a>
+</div>
+<div style='display:block;float:right;width:108px'>  
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=999' class="bouton_submit_menu_noir"><b>Guitar</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=999&instrumentation=102' class="bouton_submit_menu_noir">Guitar Tabs</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=999&instrumentation=2' class="bouton_submit_menu_noir">Piano, Voice, Guitar</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=20' class="bouton_submit_menu_noir">Bass</a>
+</div>
+<div style='display:block;float:right;width:108px'>  
+<a href='#' class="d" style='font-weight:bold;color:#ccc;'><b>Folk</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=200' class="bouton_submit_menu_noir">Accordion</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=10' class="bouton_submit_menu_noir">Banjo</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=158' class="bouton_submit_menu_noir">Dulcimer</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=256' class="bouton_submit_menu_noir">Ukulele</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=50' class="bouton_submit_menu_noir">Mandolin</a>
+</div>
+<div style='display:block;float:right;width:108px'>  
+<a href='#' class="d" style='font-weight:bold;color:#ccc;'><b>Chamber music</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=80&instrumentation=87' class="bouton_submit_menu_noir">String quartet</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=120&instrumentation=99' class="bouton_submit_menu_noir">Wind quintet</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=180&instrumentation=101' class="bouton_submit_menu_noir">Brass quintet</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=265' class="bouton_submit_menu_noir">Handbells</a>
+
+</div>
+</div>
+</div>
+
+
+
+
+<div class="dropdown"><a href="//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=240" class="bouton_submit_menu_noir" style="display:inline">ORCHESTRA</a> <font color="#99cc00">|</font> 
+<div class="dropdown-content" style='min-width: 220px;'>
+<div style='display:block;float:left;width:110px'>   
+
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=240&instrumentation=52' class="bouton_submit_menu_noir">Concert Band</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=240&instrumentation=114' class="bouton_submit_menu_noir">Jazz Ensemble</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=240&instrumentation=975' class="bouton_submit_menu_noir">Jazz combo</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=240&instrumentation=61' class="bouton_submit_menu_noir">Brass band</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=631' class="bouton_submit_menu_noir">Marching band</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=240&style=1' class="bouton_submit_menu_noir">Methods</a>
+</div>
+<div style='display:block;float:right;width:110px'>  
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=240&instrumentation=53' class="bouton_submit_menu_noir">Orchestra</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=240&instrumentation=124' class="bouton_submit_menu_noir">String orchestra</a>
+</div>
+</div>
+</div>
+
+
+<div class="dropdown"><a href="//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=270" class="bouton_submit_menu_noir" style="display:inline">CHOIR / VOICE</a> <font color="#99cc00">|</font> 
+<div class="dropdown-content" style='min-width: 220px;'>
+<div style='display:block;float:left;width:110px'>   
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=270' class="bouton_submit_menu_noir"><b>Choir</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=270&instrumentation=23' class="bouton_submit_menu_noir">SATB</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=270&instrumentation=47' class="bouton_submit_menu_noir">TTBB</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=270&instrumentation=729' class="bouton_submit_menu_noir">SSAA</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=270&instrumentation=743' class="bouton_submit_menu_noir">3-parts</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=270&instrumentation=201' class="bouton_submit_menu_noir">2-parts</a>
+</div>
+<div style='display:block;float:right;width:110px'>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=270' class="bouton_submit_menu_noir"><b>Voice</b></a>  
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=270&instrumentation=2' class="bouton_submit_menu_noir">Piano, Voice, Guitar</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=270&instrumentation=7' class="bouton_submit_menu_noir">Piano, Voice</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=270&instrumentation=76' class="bouton_submit_menu_noir">Voice solo</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?CATEGORIE=270&instrumentation=171' class="bouton_submit_menu_noir">Voice duet</a>
+</div>
+</div>
+</div>
+
+
+
+
+
+<div class="dropdown"><a href="#" class="bouton_submit_menu_noir" style="display:inline">GENRES</a> <font color="#99cc00">|</font> 
+<div class="dropdown-content" style='min-width: 270px;'>
+<div style='display:block;float:left;width:50%'>    
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=42' class="bouton_submit_menu_noir"><b>20th century</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=58' class="bouton_submit_menu_noir">Asian</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=993' class="bouton_submit_menu_noir">Bluegrass</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=12' class="bouton_submit_menu_noir">Blues</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=35' class="bouton_submit_menu_noir"><b>Broadway / Musicals</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=14' class="bouton_submit_menu_noir"><b>Celtic</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=6' class="bouton_submit_menu_noir"><b>Christmas</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=2' class="bouton_submit_menu_noir"><b>Classical</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=32' class="bouton_submit_menu_noir">Children</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=16' class="bouton_submit_menu_noir">Country</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=994' class="bouton_submit_menu_noir">Fingerpicking</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=18' class="bouton_submit_menu_noir">Flamenco</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=34' class="bouton_submit_menu_noir">Folk Rock</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=19' class="bouton_submit_menu_noir"><b>French songs</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=31' class="bouton_submit_menu_noir">Funk</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=24' class="bouton_submit_menu_noir">Gospel</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=59' class="bouton_submit_menu_noir">Halloween</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=1' class="bouton_submit_menu_noir"><b>Instructional</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=55' class="bouton_submit_menu_noir">Instructional - Studies</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=7' class="bouton_submit_menu_noir"><b>Jazz</b></a>
+
+</div>
+<div style='display:block;float:right;width:50%'>  
+
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=30' class="bouton_submit_menu_noir">Klezmer</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=5' class="bouton_submit_menu_noir"><b>Latin / World</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=62' class="bouton_submit_menu_noir">Latin Pop</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=61' class="bouton_submit_menu_noir">Medieval / Renaissance</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=650' class="bouton_submit_menu_noir">Metal / Hard</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=9' class="bouton_submit_menu_noir"><b>Movie / TV</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=20' class="bouton_submit_menu_noir"><b>Movie Walt Disney</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=13' class="bouton_submit_menu_noir"><b>New Age</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=25' class="bouton_submit_menu_noir">Patriotic</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=40' class="bouton_submit_menu_noir"><b>Pop</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=11' class="bouton_submit_menu_noir">Reggae</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=4' class="bouton_submit_menu_noir"><b>Rock</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=38' class="bouton_submit_menu_noir"><b>Rock Alt.</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=17' class="bouton_submit_menu_noir"><b>Sacred / Church</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=26' class="bouton_submit_menu_noir">Soul / Rap</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=22' class="bouton_submit_menu_noir">Tango</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=43' class="bouton_submit_menu_noir">Traditional</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=53' class="bouton_submit_menu_noir"><b>Video Game</b></a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?style=10' class="bouton_submit_menu_noir">Wedding / Love</a>
+</div>
+</div>
+</div>
+
+<div class="dropdown"><a href="//www.free-scores.com/boutique/digital-sheet-music.php?switch_partition=2&search=christmas&ordrepar=best" class="bouton_submit_menu_noir" style="display:inline">CHRISTMAS</a> <font color="#99cc00">|</font> 
+<div class="dropdown-content" style='min-width: 350px;'>
+<div style='display:block;float:right;width:100%'>  
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?search=christmas&ordrepar=best' class="bouton_submit_menu_noir">All Christmas</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?search=christmas&CATEGORIE=70&ordrepar=best' class="bouton_submit_menu_noir">Christmas Piano</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?search=christmas&CATEGORIE=999&ordrepar=best' class="bouton_submit_menu_noir">Christmas Guitar</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?search=christmas&CATEGORIE=270&ordrepar=best' class="bouton_submit_menu_noir">Christmas Voice/Choir</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?search=Halloween&ordrepar=best' class="bouton_submit_menu_noir">Halloween</a>
+</div>
+
+</div></div>
+
+<div class="dropdown"><a href="#" class="bouton_submit_menu_noir" style="display:inline">DIFFICULTY</a> <font color="#99cc00">|</font> 
+<div class="dropdown-content" style='min-width: 270px;'>
+<div style='display:block;float:left;width:50%'>    
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?niveau=1&ordrepar=best' class="bouton_submit_menu_noir">Beginner</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?niveau=2&ordrepar=best' class="bouton_submit_menu_noir">Easy</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?niveau=3&ordrepar=best' class="bouton_submit_menu_noir">Intermediate</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?niveau=4&ordrepar=best' class="bouton_submit_menu_noir">Intermediate/advanced</a>
+<a href='//www.free-scores.com/boutique/digital-sheet-music.php?niveau=5&ordrepar=best' class="bouton_submit_menu_noir">Advanced</a>
+</div>
+</div>
+</div>
+<a href="//www.free-scores.com/boutique/power-search-uk.php?domaine=3" class="bouton_submit_menu_noir"  style="display:inline">ADV.SEARCH</a></font>
+</div>
+
+
+
+</div>
+</div>
+
+
+
+<div class="menus_principaux"><a href="//www.free-scores.com/boutique/boutique1-uk.php" class='main-service-button red-border'><div style='display: flex;flex-wrap: nowrap;justify-content: center;'><div><div class='visible_full'><img src='https://img.free-scores.com/IMAGES/icon_vpe.png' class='picto'></div></div> <div> Sheet Music Books<span class="small-text">1,000,000+</span></div></div></a>
+
+<div class="submenu submenu-3">
+<div style='width:100%;text-align:middle;vertical-align:middle;margin:5px'><font class=dp>
+<a href="//www.free-scores.com/boutique/boutique-search-engine-uk.php?ordrepar=new" class="bouton_submit_menu_rouge" style="display:inline">NEW ADDITIONS</a> <font color="#FF3300">|</font>  
+<div class="dropdown"><a href="//www.free-scores.com/boutique/boutique-uk.php?CATEGORIE=70" class="bouton_submit_menu_rouge" style="display:inline">PIANO</a> <font color="#FF3300">|</font>
+<div class="dropdown-content">
+<a href='//www.free-scores.com/boutique/boutique-uk.php?CATEGORIE=70' class="bouton_submit_menu_rouge">Piano (all)</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=70&niveau=1' class="bouton_submit_menu_rouge">Beginner Piano</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=70&niveau=2' class="bouton_submit_menu_rouge">Easy Piano</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=70&instrumentation=Piano+solo' class="bouton_submit_menu_rouge">Piano Solo</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=70&instrumentation=Piano%2C+Vocal+and+Guitar' class="bouton_submit_menu_rouge">PVG</a>
+<a href='//www.free-scores.com/boutique/boutique-uk-bestseller.php?CATEGORIE=70' class="bouton_submit_menu_rouge">Best Sellers</a>
+<a href='//www.free-scores.com/boutique/boutique-uk-divers.php?CATEGORIE=70&ordrepar=new' class="bouton_submit_menu_rouge">New additions</a>
+</div>
+</div>
+
+<div class="dropdown"><a href="//www.free-scores.com/boutique/boutique-uk.php?CATEGORIE=999" class="bouton_submit_menu_rouge" style="display:inline">GUITAR</a> <font color="#FF3300">|</font>
+<div class="dropdown-content">
+<a href='//www.free-scores.com/boutique/boutique-uk.php?CATEGORIE=999' class="bouton_submit_menu_rouge">Guitar (all)</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=999&niveau=1' class="bouton_submit_menu_rouge">Beginner Guitar</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=999&niveau=2' class="bouton_submit_menu_rouge">Easy Guitar</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=999&instrumentation=Guitar+notes+and+tablatures' class="bouton_submit_menu_rouge">Guitar TAB</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=999&instrumentation=Guitar' class="bouton_submit_menu_rouge">Guitar (without TAB)</a>
+<a href='//www.free-scores.com/boutique/boutique-bestseller.php?CATEGORIE=999' class="bouton_submit_menu_rouge">Best Sellers</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=999&ordrepar=new' class="bouton_submit_menu_rouge">New additions</a>
+</div>
+</div>
+
+<div class="dropdown"><a href="//www.free-scores.com/boutique/boutique-uk.php?CATEGORIE=270" class="bouton_submit_menu_rouge" style="display:inline">VOICE/CHORAL</a> <font color="#FF3300">|</font>
+<div class="dropdown-content">
+<a href='//www.free-scores.com/boutique/boutique-uk.php?CATEGORIE=270' class="bouton_submit_menu_rouge">Choral & Voice (all)</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=270&instrumentation=Voice+solo' class="bouton_submit_menu_rouge">Solo voice</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=270&instrumentation=Choral+2-part' class="bouton_submit_menu_rouge">Choral 2-Part</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=270&instrumentation=Choral+3-part' class="bouton_submit_menu_rouge">Choral 3-Part</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=270&instrumentation=Choral+SATB' class="bouton_submit_menu_rouge">Choral SATB</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=270&instrumentation=Choral+TTBB' class="bouton_submit_menu_rouge">Choral TTBB</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=270&instrumentation=Choral+SSAA' class="bouton_submit_menu_rouge">Choral SSAA</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=270&instrumentation=Choral+Unison' class="bouton_submit_menu_rouge">Choral UNISON</a>
+<a href='//www.free-scores.com/boutique/boutique-uk-bestseller.php?CATEGORIE=270' class="bouton_submit_menu_rouge">Best Sellers</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=270&ordrepar=new' class="bouton_submit_menu_rouge">New additions</a>
+</div>
+</div>
+
+
+<div class="dropdown"><a href="#" class="bouton_submit_menu_rouge" style="display:inline">INSTRUMENTS</a> <font color="#FF3300">|</font> 
+<div class="dropdown-content" style='width:auto;height:400px; overflow:auto;'>
+<div class='flex-container'>
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>KEYBOARDS</b></font>  
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=200' class="bouton_submit_menu_rouge">ACCORDION</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=210' class="bouton_submit_menu_rouge">HARPSICHORD</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=220' class="bouton_submit_menu_rouge">ORGAN</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=70' class="bouton_submit_menu_rouge">PIANO</a>
+
+</div>
+<div class='flex-item_accueil flex_tiers'>
+
+<font class="gc"><b>GUITARS</b></font> 
+
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=10' class="bouton_submit_menu_rouge">BANJO</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=20' class="bouton_submit_menu_rouge">BASS</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=605' class="bouton_submit_menu_rouge">DOBRO</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=999' class="bouton_submit_menu_rouge">GUITAR</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=256' class="bouton_submit_menu_rouge">UKULELE</a>
+</div>
+<div class='flex-item_accueil flex_tiers'>
+
+<font class="gc"><b>VOICE</b></font> 
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=270' class="bouton_submit_menu_rouge">CHOIR - VOICE</a>
+</div>
+<div class='flex-item_accueil flex_tiers'>
+
+<font class="gc"><b>STRINGS</b></font> 
+
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=604' class="bouton_submit_menu_rouge">DOUBLEBASS</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=30' class="bouton_submit_menu_rouge" >HARP</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=320' class="bouton_submit_menu_rouge">VIOLA</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=321' class="bouton_submit_menu_rouge">VIOLA DE GAMBE</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=80' class="bouton_submit_menu_rouge">VIOLIN</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=301' class="bouton_submit_menu_rouge">VIOLONCELLO</a>
+</div>
+<div class='flex-item_accueil flex_tiers'>
+
+<font class="gc"><b>WIND</b></font> 
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=90' class="bouton_submit_menu_rouge">BASSOON</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=100' class="bouton_submit_menu_rouge">CLARINETT</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=310' class="bouton_submit_menu_rouge">ENGLISH HORN</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=120' class="bouton_submit_menu_rouge">FLUTE</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=140' class="bouton_submit_menu_rouge">HARMONICA</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=150' class="bouton_submit_menu_rouge">OBOE</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=400' class="bouton_submit_menu_rouge">PANFLUTE</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=130' class="bouton_submit_menu_rouge">RECORDER</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=160' class="bouton_submit_menu_rouge">SAXOPHONE</a>
+</div>
+<div class='flex-item_accueil flex_tiers'>
+
+
+<font class="gc"><b>ENSEMBLE</b></font>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=240' class="bouton_submit_menu_rouge">ORCHESTRA</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=631' class="bouton_submit_menu_rouge">MARCHING BAND</a>
+</div>
+<div class='flex-item_accueil flex_tiers'>
+
+<font class="gc"><b>BRASS</b></font> 
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=330' class="bouton_submit_menu_rouge">BUGLE</a>
+
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=340' class="bouton_submit_menu_rouge">CORNET</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=609' class="bouton_submit_menu_rouge">EUPHONIUM</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=290' class="bouton_submit_menu_rouge">FRENCH HORN</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=170' class="bouton_submit_menu_rouge">TROMBONE</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=180' class="bouton_submit_menu_rouge">TRUMPET</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=190' class="bouton_submit_menu_rouge">TUBA</a>
+
+</div>
+<div class='flex-item_accueil flex_tiers'>
+
+
+<font class="gc"><b>FOLK</b></font> 
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=15' class="bouton_submit_menu_rouge">BALALAIKA</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=95' class="bouton_submit_menu_rouge">BOUZOUKI</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=97' class="bouton_submit_menu_rouge">CHARANGO</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=99' class="bouton_submit_menu_rouge">CITHAR</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=158' class="bouton_submit_menu_rouge">DULCIMER</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=60' class="bouton_submit_menu_rouge">LUTH, THEORBE</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=50' class="bouton_submit_menu_rouge">MANDOLIN</a>
+</div>
+<div class='flex-item_accueil flex_tiers'>
+
+<font class="gc"><b>PERCUSSIONS</b></font> 
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=250' class="bouton_submit_menu_rouge">DRUM</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=265' class="bouton_submit_menu_rouge">HANDBELLS</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=608' class="bouton_submit_menu_rouge">MARIMBA</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=260' class="bouton_submit_menu_rouge">PERCUSSION</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=93' class="bouton_submit_menu_rouge">VIBRAPHONE</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=607' class="bouton_submit_menu_rouge">XYLOPHONE</a>
+
+
+</div>
+<div class='flex-item_accueil flex_tiers'>
+
+<font class="gc"><b>OTHERS</b></font>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=300' class="bouton_submit_menu_rouge">OTHER INSTRU&hellip;</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=640' class="bouton_submit_menu_rouge">MUSIC COURSE</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=601' class="bouton_submit_menu_rouge">BOOKS</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=900' class="bouton_submit_menu_rouge">BLANK SHEET MUSIC</a>
+</div>
+</div>
+</div>
+</div>
+
+<a href="//www.free-scores.com/boutique/formations_uk.php" class="bouton_submit_menu_rouge" style="display:inline">INSTRUMENTATIONS</a> <font color="#FF3300">|</font>  
+<a href="//www.free-scores.com/boutique/boutique-search-engine-uk.php?ordrepar=best" class="bouton_submit_menu_rouge" style="display:inline">BEST SELLERS</a> <font color="#FF3300">|</font> 
+<a href="//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=6" class="bouton_submit_menu_rouge" style="display:inline">CHRISTMAS</a> <font color="#FF3300">|</font>
+
+
+<div class="dropdown"><a href="#" class="bouton_submit_menu_rouge" style="display:inline">GENRES</a> <font color="#FF3300">|</font> 
+<div class="dropdown-content" style='min-width: 270px;'>
+<div style='display:block;float:left;width:50%'>    
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=42' class="bouton_submit_menu_rouge"><b>20th century</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=71' class="bouton_submit_menu_rouge">African</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=58' class="bouton_submit_menu_rouge">Asian</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=993' class="bouton_submit_menu_rouge">Bluegrass</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=12' class="bouton_submit_menu_rouge">Blues</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=35' class="bouton_submit_menu_rouge"><b>Broadway / Musical</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=14' class="bouton_submit_menu_rouge"><b>Celtic</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=6' class="bouton_submit_menu_rouge"><b>Christmas</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=2' class="bouton_submit_menu_rouge"><b>Classical</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=16' class="bouton_submit_menu_rouge">Country</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=32' class="bouton_submit_menu_rouge">Children</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=21' class="bouton_submit_menu_rouge">Eastern Europe</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=39' class="bouton_submit_menu_rouge">Exams</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=994' class="bouton_submit_menu_rouge">Fingerpicking</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=18' class="bouton_submit_menu_rouge">Flamenco</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=34' class="bouton_submit_menu_rouge">Folk Rock</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=19' class="bouton_submit_menu_rouge"><b>French songs</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=31' class="bouton_submit_menu_rouge">Funk</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=44' class="bouton_submit_menu_rouge">Gypsy jazz</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=24' class="bouton_submit_menu_rouge">Gospel</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=59' class="bouton_submit_menu_rouge">Halloween</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=1' class="bouton_submit_menu_rouge"><b>Instructional</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=55' class="bouton_submit_menu_rouge">Instructional - Studies</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=29' class="bouton_submit_menu_rouge">Instructional - Chords/Scales</a>
+
+
+</div>
+<div style='display:block;float:right;width:50%'>  
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=7' class="bouton_submit_menu_rouge"><b>Jazz</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=30' class="bouton_submit_menu_rouge">Klezmer</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=5' class="bouton_submit_menu_rouge"><b>Latin / World</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=62' class="bouton_submit_menu_rouge">Latin Pop</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=61' class="bouton_submit_menu_rouge">Medieval / Renaissance</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=650' class="bouton_submit_menu_rouge">Metal</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=9' class="bouton_submit_menu_rouge"><b>Movie / TV</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=20' class="bouton_submit_menu_rouge"><b>Movie Walt Disney</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=13' class="bouton_submit_menu_rouge"><b>New Age</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=25' class="bouton_submit_menu_rouge">Patriotic</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=40' class="bouton_submit_menu_rouge"><b>Pop</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=11' class="bouton_submit_menu_rouge">Reggae</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=4' class="bouton_submit_menu_rouge"><b>Rock</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=38' class="bouton_submit_menu_rouge"><b>Rock Alternative</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=17' class="bouton_submit_menu_rouge"><b>Sacred / Church</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=26' class="bouton_submit_menu_rouge">Soul / Rap</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=22' class="bouton_submit_menu_rouge">Tango</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=43' class="bouton_submit_menu_rouge">Traditional</a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=53' class="bouton_submit_menu_rouge"><b>Video Games</b></a>
+<a href='//www.free-scores.com/boutique/boutique-search-engine-uk.php?style=10' class="bouton_submit_menu_rouge">Wedding / Love</a>
+</div>
+</div>
+</div>
+
+
+<div class="dropdown"><a href="#" class="bouton_submit_menu_rouge" style="display:inline">SECTIONS</a> <font color="#FF3300">|</font> 
+<div class="dropdown-content">
+<a href="//www.free-scores.com/boutique/boutique-artiste-int1-uk.php" class="bouton_submit_menu_rouge" >ARTISTS</a>
+<a href="//www.free-scores.com/boutique/boutique-sheetmusic-publisher.php" class="bouton_submit_menu_rouge" >PUBLISHERS</a>
+<a href="//www.free-scores.com/boutique/classroom.php" class="bouton_submit_menu_rouge" >CLASSROOM</a>
+<a href="//www.free-scores.com/boutique/boutique-christmas.php?partition=1" class="bouton_submit_menu_rouge" >GIFT IDEAS</a>
+<a href="//www.free-scores.com/boutique/boutique-search-engine-uk.php?CATEGORIE=601&ordrepar=new" class="bouton_submit_menu_rouge" >BOOKS ABOUT MUSIC</a>
+<a href="//www.free-scores.com/boutique/play-along.php" class="bouton_submit_menu_rouge" >PLAY-ALONG</a>
+</div>
+</div>
+<a href="//www.free-scores.com/boutique/power-search-uk.php?domaine=1" class="bouton_submit_menu_rouge"  style="display:inline">ADV.SEARCH</a></font>
+<font color="#FF3300">|</font>
+
+<a  href="//www.free-scores.com/boutique/boutique1-uk.php" class="bouton_submit_menu_rouge" style="display:inline">
+<div class='icone_svg_menu'><svg xmlns='https://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' style='vertical-align:middle'><path d='M12,3c0,0-6.186,5.34-9.643,8.232C2.154,11.416,2,11.684,2,12c0,0.553,0.447,1,1,1h2v7c0,0.553,0.447,1,1,1h3  c0.553,0,1-0.448,1-1v-4h4v4c0,0.552,0.447,1,1,1h3c0.553,0,1-0.447,1-1v-7h2c0.553,0,1-0.447,1-1c0-0.316-0.154-0.584-0.383-0.768  C18.184,8.34,12,3,12,3z' stroke-width='0.2' stroke='#FFF' fill='#ff3300'></path></svg></div>
+</a> 
+
+</div>
+</div>
+</div>
+
+
+
+<div class="menus_principaux"><a href='//www.free-scores.com/musical-equipment/' class='main-service-button blue-border'><div style='display: flex;flex-wrap: nowrap;justify-content: center;'><div><div class='visible_full'><img src='https://img.free-scores.com/IMAGES/icon_vie.png' class='picto'></div></div> <div> Music Equipment<span class="small-text">200,000+</span></div></div></a>
+
+<div class="submenu submenu-4">
+<div style='width:100%;text-align:middle;vertical-align:middle;margin:5px'><font class=dp>
+
+<div class="dropdown"><a href="//www.free-scores.com/musical-equipment/1_guitars-basses.htm" class="bouton_submit_menu_bleu" style="display:inline"><img src='//www.free-scores.com/IMAGES/instruments/guitar_VI_200.png' style='height:20px;vertical-align:middle'> GUITAR</a> <font color="#006699">|</font> 
+<div class="dropdown-content" style='width:auto;height:400px; overflow:auto;'>
+<div class='flex-container'>
+
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>GUITARS</b></font>  
+
+<a href="//www.free-scores.com/musical-equipment/section_3_acoustic-guitars.htm" class="bouton_submit_menu_bleu">Acoustic Guitars</a>
+<a href="//www.free-scores.com/musical-equipment/section_2_classical-guitars.htm" class="bouton_submit_menu_bleu">Classical Guitars</a>
+<a href="//www.free-scores.com/musical-equipment/section_1_electric-guitars.htm" class="bouton_submit_menu_bleu">Electric Guitars</a>
+<a href="//www.free-scores.com/musical-equipment/section_631_electro-acoustic-guitars.htm" class="bouton_submit_menu_bleu">Electro-Acoustic Guitars</a>
+<a href="//www.free-scores.com/musical-equipment/section_8_other-guitars.htm" class="bouton_submit_menu_bleu">Other Guitars</a>
+</div>
+
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>GUITAR ACCESSORIES</b></font>  
+<a href="//www.free-scores.com/musical-equipment/section_16_guitar-accessories.htm" class="bouton_submit_menu_bleu">Accessories</a>
+<a href="//www.free-scores.com/musical-equipment/section_9_guitar-amps.htm" class="bouton_submit_menu_bleu">Amps</a>
+<a href="//www.free-scores.com/musical-equipment/section_695_guitar-care-products.htm" class="bouton_submit_menu_bleu">Care products</a>
+<a href="//www.free-scores.com/musical-equipment/section_12_guitar-effects.htm" class="bouton_submit_menu_bleu">Effect Pedals</a>
+<a href="//www.free-scores.com/musical-equipment/section_640_pedalboards-accessories.htm" class="bouton_submit_menu_bleu">Pedalboards</a>
+<a href="//www.free-scores.com/musical-equipment/section_13_pickups.htm" class="bouton_submit_menu_bleu">Pickups & Mics</a>
+<a href="//www.free-scores.com/musical-equipment/section_14_guitar-spare-parts.htm" class="bouton_submit_menu_bleu">Spare Parts</a>
+<a href="//www.free-scores.com/musical-equipment/section_11_strings.htm" class="bouton_submit_menu_bleu">Strings</a>
+</div>
+
+
+<div class='flex-item_accueil flex_tiers'>
+<font class="gc"><b>BASS GUITARS</b></font>  
+<a href="//www.free-scores.com/musical-equipment/section_740_bass-accessories.htm" class="bouton_submit_menu_bleu">Accessories</a>
+<a href="//www.free-scores.com/musical-equipment/section_746_acoustic-basses.htm" class="bouton_submit_menu_bleu">Acoustic Basses</a>
+<a href="//www.free-scores.com/musical-equipment/section_10_bass-amps.htm" class="bouton_submit_menu_bleu">Amps</a>
+<a href="//www.free-scores.com/musical-equipment/section_634_bass-effects.htm" class="bouton_submit_menu_bleu">Effect Pedals</a>
+<a href="//www.free-scores.com/musical-equipment/section_4_electric-basses.htm" class="bouton_submit_menu_bleu">Electric Basses</a>
+<a href="//www.free-scores.com/boutique/accessories_881_shop_20.htm" class="bouton_submit_menu_bleu">Spare Parts</a>
+
+</div>
+
+<div class='flex-item_accueil flex_tiers'>
+<font class="gc"><b>OTHERS</b></font> 
+<a href="//www.free-scores.com/musical-equipment/section_7_bluegrass-instruments.htm" class="bouton_submit_menu_bleu">Bluegrass Instruments</a>
+<a href="//www.free-scores.com/musical-equipment/section_6_ukuleles.htm" class="bouton_submit_menu_bleu">Ukuleles</a>
+
+</div>
+</div>
+</div>
+</div>
+
+
+<div class="dropdown"><a href="//www.free-scores.com/musical-equipment/3_pianos-keyboards.htm" class="bouton_submit_menu_bleu" style="display:inline"><img src='//www.free-scores.com/IMAGES/instruments/piano_VI_200.png' style='height:20px;vertical-align:middle'> KEYBOARD</a> <font color="#006699">|</font> 
+<div class="dropdown-content" style='width:auto;height:400px; overflow:auto;'>
+<div class='flex-container'>
+
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>PIANO ACCESSORIES</b></font>  
+<a href="//www.free-scores.com/boutique/accessories_753_shop_230.htm" class="bouton_submit_menu_bleu">Amps</a>
+<a href="//www.free-scores.com/musical-equipment/section_759_piano-banks-and-stools.htm" class="bouton_submit_menu_bleu">Benchs and Stools</a>
+<a href="//www.free-scores.com/boutique/accessories_669_shop_70.htm" class="bouton_submit_menu_bleu">Care & Cleaning</a>
+<a href="//www.free-scores.com/musical-equipment/section_758_piano-cases-bags.htm" class="bouton_submit_menu_bleu">Cases & Bags</a>
+<a href="//www.free-scores.com/boutique/accessories_967_shop_70.htm" class="bouton_submit_menu_bleu">Caster Cups</a>
+<a href="//www.free-scores.com/boutique/accessories_1002_shop_70.htm" class="bouton_submit_menu_bleu">Keyboard Paths</a>
+<a href="//www.free-scores.com/boutique/accessories_983_shop_70.htm" class="bouton_submit_menu_bleu">Lights</a>
+<a href="//www.free-scores.com/boutique/accessories_618_shop_70.htm" class="bouton_submit_menu_bleu">Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_606_shop_70.htm" class="bouton_submit_menu_bleu">Miscellaneous Accessories</a>
+<a href="//www.free-scores.com/boutique/vente_70_754_1043_dales-volume-expression.htm" class="bouton_submit_menu_bleu">Pedal Expression & Volume </a>
+<a href="//www.free-scores.com/boutique/vente_70_754_873_dales-controle-switches.htm" class="bouton_submit_menu_bleu">Pedal Foot, Switches & Controllers</a>
+<a href="//www.free-scores.com/boutique/accessories_754_shop_70.htm" class="bouton_submit_menu_bleu"> Pedal Sustain </a>
+<a href="//www.free-scores.com/musical-equipment/section_760_keyboard-piano-stands.htm" class="bouton_submit_menu_bleu">Stands</a>
+
+
+</div>
+
+
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>PIANOS</b></font>  
+<a href="//www.free-scores.com/boutique/shop_70_678_358_upright-piano.htm" class="bouton_submit_menu_bleu">Acoustic Upright Pianos</a>
+<a href="//www.free-scores.com/boutique/shop_70_662_135_digital-pianos.htm" class="bouton_submit_menu_bleu">Digital Pianos</a>
+<a href="//www.free-scores.com/boutique/shop_70_678_360_grand-piano.htm" class="bouton_submit_menu_bleu">Grand Pianos</a>
+<a href="//www.free-scores.com/boutique/accessories_904_shop_70.htm" class="bouton_submit_menu_bleu">Kids Pianos</a>
+<a href="//www.free-scores.com/boutique/shop_70_662_136_portables.htm" class="bouton_submit_menu_bleu">Portables Pianos</a>
+<a href="//www.free-scores.com/boutique/shop_70_662_570_portables-pack.htm" class="bouton_submit_menu_bleu">Portables Pianos (PACK)</a>
+<a href="//www.free-scores.com/boutique/shop_70_662_569_roll.htm" class="bouton_submit_menu_bleu">Roll-up Pianos</a>
+<a href="//www.free-scores.com/boutique/shop_70_662_137_stage.htm" class="bouton_submit_menu_bleu">Stage Pianos</a>
+
+
+</div>
+
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>KEYBOARDS</b></font>  
+
+<a href="//www.free-scores.com/musical-equipment/section_32_accordions.htm" class="bouton_submit_menu_bleu">Accordions</a>
+<a href="//www.free-scores.com/boutique/shop_230_807_578_analog.htm" class="bouton_submit_menu_bleu">Analog Synthesizers</a>
+<a href="//www.free-scores.com/musical-equipment/section_23_keyboards.htm" class="bouton_submit_menu_bleu">Keyboards</a>
+<a href="//www.free-scores.com/musical-equipment/section_25_midi-master-keyboards.htm" class="bouton_submit_menu_bleu">MIDI Master Keyboards</a>
+<a href="//www.free-scores.com/boutique/shop_230_807_579_digital.htm" class="bouton_submit_menu_bleu">Numeric Synthesizers</a>
+<a href="//www.free-scores.com/boutique/shop_220_646_423_electronic-organ.htm" class="bouton_submit_menu_bleu">Organs: Electronic </a>
+<a href="//www.free-scores.com/boutique/shop_220_646_1038_classical-organs.htm" class="bouton_submit_menu_bleu">Organs: Liturgical </a>
+<a href="//www.free-scores.com/boutique/shop_230_807_581_workstations.htm" class="bouton_submit_menu_bleu">Workstations</a>
+</div>
+
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>MODULES & SYNTH.</b></font>  
+<a href="//www.free-scores.com/boutique/shop_230_807_898_drum-machines.htm" class="bouton_submit_menu_bleu">Drum Machines</a>
+<a href="//www.free-scores.com/boutique/shop_230_807_899_groovebox.htm" class="bouton_submit_menu_bleu">Groove Boxes</a>
+<a href="//www.free-scores.com/musical-equipment/section_645_modular-synthesizers.htm" class="bouton_submit_menu_bleu">Modular Synthesizers</a>
+<a href="//www.free-scores.com/boutique/shop_230_807_901_samplers.htm" class="bouton_submit_menu_bleu">Samplers</a>
+<a href="//www.free-scores.com/boutique/accessories_802_shop_230.htm" class="bouton_submit_menu_bleu">Sound Modules</a>
+</div>
+</div>
+</div>
+</div>
+
+
+<a href="//www.free-scores.com/musical-equipment/2_drums-percussions.htm" class="bouton_submit_menu_bleu" style="display:inline">PERCUSSION</a> <font color="#006699">|</font> 
+
+
+<div class="dropdown"><a href="//www.free-scores.com/musical-equipment/4_studio-and-recording-equipment.htm" class="bouton_submit_menu_bleu" style="display:inline"><img src='//www.free-scores.com/IMAGES/instruments/studio_VI_200.png' style='height:20px;vertical-align:middle'> STUDIO</a> <font color="#006699">|</font>
+<div class="dropdown-content" style='width:auto;height:400px; overflow:auto;'>
+<div class='flex-container'>
+
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>STUDIO</b></font>  
+<a href="//www.free-scores.com/musical-equipment/section_80_acoustic-treatment.htm" class="bouton_submit_menu_bleu">Acoustic Treatment</a>
+<a href="//www.free-scores.com/musical-equipment/section_93_studio-accessories.htm" class="bouton_submit_menu_bleu">Accessories & Desks</a>
+<a href="//www.free-scores.com/boutique/shop_600_740_572_unpowered-mixer.htm" class="bouton_submit_menu_bleu">Analogue Mixing Desks</a>
+<a href="//www.free-scores.com/musical-equipment/section_73_audio-interfaces.htm" class="bouton_submit_menu_bleu">Audio Interfaces</a>
+<a href="//www.free-scores.com/musical-equipment/section_82_controllers.htm" class="bouton_submit_menu_bleu">Controllers</a>
+<a href="//www.free-scores.com/boutique/shop_600_756_305_converters.htm" class="bouton_submit_menu_bleu">Digital Converters</a>
+<a href="//www.free-scores.com/musical-equipment/section_78_digital-recorders.htm" class="bouton_submit_menu_bleu">Digital Recorders</a>
+<a href="//www.free-scores.com/boutique/shop_600_740_573_numeric-mixer.htm" class="bouton_submit_menu_bleu">Digital Mixing Desks</a>
+<a href="//www.free-scores.com/musical-equipment/section_84_effects-and-signal-processors.htm" class="bouton_submit_menu_bleu">Effects and Signal Processors</a>
+<a href="//www.free-scores.com/musical-equipment/section_79_headphones-and-headphone-amps.htm" class="bouton_submit_menu_bleu">Headphones</a>
+<a href="//www.free-scores.com/musical-equipment/section_85_midi-equipment.htm" class="bouton_submit_menu_bleu">MIDI Equipment</a>
+<a href="//www.free-scores.com/boutique/accessories_746_shop_627.htm" class="bouton_submit_menu_bleu">Preamps</a>
+<a href="//www.free-scores.com/musical-equipment/section_75_microphones.htm" class="bouton_submit_menu_bleu">Studio Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_898_shop_600.htm" class="bouton_submit_menu_bleu">Studio Packages</a>
+<a href="//www.free-scores.com/musical-equipment/section_74_studio-monitors.htm" class="bouton_submit_menu_bleu">Studio Monitors</a>
+<a href="//www.free-scores.com/musical-equipment/section_76_studio-software.htm" class="bouton_submit_menu_bleu">Studio Software</a>
+<a href="//www.free-scores.com/boutique/shop_600_758_1364_memory-cards.htm" class="bouton_submit_menu_bleu">Storage Media</a>
+<a href="//www.free-scores.com/boutique/shop_600_756_679_summons.htm" class="bouton_submit_menu_bleu">Summing Mixer</a>
+<a href="//www.free-scores.com/boutique/shop_600_756_672_digital-clocks.htm" class="bouton_submit_menu_bleu">Synchronizers and Clock Generators</a>
+<a href="//www.free-scores.com/boutique/shop_600_1147_1433_tapes-and-accessories.htm" class="bouton_submit_menu_bleu">Tapes and Ac­cessor­ies</a>
+
+
+</div>
+</div>
+</div>
+</div>
+
+<a href="//www.free-scores.com/musical-equipment/5_music-softwares.htm" class="bouton_submit_menu_bleu" style="display:inline">SOFT</a> <font color="#006699">|</font>
+
+
+<div class="dropdown"><a href="//www.free-scores.com/musical-equipment/6_equipment.htm" class="bouton_submit_menu_bleu" style="display:inline"><img src='//www.free-scores.com/IMAGES/instruments/sono_VI_200.png' style='height:20px;vertical-align:middle'> PA</a> <font color="#006699">|</font>
+
+<div class="dropdown-content" style='width:auto;height:400px; overflow:auto;'>
+<div class='flex-container'>
+
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>SOUND SYSTEM</b></font>  
+<a href="//www.free-scores.com/musical-equipment/section_116_audiotools.htm" class="bouton_submit_menu_bleu">Audiotools</a>
+<a href="//www.free-scores.com/musical-equipment/section_119_cnobles.htm" class="bouton_submit_menu_bleu">Cables</a>
+<a href="//www.free-scores.com/musical-equipment/section_122_coma-mua-nica-tions-equipment.htm" class="bouton_submit_menu_bleu">Com­mu­nic­a­tions Equipment</a>
+<a href="//www.free-scores.com/boutique/shop_600_756_671_crossovers-filters.htm" class="bouton_submit_menu_bleu">Crossovers</a>
+<a href="//www.free-scores.com/musical-equipment/section_115_ear-monitoring.htm" class="bouton_submit_menu_bleu">In-Ear Monitoring</a>
+<a href="//www.free-scores.com/musical-equipment/section_123_accessories.htm" class="bouton_submit_menu_bleu">PA Accessories</a>
+<a href="//www.free-scores.com/musical-equipment/section_118_equipment-stands.htm" class="bouton_submit_menu_bleu">PA Equipment Stands</a>
+<a href="//www.free-scores.com/musical-equipment/section_111_mixers.htm" class="bouton_submit_menu_bleu">PA Mixers</a>
+<a href="//www.free-scores.com/musical-equipment/section_109_speakers.htm" class="bouton_submit_menu_bleu">PA Speakers</a>
+<a href="//www.free-scores.com/boutique/shop_600_810_273_connector.htm" class="bouton_submit_menu_bleu">Plugs and Adapters</a>
+<a href="//www.free-scores.com/boutique/accessories_857_shop_600.htm" class="bouton_submit_menu_bleu">Power Amps</a>
+<a href="//www.free-scores.com/musical-equipment/section_114_wireless-equipment.htm" class="bouton_submit_menu_bleu">Wireless Equipment</a>
+<a href="//www.free-scores.com/musical-equipment/section_113_microphones.htm" class="bouton_submit_menu_bleu">Microphones</a>
+</div>
+</div>
+</div>
+</div>
+
+
+<div class="dropdown"><a href="//www.free-scores.com/musical-equipment/7_lighting-and-stage.htm" class="bouton_submit_menu_bleu" style="display:inline"><img src='//www.free-scores.com/IMAGES/instruments/light_VI_200.png' style='height:20px;vertical-align:middle'> LIGHT</a> <font color="#006699">|</font>
+<div class="dropdown-content" style='width:auto;height:400px; overflow:auto;'>
+<div class='flex-container'>
+
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>Spotlights</b></font>  
+<a href="//www.free-scores.com/boutique/shop_628_606_277_spot-accessories.htm" class="bouton_submit_menu_bleu">Spotlight Accessories</a>
+<a href="//www.free-scores.com/boutique/shop_628_606_1181_barn-doors.htm" class="bouton_submit_menu_bleu">Barndoors</a>
+<a href="//www.free-scores.com/musical-equipment/section_677_video-lighta-ing.htm" class="bouton_submit_menu_bleu">Video Light­ing</a>
+<a href="//www.free-scores.com/boutique/shop_628_791_929_battery-spotlight.htm" class="bouton_submit_menu_bleu">Battery operated floodlight</a>
+<a href="//www.free-scores.com/boutique/shop_628_791_1182_audience-blinders.htm" class="bouton_submit_menu_bleu">Audience Blinders</a>
+<a href="//www.free-scores.com/boutique/shop_628_791_287_exterior-projectors.htm" class="bouton_submit_menu_bleu">LED Outdoor Floodlight</a>
+<a href="//www.free-scores.com/boutique/shop_628_791_1179_par-cans.htm" class="bouton_submit_menu_bleu">PAR Cans</a>
+<a href="//www.free-scores.com/boutique/shop_628_791_263_led-par.htm" class="bouton_submit_menu_bleu">LED PAR</a>
+<a href="//www.free-scores.com/boutique/shop_628_791_1188_white-light-led-par.htm" class="bouton_submit_menu_bleu">White light LED PAR</a>
+<a href="//www.free-scores.com/boutique/shop_628_791_828_pinspot-par-cans.htm" class="bouton_submit_menu_bleu">Pinspots</a>
+<a href="//www.free-scores.com/boutique/shop_628_791_1191_flood-lights.htm" class="bouton_submit_menu_bleu">Flood Lights</a>
+<a href="//www.free-scores.com/boutique/shop_628_791_1189_follow-spots.htm" class="bouton_submit_menu_bleu">Follow Spots</a>
+<a href="//www.free-scores.com/musical-equipment/section_125_lighting-sets.htm" class="bouton_submit_menu_bleu">Sets de Projecteurs</a>
+<a href="//www.free-scores.com/boutique/shop_628_791_824_strobs.htm" class="bouton_submit_menu_bleu">Stroboscopes</a>
+<a href="//www.free-scores.com/boutique/shop_628_791_821_theater-spotlights.htm" class="bouton_submit_menu_bleu">Theater Spotlights</a>
+
+
+
+
+
+</div>
+
+<div class='flex-item_accueil flex_tiers'>
+<font class="gc"><b>Effects</b></font>  
+<a href="//www.free-scores.com/boutique/shop_628_1099_1192_led-strips.htm" class="bouton_submit_menu_bleu">LED Strips</a>
+<a href="//www.free-scores.com/boutique/shop_628_791_262_linear-par-can.htm" class="bouton_submit_menu_bleu">LED Bars & Panels</a>
+<a href="//www.free-scores.com/boutique/shop_250_606_981_led-drum-lighting.htm" class="bouton_submit_menu_bleu">LED Instrument Lighting</a>
+<a href="//www.free-scores.com/boutique/shop_628_1103_265_moonflower-and-effects.htm" class="bouton_submit_menu_bleu">LED Lighting Effects</a>
+<a href="//www.free-scores.com/boutique/accessories_971_shop_628.htm" class="bouton_submit_menu_bleu">Gyrophares</a>
+<a href="//www.free-scores.com/boutique/shop_628_1099_1196_led-decorational-lighting.htm" class="bouton_submit_menu_bleu">LED Decorational Lighting</a>
+<a href="//www.free-scores.com/boutique/shop_628_1103_823_lasers.htm" class="bouton_submit_menu_bleu">Lasers</a>
+<a href="//www.free-scores.com/musical-equipment/section_127_moving-lights.htm" class="bouton_submit_menu_bleu">Moving Lights</a>
+<a href="//www.free-scores.com/boutique/shop_628_1099_1194_led-tubes.htm" class="bouton_submit_menu_bleu">LED Tubes</a>
+</div>
+
+
+<div class='flex-item_accueil flex_tiers'>
+<font class="gc"><b>Deco Lighting</b></font>  
+<a href="//www.free-scores.com/boutique/shop_628_1099_1192_led-strips.htm" class="bouton_submit_menu_bleu">LED Strips</a>
+<a href="//www.free-scores.com/musical-equipment/section_141_mirror-balls.htm" class="bouton_submit_menu_bleu">Mirror Balls</a>
+<a href="//www.free-scores.com/boutique/shop_628_1099_1197_air-domes.htm" class="bouton_submit_menu_bleu">Air Domes</a>
+<a href="//www.free-scores.com/boutique/shop_628_1099_1195_indoor-deco-lighting.htm" class="bouton_submit_menu_bleu">Indoor Deco Lighting</a>
+<a href="//www.free-scores.com/boutique/shop_628_1099_1196_led-decorational-lighting.htm" class="bouton_submit_menu_bleu">LED Decorational Lighting</a>
+<a href="//www.free-scores.com/boutique/shop_628_791_287_exterior-projectors.htm" class="bouton_submit_menu_bleu">LED Outdoor Floodlight</a>
+<a href="//www.free-scores.com/boutique/shop_628_791_828_pinspot-par-cans.htm" class="bouton_submit_menu_bleu">Pinspots</a>
+<a href="//www.free-scores.com/boutique/shop_628_1099_1194_led-tubes.htm" class="bouton_submit_menu_bleu">LED Tubes</a>
+
+</div>
+
+<div class='flex-item_accueil flex_tiers'>
+<font class="gc"><b>Lighting Accessories</b></font>  
+<a href="//www.free-scores.com/musical-equipment/section_136_lighting-accessories.htm" class="bouton_submit_menu_bleu">Lighting Accessories</a>
+<a href="//www.free-scores.com/musical-equipment/section_135_lamps.htm" class="bouton_submit_menu_bleu">Replacement bulbs</a>
+<a href="//www.free-scores.com/musical-equipment/section_133_lighting-controllers-dimmer-packs.htm" class="bouton_submit_menu_bleu">Lighting Controllers & Dimmer packs</a>
+<a href="//www.free-scores.com/musical-equipment/section_134_smoke-machines-and-other-machines.htm" class="bouton_submit_menu_bleu">Smoke Machines and other machines </a>
+<a href="//www.free-scores.com/musical-equipment/section_138_lighting-hardware.htm" class="bouton_submit_menu_bleu">Lighting Hardware</a>
+<a href="//www.free-scores.com/boutique/accessories_1176_shop_628.htm" class="bouton_submit_menu_bleu">Pyrotechnics</a>
+</div>
+</div>
+</div>
+</div>
+
+
+<div class="dropdown"><a href="//www.free-scores.com/musical-equipment/8_equipment.htm" class="bouton_submit_menu_bleu" style="display:inline"><img src='//www.free-scores.com/IMAGES/instruments/DJ_VI_200.png' style='height:20px;vertical-align:middle'> DEEJAY</a> <font color="#006699">|</font>
+<div class="dropdown-content" style='width:auto;height:400px; overflow:auto;'>
+<div class='flex-container'>
+
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>DEEJAY</b></font>  
+<a href="//www.free-scores.com/musical-equipment/section_155_accessories.htm" class="bouton_submit_menu_bleu">DJ Accessories</a>
+<a href="//www.free-scores.com/boutique/accessories_750_shop_623.htm" class="bouton_submit_menu_bleu">Grooveboxes</a>
+<a href="//www.free-scores.com/boutique/shop_600_697_304_headphone.htm" class="bouton_submit_menu_bleu">DJ Headphones</a>
+<a href="//www.free-scores.com/boutique/accessories_908_shop_623.htm" class="bouton_submit_menu_bleu">DJ Controllers</a>
+<a href="//www.free-scores.com/boutique/accessories_749_shop_623.htm" class="bouton_submit_menu_bleu">DJ Effects</a>
+<a href="//www.free-scores.com/boutique/accessories_853_shop_623.htm" class="bouton_submit_menu_bleu">DJ Software</a>
+<a href="//www.free-scores.com/boutique/shop_623_987_1245_deckstands.htm" class="bouton_submit_menu_bleu">DJ Desks / Fur­niture</a>
+<a href="//www.free-scores.com/musical-equipment/section_145_turntables.htm" class="bouton_submit_menu_bleu">Turntables</a>
+<a href="//www.free-scores.com/boutique/accessories_747_shop_623.htm" class="bouton_submit_menu_bleu">DJ Sets</a>
+<a href="//www.free-scores.com/boutique/accessories_852_shop_623.htm" class="bouton_submit_menu_bleu">DJ Mixers</a>
+</div>
+</div>
+</div>
+</div>
+
+<div class="dropdown"><a href="//www.free-scores.com//musical-equipment/9_microphones.htm" class="bouton_submit_menu_bleu" style="display:inline"><img src='//www.free-scores.com/IMAGES/instruments/micro_VI_200.png' style='height:20px;vertical-align:middle'> MIC</a> <font color="#006699">|</font> 
+<div class="dropdown-content" style='width:auto;height:400px; overflow:auto;'>
+<div class='flex-container'>
+
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>MICROPHONE ACCESSORIES</b></font>  
+<a href="//www.free-scores.com/boutique/accessories_755_shop_627.htm" class="bouton_submit_menu_bleu">Cables</a>
+<a href="//www.free-scores.com/boutique/accessories_668_shop_627.htm" class="bouton_submit_menu_bleu">Bags & Cases</a>
+<a href="//www.free-scores.com/boutique/accessories_746_shop_627.htm" class="bouton_submit_menu_bleu">Mic Preamps</a>
+<a href="//www.free-scores.com/musical-equipment/section_176_microphone-accessories.htm" class="bouton_submit_menu_bleu">Stands & Mics Accessories</a>
+
+</div>
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>MICROPHONES</b></font>  
+<a href="//www.free-scores.com/boutique/accessories_713_shop_627.htm" class="bouton_submit_menu_bleu">Acoustic Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_934_shop_627.htm" class="bouton_submit_menu_bleu">Boundary Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_1177_shop_627.htm" class="bouton_submit_menu_bleu">Broadcast Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_760_shop_627.htm" class="bouton_submit_menu_bleu">Condenser Microphones</a>
+<a href="//www.free-scores.com/boutique/buy_DPA_999_713.htm" class="bouton_submit_menu_bleu">DPA Microphone serie</a>
+<a href="//www.free-scores.com/boutique/accessories_789_shop_627.htm" class="bouton_submit_menu_bleu">Dynamic Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_936_shop_627.htm" class="bouton_submit_menu_bleu">Headset Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_984_shop_627.htm" class="bouton_submit_menu_bleu">Installation Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_1113_shop_627.htm" class="bouton_submit_menu_bleu">Lamp Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_935_shop_627.htm" class="bouton_submit_menu_bleu">Lapel Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_1125_shop_627.htm" class="bouton_submit_menu_bleu">Measurement Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_764_shop_627.htm" class="bouton_submit_menu_bleu">Microphone Packs</a>
+<a href="//www.free-scores.com/boutique/accessories_1146_shop_627.htm" class="bouton_submit_menu_bleu">Reporter Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_979_shop_627.htm" class="bouton_submit_menu_bleu">Ribbon Microphones</a>
+
+<a href="//www.free-scores.com/boutique/accessories_1143_shop_627.htm" class="bouton_submit_menu_bleu">Special Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_1112_shop_627.htm" class="bouton_submit_menu_bleu">Stereo Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_761_shop_627.htm" class="bouton_submit_menu_bleu">Studio Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_916_shop_627.htm" class="bouton_submit_menu_bleu">USB/Podcast Microphones</a>
+<a href="//www.free-scores.com/boutique/accessories_986_shop_627.htm" class="bouton_submit_menu_bleu">Video Microphones</a>
+
+
+</div>
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>WIRELESS</b></font>  
+<a href="//www.free-scores.com/boutique/accessories_869_shop_627.htm" class="bouton_submit_menu_bleu">Separated Elements Wireless</a>
+<a href="//www.free-scores.com/boutique/accessories_1144_shop_627.htm" class="bouton_submit_menu_bleu">Wireless Devices for cameras</a>
+<a href="//www.free-scores.com/boutique/accessories_766_shop_627.htm" class="bouton_submit_menu_bleu">Wireless Handheld</a>
+<a href="//www.free-scores.com/boutique/accessories_769_shop_627.htm" class="bouton_submit_menu_bleu">Wireless Headset</a>
+<a href="//www.free-scores.com/boutique/accessories_1151_shop_627.htm" class="bouton_submit_menu_bleu">Wireless Guidesystems</a>
+<a href="//www.free-scores.com/boutique/accessories_767_shop_627.htm" class="bouton_submit_menu_bleu">Wireless Guitar</a>
+<a href="//www.free-scores.com/boutique/accessories_768_shop_627.htm" class="bouton_submit_menu_bleu">Wireless Lapell</a>
+<a href="//www.free-scores.com/boutique/accessories_770_shop_627.htm" class="bouton_submit_menu_bleu">Wireless Wind Instruments</a>
+
+
+
+</div>
+<div class='flex-item_accueil flex_tiers'> 
+<font class="gc"><b>INSTRUMENTS MICROPHONES</b></font>  
+<a href="//www.free-scores.com/boutique/accessories_618_shop_200.htm" class="bouton_submit_menu_bleu">Accordion Mics</a>
+<a href="//www.free-scores.com/boutique/accessories_713_shop_999.htm" class="bouton_submit_menu_bleu">Acoustic Guitar Mics</a>
+<a href="//www.free-scores.com/boutique/accessories_618_shop_180.htm" class="bouton_submit_menu_bleu">Brass & Wind Mics</a>
+<a href="//www.free-scores.com/boutique/accessories_717_shop_301.htm" class="bouton_submit_menu_bleu">Cello Mics</a>
+<a href="//www.free-scores.com/boutique/accessories_717_shop_604.htm" class="bouton_submit_menu_bleu">Doublebass Mics</a>
+<a href="//www.free-scores.com/boutique/accessories_618_shop_250.htm" class="bouton_submit_menu_bleu">Drum Mics</a>
+<a href="//www.free-scores.com/boutiquebaccessories_778_shop_999.htm" class="bouton_submit_menu_bleu">Electric Guitar Mics</a>
+<a href="//www.free-scores.com/boutique/accessories_618_shop_140.htm" class="bouton_submit_menu_bleu">Harmonica Mics</a>
+<a href="//www.free-scores.com/boutique/accessories_618_shop_160.htm" class="bouton_submit_menu_bleu">Sax Mics</a>
+<a href="//www.free-scores.com/boutique/accessories_717_shop_80.htm" class="bouton_submit_menu_bleu">Violin Mics</a>
+
+</div>
+
+</div>
+</div>
+</div>
+
+<a href="//www.free-scores.com/musical-equipment/10_effect-and-signal-processors.htm" class="bouton_submit_menu_bleu" style="display:inline">EFFECTS</a> <font color="#006699">|</font> 
+<a href="//www.free-scores.com/musical-equipment/11_wind-instruments.htm" class="bouton_submit_menu_bleu" style="display:inline">WINDS</a> <font color="#006699">|</font> 
+<a href="//www.free-scores.com/musical-equipment/12_traditional-instruments.htm" class="bouton_submit_menu_bleu" style="display:inline">STRING & FOLK</a><font color="#006699">|</font> 
+<a href="//www.free-scores.com/musical-equipment/13_cases-racks-and-bags.htm" class="bouton_submit_menu_bleu" style="display:inline">FLIGHT</a><font color="#006699">|</font> 
+<a href="//www.free-scores.com/musical-equipment/14_cables-and-connectors.htm" class="bouton_submit_menu_bleu" style="display:inline">CABLES</a><font color="#006699">|</font> 
+<a href="//www.free-scores.com/musical-equipment/15_accessories.htm" class="bouton_submit_menu_bleu" style="display:inline">ACCESSORIES</a><font color="#006699">|</font> 
+
+
+<a href="//www.free-scores.com/musical-equipment/17_gifts-ideas-for-musicians.htm" class="bouton_submit_menu_bleu" style="display:inline">GIFT</a>
+<font color="#006699">|</font> 
+<a href="//www.free-scores.com/boutique/boutique-accessoires-uk-brands.php" class="bouton_submit_menu_bleu" style="display:inline">BRANDS</a></font>
+<font color="#006699">|</font>
+<a href="//www.free-scores.com/boutique/power-search-uk.php?domaine=2" class="bouton_submit_menu_bleu" style="display:inline">ADV.SEARCH</a>
+<font color="#006699">|</font>
+<a href="//www.free-scores.com/boutique/search-engine-accessoires-uk.php?ordrepar=new" class="bouton_submit_menu_bleu" style="display:inline">NEW</a>
+<font color="#006699">|</font>
+<a href="//www.free-scores.com/musical-equipment/" class="bouton_submit_menu_bleu" style="display:inline">
+<div class='icone_svg_menu'><svg xmlns='https://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' style='vertical-align:middle'><path d='M12,3c0,0-6.186,5.34-9.643,8.232C2.154,11.416,2,11.684,2,12c0,0.553,0.447,1,1,1h2v7c0,0.553,0.447,1,1,1h3  c0.553,0,1-0.448,1-1v-4h4v4c0,0.552,0.447,1,1,1h3c0.553,0,1-0.447,1-1v-7h2c0.553,0,1-0.447,1-1c0-0.316-0.154-0.584-0.383-0.768  C18.184,8.34,12,3,12,3z' stroke-width='0.2' stroke='#fff' fill='#006699'></path></svg></div>
+</a> 
+
+
+</font> 
+</div>
+
+</div>
+</div>
+</div>
+<script>
+    // faire apparaitre le menu6
+  if (window.innerWidth > 599) {
+document.querySelectorAll('.menus_principaux').forEach(function(menu) {
+    menu.addEventListener('mouseover', function() {
+        this.querySelector('.submenu').classList.add('active');
+    });
+    menu.addEventListener('mouseout', function() {
+        this.querySelector('.submenu').classList.remove('active');
+    });
+});
+  }
+// fin faire apparaitre le menu6
+</script>
+
+<div class='wrapper'><div class='outer-wrapper'><div class='side-div'></div><div class='container_resp'><div style="width:100%; padding:20px;">
+  <div style="width:100%; max-width:450px; margin:0 auto; background-color:#fff; border-radius:12px; box-shadow:0 4px 16px rgba(0,0,0,0.1); overflow:hidden;">
+    
+    <!-- Header with orange gradient -->
+    <div style="background:#FFF; padding:25px 30px; text-align:center;border-bottom:2px solid #ff9900;">
+      <img src='https://img.free-scores.com/IMAGES/logo-FS_nom.png' style='width:180px; margin:0 auto;'>
+<div style="color:#000; font-size:14px; margin-top:10px; font-weight:500;">Log in to Free-scores</div>    
+    </div>
+    
+    <div style="padding:30px;">
+	<div id="g_id_onload"
+     data-client_id="134795240674-cbskb5buiu20s41ujfeqfubhvsjasau1.apps.googleusercontent.com"
+     data-callback="handleCredentialResponse">
+</div>
+<div class="g_id_signin"
+     data-type="standard"
+     data-theme="outline"
+     data-text="signin_with"
+     data-shape="rectangular"
+     data-size="large"
+     data-logo_alignment="center"
+     data-width="450">
+</div>
+<div style="display: flex; align-items: center; text-align: center; margin: 20px 0;">
+  <hr style="flex: 1; border: none; border-top: 1px solid #ccc;" />
+  <span style="padding: 0 10px; color: #888;">or</span>
+  <hr style="flex: 1; border: none; border-top: 1px solid #ccc;" />
+</div>
+
+    <!-- Form body -->
+      <form action="https://www.free-scores.com/espace-membres-uk/verification_login.php" method="post" name="form1" id="form1" autocomplete="on" 
+         target=_top>
+        
+        <!-- Login fields -->
+        <div style="margin-bottom:25px;">
+          <label for="pseudo" style="display:block; margin-bottom:8px; font-size:14px; color:#555; font-weight:500;">Username or email</label>
+          <input id='pseudo' name='pseudo' type='text' style='width:100%; padding:12px 15px; border:1px solid #e2e2e2; border-radius:8px; font-size:15px; box-sizing:border-box; transition:all 0.3s ease;' placeholder='Your username or email' autocomplete='username' />
+        </div>
+        
+        <div style="margin-bottom:20px;">
+          <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+            <label for="password" style="font-size:14px; color:#555; font-weight:500;">Password</label>
+            <a href="/espace-membres-uk/pdf_recuppass.php?modal=0" class="noir" style="font-size:13px; color:#666; text-decoration:none;">Forgot login details?</a>
+          </div>
+          <input id='password' name='password' style='width:100%; padding:12px 15px; border:1px solid #e2e2e2; border-radius:8px; font-size:15px; box-sizing:border-box; transition:all 0.3s ease;' type='password' placeholder='Your password' autocomplete='current-password' />
+        </div>
+
+        <input type='hidden' name='modal' value=''/>
+
+        <!-- Action buttons -->
+        <div style="display:flex; flex-direction:column; gap:15px; margin-top:25px;">
+          <button type="submit" name="Submit" style="width:100%; padding:14px; background:linear-gradient(to right, #ff9900, #ff7700); color:#fff; border:none; border-radius:8px; font-size:16px; font-weight:600; cursor:pointer; transition:all 0.3s ease; box-shadow:0 4px 6px rgba(255,153,0,0.2);">
+            Login
+          </button>
+          
+          <a href='/espace-membres-uk/pdf_inscription.php?' id='inscription' style='display:block; text-align:center; padding:14px; background-color:#f9f9f9; border:1px solid #e2e2e2; border-radius:8px; color:#333; font-size:16px; font-weight:600; text-decoration:none; transition:all 0.3s ease;' target='_top'><span>Create my free account</span></a>        </div>
+
+              </form>
+    </div>
+  </div>
+
+
+
+
+  <div style="max-width:450px; margin:25px auto 0; text-align:center;">
+    <a href="../about.php" style="display:block; text-decoration:none; transition:all 0.3s ease;" target="_top">
+
+      <div style="position:relative; overflow:hidden; border-radius:6px;">
+        <img src="https://img.free-scores.com/IMAGES/colorfull.gif" width="200" style="display:block; margin:0 auto; transition:transform 0.3s ease;"/>
+        <div style="position:absolute; top:0; left:0; width:100%; height:100%; background:linear-gradient(rgba(255,255,255,0), rgba(255,255,255,0.1), rgba(255,255,255,0)); pointer-events:none;"></div>
+      </div>
+      <div style="font-size:16px; color:#333; font-weight:500; margin-bottom:12px;">Explanations & Member Testimonials</div>
+    </a>
+  </div>
+</div>
+</div></div></div>
+<div style='height:5em'></div>
+<a href="https://www.free-scores.com/boutique/redirect-eur.php?clef=368&offre=1">
+            <img src="https://img.free-scores.com/IMAGES/promo/pack-2025-en.png"
+                 class="lazyload image_ad slider-img"
+                 style="height: clamp(auto, 50vh, 100%);"  />
+          </a>
+<div style='height:1em'></div>
+ 
+
+<div class="footer">
+ <footer class="Footer_FS_container">
+
+    <div class="Footer_FS_inner">
+        <div class="Footer_FS_grid">
+            
+            <!-- Column 1: About -->
+            <div class="Footer_FS_column">
+                <h4>About</h4>
+                <ul>
+                    <li><a href="//www.free-scores.com/about.php">About Free-scores.com</a></li>
+                    <li><a href="//www.free-scores.com/mentions-legales-uk.php">Contact Us</a></li>
+                    <li><a href="//www.free-scores.com/about.php#testimonials">Member Testimonials</a></li>
+                    <li><a href="//www.free-scores.com/conditions-generales-uk.php">Terms of Use</a></li>
+                </ul>
+            </div>
+            
+            <!-- Column 2: Community -->
+            <div class="Footer_FS_column">
+                <h4>Community</h4>
+                <ul>
+<li><a href="//www.free-scores.com/free-sheet-music_composers.php?actifs=1">Member Composers</a></li>
+
+
+                    <li><a href="//www.free-scores.com/espace-membres-uk/">Add Your Sheet Music</a></li>
+                    <li><a href="//www.free-scores.com/licences-uk.php">Licensing Service</a></li>
+                    <li><a href="//www.free-scores.com/espace-membres-uk/abonnement.php">Premium Plan</a></li>
+                    <li><a href="//www.free-scores.com/pleasedonate.php">Make a Donation</a></li>
+                </ul>
+            </div>
+            
+            <!-- Column 3: Content -->
+            <div class="Footer_FS_column">
+                <h4>Content</h4>
+                <ul>
+                    <li><a href="//www.free-scores.com/free-sheet-music.php"><img src="https://img.free-scores.com/IMAGES/icon_public_100.png" class="Footer_FS_picto" alt="">Free Sheet Music</a></li>
+                    <li><a href="//www.free-scores.com/boutique/boutique1-uk.php"><img src="https://img.free-scores.com/IMAGES/icon_vpe.png" class="Footer_FS_picto" alt="">Sheet Music Books</a></li>
+                    <li><a href="//www.free-scores.com/boutique/digital-sheet-music.php"><img src="https://img.free-scores.com/IMAGES/icon_vda.png" class="Footer_FS_picto" alt="">Digital Sheet Music</a></li>
+                    <li><a href="//www.free-scores.com/musical-equipment/"><img src="https://img.free-scores.com/IMAGES/icon_vie.png" class="Footer_FS_picto" alt="">Music Equipment</a></li>
+                </ul>
+            </div>
+
+            <!-- Column 4: Tools -->
+            <div class="Footer_FS_column">
+                <h4>Tools</h4>
+                <ul>
+
+    		    <li><a href="//www.free-scores.com/metronome-en.php">Metronome</a></li>
+
+                    <li><a href="//www.free-scores.com/notesgame.php">NoteQuest Game</a></li>
+     <li><a href="//www.free-scores.com/blanksheetmusic-generator.php">Staff Paper Generator</a></li>
+<li><a href="//www.free-scores.com/onlinetuner.php">Tuner</a></li>
+                    <li><a href="//www.free-scores.com/directory-free-sheet-music.php">Web directory</a></li>
+                </ul>
+            </div>
+            
+            <!-- Right column: Social + Logo -->
+            <div class="Footer_FS_brand">
+                <h4>Social</h4>
+                <div class="Footer_FS_social">
+                    <!-- Facebook -->
+                    <a href="https://www.facebook.com/freescores" target="_blank" rel="nofollow" title="Facebook">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                        </svg>
+                    </a>
+                    <!-- YouTube -->
+                    <a href="https://www.youtube.com/@freescores" target="_blank" rel="nofollow" title="YouTube">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                        </svg>
+                    </a>
+                    <!-- X (Twitter) -->
+                    <a href="https://x.com/freescores" target="_blank" rel="nofollow" title="X">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/>
+                        </svg>
+                    </a>
+                </div>
+                
+                <div class="Footer_FS_logo">
+                    <a href="//www.free-scores.com">
+                        <img src="https://img.free-scores.com/IMAGES/logo-m-uk.png" alt="Free-scores.com" />
+                    </a>
+                    <div class="Footer_FS_copyright">
+                        <div class="Footer_FS_copyright_inner">
+                            <a href="https://www.fortemusica.com/en/" target="_blank" title="Fortemusica" class="Footer_FS_parent_link">
+                                <img src="https://img.free-scores.com/IMAGES/fortemusica.png" alt="Fortemusica" />
+                            </a>
+                            <div class="Footer_FS_copyright_text">
+                                <span class='dp'>&copy; 2000 - 2025</span><br>
+                                All Rights Reserved
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+    </div>
+</footer>
+  <!-- Lecteur Audio -->
+  
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const myDiv = document.querySelector('.sd-cmp-1jcua');
+    if (myDiv) {
+        
+        myDiv.style.bottom = '40px';
+    }
+});
+</script>
+
+</div>
+
+
+<style>
+   
+
+       /* Widget de inscription flottant */
+        .inscription-widget {
+            position: fixed;
+            bottom: 55px;
+            right: 20px;
+            z-index: 9999;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        /* Bouton déclencheur */
+        .inscription-trigger {
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 50px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Modal overlay */
+        .inscription-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(5px);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 10000;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+                 box-shadow:0 4px 16px rgba(0,0,0,0.1);
+        }
+
+        .inscription-overlay.show {
+            background: rgba(127, 127, 127, 0.5);
+            display: flex;
+            opacity: 1;
+        }
+
+        /* Modal principal */
+        .inscription-modal {
+            background: white;
+            border-radius: 16px;
+            padding: 0;
+            width: 90%;
+            max-width: 450px;
+            max-height: 90vh;
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            transform: scale(0.9);
+            transition: transform 0.3s ease;
+        }
+
+        .inscription-overlay.show .inscription-modal {
+            transform: scale(1);
+        }
+
+        /* Header du modal */
+        .inscription-header {
+            background: linear-gradient(135deg, #ffffff 0%, #eeeeee 100%);
+            color: white;
+            padding: 24px;
+            text-align: center;
+            position: relative;
+        }
+
+        .inscription-header p {
+            margin: 0;
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+       .inscription-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: none;
+            border: none;
+            color: grey;
+            font-size: 24px;
+            cursor: pointer;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s ease;
+        }
+
+        .retour-arriere {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            background: none;
+            border: none;
+            color: grey;
+            font-size: 24px;
+            cursor: pointer;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s ease;
+        }
+
+        .inscription-close:hover,retour-arriere:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        /* Contenu du modal */
+        .inscription-content {
+            padding: 32px 24px 24px;
+        }
+
+        /* Boutons d'action */
+        .inscription-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .inscription-modal {
+                width: 95%;
+                margin: 20px;
+            }
+
+            .inscription-header {
+                padding: 20px;
+            }
+
+            .inscription-content {
+                padding: 24px 20px 20px;
+            }
+
+        }
+
+
+          
+
+    </style>
+
+ 
+
+    <!-- Widget de Inscription -->
+    <div class="inscription-widget">
+        <!-- Modal overlay -->
+        <div class="inscription-overlay" id="inscriptionOverlay">
+            <div class="inscription-modal">
+                <!-- Header -->
+                <div class="inscription-header">
+                    <button class="inscription-close" id="inscriptionClose" onClick='return false;'>&times;</button>
+                    <button class="retour-arriere" id="retourArriere" style='display:none;' onClick='hideGoogleSignUpSection();return false;'>&#11013;</button>
+        <img src='https://img.free-scores.com/IMAGES/logo-FS_nom.png' style='width:180px; margin:0 auto;'>
+      <div style="color:#000; font-size:14px; margin-top:10px; font-weight:500;">Legal access to free sheet music</div>
+
+                </div>
+
+                <!-- Contenu principal -->
+                <div class="inscription-content" id="inscriptionForm">
+
+                <!-- Bouton Google Sign-In -->
+        <div id="g_id_onload"
+             data-client_id="134795240674-cbskb5buiu20s41ujfeqfubhvsjasau1.apps.googleusercontent.com"
+             data-callback="handleCredentialResponse" >
+        </div>
+        <div class="g_id_signin"
+		data-type="standard"
+             data-theme="outline"
+             data-text="signin_with"
+             data-shape="rectangular"
+                data-size="large"
+                data-logo_alignment="center"
+                data-width="450">
+        </div>
+<div style="display: flex; align-items: center; text-align: center; margin: 20px 0;">
+  <hr style="flex: 1; border: none; border-top: 1px solid #ccc;" />
+  <span style="padding: 0 10px; color: #888;">or</span>
+  <hr style="flex: 1; border: none; border-top: 1px solid #ccc;" />
+</div>
+
+                <form action="https://www.free-scores.com/espace-membres-uk/verification_login.php" method="post" name="form2" id="form2" autocomplete="on">
+                <div style="margin-bottom:20px;">
+                <input id='pseudo' name='pseudo' type='text' style='width:100%; padding:12px 15px; border:1px solid #e2e2e2; border-radius:8px; font-size:15px; box-sizing:border-box; transition:all 0.3s ease;' placeholder='Username or email' autocomplete='username' />
+                </div>
+
+                <div style="margin-bottom:20px;">
+                <input id='password' name='password' style='width:100%; padding:12px 15px; border:1px solid #e2e2e2; border-radius:8px; font-size:15px; box-sizing:border-box; transition:all 0.3s ease;' type='password' placeholder='Password' autocomplete='current-password'  />
+                </div>
+<input type='hidden' name='urlref' value='https://www.free-scores.com/espace-membres-uk/' />
+<!-- Boutons d'action -->
+        <div style="display:flex; flex-direction:column; gap:15px; margin-top:25px;">
+          <button type="submit" name="Submit" style="width:100%; padding:14px; background:linear-gradient(to right, #ff9900, #ff7700); color:#fff; border:none; border-radius:8px; font-size:16px; font-weight:600; cursor:pointer; transition:all 0.3s ease; box-shadow:0 4px 6px rgba(255,153,0,0.2);">
+            Sign in
+          </button>
+<a href="/espace-membres-uk/pdf_recuppass.php?modal=0" class="noir" style="font-size:13px; color:#666; text-decoration:none;">Forgot credentials ?</a>
+          <a href='/espace-membres-uk/pdf_inscription.php?' id='inscription' style='display:block; text-align:center; padding:14px; background-color:#f9f9f9; border:1px solid #e2e2e2; border-radius:8px; color:#333; font-size:16px; font-weight:600; text-decoration:none; transition:all 0.3s ease;' target='_top'><span>Sign up, it's free</span></a>        </div>
+        </form>
+          </div>
+
+        <div id="inscriptionGoogle" style="display:none; max-width: 500px; margin: auto; background: #fff; padding: 25px; border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,0.1); font-family: Arial, sans-serif;">
+    <h2 style="text-align: center; color: #444; margin-bottom: 20px;"><img src='' id='associationImage' style='vertical-align:middle;'>Google sign in</h2>
+
+    <div style="margin-bottom: 15px;">
+        <label for="pseudo" style="display: block; margin-bottom: 5px; color: #333; font-weight: bold;">Username *</label>
+        <input type="text" id="associationPseudo" name="pseudo" value=""
+               placeholder="Your username or email"
+               style="width: 100%; padding: 12px 15px; border: 1px solid #ccc; border-radius: 8px; font-size: 15px; box-sizing: border-box; transition: border-color 0.3s;"
+                onBlur="checkPseudoForm();"  onKeyUp="checkPseudoForm();" onKeyDown="$('pseudobox').innerHTML=''" autocomplete="off" >
+        <span style='font-size:11px;'>Do not use accents, special characters, or spaces. Your username will be public (e.g. OK: name-surname). Please note that it cannot be changed later.</span>
+        <div id="pseudobox" style="min-height:13px; margin-top:5px; font-size:13px; color:#d32f2f;"></div>
+    </div>
+
+    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+        <div style="flex: 1;">
+            <label for="prenom" style="display: block; margin-bottom: 5px; color: #333; font-weight: bold;">First name</label>
+            <input type="text" id="associationPrenom" name="prenom" value=""
+                   placeholder="First name"
+                   style="width: 100%; padding: 12px 15px; border: 1px solid #ccc; border-radius: 8px; font-size: 15px; box-sizing: border-box; transition: border-color 0.3s;">
+        </div>
+        <div style="flex: 1;">
+            <label for="nom" style="display: block; margin-bottom: 5px; color: #333; font-weight: bold;">Last name</label>
+            <input type="text" id="associationNom" name="nom" value=""
+                   placeholder="Last name"
+                   style="width: 100%; padding: 12px 15px; border: 1px solid #ccc; border-radius: 8px; font-size: 15px; box-sizing: border-box; transition: border-color 0.3s;">
+        </div>
+    </div>
+    <div style="margin-bottom: 15px;">
+        <div style="align-items:left; margin-bottom:10px;">
+              <input type="checkbox" name="condition" value="1" id="condition" style="margin-right:10px;" onChange="checkPseudoForm();">
+              <label for="condition" style="font-size:14px; color:#666;">You have read and accept the <a href="../conditions-generales-uk.php" target="_blank" style="color:#ff9900; text-decoration:none; border-bottom:1px solid #ff9900;">terms and conditions</a> *</label>
+            </div>
+
+            <div style="align-items:left; margin-bottom:20px;">
+              <input type="checkbox" name="newsletter" id="newsletter" value="oui" style="margin-right:10px;">
+              <label for="newsletter" style="font-size:14px; color:#666;">Receive newsletters about Free-scores.com news and updates</label>
+            </div>
+    </div>
+
+    <button type="submit"
+            class="submit-btn"
+            id="submitFinal"
+            onclick="handleCredentialResponse(googleCredential)"
+            style="width: 100%; padding: 14px; font-size: 16px; font-weight: bold; color: white; border: none; border-radius: 8px; cursor: pointer; transition: background 0.3s;">
+        Sign in with Google account 
+    </button>
+</div>
+
+                </div>
+            </div>
+        </div>
+     </div>
+    <!-- FIN Widget de Inscription -->
+
+
+    <script>
+   
+
+
+
+let googleCredential = null;
+
+function handleCredentialResponse(response) {
+//            console.log('Token reçu:', response.credential);
+                googleCredential=response;
+
+        const associationCompte = document.getElementById('associationPseudo')?.value ? 1 : 0;
+        const associationNom = document.getElementById('associationNom')?.value || '';
+        const associationPrenom = document.getElementById('associationPrenom')?.value || '';
+        const associationImage = document.getElementById('associationImage')?.value || '';
+        const associationPseudo = document.getElementById('associationPseudo')?.value || '';
+	const associationNewsletter = document.getElementById('newsletter')?.checked ? 1 : 0;
+
+
+            // Envoyer le token au serveur PHP
+            //fetch(https://www.free-scores.com'/auth/google-auth.php', {
+            fetch('/auth/google-auth.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    token: response.credential,
+                        associationCompte: associationCompte,
+                        associationPseudo: associationPseudo,
+                        associationNom: associationNom,
+                        associationImage: associationImage,
+                        associationPrenom: associationPrenom,
+                        associationNewsletter: associationNewsletter
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Réponse serveur:', data);
+
+                if (data.success) {
+                        if (data.associationCompte==1)
+                        {
+                        const overlay = document.getElementById('inscriptionOverlay');
+                        overlay.classList.remove('show');
+                        document.body.style.overflow = '';
+                        window.location.href = window.location.href;
+                        }
+                else
+                        {
+                          showGoogleSignUpSection(data.user);
+                        }
+                } else {
+                    alert('Connection error: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Erreur 2:', error);
+                alert('Connection error');
+            });
+        }
+
+function showGoogleSignUpSection(user) {
+            document.getElementById('inscriptionForm').style.display = 'none';
+            document.getElementById('inscriptionGoogle').style.display = 'block';
+            document.getElementById('retourArriere').style.display = 'block';
+
+        document.getElementById('associationPrenom').value=`${user.prenom}`;
+        document.getElementById('associationNom').value=`${user.nom}`;
+        document.getElementById('associationPseudo').value=`${user.pseudo}`;
+        document.getElementById('associationImage').src=`${user.picture}`;
+        document.getElementById('submitFinal').innerHTML=`Connection with Google account ${user.email}`;
+        checkPseudoForm();
+        }
+
+function hideGoogleSignUpSection() {
+            document.getElementById('inscriptionForm').style.display = 'block';
+            document.getElementById('inscriptionGoogle').style.display = 'none';
+            document.getElementById('retourArriere').style.display = 'none';
+        }
+async function checkPseudoForm() {
+    const pseudo = document.getElementById('associationPseudo').value;
+
+    try {
+        const result = await verifPseudo3(pseudo, 'pseudobox', 'associationPseudo');
+
+
+
+        if (result === 1 && document.getElementById('condition').checked) {
+                document.getElementById('submitFinal').style.backgroundColor='#4285F4';
+                document.getElementById('submitFinal').disabled=false;
+            // tu peux activer le bouton, ou passer à l'étape suivante ici
+        } else {
+                document.getElementById('submitFinal').style.backgroundColor='#777';
+                document.getElementById('submitFinal').disabled=true;
+        }
+    } catch (err) {
+        console.error("Erreur pendant la vérification :", err);
+    }
+}
+
+
+class InscriptionWidget {
+            constructor() {
+                this.init();
+            }
+
+            init() {
+                this.bindEvents();
+            }
+
+            bindEvents() {
+                // Ouvrir le modal
+                document.getElementById('inscriptionTrigger').addEventListener('click', () => {
+                    this.openModal();
+                });
+
+                // Fermer le modal
+                document.getElementById('inscriptionClose').addEventListener('click', () => {
+                    this.closeModal();
+                });
+
+                // Fermer en cliquant sur l'overlay
+                document.getElementById('inscriptionOverlay').addEventListener('click', (e) => {
+                    if (e.target === e.currentTarget) {
+                        this.closeModal();
+                    }
+                });
+/*
+                // Soumettre le formulaire
+                document.getElementById('submitBtninscription').addEventListener('click', () => {
+                    this.submitInscription();
+                });
+*/
+                document.querySelectorAll('[data-action="openConnexion"]').forEach(el => {
+                        el.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        this.openModal();
+                        });
+                });
+            }
+
+            openModal() {
+                const overlay = document.getElementById('inscriptionOverlay');
+                overlay.classList.add('show');
+                document.body.style.overflow = 'hidden';
+            }
+
+            closeModal() {
+                const overlay = document.getElementById('inscriptionOverlay');
+                overlay.classList.remove('show');
+                document.body.style.overflow = '';
+
+                // Reset après fermeture
+                setTimeout(() => {
+                    this.resetForm();
+                }, 300);
+
+            }
+
+            setRating(rating) {
+                this.currentRating = rating;
+                this.highlightStars(rating);
+                this.updateRatingText(rating);
+            }
+
+        }
+
+
+        // Initialize widget
+        document.addEventListener('DOMContentLoaded', () => {
+        
+           const inscriptionWidget =   new InscriptionWidget();
+
+        });
+    </script>
+
+<div id='encart_notifications'></div><!-- === Anti-Adblock Notice v2 (MV3-safe, multi-sondes) === -->
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9b17e24a0f025020',t:'MTc2NjMyNTM5OA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script defer src="https://static.cloudflareinsights.com/beacon.min.js/vcd15cbe7772f49c399c6a5babf22c1241717689176015" integrity="sha512-ZpsOmlRQV6y907TI0dKBHq9Md29nnaEIPlkf84rnaERnq6zvWvPUqr2ft8M1aS28oN72PdrCzSjY4U6VaAw1EQ==" data-cf-beacon='{"version":"2024.11.0","token":"d922b7ad83a44ef197708c3f39b2891c","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>

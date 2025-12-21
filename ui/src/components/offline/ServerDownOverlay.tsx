@@ -16,12 +16,12 @@ const ServerDownOverlay = ({ status, onRetry, isChecking }: ServerDownOverlayPro
         inset: 0,
         zIndex: 9999,
         background: "linear-gradient(135deg, #f8f4ed 0%, #fef3c7 40%, #fde68a 100%)",
-        padding: "16px",
+        padding: 0,
         overflow: "hidden",
       }}
     >
-      <Stack gap="md" style={{ height: "100%" }}>
-        <Group justify="space-between" align="center">
+      <Stack gap="md" style={{ height: "100%", width: "100%" }}>
+        <Group justify="space-between" align="center" style={{ padding: "16px" }}>
           <Stack gap={4}>
             <Title order={2}>OmniLodge server is unavailable</Title>
             <Text size="sm" c="dimmed">
@@ -38,11 +38,11 @@ const ServerDownOverlay = ({ status, onRetry, isChecking }: ServerDownOverlayPro
           </Group>
         </Group>
 
-        <Box style={{ flex: 1, display: "flex", alignItems: "center" }}>
+        <Box style={{ flex: 1, display: "flex", alignItems: "center", width: "100vw", overflow: "hidden" }}>
           <DinoGame />
         </Box>
 
-        <Text size="sm" c="dimmed">
+        <Text size="sm" c="dimmed" style={{ padding: "0 16px 16px" }}>
           Tip: Space, Arrow Up, or tap to jump.
         </Text>
       </Stack>
