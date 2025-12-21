@@ -36,8 +36,8 @@ const ServerDownOverlay = ({
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
   const isServerDown = mode === "server-down";
-  const title = isServerDown ? "OmniLodge server is unavailable" : "OmniLodge Runner";
-  const subtitle = isServerDown ? "While we reconnect, enjoy the offline runner." : "Play the Krakow runner anytime.";
+  const title = isServerDown ? "OmniLodge server is unavailable" : "KTK Runner";
+  const subtitle = isServerDown ? "While we reconnect, enjoy the offline runner." : "Play the KTK Krakow runner anytime.";
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [loadingScores, setLoadingScores] = useState(false);
   const [scoreError, setScoreError] = useState<string | null>(null);
