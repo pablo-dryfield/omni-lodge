@@ -201,6 +201,7 @@ const AppContent = () => {
           onRetry={serverDown ? checkServer : undefined}
           isChecking={checkingServer}
           onClose={!serverDown ? () => setShowMiniGame(false) : undefined}
+          isAuthenticated={authenticated}
         />
       )}
       {authenticated ? (

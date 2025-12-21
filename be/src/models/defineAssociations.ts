@@ -64,6 +64,7 @@ import DerivedFieldDefinition from './DerivedFieldDefinition.js';
 import ReportDashboard from './ReportDashboard.js';
 import ReportDashboardCard from './ReportDashboardCard.js';
 import UserHomePreference from './UserHomePreference.js';
+import GameScore from './GameScore.js';
 import CompensationComponent from './CompensationComponent.js';
 import CompensationComponentAssignment from './CompensationComponentAssignment.js';
 import AssistantManagerTaskTemplate from './AssistantManagerTaskTemplate.js';
@@ -77,6 +78,7 @@ export function defineAssociations() {
   User.hasMany(ReportTemplate, { foreignKey: 'userId', as: 'reportTemplates' });
   User.hasMany(ReportDashboard, { foreignKey: 'ownerId', as: 'reportDashboards' });
   User.hasOne(UserHomePreference, { foreignKey: 'userId', as: 'homePreference' });
+  User.hasOne(GameScore, { foreignKey: 'user_id', as: 'gameScore' });
   ReportTemplate.belongsTo(User, { foreignKey: 'userId', as: 'reportOwner' });
   ReportDashboard.belongsTo(User, { foreignKey: 'ownerId', as: 'dashboardOwner' });
   UserHomePreference.belongsTo(User, { foreignKey: 'userId', as: 'userHome' });

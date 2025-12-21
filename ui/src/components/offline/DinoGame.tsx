@@ -345,27 +345,87 @@ const drawCactus = (ctx: CanvasRenderingContext2D, obstacle: Obstacle) => {
 };
 
 const drawBird = (ctx: CanvasRenderingContext2D, obstacle: Obstacle) => {
-  const wingLift = Math.sin(obstacle.wingPhase) * 5;
-  const centerX = obstacle.x + obstacle.width / 2;
-  const bodyY = obstacle.y + obstacle.height / 2 + 4;
+  const centerX = obstacle.x + obstacle.width * 0.5;
+  const direction = -1;
+  const wingLift = Math.sin(obstacle.wingPhase) * Math.max(2, obstacle.height * 0.35);
+  const bodyW = obstacle.width * 0.75;
+  const bodyH = obstacle.height * 0.45;
+  const bodyY = obstacle.y + obstacle.height * 0.6;
 
+  // Body
+  ctx.fillStyle = "#2f3a46";
+  ctx.beginPath();
+  ctx.ellipse(centerX, bodyY, bodyW / 2, bodyH / 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Tail
+  ctx.fillStyle = "#1f2937";
+  ctx.beginPath();
+  const tailBaseX = centerX - (bodyW / 2) * direction;
+  const tailTipX = tailBaseX - obstacle.width * 0.2 * direction;
+  ctx.moveTo(tailBaseX, bodyY);
+  ctx.lineTo(tailTipX, bodyY - bodyH * 0.2);
+  ctx.lineTo(tailTipX, bodyY + bodyH * 0.2);
+  ctx.closePath();
+  ctx.fill();
+
+  // Wings
+  const wingBaseY = bodyY - bodyH * 0.3;
+  const wingTipY = wingBaseY - wingLift - obstacle.height * 0.35;
+  const wingSpan = obstacle.width * 0.6;
   ctx.fillStyle = "#374151";
   ctx.beginPath();
-  ctx.ellipse(centerX, bodyY, obstacle.width / 2.4, obstacle.height / 3.2, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.moveTo(centerX - obstacle.width / 2, obstacle.y + 10);
-  ctx.lineTo(centerX, obstacle.y + wingLift);
-  ctx.lineTo(centerX + obstacle.width / 2, obstacle.y + 10);
+  ctx.moveTo(centerX - bodyW * 0.35, wingBaseY);
+  ctx.quadraticCurveTo(
+    centerX - wingSpan,
+    wingTipY,
+    centerX - bodyW * 0.05,
+    wingBaseY + bodyH * 0.12
+  );
   ctx.closePath();
   ctx.fill();
 
   ctx.beginPath();
-  ctx.moveTo(centerX + obstacle.width / 2 - 2, bodyY - 1);
-  ctx.lineTo(centerX + obstacle.width / 2 + 4, bodyY + 1);
-  ctx.lineTo(centerX + obstacle.width / 2 - 2, bodyY + 3);
+  ctx.moveTo(centerX + bodyW * 0.35, wingBaseY);
+  ctx.quadraticCurveTo(
+    centerX + wingSpan,
+    wingTipY,
+    centerX + bodyW * 0.05,
+    wingBaseY + bodyH * 0.12
+  );
   ctx.closePath();
+  ctx.fill();
+
+  // Head
+  const headRadius = Math.max(2, obstacle.height * 0.18);
+  const headX = centerX + bodyW * 0.4 * direction;
+  const headY = bodyY - bodyH * 0.2;
+  ctx.fillStyle = "#374151";
+  ctx.beginPath();
+  ctx.arc(headX, headY, headRadius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Beak
+  ctx.fillStyle = "#f59e0b";
+  ctx.beginPath();
+  const beakBaseX = headX + headRadius * direction;
+  const beakTipX = headX + (headRadius + obstacle.width * 0.12) * direction;
+  ctx.moveTo(beakBaseX, headY);
+  ctx.lineTo(beakTipX, headY - headRadius * 0.25);
+  ctx.lineTo(beakTipX, headY + headRadius * 0.25);
+  ctx.closePath();
+  ctx.fill();
+
+  // Eye
+  ctx.fillStyle = "#111827";
+  ctx.beginPath();
+  ctx.arc(
+    headX - headRadius * 0.3 * direction,
+    headY - headRadius * 0.2,
+    Math.max(1, headRadius * 0.18),
+    0,
+    Math.PI * 2
+  );
   ctx.fill();
 };
 
@@ -726,7 +786,11 @@ const drawGame = (ctx: CanvasRenderingContext2D, game: GameState) => {
   }
 };
 
-const DinoGame = () => {
+type DinoGameProps = {
+  onGameOver?: (score: number) => void;
+};
+
+const DinoGame = ({ onGameOver }: DinoGameProps) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const gameRef = useRef<GameState | null>(null);
   const lastTimeRef = useRef<number>(0);
@@ -734,9 +798,14 @@ const DinoGame = () => {
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastGameOverRef = useRef(false);
+  const onGameOverRef = useRef<DinoGameProps["onGameOver"]>(onGameOver);
   const crouchTimerRef = useRef<number | null>(null);
   const touchCrouchActiveRef = useRef(false);
   const pointerDownRef = useRef(false);
+
+  useEffect(() => {
+    onGameOverRef.current = onGameOver;
+  }, [onGameOver]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -752,9 +821,14 @@ const DinoGame = () => {
 
     const resize = () => {
       const parent = canvas.parentElement;
-      const width = window.innerWidth || parent?.clientWidth || MAX_WIDTH;
-      const scale = computeScale(width);
-      const height = Math.round(BASE_HEIGHT * (width <= 520 ? 0.85 : 1));
+      const width = parent?.clientWidth || window.innerWidth || MAX_WIDTH;
+      const baseHeight = Math.round(BASE_HEIGHT * (width <= 520 ? 0.85 : 1));
+      const maxHeight = parent?.clientHeight || window.innerHeight || baseHeight;
+      let scale = computeScale(width);
+      if (maxHeight > 0) {
+        scale = Math.min(scale, maxHeight / baseHeight);
+      }
+      const height = Math.round(baseHeight * scale);
       const dpr = window.devicePixelRatio || 1;
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
@@ -930,6 +1004,7 @@ const DinoGame = () => {
       updateGame(game, delta);
       if (game.isGameOver && !lastGameOverRef.current) {
         playTrumpetMelody();
+        onGameOverRef.current?.(Math.floor(game.score));
       }
       lastGameOverRef.current = game.isGameOver;
       drawGame(ctx, game);
