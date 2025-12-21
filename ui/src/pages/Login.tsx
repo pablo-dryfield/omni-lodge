@@ -387,6 +387,13 @@ const LoginPage: React.FC = () => {
     setProfilePhotoPreview(null);
   };
 
+  const handleOpenMiniGame = () => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.dispatchEvent(new CustomEvent('omni-open-game'));
+  };
+
   const handleProfilePhotoChange = (file: File | null) => {
     if (!file) {
       setProfilePhotoFile(null);
@@ -1266,6 +1273,9 @@ const sanitize = (value: string) => {
             {isSignup ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
           </Button>
         </Paper>
+        <Button variant="outline" onClick={handleOpenMiniGame} mt="md" fullWidth>
+          Play Krakow Runner
+        </Button>
       </Container>
     </Box>
   );

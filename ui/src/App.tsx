@@ -42,6 +42,7 @@ const AppContent = () => {
   const [serverDown, setServerDown] = useState(false);
   const [serverDownStatus, setServerDownStatus] = useState<number | undefined>(undefined);
   const [checkingServer, setCheckingServer] = useState(false);
+  const [showMiniGame, setShowMiniGame] = useState(false);
   const serverDownRef = useRef(false);
   const serverDownStatusRef = useRef<number | undefined>(undefined);
   const retryTimerRef = useRef<number | null>(null);
@@ -150,11 +151,17 @@ const AppContent = () => {
       }
     };
 
+    const handleOpenGame = () => {
+      setShowMiniGame(true);
+    };
+
     window.addEventListener("omni-server-down", handleServerDown as EventListener);
     window.addEventListener("online", handleOnline);
+    window.addEventListener("omni-open-game", handleOpenGame as EventListener);
     return () => {
       window.removeEventListener("omni-server-down", handleServerDown as EventListener);
       window.removeEventListener("online", handleOnline);
+      window.removeEventListener("omni-open-game", handleOpenGame as EventListener);
     };
   }, [checkServer]);
 
@@ -182,10 +189,19 @@ const AppContent = () => {
     dispatch(fetchAccessSnapshot());
   };
 
+  const showOverlay = serverDown || showMiniGame;
+  const overlayMode = serverDown ? "server-down" : "freeplay";
+
   return (
     <>
-      {serverDown && (
-        <ServerDownOverlay status={serverDownStatus} onRetry={checkServer} isChecking={checkingServer} />
+      {showOverlay && (
+        <ServerDownOverlay
+          mode={overlayMode}
+          status={serverDownStatus}
+          onRetry={serverDown ? checkServer : undefined}
+          isChecking={checkingServer}
+          onClose={!serverDown ? () => setShowMiniGame(false) : undefined}
+        />
       )}
       {authenticated ? (
         <AppShell
