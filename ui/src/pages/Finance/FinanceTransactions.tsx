@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   ActionIcon,
   Badge,
@@ -369,8 +369,8 @@ const FinanceTransactions = () => {
     },
     [],
   );
-  const handleFileSelect = async (event: Event) => {
-    const target = event.target as HTMLInputElement | null;
+  const handleFileSelect = async (event: ChangeEvent<HTMLInputElement>) => {
+    const target = event.target;
     const file = target?.files?.[0];
     if (!file) {
       return;

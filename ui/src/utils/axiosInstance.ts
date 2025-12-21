@@ -9,6 +9,17 @@ const instance = axios.create({
   withCredentials: true,
 });
 
+const notifyServerDown = (details: { status?: number; isNetworkError?: boolean; message?: string }) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.dispatchEvent(new CustomEvent("omni-server-down", { detail: details }));
+  } catch {
+    // Ignore event dispatch failures in older environments.
+  }
+};
+
 // Add a request interceptor
 instance.interceptors.request.use(
   (config) => {
@@ -19,6 +30,19 @@ instance.interceptors.request.use(
     return config;
   },
   (error) => {
+    return Promise.reject(error);
+  }
+);
+
+instance.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error?.response?.status as number | undefined;
+    const isNetworkError = !error?.response;
+    const isServerError = typeof status === "number" && status >= 500;
+    if (isNetworkError || isServerError) {
+      notifyServerDown({ status, isNetworkError, message: error?.message });
+    }
     return Promise.reject(error);
   }
 );
