@@ -235,10 +235,10 @@ const drawSilhouette = (
 };
 
 const MAN_SPRITE = [
-  "..................",
+  ".......HHHH.......",
+  "......HHHHHH......",
   "........SS........",
   ".......SSSE.......",
-  ".......SSSS.......",
   ".......####.......",
   "......######......",
   ".....########.....",
@@ -260,7 +260,8 @@ const MAN_CROUCH_SPRITE = [
   "..................",
   "..................",
   "..................",
-  "..................",
+  ".......HHHH.......",
+  "......HHHHHH......",
   "........SS........",
   ".......SSSE.......",
   ".......SSSS..B....",
@@ -279,7 +280,9 @@ const MAN_PALETTE: SpritePalette = {
   "S": "#f2c9a0",
   "B": "#f59e0b",
   "F": "#fde68a",
+  "H": "#1f2937",
 };
+
 
 const BOTTLE_SPRITE = [
   ".....###.....",
@@ -374,7 +377,7 @@ const drawKrakowLandmarks = (ctx: CanvasRenderingContext2D, game: GameState) => 
   // Main Market Hall (left)
   const hallX = Math.round(game.width * 0.05);
   const hallW = Math.round(game.width * 0.28);
-  const hallH = Math.round(game.height * 0.26);
+  const hallH = Math.round(game.height * 0.18);
   const hallY = horizonY - hallH;
   ctx.fillStyle = "#7a4b2e";
   ctx.fillRect(hallX, hallY, hallW, hallH);
@@ -383,11 +386,18 @@ const drawKrakowLandmarks = (ctx: CanvasRenderingContext2D, game: GameState) => 
   ctx.fillStyle = "#d9c5a2";
   const archCount = 6;
   const archW = Math.round(hallW / (archCount + 1));
-  const archH = Math.round(hallH * 0.45);
+  const archH = Math.round(hallH * 0.65);
   for (let i = 0; i < archCount; i += 1) {
     const ax = hallX + Math.round(archW * (i + 0.5));
+    const aw = Math.round(archW * 0.6);
     const ay = hallY + hallH - archH;
-    ctx.fillRect(ax, ay, Math.round(archW * 0.6), archH);
+    ctx.beginPath();
+    ctx.moveTo(ax, ay + archH);
+    ctx.lineTo(ax, ay + Math.round(archH * 0.4));
+    ctx.quadraticCurveTo(ax + aw / 2, ay - Math.round(archH * 0.2), ax + aw, ay + Math.round(archH * 0.4));
+    ctx.lineTo(ax + aw, ay + archH);
+    ctx.closePath();
+    ctx.fill();
   }
 
   // Market Hall central tower
@@ -564,6 +574,26 @@ const drawBackground = (ctx: CanvasRenderingContext2D, game: GameState) => {
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, game.width, game.height);
 
+  // City skyline backdrop
+  const skylineBaseY = game.groundY - Math.round(20 * game.scale);
+  ctx.fillStyle = "rgba(92, 74, 64, 0.35)";
+  const blockCount = 12;
+  for (let i = 0; i < blockCount; i += 1) {
+    const blockW = Math.round(game.width / blockCount);
+    const blockH = Math.round((42 + (i % 3) * 16) * game.scale);
+    const x = Math.round(blockW * i);
+    const y = skylineBaseY - blockH;
+    ctx.fillRect(x, y, blockW, blockH);
+    if (i % 2 === 0) {
+      ctx.beginPath();
+      ctx.moveTo(x + Math.round(blockW * 0.2), y);
+      ctx.lineTo(x + Math.round(blockW * 0.5), y - Math.round(14 * game.scale));
+      ctx.lineTo(x + Math.round(blockW * 0.8), y);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
   drawKrakowLandmarks(ctx, game);
 };
 
@@ -691,7 +721,8 @@ const drawGame = (ctx: CanvasRenderingContext2D, game: GameState) => {
   }
 
   if (game.isGameOver) {
-    drawMessage(ctx, game, "Game Over", "Press Space or Tap to Restart");
+    const topY = Math.max(28, Math.round(36 * game.scale));
+    drawMessage(ctx, game, "Game Over", "Press Space or Tap to Restart", topY);
   }
 };
 
@@ -701,6 +732,8 @@ const DinoGame = () => {
   const lastTimeRef = useRef<number>(0);
   const frameRef = useRef<number>(0);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const lastGameOverRef = useRef(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -716,7 +749,7 @@ const DinoGame = () => {
 
     const resize = () => {
       const parent = canvas.parentElement;
-      const width = parent?.clientWidth ?? MAX_WIDTH;
+      const width = window.innerWidth || parent?.clientWidth || MAX_WIDTH;
       const scale = computeScale(width);
       const height = Math.round(BASE_HEIGHT * (width <= 520 ? 0.85 : 1));
       const dpr = window.devicePixelRatio || 1;
@@ -764,6 +797,27 @@ const DinoGame = () => {
       applyCrouch(game);
     };
 
+    const playTrumpetMelody = () => {
+      if (typeof window === "undefined") {
+        return;
+      }
+      if (!audioRef.current) {
+        const audio = new Audio("/audio/hejnal-mariacki.ogg");
+        audio.preload = "auto";
+        audio.volume = 0.5;
+        audioRef.current = audio;
+      }
+      const audio = audioRef.current;
+      if (!audio) {
+        return;
+      }
+      if (!audio.paused && !audio.ended) {
+        return;
+      }
+      audio.currentTime = 0;
+      audio.play().catch(() => undefined);
+    };
+
     const jump = () => {
       const game = gameRef.current;
       if (!game) {
@@ -774,6 +828,7 @@ const DinoGame = () => {
         gameRef.current = createGameState(game.width, game.height, game.scale);
         if (gameRef.current) {
           gameRef.current.hiScore = previousHiScore;
+          lastGameOverRef.current = false;
         }
       }
       const current = gameRef.current;
@@ -828,6 +883,10 @@ const DinoGame = () => {
       const delta = Math.min((time - lastTime) / 16.67, 2);
       lastTimeRef.current = time;
       updateGame(game, delta);
+      if (game.isGameOver && !lastGameOverRef.current) {
+        playTrumpetMelody();
+      }
+      lastGameOverRef.current = game.isGameOver;
       drawGame(ctx, game);
       frameRef.current = window.requestAnimationFrame(loop);
     };
