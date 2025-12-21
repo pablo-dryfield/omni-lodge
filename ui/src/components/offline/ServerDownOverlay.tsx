@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Box, Button, Group, Loader, ScrollArea, Stack, Text, Title } from "@mantine/core";
+import { useMantineTheme } from "@mantine/core";
+import { useMediaQuery } from "@mantine/hooks";
 import DinoGame from "./DinoGame";
 import axiosInstance from "../../utils/axiosInstance";
 
@@ -31,6 +33,8 @@ const ServerDownOverlay = ({
   onClose,
   isAuthenticated = false,
 }: ServerDownOverlayProps) => {
+  const theme = useMantineTheme();
+  const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
   const isServerDown = mode === "server-down";
   const title = isServerDown ? "OmniLodge server is unavailable" : "OmniLodge Runner";
   const subtitle = isServerDown ? "While we reconnect, enjoy the offline runner." : "Play the Krakow runner anytime.";
@@ -40,7 +44,8 @@ const ServerDownOverlay = ({
   const [isSavingScore, setIsSavingScore] = useState(false);
   const saveInFlightRef = useRef(false);
 
-  const rowsPerColumn = Math.ceil(LEADERBOARD_ROWS / LEADERBOARD_COLUMNS);
+  const columnCount = isMobile ? 1 : LEADERBOARD_COLUMNS;
+  const rowsPerColumn = Math.ceil(LEADERBOARD_ROWS / columnCount);
   const leaderboardHeight = rowsPerColumn * LEADERBOARD_ROW_HEIGHT;
 
   const fetchLeaderboard = useCallback(async () => {
@@ -124,30 +129,33 @@ const ServerDownOverlay = ({
         </Box>
       );
     }
-    const leftColumn = leaderboard.slice(0, rowsPerColumn);
-    const rightColumn = leaderboard.slice(rowsPerColumn, rowsPerColumn * 2);
+    const columns: LeaderboardEntry[][] = [];
+    for (let i = 0; i < columnCount; i += 1) {
+      columns.push(leaderboard.slice(i * rowsPerColumn, (i + 1) * rowsPerColumn));
+    }
     return (
       <ScrollArea h={leaderboardHeight} type="auto" offsetScrollbars>
         <Box
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            columnGap: 16,
+            gridTemplateColumns: columnCount === 1 ? "1fr" : "1fr 1fr",
+            columnGap: columnCount === 1 ? 0 : 16,
             paddingRight: 8,
           }}
         >
-          {[leftColumn, rightColumn].map((column, columnIndex) => (
+          {columns.map((column, columnIndex) => (
             <Stack key={`score-col-${columnIndex}`} gap={6}>
               {column.map((entry) => (
                 <Group
                   key={`${entry.userId}-${entry.rank}`}
                   justify="space-between"
+                  align="flex-start"
                   style={{ minHeight: LEADERBOARD_ROW_HEIGHT }}
                 >
                   <Text size="sm" fw={600} style={{ width: 34 }}>
                     #{entry.rank}
                   </Text>
-                  <Text size="sm" style={{ flex: 1 }} lineClamp={1}>
+                  <Text size="xs" style={{ flex: 1, whiteSpace: "normal", overflowWrap: "anywhere" }}>
                     {entry.displayName}
                   </Text>
                   <Text size="sm" fw={600} style={{ minWidth: 44, textAlign: "right" }}>

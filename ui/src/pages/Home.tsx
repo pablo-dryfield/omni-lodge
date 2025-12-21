@@ -7,7 +7,7 @@ import FormatListNumberedIcon from "@mui/icons-material/FormatListNumbered";
 import PersonIcon from "@mui/icons-material/Person";
 import SettingsIcon from "@mui/icons-material/Settings";
 import BarChartIcon from "@mui/icons-material/BarChart";
-import StarIcon from "@mui/icons-material/Star";
+import SportsEsportsIcon from "@mui/icons-material/SportsEsports";
 import Grid from "@mui/material/Grid";
 import {
   Alert,
@@ -355,7 +355,7 @@ const renderNavigationIcon = (icon: NavigationIconKey) => {
     case "barChart":
       return <BarChartIcon fontSize="large" />;
     case "star":
-      return <StarIcon fontSize="large" />;
+      return <SportsEsportsIcon fontSize="large" />;
     default:
       return <PersonIcon fontSize="large" />;
   }
@@ -386,6 +386,14 @@ const TileLink = styled(RouterLink)(({ theme: muiTheme }) => ({
   display: "flex",
   justifyContent: "center",
   textDecoration: "none",
+  width: "100%",
+  paddingTop: muiTheme.spacing(1),
+  paddingBottom: muiTheme.spacing(1),
+}));
+
+const TileButtonWrapper = styled("div")(({ theme: muiTheme }) => ({
+  display: "flex",
+  justifyContent: "center",
   width: "100%",
   paddingTop: muiTheme.spacing(1),
   paddingBottom: muiTheme.spacing(1),
@@ -1284,7 +1292,7 @@ const Home = (props: GenericPageProps) => {
           ) : (
             <>
               {allowedPages.map((page) => (
-                <Grid key={page.name} size={{ xs: 12, sm: 6, md: 4, lg: 3 }}>
+                <Grid key={page.name} size={{ xs: 12, sm: 6, md: 3, lg: 3 }}>
                   <TileLink to={page.path} aria-label={`Go to ${page.name}`}>
                     <LogoTile elevation={3}>
                       {renderNavigationIcon(page.icon)}
@@ -1293,18 +1301,26 @@ const Home = (props: GenericPageProps) => {
                   </TileLink>
                 </Grid>
               ))}
-              <Grid size={{ xs: 12, sm: 6, md: 4, lg: 3 }}>
-                <LogoTile
-                  component="button"
-                  type="button"
-                  elevation={3}
-                  onClick={handleOpenMiniGame}
-                  sx={{ cursor: "pointer", border: "none" }}
-                  aria-label="Play Krakow Runner"
-                >
-                  <StarIcon fontSize="large" />
-                  <PageName variant="subtitle1">Krakow Runner</PageName>
-                </LogoTile>
+              <Grid size={{ xs: 12, sm: 6, md: 3, lg: 3 }}>
+                <TileButtonWrapper>
+                  <LogoTile
+                    elevation={3}
+                    onClick={handleOpenMiniGame}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        handleOpenMiniGame();
+                      }
+                    }}
+                    sx={{ cursor: "pointer", border: "none" }}
+                    aria-label="Play Krakow Runner"
+                  >
+                    <SportsEsportsIcon fontSize="large" />
+                    <PageName variant="subtitle1">Krakow Runner</PageName>
+                  </LogoTile>
+                </TileButtonWrapper>
               </Grid>
             </>
           )}
