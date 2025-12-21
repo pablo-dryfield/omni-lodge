@@ -416,7 +416,7 @@ const drawKrakowLandmarks = (ctx: CanvasRenderingContext2D, game: GameState) => 
   ctx.fill();
 
   // Adam Mickiewicz Monument (center)
-  const statueX = Math.round(game.width * 0.46);
+  const statueX = Math.round(game.width * 0.52);
   const pedestalW = Math.round(game.width * 0.08);
   const pedestalH = Math.round(game.height * 0.12);
   ctx.fillStyle = "#8f6445";
