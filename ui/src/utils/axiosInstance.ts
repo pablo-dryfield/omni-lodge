@@ -34,9 +34,27 @@ instance.interceptors.request.use(
   }
 );
 
+const isRequestCanceled = (error: unknown): boolean => {
+  if (!error) {
+    return false;
+  }
+  if (axios.isCancel(error)) {
+    return true;
+  }
+  const candidate = error as { code?: string; name?: string; message?: string };
+  return (
+    candidate.code === "ERR_CANCELED" ||
+    candidate.name === "CanceledError" ||
+    candidate.message === "canceled"
+  );
+};
+
 instance.interceptors.response.use(
   (response) => response,
   (error) => {
+    if (isRequestCanceled(error)) {
+      return Promise.reject(error);
+    }
     const status = error?.response?.status as number | undefined;
     const isNetworkError = !error?.response;
     const isServerError = typeof status === "number" && status >= 500;
