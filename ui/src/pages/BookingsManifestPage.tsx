@@ -13,6 +13,7 @@ import {
   Modal,
   Paper,
   Select,
+  SegmentedControl,
   Stack,
   Table,
   Text,
@@ -96,6 +97,8 @@ type ManifestResponse = {
 
 
 type FetchStatus = "idle" | "loading" | "success" | "error";
+
+type BookingFilter = "all" | "active" | "cancelled";
 
 
 
@@ -218,6 +221,7 @@ const PLATFORM_BOOKING_LINKS: Record<string, (bookingId: string) => string> = {
   viator: (id: string) =>
     `https://supplier.viator.com/bookings/search?bookingRef=${encodeURIComponent(id)}&sortBy=NEW_BOOKINGS&pageNumber=1&pageSize=10`,
   getyourguide: (id: string) => `https://supplier.getyourguide.com/bookings/${encodeURIComponent(id)}?from=/bookings`,
+  airbnb: (id: string) => `https://www.airbnb.com/hosting/reservations/details/${encodeURIComponent(id)}`,
 };
 
 const getPlatformBookingLink = (platform?: string | null, bookingId?: string | null): string | null => {
@@ -306,6 +310,96 @@ const createSummaryFromGroups = (groups: ManifestGroup[]): ManifestSummary => ({
     return acc;
   }, createEmptyStatusCounts()),
 });
+
+const filterOrdersByStatus = (orders: UnifiedOrder[], filter: BookingFilter): UnifiedOrder[] => {
+  if (filter === "all") {
+    return orders;
+  }
+  if (filter === "cancelled") {
+    return orders.filter((order) => order.status === "cancelled");
+  }
+  return orders.filter((order) => {
+    const quantity = Number.isFinite(order.quantity) ? order.quantity : 0;
+    return order.status !== "cancelled" && quantity > 0;
+  });
+};
+
+const getOrderCounts = (order: UnifiedOrder) => {
+  const men = Number.isFinite(order.menCount) ? order.menCount : 0;
+  const women = Number.isFinite(order.womenCount) ? order.womenCount : 0;
+  const fallback = Number.isFinite(order.quantity) ? order.quantity : 0;
+  const total = men + women > 0 ? men + women : fallback;
+  return { men, women, total };
+};
+
+const buildPlatformBreakdownFromOrders = (orders: UnifiedOrder[]): PlatformBreakdownEntry[] => {
+  const map = new Map<string, PlatformBreakdownEntry>();
+  orders.forEach((order) => {
+    const { men, women, total } = getOrderCounts(order);
+    const key = order.platform ?? "unknown";
+    const existing = map.get(key);
+    if (existing) {
+      existing.totalPeople += total;
+      existing.men += men;
+      existing.women += women;
+      existing.orderCount += 1;
+      return;
+    }
+    map.set(key, {
+      platform: key,
+      totalPeople: total,
+      men,
+      women,
+      orderCount: 1,
+    });
+  });
+  return Array.from(map.values()).sort((a, b) => a.platform.localeCompare(b.platform));
+};
+
+const buildGroupTotalsFromOrders = (orders: UnifiedOrder[]) => {
+  const extras: OrderExtras = { tshirts: 0, cocktails: 0, photos: 0 };
+  let men = 0;
+  let women = 0;
+  let totalPeople = 0;
+
+  orders.forEach((order) => {
+    const counts = getOrderCounts(order);
+    men += counts.men;
+    women += counts.women;
+    totalPeople += counts.total;
+    extras.tshirts += order.extras?.tshirts ?? 0;
+    extras.cocktails += order.extras?.cocktails ?? 0;
+    extras.photos += order.extras?.photos ?? 0;
+  });
+
+  return {
+    totalPeople,
+    men,
+    women,
+    extras,
+    platformBreakdown: buildPlatformBreakdownFromOrders(orders),
+  };
+};
+
+const applyBookingFilterToManifest = (groups: ManifestGroup[], filter: BookingFilter): ManifestGroup[] => {
+  if (filter === "all") {
+    return groups;
+  }
+  return groups
+    .map((group) => {
+      const filteredOrders = filterOrdersByStatus(group.orders, filter);
+      if (filteredOrders.length === 0) {
+        return null;
+      }
+      const totals = buildGroupTotalsFromOrders(filteredOrders);
+      return {
+        ...group,
+        ...totals,
+        orders: filteredOrders,
+      };
+    })
+    .filter((group): group is ManifestGroup => Boolean(group));
+};
 
 const OrderPlatformBadge = ({ platform }: { platform?: string }) => {
   if (!platform) {
@@ -566,6 +660,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [reloadToken, setReloadToken] = useState(0);
+  const [statusFilter, setStatusFilter] = useState<BookingFilter>("all");
   const [searchInput, setSearchInput] = useState(searchParam);
   const [amendState, setAmendState] = useState<AmendModalState>(createDefaultAmendState());
 
@@ -848,9 +943,21 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
 
 
+  const filteredManifest = useMemo(
+    () => applyBookingFilterToManifest(manifest, statusFilter),
+    [manifest, statusFilter],
+  );
+
+  const filteredSummary = useMemo(() => {
+    if (statusFilter === "all") {
+      return summary;
+    }
+    return createSummaryFromGroups(filteredManifest);
+  }, [filteredManifest, statusFilter, summary]);
+
   const groupOptions = useMemo(() => {
 
-    const options = manifestToOptions(manifest);
+    const options = manifestToOptions(filteredManifest);
 
     if (options.length === 0) {
 
@@ -860,17 +967,17 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
     return [{ value: "all", label: "All events" }, ...options];
 
-  }, [manifest]);
+  }, [filteredManifest]);
 
 
 
   const activeGroups = useMemo(() => {
     if (hasSearchParam || selectedGroupKey === "all") {
-      return manifest;
+      return filteredManifest;
     }
 
-    return manifest.filter((group) => `${group.productId}|${group.time}` === selectedGroupKey);
-  }, [hasSearchParam, manifest, selectedGroupKey]);
+    return filteredManifest.filter((group) => `${group.productId}|${group.time}` === selectedGroupKey);
+  }, [hasSearchParam, filteredManifest, selectedGroupKey]);
 
 
 
@@ -1078,6 +1185,22 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               </Stack>
             </form>
 
+            <Group gap="sm" wrap="wrap" align="center">
+              <Text size="sm" fw={600}>
+                Filters
+              </Text>
+              <SegmentedControl
+                value={statusFilter}
+                onChange={(value) => setStatusFilter(value as BookingFilter)}
+                data={[
+                  { label: "All", value: "all" },
+                  { label: "Has people", value: "active" },
+                  { label: "Cancelled", value: "cancelled" },
+                ]}
+                size="sm"
+              />
+            </Group>
+
 
 
             <Group gap="md" wrap="wrap">
@@ -1093,53 +1216,53 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
               <Badge size="lg" color="green" variant="light">
 
-                {`Total: ${summary.totalPeople} people`}
+                {`Total: ${filteredSummary.totalPeople} people`}
 
               </Badge>
 
               <Badge size="lg" color="teal" variant="light">
 
-                {`Men: ${summary.men}`}
+                {`Men: ${filteredSummary.men}`}
 
               </Badge>
 
               <Badge size="lg" color="pink" variant="light">
 
-                {`Women: ${summary.women}`}
+                {`Women: ${filteredSummary.women}`}
 
               </Badge>
 
-              {summary.extras.tshirts > 0 && (
+              {filteredSummary.extras.tshirts > 0 && (
                 <Badge size="lg" color="blue" variant="light">
 
-                  {`T-Shirts: ${summary.extras.tshirts}`}
+                  {`T-Shirts: ${filteredSummary.extras.tshirts}`}
 
                 </Badge>
               )}
 
-              {summary.extras.cocktails > 0 && (
+              {filteredSummary.extras.cocktails > 0 && (
                 <Badge size="lg" color="violet" variant="light">
 
-                  {`Cocktails: ${summary.extras.cocktails}`}
+                  {`Cocktails: ${filteredSummary.extras.cocktails}`}
 
                 </Badge>
               )}
 
-              {summary.extras.photos > 0 && (
+              {filteredSummary.extras.photos > 0 && (
                 <Badge size="lg" color="grape" variant="light">
 
-                  {`Photos: ${summary.extras.photos}`}
+                  {`Photos: ${filteredSummary.extras.photos}`}
 
                 </Badge>
               )}
 
               <Badge size="lg" color="gray" variant="light">
 
-                {`Bookings: ${summary.totalOrders}`}
+                {`Bookings: ${filteredSummary.totalOrders}`}
 
               </Badge>
 
-              <PlatformBadges entries={summary.platformBreakdown} prefix="summary" />
+              <PlatformBadges entries={filteredSummary.platformBreakdown} prefix="summary" />
 
               <Stack gap={4} w="100%">
                 <Text fw={600} size="sm">
@@ -1152,7 +1275,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                       color={STATUS_COLORS[status]}
                       variant="light"
                     >
-                      {`${formatStatusLabel(status)}: ${summary.statusCounts?.[status] ?? 0}`}
+                      {`${formatStatusLabel(status)}: ${filteredSummary.statusCounts?.[status] ?? 0}`}
                     </Badge>
                   ))}
                 </Group>
@@ -1186,7 +1309,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               <Alert color="blue" title="No data">
                 {hasSearchParam
                   ? `No bookings matched “${searchParam}”.`
-                  : "No bookings found for the selected date."}
+                  : statusFilter === "cancelled"
+                    ? "No cancelled bookings found for the selected date."
+                    : statusFilter === "active"
+                      ? "No active bookings found for the selected date."
+                      : "No bookings found for the selected date."}
               </Alert>
 
             ) : (
@@ -1264,7 +1391,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                           <Stack gap="sm">
                             {sortedOrders.map((order) => {
                               const bookingDisplay = order.platformBookingId ?? order.id;
-                              const bookingLink = getPlatformBookingLink(order.platform, order.platformBookingId);
+                              const bookingLink =
+                                order.platformBookingUrl ?? getPlatformBookingLink(order.platform, order.platformBookingId);
                               const bookingId = getBookingIdFromOrder(order);
                               const canAmend = isEcwidOrder(order) && Boolean(bookingId);
                               const canCancel = canAmend && order.status !== "cancelled";
@@ -1498,7 +1626,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                           </Table.Tr>
                           {sortedOrders.map((order) => {
                             const bookingDisplay = order.platformBookingId ?? order.id;
-                            const bookingLink = getPlatformBookingLink(order.platform, order.platformBookingId);
+                            const bookingLink =
+                              order.platformBookingUrl ?? getPlatformBookingLink(order.platform, order.platformBookingId);
                             const bookingId = getBookingIdFromOrder(order);
                             const canAmend = isEcwidOrder(order) && Boolean(bookingId);
                             const canCancel = canAmend && order.status !== "cancelled";
@@ -1658,7 +1787,3 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
 
 export default BookingsManifestPage;
-
-
-
-

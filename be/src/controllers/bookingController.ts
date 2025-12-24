@@ -309,6 +309,7 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
   return {
     id: String(booking.id),
     platformBookingId: booking.platformBookingId,
+    platformBookingUrl: booking.rawPayloadLocation ?? null,
     productId,
     productName: displayProductName,
     date: experienceDate,

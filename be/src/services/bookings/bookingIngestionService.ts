@@ -17,7 +17,7 @@ import { canonicalizeProductLabel } from '../../utils/productName.js';
 
 const DEFAULT_QUERY =
   process.env.BOOKING_GMAIL_QUERY ??
-  '(subject:(booking OR reservation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR viator.com OR getyourguide.com OR xperiencepoland.com))';
+  '(subject:(booking OR reservation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR airbnb.com OR airbnbmail.com))';
 const DEFAULT_BATCH = Number.parseInt(process.env.BOOKING_GMAIL_BATCH_SIZE ?? '20', 10);
 
 const PLATFORM_CHANNEL_NAMES: Partial<Record<BookingPlatform, string>> = {
@@ -26,7 +26,7 @@ const PLATFORM_CHANNEL_NAMES: Partial<Record<BookingPlatform, string>> = {
   getyourguide: 'GetYourGuide',
   freetour: 'FreeTour',
   ecwid: 'Ecwid',
-  airbnb: 'Email',
+  airbnb: 'Airbnb',
   xperiencepoland: 'XperiencePoland',
 };
 

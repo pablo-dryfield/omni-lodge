@@ -1,4 +1,5 @@
 import type { BookingEmailParser } from '../types.js';
+import { AirbnbBookingParser } from './airbnbBookingParser.js';
 import { EcwidBookingParser } from './ecwidBookingParser.js';
 import { FareHarborBookingParser } from './fareHarborBookingParser.js';
 import { FreeTourBookingParser } from './freeTourBookingParser.js';
@@ -13,6 +14,7 @@ const parserInstances: BookingEmailParser[] = [
   new FreeTourBookingParser(),
   new FareHarborBookingParser(),
   new XperiencePolandBookingParser(),
+  new AirbnbBookingParser(),
 ];
 
 export const getBookingParsers = (): BookingEmailParser[] => parserInstances;

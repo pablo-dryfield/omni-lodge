@@ -1,10 +1,19 @@
-import { Request, Response } from 'express';
+import { Response } from 'express';
 import { DataType } from 'sequelize-typescript';
 import Channel from '../models/Channel.js';
 import PaymentMethod from '../models/PaymentMethod.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
+import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 
 const LATE_BOOKING_CHANNELS = new Set(['Ecwid', 'Walk-In']);
+
+const requireActorId = (req: AuthenticatedRequest): number => {
+  const actorId = req.authContext?.id;
+  if (!actorId) {
+    throw new Error('Unauthorized');
+  }
+  return actorId;
+};
 
 function buildChannelColumns() {
   const attributes = Channel.getAttributes();
@@ -47,7 +56,7 @@ async function resolvePaymentMethodId(requestedId?: number | null): Promise<numb
   return defaultMethod.id;
 }
 
-export const getAllChannels = async (req: Request, res: Response): Promise<void> => {
+export const getAllChannels = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const format = (req.query.format ?? req.query.view ?? '').toString().toLowerCase();
 
@@ -81,7 +90,7 @@ export const getAllChannels = async (req: Request, res: Response): Promise<void>
   }
 };
 
-export const getChannelById = async (req: Request, res: Response): Promise<void> => {
+export const getChannelById = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
     const channel = await Channel.findByPk(id, {
@@ -102,9 +111,10 @@ export const getChannelById = async (req: Request, res: Response): Promise<void>
   }
 };
 
-export const createChannel = async (req: Request, res: Response): Promise<void> => {
+export const createChannel = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { name, description, apiKey, apiSecret, paymentMethodId } = req.body;
+    const actorId = requireActorId(req);
     const resolvedPaymentMethodId = await resolvePaymentMethodId(paymentMethodId);
     const newChannel = await Channel.create({
       name,
@@ -112,6 +122,7 @@ export const createChannel = async (req: Request, res: Response): Promise<void> 
       apiKey,
       apiSecret,
       paymentMethodId: resolvedPaymentMethodId,
+      createdBy: actorId,
     });
     await newChannel.reload({
       include: [{ model: PaymentMethod, as: 'paymentMethod', attributes: ['id', 'name'] }],
@@ -119,17 +130,20 @@ export const createChannel = async (req: Request, res: Response): Promise<void> 
     res.status(201).json(serializeChannel(newChannel as ChannelWithRelations));
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    const status = errorMessage === 'Unauthorized' ? 401 : 500;
+    res.status(status).json([{ message: errorMessage }]);
   }
 };
 
-export const updateChannel = async (req: Request, res: Response): Promise<void> => {
+export const updateChannel = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
+    const actorId = requireActorId(req);
     const payload = { ...req.body };
     if ('paymentMethodId' in payload) {
       payload.paymentMethodId = await resolvePaymentMethodId(payload.paymentMethodId);
     }
+    payload.updatedBy = actorId;
     const [updated] = await Channel.update(payload, { where: { id } });
 
     if (!updated) {
@@ -147,11 +161,12 @@ export const updateChannel = async (req: Request, res: Response): Promise<void> 
     res.status(200).json(serializeChannel(updatedChannel));
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    const status = errorMessage === 'Unauthorized' ? 401 : 500;
+    res.status(status).json([{ message: errorMessage }]);
   }
 };
 
-export const deleteChannel = async (req: Request, res: Response): Promise<void> => {
+export const deleteChannel = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
     const deleted = await Channel.destroy({ where: { id } });

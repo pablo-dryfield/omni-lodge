@@ -37,6 +37,8 @@ type ViewMode = "week" | "month";
 
 type FetchStatus = "idle" | "loading" | "error" | "success";
 
+type BookingFilter = "all" | "active" | "cancelled";
+
 const PLATFORM_COLORS: Record<string, string> = {
   ecwid: "orange",
   fareharbor: "blue",
@@ -91,6 +93,19 @@ type BookingSummaryStats = {
 };
 
 const emptyExtras = (): OrderExtras => ({ tshirts: 0, cocktails: 0, photos: 0 });
+
+const filterOrdersByStatus = (orders: UnifiedOrder[], filter: BookingFilter): UnifiedOrder[] => {
+  if (filter === "all") {
+    return orders;
+  }
+  if (filter === "cancelled") {
+    return orders.filter((order) => order.status === "cancelled");
+  }
+  return orders.filter((order) => {
+    const quantity = Number.isFinite(order.quantity) ? order.quantity : 0;
+    return order.status !== "cancelled" && quantity > 0;
+  });
+};
 
 const computeSummaryStats = (orders: UnifiedOrder[]): BookingSummaryStats => {
   const extras = emptyExtras();
@@ -235,6 +250,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const [selectedDate, setSelectedDate] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [products, setProducts] = useState<UnifiedProduct[]>([]);
   const [orders, setOrders] = useState<UnifiedOrder[]>([]);
+  const [statusFilter, setStatusFilter] = useState<BookingFilter>("all");
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -358,14 +374,35 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     };
   }, [modulePermissions.ready, modulePermissions.canView, rangeStart, rangeEnd, reloadToken]);
 
-  const grid: BookingGrid = useMemo(() => {
-    return prepareBookingGrid(products, orders, dateRange);
-  }, [products, orders, dateRange]);
+  const filteredOrders = useMemo(
+    () => filterOrdersByStatus(orders, statusFilter),
+    [orders, statusFilter],
+  );
 
-  const summaryStats = useMemo(() => computeSummaryStats(orders), [orders]);
+  const filteredProducts = useMemo(() => {
+    if (statusFilter === "all") {
+      return products;
+    }
+    const ids = new Set(filteredOrders.map((order) => order.productId));
+    return products.filter((product) => ids.has(product.id));
+  }, [products, filteredOrders, statusFilter]);
+
+  const filteredDateRange = useMemo(() => {
+    if (statusFilter === "all") {
+      return dateRange;
+    }
+    const dates = new Set(filteredOrders.map((order) => order.date));
+    return dateRange.filter((date) => dates.has(date));
+  }, [dateRange, filteredOrders, statusFilter]);
+
+  const grid: BookingGrid = useMemo(() => {
+    return prepareBookingGrid(filteredProducts, filteredOrders, filteredDateRange);
+  }, [filteredProducts, filteredOrders, filteredDateRange]);
+
+  const summaryStats = useMemo(() => computeSummaryStats(filteredOrders), [filteredOrders]);
 
   const sortedOrders = useMemo(() => {
-    const copy = [...orders];
+    const copy = [...filteredOrders];
     return copy.sort((a, b) => {
       const momentA = derivePickupMoment(a);
       const momentB = derivePickupMoment(b);
@@ -382,7 +419,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       }
       return a.id.localeCompare(b.id);
     });
-  }, [orders]);
+  }, [filteredOrders]);
 
   const isLoading = fetchStatus === "loading" && orders.length === 0;
 
@@ -409,6 +446,16 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                   data={[
                     { label: "Week", value: "week" },
                     { label: "Month", value: "month" },
+                  ]}
+                  size="sm"
+                />
+                <SegmentedControl
+                  value={statusFilter}
+                  onChange={(value) => setStatusFilter(value as BookingFilter)}
+                  data={[
+                    { label: "All", value: "all" },
+                    { label: "Has people", value: "active" },
+                    { label: "Cancelled", value: "cancelled" },
                   ]}
                   size="sm"
                 />
@@ -479,10 +526,14 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                   <Box style={{ minHeight: 320 }}>
                     <Loader variant="bars" />
                   </Box>
+                ) : filteredOrders.length === 0 ? (
+                  <Alert color="blue" title="No bookings">
+                    No bookings match the current filters.
+                  </Alert>
                 ) : (
                   <BookingsGrid
-                    products={products}
-                    dateRange={dateRange}
+                    products={filteredProducts}
+                    dateRange={filteredDateRange}
                     grid={grid}
                     selectedDate={selectedDateKey}
                     onSelectDate={(nextDate) => setSelectedDate(dayjs(nextDate))}
@@ -500,7 +551,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                 ) : (
                   <Stack gap="md">
                     <Title order={3}>Bookings summary</Title>
-                    {orders.length === 0 ? (
+                    {filteredOrders.length === 0 ? (
                       <Alert color="blue" title="No bookings">
                         No bookings found for the selected range.
                       </Alert>
