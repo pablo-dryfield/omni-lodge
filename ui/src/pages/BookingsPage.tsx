@@ -250,7 +250,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const [selectedDate, setSelectedDate] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [products, setProducts] = useState<UnifiedProduct[]>([]);
   const [orders, setOrders] = useState<UnifiedOrder[]>([]);
-  const [statusFilter, setStatusFilter] = useState<BookingFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<BookingFilter>("active");
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);

@@ -660,7 +660,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [reloadToken, setReloadToken] = useState(0);
-  const [statusFilter, setStatusFilter] = useState<BookingFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<BookingFilter>("active");
   const [searchInput, setSearchInput] = useState(searchParam);
   const [amendState, setAmendState] = useState<AmendModalState>(createDefaultAmendState());
 

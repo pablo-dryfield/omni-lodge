@@ -97,6 +97,24 @@ const canonicalProductNameFromFields = (fields: BookingFieldPatch): string | nul
   return null;
 };
 
+const isNyeDate = (value?: string | null): boolean => {
+  if (!value) {
+    return false;
+  }
+  return /-12-31$/.test(value.trim());
+};
+
+const resolveCanonicalProductName = (fields: BookingFieldPatch): string | null => {
+  const canonical = canonicalProductNameFromFields(fields);
+  if (!canonical) {
+    return null;
+  }
+  if (canonical === 'Krawl Through Krakow Pub Crawl' && isNyeDate(fields.experienceDate)) {
+    return 'NYE Pub Crawl';
+  }
+  return canonical;
+};
+
 const resolveProductIdForCanonical = async (canonicalName: string | null): Promise<number | null> => {
   if (!canonicalName) {
     return null;
@@ -420,7 +438,7 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
       }
     }
     if (!bookingFields.productId) {
-      const canonicalProductName = canonicalProductNameFromFields(bookingFields);
+      const canonicalProductName = resolveCanonicalProductName(bookingFields);
       const inferredProductId = await resolveProductIdForCanonical(canonicalProductName);
       if (inferredProductId != null) {
         bookingFields.productId = inferredProductId;
