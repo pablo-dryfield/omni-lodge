@@ -7,7 +7,11 @@ import timezone from 'dayjs/plugin/timezone.js';
 import Booking from '../models/Booking.js';
 import Product from '../models/Product.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
-import { canonicalizeProductKeyFromSources, canonicalizeProductLabelFromSources } from '../utils/productName.js';
+import {
+  canonicalizeProductKeyFromLabel,
+  canonicalizeProductKeyFromSources,
+  canonicalizeProductLabelFromSources,
+} from '../utils/productName.js';
 import type {
   UnifiedOrder,
   UnifiedProduct,
@@ -124,8 +128,13 @@ const buildPickupExtraFieldPayload = (
 };
 
 const canonicalizeProductKey = (booking: Booking): string | null => {
+  const label = prettifyProductName(booking);
+  const labelKey = canonicalizeProductKeyFromLabel(label ?? null);
+  if (labelKey) {
+    return labelKey;
+  }
   const sources = [
-    prettifyProductName(booking),
+    label,
     booking.product?.name ?? null,
     booking.productName ?? null,
     booking.productVariant ?? null,
@@ -139,13 +148,13 @@ const prettifyProductName = (booking: Booking): string | null => {
 };
 
 const deriveProductId = (booking: Booking): string => {
-  if (booking.productId) {
-    return String(booking.productId);
-  }
-
   const canonicalKey = canonicalizeProductKey(booking);
   if (canonicalKey) {
     return canonicalKey;
+  }
+
+  if (booking.productId) {
+    return String(booking.productId);
   }
 
   return `${booking.platform}-${booking.id}`;

@@ -1,5 +1,5 @@
-import React, { useMemo } from "react";
-import { SimpleGrid, Card, Stack, Title, Text, ActionIcon, Alert } from "@mantine/core";
+import React, { useMemo, useState } from "react";
+import { SimpleGrid, Card, Stack, Title, Text, ActionIcon, Alert, Button } from "@mantine/core";
 import {
   IconUsers,
   IconIdBadge,
@@ -12,6 +12,7 @@ import {
   IconLayoutDashboard,
   IconStars,
   IconCoin,
+  IconRefresh,
 } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import { useAppSelector } from "../../store/hooks";
@@ -112,11 +113,42 @@ const PAGE_SLUG = PAGE_SLUGS.settings;
 const SettingsLanding = () => {
   const navigate = useNavigate();
   const allowedPageSlugs = useAppSelector(selectAllowedPageSlugs);
+  const [refreshing, setRefreshing] = useState(false);
 
   const visibleSections = useMemo(
     () => sections.filter((section) => allowedPageSlugs.has(section.pageSlug)),
     [allowedPageSlugs],
   );
+
+  const handleRefreshApp = async () => {
+    if (refreshing) {
+      return;
+    }
+    const confirmed = window.confirm(
+      "This will clear cached app files and reload. Continue?",
+    );
+    if (!confirmed) {
+      return;
+    }
+    setRefreshing(true);
+    try {
+      if ("serviceWorker" in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(
+          registrations.map(async (registration) => {
+            registration.waiting?.postMessage({ type: "SKIP_WAITING" });
+            await registration.unregister();
+          }),
+        );
+      }
+      if ("caches" in window) {
+        const keys = await window.caches.keys();
+        await Promise.all(keys.map((key) => window.caches.delete(key)));
+      }
+    } finally {
+      window.location.reload();
+    }
+  };
 
   if (visibleSections.length === 0) {
     return (
@@ -152,6 +184,25 @@ const SettingsLanding = () => {
             </Stack>
           </Card>
         ))}
+        <Card withBorder radius="md" padding="lg">
+          <Stack gap="xs">
+            <ActionIcon variant="light" color="orange" size="lg" aria-label="Refresh app">
+              <IconRefresh size={22} />
+            </ActionIcon>
+            <Title order={4}>Refresh app</Title>
+            <Text size="sm" c="dimmed">
+              Clear cached files and reload to fetch the latest version.
+            </Text>
+            <Button
+              variant="light"
+              color="orange"
+              onClick={handleRefreshApp}
+              loading={refreshing}
+            >
+              Refresh now
+            </Button>
+          </Stack>
+        </Card>
       </SimpleGrid>
     </PageAccessGuard>
   );
