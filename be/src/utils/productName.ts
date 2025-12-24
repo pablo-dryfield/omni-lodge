@@ -36,15 +36,6 @@ const PRODUCT_NAME_STOPWORDS = new Set([
 
 const PRODUCT_CANONICAL_PATTERNS: Array<{ canonical: string; patterns: RegExp[] }> = [
   {
-    canonical: 'Krawl Through Krakow Pub Crawl',
-    patterns: [
-      /krawl through krakow/i,
-      /pub crawl krawl through/i,
-      /krakow:\s*pub crawl/i,
-      /pub crawl\s+1h\s+open\s+bar/i,
-    ],
-  },
-  {
     canonical: 'NYE Pub Crawl',
     patterns: [
       /new\s*year'?s?\s*eve/i,
@@ -52,6 +43,15 @@ const PRODUCT_CANONICAL_PATTERNS: Array<{ canonical: string; patterns: RegExp[] 
       /new\s*years?\s*eve\s+crawl/i,
       /new\s*years?\s*eve\s+pub\s+crawl/i,
       /new\s*year'?s?\s*eve\s+crawl\s+with/i,
+    ],
+  },
+  {
+    canonical: 'Krawl Through Krakow Pub Crawl',
+    patterns: [
+      /krawl through krakow/i,
+      /pub crawl krawl through/i,
+      /krakow:\s*pub crawl/i,
+      /pub crawl\s+1h\s+open\s+bar/i,
     ],
   },
   {
