@@ -320,10 +320,8 @@ const buildExperienceMoment = (dateRaw: string | null, timeRaw: string | null): 
   for (const format of dateFormats) {
     let datePart: dayjs.Dayjs | null = null;
     try {
-      const parsed = dayjs(normalizedDate, format, true);
-      if (parsed.isValid()) {
-        datePart = parsed.tz(ECWID_TIMEZONE);
-      }
+      const parsed = dayjs.tz(normalizedDate, format, ECWID_TIMEZONE);
+      datePart = parsed.isValid() ? parsed : null;
     } catch {
       datePart = null;
     }
@@ -336,14 +334,12 @@ const buildExperienceMoment = (dateRaw: string | null, timeRaw: string | null): 
     for (const timeFormat of timeFormats) {
       let combined: dayjs.Dayjs | null = null;
       try {
-        const parsed = dayjs(
+        const parsed = dayjs.tz(
           `${datePart.format('YYYY-MM-DD')} ${normalizedTime}`,
           `YYYY-MM-DD ${timeFormat}`,
-          true,
+          ECWID_TIMEZONE,
         );
-        if (parsed.isValid()) {
-          combined = parsed.tz(ECWID_TIMEZONE);
-        }
+        combined = parsed.isValid() ? parsed : null;
       } catch {
         combined = null;
       }
