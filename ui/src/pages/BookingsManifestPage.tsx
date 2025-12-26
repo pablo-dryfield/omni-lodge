@@ -659,6 +659,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const [ingestStatus, setIngestStatus] = useState<FetchStatus>("idle");
+
   const [reloadToken, setReloadToken] = useState(0);
   const [statusFilter, setStatusFilter] = useState<BookingFilter>("active");
   const [searchInput, setSearchInput] = useState(searchParam);
@@ -1045,7 +1047,22 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
 
 
-  const handleReload = () => setReloadToken((token) => token + 1);
+  const handleReload = async () => {
+    if (ingestStatus === "loading") {
+      return;
+    }
+    setIngestStatus("loading");
+    setErrorMessage(null);
+    try {
+      await axiosInstance.post("/bookings/ingest-emails", {}, { withCredentials: true });
+      setFetchStatus("loading");
+      setReloadToken((token) => token + 1);
+      setIngestStatus("success");
+    } catch (error) {
+      setIngestStatus("error");
+      setErrorMessage(extractErrorMessage(error));
+    }
+  };
 
 
 
@@ -1144,7 +1161,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
                   leftSection={<IconRefresh size={16} />}
 
-                  loading={fetchStatus === "loading"}
+                  loading={ingestStatus === "loading" || fetchStatus === "loading"}
 
                 >
 

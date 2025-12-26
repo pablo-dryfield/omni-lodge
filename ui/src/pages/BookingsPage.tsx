@@ -468,6 +468,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const [pendingError, setPendingError] = useState<string | null>(null);
   const [pendingCreateId, setPendingCreateId] = useState<string | null>(null);
   const [pendingCreateError, setPendingCreateError] = useState<string | null>(null);
+  const [ingestStatus, setIngestStatus] = useState<FetchStatus>("idle");
   const [reloadToken, setReloadToken] = useState(0);
 
   const modulePermissions = useModuleAccess(BOOKINGS_MODULE);
@@ -528,7 +529,22 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     setRangeAnchor(viewMode === "week" ? today : today.startOf("month"));
   };
 
-  const handleReload = () => setReloadToken((token) => token + 1);
+  const handleReload = async () => {
+    if (ingestStatus === "loading") {
+      return;
+    }
+    setIngestStatus("loading");
+    setErrorMessage(null);
+    try {
+      await axiosInstance.post("/bookings/ingest-emails", {}, { withCredentials: true });
+      setFetchStatus("loading");
+      setReloadToken((token) => token + 1);
+      setIngestStatus("success");
+    } catch (error) {
+      setIngestStatus("error");
+      setErrorMessage(deriveErrorMessage(error));
+    }
+  };
 
   const handleCreateEcwidBooking = async (orderId: string) => {
     if (!orderId || pendingCreateId) {
@@ -953,7 +969,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                     size="sm"
                     onClick={handleReload}
                     leftSection={<IconRefresh size={16} />}
-                    loading={fetchStatus === "loading"}
+                    loading={ingestStatus === "loading" || fetchStatus === "loading"}
                   >
                     Refresh
                   </Button>
