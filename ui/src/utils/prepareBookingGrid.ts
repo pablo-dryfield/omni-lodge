@@ -25,15 +25,15 @@ const normalizeCount = (value?: number): number => {
 };
 
 const resolveDisplayTime = (order: UnifiedOrder): string => {
+  if (order.timeslot && order.timeslot.trim() && order.timeslot !== '--:--') {
+    return order.timeslot;
+  }
+
   if (order.pickupDateTime) {
     const parsed = dayjs(order.pickupDateTime);
     if (parsed.isValid()) {
       return parsed.format('HH:mm');
     }
-  }
-
-  if (order.timeslot && order.timeslot.trim()) {
-    return order.timeslot;
   }
 
   return '--:--';
