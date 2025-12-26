@@ -203,14 +203,17 @@ const formatOrderExtras = (extras?: OrderExtras): string => {
 };
 
 const derivePickupMoment = (order: UnifiedOrder) => {
+  const candidate = dayjs(`${order.date} ${order.timeslot}`, ["YYYY-MM-DD HH:mm", "YYYY-MM-DD H:mm"], true);
+  if (candidate.isValid()) {
+    return candidate;
+  }
   if (order.pickupDateTime) {
     const parsed = dayjs(order.pickupDateTime);
     if (parsed.isValid()) {
       return parsed;
     }
   }
-  const candidate = dayjs(`${order.date} ${order.timeslot}`, ["YYYY-MM-DD HH:mm", "YYYY-MM-DD H:mm"], true);
-  return candidate.isValid() ? candidate : null;
+  return null;
 };
 
 const formatPickupLabel = (order: UnifiedOrder): string => {
