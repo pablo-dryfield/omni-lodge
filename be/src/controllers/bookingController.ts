@@ -5,6 +5,7 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import Booking from '../models/Booking.js';
+import Channel from '../models/Channel.js';
 import Product from '../models/Product.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import {
@@ -19,7 +20,7 @@ import type {
   OrderExtras,
   PlatformBreakdownEntry,
 } from '../types/booking.js';
-import { groupOrdersForManifest } from '../utils/ecwidAdapter.js';
+import { groupOrdersForManifest, transformEcwidOrders } from '../utils/ecwidAdapter.js';
 import { BOOKING_STATUSES } from '../constants/bookings.js';
 import { getEcwidOrder, updateEcwidOrder, type EcwidExtraField } from '../services/ecwidService.js';
 
@@ -192,6 +193,73 @@ const buildCustomerName = (booking: Booking): string => {
     return booking.guestPhone;
   }
   return `Booking #${booking.id}`;
+};
+
+const splitCustomerName = (value?: string | null): { firstName: string | null; lastName: string | null } => {
+  if (!value) {
+    return { firstName: null, lastName: null };
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { firstName: null, lastName: null };
+  }
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 1) {
+    return { firstName: parts[0], lastName: null };
+  }
+  return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
+};
+
+const resolveChannelIdByName = async (name: string): Promise<number | null> => {
+  const channel = await Channel.findOne({
+    where: { name: { [Op.iLike]: name } },
+    attributes: ['id'],
+  });
+  return channel?.id ?? null;
+};
+
+const resolveProductIdByName = async (name?: string | null): Promise<number | null> => {
+  if (!name) {
+    return null;
+  }
+  const canonical = canonicalizeProductLabelFromSources([name]);
+  const candidates = [canonical, name].filter(Boolean) as string[];
+  for (const candidate of candidates) {
+    const record = await Product.findOne({
+      where: { name: { [Op.iLike]: candidate } },
+      attributes: ['id'],
+    });
+    if (record?.id) {
+      return record.id;
+    }
+  }
+  return null;
+};
+
+const pickPrimaryEcwidOrder = (orders: UnifiedOrder[]): UnifiedOrder | null => {
+  if (orders.length === 0) {
+    return null;
+  }
+  if (orders.length === 1) {
+    return orders[0];
+  }
+  const withMoment = orders
+    .map((order) => ({
+      order,
+      moment: order.pickupDateTime ? dayjs(order.pickupDateTime) : null,
+    }))
+    .sort((a, b) => {
+      if (a.moment && b.moment) {
+        if (a.moment.isBefore(b.moment)) return -1;
+        if (a.moment.isAfter(b.moment)) return 1;
+      } else if (a.moment && !b.moment) {
+        return -1;
+      } else if (!a.moment && b.moment) {
+        return 1;
+      }
+      return 0;
+    });
+  return withMoment[0]?.order ?? orders[0];
 };
 
 const normalizeExtras = (snapshot: unknown): OrderExtras => {
@@ -392,6 +460,79 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load bookings';
+    res.status(500).json({ message });
+  }
+};
+
+export const importEcwidBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const orderId = String((req.body as { orderId?: string })?.orderId ?? '').trim();
+    if (!orderId) {
+      res.status(400).json({ message: 'orderId is required' });
+      return;
+    }
+
+    const existing = await Booking.findOne({
+      where: { platform: 'ecwid', platformBookingId: orderId },
+      attributes: ['id'],
+    });
+    if (existing) {
+      res.status(200).json({ status: 'exists', bookingId: existing.id });
+      return;
+    }
+
+    const ecwidOrder = await getEcwidOrder(orderId);
+    const { orders } = transformEcwidOrders([ecwidOrder]);
+    const unified = pickPrimaryEcwidOrder(orders);
+    if (!unified) {
+      res.status(400).json({ message: 'Unable to derive booking from Ecwid order' });
+      return;
+    }
+
+    const countsTotal = Number.isFinite(unified.quantity) ? unified.quantity : 0;
+    const menCount = Number.isFinite(unified.menCount) ? unified.menCount : 0;
+    const womenCount = Number.isFinite(unified.womenCount) ? unified.womenCount : 0;
+    const totalPeople = menCount + womenCount > 0 ? menCount + womenCount : countsTotal;
+    const pickupMoment = unified.pickupDateTime ? dayjs(unified.pickupDateTime) : null;
+    const now = new Date();
+    const { firstName, lastName } = splitCustomerName(unified.customerName);
+    const channelId = await resolveChannelIdByName('Ecwid');
+    const productId = await resolveProductIdByName(unified.productName);
+    const addonsSnapshot = unified.extras ? { extras: unified.extras } : null;
+    const userId =
+      req.user && typeof req.user === 'object' && 'id' in req.user
+        ? Number(req.user.id)
+        : null;
+
+    const payload = {
+      platform: 'ecwid',
+      platformBookingId: unified.platformBookingId,
+      platformOrderId: unified.platformBookingId,
+      status: 'confirmed',
+      paymentStatus: 'unknown',
+      statusChangedAt: now,
+      experienceDate: unified.date,
+      experienceStartAt: pickupMoment?.isValid() ? pickupMoment.toDate() : null,
+      productId,
+      productName: unified.productName ?? null,
+      guestFirstName: firstName,
+      guestLastName: lastName,
+      guestPhone: unified.customerPhone ?? null,
+      partySizeTotal: totalPeople || null,
+      partySizeAdults: totalPeople || null,
+      addonsSnapshot,
+      channelId,
+      sourceReceivedAt: now,
+      processedAt: now,
+      createdBy: userId,
+      updatedBy: userId,
+    } as unknown as Parameters<typeof Booking.create>[0];
+
+    const created = await Booking.create(payload as unknown as any);
+
+    res.status(201).json({ status: 'created', bookingId: created.id });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to import Ecwid booking';
     res.status(500).json({ message });
   }
 };

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
+  Accordion,
   Badge,
   Box,
   Button,
@@ -17,7 +18,7 @@ import {
   Title,
   Tooltip,
 } from "@mantine/core";
-import { IconArrowLeft, IconArrowRight, IconCalendar, IconRefresh } from "@tabler/icons-react";
+import { IconArrowLeft, IconArrowRight, IconCalendar, IconPlus, IconRefresh } from "@tabler/icons-react";
 import dayjs, { Dayjs } from "dayjs";
 import { useAppDispatch } from "../store/hooks";
 import { useNavigate } from "react-router-dom";
@@ -38,6 +39,27 @@ type ViewMode = "week" | "month";
 type FetchStatus = "idle" | "loading" | "error" | "success";
 
 type BookingFilter = "all" | "active" | "cancelled";
+
+type PendingGroup = {
+  platformBookingId: string;
+  date: string;
+  timeslot: string;
+  pickupLabel: string;
+  customerName: string;
+  customerPhone?: string;
+  productNames: string[];
+  totalPeople: number;
+  menCount: number;
+  womenCount: number;
+};
+
+type PendingDiff = {
+  platformBookingId: string;
+  ecwid: PendingGroup;
+  db: PendingGroup;
+  differences: Array<{ field: string; ecwid: string; db: string }>;
+  hasDateMismatch: boolean;
+};
 
 const PLATFORM_COLORS: Record<string, string> = {
   ecwid: "orange",
@@ -198,6 +220,194 @@ const formatPickupLabel = (order: UnifiedOrder): string => {
   }
   return `${order.date} ${order.timeslot}`;
 };
+const formatPendingCounts = (order: UnifiedOrder) => {
+  const men = Number.isFinite(order.menCount) ? order.menCount : 0;
+  const women = Number.isFinite(order.womenCount) ? order.womenCount : 0;
+  const fallback = Number.isFinite(order.quantity) ? order.quantity : 0;
+  const total = men + women > 0 ? men + women : fallback;
+  return { men, women, total };
+};
+
+const groupOrdersByBookingId = (orders: UnifiedOrder[]): PendingGroup[] => {
+  const groups = new Map<
+    string,
+    {
+      group: PendingGroup;
+      pickupMoment: Dayjs | null;
+      products: Set<string>;
+    }
+  >();
+
+  orders.forEach((order) => {
+    if (!order.platformBookingId) {
+      return;
+    }
+    const pickupMoment = derivePickupMoment(order);
+    const displayLabel = formatPickupLabel(order);
+    const { men, women, total } = formatPendingCounts(order);
+    const existing = groups.get(order.platformBookingId);
+
+    if (!existing) {
+      const products = new Set<string>();
+      if (order.productName) {
+        products.add(order.productName);
+      }
+      groups.set(order.platformBookingId, {
+        products,
+        pickupMoment,
+        group: {
+          platformBookingId: order.platformBookingId,
+          date: order.date,
+          timeslot: order.timeslot,
+          pickupLabel: displayLabel,
+          customerName: order.customerName || "Unknown",
+          customerPhone: order.customerPhone,
+          productNames: order.productName ? [order.productName] : [],
+          totalPeople: total,
+          menCount: men,
+          womenCount: women,
+        },
+      });
+      return;
+    }
+
+    if (order.productName) {
+      existing.products.add(order.productName);
+    }
+    existing.group.totalPeople += total;
+    existing.group.menCount += men;
+    existing.group.womenCount += women;
+    if (!existing.group.customerName && order.customerName) {
+      existing.group.customerName = order.customerName;
+    }
+    if (!existing.group.customerPhone && order.customerPhone) {
+      existing.group.customerPhone = order.customerPhone;
+    }
+
+    if (!existing.pickupMoment || (pickupMoment && pickupMoment.isBefore(existing.pickupMoment))) {
+      existing.pickupMoment = pickupMoment;
+      existing.group.date = order.date;
+      existing.group.timeslot = order.timeslot;
+      existing.group.pickupLabel = displayLabel;
+    }
+  });
+
+  return Array.from(groups.values())
+    .map(({ group, products, pickupMoment }) => ({
+      ...group,
+      productNames: Array.from(products.values()),
+      pickupMoment,
+    }))
+    .sort((a, b) => {
+      const momentA = dayjs(`${a.date} ${a.timeslot}`, ["YYYY-MM-DD HH:mm", "YYYY-MM-DD H:mm"], true);
+      const momentB = dayjs(`${b.date} ${b.timeslot}`, ["YYYY-MM-DD HH:mm", "YYYY-MM-DD H:mm"], true);
+      if (momentA.isValid() && momentB.isValid()) {
+        if (momentA.isBefore(momentB)) return -1;
+        if (momentA.isAfter(momentB)) return 1;
+      }
+      return a.platformBookingId.localeCompare(b.platformBookingId);
+    })
+    .map(({ pickupMoment, ...rest }) => rest);
+};
+
+const formatPendingProducts = (products: string[]): string => {
+  const unique = Array.from(new Set(products.filter(Boolean)));
+  if (unique.length === 0) {
+    return "Unknown product";
+  }
+  return unique.sort((a, b) => a.localeCompare(b)).join(", ");
+};
+
+const normalizePendingText = (value?: string | null): string => (value ?? "").trim().toLowerCase();
+
+const normalizePendingPhone = (value?: string | null): string =>
+  (value ?? "").trim().replace(/[^\d+]/g, "");
+
+const buildPendingDiffs = (ecwidGroups: PendingGroup[], dbGroups: PendingGroup[]): PendingDiff[] => {
+  const dbMap = new Map(dbGroups.map((group) => [group.platformBookingId, group]));
+  const diffs: PendingDiff[] = [];
+
+  ecwidGroups.forEach((ecwid) => {
+    const db = dbMap.get(ecwid.platformBookingId);
+    if (!db) {
+      return;
+    }
+
+    const differences: Array<{ field: string; ecwid: string; db: string }> = [];
+    const ecwidPickup = `${ecwid.date} ${ecwid.timeslot}`;
+    const dbPickup = `${db.date} ${db.timeslot}`;
+    const hasDateMismatch = ecwidPickup !== dbPickup;
+    if (hasDateMismatch) {
+      differences.push({
+        field: "Pickup",
+        ecwid: ecwid.pickupLabel,
+        db: db.pickupLabel,
+      });
+    }
+
+    const ecwidProducts = formatPendingProducts(ecwid.productNames);
+    const dbProducts = formatPendingProducts(db.productNames);
+    if (normalizePendingText(ecwidProducts) !== normalizePendingText(dbProducts)) {
+      differences.push({
+        field: "Product",
+        ecwid: ecwidProducts,
+        db: dbProducts,
+      });
+    }
+
+    if (ecwid.totalPeople !== db.totalPeople) {
+      differences.push({
+        field: "People",
+        ecwid: String(ecwid.totalPeople),
+        db: String(db.totalPeople),
+      });
+    }
+
+    if (ecwid.menCount !== db.menCount) {
+      differences.push({
+        field: "Men",
+        ecwid: String(ecwid.menCount),
+        db: String(db.menCount),
+      });
+    }
+
+    if (ecwid.womenCount !== db.womenCount) {
+      differences.push({
+        field: "Women",
+        ecwid: String(ecwid.womenCount),
+        db: String(db.womenCount),
+      });
+    }
+
+    if (normalizePendingText(ecwid.customerName) !== normalizePendingText(db.customerName)) {
+      differences.push({
+        field: "Customer",
+        ecwid: ecwid.customerName,
+        db: db.customerName,
+      });
+    }
+
+    if (normalizePendingPhone(ecwid.customerPhone) !== normalizePendingPhone(db.customerPhone)) {
+      differences.push({
+        field: "Phone",
+        ecwid: ecwid.customerPhone ?? "-",
+        db: db.customerPhone ?? "-",
+      });
+    }
+
+    if (differences.length > 0) {
+      diffs.push({
+        platformBookingId: ecwid.platformBookingId,
+        ecwid,
+        db,
+        differences,
+        hasDateMismatch,
+      });
+    }
+  });
+
+  return diffs.sort((a, b) => a.platformBookingId.localeCompare(b.platformBookingId));
+};
 
 const createDateArray = (start: Dayjs, end: Dayjs): string[] => {
   const values: string[] = [];
@@ -245,14 +455,19 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const [viewMode, setViewMode] = useState<ViewMode>("month");
-  const [activeTab, setActiveTab] = useState<"calendar" | "summary">("calendar");
+  const [activeTab, setActiveTab] = useState<"calendar" | "summary" | "pending">("calendar");
   const [rangeAnchor, setRangeAnchor] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [selectedDate, setSelectedDate] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [products, setProducts] = useState<UnifiedProduct[]>([]);
   const [orders, setOrders] = useState<UnifiedOrder[]>([]);
+  const [pendingOrders, setPendingOrders] = useState<UnifiedOrder[]>([]);
   const [statusFilter, setStatusFilter] = useState<BookingFilter>("active");
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [pendingStatus, setPendingStatus] = useState<FetchStatus>("idle");
+  const [pendingError, setPendingError] = useState<string | null>(null);
+  const [pendingCreateId, setPendingCreateId] = useState<string | null>(null);
+  const [pendingCreateError, setPendingCreateError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
   const modulePermissions = useModuleAccess(BOOKINGS_MODULE);
@@ -315,6 +530,26 @@ const BookingsPage = ({ title }: GenericPageProps) => {
 
   const handleReload = () => setReloadToken((token) => token + 1);
 
+  const handleCreateEcwidBooking = async (orderId: string) => {
+    if (!orderId || pendingCreateId) {
+      return;
+    }
+    setPendingCreateId(orderId);
+    setPendingCreateError(null);
+    try {
+      await axiosInstance.post(
+        "/bookings/import-ecwid",
+        { orderId },
+        { withCredentials: true },
+      );
+      setReloadToken((token) => token + 1);
+    } catch (error) {
+      setPendingCreateError(deriveErrorMessage(error));
+    } finally {
+      setPendingCreateId(null);
+    }
+  };
+
   const handleOpenManifest = useCallback(
     (target: { productId: string; productName: string; date: string; time: string }, orders: UnifiedOrder[]) => {
       const params = new URLSearchParams({
@@ -374,6 +609,78 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     };
   }, [modulePermissions.ready, modulePermissions.canView, rangeStart, rangeEnd, reloadToken]);
 
+  useEffect(() => {
+    if (!modulePermissions.ready || !modulePermissions.canView) {
+      return;
+    }
+    if (activeTab !== "pending") {
+      return;
+    }
+
+    const controller = new AbortController();
+    const startIso = rangeStart.startOf("day").format("YYYY-MM-DD");
+    const endIso = rangeEnd.endOf("day").format("YYYY-MM-DD");
+
+    const fetchPendingOrders = async () => {
+      setPendingStatus("loading");
+      setPendingError(null);
+
+      try {
+        const aggregated: UnifiedOrder[] = [];
+        let offset = 0;
+        const limit = 200;
+
+        while (true) {
+          const response = await axiosInstance.get("/ecwid/orders", {
+            params: {
+              pickupFrom: startIso,
+              pickupTo: endIso,
+              limit: String(limit),
+              offset: String(offset),
+            },
+            signal: controller.signal,
+            withCredentials: true,
+          });
+          const batch = Array.isArray(response.data?.orders) ? response.data.orders : [];
+          const count = Number(response.data?.count ?? batch.length);
+          const total = Number(response.data?.total ?? 0);
+
+          aggregated.push(...(batch as UnifiedOrder[]));
+
+          if (!count || count < limit) {
+            break;
+          }
+          offset += count;
+          if (total && offset >= total) {
+            break;
+          }
+        }
+
+        setPendingOrders(aggregated);
+        setPendingStatus("success");
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setPendingStatus("error");
+        setPendingError(deriveErrorMessage(error));
+      }
+    };
+
+    fetchPendingOrders();
+
+    return () => {
+      controller.abort();
+    };
+  }, [
+    modulePermissions.ready,
+    modulePermissions.canView,
+    activeTab,
+    rangeStart,
+    rangeEnd,
+    reloadToken,
+  ]);
+
   const filteredOrders = useMemo(
     () => filterOrdersByStatus(orders, statusFilter),
     [orders, statusFilter],
@@ -420,6 +727,155 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       return a.id.localeCompare(b.id);
     });
   }, [filteredOrders]);
+
+  const dbEcwidOrders = useMemo(
+    () => orders.filter((order) => (order.platform ?? "").toLowerCase() === "ecwid"),
+    [orders],
+  );
+
+  const pendingGroupedEcwid = useMemo(
+    () => groupOrdersByBookingId(pendingOrders),
+    [pendingOrders],
+  );
+
+  const pendingGroupedDb = useMemo(
+    () => groupOrdersByBookingId(dbEcwidOrders),
+    [dbEcwidOrders],
+  );
+
+  const pendingMissingInDb = useMemo(() => {
+    const dbIds = new Set(pendingGroupedDb.map((group) => group.platformBookingId));
+    return pendingGroupedEcwid.filter((group) => !dbIds.has(group.platformBookingId));
+  }, [pendingGroupedDb, pendingGroupedEcwid]);
+
+  const pendingMissingInEcwid = useMemo(() => {
+    const ecwidIds = new Set(pendingGroupedEcwid.map((group) => group.platformBookingId));
+    return pendingGroupedDb.filter((group) => !ecwidIds.has(group.platformBookingId));
+  }, [pendingGroupedDb, pendingGroupedEcwid]);
+
+  const pendingMismatches = useMemo(
+    () => buildPendingDiffs(pendingGroupedEcwid, pendingGroupedDb),
+    [pendingGroupedEcwid, pendingGroupedDb],
+  );
+
+  const pendingDateMismatches = useMemo(
+    () => pendingMismatches.filter((entry) => entry.hasDateMismatch),
+    [pendingMismatches],
+  );
+
+  const pendingIsLoading = pendingStatus === "loading" && pendingOrders.length === 0;
+
+  const renderPendingTable = (
+    groups: PendingGroup[],
+    options?: { showActions?: boolean; onAdd?: (id: string) => void },
+  ) => (
+    <Paper withBorder radius="lg" shadow="sm" p="md">
+      <ScrollArea style={{ width: "100%" }}>
+        <Table striped highlightOnHover withColumnBorders horizontalSpacing="md" verticalSpacing="sm">
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Booking</Table.Th>
+              <Table.Th>Pickup</Table.Th>
+              <Table.Th>Customer</Table.Th>
+              <Table.Th>Products</Table.Th>
+              <Table.Th align="right">People</Table.Th>
+              <Table.Th align="right">Men</Table.Th>
+              <Table.Th align="right">Women</Table.Th>
+              <Table.Th>Phone</Table.Th>
+              {options?.showActions && <Table.Th>Actions</Table.Th>}
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {groups.map((group) => (
+              <Table.Tr key={group.platformBookingId}>
+                <Table.Td>
+                  <Text fw={600}>{group.platformBookingId}</Text>
+                </Table.Td>
+                <Table.Td>{group.pickupLabel}</Table.Td>
+                <Table.Td>{group.customerName || "-"}</Table.Td>
+                <Table.Td>{formatPendingProducts(group.productNames)}</Table.Td>
+                <Table.Td align="right">{group.totalPeople}</Table.Td>
+                <Table.Td align="right">{group.menCount}</Table.Td>
+                <Table.Td align="right">{group.womenCount}</Table.Td>
+                <Table.Td>{group.customerPhone ?? "-"}</Table.Td>
+                {options?.showActions && (
+                  <Table.Td>
+                    <Button
+                      size="xs"
+                      variant="light"
+                      leftSection={<IconPlus size={14} />}
+                      loading={pendingCreateId === group.platformBookingId}
+                      disabled={Boolean(pendingCreateId)}
+                      onClick={() => options?.onAdd?.(group.platformBookingId)}
+                    >
+                      Add booking
+                    </Button>
+                  </Table.Td>
+                )}
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      </ScrollArea>
+    </Paper>
+  );
+
+  const renderMismatchTable = (rows: PendingDiff[]) => (
+    <Paper withBorder radius="lg" shadow="sm" p="md">
+      <ScrollArea style={{ width: "100%" }}>
+        <Table striped highlightOnHover withColumnBorders horizontalSpacing="md" verticalSpacing="sm">
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Booking</Table.Th>
+              <Table.Th>OmniLodge</Table.Th>
+              <Table.Th>Ecwid</Table.Th>
+              <Table.Th>Differences</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {rows.map((row) => (
+              <Table.Tr key={row.platformBookingId}>
+                <Table.Td>
+                  <Text fw={600}>{row.platformBookingId}</Text>
+                </Table.Td>
+                <Table.Td>
+                  <Stack gap={2}>
+                    <Text size="sm">{row.db.pickupLabel}</Text>
+                    <Text size="sm">{formatPendingProducts(row.db.productNames)}</Text>
+                    <Text size="sm">{`People: ${row.db.totalPeople} (M ${row.db.menCount} / W ${row.db.womenCount})`}</Text>
+                    <Text size="sm">{row.db.customerName || "-"}</Text>
+                    <Text size="sm" c="dimmed">
+                      {row.db.customerPhone ?? "-"}
+                    </Text>
+                  </Stack>
+                </Table.Td>
+                <Table.Td>
+                  <Stack gap={2}>
+                    <Text size="sm">{row.ecwid.pickupLabel}</Text>
+                    <Text size="sm">{formatPendingProducts(row.ecwid.productNames)}</Text>
+                    <Text size="sm">{`People: ${row.ecwid.totalPeople} (M ${row.ecwid.menCount} / W ${row.ecwid.womenCount})`}</Text>
+                    <Text size="sm">{row.ecwid.customerName || "-"}</Text>
+                    <Text size="sm" c="dimmed">
+                      {row.ecwid.customerPhone ?? "-"}
+                    </Text>
+                  </Stack>
+                </Table.Td>
+                <Table.Td>
+                  <Stack gap={4}>
+                    {row.differences.map((diff) => (
+                      <Text key={`${row.platformBookingId}-${diff.field}`} size="sm">
+                        {`${diff.field}: ${diff.db} → ${diff.ecwid}`}
+                      </Text>
+                    ))}
+                  </Stack>
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      </ScrollArea>
+    </Paper>
+  );
 
   const isLoading = fetchStatus === "loading" && orders.length === 0;
 
@@ -513,12 +969,13 @@ const BookingsPage = ({ title }: GenericPageProps) => {
 
             <Tabs
               value={activeTab}
-              onChange={(value) => setActiveTab((value as "calendar" | "summary") ?? "calendar")}
+              onChange={(value) => setActiveTab((value as "calendar" | "summary" | "pending") ?? "calendar")}
               keepMounted={false}
             >
               <Tabs.List>
                 <Tabs.Tab value="calendar">Calendar</Tabs.Tab>
                 <Tabs.Tab value="summary">Summary</Tabs.Tab>
+                <Tabs.Tab value="pending">Pending Bookings</Tabs.Tab>
               </Tabs.List>
 
               <Tabs.Panel value="calendar" pt="md">
@@ -656,6 +1113,82 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                   </Stack>
                 )}
               </Tabs.Panel>
+
+              <Tabs.Panel value="pending" pt="md">
+                {pendingIsLoading ? (
+                  <Box style={{ minHeight: 320 }}>
+                    <Loader variant="bars" />
+                  </Box>
+                ) : (
+                  <Stack gap="md">
+                    {pendingError && (
+                      <Alert color="red" title="Failed to load Ecwid orders">
+                        {pendingError}
+                      </Alert>
+                    )}
+                    {pendingCreateError && (
+                      <Alert color="red" title="Failed to add booking">
+                        {pendingCreateError}
+                      </Alert>
+                    )}
+                    <Group gap="sm" wrap="wrap">
+                      <Badge size="lg" color="orange" variant="light">
+                        {`Missing in OmniLodge: ${pendingMissingInDb.length}`}
+                      </Badge>
+                      <Badge size="lg" color="grape" variant="light">
+                        {`Mismatched: ${pendingMismatches.length}`}
+                      </Badge>
+                      <Badge size="lg" color="yellow" variant="light">
+                        {`Date mismatches: ${pendingDateMismatches.length}`}
+                      </Badge>
+                      <Badge size="lg" color="gray" variant="light">
+                        {`Missing in Ecwid: ${pendingMissingInEcwid.length}`}
+                      </Badge>
+                    </Group>
+                    {pendingMissingInDb.length === 0 &&
+                    pendingMissingInEcwid.length === 0 &&
+                    pendingMismatches.length === 0 ? (
+                      <Alert color="blue" title="No discrepancies">
+                        Ecwid orders match the bookings stored in OmniLodge for this range.
+                      </Alert>
+                    ) : (
+                      <>
+                        <Accordion variant="separated" chevronPosition="right">
+                          {pendingMismatches.length > 0 && (
+                            <Accordion.Item value="mismatches">
+                              <Accordion.Control>
+                                {`Mismatched bookings (${pendingMismatches.length})`}
+                              </Accordion.Control>
+                              <Accordion.Panel>{renderMismatchTable(pendingMismatches)}</Accordion.Panel>
+                            </Accordion.Item>
+                          )}
+                          {pendingMissingInDb.length > 0 && (
+                            <Accordion.Item value="missing-omnilodge">
+                              <Accordion.Control>
+                                {`Missing in OmniLodge (${pendingMissingInDb.length})`}
+                              </Accordion.Control>
+                              <Accordion.Panel>
+                                {renderPendingTable(pendingMissingInDb, {
+                                  showActions: true,
+                                  onAdd: handleCreateEcwidBooking,
+                                })}
+                              </Accordion.Panel>
+                            </Accordion.Item>
+                          )}
+                          {pendingMissingInEcwid.length > 0 && (
+                            <Accordion.Item value="missing-ecwid">
+                              <Accordion.Control>
+                                {`Missing in Ecwid (${pendingMissingInEcwid.length})`}
+                              </Accordion.Control>
+                              <Accordion.Panel>{renderPendingTable(pendingMissingInEcwid)}</Accordion.Panel>
+                            </Accordion.Item>
+                          )}
+                        </Accordion>
+                      </>
+                    )}
+                  </Stack>
+                )}
+              </Tabs.Panel>
             </Tabs>
           </Stack>
         )}
@@ -665,5 +1198,6 @@ const BookingsPage = ({ title }: GenericPageProps) => {
 };
 
 export default BookingsPage;
+
 
 
