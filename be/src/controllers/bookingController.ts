@@ -29,12 +29,8 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const DATE_FORMAT = 'YYYY-MM-DD';
-const DISPLAY_TIMEZONE =
-  process.env.BOOKING_DISPLAY_TIMEZONE ??
-  process.env.BOOKING_PARSER_TIMEZONE ??
-  process.env.ECWID_STORE_TIMEZONE ??
-  'Europe/Warsaw';
-const STORE_TIMEZONE = process.env.ECWID_STORE_TIMEZONE ?? DISPLAY_TIMEZONE ?? 'Europe/Warsaw';
+const DISPLAY_TIMEZONE = 'Europe/Warsaw';
+const STORE_TIMEZONE = 'Europe/Warsaw';
 
 type RangeBoundary = 'start' | 'end';
 
