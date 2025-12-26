@@ -13,6 +13,51 @@ const ECWID_TIMEZONE = process.env.ECWID_TIMEZONE ?? DEFAULT_BOOKING_TIMEZONE;
 
 const normalizeText = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
+const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const DEFAULT_LABEL_TERMINATORS = [
+  'Full Name',
+  'Phone Number',
+  'Group Time',
+  'Date',
+  'Meeting Point',
+  'Price per item',
+  'Quantity',
+  'Subtotal',
+  'Total',
+  'Items',
+  'Man',
+  'Woman',
+];
+
+const extractLabeledValue = (
+  text: string,
+  label: string,
+  terminators: string[] = DEFAULT_LABEL_TERMINATORS,
+): string | null => {
+  if (!text) {
+    return null;
+  }
+
+  const escapedLabel = escapeRegex(label);
+  const terminatorPattern = terminators
+    .filter((term) => term.toLowerCase() !== label.toLowerCase())
+    .map((term) => escapeRegex(term))
+    .join('|');
+
+  if (!terminatorPattern) {
+    const simpleMatch = text.match(new RegExp(`${escapedLabel}\\s*:\\s*(.+?)\\s*$`, 'i'));
+    return simpleMatch?.[1]?.trim() ?? null;
+  }
+
+  const matcher = new RegExp(
+    `${escapedLabel}\\s*:\\s*(.+?)(?=\\s+(?:${terminatorPattern})\\s*:|\\s+(?:${terminatorPattern})\\b|\\s*$)`,
+    'i',
+  );
+  const match = text.match(matcher);
+  return match?.[1]?.trim() ?? null;
+};
+
 const parseNumber = (raw: string | null): number | null => {
   if (!raw) {
     return null;
@@ -210,14 +255,20 @@ const summarizeAddonCategories = (rows: ParsedAddonRow[]): ParsedAddonCounters =
 
 const parsePickupLocation = (text: string): string | null => {
   const match = text.match(/Meeting Point\s+(.+?)\s+Time/i);
-  return match?.[1]?.trim() ?? null;
+  if (match?.[1]) {
+    return match[1].trim();
+  }
+  return extractLabeledValue(text, 'Meeting Point');
 };
 
 const parsePickupDate = (text: string): string | null => {
   const match = text.match(
     /Pickup date and time:? ([A-Za-z]+ \d{1,2}, \d{4}(?:\s+\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)?)/i,
   );
-  return match?.[1]?.trim() ?? null;
+  if (match?.[1]) {
+    return match[1].trim();
+  }
+  return extractLabeledValue(text, 'Date');
 };
 
 const parsePickupTime = (text: string): string | null => {
@@ -228,7 +279,10 @@ const parsePickupTime = (text: string): string | null => {
   const pickupLineMatch = text.match(
     /Pickup date and time:? [A-Za-z]+\s+\d{1,2},\s+\d{4}[,\s]+(\d{1,2}:\d{2}\s*(?:AM|PM)?)/i,
   );
-  return pickupLineMatch?.[1]?.trim() ?? null;
+  if (pickupLineMatch?.[1]) {
+    return pickupLineMatch[1].trim();
+  }
+  return extractLabeledValue(text, 'Group Time');
 };
 
 const buildExperienceMoment = (dateRaw: string | null, timeRaw: string | null): { experienceDate: string | null; startAt: Date | null } => {
@@ -248,7 +302,7 @@ const buildExperienceMoment = (dateRaw: string | null, timeRaw: string | null): 
       normalizedTime = dateTimeMatch[2].replace(/A\.M\./gi, 'AM').replace(/P\.M\./gi, 'PM');
     }
   }
-  const dateFormats = ['MMM D, YYYY', 'MMMM D, YYYY'];
+  const dateFormats = ['MMM D, YYYY', 'MMMM D, YYYY', 'YYYY-MM-DD', 'YYYY/MM/DD'];
   const usesAmPm = normalizedTime ? /am|pm/i.test(normalizedTime) : false;
   const timeFormats = normalizedTime ? (usesAmPm ? ['h:mm A'] : ['H:mm']) : [];
   for (const format of dateFormats) {
@@ -341,8 +395,9 @@ export class EcwidBookingParser implements BookingEmailParser {
 
     const customerSection = extractCustomerSection(text);
     const email = parseEmail(customerSection);
-  const phone = parsePhone(customerSection, email);
-    const customerName = parseNameFromCustomerSection(customerSection, email, phone);
+    const phone = parsePhone(customerSection, email) ?? extractLabeledValue(text, 'Phone Number');
+    const customerName =
+      parseNameFromCustomerSection(customerSection, email, phone) ?? extractLabeledValue(text, 'Full Name');
     const nameParts = customerName ? customerName.split(/\s+/) : [];
     const firstName = nameParts.shift() ?? null;
     const lastName = nameParts.length > 0 ? nameParts.join(' ') : null;
