@@ -13,6 +13,7 @@ import {
   canonicalizeProductKeyFromSources,
   canonicalizeProductLabelFromSources,
 } from '../utils/productName.js';
+import { ingestLatestBookingEmails } from '../services/bookings/bookingIngestionService.js';
 import type {
   UnifiedOrder,
   UnifiedProduct,
@@ -460,6 +461,16 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load bookings';
+    res.status(500).json({ message });
+  }
+};
+
+export const ingestBookingEmails = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    await ingestLatestBookingEmails();
+    res.status(200).json({ status: 'ok' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to ingest booking emails';
     res.status(500).json({ message });
   }
 };

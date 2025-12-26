@@ -15,6 +15,11 @@ const normalizeText = (value: string): string => value.replace(/\s+/g, ' ').trim
 
 const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+const normalizeMeridiem = (value: string): string =>
+  value
+    .replace(/A\s*\.?\s*M\.?/gi, 'AM')
+    .replace(/P\s*\.?\s*M\.?/gi, 'PM');
+
 const DEFAULT_LABEL_TERMINATORS = [
   'Full Name',
   'Phone Number',
@@ -96,7 +101,9 @@ const parseOrderTotals = (text: string): { total: number | null; currency: strin
 };
 
 const extractCustomerSection = (text: string): string | null => {
-  const match = text.match(/Customer\s+(.+?)\s+(?:Pickup Details|Pickup date and time)/i);
+  const match = text.match(
+    /Customer\s+(.+?)\s+(?:Pickup Details|Pickup date and time|Billing Info|Billing information)/i,
+  );
   return match?.[1]?.trim() ?? null;
 };
 
@@ -122,10 +129,14 @@ const parsePhone = (input: string | null, email?: string | null): string | null 
   if (matches.length === 0) {
     return null;
   }
+  const normalizedMatches = matches.filter((value) => value.replace(/\D+/g, '').length >= 7);
+  if (normalizedMatches.length === 0) {
+    return null;
+  }
   let phone =
-    matches.find((value) => value.trim().startsWith('+')) ??
-    matches.find((value) => value.replace(/\D+/g, '').length >= 9) ??
-    matches[0];
+    normalizedMatches.find((value) => value.trim().startsWith('+')) ??
+    normalizedMatches.find((value) => value.replace(/\D+/g, '').length >= 9) ??
+    normalizedMatches[0];
   const extIndex = phone.toLowerCase().indexOf('ext');
   if (extIndex !== -1) {
     phone = phone.slice(0, extIndex);
@@ -274,15 +285,16 @@ const parsePickupDate = (text: string): string | null => {
 const parsePickupTime = (text: string): string | null => {
   const directMatch = text.match(/Time\s+([\d:.]+\s*(?:A\.M\.|P\.M\.|AM|PM)?)/i);
   if (directMatch?.[1]) {
-    return directMatch[1].trim();
+    return normalizeMeridiem(directMatch[1]).trim();
   }
   const pickupLineMatch = text.match(
     /Pickup date and time:? [A-Za-z]+\s+\d{1,2},\s+\d{4}[,\s]+(\d{1,2}:\d{2}\s*(?:AM|PM)?)/i,
   );
   if (pickupLineMatch?.[1]) {
-    return pickupLineMatch[1].trim();
+    return normalizeMeridiem(pickupLineMatch[1]).trim();
   }
-  return extractLabeledValue(text, 'Group Time');
+  const labeled = extractLabeledValue(text, 'Group Time');
+  return labeled ? normalizeMeridiem(labeled).trim() : null;
 };
 
 const buildExperienceMoment = (dateRaw: string | null, timeRaw: string | null): { experienceDate: string | null; startAt: Date | null } => {
@@ -291,7 +303,7 @@ const buildExperienceMoment = (dateRaw: string | null, timeRaw: string | null): 
   }
   let normalizedDate = dateRaw.replace(/\s+/g, ' ').trim();
   let normalizedTime = timeRaw
-    ? timeRaw.replace(/A\.M\./gi, 'AM').replace(/P\.M\./gi, 'PM').replace(/CEST|CET|UTC|GMT/gi, '').trim()
+    ? normalizeMeridiem(timeRaw).replace(/CEST|CET|UTC|GMT/gi, '').trim()
     : null;
   const dateTimeMatch = normalizedDate.match(
     /([A-Za-z]+\s+\d{1,2},\s+\d{4})(?:[,\s]+(\d{1,2}:\d{2}\s*(?:AM|PM)?))?/i,
@@ -299,27 +311,43 @@ const buildExperienceMoment = (dateRaw: string | null, timeRaw: string | null): 
   if (dateTimeMatch) {
     normalizedDate = dateTimeMatch[1].trim();
     if (!normalizedTime && dateTimeMatch[2]) {
-      normalizedTime = dateTimeMatch[2].replace(/A\.M\./gi, 'AM').replace(/P\.M\./gi, 'PM');
+      normalizedTime = normalizeMeridiem(dateTimeMatch[2]).trim();
     }
   }
   const dateFormats = ['MMM D, YYYY', 'MMMM D, YYYY', 'YYYY-MM-DD', 'YYYY/MM/DD'];
   const usesAmPm = normalizedTime ? /am|pm/i.test(normalizedTime) : false;
   const timeFormats = normalizedTime ? (usesAmPm ? ['h:mm A'] : ['H:mm']) : [];
   for (const format of dateFormats) {
-    const datePart = dayjs.tz(normalizedDate, format, ECWID_TIMEZONE);
-    if (!datePart.isValid()) {
+    let datePart: dayjs.Dayjs | null = null;
+    try {
+      const parsed = dayjs(normalizedDate, format, true);
+      if (parsed.isValid()) {
+        datePart = parsed.tz(ECWID_TIMEZONE);
+      }
+    } catch {
+      datePart = null;
+    }
+    if (!datePart) {
       continue;
     }
     if (!normalizedTime) {
       return { experienceDate: datePart.format('YYYY-MM-DD'), startAt: datePart.toDate() };
     }
     for (const timeFormat of timeFormats) {
-      const combined = dayjs.tz(
-        `${datePart.format('YYYY-MM-DD')} ${normalizedTime}`,
-        `YYYY-MM-DD ${timeFormat}`,
-        ECWID_TIMEZONE,
-      );
-      if (combined.isValid()) {
+      let combined: dayjs.Dayjs | null = null;
+      try {
+        const parsed = dayjs(
+          `${datePart.format('YYYY-MM-DD')} ${normalizedTime}`,
+          `YYYY-MM-DD ${timeFormat}`,
+          true,
+        );
+        if (parsed.isValid()) {
+          combined = parsed.tz(ECWID_TIMEZONE);
+        }
+      } catch {
+        combined = null;
+      }
+      if (combined) {
         return {
           experienceDate: datePart.format('YYYY-MM-DD'),
           startAt: combined.toDate(),
@@ -394,10 +422,11 @@ export class EcwidBookingParser implements BookingEmailParser {
     const experienceMoment = buildExperienceMoment(pickupDate, pickupTime);
 
     const customerSection = extractCustomerSection(text);
-    const email = parseEmail(customerSection);
+    const email = parseEmail(customerSection) ?? parseEmail(text);
     const phone = parsePhone(customerSection, email) ?? extractLabeledValue(text, 'Phone Number');
+    const labeledFullName = extractLabeledValue(text, 'Full Name');
     const customerName =
-      parseNameFromCustomerSection(customerSection, email, phone) ?? extractLabeledValue(text, 'Full Name');
+      labeledFullName ?? parseNameFromCustomerSection(customerSection, email, phone);
     const nameParts = customerName ? customerName.split(/\s+/) : [];
     const firstName = nameParts.shift() ?? null;
     const lastName = nameParts.length > 0 ? nameParts.join(' ') : null;
