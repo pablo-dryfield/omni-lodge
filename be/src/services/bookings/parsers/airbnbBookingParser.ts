@@ -14,6 +14,18 @@ const AIRBNB_TIMEZONE = process.env.AIRBNB_TIMEZONE ?? DEFAULT_BOOKING_TIMEZONE;
 
 const normalizeWhitespace = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
+const isReminderEmail = (context: BookingParserContext): boolean => {
+  const haystack = [
+    context.subject ?? '',
+    context.snippet ?? '',
+    context.textBody ?? '',
+    context.rawTextBody ?? '',
+  ]
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes('reminder');
+};
+
 const extractField = (text: string, label: string, nextLabels: string[]): string | null => {
   const lowerText = text.toLowerCase();
   const lowerLabel = label.toLowerCase();
@@ -479,10 +491,16 @@ export class AirbnbBookingParser implements BookingEmailParser {
   canParse(context: BookingParserContext): boolean {
     const from = context.from ?? context.headers.from ?? '';
     const subject = context.subject ?? '';
+    if (isReminderEmail(context)) {
+      return false;
+    }
     return /airbnb/i.test(from) || /airbnb/i.test(subject);
   }
 
   async parse(context: BookingParserContext): Promise<ParsedBookingEvent | null> {
+    if (isReminderEmail(context)) {
+      return null;
+    }
     const text = normalizeWhitespace(context.textBody || context.rawTextBody || context.snippet || '');
     if (!text) {
       return null;

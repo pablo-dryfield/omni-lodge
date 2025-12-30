@@ -27,6 +27,7 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconHistory,
+  IconPencil,
   IconPlus,
   IconTrash,
   IconX,
@@ -56,12 +57,14 @@ import {
   useReopenWeek,
   useShiftInstances,
   useShiftTemplates,
+  useUpdateShiftInstance,
   useWeekAvailability,
   useWeekSummary,
 } from "../../api/scheduling";
 import { useShiftRoles, useShiftRoleAssignments } from "../../api/shiftRoles";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import AddShiftInstanceModal from "../../components/scheduling/AddShiftInstanceModal";
+import EditShiftInstanceModal from "../../components/scheduling/EditShiftInstanceModal";
 import type {
   AvailabilityEntry,
   ShiftAssignment,
@@ -674,6 +677,7 @@ const BuilderPage = () => {
     [selectedWeek, canNavigateBackward, canNavigateForward, weekIndex, weekOptions],
   );
   const [showAddInstance, setShowAddInstance] = useState(false);
+  const [editInstance, setEditInstance] = useState<ShiftInstance | null>(null);
   const [staff, setStaff] = useState<StaffOption[]>([]);
   const [draggedUserId, setDraggedUserId] = useState<number | null>(null);
   const [draggedAssignmentIds, setDraggedAssignmentIds] = useState<number[] | null>(null);
@@ -817,6 +821,7 @@ const BuilderPage = () => {
   const assignMutation = useAssignShifts();
   const deleteAssignmentMutation = useDeleteAssignment();
   const createInstanceMutation = useCreateShiftInstance();
+  const updateInstanceMutation = useUpdateShiftInstance();
   const deleteInstanceMutation = useDeleteShiftInstance();
   const autoAssignMutation = useAutoAssignWeek();
   const lockWeekMutation = useLockWeek();
@@ -2303,6 +2308,14 @@ const BuilderPage = () => {
     await deleteAssignmentMutation.mutateAsync({ assignmentId: assignment.id, weekId });
   };
 
+  const handleEditInstance = useCallback((instance: ShiftInstance) => {
+    setEditInstance(instance);
+  }, []);
+
+  const handleCloseEditInstance = useCallback(() => {
+    setEditInstance(null);
+  }, []);
+
   const handleDeleteInstance = async (instance: ShiftInstance) => {
     if (!weekId) return;
     await deleteInstanceMutation.mutateAsync({ id: instance.id, weekId });
@@ -2312,6 +2325,12 @@ const BuilderPage = () => {
     payload: Parameters<typeof createInstanceMutation.mutateAsync>[0],
   ) => {
     await createInstanceMutation.mutateAsync(payload);
+  };
+
+  const handleUpdateInstance = async (
+    payload: Parameters<typeof updateInstanceMutation.mutateAsync>[0],
+  ) => {
+    await updateInstanceMutation.mutateAsync(payload);
   };
 
   const handleLockWeek = async () => {
@@ -2560,20 +2579,29 @@ const BuilderPage = () => {
                             preferredRequirement: roleRequirement,
                           })
                         }
-                      >
-                        {formatAssignButtonLabel(label)}
-                      </Button>
-                      {canModifyWeek ? (
-                        <ActionIcon
-                          variant="subtle"
-                          color="red"
-                          onClick={() => handleDeleteInstance(instance)}
-                          disabled={deleteInstanceMutation.isPending}
                         >
-                          <IconTrash size={16} />
-                        </ActionIcon>
-                      ) : null}
-                    </Group>
+                          {formatAssignButtonLabel(label)}
+                        </Button>
+                        {canModifyWeek ? (
+                          <Group gap={6}>
+                            <ActionIcon
+                              variant="subtle"
+                              onClick={() => handleEditInstance(instance)}
+                              disabled={updateInstanceMutation.isPending}
+                            >
+                              <IconPencil size={16} />
+                            </ActionIcon>
+                            <ActionIcon
+                              variant="subtle"
+                              color="red"
+                              onClick={() => handleDeleteInstance(instance)}
+                              disabled={deleteInstanceMutation.isPending}
+                            >
+                              <IconTrash size={16} />
+                            </ActionIcon>
+                          </Group>
+                        ) : null}
+                      </Group>
                   </Box>
                 </Tooltip>
               );
@@ -2663,18 +2691,27 @@ const BuilderPage = () => {
                   {formatAssignButtonLabel(null)}
                 </Button>
               ) : null}
-              <Group justify="space-between" align="center">
-                {canModifyWeek ? (
-                  <ActionIcon
-                    variant="subtle"
-                    color="red"
-                    onClick={() => handleDeleteInstance(instance)}
-                    disabled={deleteInstanceMutation.isPending}
-                  >
-                    <IconTrash size={16} />
-                  </ActionIcon>
-                ) : null}
-              </Group>
+                <Group justify="space-between" align="center">
+                  {canModifyWeek ? (
+                    <Group gap={6}>
+                      <ActionIcon
+                        variant="subtle"
+                        onClick={() => handleEditInstance(instance)}
+                        disabled={updateInstanceMutation.isPending}
+                      >
+                        <IconPencil size={16} />
+                      </ActionIcon>
+                      <ActionIcon
+                        variant="subtle"
+                        color="red"
+                        onClick={() => handleDeleteInstance(instance)}
+                        disabled={deleteInstanceMutation.isPending}
+                      >
+                        <IconTrash size={16} />
+                      </ActionIcon>
+                    </Group>
+                  ) : null}
+                </Group>
               </Stack>
             </Tooltip>
           );
@@ -2727,19 +2764,32 @@ const BuilderPage = () => {
                 {label}
               </Text>
             </Stack>
-            {canModifyWeek ? (
-              <ActionIcon
-                variant="subtle"
-                color="red"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  handleDeleteInstance(instance);
-                }}
-              >
-                <IconTrash size={16} />
-              </ActionIcon>
-            ) : null}
-          </Group>
+              {canModifyWeek ? (
+                <Group gap={6}>
+                  <ActionIcon
+                    variant="subtle"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleEditInstance(instance);
+                    }}
+                    disabled={updateInstanceMutation.isPending}
+                  >
+                    <IconPencil size={16} />
+                  </ActionIcon>
+                  <ActionIcon
+                    variant="subtle"
+                    color="red"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleDeleteInstance(instance);
+                    }}
+                    disabled={deleteInstanceMutation.isPending}
+                  >
+                    <IconTrash size={16} />
+                  </ActionIcon>
+                </Group>
+              ) : null}
+            </Group>
           <Stack gap={6} style={{ width: "100%" }}>
             {grouped.length > 0 ? (
               grouped
@@ -3830,14 +3880,21 @@ const BuilderPage = () => {
         </Stack>
       </Modal>
 
-      <AddShiftInstanceModal
-        opened={showAddInstance}
-        onClose={() => setShowAddInstance(false)}
-        onSubmit={handleCreateInstance}
-        scheduleWeekId={weekId ?? 0}
-        defaultDate={weekStart.toDate()}
-        templates={templatesQuery.data ?? []}
-      />
+        <AddShiftInstanceModal
+          opened={showAddInstance}
+          onClose={() => setShowAddInstance(false)}
+          onSubmit={handleCreateInstance}
+          scheduleWeekId={weekId ?? 0}
+          defaultDate={weekStart.toDate()}
+          templates={templatesQuery.data ?? []}
+        />
+        <EditShiftInstanceModal
+          opened={Boolean(editInstance)}
+          instance={editInstance}
+          onClose={handleCloseEditInstance}
+          onSubmit={handleUpdateInstance}
+          shiftRoles={shiftRoleRecords}
+        />
 
       <Modal opened={publishWarningModalOpen} onClose={handleDismissPublishWarnings} title="Publish with volunteer shortfalls?">
         <Stack>
