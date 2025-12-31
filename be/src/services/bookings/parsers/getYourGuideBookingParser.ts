@@ -218,7 +218,9 @@ const extractBookingFields = (text: string): BookingFieldPatch => {
   const fields: BookingFieldPatch = {};
 
   const productMatch =
-    text.match(/has been booked:\s+(.+?)\s+Reference number/i) ?? text.match(/Tour:\s*(.+?)\s+Tour Option/i);
+    text.match(/has been booked:\s+(.+?)\s+Reference number/i) ??
+    text.match(/booking:\s+(.+?)\s+Reference number/i) ??
+    text.match(/Tour:\s*(.+?)\s+Tour Option/i);
 
   if (productMatch) {
     let rawName = productMatch[1].trim();
