@@ -327,7 +327,7 @@ const saveEmailRecord = async (payload: GmailMessagePayload): Promise<BookingEma
   record.payloadSize = message.sizeEstimate ?? textBody.length;
   record.rawPayload = JSON.stringify(message);
 
-  if (!record.ingestionStatus || record.ingestionStatus === 'processed') {
+  if (!record.ingestionStatus) {
     record.ingestionStatus = 'pending';
   }
 
