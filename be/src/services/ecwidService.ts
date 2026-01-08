@@ -86,6 +86,7 @@ export type EcwidPerson = {
 
 export type EcwidOrder = {
   id: string | number;
+  externalTransactionId?: string | number;
   items: EcwidOrderItem[];
   createDate?: string;
   pickupTime?: string;

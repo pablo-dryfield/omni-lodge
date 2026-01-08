@@ -81,6 +81,7 @@
         "rimraf": "^5.0.5",
         "sequelize": "^6.32.1",
         "sequelize-typescript": "^2.1.6",
+        "stripe": "^20.1.1",
         "typescript": "^5.3.3",
         "umzug": "^3.4.1",
         "winston": "^3.10.0"

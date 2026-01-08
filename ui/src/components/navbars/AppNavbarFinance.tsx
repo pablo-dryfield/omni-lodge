@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 const financeLinks = [
   { label: "Dashboard", path: "/finance" },
   { label: "Transactions", path: "/finance/transactions" },
+  { label: "Refunds", path: "/finance/refunds" },
   { label: "Accounts", path: "/finance/accounts" },
   { label: "Vendors", path: "/finance/vendors" },
   { label: "Clients", path: "/finance/clients" },
@@ -34,4 +35,3 @@ export const AppNavbarFinance = () => {
     </Stack>
   );
 };
-

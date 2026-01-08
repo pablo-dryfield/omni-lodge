@@ -64,6 +64,7 @@ import FinanceManagementRequests from "../../pages/Finance/FinanceManagementRequ
 import FinanceReports from "../../pages/Finance/FinanceReports";
 import FinanceFiles from "../../pages/Finance/FinanceFiles";
 import FinanceSettings from "../../pages/Finance/FinanceSettings";
+import FinanceRefunds from "../../pages/Finance/FinanceRefunds";
 
 const Routes = () => {
   return (
@@ -96,6 +97,7 @@ const Routes = () => {
       <Route path="/finance" element={<FinanceLayout />}>
         <Route index element={<FinanceDashboard />} />
         <Route path="transactions" element={<FinanceTransactions />} />
+        <Route path="refunds" element={<FinanceRefunds />} />
         <Route path="accounts" element={<FinanceAccounts />} />
         <Route path="vendors" element={<FinanceVendors />} />
         <Route path="clients" element={<FinanceClients />} />

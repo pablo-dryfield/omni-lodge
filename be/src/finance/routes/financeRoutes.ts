@@ -69,6 +69,7 @@ import {
   deleteBudget,
 } from '../controllers/budgetController.js';
 import { getFinanceReports } from '../controllers/reportController.js';
+import { listStripeRefunds } from '../controllers/refundController.js';
 
 const router = Router();
 
@@ -150,5 +151,8 @@ router.delete('/budgets/:id', deleteBudget);
 
 // Reports
 router.get('/reports', getFinanceReports);
+
+// Stripe refunds
+router.get('/refunds', listStripeRefunds);
 
 export default router;
