@@ -94,6 +94,26 @@ type ManifestResponse = {
   summary?: ManifestSummary;
 };
 
+type StripeTransactionPreview = {
+  id: string;
+  type: "charge" | "payment_intent";
+  amount: number;
+  amountRefunded: number;
+  currency: string;
+  status: string | null;
+  created: number;
+  receiptEmail?: string | null;
+  description?: string | null;
+  fullyRefunded: boolean;
+};
+
+type RefundPreviewResponse = {
+  bookingId: number;
+  orderId: string;
+  externalTransactionId: string;
+  stripe: StripeTransactionPreview;
+};
+
 
 
 type FetchStatus = "idle" | "loading" | "success" | "error";
@@ -588,6 +608,26 @@ const extractErrorMessage = (error: unknown): string => {
   return 'Something went wrong';
 };
 
+const formatStripeAmount = (amount: number, currency: string): string => {
+  const value = (amount / 100).toFixed(2);
+  return `${value} ${currency.toUpperCase()}`;
+};
+
+const getStripeStatusColor = (status?: string | null): string => {
+  switch (status) {
+    case "succeeded":
+      return "green";
+    case "pending":
+      return "yellow";
+    case "failed":
+      return "red";
+    case "canceled":
+      return "gray";
+    default:
+      return "blue";
+  }
+};
+
 type AmendModalState = {
   opened: boolean;
   order: UnifiedOrder | null;
@@ -606,6 +646,26 @@ const createDefaultAmendState = (): AmendModalState => ({
   formTime: '',
   submitting: false,
   error: null,
+});
+
+type CancelRefundState = {
+  opened: boolean;
+  order: UnifiedOrder | null;
+  bookingId: number | null;
+  loading: boolean;
+  submitting: boolean;
+  error: string | null;
+  preview: RefundPreviewResponse | null;
+};
+
+const createDefaultCancelState = (): CancelRefundState => ({
+  opened: false,
+  order: null,
+  bookingId: null,
+  loading: false,
+  submitting: false,
+  error: null,
+  preview: null,
 });
 
 const BookingsManifestPage = ({ title }: GenericPageProps) => {
@@ -665,6 +725,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const [statusFilter, setStatusFilter] = useState<BookingFilter>("active");
   const [searchInput, setSearchInput] = useState(searchParam);
   const [amendState, setAmendState] = useState<AmendModalState>(createDefaultAmendState());
+  const [cancelState, setCancelState] = useState<CancelRefundState>(createDefaultCancelState());
 
   useEffect(() => {
     setSearchInput(searchParam);
@@ -788,9 +849,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     setAmendState((prev) => ({ ...prev, formDate: value }));
   };
 
-  const handleAmendTimeChange = (value: string | Date | null) => {
-    const nextValue = value instanceof Date ? dayjs(value).format("HH:mm") : value ?? "";
-    setAmendState((prev) => ({ ...prev, formTime: nextValue }));
+  const handleAmendTimeChange = (event: ChangeEvent<HTMLInputElement>) => {
+    setAmendState((prev) => ({ ...prev, formTime: event.currentTarget.value }));
   };
 
   const handleAmendSubmit = async () => {
@@ -821,21 +881,60 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
   };
 
-  const handleCancelOrder = async (order: UnifiedOrder) => {
+  const openCancelModal = async (order: UnifiedOrder) => {
     const bookingId = getBookingIdFromOrder(order);
+    const baseState = createDefaultCancelState();
+    baseState.opened = true;
+    baseState.order = order;
+    baseState.bookingId = bookingId;
+    baseState.loading = Boolean(bookingId);
     if (!bookingId) {
-      window.alert("Unable to locate OmniLodge booking reference for this order.");
-      return;
+      baseState.error = "Unable to locate OmniLodge booking reference for this order.";
+      baseState.loading = false;
     }
-    if (!window.confirm("Cancel this Ecwid booking? This will only update OmniLodge for now.")) {
+    setCancelState(baseState);
+    if (!bookingId) {
       return;
     }
     try {
-      await axiosInstance.post(`/bookings/${bookingId}/cancel-ecwid`);
+      const response = await axiosInstance.get<RefundPreviewResponse>(`/bookings/${bookingId}/refund-preview`);
+      setCancelState((prev) => {
+        if (!prev.opened) {
+          return prev;
+        }
+        return {
+          ...prev,
+          loading: false,
+          preview: response.data,
+          error: null,
+        };
+      });
+    } catch (error) {
+      const message = extractErrorMessage(error);
+      setCancelState((prev) => ({ ...prev, loading: false, error: message }));
+    }
+  };
+
+  const closeCancelModal = () => {
+    if (cancelState.submitting) {
+      return;
+    }
+    setCancelState(createDefaultCancelState());
+  };
+
+  const handleConfirmRefund = async () => {
+    if (!cancelState.bookingId) {
+      setCancelState((prev) => ({ ...prev, error: "Missing OmniLodge booking reference." }));
+      return;
+    }
+    setCancelState((prev) => ({ ...prev, submitting: true, error: null }));
+    try {
+      await axiosInstance.post(`/bookings/${cancelState.bookingId}/cancel-ecwid`);
+      setCancelState(createDefaultCancelState());
       setReloadToken((token) => token + 1);
     } catch (error) {
       const message = extractErrorMessage(error);
-      window.alert(message);
+      setCancelState((prev) => ({ ...prev, submitting: false, error: message }));
     }
   };
 
@@ -1513,7 +1612,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                           size="xs"
                                           color="red"
                                           variant="outline"
-                                          onClick={() => handleCancelOrder(order)}
+                                          onClick={() => openCancelModal(order)}
                                         >
                                           Cancel
                                         </Button>
@@ -1707,7 +1806,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                         size="xs"
                                         color="red"
                                         variant="outline"
-                                        onClick={() => handleCancelOrder(order)}
+                                        onClick={() => openCancelModal(order)}
                                       >
                                         Cancel
                                       </Button>
@@ -1790,6 +1889,106 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               disabled={!amendState.formDate || !amendState.formTime || amendState.submitting}
             >
               Save changes
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={cancelState.opened}
+        onClose={closeCancelModal}
+        title={
+          cancelState.order
+            ? `Cancel booking ${cancelState.order.platformBookingId ?? cancelState.order.id}`
+            : "Cancel Ecwid booking"
+        }
+        size="md"
+        centered
+      >
+        <Stack gap="md">
+          <Text size="sm" c="dimmed">
+            We will verify the Stripe transaction before issuing the refund and cancelling the booking.
+          </Text>
+          {cancelState.loading && (
+            <Group gap="sm">
+              <Loader size="sm" />
+              <Text size="sm">Loading Stripe transaction details...</Text>
+            </Group>
+          )}
+          {cancelState.preview && (
+            <Stack gap="sm">
+              <Table withColumnBorders>
+                <Table.Tbody>
+                  <Table.Tr>
+                    <Table.Th>Order</Table.Th>
+                    <Table.Td>{cancelState.preview.orderId}</Table.Td>
+                  </Table.Tr>
+                  <Table.Tr>
+                    <Table.Th>Transaction</Table.Th>
+                    <Table.Td>
+                      {cancelState.preview.stripe.id} (
+                      {cancelState.preview.stripe.type === "payment_intent" ? "Payment intent" : "Charge"})
+                    </Table.Td>
+                  </Table.Tr>
+                  <Table.Tr>
+                    <Table.Th>Amount</Table.Th>
+                    <Table.Td>
+                      {formatStripeAmount(
+                        cancelState.preview.stripe.amount,
+                        cancelState.preview.stripe.currency,
+                      )}
+                    </Table.Td>
+                  </Table.Tr>
+                  <Table.Tr>
+                    <Table.Th>Refunded</Table.Th>
+                    <Table.Td>
+                      {formatStripeAmount(
+                        cancelState.preview.stripe.amountRefunded,
+                        cancelState.preview.stripe.currency,
+                      )}
+                    </Table.Td>
+                  </Table.Tr>
+                  <Table.Tr>
+                    <Table.Th>Status</Table.Th>
+                    <Table.Td>
+                      <Badge color={getStripeStatusColor(cancelState.preview.stripe.status)} variant="light">
+                        {(cancelState.preview.stripe.status ?? "unknown").toUpperCase()}
+                      </Badge>
+                    </Table.Td>
+                  </Table.Tr>
+                  <Table.Tr>
+                    <Table.Th>Created</Table.Th>
+                    <Table.Td>{dayjs.unix(cancelState.preview.stripe.created).format("YYYY-MM-DD HH:mm")}</Table.Td>
+                  </Table.Tr>
+                  <Table.Tr>
+                    <Table.Th>External ID</Table.Th>
+                    <Table.Td>{cancelState.preview.externalTransactionId}</Table.Td>
+                  </Table.Tr>
+                </Table.Tbody>
+              </Table>
+              {cancelState.preview.stripe.fullyRefunded && (
+                <Alert color="yellow" title="Already refunded">
+                  This Stripe transaction is already fully refunded. Confirming will only cancel the booking in OmniLodge.
+                </Alert>
+              )}
+            </Stack>
+          )}
+          {cancelState.error && (
+            <Alert color="red" title="Unable to load refund details">
+              {cancelState.error}
+            </Alert>
+          )}
+          <Group justify="flex-end">
+            <Button variant="default" onClick={closeCancelModal} disabled={cancelState.submitting}>
+              Close
+            </Button>
+            <Button
+              color="red"
+              onClick={handleConfirmRefund}
+              loading={cancelState.submitting}
+              disabled={cancelState.loading || !cancelState.preview || cancelState.submitting}
+            >
+              {cancelState.preview?.stripe.fullyRefunded ? "Confirm Cancel" : "Confirm Refund"}
             </Button>
           </Group>
         </Stack>

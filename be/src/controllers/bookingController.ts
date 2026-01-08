@@ -7,6 +7,8 @@ import timezone from 'dayjs/plugin/timezone.js';
 import Booking from '../models/Booking.js';
 import Channel from '../models/Channel.js';
 import Product from '../models/Product.js';
+import stripe from '../finance/services/stripeClient.js';
+import type Stripe from 'stripe';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import {
   canonicalizeProductKeyFromLabel,
@@ -23,7 +25,7 @@ import type {
 } from '../types/booking.js';
 import { groupOrdersForManifest, transformEcwidOrders } from '../utils/ecwidAdapter.js';
 import { BOOKING_STATUSES } from '../constants/bookings.js';
-import { getEcwidOrder, updateEcwidOrder, type EcwidExtraField } from '../services/ecwidService.js';
+import { getEcwidOrder, updateEcwidOrder, type EcwidExtraField, type EcwidOrder } from '../services/ecwidService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -737,6 +739,192 @@ export const amendEcwidBooking = async (req: AuthenticatedRequest, res: Response
   }
 };
 
+type StripeTransactionSummary = {
+  id: string;
+  type: 'charge' | 'payment_intent';
+  amount: number;
+  amountRefunded: number;
+  currency: string;
+  status: string | null;
+  created: number;
+  receiptEmail?: string | null;
+  description?: string | null;
+  fullyRefunded: boolean;
+};
+
+type EcwidRefundPreview = {
+  bookingId: number;
+  orderId: string;
+  externalTransactionId: string;
+  stripe: StripeTransactionSummary;
+};
+
+const normalizeExternalTransactionId = (order: EcwidOrder): string | null => {
+  const candidate = (order as { externalTransactionId?: unknown }).externalTransactionId;
+  if (typeof candidate === 'string' && candidate.trim().length > 0) {
+    return candidate.trim();
+  }
+  if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+    return String(candidate);
+  }
+  return null;
+};
+
+const isStripeResourceMissing = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  return (error as { code?: string }).code === 'resource_missing';
+};
+
+const summarizeCharge = (charge: Stripe.Charge): StripeTransactionSummary => {
+  const amount = charge.amount ?? 0;
+  const amountRefunded = charge.amount_refunded ?? 0;
+  return {
+    id: charge.id,
+    type: 'charge',
+    amount,
+    amountRefunded,
+    currency: charge.currency ?? 'unknown',
+    status: charge.status ?? null,
+    created: charge.created ?? 0,
+    receiptEmail: charge.receipt_email ?? charge.billing_details?.email ?? null,
+    description: charge.description ?? null,
+    fullyRefunded: amount > 0 && amountRefunded >= amount,
+  };
+};
+
+const summarizePaymentIntent = (
+  intent: Stripe.PaymentIntent,
+  latestCharge: Stripe.Charge | null,
+): StripeTransactionSummary => {
+  const amount = intent.amount_received ?? intent.amount ?? 0;
+  const amountRefunded = latestCharge?.amount_refunded ?? 0;
+  return {
+    id: intent.id,
+    type: 'payment_intent',
+    amount,
+    amountRefunded,
+    currency: intent.currency ?? 'unknown',
+    status: intent.status ?? null,
+    created: intent.created ?? 0,
+    receiptEmail: intent.receipt_email ?? latestCharge?.receipt_email ?? latestCharge?.billing_details?.email ?? null,
+    description: intent.description ?? latestCharge?.description ?? null,
+    fullyRefunded: amount > 0 && amountRefunded >= amount,
+  };
+};
+
+const resolveStripeTransaction = async (externalTransactionId: string): Promise<StripeTransactionSummary> => {
+  const trimmed = externalTransactionId.trim();
+  if (!trimmed) {
+    throw new Error('External transaction ID is missing');
+  }
+
+  const tryPaymentIntent = async (): Promise<StripeTransactionSummary | null> => {
+    try {
+      const intent = await stripe.paymentIntents.retrieve(trimmed);
+      let latestCharge: Stripe.Charge | null = null;
+      if (typeof intent.latest_charge === 'string' && intent.latest_charge.trim().length > 0) {
+        const charge = await stripe.charges.retrieve(intent.latest_charge);
+        latestCharge = 'deleted' in charge && charge.deleted ? null : (charge as Stripe.Charge);
+      } else if (intent.latest_charge && typeof intent.latest_charge === 'object') {
+        latestCharge = intent.latest_charge as Stripe.Charge;
+      }
+      return summarizePaymentIntent(intent, latestCharge);
+    } catch (error) {
+      if (isStripeResourceMissing(error)) {
+        return null;
+      }
+      throw error;
+    }
+  };
+
+  const tryCharge = async (): Promise<StripeTransactionSummary | null> => {
+    try {
+      const charge = await stripe.charges.retrieve(trimmed);
+      if ('deleted' in charge && charge.deleted) {
+        return null;
+      }
+      return summarizeCharge(charge as Stripe.Charge);
+    } catch (error) {
+      if (isStripeResourceMissing(error)) {
+        return null;
+      }
+      throw error;
+    }
+  };
+
+  if (trimmed.startsWith('pi_')) {
+    const intentSummary = await tryPaymentIntent();
+    if (intentSummary) {
+      return intentSummary;
+    }
+    const chargeSummary = await tryCharge();
+    if (chargeSummary) {
+      return chargeSummary;
+    }
+  } else if (trimmed.startsWith('ch_')) {
+    const chargeSummary = await tryCharge();
+    if (chargeSummary) {
+      return chargeSummary;
+    }
+    const intentSummary = await tryPaymentIntent();
+    if (intentSummary) {
+      return intentSummary;
+    }
+  } else {
+    const intentSummary = await tryPaymentIntent();
+    if (intentSummary) {
+      return intentSummary;
+    }
+    const chargeSummary = await tryCharge();
+    if (chargeSummary) {
+      return chargeSummary;
+    }
+  }
+
+  throw new Error('Stripe transaction not found for the provided external transaction ID.');
+};
+
+const buildEcwidRefundPreview = async (booking: Booking): Promise<EcwidRefundPreview> => {
+  const orderId = booking.platformBookingId?.trim();
+  if (!orderId) {
+    throw new Error('Booking is missing Ecwid platform reference');
+  }
+  const ecwidOrder = await getEcwidOrder(orderId);
+  const externalTransactionId = normalizeExternalTransactionId(ecwidOrder);
+  if (!externalTransactionId) {
+    throw new Error('Ecwid order is missing an external transaction ID');
+  }
+  const stripeSummary = await resolveStripeTransaction(externalTransactionId);
+  return {
+    bookingId: booking.id,
+    orderId,
+    externalTransactionId,
+    stripe: stripeSummary,
+  };
+};
+
+const createStripeRefundFromSummary = async (
+  summary: StripeTransactionSummary,
+  metadata: { bookingId: number; orderId: string },
+): Promise<Stripe.Refund | null> => {
+  if (summary.fullyRefunded) {
+    return null;
+  }
+  const basePayload: Stripe.RefundCreateParams = {
+    reason: 'requested_by_customer',
+    metadata: {
+      bookingId: String(metadata.bookingId),
+      orderId: metadata.orderId,
+    },
+  };
+  if (summary.type === 'payment_intent') {
+    return stripe.refunds.create({ ...basePayload, payment_intent: summary.id });
+  }
+  return stripe.refunds.create({ ...basePayload, charge: summary.id });
+};
+
 export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
@@ -761,6 +949,12 @@ export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Respons
       return;
     }
 
+    const preview = await buildEcwidRefundPreview(booking);
+    const refund = await createStripeRefundFromSummary(preview.stripe, {
+      bookingId: booking.id,
+      orderId: preview.orderId,
+    });
+
     const now = new Date();
     booking.status = 'cancelled';
     booking.statusChangedAt = now;
@@ -770,15 +964,44 @@ export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Respons
     await booking.save();
 
     res.status(200).json({
-      message: 'Booking cancelled successfully',
+      message: refund ? 'Booking cancelled and refund issued successfully' : 'Booking cancelled successfully',
       booking: {
         id: booking.id,
         status: booking.status,
         cancelledAt: booking.cancelledAt,
       },
+      refund,
+      stripe: preview.stripe,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to cancel booking';
+    res.status(500).json({ message });
+  }
+};
+
+export const getEcwidRefundPreview = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const booking = await Booking.findByPk(bookingIdParam);
+    if (!booking) {
+      res.status(404).json({ message: 'Booking not found' });
+      return;
+    }
+
+    if (booking.platform !== 'ecwid') {
+      res.status(400).json({ message: 'Only Ecwid bookings can be refunded through this endpoint' });
+      return;
+    }
+
+    const preview = await buildEcwidRefundPreview(booking);
+    res.status(200).json(preview);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to load refund preview';
     res.status(500).json({ message });
   }
 };
