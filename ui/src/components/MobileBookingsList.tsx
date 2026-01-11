@@ -279,6 +279,11 @@ export const MobileBookingsList: React.FC<MobileBookingsListProps> = ({
                             <Badge color="pink" variant="light">
                               {`Women: ${cell.womenCount}`}
                             </Badge>
+                            {cell.undefinedCount > 0 && (
+                              <Badge color="gray" variant="light">
+                                {`Undefined Genre: ${cell.undefinedCount}`}
+                              </Badge>
+                            )}
                             <Badge color="gray" variant="light">
                               {bookingLabel}
                             </Badge>

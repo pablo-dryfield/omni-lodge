@@ -9,10 +9,15 @@ type BookingPopupProps = {
 };
 
 const formatPeopleSummary = (cell: BookingCell): string => {
+  if (cell.undefinedCount > 0 && cell.menCount === 0 && cell.womenCount === 0) {
+    return `${cell.totalPeople} people (Undefined Genre: ${cell.undefinedCount})`;
+  }
+  if (cell.undefinedCount > 0) {
+    return `${cell.totalPeople} people (Men: ${cell.menCount}, Women: ${cell.womenCount}, Undefined: ${cell.undefinedCount})`;
+  }
   if (cell.menCount === 0 && cell.womenCount === 0) {
     return `${cell.totalPeople} people`;
   }
-
   return `${cell.totalPeople} people (Men: ${cell.menCount}, Women: ${cell.womenCount})`;
 };
 

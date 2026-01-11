@@ -111,6 +111,7 @@ import {
   type DashboardVisualCardViewConfig,
   type DashboardPreviewTableCardViewConfig,
   type DashboardCardDto,
+  type DashboardPreviewPeriodPreset,
   type TemplateScheduleDto,
   type TemplateSchedulePayload,
   type TemplateScheduleDeliveryTarget,
@@ -1129,9 +1130,15 @@ const formatDeliveryTargetsLabel = (targets: TemplateScheduleDeliveryTarget[]): 
   return resolved.join(", ");
 };
 
+const normalizeCurrencyCode = (currency?: string): string => {
+  const normalized = currency?.trim().toUpperCase();
+  return normalized && normalized.length === 3 ? normalized : "USD";
+};
+
 const formatMetricValue = (
   value: number,
   format: MetricSpotlightDefinitionDto["format"] = "number",
+  currency?: string,
 ): string => {
   if (!Number.isFinite(value)) {
     return "—";
@@ -1141,7 +1148,7 @@ const formatMetricValue = (
     case "currency":
       return new Intl.NumberFormat("en-US", {
         style: "currency",
-        currency: "USD",
+        currency: normalizeCurrencyCode(currency),
         maximumFractionDigits: 2,
       }).format(value);
     case "percentage":
@@ -1193,6 +1200,7 @@ const SPOTLIGHT_COMPARISON_OPTIONS: {
   { value: "wow", label: "Week over week" },
   { value: "mom", label: "Month over month" },
   { value: "yoy", label: "Year over year" },
+  { value: "custom", label: "Custom range" },
 ];
 
 const SPOTLIGHT_FORMAT_OPTIONS: {
@@ -1200,9 +1208,34 @@ const SPOTLIGHT_FORMAT_OPTIONS: {
   label: string;
 }[] = [
   { value: "number", label: "Number" },
-  { value: "currency", label: "Currency (USD)" },
+  { value: "currency", label: "Currency" },
   { value: "percentage", label: "Percentage" },
 ];
+
+const SPOTLIGHT_CURRENCY_OPTIONS: { value: string; label: string }[] = [
+  { value: "PLN", label: "PLN" },
+  { value: "EUR", label: "EUR" },
+  { value: "USD", label: "USD" },
+];
+
+const SPOTLIGHT_PERIOD_PRESET_OPTIONS: Array<{ value: DashboardPreviewPeriodPreset; label: string }> = [
+  { value: "today", label: "Today" },
+  { value: "last_7_days", label: "Last 7 days" },
+  { value: "last_30_days", label: "Last 30 days" },
+  { value: "last_30_months", label: "Last 30 months" },
+];
+
+const SPOTLIGHT_PERIOD_LABEL_LOOKUP = new Map(
+  SPOTLIGHT_PERIOD_PRESET_OPTIONS.map((option) => [option.value, option.label]),
+);
+
+const DEFAULT_SPOTLIGHT_PERIOD_PRESETS: DashboardPreviewPeriodPreset[] = [
+  "today",
+  "last_7_days",
+  "last_30_days",
+];
+
+const DEFAULT_SPOTLIGHT_PERIOD_DEFAULT: DashboardPreviewPeriodPreset = "last_7_days";
 
 const normalizeFiltersForQuery = (
   filters: ReportFilter[],
@@ -2002,6 +2035,7 @@ const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitio
     "wow",
     "mom",
     "yoy",
+    "custom",
   ];
   const formatValues: ReadonlyArray<MetricSpotlightDefinitionDto["format"]> = [
     "number",
@@ -2035,16 +2069,29 @@ const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitio
           : null;
       const comparison =
         comparisonCandidate && comparisonValues.includes(comparisonCandidate) ? comparisonCandidate : undefined;
+      let comparisonRange: MetricSpotlightDefinitionDto["comparisonRange"] | undefined;
+      if (comparison === "custom" && record.comparisonRange && typeof record.comparisonRange === "object") {
+        const rangeCandidate = record.comparisonRange as Record<string, unknown>;
+        const from = typeof rangeCandidate.from === "string" ? rangeCandidate.from.trim() : "";
+        const to = typeof rangeCandidate.to === "string" ? rangeCandidate.to.trim() : "";
+        if (from && to) {
+          comparisonRange = { from, to };
+        }
+      }
       const formatCandidate =
         typeof record.format === "string" ? (record.format as MetricSpotlightDefinitionDto["format"]) : null;
       const format = formatCandidate && formatValues.includes(formatCandidate) ? formatCandidate : undefined;
+      const currencyRaw = typeof record.currency === "string" ? record.currency.trim().toUpperCase() : "";
+      const currency = currencyRaw.length === 3 ? currencyRaw : undefined;
 
       return {
         metric,
         label,
         ...(target !== undefined ? { target } : {}),
         ...(comparison ? { comparison } : {}),
+        ...(comparisonRange ? { comparisonRange } : {}),
         ...(format ? { format } : {}),
+        ...(currency ? { currency } : {}),
       };
     })
     .filter((entry): entry is MetricSpotlightDefinitionDto => Boolean(entry));
@@ -2902,6 +2949,43 @@ const Reports = (props: GenericPageProps) => {
     });
     return lookup;
   }, [filterFieldOptions]);
+
+  const spotlightDateFilterMetadata = useMemo(() => {
+    const metadata = new Map<
+      string,
+      { modelId: string; fieldId: string; operator: FilterOperator; filterIndex?: number }
+    >();
+    draft.filters.forEach((filter, index) => {
+      if (filter.valueKind !== "date") {
+        return;
+      }
+      metadata.set(filter.id, {
+        modelId: filter.leftModelId,
+        fieldId: filter.leftFieldId,
+        operator: filter.operator,
+        filterIndex: index,
+      });
+    });
+    return metadata;
+  }, [draft.filters]);
+
+  const spotlightDateFilterOptions = useMemo(
+    () =>
+      draft.filters
+        .filter((filter) => filter.valueKind === "date")
+        .map((filter) => {
+          const fieldOption = filterFieldLookup.get(
+            buildFilterOptionKey(filter.leftModelId, filter.leftFieldId),
+          );
+          const operatorLabel = FILTER_OPERATOR_LOOKUP.get(filter.operator)?.label ?? filter.operator;
+          const labelBase = fieldOption?.label ?? `${filter.leftModelId}.${filter.leftFieldId}`;
+          return {
+            value: filter.id,
+            label: `${labelBase} (${operatorLabel})`,
+          };
+        }),
+    [draft.filters, filterFieldLookup],
+  );
 
   const previewColumnsFromSelection = useMemo(() => {
     const columns = previewResult?.columns ?? [];
@@ -3952,7 +4036,7 @@ const Reports = (props: GenericPageProps) => {
         }
 
         const aggregatedValue = values.reduce((total, value) => total + value, 0);
-        const formattedValue = formatMetricValue(aggregatedValue, spotlight.format);
+        const formattedValue = formatMetricValue(aggregatedValue, spotlight.format, spotlight.currency);
 
         let deltaDisplay = "—";
         let tone: "positive" | "neutral" | "negative" = "neutral";
@@ -3964,8 +4048,11 @@ const Reports = (props: GenericPageProps) => {
           deltaDisplay = `${difference >= 0 ? "+" : ""}${formatMetricValue(
             difference,
             spotlight.format,
+            spotlight.currency,
           )}`;
-          contextParts.push(`Target ${formatMetricValue(spotlight.target, spotlight.format)}`);
+          contextParts.push(
+            `Target ${formatMetricValue(spotlight.target, spotlight.format, spotlight.currency)}`,
+          );
         }
 
         if (spotlight.comparison) {
@@ -5163,14 +5250,19 @@ const Reports = (props: GenericPageProps) => {
             const spotlightMetric = viewConfig.spotlight?.metric ?? null;
             const latestSpotlight = spotlightMetric ? spotlightLookup.get(spotlightMetric) : undefined;
             if (latestSpotlight) {
+              const { comparison: _comparison, comparisonRange: _comparisonRange, ...latestSpotlightBase } =
+                latestSpotlight;
+              const resolvedDateFilter =
+                viewConfig.dateFilter ??
+                (dateFilterMetadata ? { ...dateFilterMetadata } : undefined);
               const updatedConfig: DashboardSpotlightCardViewConfig = {
                 ...viewConfig,
                 spotlight: {
                   ...viewConfig.spotlight,
-                  ...latestSpotlight,
+                  ...latestSpotlightBase,
                   metricLabel: getColumnLabel(latestSpotlight.metric),
                 },
-                ...(dateFilterMetadata ? { dateFilter: { ...dateFilterMetadata } } : {}),
+                ...(resolvedDateFilter ? { dateFilter: resolvedDateFilter } : {}),
               };
               enqueueUpdate(dashboard.id, card, updatedConfig);
               return;
@@ -5265,15 +5357,31 @@ const Reports = (props: GenericPageProps) => {
       spotlight.label && spotlight.label.trim().length > 0 ? spotlight.label.trim() : metricLabel;
     const spotlightId = spotlight.metric || `spotlight-${index}`;
     const summaryCard = metricsSummary.find((card) => card.id === spotlightId);
+    const { comparison: _comparison, comparisonRange: _comparisonRange, ...spotlightBase } = spotlight;
     const dateFilterMetadata = findDateFilterMetadata();
+    const periodPresets = DEFAULT_SPOTLIGHT_PERIOD_PRESETS.filter(
+      (preset) => preset && SPOTLIGHT_PERIOD_PRESET_OPTIONS.some((option) => option.value === preset),
+    );
+    const periodDefault = periodPresets.includes(DEFAULT_SPOTLIGHT_PERIOD_DEFAULT)
+      ? DEFAULT_SPOTLIGHT_PERIOD_DEFAULT
+      : periodPresets[0];
     const viewConfig: DashboardCardViewConfig = {
       mode: "spotlight",
       description: `Spotlight: ${defaultTitle}`,
+      queryConfig: visualQueryDescriptor.config ?? null,
       spotlight: {
-        ...spotlight,
+        ...spotlightBase,
         metricLabel,
       },
       ...(dateFilterMetadata ? { dateFilter: dateFilterMetadata } : {}),
+      ...(dateFilterMetadata && periodPresets.length > 0 && periodDefault
+        ? {
+            periodConfig: {
+              presets: periodPresets,
+              defaultPreset: periodDefault,
+            },
+          }
+        : {}),
       sample: summaryCard
         ? {
             cards: [
@@ -5301,6 +5409,50 @@ const Reports = (props: GenericPageProps) => {
     };
     handleOpenDashboardModal(cardDraft);
   };
+
+  const updateSpotlightCardDraft = useCallback(
+    (updater: (current: DashboardSpotlightCardViewConfig) => DashboardSpotlightCardViewConfig) => {
+      setDashboardCardDraft((current) => {
+        if (!current || !isSpotlightCardViewConfig(current.viewConfig)) {
+          return current;
+        }
+        return {
+          ...current,
+          viewConfig: updater(current.viewConfig),
+        };
+      });
+    },
+    [],
+  );
+
+  const selectedSpotlightDateFilterId = useMemo(() => {
+    if (!dashboardCardDraft || !isSpotlightCardViewConfig(dashboardCardDraft.viewConfig)) {
+      return null;
+    }
+    const dateFilter = dashboardCardDraft.viewConfig.dateFilter;
+    if (!dateFilter) {
+      return null;
+    }
+    for (const option of spotlightDateFilterOptions) {
+      const metadata = spotlightDateFilterMetadata.get(option.value);
+      if (
+        metadata &&
+        metadata.modelId === dateFilter.modelId &&
+        metadata.fieldId === dateFilter.fieldId &&
+        metadata.operator === dateFilter.operator
+      ) {
+        return option.value;
+      }
+    }
+    return null;
+  }, [dashboardCardDraft, spotlightDateFilterMetadata, spotlightDateFilterOptions]);
+
+  const spotlightDashboardConfig = useMemo(() => {
+    if (!dashboardCardDraft || !isSpotlightCardViewConfig(dashboardCardDraft.viewConfig)) {
+      return null;
+    }
+    return dashboardCardDraft.viewConfig;
+  }, [dashboardCardDraft]);
 
   const handleConfirmDashboardCard = async () => {
     if (!dashboardCardDraft) {
@@ -5377,14 +5529,19 @@ const Reports = (props: GenericPageProps) => {
     if (isSpotlightCardViewConfig(viewConfig)) {
       const { spotlight } = viewConfig;
       const sampleCard = viewConfig.sample?.cards?.[0];
+      const formatLabel = (spotlight.format ?? "number").toUpperCase();
+      const currencyLabel =
+        spotlight.format === "currency" && spotlight.currency
+          ? ` (${spotlight.currency.toUpperCase()})`
+          : "";
       return (
         <Stack gap={4}>
           <Text fw={600} fz="sm">
             {spotlight.label?.trim() || spotlight.metricLabel}
           </Text>
           <Text fz="xs" c="dimmed">
-            Format: {(spotlight.format ?? "number").toUpperCase()}
-            {typeof spotlight.target === "number" ? ` • Target ${formatMetricValue(spotlight.target, spotlight.format)}` : ""}
+            Format: {formatLabel}{currencyLabel}
+            {typeof spotlight.target === "number" ? ` • Target ${formatMetricValue(spotlight.target, spotlight.format, spotlight.currency)}` : ""}
             {spotlight.comparison ? ` • Comparison ${spotlight.comparison.toUpperCase()}` : ""}
           </Text>
           {sampleCard ? (
@@ -8645,12 +8802,30 @@ const Reports = (props: GenericPageProps) => {
                                 label="Format"
                                 data={SPOTLIGHT_FORMAT_OPTIONS}
                                 value={spotlight.format ?? "number"}
-                                onChange={(value) =>
-                                  handleSpotlightChange(index, {
-                                    format: (value ?? "number") as MetricSpotlightDefinitionDto["format"],
-                                  })
-                                }
+                                onChange={(value) => {
+                                  const normalized =
+                                    (value ?? "number") as MetricSpotlightDefinitionDto["format"];
+                                  const patch: Partial<MetricSpotlightDefinitionDto> = { format: normalized };
+                                  if (normalized === "currency" && !spotlight.currency) {
+                                    patch.currency = SPOTLIGHT_CURRENCY_OPTIONS[0]?.value ?? "USD";
+                                  } else if (normalized !== "currency") {
+                                    patch.currency = undefined;
+                                  }
+                                  handleSpotlightChange(index, patch);
+                                }}
                               />
+                              {spotlight.format === "currency" && (
+                                <Select
+                                  label="Currency"
+                                  data={SPOTLIGHT_CURRENCY_OPTIONS}
+                                  value={spotlight.currency ?? SPOTLIGHT_CURRENCY_OPTIONS[0]?.value ?? "USD"}
+                                  onChange={(value) =>
+                                    handleSpotlightChange(index, {
+                                      currency: value ?? undefined,
+                                    })
+                                  }
+                                />
+                              )}
                             </SimpleGrid>
                             <Flex gap="sm" wrap="wrap">
                               <NumberInput
@@ -8667,21 +8842,6 @@ const Reports = (props: GenericPageProps) => {
                                 allowDecimal
                                 placeholder="Optional target"
                                 style={{ flex: 1, minWidth: 160 }}
-                              />
-                              <Select
-                                label="Comparison baseline"
-                                data={SPOTLIGHT_COMPARISON_OPTIONS}
-                                value={spotlight.comparison ?? null}
-                                onChange={(value) =>
-                                  handleSpotlightChange(index, {
-                                    comparison: value
-                                      ? (value as MetricSpotlightDefinitionDto["comparison"])
-                                      : undefined,
-                                  })
-                                }
-                                placeholder="None"
-                                clearable
-                                style={{ flex: 1, minWidth: 200 }}
                               />
                             </Flex>
                             <Group justify="flex-end">
@@ -9733,6 +9893,187 @@ const Reports = (props: GenericPageProps) => {
               }
               placeholder="Optional note shown with the card."
             />
+            {spotlightDashboardConfig && (
+              <Paper withBorder radius="md" p="md">
+                <Stack gap="sm">
+                  <Text fw={600} fz="sm">
+                    Spotlight filters
+                  </Text>
+                  {spotlightDateFilterOptions.length === 0 ? (
+                    <Text fz="sm" c="dimmed">
+                      Add a date filter to the template to enable per-card period buttons.
+                    </Text>
+                  ) : (
+                    <>
+                      <Select
+                        label="Date field"
+                        data={spotlightDateFilterOptions}
+                        value={selectedSpotlightDateFilterId}
+                        placeholder="Select date field"
+                        onChange={(value) => {
+                          updateSpotlightCardDraft((current) => {
+                            if (!value) {
+                              const { dateFilter, ...rest } = current;
+                              return rest;
+                            }
+                            const metadata = spotlightDateFilterMetadata.get(value);
+                            return {
+                              ...current,
+                              ...(metadata ? { dateFilter: { ...metadata } } : {}),
+                            };
+                          });
+                        }}
+                      />
+                      <MultiSelect
+                        label="Quick filter buttons"
+                        data={SPOTLIGHT_PERIOD_PRESET_OPTIONS}
+                        value={spotlightDashboardConfig.periodConfig?.presets ?? []}
+                        onChange={(value) => {
+                          updateSpotlightCardDraft((current) => {
+                            const normalized = value.filter((entry) =>
+                              SPOTLIGHT_PERIOD_PRESET_OPTIONS.some((option) => option.value === entry),
+                            ) as DashboardPreviewPeriodPreset[];
+                            if (normalized.length === 0) {
+                              const { periodConfig, ...rest } = current;
+                              return rest;
+                            }
+                            const existingDefault = current.periodConfig?.defaultPreset;
+                            const allowCustom = Boolean(current.periodConfig?.allowCustom);
+                            const defaultPreset =
+                              existingDefault && normalized.includes(existingDefault)
+                                ? existingDefault
+                                : normalized[0];
+                            return {
+                              ...current,
+                              periodConfig: {
+                                presets: normalized,
+                                defaultPreset,
+                                allowCustom,
+                              },
+                            };
+                          });
+                        }}
+                        searchable
+                        disabled={!selectedSpotlightDateFilterId}
+                      />
+                      <Select
+                        label="Default period"
+                        data={(spotlightDashboardConfig.periodConfig?.presets ?? []).map((preset) => ({
+                          value: preset,
+                          label: SPOTLIGHT_PERIOD_LABEL_LOOKUP.get(preset) ?? preset,
+                        }))}
+                        value={spotlightDashboardConfig.periodConfig?.defaultPreset ?? null}
+                        placeholder="Select default"
+                        onChange={(value) => {
+                          if (!value) {
+                            return;
+                          }
+                          updateSpotlightCardDraft((current) => {
+                            if (!current.periodConfig) {
+                              return current;
+                            }
+                            return {
+                              ...current,
+                              periodConfig: {
+                                ...current.periodConfig,
+                                defaultPreset: value as DashboardPreviewPeriodPreset,
+                              },
+                            };
+                          });
+                        }}
+                        disabled={!selectedSpotlightDateFilterId || !spotlightDashboardConfig.periodConfig}
+                      />
+                      <Switch
+                        label="Allow custom range"
+                        checked={Boolean(spotlightDashboardConfig.periodConfig?.allowCustom)}
+                        onChange={(event) => {
+                          const allowCustom = event.currentTarget.checked;
+                          updateSpotlightCardDraft((current) => {
+                            if (!current.periodConfig) {
+                              return current;
+                            }
+                            return {
+                              ...current,
+                              periodConfig: {
+                                ...current.periodConfig,
+                                allowCustom,
+                              },
+                            };
+                          });
+                        }}
+                        disabled={!selectedSpotlightDateFilterId || !spotlightDashboardConfig.periodConfig}
+                      />
+                      <Select
+                        label="Comparison baseline"
+                        data={SPOTLIGHT_COMPARISON_OPTIONS}
+                        value={spotlightDashboardConfig.spotlight?.comparison ?? null}
+                        onChange={(value) => {
+                          const comparison = value
+                            ? (value as MetricSpotlightDefinitionDto["comparison"])
+                            : undefined;
+                          updateSpotlightCardDraft((current) => {
+                            const nextSpotlight = {
+                              ...current.spotlight,
+                              ...(comparison ? { comparison } : { comparison: undefined }),
+                              ...(comparison === "custom" ? {} : { comparisonRange: undefined }),
+                            };
+                            return {
+                              ...current,
+                              spotlight: nextSpotlight,
+                            };
+                          });
+                        }}
+                        placeholder="None"
+                        clearable
+                        disabled={!selectedSpotlightDateFilterId}
+                      />
+                      {spotlightDashboardConfig.spotlight?.comparison === "custom" && (
+                        <SimpleGrid cols={{ base: 1, sm: 2 }}>
+                          <TextInput
+                            type="date"
+                            label="Comparison start"
+                            value={spotlightDashboardConfig.spotlight.comparisonRange?.from ?? ""}
+                            onChange={(event) =>
+                              updateSpotlightCardDraft((current) => ({
+                                ...current,
+                                spotlight: {
+                                  ...current.spotlight,
+                                  comparison: "custom",
+                                  comparisonRange: {
+                                    from: event.currentTarget.value,
+                                    to: current.spotlight.comparisonRange?.to ?? "",
+                                  },
+                                },
+                              }))
+                            }
+                            disabled={!selectedSpotlightDateFilterId}
+                          />
+                          <TextInput
+                            type="date"
+                            label="Comparison end"
+                            value={spotlightDashboardConfig.spotlight.comparisonRange?.to ?? ""}
+                            onChange={(event) =>
+                              updateSpotlightCardDraft((current) => ({
+                                ...current,
+                                spotlight: {
+                                  ...current.spotlight,
+                                  comparison: "custom",
+                                  comparisonRange: {
+                                    from: current.spotlight.comparisonRange?.from ?? "",
+                                    to: event.currentTarget.value,
+                                  },
+                                },
+                              }))
+                            }
+                            disabled={!selectedSpotlightDateFilterId}
+                          />
+                        </SimpleGrid>
+                      )}
+                    </>
+                  )}
+                </Stack>
+              </Paper>
+            )}
             <Paper withBorder radius="md" p="md">
               {renderDashboardCardSummary() ?? (
                 <Text fz="sm" c="dimmed">

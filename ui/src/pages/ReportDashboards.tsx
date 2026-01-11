@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useDebouncedValue } from "@mantine/hooks";
+import { useDebouncedValue, useMediaQuery } from "@mantine/hooks";
 import { useQueryClient } from "@tanstack/react-query";
-import ReactGridLayout, { type Layout, WidthProvider } from "react-grid-layout";
-import "react-grid-layout/css/styles.css";
-import "react-resizable/css/styles.css";
+import { GridStack } from "gridstack";
+import "gridstack/dist/gridstack.min.css";
 import {
   ActionIcon,
   Badge,
@@ -25,12 +24,12 @@ import {
   Textarea,
   TextInput,
   Title,
+  useMantineTheme,
 } from "@mantine/core";
 import {
   IconAdjustments,
   IconArrowLeft,
   IconDeviceFloppy,
-  IconGripVertical,
   IconLayoutGrid,
   IconPlus,
   IconSearch,
@@ -65,6 +64,14 @@ type DashboardCardLayout = {
   h: number;
 };
 
+type DashboardGridItem = {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
 type CardDraft = {
   id?: string;
   templateId: string;
@@ -79,10 +86,63 @@ const DEFAULT_CARD_LAYOUT: DashboardCardLayout = {
   w: 6,
   h: 4,
 };
+const LAYOUT_EDITOR_CELL_HEIGHT = 80;
+const LAYOUT_EDITOR_GRID_SIZE = Math.max(12, Math.floor(LAYOUT_EDITOR_CELL_HEIGHT / 8));
+const DEMO_GRID_ITEMS: Array<DashboardGridItem & { label: string; accent?: boolean }> = [
+  { id: "1", x: 0, y: 0, w: 4, h: 2, label: "1" },
+  { id: "2", x: 4, y: 0, w: 4, h: 4, label: "2" },
+  { id: "3", x: 8, y: 0, w: 2, h: 2, label: "Drag me!", accent: true },
+  { id: "4", x: 10, y: 0, w: 2, h: 2, label: "4" },
+  { id: "5", x: 0, y: 2, w: 2, h: 2, label: "5" },
+  { id: "6", x: 2, y: 2, w: 2, h: 2, label: "6" },
+  { id: "7", x: 8, y: 2, w: 4, h: 2, label: "7" },
+  { id: "8", x: 0, y: 4, w: 2, h: 2, label: "8" },
+  { id: "9", x: 4, y: 4, w: 4, h: 2, label: "9" },
+  { id: "10", x: 8, y: 4, w: 2, h: 2, label: "10" },
+  { id: "11", x: 10, y: 4, w: 2, h: 2, label: "11" },
+];
 
-const GridLayout = WidthProvider(ReactGridLayout);
+const DASHBOARD_EDITOR_GRID_CSS = `
+.dashboard-layout-grid .grid-stack-item-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  font-size: 16px;
+  font-weight: 600;
+  color: #111827;
+  cursor: grab;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+.dashboard-layout-grid .grid-stack-item-content:active {
+  cursor: grabbing;
+}
+.dashboard-layout-grid .grid-stack-item-content:hover {
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.12);
+  transform: translateY(-2px);
+}
+.dashboard-layout-grid .demo-grid-item.is-accent {
+  color: #2563eb;
+}
+.dashboard-layout-grid .ui-resizable-handle {
+  background: transparent;
+}
+`;
 
 const deepClone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
+const resolveNumericValue = (value: number | string | undefined): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
 
 const parseLayout = (layout: Record<string, unknown> | undefined | null): DashboardCardLayout => {
   const safeLayout = layout && typeof layout === "object" ? layout : {};
@@ -109,7 +169,7 @@ const parseLayout = (layout: Record<string, unknown> | undefined | null): Dashbo
   };
 };
 
-const normalizeGridItem = (item: Layout): DashboardCardLayout => ({
+const normalizeGridItem = (item: DashboardGridItem): DashboardCardLayout => ({
   x: Math.max(0, item.x),
   y: Math.max(0, item.y),
   w: Math.max(1, Math.min(12, item.w)),
@@ -183,18 +243,16 @@ const DashboardCardSummary = ({
   );
 };
 
-const DashboardCardGrid = ({
+const DashboardCardList = ({
   cards,
   templateLookup,
   onEdit,
   onRemove,
-  onLayoutCommit,
 }: {
   cards: DashboardCardDto[];
   templateLookup: Map<string, ReportTemplateDto>;
   onEdit: (card: DashboardCardDto) => void;
   onRemove: (card: DashboardCardDto) => void;
-  onLayoutCommit: (layout: Layout[]) => void;
 }) => {
   if (cards.length === 0) {
     return (
@@ -207,60 +265,226 @@ const DashboardCardGrid = ({
     );
   }
 
-  const layout = cards.map((card) => {
-    const parsed = parseLayout(card.layout);
-    return {
-      i: card.id,
-      x: parsed.x,
-      y: parsed.y,
-      w: parsed.w,
-      h: parsed.h,
-      minW: 2,
-      minH: 2,
-    };
-  });
-
   return (
-    <GridLayout
-      className="dashboard-layout-grid"
-      cols={12}
-      rowHeight={48}
-      margin={[16, 16]}
-      compactType={null}
-      layout={layout}
-      onLayoutChange={onLayoutCommit}
-      draggableHandle=".dashboard-card-drag-handle"
-      draggableCancel=".dashboard-card-actions"
-    >
+    <Stack gap="sm">
       {cards.map((card) => {
         const template = templateLookup.get(card.templateId);
         return (
-          <div key={card.id}>
-            <Card withBorder radius="md" padding="md" shadow="sm" h="100%">
-              <Stack gap="sm" h="100%">
-                <Group justify="space-between" align="center">
-                  <Group gap={6} align="center" className="dashboard-card-drag-handle" style={{ cursor: "grab" }}>
-                    <IconGripVertical size={16} stroke={1.5} />
-                    <Text fz="xs" c="dimmed">
-                      Drag
-                    </Text>
-                  </Group>
-                  <Group gap="xs" className="dashboard-card-actions">
-                    <Button variant="light" size="xs" onClick={() => onEdit(card)}>
-                      Edit
-                    </Button>
-                    <ActionIcon variant="subtle" color="red" onClick={() => onRemove(card)} aria-label="Remove card">
-                      <IconTrash size={16} />
-                    </ActionIcon>
-                  </Group>
+          <Card key={card.id} withBorder radius="md" padding="md" shadow="sm">
+            <Stack gap="sm">
+              <Group justify="space-between" align="center">
+                <Text fw={600}>{card.title}</Text>
+                <Group gap="xs">
+                  <Button variant="light" size="xs" onClick={() => onEdit(card)}>
+                    Edit
+                  </Button>
+                  <ActionIcon variant="subtle" color="red" onClick={() => onRemove(card)} aria-label="Remove card">
+                    <IconTrash size={16} />
+                  </ActionIcon>
                 </Group>
-                <DashboardCardSummary card={card} template={template} />
-              </Stack>
-            </Card>
-          </div>
+              </Group>
+              <DashboardCardSummary card={card} template={template} />
+            </Stack>
+          </Card>
         );
       })}
-    </GridLayout>
+    </Stack>
+  );
+};
+
+const DashboardLayoutEditor = ({ onLayoutCommit }: { onLayoutCommit: (layout: DashboardGridItem[]) => void }) => {
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const gridInstanceRef = useRef<GridStack | null>(null);
+  const layoutCommitRef = useRef(onLayoutCommit);
+  const isSyncingRef = useRef(false);
+  const lastMinRowRef = useRef<number | null>(null);
+  const demoItems = useMemo(() => DEMO_GRID_ITEMS, []);
+  const layoutById = useMemo(() => {
+    const map = new Map<string, DashboardCardLayout>();
+    demoItems.forEach((item) => {
+      map.set(item.id, { x: item.x, y: item.y, w: item.w, h: item.h });
+    });
+    return map;
+  }, [demoItems]);
+
+  const updateGridMinRows = useCallback(() => {
+    const container = gridRef.current;
+    const grid = gridInstanceRef.current;
+    if (!container || !grid) {
+      return;
+    }
+    const baseHeight = container.parentElement?.getBoundingClientRect().height ?? container.clientHeight;
+    if (!baseHeight) {
+      return;
+    }
+    const cellHeight = resolveNumericValue(grid.opts.cellHeight);
+    if (!cellHeight || cellHeight <= 0) {
+      return;
+    }
+    const safeHeight = Math.max(0, baseHeight - 1);
+    const nextMinRow = Math.max(1, Math.floor(safeHeight / cellHeight));
+    if (lastMinRowRef.current === nextMinRow) {
+      return;
+    }
+    lastMinRowRef.current = nextMinRow;
+    grid.opts.minRow = nextMinRow;
+    const gridWithUpdate = grid as GridStack & { _updateContainerHeight?: () => void };
+    gridWithUpdate._updateContainerHeight?.();
+  }, []);
+
+  useEffect(() => {
+    layoutCommitRef.current = onLayoutCommit;
+  }, [onLayoutCommit]);
+
+  useEffect(() => {
+    const container = gridRef.current;
+    if (!container) {
+      return;
+    }
+    let grid = gridInstanceRef.current;
+    if (!grid) {
+      grid = GridStack.init(
+        {
+          column: 12,
+          cellHeight: LAYOUT_EDITOR_CELL_HEIGHT,
+          margin: "0px 0px",
+          float: true,
+          disableOneColumnMode: true,
+          draggable: {
+            handle: ".grid-stack-item-content",
+          },
+          resizable: {
+            handles: "all",
+            autoHide: true,
+          },
+        },
+        container,
+      );
+      const handleChange = () => {
+        if (isSyncingRef.current) {
+          return;
+        }
+        const nodes = grid?.engine?.nodes ?? [];
+        const nextLayout = nodes
+          .map((node) => ({
+            id: String(node.id ?? node.el?.getAttribute("gs-id") ?? node.el?.getAttribute("data-gs-id") ?? ""),
+            x: node.x ?? 0,
+            y: node.y ?? 0,
+            w: node.w ?? 1,
+            h: node.h ?? 1,
+          }))
+          .filter((node) => node.id.length > 0);
+        if (nextLayout.length > 0) {
+          layoutCommitRef.current(nextLayout);
+        }
+      };
+      grid.on("change", handleChange);
+      gridInstanceRef.current = grid;
+      updateGridMinRows();
+      requestAnimationFrame(() => updateGridMinRows());
+      const activeGrid = grid;
+      return () => {
+        activeGrid.off("change");
+        activeGrid.destroy(false);
+        gridInstanceRef.current = null;
+      };
+    }
+    return undefined;
+  }, [updateGridMinRows]);
+
+  useEffect(() => {
+    const container = gridRef.current;
+    const grid = gridInstanceRef.current;
+    if (!container || !grid) {
+      return;
+    }
+    isSyncingRef.current = true;
+    grid.batchUpdate();
+    grid.removeAll(false);
+    container.querySelectorAll<HTMLElement>(".grid-stack-item").forEach((element) => {
+      const cardId = element.getAttribute("gs-id") ?? element.getAttribute("data-gs-id");
+      const layout = cardId ? layoutById.get(String(cardId)) : null;
+      if (cardId && layout) {
+        grid.makeWidget(element, {
+          x: layout.x,
+          y: layout.y,
+          w: layout.w,
+          h: layout.h,
+          id: cardId,
+        });
+        return;
+      }
+      grid.makeWidget(element);
+    });
+    grid.batchUpdate(false);
+    isSyncingRef.current = false;
+    updateGridMinRows();
+    requestAnimationFrame(() => updateGridMinRows());
+  }, [demoItems, layoutById, updateGridMinRows]);
+
+  useEffect(() => {
+    const container = gridRef.current;
+    if (!container) {
+      return;
+    }
+    const observedElement = container.parentElement ?? container;
+    let resizeObserver: ResizeObserver | null = null;
+    const handleResize = () => updateGridMinRows();
+
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => updateGridMinRows());
+      resizeObserver.observe(observedElement);
+    } else {
+      window.addEventListener("resize", handleResize);
+    }
+    updateGridMinRows();
+    requestAnimationFrame(() => updateGridMinRows());
+
+    return () => {
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      } else {
+        window.removeEventListener("resize", handleResize);
+      }
+    };
+  }, [updateGridMinRows]);
+
+  return (
+    <Box
+      ref={gridRef}
+      className="dashboard-layout-grid grid-stack"
+      style={{
+        width: "100%",
+        height: "100%",
+        minHeight: "100%",
+        borderRadius: 14,
+        border: "1px dashed rgba(15, 23, 42, 0.18)",
+        backgroundColor: "#f5f7fb",
+        backgroundImage:
+          "linear-gradient(0deg, rgba(15, 23, 42, 0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(15, 23, 42, 0.06) 1px, transparent 1px)",
+        backgroundSize: `${LAYOUT_EDITOR_GRID_SIZE}px ${LAYOUT_EDITOR_GRID_SIZE}px`,
+        overflow: "hidden",
+      }}
+    >
+      <style>{DASHBOARD_EDITOR_GRID_CSS}</style>
+      {demoItems.map((item) => (
+        <div
+          key={item.id}
+          className="grid-stack-item"
+          data-gs-id={item.id}
+          data-gs-x={item.x}
+          data-gs-y={item.y}
+          data-gs-w={item.w}
+          data-gs-h={item.h}
+          data-gs-width={item.w}
+          data-gs-height={item.h}
+        >
+          <div className={`grid-stack-item-content demo-grid-item${item.accent ? " is-accent" : ""}`}>
+            {item.label}
+          </div>
+        </div>
+      ))}
+    </Box>
   );
 };
 
@@ -294,6 +518,13 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const theme = useMantineTheme();
+  const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
+  const layoutEditorHeaderHeight = isMobile ? 56 : 68;
+  const layoutEditorPaddingX = isMobile ? 16 : 24;
+  const layoutEditorPaddingY = isMobile ? 12 : 20;
+  const layoutEditorGridPaddingX = isMobile ? 8 : 12;
+  const layoutEditorGridPaddingY = isMobile ? 8 : 12;
 
   useEffect(() => {
     dispatch(navigateToPage(title ?? "Report dashboards"));
@@ -327,6 +558,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
   const [cardModalOpen, setCardModalOpen] = useState(false);
   const [cardDraft, setCardDraft] = useState<CardDraft | null>(null);
   const [cardMode, setCardMode] = useState<"create" | "edit">("create");
+  const [layoutEditorOpen, setLayoutEditorOpen] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [pendingLayoutChanges, setPendingLayoutChanges] = useState<Record<string, DashboardCardLayout>>({});
   const [isSavingLayout, setIsSavingLayout] = useState(false);
@@ -452,13 +684,13 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     }
   };
 
-  const handleLayoutCommit = (nextLayout: Layout[]) => {
+  const handleLayoutCommit = (nextLayout: DashboardGridItem[]) => {
     if (!dashboardDraft || nextLayout.length === 0) {
       return;
     }
     const normalized = new Map<string, DashboardCardLayout>();
     nextLayout.forEach((item) => {
-      normalized.set(item.i, normalizeGridItem(item));
+      normalized.set(item.id, normalizeGridItem(item));
     });
 
     setDashboardDraft((current) => {
@@ -781,12 +1013,10 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                       <Group gap="sm">
                         <Button
                           variant="light"
-                          leftSection={<IconDeviceFloppy size={16} />}
-                          onClick={handleSaveLayoutChanges}
-                          disabled={pendingLayoutCount === 0 || isSavingLayout}
-                          loading={isSavingLayout}
+                          leftSection={<IconLayoutGrid size={16} />}
+                          onClick={() => setLayoutEditorOpen(true)}
                         >
-                          Save layout
+                          Open layout editor
                         </Button>
                         <Button
                           variant="light"
@@ -799,12 +1029,11 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                       </Group>
                     </Group>
 
-                    <DashboardCardGrid
+                    <DashboardCardList
                       cards={selectedDashboardCards}
                       templateLookup={templateLookup}
                       onEdit={handleOpenEditCard}
                       onRemove={handleRemoveCard}
-                      onLayoutCommit={handleLayoutCommit}
                     />
                   </Stack>
                 )}
@@ -969,6 +1198,107 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
             <Loader size="sm" />
           </Stack>
         )}
+      </Modal>
+
+      <Modal
+        opened={layoutEditorOpen}
+        onClose={() => setLayoutEditorOpen(false)}
+        title={null}
+        fullScreen
+        padding={0}
+        withCloseButton={false}
+        styles={{
+          inner: { padding: 0 },
+          content: {
+            display: "flex",
+            flexDirection: "column",
+            width: "100vw",
+            maxWidth: "100vw",
+            margin: 0,
+            borderRadius: 0,
+          },
+          body: { flex: 1, display: "flex", flexDirection: "column", padding: 0 },
+        }}
+      >
+        <Box
+          style={{
+            height: layoutEditorHeaderHeight,
+            minHeight: layoutEditorHeaderHeight,
+            display: "flex",
+            flexWrap: "nowrap",
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            columnGap: 12,
+            padding: `0 ${layoutEditorPaddingX}px`,
+            background: `linear-gradient(135deg, ${theme.colors.dark[7]} 0%, ${theme.colors.dark[8]} 45%, ${theme.colors.dark[9]} 100%)`,
+            borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
+            boxShadow: "0 10px 30px rgba(0, 0, 0, 0.22)",
+            color: theme.white,
+          }}
+        >
+          <Text
+            fw={600}
+            c="white"
+            size={isMobile ? "sm" : "md"}
+            style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+          >
+            Layout editor
+          </Text>
+          <Group gap={isMobile ? 6 : "sm"} wrap="nowrap" justify="flex-end" style={{ flexShrink: 0 }}>
+            <Button
+              size={isMobile ? "xs" : "sm"}
+              variant="outline"
+              onClick={() => setLayoutEditorOpen(false)}
+              styles={{
+                root: {
+                  borderColor: "rgba(255,255,255,0.4)",
+                  color: "#fff",
+                  paddingLeft: isMobile ? 10 : undefined,
+                  paddingRight: isMobile ? 10 : undefined,
+                  height: isMobile ? 28 : undefined,
+                  minHeight: isMobile ? 28 : undefined,
+                },
+              }}
+            >
+              Close
+            </Button>
+            <Button
+              size={isMobile ? "xs" : "sm"}
+              leftSection={<IconDeviceFloppy size={isMobile ? 14 : 16} />}
+              onClick={handleSaveLayoutChanges}
+              disabled={pendingLayoutCount === 0 || isSavingLayout}
+              loading={isSavingLayout}
+              styles={{
+                root: {
+                  backgroundColor: "#ffffff",
+                  color: "#0b0d12",
+                  paddingLeft: isMobile ? 10 : undefined,
+                  paddingRight: isMobile ? 10 : undefined,
+                  height: isMobile ? 28 : undefined,
+                  minHeight: isMobile ? 28 : undefined,
+                },
+              }}
+            >
+              {isMobile ? "Save" : "Save layout"}
+            </Button>
+          </Group>
+        </Box>
+        <Box
+          style={{
+            flex: 1,
+            padding: `${layoutEditorGridPaddingY}px ${layoutEditorGridPaddingX}px`,
+            backgroundColor: "#f4f4f7",
+            minHeight: 0,
+            display: "flex",
+          }}
+        >
+          <Box style={{ flex: 1, minHeight: 0, height: "100%" }}>
+            <DashboardLayoutEditor
+              onLayoutCommit={handleLayoutCommit}
+            />
+          </Box>
+        </Box>
       </Modal>
     </PageAccessGuard>
   );
