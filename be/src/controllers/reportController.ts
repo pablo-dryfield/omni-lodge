@@ -1233,7 +1233,7 @@ const toMetricsSpotlightArray = (value: unknown): ReportTemplateMetricSpotlight[
   if (!Array.isArray(value)) {
     return [];
   }
-  const allowedComparisons = new Set(["previous", "wow", "mom", "yoy"]);
+  const allowedComparisons = new Set(["previous", "wow", "mom", "yoy", "custom"]);
   const allowedFormats = new Set(["number", "currency", "percentage"]);
   return value
     .map((entry): ReportTemplateMetricSpotlight | null => {
@@ -1263,7 +1263,7 @@ const toMetricsSpotlightArray = (value: unknown): ReportTemplateMetricSpotlight[
         typeof candidate.comparison === "string" ? candidate.comparison.trim().toLowerCase() : undefined;
       const comparison =
         comparisonRaw && allowedComparisons.has(comparisonRaw)
-          ? (comparisonRaw as "previous" | "wow" | "mom" | "yoy")
+          ? (comparisonRaw as "previous" | "wow" | "mom" | "yoy" | "custom")
           : undefined;
       const formatRaw =
         typeof candidate.format === "string" ? candidate.format.trim().toLowerCase() : undefined;
@@ -1271,12 +1271,27 @@ const toMetricsSpotlightArray = (value: unknown): ReportTemplateMetricSpotlight[
         formatRaw && allowedFormats.has(formatRaw)
           ? (formatRaw as "number" | "currency" | "percentage")
           : undefined;
+      const currencyRaw =
+        typeof candidate.currency === "string" ? candidate.currency.trim().toUpperCase() : undefined;
+      const currency =
+        currencyRaw && currencyRaw.length === 3 ? currencyRaw : undefined;
+      let comparisonRange: { from: string; to: string } | undefined;
+      if (comparison === "custom" && candidate.comparisonRange && typeof candidate.comparisonRange === "object") {
+        const rangeCandidate = candidate.comparisonRange as Record<string, unknown>;
+        const from = typeof rangeCandidate.from === "string" ? rangeCandidate.from.trim() : "";
+        const to = typeof rangeCandidate.to === "string" ? rangeCandidate.to.trim() : "";
+        if (from && to) {
+          comparisonRange = { from, to };
+        }
+      }
       return {
         metric,
         label,
         target,
         comparison,
+        ...(comparisonRange ? { comparisonRange } : {}),
         format,
+        currency,
       };
     })
     .filter((entry): entry is ReportTemplateMetricSpotlight => Boolean(entry));

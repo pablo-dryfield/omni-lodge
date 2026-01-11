@@ -510,11 +510,18 @@ const TimeslotRect: React.FC<TimeslotRectProps> = ({ rowKey, cell, onClick, prod
   const [hovered, setHovered] = useState(false);
   const totalLabel = useMemo(() => `${cell.totalPeople} booked`, [cell.totalPeople]);
   const genderLabel = useMemo(
-    () =>
-      variant === "calendar"
-        ? `M: ${cell.menCount} / W: ${cell.womenCount}`
-        : `Men: ${cell.menCount} | Women: ${cell.womenCount}`,
-    [cell.menCount, cell.womenCount, variant],
+    () => {
+      const undefinedLabel =
+        cell.undefinedCount > 0
+          ? variant === "calendar"
+            ? ` / U: ${cell.undefinedCount}`
+            : ` | Undefined: ${cell.undefinedCount}`
+          : "";
+      return variant === "calendar"
+        ? `M: ${cell.menCount} / W: ${cell.womenCount}${undefinedLabel}`
+        : `Men: ${cell.menCount} | Women: ${cell.womenCount}${undefinedLabel}`;
+    },
+    [cell.menCount, cell.womenCount, cell.undefinedCount, variant],
   );
   const baseColor = ROW_COLORS[rowKey] ?? ROW_COLORS.default;
   const accentColor = BORDER_ACCENT_COLORS[rowKey] ?? BORDER_ACCENT_COLORS.default;

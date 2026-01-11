@@ -83,8 +83,13 @@ export type ReportTemplateMetricSpotlight = {
   metric: string;
   label: string;
   target?: number;
-  comparison?: "previous" | "wow" | "mom" | "yoy";
+  comparison?: "previous" | "wow" | "mom" | "yoy" | "custom";
+  comparisonRange?: {
+    from: string;
+    to: string;
+  };
   format?: "number" | "currency" | "percentage";
+  currency?: string;
 };
 
 @Table({

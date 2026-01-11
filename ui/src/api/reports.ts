@@ -271,6 +271,7 @@ export type DashboardVisualCardViewConfig = {
 export type DashboardSpotlightCardViewConfig = {
   mode: "spotlight";
   description?: string;
+  queryConfig?: QueryConfig | null;
   spotlight: MetricSpotlightDefinitionDto & {
     metricLabel?: string;
   };
@@ -282,6 +283,10 @@ export type DashboardSpotlightCardViewConfig = {
       delta: string;
       context: string;
       tone: "positive" | "neutral" | "negative";
+      comparisonValue?: string;
+      comparisonLabel?: string;
+      rangeLabel?: string;
+      comparisonRangeLabel?: string;
     }>;
   };
   dateFilter?: {
@@ -291,6 +296,11 @@ export type DashboardSpotlightCardViewConfig = {
     filterIndex?: number;
     clauseSql?: string;
     filterPath?: number[];
+  };
+  periodConfig?: {
+    presets: DashboardPreviewPeriodPreset[];
+    defaultPreset: DashboardPreviewPeriodPreset;
+    allowCustom?: boolean;
   };
 };
 
@@ -394,7 +404,13 @@ export type DashboardPreviewCardResponse = {
   executedAt?: string | null;
 };
 
-export type DashboardPreviewPeriodPreset = "this_month" | "last_month";
+export type DashboardPreviewPeriodPreset =
+  | "today"
+  | "last_7_days"
+  | "last_30_days"
+  | "last_30_months"
+  | "this_month"
+  | "last_month";
 
 export type DashboardPreviewPeriodOverride =
   | { mode: DashboardPreviewPeriodPreset }
@@ -488,8 +504,13 @@ export type MetricSpotlightDefinitionDto = {
   metric: string;
   label: string;
   target?: number;
-  comparison?: "previous" | "wow" | "mom" | "yoy";
+  comparison?: "previous" | "wow" | "mom" | "yoy" | "custom";
+  comparisonRange?: {
+    from: string;
+    to: string;
+  };
   format?: "number" | "currency" | "percentage";
+  currency?: string;
 };
 
 export type ReportModelFieldResponse = {

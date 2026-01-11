@@ -547,7 +547,17 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
     }
 
     bookingRecord.lastEmailMessageId = email.messageId;
-    bookingRecord.sourceReceivedAt = event.sourceReceivedAt ?? email.receivedAt ?? bookingRecord.sourceReceivedAt;
+    const nextSourceReceivedAt = event.sourceReceivedAt ?? email.receivedAt ?? null;
+    if (!bookingRecord.sourceReceivedAt && nextSourceReceivedAt) {
+      bookingRecord.sourceReceivedAt = nextSourceReceivedAt;
+    } else if (
+      event.eventType === 'created' &&
+      nextSourceReceivedAt &&
+      bookingRecord.sourceReceivedAt &&
+      nextSourceReceivedAt < bookingRecord.sourceReceivedAt
+    ) {
+      bookingRecord.sourceReceivedAt = nextSourceReceivedAt;
+    }
     bookingRecord.processedAt = new Date();
     const addonsSnapshot =
       event.bookingFields?.addonsSnapshot ??

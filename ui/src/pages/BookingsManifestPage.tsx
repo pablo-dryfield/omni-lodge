@@ -352,6 +352,11 @@ const getOrderCounts = (order: UnifiedOrder) => {
   return { men, women, total };
 };
 
+const getUndefinedGenreCount = (total: number, men: number, women: number): number => {
+  const diff = total - men - women;
+  return diff > 0 ? diff : 0;
+};
+
 const buildPlatformBreakdownFromOrders = (orders: UnifiedOrder[]): PlatformBreakdownEntry[] => {
   const map = new Map<string, PlatformBreakdownEntry>();
   orders.forEach((order) => {
@@ -1056,6 +1061,12 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     return createSummaryFromGroups(filteredManifest);
   }, [filteredManifest, statusFilter, summary]);
 
+  const summaryUndefinedCount = getUndefinedGenreCount(
+    filteredSummary.totalPeople,
+    filteredSummary.men,
+    filteredSummary.women,
+  );
+
   const groupOptions = useMemo(() => {
 
     const options = manifestToOptions(filteredManifest);
@@ -1348,6 +1359,12 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
               </Badge>
 
+              {summaryUndefinedCount > 0 && (
+                <Badge size="lg" color="gray" variant="light">
+                  {`Undefined Genre: ${summaryUndefinedCount}`}
+                </Badge>
+              )}
+
               {filteredSummary.extras.tshirts > 0 && (
                 <Badge size="lg" color="blue" variant="light">
 
@@ -1438,6 +1455,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                 {activeGroups.map((group) => {
                   const readableDate = dayjs(group.date).format("dddd, MMM D");
                   const bookingsLabel = `${group.orders.length} booking${group.orders.length === 1 ? "" : "s"}`;
+                  const undefinedGroupCount = getUndefinedGenreCount(group.totalPeople, group.men, group.women);
                   const sortedOrders = [...group.orders].sort((a, b) => {
                     const platformA = (a.platform ?? "").toLowerCase();
                     const platformB = (b.platform ?? "").toLowerCase();
@@ -1474,16 +1492,21 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                             <Badge color="green" variant="light">
                               {`${group.totalPeople} people`}
                             </Badge>
-                            <Badge color="teal" variant="light">
-                              {`Men: ${group.men}`}
-                            </Badge>
-                            <Badge color="pink" variant="light">
-                              {`Women: ${group.women}`}
-                            </Badge>
-                            {group.extras.tshirts > 0 && (
-                              <Badge color="blue" variant="light">
-                                {`T-Shirts: ${group.extras.tshirts}`}
+                              <Badge color="teal" variant="light">
+                                {`Men: ${group.men}`}
                               </Badge>
+                              <Badge color="pink" variant="light">
+                                {`Women: ${group.women}`}
+                              </Badge>
+                              {undefinedGroupCount > 0 && (
+                                <Badge color="gray" variant="light">
+                                  {`Undefined Genre: ${undefinedGroupCount}`}
+                                </Badge>
+                              )}
+                              {group.extras.tshirts > 0 && (
+                                <Badge color="blue" variant="light">
+                                  {`T-Shirts: ${group.extras.tshirts}`}
+                                </Badge>
                             )}
                             {group.extras.cocktails > 0 && (
                               <Badge color="violet" variant="light">
@@ -1512,6 +1535,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               const bookingId = getBookingIdFromOrder(order);
                               const canAmend = isEcwidOrder(order) && Boolean(bookingId);
                               const canCancel = canAmend && order.status !== "cancelled";
+                              const undefinedOrderCount = getUndefinedGenreCount(
+                                order.quantity,
+                                order.menCount,
+                                order.womenCount,
+                              );
                               return (
                                 <Paper
                                   key={order.id}
@@ -1551,6 +1579,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                       <Badge color="pink" variant="light">
                                         {`Women: ${order.womenCount}`}
                                       </Badge>
+                                      {undefinedOrderCount > 0 && (
+                                        <Badge color="gray" variant="light">
+                                          {`Undefined Genre: ${undefinedOrderCount}`}
+                                        </Badge>
+                                      )}
                                       <OrderPlatformBadge platform={order.platform} />
                                       <StatusBadge status={order.status} />
                                     {order.extras && (order.extras.tshirts ?? 0) > 0 ? (
@@ -1663,6 +1696,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                           <Badge color="pink" variant="light">
                             {`Women: ${group.women}`}
                           </Badge>
+                          {undefinedGroupCount > 0 && (
+                            <Badge color="gray" variant="light">
+                              {`Undefined Genre: ${undefinedGroupCount}`}
+                            </Badge>
+                          )}
                           {group.extras.tshirts > 0 && (
                             <Badge color="blue" variant="light">
                               {`T-Shirts: ${group.extras.tshirts}`}
@@ -1699,6 +1737,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               <Table.Th align="right">People</Table.Th>
                           <Table.Th align="right">Men</Table.Th>
                           <Table.Th align="right">Women</Table.Th>
+                          <Table.Th align="right">Undefined Genre</Table.Th>
                           <Table.Th align="right">T-Shirts</Table.Th>
                           <Table.Th align="right">Cocktails</Table.Th>
                           <Table.Th align="right">Photos</Table.Th>
@@ -1729,6 +1768,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               {group.women}
                             </Table.Td>
                             <Table.Td align="right" fw={600}>
+                              {undefinedGroupCount}
+                            </Table.Td>
+                            <Table.Td align="right" fw={600}>
                               {formatAddonValue(group.extras.tshirts)}
                             </Table.Td>
                             <Table.Td align="right" fw={600}>
@@ -1747,6 +1789,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                             const bookingId = getBookingIdFromOrder(order);
                             const canAmend = isEcwidOrder(order) && Boolean(bookingId);
                             const canCancel = canAmend && order.status !== "cancelled";
+                            const undefinedOrderCount = getUndefinedGenreCount(
+                              order.quantity,
+                              order.menCount,
+                              order.womenCount,
+                            );
                             return (
                               <Table.Tr key={order.id}>
                                 <Table.Td>
@@ -1789,6 +1836,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               <Table.Td align="right">{order.quantity}</Table.Td>
                               <Table.Td align="right">{order.menCount}</Table.Td>
                               <Table.Td align="right">{order.womenCount}</Table.Td>
+                              <Table.Td align="right">{undefinedOrderCount}</Table.Td>
                               <Table.Td align="right">{formatAddonValue(order.extras?.tshirts)}</Table.Td>
                               <Table.Td align="right">{formatAddonValue(order.extras?.cocktails)}</Table.Td>
                               <Table.Td align="right">{formatAddonValue(order.extras?.photos)}</Table.Td>

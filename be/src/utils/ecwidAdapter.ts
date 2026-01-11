@@ -650,8 +650,8 @@ const applyPlatformBreakdown = (
   platform: string,
   men: number,
   women: number,
+  totalPeople: number,
 ): void => {
-  const totalPeople = men + women;
   const key = platform || 'unknown';
   const existing = breakdown.find((entry) => entry.platform === key);
   if (existing) {
@@ -684,7 +684,10 @@ export const groupOrdersForManifest = (orders: UnifiedOrder[]): ManifestGroup[] 
     const effectiveMen = countsActive ? men : 0;
     const effectiveWomen = countsActive ? women : 0;
     const effectiveExtras = countsActive ? extras : zeroExtras;
-    const totalPeople = effectiveMen + effectiveWomen;
+    const countsTotal = effectiveMen + effectiveWomen;
+    const fallbackTotal =
+      countsActive && Number.isFinite(order.quantity) ? Math.max(order.quantity, 0) : 0;
+    const totalPeople = countsTotal > 0 ? countsTotal : fallbackTotal;
 
     const displayTime = order.pickupDateTime
       ? dayjs(order.pickupDateTime).tz(STORE_TIMEZONE).format('HH:mm')
@@ -703,7 +706,13 @@ export const groupOrdersForManifest = (orders: UnifiedOrder[]): ManifestGroup[] 
       existing.extras.cocktails += effectiveExtras.cocktails;
       existing.extras.photos += effectiveExtras.photos;
       existing.orders.push(normalizedOrder);
-      applyPlatformBreakdown(existing.platformBreakdown, normalizedOrder.platform, effectiveMen, effectiveWomen);
+      applyPlatformBreakdown(
+        existing.platformBreakdown,
+        normalizedOrder.platform,
+        effectiveMen,
+        effectiveWomen,
+        totalPeople,
+      );
       return;
     }
 

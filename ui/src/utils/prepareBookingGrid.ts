@@ -9,6 +9,7 @@ export type BookingCell = {
   totalPeople: number;
   menCount: number;
   womenCount: number;
+  undefinedCount: number;
   orders: UnifiedOrder[];
 };
 
@@ -94,6 +95,7 @@ export function prepareBookingGrid(
         totalPeople: 0,
         menCount: 0,
         womenCount: 0,
+        undefinedCount: 0,
         orders: [],
       };
       dateCells.push(cell);
@@ -101,12 +103,22 @@ export function prepareBookingGrid(
 
     const menBase = normalizeCount(order.menCount);
     const womenBase = normalizeCount(order.womenCount);
-    const menCount = isCountableStatus(order) ? menBase : 0;
-    const womenCount = isCountableStatus(order) ? womenBase : 0;
+    const fallback = normalizeCount(order.quantity);
+    const countable = isCountableStatus(order);
+    const menCount = countable ? menBase : 0;
+    const womenCount = countable ? womenBase : 0;
+    const countsTotal = menCount + womenCount;
+    const totalPeople = countable
+      ? countsTotal > 0
+        ? countsTotal
+        : fallback
+      : 0;
+    const undefinedCount = Math.max(totalPeople - countsTotal, 0);
 
-    cell.totalPeople += menCount + womenCount;
+    cell.totalPeople += totalPeople;
     cell.menCount += menCount;
     cell.womenCount += womenCount;
+    cell.undefinedCount += undefinedCount;
     cell.orders.push({ ...order, timeslot: displayTime });
   });
 

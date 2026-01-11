@@ -326,12 +326,16 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
   const displayProductName = prettifyProductName(booking) ?? 'Unassigned product';
   const timeslot = pickupMomentLocal?.isValid() ? pickupMomentLocal.format('HH:mm') : '--:--';
   const snapshotBreakdown = extractPartyBreakdown(booking.addonsSnapshot ?? undefined);
-  const fallbackTotal = booking.partySizeTotal ?? booking.partySizeAdults ?? null;
+  const fallbackTotal =
+    booking.partySizeTotal ??
+    (booking.partySizeAdults != null || booking.partySizeChildren != null
+      ? (booking.partySizeAdults ?? 0) + (booking.partySizeChildren ?? 0)
+      : null);
   let menCount = snapshotBreakdown.men;
   let womenCount = snapshotBreakdown.women;
   if (menCount === null && womenCount === null) {
-    menCount = booking.partySizeAdults ?? booking.partySizeTotal ?? 0;
-    womenCount = booking.partySizeChildren ?? 0;
+    menCount = 0;
+    womenCount = 0;
   } else {
     const adultsFallback = booking.partySizeAdults ?? booking.partySizeTotal ?? 0;
     const childrenFallback = booking.partySizeChildren ?? 0;
@@ -351,19 +355,16 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
     womenCount = womenCount ?? childrenFallback;
     if (fallbackTotal !== null) {
       const combined = menCount + womenCount;
-      if (combined === 0) {
-        menCount = fallbackTotal;
-        womenCount = 0;
-      } else if (combined !== fallbackTotal) {
+      if (combined > 0 && combined !== fallbackTotal) {
         const scale = fallbackTotal / combined;
         menCount = Math.max(Math.round(menCount * scale), 0);
         womenCount = Math.max(fallbackTotal - menCount, 0);
       }
-      if (menCount > fallbackTotal) {
+      if (combined > 0 && menCount > fallbackTotal) {
         menCount = fallbackTotal;
         womenCount = 0;
       }
-      if (womenCount > fallbackTotal) {
+      if (combined > 0 && womenCount > fallbackTotal) {
         womenCount = fallbackTotal;
       }
     }

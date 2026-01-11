@@ -8,6 +8,9 @@ import PersonIcon from "@mui/icons-material/Person";
 import SettingsIcon from "@mui/icons-material/Settings";
 import BarChartIcon from "@mui/icons-material/BarChart";
 import SportsEsportsIcon from "@mui/icons-material/SportsEsports";
+import TrendingUpIcon from "@mui/icons-material/TrendingUp";
+import TrendingDownIcon from "@mui/icons-material/TrendingDown";
+import TrendingFlatIcon from "@mui/icons-material/TrendingFlat";
 import Grid from "@mui/material/Grid";
 import {
   Alert,
@@ -33,12 +36,14 @@ import {
   Switch,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
-import { styled } from "@mui/material/styles";
+import { styled, alpha } from "@mui/material/styles";
 import { createTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
+import { GridStack } from "gridstack";
+import "gridstack/dist/gridstack.min.css";
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -102,6 +107,7 @@ const DEFAULT_CARD_LAYOUT = {
 };
 
 const AUTO_REFRESH_INTERVAL_MS = 60 * 1000;
+const SPOTLIGHT_VALUE_FONT = "'Roboto Slab', serif";
 
 type VisualChartPoint = {
   dimension: string;
@@ -124,9 +130,15 @@ type CardLayoutMetrics = {
 
 const cloneConfig = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 
+const normalizeCurrencyCode = (currency?: string): string => {
+  const normalized = currency?.trim().toUpperCase();
+  return normalized && normalized.length === 3 ? normalized : "USD";
+};
+
 const formatMetricValue = (
   value: number,
   format: MetricSpotlightDefinitionDto["format"] = "number",
+  currency?: string,
 ): string => {
   if (!Number.isFinite(value)) {
     return "-";
@@ -136,7 +148,7 @@ const formatMetricValue = (
     case "currency":
       return new Intl.NumberFormat("en-US", {
         style: "currency",
-        currency: "USD",
+        currency: normalizeCurrencyCode(currency),
         maximumFractionDigits: 2,
       }).format(value);
     case "percentage":
@@ -190,6 +202,8 @@ const formatDisplayDate = (value: string | undefined | null): string | null => {
   return parsed.isValid() ? parsed.format("MMM D, YYYY") : value;
 };
 
+const formatPeriodBoundary = (value: dayjs.Dayjs): string => value.format("YYYY-MM-DD HH:mm:ss.SSS");
+
 const computePeriodRange = (
   override: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null,
 ): { from: string; to: string } | null => {
@@ -197,16 +211,143 @@ const computePeriodRange = (
     return null;
   }
   if (typeof override === "string") {
-    const base = override === "last_month" ? dayjs().subtract(1, "month") : dayjs();
-    return {
-      from: base.startOf("month").format("YYYY-MM-DD"),
-      to: base.endOf("month").format("YYYY-MM-DD"),
-    };
+    const today = dayjs();
+    switch (override) {
+      case "today":
+        return {
+          from: formatPeriodBoundary(today.startOf("day")),
+          to: formatPeriodBoundary(today.endOf("day")),
+        };
+      case "last_7_days": {
+        const from = today.subtract(6, "day");
+        return {
+          from: formatPeriodBoundary(from.startOf("day")),
+          to: formatPeriodBoundary(today.endOf("day")),
+        };
+      }
+      case "last_30_days": {
+        const from = today.subtract(29, "day");
+        return {
+          from: formatPeriodBoundary(from.startOf("day")),
+          to: formatPeriodBoundary(today.endOf("day")),
+        };
+      }
+      case "last_30_months": {
+        const from = today.subtract(29, "month");
+        return {
+          from: formatPeriodBoundary(from.startOf("month")),
+          to: formatPeriodBoundary(today.endOf("day")),
+        };
+      }
+      case "last_month": {
+        const base = today.subtract(1, "month");
+        return {
+          from: formatPeriodBoundary(base.startOf("month")),
+          to: formatPeriodBoundary(base.endOf("month")),
+        };
+      }
+      case "this_month":
+      default:
+        return {
+          from: formatPeriodBoundary(today.startOf("month")),
+          to: formatPeriodBoundary(today.endOf("month")),
+        };
+    }
   }
   if (override.mode === "custom" && override.from && override.to) {
     return {
       from: override.from,
       to: override.to,
+    };
+  }
+  return null;
+};
+
+const normalizeCustomDateRange = (from: string, to: string): { from: string; to: string } | null => {
+  const fromDate = dayjs(from, "YYYY-MM-DD", true);
+  const toDate = dayjs(to, "YYYY-MM-DD", true);
+  if (!fromDate.isValid() || !toDate.isValid()) {
+    return null;
+  }
+  if (fromDate.isAfter(toDate)) {
+    return null;
+  }
+  return {
+    from: formatPeriodBoundary(fromDate.startOf("day")),
+    to: formatPeriodBoundary(toDate.endOf("day")),
+  };
+};
+
+const normalizeQueryRange = (
+  range?: { from?: string; to?: string } | null,
+): { from: string; to: string } | null => {
+  const from = typeof range?.from === "string" && range.from.trim().length > 0 ? range.from.trim() : null;
+  const to = typeof range?.to === "string" && range.to.trim().length > 0 ? range.to.trim() : null;
+  if (!from || !to) {
+    return null;
+  }
+  return { from, to };
+};
+
+const formatRangeLabel = (range: { from: string; to: string } | null): string | null => {
+  if (!range) {
+    return null;
+  }
+  const from = formatDisplayDate(range.from);
+  const to = formatDisplayDate(range.to);
+  if (!from || !to) {
+    return null;
+  }
+  return from === to ? from : `${from} - ${to}`;
+};
+
+const computeComparisonRange = (
+  comparison: MetricSpotlightDefinitionDto["comparison"] | undefined,
+  baseRange: { from: string; to: string } | null,
+  customRange?: MetricSpotlightDefinitionDto["comparisonRange"] | null,
+): { from: string; to: string } | null => {
+  if (!comparison) {
+    return null;
+  }
+  if (comparison === "custom") {
+    if (!customRange) {
+      return null;
+    }
+    return normalizeCustomDateRange(customRange.from, customRange.to);
+  }
+  if (!baseRange) {
+    return null;
+  }
+  const fromDate = dayjs(baseRange.from);
+  const toDate = dayjs(baseRange.to);
+  if (!fromDate.isValid() || !toDate.isValid()) {
+    return null;
+  }
+  if (comparison === "previous") {
+    const durationMs = toDate.valueOf() - fromDate.valueOf() + 1;
+    const comparisonFrom = fromDate.subtract(durationMs, "millisecond");
+    const comparisonTo = toDate.subtract(durationMs, "millisecond");
+    return {
+      from: formatPeriodBoundary(comparisonFrom),
+      to: formatPeriodBoundary(comparisonTo),
+    };
+  }
+  if (comparison === "wow") {
+    return {
+      from: formatPeriodBoundary(fromDate.subtract(7, "day")),
+      to: formatPeriodBoundary(toDate.subtract(7, "day")),
+    };
+  }
+  if (comparison === "mom") {
+    return {
+      from: formatPeriodBoundary(fromDate.subtract(1, "month")),
+      to: formatPeriodBoundary(toDate.subtract(1, "month")),
+    };
+  }
+  if (comparison === "yoy") {
+    return {
+      from: formatPeriodBoundary(fromDate.subtract(1, "year")),
+      to: formatPeriodBoundary(toDate.subtract(1, "year")),
     };
   }
   return null;
@@ -264,7 +405,7 @@ const cardSupportsPeriodOverride = (viewConfig: DashboardCardViewConfig | null |
     return Boolean(viewConfig.dateFilter || viewConfig.queryConfig?.time?.field);
   }
   if (isSpotlightCardViewConfig(viewConfig)) {
-    return Boolean(viewConfig.dateFilter);
+    return false;
   }
   return false;
 };
@@ -302,7 +443,24 @@ type CardHydrationDescriptor =
       periodOverride: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null;
     }
   | {
-      mode: "visual" | "legacy";
+      mode: "visual";
+      card: DashboardCardDto;
+      viewConfig: DashboardCardViewConfig | null;
+      queryConfig: QueryConfig | null;
+      cacheKey: string;
+    }
+  | {
+      mode: "spotlight";
+      card: DashboardCardDto;
+      viewConfig: DashboardSpotlightCardViewConfig;
+      queryConfig: QueryConfig | null;
+      comparisonQueryConfig: QueryConfig | null;
+      baseRange: { from: string; to: string } | null;
+      comparisonRange: { from: string; to: string } | null;
+      cacheKey: string;
+    }
+  | {
+      mode: "legacy";
       card: DashboardCardDto;
       viewConfig: DashboardCardViewConfig | null;
       queryConfig: QueryConfig | null;
@@ -310,12 +468,56 @@ type CardHydrationDescriptor =
     };
 
 type PreviewPeriodValue = DashboardPreviewPeriodPreset | "custom";
+type SpotlightPeriodSelection = DashboardPreviewPeriodPreset | "custom";
 
 const PERIOD_OPTIONS: Array<{ value: PreviewPeriodValue; label: string }> = [
   { value: "this_month", label: "This month" },
   { value: "last_month", label: "Last month" },
   { value: "custom", label: "Custom range" },
 ];
+
+const SPOTLIGHT_PERIOD_OPTIONS: Array<{ value: DashboardPreviewPeriodPreset; label: string }> = [
+  { value: "today", label: "Today" },
+  { value: "last_7_days", label: "Last 7 days" },
+  { value: "last_30_days", label: "Last 30 days" },
+  { value: "last_30_months", label: "Last 30 months" },
+];
+
+const SPOTLIGHT_PERIOD_LABEL_LOOKUP = new Map(
+  SPOTLIGHT_PERIOD_OPTIONS.map((option) => [option.value, option.label]),
+);
+
+const getSpotlightPeriodLabel = (preset: DashboardPreviewPeriodPreset): string =>
+  SPOTLIGHT_PERIOD_LABEL_LOOKUP.get(preset) ?? preset.replace(/_/g, " ");
+
+const normalizeSpotlightPeriodConfig = (
+  config: DashboardSpotlightCardViewConfig | null | undefined,
+): {
+  presets: DashboardPreviewPeriodPreset[];
+  defaultPreset: DashboardPreviewPeriodPreset;
+  allowCustom?: boolean;
+} | null => {
+  if (!config?.periodConfig || !config.dateFilter) {
+    return null;
+  }
+  const presets = Array.isArray(config.periodConfig.presets)
+    ? config.periodConfig.presets.filter(
+        (preset): preset is DashboardPreviewPeriodPreset =>
+          typeof preset === "string" && SPOTLIGHT_PERIOD_LABEL_LOOKUP.has(preset),
+      )
+    : [];
+  if (presets.length === 0) {
+    return null;
+  }
+  const defaultPreset = presets.includes(config.periodConfig.defaultPreset)
+    ? config.periodConfig.defaultPreset
+    : presets[0];
+  return {
+    presets,
+    defaultPreset,
+    allowCustom: Boolean(config.periodConfig.allowCustom),
+  };
+};
 
 const buildCustomPeriodOverride = (
   range: { from: string; to: string } | null,
@@ -446,6 +648,83 @@ const CardAccent = styled("div")(({ theme: muiTheme }) => ({
   borderRadius: "999px",
   background: `linear-gradient(90deg, ${muiTheme.palette.primary.main}, ${muiTheme.palette.secondary.main})`,
   opacity: 0.7,
+}));
+
+const SpotlightCardShell = styled(Card)(({ theme: muiTheme }) => ({
+  position: "relative",
+  height: "100%",
+  borderRadius: 14,
+  border: `1px solid ${alpha(muiTheme.palette.text.primary, 0.12)}`,
+  background:
+    muiTheme.palette.mode === "dark"
+      ? "linear-gradient(160deg, rgba(12, 18, 30, 0.98) 0%, rgba(18, 26, 44, 0.98) 100%)"
+      : "linear-gradient(180deg, #ffffff 0%, #f6f7f9 100%)",
+  boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)",
+  overflow: "hidden",
+  minHeight: 160,
+  "&::before": {
+    content: "\"\"",
+    position: "absolute",
+    inset: 0,
+    backgroundImage:
+      "linear-gradient(120deg, rgba(15, 23, 42, 0.04) 0%, transparent 50%), linear-gradient(90deg, rgba(15, 23, 42, 0.04) 1px, transparent 1px), linear-gradient(0deg, rgba(15, 23, 42, 0.04) 1px, transparent 1px)",
+    backgroundSize: "auto, 26px 26px, 26px 26px",
+    opacity: muiTheme.palette.mode === "dark" ? 0.25 : 0.4,
+    pointerEvents: "none",
+  },
+  "&::after": {
+    content: "\"\"",
+    position: "absolute",
+    left: 0,
+    top: 0,
+    width: 10,
+    height: "100%",
+    background: `linear-gradient(180deg, ${muiTheme.palette.primary.main}, #0e7490)`,
+    opacity: 0.9,
+  },
+}));
+
+const SpotlightEyebrow = styled(Typography)(({ theme: muiTheme }) => ({
+  textTransform: "uppercase",
+  letterSpacing: 1.8,
+  fontWeight: 700,
+  fontSize: 10,
+  color: alpha(muiTheme.palette.text.primary, 0.6),
+}));
+
+const SpotlightValue = styled(Typography)(({ theme: muiTheme }) => ({
+  fontFamily: SPOTLIGHT_VALUE_FONT,
+  fontWeight: 700,
+  letterSpacing: -0.4,
+  color: muiTheme.palette.text.primary,
+  fontVariantNumeric: "tabular-nums",
+}));
+
+const SpotlightPeriodGroup = styled("div")(({ theme: muiTheme }) => ({
+  display: "inline-flex",
+  flexWrap: "wrap",
+  gap: 6,
+  padding: 4,
+  borderRadius: 999,
+  backgroundColor: alpha(muiTheme.palette.text.primary, 0.04),
+  border: `1px solid ${alpha(muiTheme.palette.text.primary, 0.08)}`,
+}));
+
+const SpotlightPeriodButton = styled(Button)(({ theme: muiTheme }) => ({
+  borderRadius: 999,
+  textTransform: "none",
+  fontWeight: 600,
+  minHeight: 26,
+  padding: "3px 10px",
+  fontSize: 12,
+  color: muiTheme.palette.text.secondary,
+  "&.isActive": {
+    color: muiTheme.palette.primary.main,
+    backgroundColor: alpha(muiTheme.palette.primary.main, 0.12),
+  },
+  "&:hover": {
+    backgroundColor: alpha(muiTheme.palette.text.primary, 0.08),
+  },
 }));
 
 const CardTitle = styled(Typography)(({ theme: muiTheme }) => ({
@@ -804,10 +1083,43 @@ const SpotlightTone = {
   neutral: "text.primary",
 } as const;
 
+const getComparisonLabel = (
+  comparison?: MetricSpotlightDefinitionDto["comparison"],
+  comparisonRange?: MetricSpotlightDefinitionDto["comparisonRange"] | null,
+): string | null => {
+  switch (comparison) {
+    case "previous":
+      return "Previous period";
+    case "wow":
+      return "Week over week";
+    case "mom":
+      return "Month over month";
+    case "yoy":
+      return "Year over year";
+    case "custom": {
+      const from = comparisonRange?.from ? formatDisplayDate(comparisonRange.from) : null;
+      const to = comparisonRange?.to ? formatDisplayDate(comparisonRange.to) : null;
+      if (from && to) {
+        return `Custom compare ${from} - ${to}`;
+      }
+      return "Custom compare";
+    }
+    default:
+      return null;
+  }
+};
+
 const computeLiveCardState = (
   card: DashboardCardDto,
   viewConfig: DashboardCardViewConfig | null | undefined,
-  templateState?: { data?: ReportQuerySuccessResponse; isLoading: boolean; error?: string | null },
+  templateState?: {
+    data?: ReportQuerySuccessResponse;
+    comparisonData?: ReportQuerySuccessResponse | null;
+    baseRange?: { from: string; to: string } | null;
+    comparisonRange?: { from: string; to: string } | null;
+    isLoading: boolean;
+    error?: string | null;
+  },
 ): DashboardCardLiveState => {
   if (!templateState) {
     return { status: "loading" };
@@ -826,7 +1138,13 @@ const computeLiveCardState = (
     return { status: "success", visualSample: sample };
   }
   if (isSpotlightCardViewConfig(viewConfig)) {
-    const sample = buildSpotlightSampleFromResult(viewConfig, templateState.data);
+    const sample = buildSpotlightSampleFromResult(
+      viewConfig,
+      templateState.data,
+      templateState.comparisonData ?? null,
+      templateState.baseRange ?? null,
+      templateState.comparisonRange ?? null,
+    );
     return { status: "success", spotlightSample: sample };
   }
   return { status: "success" };
@@ -847,6 +1165,9 @@ const buildVisualSampleFromResult = (
 const buildSpotlightSampleFromResult = (
   config: DashboardSpotlightCardViewConfig,
   result?: ReportQuerySuccessResponse,
+  comparisonResult?: ReportQuerySuccessResponse | null,
+  baseRange?: { from: string; to: string } | null,
+  comparisonRange?: { from: string; to: string } | null,
 ): DashboardSpotlightCardViewConfig["sample"] | undefined => {
   if (!result || !Array.isArray(result.rows) || result.rows.length === 0) {
     return undefined;
@@ -862,16 +1183,60 @@ const buildSpotlightSampleFromResult = (
     return undefined;
   }
   const aggregatedValue = values.reduce((total, value) => total + value, 0);
-  const formattedValue = formatMetricValue(aggregatedValue, config.spotlight.format);
+  const formattedValue = formatMetricValue(
+    aggregatedValue,
+    config.spotlight.format,
+    config.spotlight.currency,
+  );
   let delta = "-";
   let tone: "positive" | "neutral" | "negative" = "neutral";
   const contextParts: string[] = [];
+  let comparisonValue: number | null = null;
+  if (comparisonResult && Array.isArray(comparisonResult.rows)) {
+    const comparisonValues = comparisonResult.rows
+      .map((row) => coerceNumber(row[metricAlias]))
+      .filter((value): value is number => value !== null);
+    if (comparisonValues.length > 0) {
+      comparisonValue = comparisonValues.reduce((total, value) => total + value, 0);
+    }
+  }
+  let comparisonApplied = false;
+  let comparisonLabel: string | null = null;
+  const rangeLabel = formatRangeLabel(baseRange ?? null);
+  const comparisonRangeLabel = formatRangeLabel(comparisonRange ?? null);
+
+  if (config.spotlight.comparison && comparisonValue !== null) {
+    const difference = aggregatedValue - comparisonValue;
+    tone = difference >= 0 ? "positive" : "negative";
+    delta = `${difference >= 0 ? "+" : ""}${formatMetricValue(
+      difference,
+      config.spotlight.format,
+      config.spotlight.currency,
+    )}`;
+    comparisonLabel = getComparisonLabel(config.spotlight.comparison, config.spotlight.comparisonRange ?? null);
+    if (comparisonLabel) {
+      contextParts.push(comparisonLabel);
+    }
+    comparisonApplied = true;
+  }
 
   if (typeof config.spotlight.target === "number") {
-    const difference = aggregatedValue - config.spotlight.target;
-    tone = difference >= 0 ? "positive" : "negative";
-    delta = `${difference >= 0 ? "+" : ""}${formatMetricValue(difference, config.spotlight.format)}`;
-    contextParts.push(`Target ${formatMetricValue(config.spotlight.target, config.spotlight.format)}`);
+    if (!comparisonApplied) {
+      const difference = aggregatedValue - config.spotlight.target;
+      tone = difference >= 0 ? "positive" : "negative";
+      delta = `${difference >= 0 ? "+" : ""}${formatMetricValue(
+        difference,
+        config.spotlight.format,
+        config.spotlight.currency,
+      )}`;
+    }
+    contextParts.push(
+      `Target ${formatMetricValue(
+        config.spotlight.target,
+        config.spotlight.format,
+        config.spotlight.currency,
+      )}`,
+    );
   }
 
   const cards = [
@@ -880,8 +1245,20 @@ const buildSpotlightSampleFromResult = (
       label: config.spotlight.label?.trim() || config.spotlight.metricLabel || metricAlias,
       value: formattedValue,
       delta,
-      context: contextParts.join(" • ") || "Live dashboard value",
+      context: contextParts.join(" • "),
       tone,
+      ...(comparisonApplied && comparisonValue !== null
+        ? {
+            comparisonValue: formatMetricValue(
+              comparisonValue,
+              config.spotlight.format,
+              config.spotlight.currency,
+            ),
+            comparisonLabel: comparisonLabel ?? undefined,
+          }
+        : {}),
+      ...(rangeLabel ? { rangeLabel } : {}),
+      ...(comparisonRangeLabel ? { comparisonRangeLabel } : {}),
     },
   ];
   return { cards };
@@ -952,10 +1329,95 @@ const Home = (props: GenericPageProps) => {
   const isMediumScreen = useMediaQuery(theme.breakpoints.down("md"));
   const isSmallScreen = useMediaQuery(theme.breakpoints.down("sm"));
   const gridColumns = isSmallScreen ? 1 : isMediumScreen ? 6 : 12;
-  const gridRowHeight = isSmallScreen ? 0 : isMediumScreen ? 120 : HOME_GRID_ROW_HEIGHT_PX;
+  const gridRowHeight = isSmallScreen ? 96 : isMediumScreen ? 120 : HOME_GRID_ROW_HEIGHT_PX;
   const gridGap = isSmallScreen ? 1 : 2;
-  const useAutoRows = gridColumns === 1;
+  const gridGapPx = gridGap * 8;
+  const dashboardGridRef = useRef<HTMLDivElement | null>(null);
+  const dashboardGridInstanceRef = useRef<GridStack | null>(null);
+  const gridLayoutCards = useMemo(() => {
+    const isScaled = isSmallScreen || isMediumScreen;
+    const scaleFactor = isScaled ? 0.5 : 1;
+    return remainingDashboardCards.map((card) => {
+      const layout = parseDashboardLayout(card.layout);
+      let columnSpan = Math.max(1, Math.min(gridColumns, layout.w));
+      let rowSpan = Math.max(1, layout.h);
+      let gridX = Math.max(0, Math.floor(layout.x * scaleFactor));
+      let gridY = Math.max(0, Math.floor(layout.y * scaleFactor));
+
+      if (isSmallScreen) {
+        columnSpan = gridColumns;
+        rowSpan = Math.max(1, Math.ceil(rowSpan / 2));
+        gridX = 0;
+      } else if (isMediumScreen) {
+        columnSpan = Math.min(gridColumns, Math.max(1, Math.ceil(layout.w / 2)));
+        rowSpan = Math.max(1, Math.ceil(rowSpan / 2));
+      }
+
+      const maxX = Math.max(0, gridColumns - columnSpan);
+      if (gridX > maxX) {
+        gridX = maxX;
+      }
+
+      return {
+        card,
+        layout,
+        gridX,
+        gridY,
+        columnSpan,
+        rowSpan,
+        approxHeightPx: rowSpan * gridRowHeight,
+      };
+    });
+  }, [gridColumns, gridRowHeight, isMediumScreen, isSmallScreen, remainingDashboardCards]);
   const shouldHydrateLiveData = canUseDashboards && effectiveViewMode === "dashboard";
+
+  useEffect(() => {
+    const container = dashboardGridRef.current;
+    if (!container) {
+      return;
+    }
+    if (gridLayoutCards.length === 0) {
+      if (dashboardGridInstanceRef.current) {
+        dashboardGridInstanceRef.current.destroy(false);
+        dashboardGridInstanceRef.current = null;
+      }
+      return;
+    }
+    if (dashboardGridInstanceRef.current) {
+      dashboardGridInstanceRef.current.destroy(false);
+      dashboardGridInstanceRef.current = null;
+    }
+    const grid = GridStack.init(
+      {
+        column: gridColumns,
+        cellHeight: gridRowHeight,
+        margin: gridGapPx,
+        float: true,
+        disableOneColumnMode: true,
+        staticGrid: true,
+      },
+      container,
+    );
+    dashboardGridInstanceRef.current = grid;
+    return () => {
+      grid.destroy(false);
+      dashboardGridInstanceRef.current = null;
+    };
+  }, [gridColumns, gridGapPx, gridLayoutCards.length, gridRowHeight]);
+
+  useEffect(() => {
+    const container = dashboardGridRef.current;
+    const grid = dashboardGridInstanceRef.current;
+    if (!container || !grid) {
+      return;
+    }
+    grid.batchUpdate();
+    grid.removeAll(false);
+    container.querySelectorAll<HTMLElement>(".grid-stack-item").forEach((element) => {
+      grid.makeWidget(element);
+    });
+    grid.batchUpdate(false);
+  }, [gridLayoutCards]);
   const cardsSupportPeriod = useMemo(
     () => orderedActiveCards.some((card) => cardSupportsPeriodOverride((card.viewConfig as DashboardCardViewConfig) ?? null)),
     [orderedActiveCards],
@@ -973,6 +1435,151 @@ const Home = (props: GenericPageProps) => {
     }
     return globalPeriodSelection;
   }, [globalCustomAppliedRange, globalPeriodSelection, cardsSupportPeriod]);
+  const spotlightPeriodConfigById = useMemo(() => {
+    const map = new Map<
+      string,
+      { presets: DashboardPreviewPeriodPreset[]; defaultPreset: DashboardPreviewPeriodPreset; allowCustom?: boolean }
+    >();
+    orderedActiveCards.forEach((card) => {
+      const viewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
+      if (!isSpotlightCardViewConfig(viewConfig)) {
+        return;
+      }
+      const normalized = normalizeSpotlightPeriodConfig(viewConfig);
+      if (normalized) {
+        map.set(card.id, normalized);
+      }
+    });
+    return map;
+  }, [orderedActiveCards]);
+  const [spotlightPeriodSelections, setSpotlightPeriodSelections] = useState<
+    Record<string, SpotlightPeriodSelection>
+  >({});
+  const [spotlightCustomInputs, setSpotlightCustomInputs] = useState<
+    Record<string, { from: string; to: string }>
+  >({});
+  const [spotlightCustomAppliedRanges, setSpotlightCustomAppliedRanges] = useState<
+    Record<string, { from: string; to: string }>
+  >({});
+  useEffect(() => {
+    setSpotlightPeriodSelections((current) => {
+      const next: Record<string, SpotlightPeriodSelection> = { ...current };
+      const validIds = new Set<string>();
+      spotlightPeriodConfigById.forEach((config, cardId) => {
+        validIds.add(cardId);
+        const existing = current[cardId];
+        if (
+          !existing ||
+          (existing === "custom" && !config.allowCustom) ||
+          (existing !== "custom" && !config.presets.includes(existing))
+        ) {
+          next[cardId] = config.defaultPreset;
+        }
+      });
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
+  }, [spotlightPeriodConfigById]);
+  useEffect(() => {
+    setSpotlightCustomInputs((current) => {
+      const next: Record<string, { from: string; to: string }> = { ...current };
+      const validIds = new Set<string>(spotlightPeriodConfigById.keys());
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
+    setSpotlightCustomAppliedRanges((current) => {
+      const next: Record<string, { from: string; to: string }> = { ...current };
+      const validIds = new Set<string>(spotlightPeriodConfigById.keys());
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
+  }, [spotlightPeriodConfigById]);
+  const handleSpotlightPeriodChange = useCallback(
+    (cardId: string, preset: SpotlightPeriodSelection) => {
+      setSpotlightPeriodSelections((current) => ({
+        ...current,
+        [cardId]: preset,
+      }));
+    },
+    [],
+  );
+  const handleSpotlightCustomInputChange = useCallback((cardId: string, key: "from" | "to", value: string) => {
+    setSpotlightCustomInputs((current) => ({
+      ...current,
+      [cardId]: {
+        from: key === "from" ? value : current[cardId]?.from ?? "",
+        to: key === "to" ? value : current[cardId]?.to ?? "",
+      },
+    }));
+  }, []);
+  const handleSpotlightApplyCustomRange = useCallback(
+    (cardId: string) => {
+      const inputs = spotlightCustomInputs[cardId];
+      if (!inputs) {
+        return;
+      }
+      const normalized = normalizeCustomDateRange(inputs.from, inputs.to);
+      if (!normalized) {
+        return;
+      }
+      setSpotlightCustomAppliedRanges((current) => ({
+        ...current,
+        [cardId]: normalized,
+      }));
+      setSpotlightPeriodSelections((current) => ({
+        ...current,
+        [cardId]: "custom",
+      }));
+    },
+    [spotlightCustomInputs],
+  );
+  const getSpotlightPeriodSelection = useCallback(
+    (cardId: string): SpotlightPeriodSelection | null => {
+      const config = spotlightPeriodConfigById.get(cardId);
+      if (!config) {
+        return null;
+      }
+      const selected = spotlightPeriodSelections[cardId];
+      if (selected === "custom" && config.allowCustom) {
+        return "custom";
+      }
+      if (selected && selected !== "custom" && config.presets.includes(selected)) {
+        return selected;
+      }
+      return config.defaultPreset;
+    },
+    [spotlightPeriodConfigById, spotlightPeriodSelections],
+  );
+  const getSpotlightPeriodOverride = useCallback(
+    (cardId: string): DashboardPreviewPeriodPreset | DashboardPreviewPeriodOverride | null => {
+      const config = spotlightPeriodConfigById.get(cardId);
+      if (!config) {
+        return null;
+      }
+      const selected = spotlightPeriodSelections[cardId];
+      if (selected === "custom" && config.allowCustom) {
+        const applied = spotlightCustomAppliedRanges[cardId];
+        return applied ? { mode: "custom", from: applied.from, to: applied.to } : config.defaultPreset;
+      }
+      if (selected && selected !== "custom" && config.presets.includes(selected)) {
+        return selected;
+      }
+      return config.defaultPreset;
+    },
+    [spotlightPeriodConfigById, spotlightPeriodSelections, spotlightCustomAppliedRanges],
+  );
   const handleGlobalPresetSelection = useCallback(
     (value: PreviewPeriodValue) => {
       setGlobalPeriodSelection(value);
@@ -1095,6 +1702,7 @@ const Home = (props: GenericPageProps) => {
         };
       }
       let queryConfig: QueryConfig | null = null;
+      let comparisonQueryConfig: QueryConfig | null = null;
       if (isVisualCardViewConfig(rawViewConfig) && rawViewConfig.queryConfig) {
         queryConfig = cloneConfig(rawViewConfig.queryConfig);
         if (queryConfig) {
@@ -1105,16 +1713,73 @@ const Home = (props: GenericPageProps) => {
             allowAsync: true,
           };
         }
+        return {
+          mode: queryConfig ? ("visual" as const) : ("legacy" as const),
+          card,
+          viewConfig: rawViewConfig,
+          queryConfig: queryConfig ?? null,
+          cacheKey: queryConfig ? JSON.stringify({ queryConfig, refreshNonce }) : JSON.stringify({ refreshNonce }),
+        };
+      }
+      if (isSpotlightCardViewConfig(rawViewConfig)) {
+        let baseRange: { from: string; to: string } | null = null;
+        let comparisonRange: { from: string; to: string } | null = null;
+        if (rawViewConfig.queryConfig) {
+          queryConfig = cloneConfig(rawViewConfig.queryConfig);
+          if (queryConfig) {
+            const spotlightPeriod = getSpotlightPeriodOverride(card.id);
+            const spotlightRange = spotlightPeriod ? computePeriodRange(spotlightPeriod) : null;
+            if (spotlightPeriod) {
+              applyPeriodOverrideToQueryConfig(queryConfig, spotlightPeriod, rawViewConfig.dateFilter ?? null);
+            }
+            baseRange = spotlightRange ?? normalizeQueryRange(queryConfig.time?.range ?? undefined);
+            comparisonRange = computeComparisonRange(
+              rawViewConfig.spotlight.comparison,
+              baseRange,
+              rawViewConfig.spotlight.comparisonRange ?? null,
+            );
+            if (comparisonRange && rawViewConfig.dateFilter) {
+              comparisonQueryConfig = cloneConfig(rawViewConfig.queryConfig);
+              if (comparisonQueryConfig) {
+                applyPeriodOverrideToQueryConfig(
+                  comparisonQueryConfig,
+                  { mode: "custom", from: comparisonRange.from, to: comparisonRange.to },
+                  rawViewConfig.dateFilter ?? null,
+                );
+                comparisonQueryConfig.options = {
+                  ...comparisonQueryConfig.options,
+                  templateId: card.templateId || comparisonQueryConfig.options?.templateId || null,
+                  allowAsync: true,
+                };
+              }
+            }
+            queryConfig.options = {
+              ...queryConfig.options,
+              templateId: card.templateId || queryConfig.options?.templateId || null,
+              allowAsync: true,
+            };
+          }
+        }
+        return {
+          mode: "spotlight" as const,
+          card,
+          viewConfig: rawViewConfig,
+          queryConfig: queryConfig ?? null,
+          comparisonQueryConfig,
+          baseRange,
+          comparisonRange,
+          cacheKey: JSON.stringify({ queryConfig, comparisonQueryConfig, refreshNonce }),
+        };
       }
       return {
-        mode: queryConfig ? ("visual" as const) : ("legacy" as const),
+        mode: "legacy" as const,
         card,
         viewConfig: rawViewConfig,
-        queryConfig: queryConfig ?? null,
-        cacheKey: queryConfig ? JSON.stringify({ queryConfig, refreshNonce }) : JSON.stringify({ refreshNonce }),
+        queryConfig: null,
+        cacheKey: JSON.stringify({ refreshNonce }),
       };
     });
-  }, [activeCards, globalPeriodOverride, refreshNonce, shouldHydrateLiveData]);
+  }, [activeCards, globalPeriodOverride, refreshNonce, shouldHydrateLiveData, getSpotlightPeriodOverride]);
 
   const cardLiveQueries = useQueries({
     queries: cardHydrationDescriptors.map((descriptor) => {
@@ -1133,6 +1798,34 @@ const Home = (props: GenericPageProps) => {
             runDashboardPreviewCard(descriptor.card.dashboardId, descriptor.card.id, {
               period: descriptor.periodOverride ?? undefined,
             }),
+          staleTime: Infinity,
+          refetchOnWindowFocus: false,
+          refetchOnReconnect: false,
+        };
+      }
+      if (descriptor.mode === "spotlight") {
+        return {
+          queryKey: ["reports", "dashboard-card", descriptor.card.id, descriptor.cacheKey],
+          enabled: shouldHydrateLiveData && Boolean(descriptor.queryConfig),
+          queryFn: async () => {
+            if (!descriptor.queryConfig) {
+              return null;
+            }
+            const primaryPromise = runReportQueryWithPolling(descriptor.queryConfig, {
+              pollIntervalMs: 1500,
+              timeoutMs: 45_000,
+            });
+            if (!descriptor.comparisonQueryConfig) {
+              const primary = await primaryPromise;
+              return { primary, comparison: null };
+            }
+            const comparisonPromise = runReportQueryWithPolling(descriptor.comparisonQueryConfig, {
+              pollIntervalMs: 1500,
+              timeoutMs: 45_000,
+            });
+            const [primary, comparison] = await Promise.all([primaryPromise, comparisonPromise]);
+            return { primary, comparison };
+          },
           staleTime: Infinity,
           refetchOnWindowFocus: false,
           refetchOnReconnect: false,
@@ -1203,6 +1896,49 @@ const Home = (props: GenericPageProps) => {
             executedAt: data.executedAt ?? null,
           },
         });
+        return;
+      }
+      if (descriptor.mode === "spotlight") {
+        if (!descriptor.queryConfig) {
+          const warning =
+            effectiveViewMode === "dashboard"
+              ? "Open this template in Reports and re-save the card to enable live data."
+              : null;
+          map.set(descriptor.card.id, { status: "idle", warning });
+          return;
+        }
+        if (!queryResult) {
+          map.set(descriptor.card.id, { status: "idle" });
+          return;
+        }
+        if (queryResult.isLoading || queryResult.isFetching) {
+          map.set(descriptor.card.id, { status: "loading" });
+          return;
+        }
+        if (queryResult.error) {
+          map.set(descriptor.card.id, {
+            status: "error",
+            error: getErrorMessage(queryResult.error, "Failed to refresh spotlight data."),
+          });
+          return;
+        }
+        const data = queryResult.data as
+          | { primary: ReportQuerySuccessResponse; comparison?: ReportQuerySuccessResponse | null }
+          | null;
+        if (!data || !data.primary) {
+          map.set(descriptor.card.id, { status: "idle" });
+          return;
+        }
+        map.set(
+          descriptor.card.id,
+          computeLiveCardState(descriptor.card, descriptor.viewConfig, {
+            data: data.primary,
+            comparisonData: data.comparison ?? null,
+            baseRange: descriptor.baseRange ?? null,
+            comparisonRange: descriptor.comparisonRange ?? null,
+            isLoading: false,
+          }),
+        );
         return;
       }
       if (!descriptor.queryConfig) {
@@ -1463,85 +2199,39 @@ const Home = (props: GenericPageProps) => {
         </Alert>
       );
     }
-    if (activeDashboard.cards.length === 0) {
-      return (
-        <Alert severity="info">
-          This dashboard does not have any cards yet. Add cards from the Reports workspace to populate it.
-        </Alert>
-      );
-    }
     return (
-      <Stack gap={2}>
-        {renderDashboardControls()}
-        {heroSpotlightCards.length > 0 && (
-          <Stack gap={0.5}>
-            <Typography variant="h6">Today&apos;s KPI pulse</Typography>
-            <HeroSpotlightRow cards={heroSpotlightCards} liveCardSamples={liveCardSamples} />
-          </Stack>
-        )}
-        {heroSpotlightCards.length > 0 && <Divider flexItem />}
-        <Box
-          sx={{
-            display: "grid",
-            gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`,
-            gridAutoRows: useAutoRows ? "auto" : `${gridRowHeight}px`,
-            gap: gridGap,
-          }}
-        >
-        {remainingDashboardCards.map((card) => {
-          const layout = parseDashboardLayout(card.layout);
-          let columnSpan = Math.max(1, Math.min(gridColumns, layout.w));
-          let rowSpan = Math.max(1, layout.h);
-
-          if (isSmallScreen) {
-            columnSpan = gridColumns;
-          } else if (isMediumScreen) {
-            columnSpan = Math.min(gridColumns, Math.max(1, Math.ceil(layout.w / 2)));
-            rowSpan = Math.max(1, Math.ceil(rowSpan / 2));
-          }
-
-          const approxHeightPx = useAutoRows ? undefined : rowSpan * gridRowHeight;
-          const rawViewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
-          const cardPeriodOverride =
-            isPreviewTableCardViewConfig(rawViewConfig) && rawViewConfig.dateFilter ? globalPeriodOverride : null;
-          return (
-            <Box
-              key={card.id}
-              sx={{
-                gridColumn: `span ${columnSpan}`,
-                gridRow: useAutoRows ? "auto" : `span ${rowSpan}`,
-                minWidth: 0,
-              }}
-            >
-              <DashboardCard
-                card={card}
-                liveState={liveCardSamples.get(card.id)}
-                layoutMetrics={{ columnSpan, rowSpan, approxHeightPx }}
-                periodOverride={cardPeriodOverride}
-                segmentFilter={globalSegmentValue}
-              />
-            </Box>
-          );
-        })}
-        </Box>
-      </Stack>
+      <Box
+        sx={{
+          width: "100%",
+          height: { xs: "calc(100vh - 96px)", md: "calc(100vh - 120px)" },
+          minHeight: { xs: "calc(100vh - 96px)", md: "calc(100vh - 120px)" },
+          borderRadius: 4,
+          border: "1px dashed rgba(15, 23, 42, 0.18)",
+          backgroundColor: "#f5f7fb",
+          backgroundImage:
+            "linear-gradient(0deg, rgba(15, 23, 42, 0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(15, 23, 42, 0.06) 1px, transparent 1px)",
+          backgroundSize: `${Math.max(12, Math.floor(gridRowHeight / 8))}px ${Math.max(12, Math.floor(gridRowHeight / 8))}px`,
+          overflow: "hidden",
+        }}
+      />
     );
   };
 
   return (
     <PageAccessGuard pageSlug={PAGE_SLUG}>
       <ThemeProvider theme={theme}>
-        <PageWrapper>
-          <TilesContainer>
+        <PageWrapper
+          style={
+            effectiveViewMode === "dashboard"
+              ? { paddingTop: 4, paddingBottom: 4, paddingLeft: 8, paddingRight: 8 }
+              : undefined
+          }
+        >
+          <TilesContainer
+            style={effectiveViewMode === "dashboard" ? { maxWidth: "100%" } : undefined}
+          >
             <Stack gap={3}>
               {effectiveViewMode === "dashboard" ? renderDashboardSummary() : renderNavigationTiles()}
-              {effectiveViewMode === "dashboard" ? (
-                <Box sx={{ display: "flex", justifyContent: "center", mt: 3, pb: 1 }}>
-                  <Button variant="outlined" onClick={handleOpenMiniGame}>
-                    Play Krakow Runner
-                  </Button>
-                </Box>
-              ) : null}
             </Stack>
           </TilesContainer>
         </PageWrapper>
@@ -1555,12 +2245,28 @@ const DashboardCard = ({
   liveState,
   layoutMetrics,
   periodOverride,
+  spotlightPeriodConfig,
+  spotlightPeriodSelection,
+  onSpotlightPeriodChange,
+  spotlightCustomInput,
+  onSpotlightCustomInputChange,
+  onSpotlightApplyCustomRange,
   segmentFilter,
 }: {
   card: DashboardCardDto;
   liveState?: DashboardCardLiveState;
   layoutMetrics?: CardLayoutMetrics;
   periodOverride?: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null;
+  spotlightPeriodConfig?: {
+    presets: DashboardPreviewPeriodPreset[];
+    defaultPreset: DashboardPreviewPeriodPreset;
+    allowCustom?: boolean;
+  } | null;
+  spotlightPeriodSelection?: SpotlightPeriodSelection | null;
+  onSpotlightPeriodChange?: (cardId: string, preset: SpotlightPeriodSelection) => void;
+  spotlightCustomInput?: { from: string; to: string } | null;
+  onSpotlightCustomInputChange?: (cardId: string, key: "from" | "to", value: string) => void;
+  onSpotlightApplyCustomRange?: (cardId: string) => void;
   segmentFilter?: string | null;
 }) => {
   const viewConfig = card.viewConfig as DashboardCardViewConfig;
@@ -1604,6 +2310,12 @@ const DashboardCard = ({
         config={viewConfig}
         liveState={liveState ?? { status: "idle" }}
         layoutMetrics={layoutMetrics}
+        periodConfig={spotlightPeriodConfig ?? undefined}
+        periodSelection={spotlightPeriodSelection ?? undefined}
+        onPeriodChange={(preset) => onSpotlightPeriodChange?.(card.id, preset)}
+        customInput={spotlightCustomInput ?? undefined}
+        onCustomInputChange={(key, value) => onSpotlightCustomInputChange?.(card.id, key, value)}
+        onApplyCustomRange={() => onSpotlightApplyCustomRange?.(card.id)}
       />
     );
   }
@@ -1738,11 +2450,27 @@ const SpotlightDashboardCard = ({
   config,
   liveState,
   layoutMetrics,
+  periodConfig,
+  periodSelection,
+  onPeriodChange,
+  customInput,
+  onCustomInputChange,
+  onApplyCustomRange,
 }: {
   card: DashboardCardDto;
   config: DashboardSpotlightCardViewConfig;
   liveState: DashboardCardLiveState;
   layoutMetrics?: CardLayoutMetrics;
+  periodConfig?: {
+    presets: DashboardPreviewPeriodPreset[];
+    defaultPreset: DashboardPreviewPeriodPreset;
+    allowCustom?: boolean;
+  };
+  periodSelection?: SpotlightPeriodSelection;
+  onPeriodChange?: (preset: SpotlightPeriodSelection) => void;
+  customInput?: { from: string; to: string };
+  onCustomInputChange?: (key: "from" | "to", value: string) => void;
+  onApplyCustomRange?: () => void;
 }) => {
   const sampleCards = liveState.spotlightSample?.cards ?? config.sample?.cards ?? [];
   const isLoading = liveState.status === "loading";
@@ -1751,75 +2479,286 @@ const SpotlightDashboardCard = ({
   const layoutHeight = layoutMetrics?.approxHeightPx ?? 320;
   const measuredHeight = cardSize.height > 0 ? cardSize.height : layoutHeight;
   const maxStackHeight = Math.max(160, measuredHeight - 140);
+  const showPeriodControls =
+    Boolean(periodConfig && config.dateFilter && periodConfig.presets.length > 0) &&
+    typeof onPeriodChange === "function";
+  const activePreset = periodSelection ?? periodConfig?.defaultPreset ?? null;
+  const allowCustom = Boolean(periodConfig?.allowCustom);
+  const isCustomActive = allowCustom && activePreset === "custom";
+  const customInputs = customInput ?? { from: "", to: "" };
+  const primarySample = sampleCards[0];
+  const secondarySamples = sampleCards.slice(1, 3);
+  const toneColor = primarySample ? SpotlightTone[primarySample.tone] ?? "text.primary" : "text.primary";
+  const deltaLabel = primarySample?.delta
+    ? primarySample.comparisonValue
+      ? `${primarySample.delta} vs ${primarySample.comparisonLabel ?? "prior period"}`
+      : primarySample.delta
+    : null;
+  const TrendIcon =
+    primarySample?.tone === "positive"
+      ? TrendingUpIcon
+      : primarySample?.tone === "negative"
+        ? TrendingDownIcon
+        : TrendingFlatIcon;
+  const showComparisonPanel = Boolean(
+    primarySample?.comparisonValue || primarySample?.comparisonRangeLabel || primarySample?.comparisonLabel,
+  );
 
   return (
-    <StyledDashboardCard ref={cardRef} variant="outlined">
-      <CardAccent />
+    <SpotlightCardShell ref={cardRef} variant="outlined">
       <CardContent
         sx={{
+          position: "relative",
+          zIndex: 1,
           flexGrow: 1,
           display: "flex",
           flexDirection: "column",
-          gap: 1.5,
-          justifyContent: "space-between",
-          p: { xs: 2.5, md: 3 },
+          gap: { xs: 2, md: 2.5 },
+          p: { xs: 2, md: 2.5 },
+          pl: { xs: 2.5, md: 3 },
         }}
       >
-        <Stack gap={0.5} alignItems="center" textAlign="center">
-          <CardTitle variant="subtitle1">{card.title}</CardTitle>
-          {config.description && <CardSubtitle variant="body2">{config.description}</CardSubtitle>}
+        <Stack
+          direction={{ xs: "column", md: "row" }}
+          gap={2}
+          alignItems={{ xs: "flex-start", md: "center" }}
+          justifyContent="space-between"
+        >
+          <Box>
+            <SpotlightEyebrow variant="overline">Spotlight</SpotlightEyebrow>
+            <Typography variant="subtitle1" fontFamily={SPOTLIGHT_VALUE_FONT} fontWeight={700}>
+              {card.title}
+            </Typography>
+            {config.description && <CardSubtitle variant="body2">{config.description}</CardSubtitle>}
+          </Box>
+          {showPeriodControls && activePreset && (
+            <SpotlightPeriodGroup>
+              {periodConfig?.presets.map((preset) => (
+                <SpotlightPeriodButton
+                  key={`${card.id}-${preset}`}
+                  size="small"
+                  onClick={() => onPeriodChange?.(preset)}
+                  className={activePreset === preset ? "isActive" : undefined}
+                >
+                  {getSpotlightPeriodLabel(preset)}
+                </SpotlightPeriodButton>
+              ))}
+              {allowCustom && (
+                <SpotlightPeriodButton
+                  key={`${card.id}-custom`}
+                  size="small"
+                  onClick={() => onPeriodChange?.("custom")}
+                  className={isCustomActive ? "isActive" : undefined}
+                >
+                  Custom
+                </SpotlightPeriodButton>
+              )}
+            </SpotlightPeriodGroup>
+          )}
         </Stack>
+        {showPeriodControls && isCustomActive && (
+          <Paper
+            variant="outlined"
+            sx={(muiTheme) => ({
+              p: 1.5,
+              borderRadius: 12,
+              borderColor: alpha(muiTheme.palette.text.primary, 0.08),
+              backgroundColor: alpha(muiTheme.palette.text.primary, 0.04),
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 1,
+              alignItems: "center",
+            })}
+          >
+            <TextField
+              type="date"
+              size="small"
+              label="Start"
+              value={customInputs.from}
+              onChange={(event) => onCustomInputChange?.("from", event.target.value)}
+              InputLabelProps={{ shrink: true }}
+            />
+            <TextField
+              type="date"
+              size="small"
+              label="End"
+              value={customInputs.to}
+              onChange={(event) => onCustomInputChange?.("to", event.target.value)}
+              InputLabelProps={{ shrink: true }}
+            />
+            <Button
+              size="small"
+              variant="contained"
+              onClick={onApplyCustomRange}
+              disabled={
+                !onApplyCustomRange ||
+                customInputs.from.trim().length === 0 ||
+                customInputs.to.trim().length === 0
+              }
+              sx={{ borderRadius: 999, textTransform: "none", fontWeight: 600 }}
+            >
+              Apply
+            </Button>
+          </Paper>
+        )}
         {liveState.warning && <Alert severity="warning">{liveState.warning}</Alert>}
         {isLoading && (
-          <Stack direction="row" gap={1} alignItems="center" justifyContent="center">
+          <Stack direction="row" gap={1} alignItems="center">
             <CircularProgress size={16} />
             <CardSubtitle variant="body2">Refreshing data...</CardSubtitle>
           </Stack>
         )}
         {error && <Alert severity="error">{error}</Alert>}
-        {sampleCards.length > 0 ? (
+        {primarySample ? (
           <Box
             sx={{
-              flexGrow: 1,
-              maxHeight: sampleCards.length > 2 ? maxStackHeight : "none",
-              overflow: "auto",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
+              display: "grid",
+              gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "minmax(0, 1.2fr) minmax(0, 0.8fr)" },
+              gap: 1.5,
             }}
           >
-            <Stack direction={{ xs: "column", md: "row" }} gap={2} alignItems="stretch" justifyContent="center">
-              {sampleCards.slice(0, 4).map((sampleCard) => (
+            <Paper
+              variant="outlined"
+              sx={(muiTheme) => ({
+                p: 2.25,
+                borderRadius: 14,
+                borderColor: alpha(muiTheme.palette.text.primary, 0.08),
+                background:
+                  muiTheme.palette.mode === "dark"
+                    ? alpha(muiTheme.palette.primary.dark, 0.18)
+                    : "linear-gradient(135deg, rgba(59,130,246,0.08) 0%, rgba(255,255,255,0.9) 65%)",
+              })}
+            >
+              <SpotlightEyebrow variant="overline">{primarySample.label}</SpotlightEyebrow>
+              <SpotlightValue
+                variant="h2"
+                sx={{ color: toneColor, fontSize: { xs: "1.95rem", sm: "2.35rem" } }}
+              >
+                {primarySample.value}
+              </SpotlightValue>
+              <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
+                {deltaLabel && (
+                  <Box
+                    sx={(muiTheme) => {
+                      const baseColor =
+                        primarySample.tone === "positive"
+                          ? muiTheme.palette.success.main
+                          : primarySample.tone === "negative"
+                            ? muiTheme.palette.error.main
+                            : muiTheme.palette.text.primary;
+                      return {
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 0.5,
+                        px: 1.25,
+                        py: 0.5,
+                        borderRadius: 999,
+                        border: `1px solid ${alpha(baseColor, 0.35)}`,
+                        backgroundColor: alpha(baseColor, 0.08),
+                        color: baseColor,
+                        fontWeight: 700,
+                      };
+                    }}
+                  >
+                    <TrendIcon sx={{ fontSize: 16 }} />
+                    <Typography variant="caption" fontWeight={700}>
+                      {deltaLabel}
+                    </Typography>
+                  </Box>
+                )}
+                {primarySample.rangeLabel && (
+                  <Chip
+                    size="small"
+                    label={`Current: ${primarySample.rangeLabel}`}
+                    sx={{ borderRadius: 999, fontWeight: 600 }}
+                    variant="outlined"
+                  />
+                )}
+              </Stack>
+              <Stack direction={{ xs: "column", sm: "row" }} gap={1.5} sx={{ mt: 1.5 }}>
+                {primarySample.rangeLabel && (
+                  <Box>
+                    <SpotlightEyebrow variant="overline">Current period</SpotlightEyebrow>
+                    <Typography variant="body2" fontWeight={600}>
+                      {primarySample.rangeLabel}
+                    </Typography>
+                  </Box>
+                )}
+                {primarySample.comparisonRangeLabel && (
+                  <Box>
+                    <SpotlightEyebrow variant="overline">
+                      {primarySample.comparisonLabel ?? "Comparison"}
+                    </SpotlightEyebrow>
+                    <Typography variant="body2" fontWeight={600}>
+                      {primarySample.comparisonRangeLabel}
+                    </Typography>
+                  </Box>
+                )}
+              </Stack>
+              {primarySample.context && (
+                <CardSubtitle variant="body2" sx={{ mt: 1 }}>
+                  {primarySample.context}
+                </CardSubtitle>
+              )}
+            </Paper>
+            <Stack gap={1.5}>
+              {showComparisonPanel && (
                 <Paper
-                  key={sampleCard.id}
                   variant="outlined"
-                  sx={{
-                    p: 2,
-                    flex: 1,
-                    minWidth: 180,
+                  sx={(muiTheme) => ({
+                    p: 1.75,
                     borderRadius: 12,
-                    borderColor: "rgba(15, 23, 42, 0.12)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
+                    borderColor: alpha(muiTheme.palette.text.primary, 0.08),
+                    background:
+                      muiTheme.palette.mode === "dark"
+                        ? alpha(muiTheme.palette.common.white, 0.05)
+                        : "linear-gradient(180deg, #ffffff 0%, #f7f8fa 100%)",
+                  })}
                 >
-                  <Stack gap={0.5} alignItems="center" textAlign="center">
-                    <Typography variant="subtitle2" fontWeight={600}>
-                      {sampleCard.label}
-                    </Typography>
-                    <Typography variant="h4" fontWeight={700}>
-                      {sampleCard.value}
-                    </Typography>
-                    {sampleCard.delta && (
-                      <Typography variant="body2" sx={{ color: SpotlightTone[sampleCard.tone] ?? "text.primary" }}>
-                        {sampleCard.delta} vs prior
-                      </Typography>
-                    )}
-                    {sampleCard.context && <CardSubtitle variant="caption">{sampleCard.context}</CardSubtitle>}
+                  <SpotlightEyebrow variant="overline">
+                    {primarySample.comparisonLabel ?? "Comparison baseline"}
+                  </SpotlightEyebrow>
+                  <Typography variant="h6" fontFamily={SPOTLIGHT_VALUE_FONT} fontWeight={700}>
+                    {primarySample.comparisonValue ?? "-"}
+                  </Typography>
+                  <Typography variant="caption" color="textSecondary">
+                    {primarySample.comparisonRangeLabel ?? "No comparison range configured"}
+                  </Typography>
+                </Paper>
+              )}
+              {secondarySamples.length > 0 && (
+                <Paper
+                  variant="outlined"
+                  sx={(muiTheme) => ({
+                    p: 1.75,
+                    borderRadius: 12,
+                    borderColor: alpha(muiTheme.palette.text.primary, 0.08),
+                    backgroundColor: alpha(muiTheme.palette.text.primary, 0.04),
+                  })}
+                >
+                  <SpotlightEyebrow variant="overline">Additional metrics</SpotlightEyebrow>
+                  <Stack
+                    divider={<Divider flexItem />}
+                    sx={{ maxHeight: maxStackHeight, overflow: "auto", mt: 1 }}
+                  >
+                    {secondarySamples.map((sampleCard) => (
+                      <Box key={sampleCard.id} sx={{ py: 0.75 }}>
+                        <Typography variant="caption" color="textSecondary">
+                          {sampleCard.label}
+                        </Typography>
+                        <Typography variant="subtitle2" fontFamily={SPOTLIGHT_VALUE_FONT} fontWeight={700}>
+                          {sampleCard.value}
+                        </Typography>
+                        {sampleCard.delta && (
+                          <Typography variant="caption" color="textSecondary">
+                            {sampleCard.delta}
+                          </Typography>
+                        )}
+                      </Box>
+                    ))}
                   </Stack>
                 </Paper>
-              ))}
+              )}
             </Stack>
           </Box>
         ) : (
@@ -1828,7 +2767,7 @@ const SpotlightDashboardCard = ({
           </CardSubtitle>
         )}
       </CardContent>
-    </StyledDashboardCard>
+    </SpotlightCardShell>
   );
 };
 
@@ -2039,18 +2978,55 @@ const PreviewTableDashboardCard = ({
 const HeroSpotlightRow = ({
   cards,
   liveCardSamples,
+  spotlightPeriodConfigById,
+  getSpotlightPeriodSelection,
+  onSpotlightPeriodChange,
+  spotlightCustomInputs,
+  onSpotlightCustomInputChange,
+  onSpotlightApplyCustomRange,
 }: {
   cards: DashboardCardDto[];
   liveCardSamples: Map<string, DashboardCardLiveState>;
+  spotlightPeriodConfigById?: Map<
+    string,
+    { presets: DashboardPreviewPeriodPreset[]; defaultPreset: DashboardPreviewPeriodPreset; allowCustom?: boolean }
+  >;
+  getSpotlightPeriodSelection?: (cardId: string) => SpotlightPeriodSelection | null;
+  onSpotlightPeriodChange?: (cardId: string, preset: SpotlightPeriodSelection) => void;
+  spotlightCustomInputs?: Record<string, { from: string; to: string }>;
+  onSpotlightCustomInputChange?: (cardId: string, key: "from" | "to", value: string) => void;
+  onSpotlightApplyCustomRange?: (cardId: string) => void;
 }) => {
   if (cards.length === 0) {
     return null;
   }
+  const singleCard = cards.length === 1;
+  const twoCards = cards.length === 2;
   return (
-    <Grid container spacing={{ xs: 2, md: 3 }}>
+    <Grid container spacing={{ xs: 2, md: 3 }} justifyContent="center">
       {cards.map((card) => (
-        <Grid key={card.id} size={{ xs: 12, sm: 6, md: cards.length === 1 ? 12 : cards.length === 2 ? 6 : 4 }}>
-          <HeroSpotlightCard card={card} liveState={liveCardSamples.get(card.id)} />
+        <Grid
+          key={card.id}
+          size={{
+            xs: 12,
+            sm: singleCard ? 8 : 6,
+            md: singleCard ? 6 : twoCards ? 6 : 4,
+          }}
+        >
+          <HeroSpotlightCard
+            card={card}
+            liveState={liveCardSamples.get(card.id)}
+            periodConfig={spotlightPeriodConfigById?.get(card.id)}
+            periodSelection={
+              getSpotlightPeriodSelection?.(card.id) ??
+              spotlightPeriodConfigById?.get(card.id)?.defaultPreset ??
+              undefined
+            }
+            onPeriodChange={(preset) => onSpotlightPeriodChange?.(card.id, preset)}
+            customInput={spotlightCustomInputs?.[card.id]}
+            onCustomInputChange={(key, value) => onSpotlightCustomInputChange?.(card.id, key, value)}
+            onApplyCustomRange={() => onSpotlightApplyCustomRange?.(card.id)}
+          />
         </Grid>
       ))}
     </Grid>
@@ -2060,9 +3036,25 @@ const HeroSpotlightRow = ({
 const HeroSpotlightCard = ({
   card,
   liveState,
+  periodConfig,
+  periodSelection,
+  onPeriodChange,
+  customInput,
+  onCustomInputChange,
+  onApplyCustomRange,
 }: {
   card: DashboardCardDto;
   liveState: DashboardCardLiveState | undefined;
+  periodConfig?: {
+    presets: DashboardPreviewPeriodPreset[];
+    defaultPreset: DashboardPreviewPeriodPreset;
+    allowCustom?: boolean;
+  };
+  periodSelection?: SpotlightPeriodSelection;
+  onPeriodChange?: (preset: SpotlightPeriodSelection) => void;
+  customInput?: { from: string; to: string };
+  onCustomInputChange?: (key: "from" | "to", value: string) => void;
+  onApplyCustomRange?: () => void;
 }) => {
   const config = (card.viewConfig as DashboardCardViewConfig) ?? null;
   if (!isSpotlightCardViewConfig(config)) {
@@ -2071,68 +3063,277 @@ const HeroSpotlightCard = ({
   const sampleCards = liveState?.spotlightSample?.cards ?? config.sample?.cards ?? [];
   const primary = sampleCards[0];
   const supporting = sampleCards.slice(1, 3);
+  const showPeriodControls =
+    Boolean(periodConfig && config.dateFilter && periodConfig.presets.length > 0) &&
+    typeof onPeriodChange === "function";
+  const activePreset = periodSelection ?? periodConfig?.defaultPreset ?? null;
+  const allowCustom = Boolean(periodConfig?.allowCustom);
+  const isCustomActive = allowCustom && activePreset === "custom";
+  const customInputs = customInput ?? { from: "", to: "" };
+  const toneColor = primary ? SpotlightTone[primary.tone] ?? "text.primary" : "text.primary";
+  const deltaLabel = primary?.delta
+    ? primary.comparisonValue
+      ? `${primary.delta} vs ${primary.comparisonLabel ?? "prior period"}`
+      : primary.delta
+    : null;
+  const TrendIcon =
+    primary?.tone === "positive" ? TrendingUpIcon : primary?.tone === "negative" ? TrendingDownIcon : TrendingFlatIcon;
+  const showComparisonPanel = Boolean(primary?.comparisonValue || primary?.comparisonRangeLabel || primary?.comparisonLabel);
   return (
-    <StyledDashboardCard variant="outlined">
-      <CardAccent />
+    <SpotlightCardShell variant="outlined">
       <CardContent
         sx={{
+          position: "relative",
+          zIndex: 1,
           flexGrow: 1,
           display: "flex",
           flexDirection: "column",
-          gap: 1,
-          p: { xs: 2, md: 2.5 },
+          gap: { xs: 2, md: 3 },
+          p: { xs: 2.25, md: 3.25 },
+          pl: { xs: 2.75, md: 3.75 },
         }}
       >
-        <Typography variant="overline" color="textSecondary">
-          Directive KPI
-        </Typography>
-        <CardTitle variant="subtitle1">{card.title}</CardTitle>
-        {primary ? (
-          <>
-            <Typography
-              variant="h3"
-              fontWeight={700}
-              sx={{ color: SpotlightTone[primary.tone] ?? "text.primary" }}
-            >
-              {primary.value}
+        <Stack
+          direction={{ xs: "column", lg: "row" }}
+          gap={2}
+          alignItems={{ xs: "flex-start", lg: "center" }}
+          justifyContent="space-between"
+        >
+          <Box sx={{ minWidth: 0 }}>
+            <SpotlightEyebrow variant="overline">Spotlight</SpotlightEyebrow>
+            <Typography variant="h6" fontFamily={SPOTLIGHT_VALUE_FONT} fontWeight={700}>
+              {card.title}
             </Typography>
-            {primary.delta && (
-              <Chip
-                size="small"
-                color={primary.tone === "negative" ? "error" : primary.tone === "positive" ? "success" : "default"}
-                label={`${primary.delta} vs prior`}
-                variant="outlined"
-              />
+            {config.description && (
+              <CardSubtitle variant="body2" sx={{ maxWidth: 560 }}>
+                {config.description}
+              </CardSubtitle>
             )}
-            {primary.context && <CardSubtitle variant="body2">{primary.context}</CardSubtitle>}
-          </>
+          </Box>
+          {showPeriodControls && activePreset && (
+            <SpotlightPeriodGroup>
+              {periodConfig?.presets.map((preset) => (
+                <SpotlightPeriodButton
+                  key={`${card.id}-${preset}`}
+                  size="small"
+                  onClick={() => onPeriodChange?.(preset)}
+                  className={activePreset === preset ? "isActive" : undefined}
+                >
+                  {getSpotlightPeriodLabel(preset)}
+                </SpotlightPeriodButton>
+              ))}
+              {allowCustom && (
+                <SpotlightPeriodButton
+                  key={`${card.id}-custom`}
+                  size="small"
+                  onClick={() => onPeriodChange?.("custom")}
+                  className={isCustomActive ? "isActive" : undefined}
+                >
+                  Custom
+                </SpotlightPeriodButton>
+              )}
+            </SpotlightPeriodGroup>
+          )}
+        </Stack>
+        {showPeriodControls && isCustomActive && (
+          <Paper
+            variant="outlined"
+            sx={(muiTheme) => ({
+              p: 1.5,
+              borderRadius: 12,
+              borderColor: alpha(muiTheme.palette.text.primary, 0.08),
+              backgroundColor: alpha(muiTheme.palette.text.primary, 0.04),
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 1,
+              alignItems: "center",
+            })}
+          >
+            <TextField
+              type="date"
+              size="small"
+              label="Start"
+              value={customInputs.from}
+              onChange={(event) => onCustomInputChange?.("from", event.target.value)}
+              InputLabelProps={{ shrink: true }}
+            />
+            <TextField
+              type="date"
+              size="small"
+              label="End"
+              value={customInputs.to}
+              onChange={(event) => onCustomInputChange?.("to", event.target.value)}
+              InputLabelProps={{ shrink: true }}
+            />
+            <Button
+              size="small"
+              variant="contained"
+              onClick={onApplyCustomRange}
+              disabled={
+                !onApplyCustomRange ||
+                customInputs.from.trim().length === 0 ||
+                customInputs.to.trim().length === 0
+              }
+              sx={{ borderRadius: 999, textTransform: "none", fontWeight: 600 }}
+            >
+              Apply
+            </Button>
+          </Paper>
+        )}
+        {primary ? (
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "minmax(0, 1.3fr) minmax(0, 0.7fr)" },
+              gap: 2,
+              alignItems: "stretch",
+            }}
+          >
+            <Paper
+              variant="outlined"
+              sx={(muiTheme) => ({
+                p: 2.5,
+                borderRadius: 16,
+                borderColor: alpha(muiTheme.palette.text.primary, 0.08),
+                background:
+                  muiTheme.palette.mode === "dark"
+                    ? alpha(muiTheme.palette.primary.dark, 0.2)
+                    : "linear-gradient(135deg, rgba(59,130,246,0.12) 0%, rgba(255,255,255,0.95) 70%)",
+              })}
+            >
+              <SpotlightEyebrow variant="overline">{primary.label}</SpotlightEyebrow>
+              <SpotlightValue
+                variant="h2"
+                sx={{
+                  fontSize: { xs: "2.2rem", sm: "2.8rem", lg: "3.2rem" },
+                  color: toneColor,
+                }}
+              >
+                {primary.value}
+              </SpotlightValue>
+              <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
+                {deltaLabel && (
+                  <Box
+                    sx={(muiTheme) => {
+                      const baseColor =
+                        primary.tone === "positive"
+                          ? muiTheme.palette.success.main
+                          : primary.tone === "negative"
+                            ? muiTheme.palette.error.main
+                            : muiTheme.palette.text.primary;
+                      return {
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 0.5,
+                        px: 1.25,
+                        py: 0.5,
+                        borderRadius: 999,
+                        border: `1px solid ${alpha(baseColor, 0.35)}`,
+                        backgroundColor: alpha(baseColor, 0.08),
+                        color: baseColor,
+                        fontWeight: 700,
+                      };
+                    }}
+                  >
+                    <TrendIcon sx={{ fontSize: 16 }} />
+                    <Typography variant="caption" fontWeight={700}>
+                      {deltaLabel}
+                    </Typography>
+                  </Box>
+                )}
+                {primary.rangeLabel && (
+                  <Chip
+                    size="small"
+                    label={`Current: ${primary.rangeLabel}`}
+                    sx={{ borderRadius: 999, fontWeight: 600 }}
+                    variant="outlined"
+                  />
+                )}
+              </Stack>
+              <Stack direction={{ xs: "column", sm: "row" }} gap={1.5} sx={{ mt: 1.5 }}>
+                {primary.rangeLabel && (
+                  <Box>
+                    <SpotlightEyebrow variant="overline">Current period</SpotlightEyebrow>
+                    <Typography variant="body2" fontWeight={600}>
+                      {primary.rangeLabel}
+                    </Typography>
+                  </Box>
+                )}
+                {primary.comparisonRangeLabel && (
+                  <Box>
+                    <SpotlightEyebrow variant="overline">
+                      {primary.comparisonLabel ?? "Comparison"}
+                    </SpotlightEyebrow>
+                    <Typography variant="body2" fontWeight={600}>
+                      {primary.comparisonRangeLabel}
+                    </Typography>
+                  </Box>
+                )}
+              </Stack>
+              {primary.context && (
+                <CardSubtitle variant="body2" sx={{ mt: 1 }}>
+                  {primary.context}
+                </CardSubtitle>
+              )}
+            </Paper>
+            <Stack gap={1.5}>
+              {showComparisonPanel && (
+                <Paper
+                  variant="outlined"
+                  sx={(muiTheme) => ({
+                    p: 2,
+                    borderRadius: 14,
+                    borderColor: alpha(muiTheme.palette.text.primary, 0.08),
+                    background:
+                      muiTheme.palette.mode === "dark"
+                        ? alpha(muiTheme.palette.common.white, 0.05)
+                        : "linear-gradient(180deg, #ffffff 0%, #f7f8fa 100%)",
+                  })}
+                >
+                  <SpotlightEyebrow variant="overline">
+                    {primary.comparisonLabel ?? "Comparison baseline"}
+                  </SpotlightEyebrow>
+                  <Typography variant="h5" fontFamily={SPOTLIGHT_VALUE_FONT} fontWeight={700}>
+                    {primary.comparisonValue ?? "-"}
+                  </Typography>
+                  <Typography variant="caption" color="textSecondary">
+                    {primary.comparisonRangeLabel ?? "No comparison range configured"}
+                  </Typography>
+                </Paper>
+              )}
+              {supporting.length > 0 && (
+                <Paper
+                  variant="outlined"
+                  sx={(muiTheme) => ({
+                    p: 1.75,
+                    borderRadius: 14,
+                    borderColor: alpha(muiTheme.palette.text.primary, 0.08),
+                    backgroundColor: alpha(muiTheme.palette.text.primary, 0.04),
+                  })}
+                >
+                  <SpotlightEyebrow variant="overline">Supporting metrics</SpotlightEyebrow>
+                  <Stack divider={<Divider flexItem />} sx={{ mt: 1 }}>
+                    {supporting.map((item) => (
+                      <Box key={item.id} sx={{ py: 0.75 }}>
+                        <Typography variant="caption" color="textSecondary">
+                          {item.label}
+                        </Typography>
+                        <Typography variant="subtitle2" fontFamily={SPOTLIGHT_VALUE_FONT} fontWeight={700}>
+                          {item.value}
+                        </Typography>
+                      </Box>
+                    ))}
+                  </Stack>
+                </Paper>
+              )}
+            </Stack>
+          </Box>
         ) : (
           <CardSubtitle variant="body2">No live values yet. Refresh to hydrate this card.</CardSubtitle>
         )}
-        {supporting.length > 0 && (
-          <Stack gap={0.5}>
-            {supporting.map((item) => (
-              <CardSubtitle key={item.id} variant="caption">
-                {item.label}: {item.value}
-              </CardSubtitle>
-            ))}
-          </Stack>
-        )}
-        <Stack direction="row" gap={1} justifyContent="flex-start" sx={{ mt: "auto" }}>
-          <Button
-            component={RouterLink}
-            to={`/reports?templateId=${card.templateId}`}
-            size="small"
-            variant="contained"
-          >
-            View details
-          </Button>
-          <Button component={RouterLink} to="/reports/dashboards" size="small" variant="text">
-            Adjust card
-          </Button>
-        </Stack>
+        <Box sx={{ mt: "auto" }} />
       </CardContent>
-    </StyledDashboardCard>
+    </SpotlightCardShell>
   );
 };
 
