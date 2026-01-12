@@ -50,12 +50,17 @@ import {
   useReportTemplates,
   type DashboardCardDto,
   type DashboardCardPayload,
+  type DashboardCardViewConfig,
+  type DashboardPreviewPeriodPreset,
+  type DashboardSpotlightCardViewConfig,
   type ReportDashboardDto,
   type ReportTemplateDto,
   type DashboardExportResponse,
 } from "../api/reports";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
+import { SpotlightCard } from "../components/dashboard/SpotlightCardParts";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
+import dayjs from "dayjs";
 
 type DashboardCardLayout = {
   x: number;
@@ -63,6 +68,8 @@ type DashboardCardLayout = {
   w: number;
   h: number;
 };
+
+type LayoutMode = "desktop" | "mobile";
 
 type DashboardGridItem = {
   id: string;
@@ -86,46 +93,80 @@ const DEFAULT_CARD_LAYOUT: DashboardCardLayout = {
   w: 6,
   h: 4,
 };
-const LAYOUT_EDITOR_CELL_HEIGHT = 80;
+const LAYOUT_EDITOR_CELL_HEIGHT = 12;
+const LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP = 168;
+const LAYOUT_EDITOR_COLUMN_COUNT_MOBILE = 48;
+const LAYOUT_EDITOR_COLUMN_COUNT_BY_MODE: Record<LayoutMode, number> = {
+  desktop: LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP,
+  mobile: LAYOUT_EDITOR_COLUMN_COUNT_MOBILE,
+};
+const DEFAULT_MOBILE_LAYOUT: DashboardCardLayout = {
+  x: 0,
+  y: 0,
+  w: Math.min(DEFAULT_CARD_LAYOUT.w, LAYOUT_EDITOR_COLUMN_COUNT_MOBILE),
+  h: DEFAULT_CARD_LAYOUT.h,
+};
 const LAYOUT_EDITOR_GRID_SIZE = Math.max(12, Math.floor(LAYOUT_EDITOR_CELL_HEIGHT / 8));
-const DEMO_GRID_ITEMS: Array<DashboardGridItem & { label: string; accent?: boolean }> = [
-  { id: "1", x: 0, y: 0, w: 4, h: 2, label: "1" },
-  { id: "2", x: 4, y: 0, w: 4, h: 4, label: "2" },
-  { id: "3", x: 8, y: 0, w: 2, h: 2, label: "Drag me!", accent: true },
-  { id: "4", x: 10, y: 0, w: 2, h: 2, label: "4" },
-  { id: "5", x: 0, y: 2, w: 2, h: 2, label: "5" },
-  { id: "6", x: 2, y: 2, w: 2, h: 2, label: "6" },
-  { id: "7", x: 8, y: 2, w: 4, h: 2, label: "7" },
-  { id: "8", x: 0, y: 4, w: 2, h: 2, label: "8" },
-  { id: "9", x: 4, y: 4, w: 4, h: 2, label: "9" },
-  { id: "10", x: 8, y: 4, w: 2, h: 2, label: "10" },
-  { id: "11", x: 10, y: 4, w: 2, h: 2, label: "11" },
-];
 
+const buildGridStackColumnStyles = (columns: number): string => {
+  const columnWidth = 100 / columns;
+  const rules = [`.gs-${columns} > .grid-stack-item { width: ${columnWidth.toFixed(6)}%; }`];
+  for (let i = 0; i <= columns; i += 1) {
+    const width = (columnWidth * i).toFixed(6);
+    rules.push(`.gs-${columns} > .grid-stack-item[gs-w="${i}"] { width: ${width}%; }`);
+    rules.push(`.gs-${columns} > .grid-stack-item[gs-x="${i}"] { left: ${width}%; }`);
+  }
+  return rules.join("\n");
+};
+const scaleLayoutForColumns = (
+  layout: DashboardCardLayout,
+  fromColumns: number,
+  toColumns: number,
+): DashboardCardLayout => {
+  if (fromColumns <= 0 || toColumns <= 0 || fromColumns === toColumns) {
+    return { ...layout };
+  }
+  const ratio = toColumns / fromColumns;
+  const nextWidth = Math.max(1, Math.round(layout.w * ratio));
+  let nextX = Math.max(0, Math.round(layout.x * ratio));
+  const maxX = Math.max(0, toColumns - nextWidth);
+  if (nextX > maxX) {
+    nextX = maxX;
+  }
+  return {
+    ...layout,
+    x: nextX,
+    w: Math.min(toColumns, nextWidth),
+  };
+};
 const DASHBOARD_EDITOR_GRID_CSS = `
+${buildGridStackColumnStyles(LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP)}
+${buildGridStackColumnStyles(LAYOUT_EDITOR_COLUMN_COUNT_MOBILE)}
 .dashboard-layout-grid .grid-stack-item-content {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #ffffff;
-  border-radius: 14px;
-  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
-  border: 1px solid rgba(15, 23, 42, 0.1);
-  font-size: 16px;
-  font-weight: 600;
-  color: #111827;
+  align-items: stretch;
+  justify-content: stretch;
+  height: 100%;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  border: none;
+  padding: 0;
   cursor: grab;
-  transition: box-shadow 0.2s ease, transform 0.2s ease;
+  transition: transform 0.2s ease;
 }
 .dashboard-layout-grid .grid-stack-item-content:active {
   cursor: grabbing;
 }
 .dashboard-layout-grid .grid-stack-item-content:hover {
-  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.12);
   transform: translateY(-2px);
 }
 .dashboard-layout-grid .demo-grid-item.is-accent {
   color: #2563eb;
+}
+.dashboard-layout-grid .dashboard-layout-card {
+  height: 100%;
+  width: 100%;
 }
 .dashboard-layout-grid .ui-resizable-handle {
   background: transparent;
@@ -144,37 +185,201 @@ const resolveNumericValue = (value: number | string | undefined): number | null 
   return null;
 };
 
-const parseLayout = (layout: Record<string, unknown> | undefined | null): DashboardCardLayout => {
-  const safeLayout = layout && typeof layout === "object" ? layout : {};
-  const resolveNumber = (key: string, fallback: number): number => {
-    const candidate = safeLayout?.[key];
-    if (typeof candidate === "number" && Number.isFinite(candidate)) {
-      return candidate;
+const parseLayoutSource = (
+  source: Record<string, unknown> | undefined | null,
+  fallback: DashboardCardLayout,
+  maxColumns: number,
+): DashboardCardLayout => {
+  const resolveNumber = (key: string, fallbackValue: number): number => {
+    const value = source?.[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
     }
-    if (typeof candidate === "string") {
-      const parsed = Number(candidate);
+    if (typeof value === "string") {
+      const parsed = Number(value);
       if (Number.isFinite(parsed)) {
         return parsed;
       }
     }
-    return fallback;
+    return fallbackValue;
   };
-  const width = Math.max(1, Math.min(12, resolveNumber("w", DEFAULT_CARD_LAYOUT.w)));
-  const height = Math.max(1, resolveNumber("h", DEFAULT_CARD_LAYOUT.h));
+  const width = Math.max(1, Math.min(maxColumns, resolveNumber("w", fallback.w)));
+  const height = Math.max(1, resolveNumber("h", fallback.h));
+  const x = resolveNumber("x", fallback.x);
+  const y = resolveNumber("y", fallback.y);
+  const maxX = Math.max(0, maxColumns - width);
   return {
-    x: resolveNumber("x", DEFAULT_CARD_LAYOUT.x),
-    y: resolveNumber("y", DEFAULT_CARD_LAYOUT.y),
+    x: Math.max(0, Math.min(x, maxX)),
+    y: Math.max(0, y),
     w: width,
     h: height,
   };
 };
+const parseLayout = (
+  layout: Record<string, unknown> | undefined | null,
+  mode: LayoutMode = "desktop",
+): DashboardCardLayout => {
+  const safeLayout = layout && typeof layout === "object" ? layout : {};
+  const desktopSource =
+    Object.prototype.hasOwnProperty.call(safeLayout, "desktop") && typeof safeLayout.desktop === "object"
+      ? (safeLayout.desktop as Record<string, unknown>)
+      : null;
+  const mobileSource =
+    Object.prototype.hasOwnProperty.call(safeLayout, "mobile") && typeof safeLayout.mobile === "object"
+      ? (safeLayout.mobile as Record<string, unknown>)
+      : null;
+  if (mode === "mobile") {
+    if (mobileSource) {
+      return parseLayoutSource(mobileSource, DEFAULT_MOBILE_LAYOUT, LAYOUT_EDITOR_COLUMN_COUNT_MOBILE);
+    }
+    const desktopBase = desktopSource ?? (safeLayout as Record<string, unknown>);
+    const desktopParsed = parseLayoutSource(desktopBase, DEFAULT_CARD_LAYOUT, LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP);
+    return scaleLayoutForColumns(desktopParsed, LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP, LAYOUT_EDITOR_COLUMN_COUNT_MOBILE);
+  }
+  if (desktopSource) {
+    return parseLayoutSource(desktopSource, DEFAULT_CARD_LAYOUT, LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP);
+  }
+  if (mobileSource) {
+    const mobileParsed = parseLayoutSource(mobileSource, DEFAULT_MOBILE_LAYOUT, LAYOUT_EDITOR_COLUMN_COUNT_MOBILE);
+    return scaleLayoutForColumns(mobileParsed, LAYOUT_EDITOR_COLUMN_COUNT_MOBILE, LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP);
+  }
+  return parseLayoutSource(safeLayout as Record<string, unknown>, DEFAULT_CARD_LAYOUT, LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP);
+};
 
-const normalizeGridItem = (item: DashboardGridItem): DashboardCardLayout => ({
-  x: Math.max(0, item.x),
-  y: Math.max(0, item.y),
-  w: Math.max(1, Math.min(12, item.w)),
-  h: Math.max(1, item.h),
-});
+const hasLayoutForMode = (layout: Record<string, unknown> | undefined | null, mode: LayoutMode): boolean => {
+  if (!layout || typeof layout !== "object") {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(layout, mode)) {
+    const candidate = (layout as Record<string, unknown>)[mode];
+    return candidate !== null && typeof candidate === "object";
+  }
+  return ["x", "y", "w", "h"].some((key) => Object.prototype.hasOwnProperty.call(layout, key));
+};
+
+const normalizeGridItem = (item: DashboardGridItem, mode: LayoutMode): DashboardCardLayout => {
+  const maxColumns = LAYOUT_EDITOR_COLUMN_COUNT_BY_MODE[mode];
+  const width = Math.max(1, Math.min(maxColumns, item.w));
+  const maxX = Math.max(0, maxColumns - width);
+  return {
+    x: Math.max(0, Math.min(item.x, maxX)),
+    y: Math.max(0, item.y),
+    w: width,
+    h: Math.max(1, item.h),
+  };
+};
+
+const normalizeLayoutForMode = (layout: DashboardCardLayout, mode: LayoutMode): DashboardCardLayout =>
+  normalizeGridItem({ id: "layout", ...layout }, mode);
+
+const SPOTLIGHT_PERIOD_LABELS: Record<DashboardPreviewPeriodPreset, string> = {
+  today: "Today",
+  last_7_days: "Last 7 days",
+  last_30_days: "Last 30 days",
+  last_30_months: "Last 30 months",
+  this_month: "This month",
+  last_month: "Last month",
+};
+
+const computeSpotlightPresetRange = (
+  preset: DashboardPreviewPeriodPreset,
+): { from: string; to: string } => {
+  const today = dayjs();
+  switch (preset) {
+    case "today":
+      return {
+        from: today.startOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: today.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    case "last_7_days": {
+      const from = today.subtract(6, "day");
+      return {
+        from: from.startOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: today.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "last_30_days": {
+      const from = today.subtract(29, "day");
+      return {
+        from: from.startOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: today.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "last_30_months": {
+      const from = today.subtract(29, "month");
+      return {
+        from: from.startOf("month").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: today.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "last_month": {
+      const base = today.subtract(1, "month");
+      return {
+        from: base.startOf("month").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: base.endOf("month").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "this_month":
+    default:
+      return {
+        from: today.startOf("month").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: today.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+  }
+};
+
+const formatSpotlightRangeLabel = (preset: DashboardPreviewPeriodPreset): string => {
+  const range = computeSpotlightPresetRange(preset);
+  const fromLabel = dayjs(range.from).format("MMM D, YYYY");
+  const toLabel = dayjs(range.to).format("MMM D, YYYY");
+  return `${fromLabel} - ${toLabel}`;
+};
+
+const isSpotlightCardViewConfig = (
+  config: DashboardCardViewConfig | null | undefined,
+): config is DashboardSpotlightCardViewConfig =>
+  Boolean(
+    config && config.mode === "spotlight" && typeof (config as DashboardSpotlightCardViewConfig).spotlight === "object",
+  );
+
+const extractLayoutConfig = (
+  layout: Record<string, unknown> | undefined | null,
+): Partial<Record<LayoutMode, DashboardCardLayout>> => {
+  if (!layout || typeof layout !== "object") {
+    return {};
+  }
+  const source = layout as Record<string, unknown>;
+  const hasDesktop = Object.prototype.hasOwnProperty.call(source, "desktop") && typeof source.desktop === "object";
+  const hasMobile = Object.prototype.hasOwnProperty.call(source, "mobile") && typeof source.mobile === "object";
+  if (hasDesktop || hasMobile) {
+    return {
+      ...(hasDesktop
+        ? { desktop: parseLayoutSource(source.desktop as Record<string, unknown>, DEFAULT_CARD_LAYOUT, LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP) }
+        : {}),
+      ...(hasMobile
+        ? { mobile: parseLayoutSource(source.mobile as Record<string, unknown>, DEFAULT_MOBILE_LAYOUT, LAYOUT_EDITOR_COLUMN_COUNT_MOBILE) }
+        : {}),
+    };
+  }
+  if (["x", "y", "w", "h"].some((key) => Object.prototype.hasOwnProperty.call(source, key))) {
+    return {
+      desktop: parseLayoutSource(source, DEFAULT_CARD_LAYOUT, LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP),
+    };
+  }
+  return {};
+};
+
+const updateLayoutConfig = (
+  layout: Record<string, unknown> | undefined | null,
+  mode: LayoutMode,
+  next: DashboardCardLayout,
+): Partial<Record<LayoutMode, DashboardCardLayout>> => {
+  const current = extractLayoutConfig(layout);
+  return {
+    ...current,
+    [mode]: normalizeLayoutForMode(next, mode),
+  };
+};
 
 const layoutsAreEqual = (a: DashboardCardLayout, b: DashboardCardLayout): boolean =>
   a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
@@ -220,7 +425,7 @@ const DashboardCardSummary = ({
   card: DashboardCardDto;
   template: ReportTemplateDto | undefined;
 }) => {
-  const layout = parseLayout(card.layout);
+  const layout = parseLayout(card.layout, "desktop");
   const description = getViewConfigDescription(card.viewConfig);
   return (
     <Stack gap="xs">
@@ -230,9 +435,6 @@ const DashboardCardSummary = ({
           {layout.w}×{layout.h}
         </Badge>
       </Group>
-      <Text fz="sm" c="dimmed">
-        Template: {template?.name ?? card.templateId}
-      </Text>
       <Text fz="xs" c="dimmed">
         Position ({layout.x}, {layout.y})
       </Text>
@@ -292,20 +494,41 @@ const DashboardCardList = ({
   );
 };
 
-const DashboardLayoutEditor = ({ onLayoutCommit }: { onLayoutCommit: (layout: DashboardGridItem[]) => void }) => {
+const DashboardLayoutEditor = ({
+  cards,
+  templateLookup,
+  onLayoutCommit,
+  layoutMode,
+}: {
+  cards: DashboardCardDto[];
+  templateLookup: Map<string, ReportTemplateDto>;
+  onLayoutCommit: (layout: DashboardGridItem[], mode: LayoutMode) => void;
+  layoutMode: LayoutMode;
+}) => {
   const gridRef = useRef<HTMLDivElement | null>(null);
   const gridInstanceRef = useRef<GridStack | null>(null);
   const layoutCommitRef = useRef(onLayoutCommit);
   const isSyncingRef = useRef(false);
   const lastMinRowRef = useRef<number | null>(null);
-  const demoItems = useMemo(() => DEMO_GRID_ITEMS, []);
+  const columnCount = LAYOUT_EDITOR_COLUMN_COUNT_BY_MODE[layoutMode];
+  const layoutEntries = useMemo(
+    () =>
+      cards.map((card) => ({
+        card,
+        layout: parseLayout(card.layout, layoutMode),
+        hasStoredLayout: hasLayoutForMode(card.layout, layoutMode),
+      })),
+    [cards, layoutMode],
+  );
   const layoutById = useMemo(() => {
     const map = new Map<string, DashboardCardLayout>();
-    demoItems.forEach((item) => {
-      map.set(item.id, { x: item.x, y: item.y, w: item.w, h: item.h });
+    layoutEntries.forEach(({ card, layout, hasStoredLayout }) => {
+      if (hasStoredLayout) {
+        map.set(card.id, layout);
+      }
     });
     return map;
-  }, [demoItems]);
+  }, [layoutEntries]);
 
   const updateGridMinRows = useCallback(() => {
     const container = gridRef.current;
@@ -328,6 +551,10 @@ const DashboardLayoutEditor = ({ onLayoutCommit }: { onLayoutCommit: (layout: Da
     }
     lastMinRowRef.current = nextMinRow;
     grid.opts.minRow = nextMinRow;
+    grid.opts.maxRow = nextMinRow;
+    if (grid.engine) {
+      grid.engine.maxRow = nextMinRow;
+    }
     const gridWithUpdate = grid as GridStack & { _updateContainerHeight?: () => void };
     gridWithUpdate._updateContainerHeight?.();
   }, []);
@@ -342,55 +569,56 @@ const DashboardLayoutEditor = ({ onLayoutCommit }: { onLayoutCommit: (layout: Da
       return;
     }
     let grid = gridInstanceRef.current;
-    if (!grid) {
-      grid = GridStack.init(
-        {
-          column: 12,
-          cellHeight: LAYOUT_EDITOR_CELL_HEIGHT,
-          margin: "0px 0px",
-          float: true,
-          disableOneColumnMode: true,
-          draggable: {
-            handle: ".grid-stack-item-content",
-          },
-          resizable: {
-            handles: "all",
-            autoHide: true,
-          },
-        },
-        container,
-      );
-      const handleChange = () => {
-        if (isSyncingRef.current) {
-          return;
-        }
-        const nodes = grid?.engine?.nodes ?? [];
-        const nextLayout = nodes
-          .map((node) => ({
-            id: String(node.id ?? node.el?.getAttribute("gs-id") ?? node.el?.getAttribute("data-gs-id") ?? ""),
-            x: node.x ?? 0,
-            y: node.y ?? 0,
-            w: node.w ?? 1,
-            h: node.h ?? 1,
-          }))
-          .filter((node) => node.id.length > 0);
-        if (nextLayout.length > 0) {
-          layoutCommitRef.current(nextLayout);
-        }
-      };
-      grid.on("change", handleChange);
-      gridInstanceRef.current = grid;
-      updateGridMinRows();
-      requestAnimationFrame(() => updateGridMinRows());
-      const activeGrid = grid;
-      return () => {
-        activeGrid.off("change");
-        activeGrid.destroy(false);
-        gridInstanceRef.current = null;
-      };
+    if (grid) {
+      grid.destroy(false);
+      gridInstanceRef.current = null;
     }
-    return undefined;
-  }, [updateGridMinRows]);
+    grid = GridStack.init(
+      {
+        column: columnCount,
+        cellHeight: LAYOUT_EDITOR_CELL_HEIGHT,
+        margin: "0px 0px",
+        float: true,
+        disableOneColumnMode: true,
+        draggable: {
+          handle: ".grid-stack-item-content",
+        },
+        resizable: {
+          handles: "all",
+          autoHide: true,
+        },
+      },
+      container,
+    );
+    const handleChange = () => {
+      if (isSyncingRef.current) {
+        return;
+      }
+      const nodes = grid?.engine?.nodes ?? [];
+      const nextLayout = nodes
+        .map((node) => ({
+          id: String(node.id ?? node.el?.getAttribute("gs-id") ?? node.el?.getAttribute("data-gs-id") ?? ""),
+          x: node.x ?? 0,
+          y: node.y ?? 0,
+          w: node.w ?? 1,
+          h: node.h ?? 1,
+        }))
+        .filter((node) => node.id.length > 0);
+      if (nextLayout.length > 0) {
+        layoutCommitRef.current(nextLayout, layoutMode);
+      }
+    };
+    grid.on("change", handleChange);
+    gridInstanceRef.current = grid;
+    updateGridMinRows();
+    requestAnimationFrame(() => updateGridMinRows());
+    const activeGrid = grid;
+    return () => {
+      activeGrid.off("change");
+      activeGrid.destroy(false);
+      gridInstanceRef.current = null;
+    };
+  }, [columnCount, layoutMode, updateGridMinRows]);
 
   useEffect(() => {
     const container = gridRef.current;
@@ -420,7 +648,7 @@ const DashboardLayoutEditor = ({ onLayoutCommit }: { onLayoutCommit: (layout: Da
     isSyncingRef.current = false;
     updateGridMinRows();
     requestAnimationFrame(() => updateGridMinRows());
-  }, [demoItems, layoutById, updateGridMinRows]);
+  }, [layoutById, layoutEntries, updateGridMinRows]);
 
   useEffect(() => {
     const container = gridRef.current;
@@ -467,23 +695,55 @@ const DashboardLayoutEditor = ({ onLayoutCommit }: { onLayoutCommit: (layout: Da
       }}
     >
       <style>{DASHBOARD_EDITOR_GRID_CSS}</style>
-      {demoItems.map((item) => (
-        <div
-          key={item.id}
-          className="grid-stack-item"
-          data-gs-id={item.id}
-          data-gs-x={item.x}
-          data-gs-y={item.y}
-          data-gs-w={item.w}
-          data-gs-h={item.h}
-          data-gs-width={item.w}
-          data-gs-height={item.h}
-        >
-          <div className={`grid-stack-item-content demo-grid-item${item.accent ? " is-accent" : ""}`}>
-            {item.label}
+      {layoutEntries.map(({ card, layout, hasStoredLayout }) => {
+        const spotlightConfig = isSpotlightCardViewConfig((card.viewConfig as DashboardCardViewConfig) ?? null)
+          ? (card.viewConfig as DashboardSpotlightCardViewConfig)
+          : null;
+        const defaultPreset = spotlightConfig?.periodConfig?.defaultPreset ?? null;
+        const defaultLabel = defaultPreset ? SPOTLIGHT_PERIOD_LABELS[defaultPreset] : null;
+        const rangeLabel = defaultPreset ? formatSpotlightRangeLabel(defaultPreset) : null;
+        const sampleCard = spotlightConfig?.sample?.cards?.[0];
+        const metricLabel = sampleCard?.label ?? spotlightConfig?.spotlight?.metricLabel ?? "Metric";
+        const metricValue = sampleCard?.value ?? "-";
+        const periodPresets = spotlightConfig?.periodConfig?.presets ?? [];
+        const allowCustom = Boolean(spotlightConfig?.periodConfig?.allowCustom);
+        const showPeriodControls = periodPresets.length > 0;
+        const periodOptions = showPeriodControls
+          ? [
+              ...periodPresets.map((preset) => ({
+                value: preset,
+                label: SPOTLIGHT_PERIOD_LABELS[preset],
+              })),
+              ...(allowCustom ? [{ value: "custom", label: "Custom" }] : []),
+            ]
+          : [];
+        return (
+          <div
+            key={card.id}
+            className="grid-stack-item"
+            data-gs-id={card.id}
+            data-gs-x={hasStoredLayout ? layout.x : undefined}
+            data-gs-y={hasStoredLayout ? layout.y : undefined}
+            data-gs-w={layout.w}
+            data-gs-h={layout.h}
+            data-gs-width={layout.w}
+            data-gs-height={layout.h}
+            data-gs-auto-position={hasStoredLayout ? undefined : "true"}
+          >
+            <div className="grid-stack-item-content dashboard-layout-card">
+              <SpotlightCard
+                title={card.title || "Untitled card"}
+                metricLabel={metricLabel}
+                metricValue={metricValue}
+                periodLabel={defaultLabel ?? undefined}
+                rangeLabel={rangeLabel ?? undefined}
+                periodOptions={periodOptions}
+                activePeriod={defaultPreset ?? undefined}
+              />
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </Box>
   );
 };
@@ -511,7 +771,7 @@ const createCardDraftFromCard = (card: DashboardCardDto): CardDraft => ({
   templateId: card.templateId,
   title: card.title,
   viewConfig: deepClone(card.viewConfig ?? DEFAULT_VIEW_CONFIG),
-  layout: parseLayout(card.layout),
+  layout: parseLayout(card.layout, "desktop"),
 });
 
 const ReportDashboards = ({ title }: GenericPageProps) => {
@@ -559,8 +819,11 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
   const [cardDraft, setCardDraft] = useState<CardDraft | null>(null);
   const [cardMode, setCardMode] = useState<"create" | "edit">("create");
   const [layoutEditorOpen, setLayoutEditorOpen] = useState(false);
+  const [layoutEditorMode, setLayoutEditorMode] = useState<LayoutMode>("desktop");
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
-  const [pendingLayoutChanges, setPendingLayoutChanges] = useState<Record<string, DashboardCardLayout>>({});
+  const [pendingLayoutChanges, setPendingLayoutChanges] = useState<
+    Record<string, Partial<Record<LayoutMode, DashboardCardLayout>>>
+  >({});
   const [isSavingLayout, setIsSavingLayout] = useState(false);
 
   useEffect(() => {
@@ -684,13 +947,13 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     }
   };
 
-  const handleLayoutCommit = (nextLayout: DashboardGridItem[]) => {
+  const handleLayoutCommit = (nextLayout: DashboardGridItem[], mode: LayoutMode) => {
     if (!dashboardDraft || nextLayout.length === 0) {
       return;
     }
     const normalized = new Map<string, DashboardCardLayout>();
     nextLayout.forEach((item) => {
-      normalized.set(item.id, normalizeGridItem(item));
+      normalized.set(item.id, normalizeGridItem(item, mode));
     });
 
     setDashboardDraft((current) => {
@@ -704,12 +967,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
         }
         return {
           ...card,
-          layout: {
-            x: layout.x,
-            y: layout.y,
-            w: layout.w,
-            h: layout.h,
-          },
+          layout: updateLayoutConfig(card.layout, mode, layout),
         };
       });
       return { ...current, cards: nextCards };
@@ -719,11 +977,22 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
       const nextChanges = { ...current };
       normalized.forEach((layout, cardId) => {
         const baselineCard = selectedDashboard?.cards?.find((card) => card.id === cardId);
-        const baselineLayout = baselineCard ? parseLayout(baselineCard.layout) : layout;
+        const baselineLayout = baselineCard ? parseLayout(baselineCard.layout, mode) : layout;
         if (layoutsAreEqual(layout, baselineLayout)) {
-          delete nextChanges[cardId];
+          const existing = nextChanges[cardId];
+          if (existing) {
+            const { [mode]: _removed, ...rest } = existing;
+            if (Object.keys(rest).length > 0) {
+              nextChanges[cardId] = rest;
+            } else {
+              delete nextChanges[cardId];
+            }
+          }
         } else {
-          nextChanges[cardId] = layout;
+          nextChanges[cardId] = {
+            ...(nextChanges[cardId] ?? {}),
+            [mode]: layout,
+          };
         }
       });
       return nextChanges;
@@ -742,7 +1011,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     setFeedback(null);
     try {
       await Promise.all(
-        entries.map(([cardId, layout]) => {
+        entries.map(([cardId]) => {
           const card = dashboardDraft.cards.find((candidate) => candidate.id === cardId);
           if (!card) {
             return null;
@@ -754,7 +1023,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
               templateId: card.templateId,
               title: card.title,
               viewConfig: card.viewConfig as Record<string, unknown>,
-              layout,
+              layout: card.layout,
             },
           });
         }),
@@ -782,16 +1051,16 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
       setFeedback({ type: "error", message: "Card title is required." });
       return;
     }
+    const existingLayout =
+      cardMode === "edit"
+        ? dashboardDraft?.cards.find((candidate) => candidate.id === cardDraft.id)?.layout ?? null
+        : null;
+    const layoutConfig = updateLayoutConfig(existingLayout, "desktop", cardDraft.layout);
     const payload: DashboardCardPayload = {
       templateId: cardDraft.templateId,
       title: cardDraft.title,
       viewConfig: deepClone(cardDraft.viewConfig),
-      layout: {
-        x: cardDraft.layout.x,
-        y: cardDraft.layout.y,
-        w: cardDraft.layout.w,
-        h: cardDraft.layout.h,
-      },
+      layout: layoutConfig,
     };
     setFeedback(null);
     try {
@@ -1237,14 +1506,54 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
             color: theme.white,
           }}
         >
-          <Text
-            fw={600}
-            c="white"
-            size={isMobile ? "sm" : "md"}
-            style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-          >
-            Layout editor
-          </Text>
+          <Group gap={isMobile ? 6 : "sm"} wrap="nowrap" style={{ minWidth: 0 }}>
+            <Text
+              fw={600}
+              c="white"
+              size={isMobile ? "sm" : "md"}
+              style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+            >
+              {isMobile ? "Layout" : "Layout editor"}
+            </Text>
+            <Group gap={isMobile ? 6 : "xs"} wrap="nowrap" style={{ flexShrink: 0 }}>
+              <Button
+                size={isMobile ? "xs" : "sm"}
+                variant={layoutEditorMode === "desktop" ? "filled" : "outline"}
+                onClick={() => setLayoutEditorMode("desktop")}
+                styles={{
+                  root: {
+                    backgroundColor: layoutEditorMode === "desktop" ? "#ffffff" : "transparent",
+                    color: layoutEditorMode === "desktop" ? "#0b0d12" : "#ffffff",
+                    borderColor: "rgba(255,255,255,0.4)",
+                    paddingLeft: isMobile ? 8 : undefined,
+                    paddingRight: isMobile ? 8 : undefined,
+                    height: isMobile ? 28 : undefined,
+                    minHeight: isMobile ? 28 : undefined,
+                  },
+                }}
+              >
+                {isMobile ? "Desk" : "Desktop"}
+              </Button>
+              <Button
+                size={isMobile ? "xs" : "sm"}
+                variant={layoutEditorMode === "mobile" ? "filled" : "outline"}
+                onClick={() => setLayoutEditorMode("mobile")}
+                styles={{
+                  root: {
+                    backgroundColor: layoutEditorMode === "mobile" ? "#ffffff" : "transparent",
+                    color: layoutEditorMode === "mobile" ? "#0b0d12" : "#ffffff",
+                    borderColor: "rgba(255,255,255,0.4)",
+                    paddingLeft: isMobile ? 8 : undefined,
+                    paddingRight: isMobile ? 8 : undefined,
+                    height: isMobile ? 28 : undefined,
+                    minHeight: isMobile ? 28 : undefined,
+                  },
+                }}
+              >
+                {isMobile ? "Mob" : "Mobile"}
+              </Button>
+            </Group>
+          </Group>
           <Group gap={isMobile ? 6 : "sm"} wrap="nowrap" justify="flex-end" style={{ flexShrink: 0 }}>
             <Button
               size={isMobile ? "xs" : "sm"}
@@ -1295,7 +1604,10 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
         >
           <Box style={{ flex: 1, minHeight: 0, height: "100%" }}>
             <DashboardLayoutEditor
+              cards={selectedDashboardCards}
+              templateLookup={templateLookup}
               onLayoutCommit={handleLayoutCommit}
+              layoutMode={layoutEditorMode}
             />
           </Box>
         </Box>
