@@ -8,9 +8,6 @@ import PersonIcon from "@mui/icons-material/Person";
 import SettingsIcon from "@mui/icons-material/Settings";
 import BarChartIcon from "@mui/icons-material/BarChart";
 import SportsEsportsIcon from "@mui/icons-material/SportsEsports";
-import TrendingUpIcon from "@mui/icons-material/TrendingUp";
-import TrendingDownIcon from "@mui/icons-material/TrendingDown";
-import TrendingFlatIcon from "@mui/icons-material/TrendingFlat";
 import Grid from "@mui/material/Grid";
 import {
   Alert,
@@ -63,6 +60,7 @@ import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { navigateToPage } from "../actions/navigationActions";
 import { selectAllowedNavigationPages } from "../selectors/accessControlSelectors";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
+import { SpotlightCard } from "../components/dashboard/SpotlightCardParts";
 import type { NavigationIconKey } from "../types/general/NavigationState";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import {
@@ -105,9 +103,34 @@ const DEFAULT_CARD_LAYOUT = {
   w: 6,
   h: 4,
 };
+const buildGridStackColumnStyles = (columns: number): string => {
+  const columnWidth = 100 / columns;
+  const rules = [`.gs-${columns} > .grid-stack-item { width: ${columnWidth.toFixed(6)}%; }`];
+  for (let i = 0; i <= columns; i += 1) {
+    const width = (columnWidth * i).toFixed(6);
+    rules.push(`.gs-${columns} > .grid-stack-item[gs-w="${i}"] { width: ${width}%; }`);
+    rules.push(`.gs-${columns} > .grid-stack-item[gs-x="${i}"] { left: ${width}%; }`);
+  }
+  return rules.join("\n");
+};
+
+const buildHomeGridCss = (columns: number): string => `
+${buildGridStackColumnStyles(columns)}
+.home-dashboard-grid .grid-stack-item-content {
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  height: 100%;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+  cursor: default;
+}
+`;
 
 const AUTO_REFRESH_INTERVAL_MS = 60 * 1000;
-const SPOTLIGHT_VALUE_FONT = "'Roboto Slab', serif";
 
 type VisualChartPoint = {
   dimension: string;
@@ -121,6 +144,8 @@ type DashboardCardLayout = {
   w: number;
   h: number;
 };
+
+type DashboardLayoutMode = "desktop" | "mobile";
 
 type CardLayoutMetrics = {
   columnSpan: number;
@@ -376,13 +401,8 @@ const applyPeriodOverrideToQueryConfig = (
     const nextFilters = filters.filter(
       (filter) => !(filter.modelId === metadata.modelId && filter.fieldId === metadata.fieldId),
     );
-    const operator = metadata.operator === "gte" || metadata.operator === "lte" ? metadata.operator : "between";
-    const value =
-      operator === "gte"
-        ? range.from
-        : operator === "lte"
-          ? range.to
-          : { from: range.from, to: range.to };
+    const operator: QueryConfigFilter["operator"] = "between";
+    const value = { from: range.from, to: range.to };
     nextFilters.push({
       modelId: metadata.modelId,
       fieldId: metadata.fieldId,
@@ -650,83 +670,6 @@ const CardAccent = styled("div")(({ theme: muiTheme }) => ({
   opacity: 0.7,
 }));
 
-const SpotlightCardShell = styled(Card)(({ theme: muiTheme }) => ({
-  position: "relative",
-  height: "100%",
-  borderRadius: 14,
-  border: `1px solid ${alpha(muiTheme.palette.text.primary, 0.12)}`,
-  background:
-    muiTheme.palette.mode === "dark"
-      ? "linear-gradient(160deg, rgba(12, 18, 30, 0.98) 0%, rgba(18, 26, 44, 0.98) 100%)"
-      : "linear-gradient(180deg, #ffffff 0%, #f6f7f9 100%)",
-  boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)",
-  overflow: "hidden",
-  minHeight: 160,
-  "&::before": {
-    content: "\"\"",
-    position: "absolute",
-    inset: 0,
-    backgroundImage:
-      "linear-gradient(120deg, rgba(15, 23, 42, 0.04) 0%, transparent 50%), linear-gradient(90deg, rgba(15, 23, 42, 0.04) 1px, transparent 1px), linear-gradient(0deg, rgba(15, 23, 42, 0.04) 1px, transparent 1px)",
-    backgroundSize: "auto, 26px 26px, 26px 26px",
-    opacity: muiTheme.palette.mode === "dark" ? 0.25 : 0.4,
-    pointerEvents: "none",
-  },
-  "&::after": {
-    content: "\"\"",
-    position: "absolute",
-    left: 0,
-    top: 0,
-    width: 10,
-    height: "100%",
-    background: `linear-gradient(180deg, ${muiTheme.palette.primary.main}, #0e7490)`,
-    opacity: 0.9,
-  },
-}));
-
-const SpotlightEyebrow = styled(Typography)(({ theme: muiTheme }) => ({
-  textTransform: "uppercase",
-  letterSpacing: 1.8,
-  fontWeight: 700,
-  fontSize: 10,
-  color: alpha(muiTheme.palette.text.primary, 0.6),
-}));
-
-const SpotlightValue = styled(Typography)(({ theme: muiTheme }) => ({
-  fontFamily: SPOTLIGHT_VALUE_FONT,
-  fontWeight: 700,
-  letterSpacing: -0.4,
-  color: muiTheme.palette.text.primary,
-  fontVariantNumeric: "tabular-nums",
-}));
-
-const SpotlightPeriodGroup = styled("div")(({ theme: muiTheme }) => ({
-  display: "inline-flex",
-  flexWrap: "wrap",
-  gap: 6,
-  padding: 4,
-  borderRadius: 999,
-  backgroundColor: alpha(muiTheme.palette.text.primary, 0.04),
-  border: `1px solid ${alpha(muiTheme.palette.text.primary, 0.08)}`,
-}));
-
-const SpotlightPeriodButton = styled(Button)(({ theme: muiTheme }) => ({
-  borderRadius: 999,
-  textTransform: "none",
-  fontWeight: 600,
-  minHeight: 26,
-  padding: "3px 10px",
-  fontSize: 12,
-  color: muiTheme.palette.text.secondary,
-  "&.isActive": {
-    color: muiTheme.palette.primary.main,
-    backgroundColor: alpha(muiTheme.palette.primary.main, 0.12),
-  },
-  "&:hover": {
-    backgroundColor: alpha(muiTheme.palette.text.primary, 0.08),
-  },
-}));
-
 const CardTitle = styled(Typography)(({ theme: muiTheme }) => ({
   fontWeight: 600,
   letterSpacing: 0.2,
@@ -744,6 +687,18 @@ const PageName = styled(Typography)(({ theme: muiTheme }) => ({
   textDecoration: "none",
   marginTop: muiTheme.spacing(1),
 }));
+
+const formatSpotlightRangeLabel = (range: { from: string; to: string } | null): string | null => {
+  if (!range) {
+    return null;
+  }
+  const fromLabel = formatDisplayDate(range.from);
+  const toLabel = formatDisplayDate(range.to);
+  if (!fromLabel || !toLabel) {
+    return null;
+  }
+  return `${fromLabel} - ${toLabel}`;
+};
 
 const getErrorMessage = (error: unknown, fallback: string): string => {
   if (typeof error === "string" && error.length > 0) {
@@ -915,35 +870,138 @@ const buildPreviewInsight = (
   };
 };
 
-const parseDashboardLayout = (
-  layout: Record<string, unknown> | null | undefined,
-  fallback: DashboardCardLayout = DEFAULT_CARD_LAYOUT,
+const HOME_LAYOUT_SOURCE_COLUMNS_DESKTOP = 168;
+const HOME_LAYOUT_SOURCE_COLUMNS_MOBILE = 48;
+const HOME_LAYOUT_LEGACY_COLUMNS = 12;
+
+const scaleDashboardLayoutColumns = (
+  layout: DashboardCardLayout,
+  fromColumns: number,
+  toColumns: number,
 ): DashboardCardLayout => {
-  const source = layout && typeof layout === "object" ? layout : {};
-  const resolve = (key: string, defaultValue: number): number => {
-    const candidate = source[key as keyof typeof source];
-    if (typeof candidate === "number" && Number.isFinite(candidate)) {
-      return candidate;
-    }
-    if (typeof candidate === "string") {
-      const parsed = Number(candidate);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
-    }
-    return defaultValue;
-  };
-  const width = Math.max(1, Math.min(12, resolve("w", fallback.w)));
-  const height = Math.max(1, resolve("h", fallback.h));
+  if (fromColumns <= 0 || toColumns <= 0 || fromColumns === toColumns) {
+    return { ...layout };
+  }
+  const ratio = toColumns / fromColumns;
+  const nextWidth = Math.max(1, Math.round(layout.w * ratio));
+  let nextX = Math.max(0, Math.round(layout.x * ratio));
+  const maxX = Math.max(0, toColumns - nextWidth);
+  if (nextX > maxX) {
+    nextX = maxX;
+  }
   return {
-    x: Math.max(0, resolve("x", fallback.x)),
-    y: Math.max(0, resolve("y", fallback.y)),
+    ...layout,
+    x: nextX,
+    w: Math.min(toColumns, nextWidth),
+  };
+};
+
+const resolveLayoutNumber = (
+  source: Record<string, unknown> | null | undefined,
+  key: string,
+  fallback: number,
+): number => {
+  const candidate = source?.[key as keyof typeof source];
+  if (typeof candidate === "number" && Number.isFinite(candidate)) {
+    return candidate;
+  }
+  if (typeof candidate === "string") {
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return fallback;
+};
+
+const isLegacyColumnLayout = (source: Record<string, unknown> | null | undefined): boolean => {
+  if (!source) {
+    return false;
+  }
+  const width = resolveLayoutNumber(source, "w", 0);
+  const x = resolveLayoutNumber(source, "x", 0);
+  return width > 0 && width <= HOME_LAYOUT_LEGACY_COLUMNS && x <= HOME_LAYOUT_LEGACY_COLUMNS;
+};
+
+const parseLayoutSource = (
+  source: Record<string, unknown> | null | undefined,
+  fallback: DashboardCardLayout,
+  maxColumns: number,
+): DashboardCardLayout => {
+  const resolve = (key: string, defaultValue: number): number => {
+    return resolveLayoutNumber(source, key, defaultValue);
+  };
+  const width = Math.max(1, Math.min(maxColumns, resolve("w", fallback.w)));
+  const height = Math.max(1, resolve("h", fallback.h));
+  const x = resolve("x", fallback.x);
+  const y = resolve("y", fallback.y);
+  const maxX = Math.max(0, maxColumns - width);
+  return {
+    x: Math.max(0, Math.min(x, maxX)),
+    y: Math.max(0, y),
     w: width,
     h: height,
   };
 };
 
-const HOME_GRID_ROW_HEIGHT_PX = 90;
+const resolveDashboardLayout = (
+  layout: Record<string, unknown> | null | undefined,
+  mode: DashboardLayoutMode,
+  targetColumns: number,
+  fallback: DashboardCardLayout = DEFAULT_CARD_LAYOUT,
+): DashboardCardLayout => {
+  const source = layout && typeof layout === "object" ? layout : {};
+  const desktopSource =
+    Object.prototype.hasOwnProperty.call(source, "desktop") && typeof (source as { desktop?: unknown }).desktop === "object"
+      ? ((source as { desktop?: Record<string, unknown> }).desktop ?? null)
+      : null;
+  const mobileSource =
+    Object.prototype.hasOwnProperty.call(source, "mobile") && typeof (source as { mobile?: unknown }).mobile === "object"
+      ? ((source as { mobile?: Record<string, unknown> }).mobile ?? null)
+      : null;
+  const hasBuckets = Boolean(desktopSource || mobileSource);
+
+  if (!hasBuckets) {
+    const parsed = parseLayoutSource(source, fallback, HOME_LAYOUT_LEGACY_COLUMNS);
+    return scaleDashboardLayoutColumns(parsed, HOME_LAYOUT_LEGACY_COLUMNS, targetColumns);
+  }
+
+  if (mode === "mobile") {
+    if (mobileSource) {
+      const legacyMobile = isLegacyColumnLayout(mobileSource);
+      const sourceColumns = legacyMobile ? HOME_LAYOUT_LEGACY_COLUMNS : HOME_LAYOUT_SOURCE_COLUMNS_MOBILE;
+      const parsed = parseLayoutSource(mobileSource, fallback, sourceColumns);
+      return scaleDashboardLayoutColumns(parsed, sourceColumns, targetColumns);
+    }
+    const desktopCandidate = desktopSource ?? source;
+    const legacyDesktop = isLegacyColumnLayout(desktopCandidate);
+    const desktopColumns = legacyDesktop ? HOME_LAYOUT_LEGACY_COLUMNS : HOME_LAYOUT_SOURCE_COLUMNS_DESKTOP;
+    const desktopParsed = parseLayoutSource(desktopCandidate, fallback, desktopColumns);
+    const derivedMobile = scaleDashboardLayoutColumns(
+      desktopParsed,
+      desktopColumns,
+      HOME_LAYOUT_SOURCE_COLUMNS_MOBILE,
+    );
+    return scaleDashboardLayoutColumns(derivedMobile, HOME_LAYOUT_SOURCE_COLUMNS_MOBILE, targetColumns);
+  }
+
+  if (desktopSource) {
+    const legacyDesktop = isLegacyColumnLayout(desktopSource);
+    const sourceColumns = legacyDesktop ? HOME_LAYOUT_LEGACY_COLUMNS : HOME_LAYOUT_SOURCE_COLUMNS_DESKTOP;
+    const parsed = parseLayoutSource(desktopSource, fallback, sourceColumns);
+    return scaleDashboardLayoutColumns(parsed, sourceColumns, targetColumns);
+  }
+  if (mobileSource) {
+    const legacyMobile = isLegacyColumnLayout(mobileSource);
+    const sourceColumns = legacyMobile ? HOME_LAYOUT_LEGACY_COLUMNS : HOME_LAYOUT_SOURCE_COLUMNS_MOBILE;
+    const parsed = parseLayoutSource(mobileSource, fallback, sourceColumns);
+    return scaleDashboardLayoutColumns(parsed, sourceColumns, targetColumns);
+  }
+  const parsed = parseLayoutSource(source, fallback, HOME_LAYOUT_LEGACY_COLUMNS);
+  return scaleDashboardLayoutColumns(parsed, HOME_LAYOUT_LEGACY_COLUMNS, targetColumns);
+};
+
+const HOME_GRID_ROW_HEIGHT_PX = 12;
 
 const mapRowsToVisualPoints = (
   rows: Array<Record<string, unknown>>,
@@ -1076,12 +1134,6 @@ const renderVisualChart = (config: DashboardVisualCardViewConfig, data: VisualCh
     </ResponsiveContainer>
   );
 };
-
-const SpotlightTone = {
-  positive: "success.main",
-  negative: "error.main",
-  neutral: "text.primary",
-} as const;
 
 const getComparisonLabel = (
   comparison?: MetricSpotlightDefinitionDto["comparison"],
@@ -1305,8 +1357,8 @@ const Home = (props: GenericPageProps) => {
       activeCards
         .slice()
         .sort((a, b) => {
-          const layoutA = parseDashboardLayout(a.layout);
-          const layoutB = parseDashboardLayout(b.layout);
+          const layoutA = resolveDashboardLayout(a.layout, "desktop", HOME_LAYOUT_LEGACY_COLUMNS);
+          const layoutB = resolveDashboardLayout(b.layout, "desktop", HOME_LAYOUT_LEGACY_COLUMNS);
           if (layoutA.y === layoutB.y) {
             return layoutA.x - layoutB.x;
           }
@@ -1314,44 +1366,23 @@ const Home = (props: GenericPageProps) => {
         }),
     [activeCards],
   );
-  const heroSpotlightCards = useMemo(
-    () =>
-      orderedActiveCards
-        .filter((card) => isSpotlightCardViewConfig((card.viewConfig as DashboardCardViewConfig) ?? null))
-        .slice(0, 3),
-    [orderedActiveCards],
-  );
-  const heroCardIds = useMemo(() => new Set(heroSpotlightCards.map((card) => card.id)), [heroSpotlightCards]);
-  const remainingDashboardCards = useMemo(
-    () => orderedActiveCards.filter((card) => !heroCardIds.has(card.id)),
-    [orderedActiveCards, heroCardIds],
-  );
-  const isMediumScreen = useMediaQuery(theme.breakpoints.down("md"));
   const isSmallScreen = useMediaQuery(theme.breakpoints.down("sm"));
-  const gridColumns = isSmallScreen ? 1 : isMediumScreen ? 6 : 12;
-  const gridRowHeight = isSmallScreen ? 96 : isMediumScreen ? 120 : HOME_GRID_ROW_HEIGHT_PX;
-  const gridGap = isSmallScreen ? 1 : 2;
-  const gridGapPx = gridGap * 8;
+  const layoutMode: DashboardLayoutMode = isSmallScreen ? "mobile" : "desktop";
+  const gridColumns =
+    layoutMode === "mobile" ? HOME_LAYOUT_SOURCE_COLUMNS_MOBILE : HOME_LAYOUT_SOURCE_COLUMNS_DESKTOP;
+  const gridRowHeight = HOME_GRID_ROW_HEIGHT_PX;
+  const gridGapPx = 0;
+  const homeGridSize = Math.max(12, Math.floor(gridRowHeight / 8));
+  const homeGridCss = useMemo(() => buildHomeGridCss(gridColumns), [gridColumns]);
   const dashboardGridRef = useRef<HTMLDivElement | null>(null);
   const dashboardGridInstanceRef = useRef<GridStack | null>(null);
   const gridLayoutCards = useMemo(() => {
-    const isScaled = isSmallScreen || isMediumScreen;
-    const scaleFactor = isScaled ? 0.5 : 1;
-    return remainingDashboardCards.map((card) => {
-      const layout = parseDashboardLayout(card.layout);
+    return orderedActiveCards.map((card) => {
+      const layout = resolveDashboardLayout(card.layout, layoutMode, gridColumns);
       let columnSpan = Math.max(1, Math.min(gridColumns, layout.w));
       let rowSpan = Math.max(1, layout.h);
-      let gridX = Math.max(0, Math.floor(layout.x * scaleFactor));
-      let gridY = Math.max(0, Math.floor(layout.y * scaleFactor));
-
-      if (isSmallScreen) {
-        columnSpan = gridColumns;
-        rowSpan = Math.max(1, Math.ceil(rowSpan / 2));
-        gridX = 0;
-      } else if (isMediumScreen) {
-        columnSpan = Math.min(gridColumns, Math.max(1, Math.ceil(layout.w / 2)));
-        rowSpan = Math.max(1, Math.ceil(rowSpan / 2));
-      }
+      let gridX = Math.max(0, layout.x);
+      let gridY = Math.max(0, layout.y);
 
       const maxX = Math.max(0, gridColumns - columnSpan);
       if (gridX > maxX) {
@@ -1368,7 +1399,7 @@ const Home = (props: GenericPageProps) => {
         approxHeightPx: rowSpan * gridRowHeight,
       };
     });
-  }, [gridColumns, gridRowHeight, isMediumScreen, isSmallScreen, remainingDashboardCards]);
+  }, [gridColumns, gridRowHeight, layoutMode, orderedActiveCards]);
   const shouldHydrateLiveData = canUseDashboards && effectiveViewMode === "dashboard";
 
   useEffect(() => {
@@ -1411,9 +1442,21 @@ const Home = (props: GenericPageProps) => {
     if (!container || !grid) {
       return;
     }
+    const layoutById = new Map(
+      gridLayoutCards.map((entry) => [
+        entry.card.id,
+        { x: entry.gridX, y: entry.gridY, w: entry.columnSpan, h: entry.rowSpan },
+      ]),
+    );
     grid.batchUpdate();
     grid.removeAll(false);
     container.querySelectorAll<HTMLElement>(".grid-stack-item").forEach((element) => {
+      const cardId = element.getAttribute("gs-id") ?? element.getAttribute("data-gs-id");
+      const layout = cardId ? layoutById.get(cardId) : null;
+      if (cardId && layout) {
+        grid.makeWidget(element, { ...layout, id: cardId });
+        return;
+      }
       grid.makeWidget(element);
     });
     grid.batchUpdate(false);
@@ -2199,21 +2242,66 @@ const Home = (props: GenericPageProps) => {
         </Alert>
       );
     }
+    if (gridLayoutCards.length === 0) {
+      return (
+        <Typography variant="body2" color="textSecondary">
+          This dashboard does not have any cards yet.
+        </Typography>
+      );
+    }
     return (
       <Box
+        ref={dashboardGridRef}
+        className="grid-stack home-dashboard-grid"
         sx={{
           width: "100%",
           height: { xs: "calc(100vh - 96px)", md: "calc(100vh - 120px)" },
           minHeight: { xs: "calc(100vh - 96px)", md: "calc(100vh - 120px)" },
           borderRadius: 4,
-          border: "1px dashed rgba(15, 23, 42, 0.18)",
+          // border: "1px dashed rgba(15, 23, 42, 0.18)",
           backgroundColor: "#f5f7fb",
-          backgroundImage:
-            "linear-gradient(0deg, rgba(15, 23, 42, 0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(15, 23, 42, 0.06) 1px, transparent 1px)",
-          backgroundSize: `${Math.max(12, Math.floor(gridRowHeight / 8))}px ${Math.max(12, Math.floor(gridRowHeight / 8))}px`,
+          // backgroundImage:
+          //   "linear-gradient(0deg, rgba(15, 23, 42, 0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(15, 23, 42, 0.06) 1px, transparent 1px)",
+          // backgroundSize: `${homeGridSize}px ${homeGridSize}px`,
           overflow: "hidden",
         }}
-      />
+      >
+        <style>{homeGridCss}</style>
+        {gridLayoutCards.map(({ card, gridX, gridY, columnSpan, rowSpan, approxHeightPx }) => {
+          const spotlightConfig = spotlightPeriodConfigById.get(card.id);
+          return (
+            <Box
+              key={card.id}
+              className="grid-stack-item"
+              data-gs-id={card.id}
+              data-gs-x={gridX}
+              data-gs-y={gridY}
+              data-gs-w={columnSpan}
+              data-gs-h={rowSpan}
+              data-gs-width={columnSpan}
+              data-gs-height={rowSpan}
+            >
+              <div className="grid-stack-item-content">
+                <DashboardCard
+                  card={card}
+                  liveState={liveCardSamples.get(card.id)}
+                  layoutMetrics={{ approxHeightPx, columnSpan, rowSpan }}
+                  periodOverride={globalPeriodOverride ?? null}
+                  spotlightPeriodConfig={spotlightConfig ?? null}
+                  spotlightPeriodSelection={
+                    getSpotlightPeriodSelection(card.id) ?? spotlightConfig?.defaultPreset ?? null
+                  }
+                  onSpotlightPeriodChange={handleSpotlightPeriodChange}
+                  spotlightCustomInput={spotlightCustomInputs[card.id] ?? null}
+                  onSpotlightCustomInputChange={handleSpotlightCustomInputChange}
+                  onSpotlightApplyCustomRange={handleSpotlightApplyCustomRange}
+                  segmentFilter={globalSegmentValue}
+                />
+              </div>
+            </Box>
+          );
+        })}
+      </Box>
     );
   };
 
@@ -2223,7 +2311,7 @@ const Home = (props: GenericPageProps) => {
         <PageWrapper
           style={
             effectiveViewMode === "dashboard"
-              ? { paddingTop: 4, paddingBottom: 4, paddingLeft: 8, paddingRight: 8 }
+              ? { paddingTop: 0, paddingBottom: 0, paddingLeft: 0, paddingRight: 0 }
               : undefined
           }
         >
@@ -2309,7 +2397,6 @@ const DashboardCard = ({
         card={card}
         config={viewConfig}
         liveState={liveState ?? { status: "idle" }}
-        layoutMetrics={layoutMetrics}
         periodConfig={spotlightPeriodConfig ?? undefined}
         periodSelection={spotlightPeriodSelection ?? undefined}
         onPeriodChange={(preset) => onSpotlightPeriodChange?.(card.id, preset)}
@@ -2449,7 +2536,6 @@ const SpotlightDashboardCard = ({
   card,
   config,
   liveState,
-  layoutMetrics,
   periodConfig,
   periodSelection,
   onPeriodChange,
@@ -2460,7 +2546,6 @@ const SpotlightDashboardCard = ({
   card: DashboardCardDto;
   config: DashboardSpotlightCardViewConfig;
   liveState: DashboardCardLiveState;
-  layoutMetrics?: CardLayoutMetrics;
   periodConfig?: {
     presets: DashboardPreviewPeriodPreset[];
     defaultPreset: DashboardPreviewPeriodPreset;
@@ -2472,302 +2557,69 @@ const SpotlightDashboardCard = ({
   onCustomInputChange?: (key: "from" | "to", value: string) => void;
   onApplyCustomRange?: () => void;
 }) => {
-  const sampleCards = liveState.spotlightSample?.cards ?? config.sample?.cards ?? [];
+  const isLiveSuccess = liveState.status === "success";
+  const sampleCards = isLiveSuccess
+    ? liveState.spotlightSample?.cards ?? []
+    : liveState.spotlightSample?.cards ?? config.sample?.cards ?? [];
   const isLoading = liveState.status === "loading";
   const error = liveState.status === "error" ? liveState.error : null;
-  const [cardRef, cardSize] = useElementSize<HTMLDivElement>();
-  const layoutHeight = layoutMetrics?.approxHeightPx ?? 320;
-  const measuredHeight = cardSize.height > 0 ? cardSize.height : layoutHeight;
-  const maxStackHeight = Math.max(160, measuredHeight - 140);
   const showPeriodControls =
     Boolean(periodConfig && config.dateFilter && periodConfig.presets.length > 0) &&
     typeof onPeriodChange === "function";
-  const activePreset = periodSelection ?? periodConfig?.defaultPreset ?? null;
   const allowCustom = Boolean(periodConfig?.allowCustom);
-  const isCustomActive = allowCustom && activePreset === "custom";
+  const activePreset = periodSelection ?? periodConfig?.defaultPreset ?? null;
   const customInputs = customInput ?? { from: "", to: "" };
-  const primarySample = sampleCards[0];
-  const secondarySamples = sampleCards.slice(1, 3);
-  const toneColor = primarySample ? SpotlightTone[primarySample.tone] ?? "text.primary" : "text.primary";
-  const deltaLabel = primarySample?.delta
-    ? primarySample.comparisonValue
-      ? `${primarySample.delta} vs ${primarySample.comparisonLabel ?? "prior period"}`
-      : primarySample.delta
+  const activeLabel = activePreset
+    ? activePreset === "custom"
+      ? "Custom"
+      : getSpotlightPeriodLabel(activePreset)
     : null;
-  const TrendIcon =
-    primarySample?.tone === "positive"
-      ? TrendingUpIcon
-      : primarySample?.tone === "negative"
-        ? TrendingDownIcon
-        : TrendingFlatIcon;
-  const showComparisonPanel = Boolean(
-    primarySample?.comparisonValue || primarySample?.comparisonRangeLabel || primarySample?.comparisonLabel,
-  );
+  const activeRangeOverride: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null =
+    activePreset === "custom" && customInputs.from && customInputs.to
+      ? { mode: "custom", from: customInputs.from, to: customInputs.to }
+      : activePreset && activePreset !== "custom"
+        ? activePreset
+        : null;
+  const activeRangeLabel = formatSpotlightRangeLabel(computePeriodRange(activeRangeOverride));
+  const periodOptions = showPeriodControls
+    ? [
+        ...(periodConfig?.presets ?? []).map((preset) => ({
+          value: preset,
+          label: getSpotlightPeriodLabel(preset),
+        })),
+        ...(allowCustom ? [{ value: "custom", label: "Custom" }] : []),
+      ]
+    : [];
+  const primarySample = sampleCards[0];
+  const metricLabel = primarySample ? primarySample.label ?? config.spotlight.metricLabel ?? "Metric" : null;
+  const fallbackMetricValue = formatMetricValue(0, config.spotlight.format, config.spotlight.currency);
+  const metricValue = primarySample?.value ?? fallbackMetricValue;
+  const deltaText = primarySample ? primarySample.delta ?? null : null;
+  const rangeText = primarySample?.rangeLabel ? `Current: ${primarySample.rangeLabel}` : null;
+  const contextText = primarySample?.context ?? null;
+  const filteredContextText = contextText === "Latest analytics result" ? null : contextText;
+  const statusText = error ?? liveState.warning ?? null;
+  const statusTone = error ? "error" : liveState.warning ? "warning" : isLoading ? "info" : null;
 
   return (
-    <SpotlightCardShell ref={cardRef} variant="outlined">
-      <CardContent
-        sx={{
-          position: "relative",
-          zIndex: 1,
-          flexGrow: 1,
-          display: "flex",
-          flexDirection: "column",
-          gap: { xs: 2, md: 2.5 },
-          p: { xs: 2, md: 2.5 },
-          pl: { xs: 2.5, md: 3 },
-        }}
-      >
-        <Stack
-          direction={{ xs: "column", md: "row" }}
-          gap={2}
-          alignItems={{ xs: "flex-start", md: "center" }}
-          justifyContent="space-between"
-        >
-          <Box>
-            <SpotlightEyebrow variant="overline">Spotlight</SpotlightEyebrow>
-            <Typography variant="subtitle1" fontFamily={SPOTLIGHT_VALUE_FONT} fontWeight={700}>
-              {card.title}
-            </Typography>
-            {config.description && <CardSubtitle variant="body2">{config.description}</CardSubtitle>}
-          </Box>
-          {showPeriodControls && activePreset && (
-            <SpotlightPeriodGroup>
-              {periodConfig?.presets.map((preset) => (
-                <SpotlightPeriodButton
-                  key={`${card.id}-${preset}`}
-                  size="small"
-                  onClick={() => onPeriodChange?.(preset)}
-                  className={activePreset === preset ? "isActive" : undefined}
-                >
-                  {getSpotlightPeriodLabel(preset)}
-                </SpotlightPeriodButton>
-              ))}
-              {allowCustom && (
-                <SpotlightPeriodButton
-                  key={`${card.id}-custom`}
-                  size="small"
-                  onClick={() => onPeriodChange?.("custom")}
-                  className={isCustomActive ? "isActive" : undefined}
-                >
-                  Custom
-                </SpotlightPeriodButton>
-              )}
-            </SpotlightPeriodGroup>
-          )}
-        </Stack>
-        {showPeriodControls && isCustomActive && (
-          <Paper
-            variant="outlined"
-            sx={(muiTheme) => ({
-              p: 1.5,
-              borderRadius: 12,
-              borderColor: alpha(muiTheme.palette.text.primary, 0.08),
-              backgroundColor: alpha(muiTheme.palette.text.primary, 0.04),
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 1,
-              alignItems: "center",
-            })}
-          >
-            <TextField
-              type="date"
-              size="small"
-              label="Start"
-              value={customInputs.from}
-              onChange={(event) => onCustomInputChange?.("from", event.target.value)}
-              InputLabelProps={{ shrink: true }}
-            />
-            <TextField
-              type="date"
-              size="small"
-              label="End"
-              value={customInputs.to}
-              onChange={(event) => onCustomInputChange?.("to", event.target.value)}
-              InputLabelProps={{ shrink: true }}
-            />
-            <Button
-              size="small"
-              variant="contained"
-              onClick={onApplyCustomRange}
-              disabled={
-                !onApplyCustomRange ||
-                customInputs.from.trim().length === 0 ||
-                customInputs.to.trim().length === 0
-              }
-              sx={{ borderRadius: 999, textTransform: "none", fontWeight: 600 }}
-            >
-              Apply
-            </Button>
-          </Paper>
-        )}
-        {liveState.warning && <Alert severity="warning">{liveState.warning}</Alert>}
-        {isLoading && (
-          <Stack direction="row" gap={1} alignItems="center">
-            <CircularProgress size={16} />
-            <CardSubtitle variant="body2">Refreshing data...</CardSubtitle>
-          </Stack>
-        )}
-        {error && <Alert severity="error">{error}</Alert>}
-        {primarySample ? (
-          <Box
-            sx={{
-              display: "grid",
-              gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "minmax(0, 1.2fr) minmax(0, 0.8fr)" },
-              gap: 1.5,
-            }}
-          >
-            <Paper
-              variant="outlined"
-              sx={(muiTheme) => ({
-                p: 2.25,
-                borderRadius: 14,
-                borderColor: alpha(muiTheme.palette.text.primary, 0.08),
-                background:
-                  muiTheme.palette.mode === "dark"
-                    ? alpha(muiTheme.palette.primary.dark, 0.18)
-                    : "linear-gradient(135deg, rgba(59,130,246,0.08) 0%, rgba(255,255,255,0.9) 65%)",
-              })}
-            >
-              <SpotlightEyebrow variant="overline">{primarySample.label}</SpotlightEyebrow>
-              <SpotlightValue
-                variant="h2"
-                sx={{ color: toneColor, fontSize: { xs: "1.95rem", sm: "2.35rem" } }}
-              >
-                {primarySample.value}
-              </SpotlightValue>
-              <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
-                {deltaLabel && (
-                  <Box
-                    sx={(muiTheme) => {
-                      const baseColor =
-                        primarySample.tone === "positive"
-                          ? muiTheme.palette.success.main
-                          : primarySample.tone === "negative"
-                            ? muiTheme.palette.error.main
-                            : muiTheme.palette.text.primary;
-                      return {
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 0.5,
-                        px: 1.25,
-                        py: 0.5,
-                        borderRadius: 999,
-                        border: `1px solid ${alpha(baseColor, 0.35)}`,
-                        backgroundColor: alpha(baseColor, 0.08),
-                        color: baseColor,
-                        fontWeight: 700,
-                      };
-                    }}
-                  >
-                    <TrendIcon sx={{ fontSize: 16 }} />
-                    <Typography variant="caption" fontWeight={700}>
-                      {deltaLabel}
-                    </Typography>
-                  </Box>
-                )}
-                {primarySample.rangeLabel && (
-                  <Chip
-                    size="small"
-                    label={`Current: ${primarySample.rangeLabel}`}
-                    sx={{ borderRadius: 999, fontWeight: 600 }}
-                    variant="outlined"
-                  />
-                )}
-              </Stack>
-              <Stack direction={{ xs: "column", sm: "row" }} gap={1.5} sx={{ mt: 1.5 }}>
-                {primarySample.rangeLabel && (
-                  <Box>
-                    <SpotlightEyebrow variant="overline">Current period</SpotlightEyebrow>
-                    <Typography variant="body2" fontWeight={600}>
-                      {primarySample.rangeLabel}
-                    </Typography>
-                  </Box>
-                )}
-                {primarySample.comparisonRangeLabel && (
-                  <Box>
-                    <SpotlightEyebrow variant="overline">
-                      {primarySample.comparisonLabel ?? "Comparison"}
-                    </SpotlightEyebrow>
-                    <Typography variant="body2" fontWeight={600}>
-                      {primarySample.comparisonRangeLabel}
-                    </Typography>
-                  </Box>
-                )}
-              </Stack>
-              {primarySample.context && (
-                <CardSubtitle variant="body2" sx={{ mt: 1 }}>
-                  {primarySample.context}
-                </CardSubtitle>
-              )}
-            </Paper>
-            <Stack gap={1.5}>
-              {showComparisonPanel && (
-                <Paper
-                  variant="outlined"
-                  sx={(muiTheme) => ({
-                    p: 1.75,
-                    borderRadius: 12,
-                    borderColor: alpha(muiTheme.palette.text.primary, 0.08),
-                    background:
-                      muiTheme.palette.mode === "dark"
-                        ? alpha(muiTheme.palette.common.white, 0.05)
-                        : "linear-gradient(180deg, #ffffff 0%, #f7f8fa 100%)",
-                  })}
-                >
-                  <SpotlightEyebrow variant="overline">
-                    {primarySample.comparisonLabel ?? "Comparison baseline"}
-                  </SpotlightEyebrow>
-                  <Typography variant="h6" fontFamily={SPOTLIGHT_VALUE_FONT} fontWeight={700}>
-                    {primarySample.comparisonValue ?? "-"}
-                  </Typography>
-                  <Typography variant="caption" color="textSecondary">
-                    {primarySample.comparisonRangeLabel ?? "No comparison range configured"}
-                  </Typography>
-                </Paper>
-              )}
-              {secondarySamples.length > 0 && (
-                <Paper
-                  variant="outlined"
-                  sx={(muiTheme) => ({
-                    p: 1.75,
-                    borderRadius: 12,
-                    borderColor: alpha(muiTheme.palette.text.primary, 0.08),
-                    backgroundColor: alpha(muiTheme.palette.text.primary, 0.04),
-                  })}
-                >
-                  <SpotlightEyebrow variant="overline">Additional metrics</SpotlightEyebrow>
-                  <Stack
-                    divider={<Divider flexItem />}
-                    sx={{ maxHeight: maxStackHeight, overflow: "auto", mt: 1 }}
-                  >
-                    {secondarySamples.map((sampleCard) => (
-                      <Box key={sampleCard.id} sx={{ py: 0.75 }}>
-                        <Typography variant="caption" color="textSecondary">
-                          {sampleCard.label}
-                        </Typography>
-                        <Typography variant="subtitle2" fontFamily={SPOTLIGHT_VALUE_FONT} fontWeight={700}>
-                          {sampleCard.value}
-                        </Typography>
-                        {sampleCard.delta && (
-                          <Typography variant="caption" color="textSecondary">
-                            {sampleCard.delta}
-                          </Typography>
-                        )}
-                      </Box>
-                    ))}
-                  </Stack>
-                </Paper>
-              )}
-            </Stack>
-          </Box>
-        ) : (
-          <CardSubtitle variant="body2" sx={{ textAlign: "center" }}>
-            {isLoading ? "Loading spotlight values..." : "No spotlight values returned for this template."}
-          </CardSubtitle>
-        )}
-      </CardContent>
-    </SpotlightCardShell>
+    <SpotlightCard
+      title={card.title}
+      metricLabel={metricLabel}
+      metricValue={metricValue}
+      deltaText={deltaText}
+      rangeText={rangeText}
+      contextText={filteredContextText}
+      statusText={statusText ?? undefined}
+      statusTone={statusTone ?? undefined}
+      periodLabel={showPeriodControls ? activeLabel ?? undefined : undefined}
+      rangeLabel={showPeriodControls ? activeRangeLabel ?? undefined : undefined}
+      periodOptions={showPeriodControls ? periodOptions : []}
+      activePeriod={activePreset ?? undefined}
+      onSelectPeriod={showPeriodControls ? (value) => onPeriodChange?.(value as SpotlightPeriodSelection) : undefined}
+      customInput={allowCustom ? customInputs : undefined}
+      onCustomInputChange={allowCustom ? onCustomInputChange : undefined}
+      onApplyCustomRange={allowCustom ? onApplyCustomRange : undefined}
+    />
   );
 };
 
@@ -3060,280 +2912,66 @@ const HeroSpotlightCard = ({
   if (!isSpotlightCardViewConfig(config)) {
     return null;
   }
-  const sampleCards = liveState?.spotlightSample?.cards ?? config.sample?.cards ?? [];
+  const isLiveSuccess = liveState?.status === "success";
+  const sampleCards = isLiveSuccess
+    ? liveState?.spotlightSample?.cards ?? []
+    : liveState?.spotlightSample?.cards ?? config.sample?.cards ?? [];
   const primary = sampleCards[0];
-  const supporting = sampleCards.slice(1, 3);
   const showPeriodControls =
     Boolean(periodConfig && config.dateFilter && periodConfig.presets.length > 0) &&
     typeof onPeriodChange === "function";
-  const activePreset = periodSelection ?? periodConfig?.defaultPreset ?? null;
   const allowCustom = Boolean(periodConfig?.allowCustom);
-  const isCustomActive = allowCustom && activePreset === "custom";
+  const activePreset = periodSelection ?? periodConfig?.defaultPreset ?? null;
   const customInputs = customInput ?? { from: "", to: "" };
-  const toneColor = primary ? SpotlightTone[primary.tone] ?? "text.primary" : "text.primary";
-  const deltaLabel = primary?.delta
-    ? primary.comparisonValue
-      ? `${primary.delta} vs ${primary.comparisonLabel ?? "prior period"}`
-      : primary.delta
+  const activeLabel = activePreset
+    ? activePreset === "custom"
+      ? "Custom"
+      : getSpotlightPeriodLabel(activePreset)
     : null;
-  const TrendIcon =
-    primary?.tone === "positive" ? TrendingUpIcon : primary?.tone === "negative" ? TrendingDownIcon : TrendingFlatIcon;
-  const showComparisonPanel = Boolean(primary?.comparisonValue || primary?.comparisonRangeLabel || primary?.comparisonLabel);
+  const activeRangeOverride: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null =
+    activePreset === "custom" && customInputs.from && customInputs.to
+      ? { mode: "custom", from: customInputs.from, to: customInputs.to }
+      : activePreset && activePreset !== "custom"
+        ? activePreset
+        : null;
+  const activeRangeLabel = formatSpotlightRangeLabel(computePeriodRange(activeRangeOverride));
+  const periodOptions = showPeriodControls
+    ? [
+        ...(periodConfig?.presets ?? []).map((preset) => ({
+          value: preset,
+          label: getSpotlightPeriodLabel(preset),
+        })),
+        ...(allowCustom ? [{ value: "custom", label: "Custom" }] : []),
+      ]
+    : [];
+  const metricLabel = primary ? primary.label ?? config.spotlight.metricLabel ?? "Metric" : null;
+  const fallbackMetricValue = formatMetricValue(0, config.spotlight.format, config.spotlight.currency);
+  const metricValue = primary?.value ?? fallbackMetricValue;
+  const deltaText = primary?.delta ?? null;
+  const rangeText = primary?.rangeLabel ? `Current: ${primary.rangeLabel}` : null;
+  const contextText = primary?.context ?? null;
+  const statusText = null;
+
   return (
-    <SpotlightCardShell variant="outlined">
-      <CardContent
-        sx={{
-          position: "relative",
-          zIndex: 1,
-          flexGrow: 1,
-          display: "flex",
-          flexDirection: "column",
-          gap: { xs: 2, md: 3 },
-          p: { xs: 2.25, md: 3.25 },
-          pl: { xs: 2.75, md: 3.75 },
-        }}
-      >
-        <Stack
-          direction={{ xs: "column", lg: "row" }}
-          gap={2}
-          alignItems={{ xs: "flex-start", lg: "center" }}
-          justifyContent="space-between"
-        >
-          <Box sx={{ minWidth: 0 }}>
-            <SpotlightEyebrow variant="overline">Spotlight</SpotlightEyebrow>
-            <Typography variant="h6" fontFamily={SPOTLIGHT_VALUE_FONT} fontWeight={700}>
-              {card.title}
-            </Typography>
-            {config.description && (
-              <CardSubtitle variant="body2" sx={{ maxWidth: 560 }}>
-                {config.description}
-              </CardSubtitle>
-            )}
-          </Box>
-          {showPeriodControls && activePreset && (
-            <SpotlightPeriodGroup>
-              {periodConfig?.presets.map((preset) => (
-                <SpotlightPeriodButton
-                  key={`${card.id}-${preset}`}
-                  size="small"
-                  onClick={() => onPeriodChange?.(preset)}
-                  className={activePreset === preset ? "isActive" : undefined}
-                >
-                  {getSpotlightPeriodLabel(preset)}
-                </SpotlightPeriodButton>
-              ))}
-              {allowCustom && (
-                <SpotlightPeriodButton
-                  key={`${card.id}-custom`}
-                  size="small"
-                  onClick={() => onPeriodChange?.("custom")}
-                  className={isCustomActive ? "isActive" : undefined}
-                >
-                  Custom
-                </SpotlightPeriodButton>
-              )}
-            </SpotlightPeriodGroup>
-          )}
-        </Stack>
-        {showPeriodControls && isCustomActive && (
-          <Paper
-            variant="outlined"
-            sx={(muiTheme) => ({
-              p: 1.5,
-              borderRadius: 12,
-              borderColor: alpha(muiTheme.palette.text.primary, 0.08),
-              backgroundColor: alpha(muiTheme.palette.text.primary, 0.04),
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 1,
-              alignItems: "center",
-            })}
-          >
-            <TextField
-              type="date"
-              size="small"
-              label="Start"
-              value={customInputs.from}
-              onChange={(event) => onCustomInputChange?.("from", event.target.value)}
-              InputLabelProps={{ shrink: true }}
-            />
-            <TextField
-              type="date"
-              size="small"
-              label="End"
-              value={customInputs.to}
-              onChange={(event) => onCustomInputChange?.("to", event.target.value)}
-              InputLabelProps={{ shrink: true }}
-            />
-            <Button
-              size="small"
-              variant="contained"
-              onClick={onApplyCustomRange}
-              disabled={
-                !onApplyCustomRange ||
-                customInputs.from.trim().length === 0 ||
-                customInputs.to.trim().length === 0
-              }
-              sx={{ borderRadius: 999, textTransform: "none", fontWeight: 600 }}
-            >
-              Apply
-            </Button>
-          </Paper>
-        )}
-        {primary ? (
-          <Box
-            sx={{
-              display: "grid",
-              gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "minmax(0, 1.3fr) minmax(0, 0.7fr)" },
-              gap: 2,
-              alignItems: "stretch",
-            }}
-          >
-            <Paper
-              variant="outlined"
-              sx={(muiTheme) => ({
-                p: 2.5,
-                borderRadius: 16,
-                borderColor: alpha(muiTheme.palette.text.primary, 0.08),
-                background:
-                  muiTheme.palette.mode === "dark"
-                    ? alpha(muiTheme.palette.primary.dark, 0.2)
-                    : "linear-gradient(135deg, rgba(59,130,246,0.12) 0%, rgba(255,255,255,0.95) 70%)",
-              })}
-            >
-              <SpotlightEyebrow variant="overline">{primary.label}</SpotlightEyebrow>
-              <SpotlightValue
-                variant="h2"
-                sx={{
-                  fontSize: { xs: "2.2rem", sm: "2.8rem", lg: "3.2rem" },
-                  color: toneColor,
-                }}
-              >
-                {primary.value}
-              </SpotlightValue>
-              <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
-                {deltaLabel && (
-                  <Box
-                    sx={(muiTheme) => {
-                      const baseColor =
-                        primary.tone === "positive"
-                          ? muiTheme.palette.success.main
-                          : primary.tone === "negative"
-                            ? muiTheme.palette.error.main
-                            : muiTheme.palette.text.primary;
-                      return {
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 0.5,
-                        px: 1.25,
-                        py: 0.5,
-                        borderRadius: 999,
-                        border: `1px solid ${alpha(baseColor, 0.35)}`,
-                        backgroundColor: alpha(baseColor, 0.08),
-                        color: baseColor,
-                        fontWeight: 700,
-                      };
-                    }}
-                  >
-                    <TrendIcon sx={{ fontSize: 16 }} />
-                    <Typography variant="caption" fontWeight={700}>
-                      {deltaLabel}
-                    </Typography>
-                  </Box>
-                )}
-                {primary.rangeLabel && (
-                  <Chip
-                    size="small"
-                    label={`Current: ${primary.rangeLabel}`}
-                    sx={{ borderRadius: 999, fontWeight: 600 }}
-                    variant="outlined"
-                  />
-                )}
-              </Stack>
-              <Stack direction={{ xs: "column", sm: "row" }} gap={1.5} sx={{ mt: 1.5 }}>
-                {primary.rangeLabel && (
-                  <Box>
-                    <SpotlightEyebrow variant="overline">Current period</SpotlightEyebrow>
-                    <Typography variant="body2" fontWeight={600}>
-                      {primary.rangeLabel}
-                    </Typography>
-                  </Box>
-                )}
-                {primary.comparisonRangeLabel && (
-                  <Box>
-                    <SpotlightEyebrow variant="overline">
-                      {primary.comparisonLabel ?? "Comparison"}
-                    </SpotlightEyebrow>
-                    <Typography variant="body2" fontWeight={600}>
-                      {primary.comparisonRangeLabel}
-                    </Typography>
-                  </Box>
-                )}
-              </Stack>
-              {primary.context && (
-                <CardSubtitle variant="body2" sx={{ mt: 1 }}>
-                  {primary.context}
-                </CardSubtitle>
-              )}
-            </Paper>
-            <Stack gap={1.5}>
-              {showComparisonPanel && (
-                <Paper
-                  variant="outlined"
-                  sx={(muiTheme) => ({
-                    p: 2,
-                    borderRadius: 14,
-                    borderColor: alpha(muiTheme.palette.text.primary, 0.08),
-                    background:
-                      muiTheme.palette.mode === "dark"
-                        ? alpha(muiTheme.palette.common.white, 0.05)
-                        : "linear-gradient(180deg, #ffffff 0%, #f7f8fa 100%)",
-                  })}
-                >
-                  <SpotlightEyebrow variant="overline">
-                    {primary.comparisonLabel ?? "Comparison baseline"}
-                  </SpotlightEyebrow>
-                  <Typography variant="h5" fontFamily={SPOTLIGHT_VALUE_FONT} fontWeight={700}>
-                    {primary.comparisonValue ?? "-"}
-                  </Typography>
-                  <Typography variant="caption" color="textSecondary">
-                    {primary.comparisonRangeLabel ?? "No comparison range configured"}
-                  </Typography>
-                </Paper>
-              )}
-              {supporting.length > 0 && (
-                <Paper
-                  variant="outlined"
-                  sx={(muiTheme) => ({
-                    p: 1.75,
-                    borderRadius: 14,
-                    borderColor: alpha(muiTheme.palette.text.primary, 0.08),
-                    backgroundColor: alpha(muiTheme.palette.text.primary, 0.04),
-                  })}
-                >
-                  <SpotlightEyebrow variant="overline">Supporting metrics</SpotlightEyebrow>
-                  <Stack divider={<Divider flexItem />} sx={{ mt: 1 }}>
-                    {supporting.map((item) => (
-                      <Box key={item.id} sx={{ py: 0.75 }}>
-                        <Typography variant="caption" color="textSecondary">
-                          {item.label}
-                        </Typography>
-                        <Typography variant="subtitle2" fontFamily={SPOTLIGHT_VALUE_FONT} fontWeight={700}>
-                          {item.value}
-                        </Typography>
-                      </Box>
-                    ))}
-                  </Stack>
-                </Paper>
-              )}
-            </Stack>
-          </Box>
-        ) : (
-          <CardSubtitle variant="body2">No live values yet. Refresh to hydrate this card.</CardSubtitle>
-        )}
-        <Box sx={{ mt: "auto" }} />
-      </CardContent>
-    </SpotlightCardShell>
+    <SpotlightCard
+      title={card.title}
+      metricLabel={metricLabel}
+      metricValue={metricValue}
+      deltaText={deltaText}
+      rangeText={rangeText}
+      contextText={contextText}
+      statusText={statusText ?? undefined}
+      statusTone={statusText ? "info" : undefined}
+      periodLabel={showPeriodControls ? activeLabel ?? undefined : undefined}
+      rangeLabel={showPeriodControls ? activeRangeLabel ?? undefined : undefined}
+      periodOptions={showPeriodControls ? periodOptions : []}
+      activePeriod={activePreset ?? undefined}
+      onSelectPeriod={showPeriodControls ? (value) => onPeriodChange?.(value as SpotlightPeriodSelection) : undefined}
+      customInput={allowCustom ? customInputs : undefined}
+      onCustomInputChange={allowCustom ? onCustomInputChange : undefined}
+      onApplyCustomRange={allowCustom ? onApplyCustomRange : undefined}
+      titleVariant="h6"
+    />
   );
 };
 

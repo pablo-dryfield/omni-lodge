@@ -20,6 +20,7 @@ import {
   MultiSelect,
   NumberInput,
   Paper,
+  Popover,
   ScrollArea,
   SegmentedControl,
   Select,
@@ -32,9 +33,10 @@ import {
   Title,
   SimpleGrid,
   Switch,
+  Tooltip,
 } from "@mantine/core";
 import { DatePickerInput } from "@mantine/dates";
-import { useDebouncedValue } from "@mantine/hooks";
+import { useDebouncedValue, useMediaQuery } from "@mantine/hooks";
 import dayjs from "dayjs";
 import {
   IconAdjustments,
@@ -52,6 +54,7 @@ import {
   IconLayoutGrid,
   IconMail,
   IconMessage2,
+  IconInfoCircle,
   IconPlayerPlay,
   IconPlus,
   IconRefresh,
@@ -1236,6 +1239,104 @@ const DEFAULT_SPOTLIGHT_PERIOD_PRESETS: DashboardPreviewPeriodPreset[] = [
 ];
 
 const DEFAULT_SPOTLIGHT_PERIOD_DEFAULT: DashboardPreviewPeriodPreset = "last_7_days";
+
+const formatSpotlightDateLabel = (value: string): string => {
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed.format("MMM D, YYYY") : value;
+};
+
+const computeSpotlightPresetRange = (
+  preset: DashboardPreviewPeriodPreset,
+): { from: string; to: string } => {
+  const today = dayjs();
+  switch (preset) {
+    case "today":
+      return {
+        from: today.startOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: today.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    case "last_7_days": {
+      const from = today.subtract(6, "day");
+      return {
+        from: from.startOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: today.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "last_30_days": {
+      const from = today.subtract(29, "day");
+      return {
+        from: from.startOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: today.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "last_30_months": {
+      const from = today.subtract(29, "month");
+      return {
+        from: from.startOf("month").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: today.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "last_month": {
+      const base = today.subtract(1, "month");
+      return {
+        from: base.startOf("month").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: base.endOf("month").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "this_month":
+    default:
+      return {
+        from: today.startOf("month").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: today.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+  }
+};
+
+const formatSpotlightRangeLabel = (preset: DashboardPreviewPeriodPreset): string => {
+  const range = computeSpotlightPresetRange(preset);
+  return `${formatSpotlightDateLabel(range.from)} - ${formatSpotlightDateLabel(range.to)}`;
+};
+
+const SpotlightRangeInfo = ({ label, rangeLabel }: { label: string; rangeLabel: string }) => {
+  const isMobile = useMediaQuery("(max-width: 48em)");
+  const [opened, setOpened] = useState(false);
+  const tooltipLabel = rangeLabel || "Range unavailable";
+  if (!label) {
+    return null;
+  }
+  return (
+    <Group gap={4} align="center">
+      <Text fz="xs" fw={600} c="dimmed">
+        {label}
+      </Text>
+      {isMobile ? (
+        <Popover opened={opened} onChange={setOpened} position="bottom-start" withArrow shadow="md">
+          <Popover.Target>
+            <ActionIcon
+              variant="subtle"
+              size="sm"
+              onClick={() => setOpened((current) => !current)}
+              aria-label="Show date range"
+            >
+              <IconInfoCircle size={14} />
+            </ActionIcon>
+          </Popover.Target>
+          <Popover.Dropdown>
+            <Text fz="xs" c="dimmed">
+              {tooltipLabel}
+            </Text>
+          </Popover.Dropdown>
+        </Popover>
+      ) : (
+        <Tooltip label={tooltipLabel} withArrow position="top-start">
+          <ActionIcon variant="subtle" size="sm" aria-label="Show date range">
+            <IconInfoCircle size={14} />
+          </ActionIcon>
+        </Tooltip>
+      )}
+    </Group>
+  );
+};
 
 const normalizeFiltersForQuery = (
   filters: ReportFilter[],
@@ -5534,11 +5635,20 @@ const Reports = (props: GenericPageProps) => {
         spotlight.format === "currency" && spotlight.currency
           ? ` (${spotlight.currency.toUpperCase()})`
           : "";
+      const cardTitle = dashboardCardTitle.trim() || spotlight.label?.trim() || spotlight.metricLabel;
+      const defaultPreset = viewConfig.periodConfig?.defaultPreset ?? null;
+      const defaultLabel = defaultPreset ? SPOTLIGHT_PERIOD_LABEL_LOOKUP.get(defaultPreset) ?? defaultPreset : null;
+      const rangeLabel = defaultPreset ? formatSpotlightRangeLabel(defaultPreset) : null;
       return (
         <Stack gap={4}>
-          <Text fw={600} fz="sm">
-            {spotlight.label?.trim() || spotlight.metricLabel}
-          </Text>
+          <Group gap={6} align="center">
+            <Text fw={600} fz="sm">
+              {cardTitle}
+            </Text>
+            {defaultLabel && rangeLabel && (
+              <SpotlightRangeInfo label={defaultLabel} rangeLabel={rangeLabel} />
+            )}
+          </Group>
           <Text fz="xs" c="dimmed">
             Format: {formatLabel}{currencyLabel}
             {typeof spotlight.target === "number" ? ` • Target ${formatMetricValue(spotlight.target, spotlight.format, spotlight.currency)}` : ""}
