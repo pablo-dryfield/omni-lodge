@@ -15,11 +15,13 @@ import {
   Group,
   Loader,
   Modal,
+  MultiSelect,
   NumberInput,
   Paper,
   ScrollArea,
   Select,
   Stack,
+  Switch,
   Text,
   Textarea,
   TextInput,
@@ -53,11 +55,14 @@ import {
   type DashboardCardViewConfig,
   type DashboardPreviewPeriodPreset,
   type DashboardSpotlightCardViewConfig,
+  type DashboardVisualCardViewConfig,
+  type FilterOperator,
   type ReportDashboardDto,
   type ReportTemplateDto,
   type DashboardExportResponse,
 } from "../api/reports";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
+import { GraphicCard } from "../components/dashboard/GraphicCard";
 import { SpotlightCard } from "../components/dashboard/SpotlightCardParts";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import dayjs from "dayjs";
@@ -281,6 +286,93 @@ const SPOTLIGHT_PERIOD_LABELS: Record<DashboardPreviewPeriodPreset, string> = {
   last_month: "Last month",
 };
 
+const PERIOD_PRESET_OPTIONS: Array<{ value: DashboardPreviewPeriodPreset; label: string }> = [
+  { value: "today", label: "Today" },
+  { value: "last_7_days", label: "Last 7 days" },
+  { value: "last_30_days", label: "Last 30 days" },
+  { value: "last_30_months", label: "Last 30 months" },
+];
+
+const FILTER_OPERATORS: FilterOperator[] = [
+  "eq",
+  "neq",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "between",
+  "contains",
+  "starts_with",
+  "ends_with",
+  "is_null",
+  "is_not_null",
+  "is_true",
+  "is_false",
+];
+
+const isFilterOperator = (value: unknown): value is FilterOperator =>
+  typeof value === "string" && FILTER_OPERATORS.includes(value as FilterOperator);
+
+type TemplateDateFilter = {
+  id: string;
+  modelId: string;
+  fieldId: string;
+  operator: FilterOperator;
+};
+
+const getTemplateDateFilters = (template: ReportTemplateDto | null): TemplateDateFilter[] => {
+  if (!template || !Array.isArray(template.filters)) {
+    return [];
+  }
+  return template.filters
+    .map((entry, index) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const record = entry as {
+        id?: unknown;
+        leftModelId?: unknown;
+        leftFieldId?: unknown;
+        operator?: unknown;
+        valueKind?: unknown;
+      };
+      if (record.valueKind !== "date") {
+        return null;
+      }
+      const modelId = typeof record.leftModelId === "string" ? record.leftModelId : null;
+      const fieldId = typeof record.leftFieldId === "string" ? record.leftFieldId : null;
+      const operator = isFilterOperator(record.operator) ? record.operator : null;
+      if (!modelId || !fieldId || !operator) {
+        return null;
+      }
+      const id =
+        typeof record.id === "string" && record.id.trim().length > 0
+          ? record.id
+          : `${modelId}.${fieldId}.${index}`;
+      return { id, modelId, fieldId, operator };
+    })
+    .filter((entry): entry is TemplateDateFilter => Boolean(entry));
+};
+
+const findMatchingDateFilterId = (
+  dateFilter: { modelId: string; fieldId: string; operator: FilterOperator } | undefined,
+  metadata: Map<string, { modelId: string; fieldId: string; operator: FilterOperator }>,
+): string | null => {
+  if (!dateFilter) {
+    return null;
+  }
+  for (const [id, entry] of metadata.entries()) {
+    if (
+      entry.modelId === dateFilter.modelId &&
+      entry.fieldId === dateFilter.fieldId &&
+      entry.operator === dateFilter.operator
+    ) {
+      return id;
+    }
+  }
+  return null;
+};
+
 const computeSpotlightPresetRange = (
   preset: DashboardPreviewPeriodPreset,
 ): { from: string; to: string } => {
@@ -335,12 +427,69 @@ const formatSpotlightRangeLabel = (preset: DashboardPreviewPeriodPreset): string
   return `${fromLabel} - ${toLabel}`;
 };
 
+const formatDateRangeLabel = (range?: { from?: string; to?: string } | null): string | null => {
+  const from = range?.from;
+  const to = range?.to;
+  if (!from || !to) {
+    return null;
+  }
+  const fromLabel = dayjs(from);
+  const toLabel = dayjs(to);
+  if (!fromLabel.isValid() || !toLabel.isValid()) {
+    return null;
+  }
+  return `${fromLabel.format("MMM D, YYYY")} - ${toLabel.format("MMM D, YYYY")}`;
+};
+
+const extractFilterRange = (filters: DashboardVisualCardViewConfig["queryConfig"] extends infer T
+  ? T extends { filters?: infer F }
+    ? F
+    : undefined
+  : undefined,
+  modelId?: string,
+  fieldId?: string,
+): { from: string; to: string } | null => {
+  if (!filters || !modelId || !fieldId) {
+    return null;
+  }
+  const match = filters.find((filter) => filter.modelId === modelId && filter.fieldId === fieldId);
+  if (!match || match.operator !== "between") {
+    return null;
+  }
+  const value = match.value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const from = typeof value.from === "string" ? value.from : null;
+    const to = typeof value.to === "string" ? value.to : null;
+    if (from && to) {
+      return { from, to };
+    }
+  }
+  return null;
+};
+
+const resolveVisualDateRangeLabel = (config: DashboardVisualCardViewConfig): string | null => {
+  const filterRange = extractFilterRange(
+    config.queryConfig?.filters,
+    config.dateFilter?.modelId,
+    config.dateFilter?.fieldId,
+  );
+  if (filterRange) {
+    return formatDateRangeLabel(filterRange);
+  }
+  return formatDateRangeLabel(config.queryConfig?.time?.range ?? null);
+};
+
 const isSpotlightCardViewConfig = (
   config: DashboardCardViewConfig | null | undefined,
 ): config is DashboardSpotlightCardViewConfig =>
   Boolean(
     config && config.mode === "spotlight" && typeof (config as DashboardSpotlightCardViewConfig).spotlight === "object",
   );
+
+const isVisualCardViewConfig = (
+  config: DashboardCardViewConfig | null | undefined,
+): config is DashboardVisualCardViewConfig =>
+  Boolean(config && config.mode === "visual" && typeof (config as DashboardVisualCardViewConfig).visual === "object");
 
 const extractLayoutConfig = (
   layout: Record<string, unknown> | undefined | null,
@@ -696,27 +845,88 @@ const DashboardLayoutEditor = ({
     >
       <style>{DASHBOARD_EDITOR_GRID_CSS}</style>
       {layoutEntries.map(({ card, layout, hasStoredLayout }) => {
-        const spotlightConfig = isSpotlightCardViewConfig((card.viewConfig as DashboardCardViewConfig) ?? null)
-          ? (card.viewConfig as DashboardSpotlightCardViewConfig)
-          : null;
-        const defaultPreset = spotlightConfig?.periodConfig?.defaultPreset ?? null;
-        const defaultLabel = defaultPreset ? SPOTLIGHT_PERIOD_LABELS[defaultPreset] : null;
-        const rangeLabel = defaultPreset ? formatSpotlightRangeLabel(defaultPreset) : null;
-        const sampleCard = spotlightConfig?.sample?.cards?.[0];
-        const metricLabel = sampleCard?.label ?? spotlightConfig?.spotlight?.metricLabel ?? "Metric";
-        const metricValue = sampleCard?.value ?? "-";
-        const periodPresets = spotlightConfig?.periodConfig?.presets ?? [];
-        const allowCustom = Boolean(spotlightConfig?.periodConfig?.allowCustom);
-        const showPeriodControls = periodPresets.length > 0;
-        const periodOptions = showPeriodControls
-          ? [
-              ...periodPresets.map((preset) => ({
-                value: preset,
-                label: SPOTLIGHT_PERIOD_LABELS[preset],
-              })),
-              ...(allowCustom ? [{ value: "custom", label: "Custom" }] : []),
-            ]
-          : [];
+        const viewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
+        let content = (
+          <div
+            style={{
+              height: "100%",
+              width: "100%",
+              borderRadius: 14,
+              border: "1px solid rgba(15, 23, 42, 0.12)",
+              background: "linear-gradient(180deg, #ffffff 0%, #f6f7f9 100%)",
+              boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 12,
+            }}
+          >
+            <Text size="xs" c="dimmed" ta="center">
+              Configure this card in Reports to preview it here.
+            </Text>
+          </div>
+        );
+
+        if (isSpotlightCardViewConfig(viewConfig)) {
+          const spotlightConfig = viewConfig;
+          const defaultPreset = spotlightConfig?.periodConfig?.defaultPreset ?? null;
+          const defaultLabel = defaultPreset ? SPOTLIGHT_PERIOD_LABELS[defaultPreset] : null;
+          const rangeLabel = defaultPreset ? formatSpotlightRangeLabel(defaultPreset) : null;
+          const sampleCard = spotlightConfig?.sample?.cards?.[0];
+          const metricLabel = sampleCard?.label ?? spotlightConfig?.spotlight?.metricLabel ?? "Metric";
+          const metricValue = sampleCard?.value ?? "-";
+          const periodPresets = spotlightConfig?.periodConfig?.presets ?? [];
+          const allowCustom = Boolean(spotlightConfig?.periodConfig?.allowCustom);
+          const showPeriodControls = periodPresets.length > 0;
+          const periodOptions = showPeriodControls
+            ? [
+                ...periodPresets.map((preset) => ({
+                  value: preset,
+                  label: SPOTLIGHT_PERIOD_LABELS[preset],
+                })),
+                ...(allowCustom ? [{ value: "custom", label: "Custom" }] : []),
+              ]
+            : [];
+          content = (
+            <SpotlightCard
+              title={card.title || "Untitled card"}
+              metricLabel={metricLabel}
+              metricValue={metricValue}
+              periodLabel={defaultLabel ?? undefined}
+              rangeLabel={rangeLabel ?? undefined}
+              periodOptions={periodOptions}
+              activePeriod={defaultPreset ?? undefined}
+            />
+          );
+        } else if (isVisualCardViewConfig(viewConfig)) {
+          const periodConfig = viewConfig.periodConfig;
+          const defaultPreset = periodConfig?.defaultPreset ?? null;
+          const periodLabel = defaultPreset ? SPOTLIGHT_PERIOD_LABELS[defaultPreset] : null;
+          const allowCustom = Boolean(periodConfig?.allowCustom);
+          const periodOptions =
+            periodConfig?.presets && periodConfig.presets.length > 0
+              ? [
+                  ...periodConfig.presets.map((preset) => ({
+                    value: preset,
+                    label: SPOTLIGHT_PERIOD_LABELS[preset],
+                  })),
+                  ...(allowCustom ? [{ value: "custom", label: "Custom" }] : []),
+                ]
+              : [];
+          const rangeLabel = defaultPreset ? formatSpotlightRangeLabel(defaultPreset) : resolveVisualDateRangeLabel(viewConfig);
+          content = (
+            <GraphicCard
+              title={card.title || "Untitled card"}
+              config={viewConfig}
+              rows={viewConfig.sample?.rows ?? []}
+              infoLabel={rangeLabel ?? "Date range not set"}
+              periodLabel={periodLabel ?? undefined}
+              periodOptions={periodOptions}
+              activePeriod={defaultPreset ?? undefined}
+            />
+          );
+        }
+
         return (
           <div
             key={card.id}
@@ -730,17 +940,7 @@ const DashboardLayoutEditor = ({
             data-gs-height={layout.h}
             data-gs-auto-position={hasStoredLayout ? undefined : "true"}
           >
-            <div className="grid-stack-item-content dashboard-layout-card">
-              <SpotlightCard
-                title={card.title || "Untitled card"}
-                metricLabel={metricLabel}
-                metricValue={metricValue}
-                periodLabel={defaultLabel ?? undefined}
-                rangeLabel={rangeLabel ?? undefined}
-                periodOptions={periodOptions}
-                activePeriod={defaultPreset ?? undefined}
-              />
-            </div>
+            <div className="grid-stack-item-content dashboard-layout-card">{content}</div>
           </div>
         );
       })}
@@ -825,6 +1025,97 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     Record<string, Partial<Record<LayoutMode, DashboardCardLayout>>>
   >({});
   const [isSavingLayout, setIsSavingLayout] = useState(false);
+  const selectedCardTemplate = useMemo(
+    () => (cardDraft ? templateLookup.get(cardDraft.templateId) ?? null : null),
+    [cardDraft, templateLookup],
+  );
+  const templateDateFilters = useMemo(
+    () => getTemplateDateFilters(selectedCardTemplate),
+    [selectedCardTemplate],
+  );
+  const templateDateFilterMetadata = useMemo(() => {
+    const map = new Map<string, { modelId: string; fieldId: string; operator: FilterOperator }>();
+    templateDateFilters.forEach((filter) => {
+      map.set(filter.id, {
+        modelId: filter.modelId,
+        fieldId: filter.fieldId,
+        operator: filter.operator,
+      });
+    });
+    return map;
+  }, [templateDateFilters]);
+  const templateDateFilterOptions = useMemo(
+    () =>
+      templateDateFilters.map((filter) => ({
+        value: filter.id,
+        label: `${filter.modelId}.${filter.fieldId} (${filter.operator})`,
+      })),
+    [templateDateFilters],
+  );
+  const visualDashboardConfig = useMemo(() => {
+    if (!cardDraft) {
+      return null;
+    }
+    const viewConfig = cardDraft.viewConfig as DashboardCardViewConfig;
+    return isVisualCardViewConfig(viewConfig) ? viewConfig : null;
+  }, [cardDraft]);
+  const spotlightDashboardConfig = useMemo(() => {
+    if (!cardDraft) {
+      return null;
+    }
+    const viewConfig = cardDraft.viewConfig as DashboardCardViewConfig;
+    return isSpotlightCardViewConfig(viewConfig) ? viewConfig : null;
+  }, [cardDraft]);
+  const selectedVisualDateFilterId = useMemo(
+    () =>
+      visualDashboardConfig ? findMatchingDateFilterId(visualDashboardConfig.dateFilter, templateDateFilterMetadata) : null,
+    [templateDateFilterMetadata, visualDashboardConfig],
+  );
+  const selectedSpotlightDateFilterId = useMemo(
+    () =>
+      spotlightDashboardConfig
+        ? findMatchingDateFilterId(spotlightDashboardConfig.dateFilter, templateDateFilterMetadata)
+        : null,
+    [spotlightDashboardConfig, templateDateFilterMetadata],
+  );
+
+  const updateVisualCardDraft = useCallback(
+    (updater: (current: DashboardVisualCardViewConfig) => DashboardVisualCardViewConfig) => {
+      setCardDraft((current) => {
+        if (!current) {
+          return current;
+        }
+        const viewConfig = current.viewConfig as DashboardCardViewConfig;
+        if (!isVisualCardViewConfig(viewConfig)) {
+          return current;
+        }
+        return {
+          ...current,
+          viewConfig: updater(viewConfig),
+        };
+      });
+    },
+    [],
+  );
+
+  const updateSpotlightCardDraft = useCallback(
+    (updater: (current: DashboardSpotlightCardViewConfig) => DashboardSpotlightCardViewConfig) => {
+      setCardDraft((current) => {
+        if (!current) {
+          return current;
+        }
+        const viewConfig = current.viewConfig as DashboardCardViewConfig;
+        if (!isSpotlightCardViewConfig(viewConfig)) {
+          return current;
+        }
+        return {
+          ...current,
+          viewConfig: updater(viewConfig),
+        };
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!selectedDashboardId && dashboards.length > 0) {
@@ -1378,6 +1669,236 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
               minRows={2}
               placeholder="Optional context shown in the dashboard."
             />
+            {visualDashboardConfig && (
+              <Paper withBorder radius="md" p="md">
+                <Stack gap="sm">
+                  <Text fw={600} fz="sm">
+                    Visual filters
+                  </Text>
+                  {templateDateFilterOptions.length === 0 ? (
+                    <Text fz="sm" c="dimmed">
+                      Add a date filter to the template to enable per-card period buttons.
+                    </Text>
+                  ) : (
+                    <>
+                      <Select
+                        label="Date field"
+                        data={templateDateFilterOptions}
+                        value={selectedVisualDateFilterId}
+                        placeholder="Select date field"
+                        onChange={(value) => {
+                          updateVisualCardDraft((current) => {
+                            if (!value) {
+                              const { dateFilter, ...rest } = current;
+                              return rest;
+                            }
+                            const metadata = templateDateFilterMetadata.get(value);
+                            return {
+                              ...current,
+                              ...(metadata ? { dateFilter: { ...metadata } } : {}),
+                            };
+                          });
+                        }}
+                      />
+                      <MultiSelect
+                        label="Quick filter buttons"
+                        data={PERIOD_PRESET_OPTIONS}
+                        value={visualDashboardConfig.periodConfig?.presets ?? []}
+                        onChange={(value) => {
+                          updateVisualCardDraft((current) => {
+                            const normalized = value.filter((entry) =>
+                              PERIOD_PRESET_OPTIONS.some((option) => option.value === entry),
+                            ) as DashboardPreviewPeriodPreset[];
+                            if (normalized.length === 0) {
+                              const { periodConfig, ...rest } = current;
+                              return rest;
+                            }
+                            const existingDefault = current.periodConfig?.defaultPreset;
+                            const allowCustom = Boolean(current.periodConfig?.allowCustom);
+                            const defaultPreset =
+                              existingDefault && normalized.includes(existingDefault)
+                                ? existingDefault
+                                : normalized[0];
+                            return {
+                              ...current,
+                              periodConfig: {
+                                presets: normalized,
+                                defaultPreset,
+                                allowCustom,
+                              },
+                            };
+                          });
+                        }}
+                        searchable
+                        disabled={!selectedVisualDateFilterId}
+                      />
+                      <Select
+                        label="Default period"
+                        data={(visualDashboardConfig.periodConfig?.presets ?? []).map((preset) => ({
+                          value: preset,
+                          label: SPOTLIGHT_PERIOD_LABELS[preset],
+                        }))}
+                        value={visualDashboardConfig.periodConfig?.defaultPreset ?? null}
+                        placeholder="Select default"
+                        onChange={(value) => {
+                          if (!value) {
+                            return;
+                          }
+                          updateVisualCardDraft((current) => {
+                            if (!current.periodConfig) {
+                              return current;
+                            }
+                            return {
+                              ...current,
+                              periodConfig: {
+                                ...current.periodConfig,
+                                defaultPreset: value as DashboardPreviewPeriodPreset,
+                              },
+                            };
+                          });
+                        }}
+                        disabled={!selectedVisualDateFilterId || !visualDashboardConfig.periodConfig}
+                      />
+                      <Switch
+                        label="Allow custom range"
+                        checked={Boolean(visualDashboardConfig.periodConfig?.allowCustom)}
+                        onChange={(event) => {
+                          const allowCustom = event.currentTarget.checked;
+                          updateVisualCardDraft((current) => {
+                            if (!current.periodConfig) {
+                              return current;
+                            }
+                            return {
+                              ...current,
+                              periodConfig: {
+                                ...current.periodConfig,
+                                allowCustom,
+                              },
+                            };
+                          });
+                        }}
+                        disabled={!selectedVisualDateFilterId || !visualDashboardConfig.periodConfig}
+                      />
+                    </>
+                  )}
+                </Stack>
+              </Paper>
+            )}
+            {spotlightDashboardConfig && (
+              <Paper withBorder radius="md" p="md">
+                <Stack gap="sm">
+                  <Text fw={600} fz="sm">
+                    Spotlight filters
+                  </Text>
+                  {templateDateFilterOptions.length === 0 ? (
+                    <Text fz="sm" c="dimmed">
+                      Add a date filter to the template to enable per-card period buttons.
+                    </Text>
+                  ) : (
+                    <>
+                      <Select
+                        label="Date field"
+                        data={templateDateFilterOptions}
+                        value={selectedSpotlightDateFilterId}
+                        placeholder="Select date field"
+                        onChange={(value) => {
+                          updateSpotlightCardDraft((current) => {
+                            if (!value) {
+                              const { dateFilter, ...rest } = current;
+                              return rest;
+                            }
+                            const metadata = templateDateFilterMetadata.get(value);
+                            return {
+                              ...current,
+                              ...(metadata ? { dateFilter: { ...metadata } } : {}),
+                            };
+                          });
+                        }}
+                      />
+                      <MultiSelect
+                        label="Quick filter buttons"
+                        data={PERIOD_PRESET_OPTIONS}
+                        value={spotlightDashboardConfig.periodConfig?.presets ?? []}
+                        onChange={(value) => {
+                          updateSpotlightCardDraft((current) => {
+                            const normalized = value.filter((entry) =>
+                              PERIOD_PRESET_OPTIONS.some((option) => option.value === entry),
+                            ) as DashboardPreviewPeriodPreset[];
+                            if (normalized.length === 0) {
+                              const { periodConfig, ...rest } = current;
+                              return rest;
+                            }
+                            const existingDefault = current.periodConfig?.defaultPreset;
+                            const allowCustom = Boolean(current.periodConfig?.allowCustom);
+                            const defaultPreset =
+                              existingDefault && normalized.includes(existingDefault)
+                                ? existingDefault
+                                : normalized[0];
+                            return {
+                              ...current,
+                              periodConfig: {
+                                presets: normalized,
+                                defaultPreset,
+                                allowCustom,
+                              },
+                            };
+                          });
+                        }}
+                        searchable
+                        disabled={!selectedSpotlightDateFilterId}
+                      />
+                      <Select
+                        label="Default period"
+                        data={(spotlightDashboardConfig.periodConfig?.presets ?? []).map((preset) => ({
+                          value: preset,
+                          label: SPOTLIGHT_PERIOD_LABELS[preset],
+                        }))}
+                        value={spotlightDashboardConfig.periodConfig?.defaultPreset ?? null}
+                        placeholder="Select default"
+                        onChange={(value) => {
+                          if (!value) {
+                            return;
+                          }
+                          updateSpotlightCardDraft((current) => {
+                            if (!current.periodConfig) {
+                              return current;
+                            }
+                            return {
+                              ...current,
+                              periodConfig: {
+                                ...current.periodConfig,
+                                defaultPreset: value as DashboardPreviewPeriodPreset,
+                              },
+                            };
+                          });
+                        }}
+                        disabled={!selectedSpotlightDateFilterId || !spotlightDashboardConfig.periodConfig}
+                      />
+                      <Switch
+                        label="Allow custom range"
+                        checked={Boolean(spotlightDashboardConfig.periodConfig?.allowCustom)}
+                        onChange={(event) => {
+                          const allowCustom = event.currentTarget.checked;
+                          updateSpotlightCardDraft((current) => {
+                            if (!current.periodConfig) {
+                              return current;
+                            }
+                            return {
+                              ...current,
+                              periodConfig: {
+                                ...current.periodConfig,
+                                allowCustom,
+                              },
+                            };
+                          });
+                        }}
+                        disabled={!selectedSpotlightDateFilterId || !spotlightDashboardConfig.periodConfig}
+                      />
+                    </>
+                  )}
+                </Stack>
+              </Paper>
+            )}
             <Group align="flex-end" gap="sm">
               <NumberInput
                 label="Columns (1-12)"
