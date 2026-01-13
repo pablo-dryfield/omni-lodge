@@ -41,25 +41,12 @@ import { useQueries } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import { GridStack } from "gridstack";
 import "gridstack/dist/gridstack.min.css";
-import {
-  ResponsiveContainer,
-  ComposedChart,
-  ScatterChart,
-  Scatter,
-  CartesianGrid,
-  XAxis,
-  YAxis,
-  Tooltip as ChartTooltip,
-  Legend,
-  Line,
-  Area,
-  Bar,
-} from "recharts";
 import { GenericPageProps } from "../types/general/GenericPageProps";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { navigateToPage } from "../actions/navigationActions";
 import { selectAllowedNavigationPages } from "../selectors/accessControlSelectors";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
+import { GraphicCard, type VisualChartPoint } from "../components/dashboard/GraphicCard";
 import { SpotlightCard } from "../components/dashboard/SpotlightCardParts";
 import type { NavigationIconKey } from "../types/general/NavigationState";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
@@ -90,11 +77,6 @@ const DEFAULT_HOME_PREFERENCE: HomeDashboardPreferenceDto = {
   viewMode: "navigation",
   savedDashboardIds: [],
   activeDashboardId: null,
-};
-
-const chartColors = {
-  metric: "#1976d2",
-  comparison: "#9c27b0",
 };
 
 const DEFAULT_CARD_LAYOUT = {
@@ -132,12 +114,6 @@ ${buildGridStackColumnStyles(columns)}
 
 const AUTO_REFRESH_INTERVAL_MS = 60 * 1000;
 
-type VisualChartPoint = {
-  dimension: string;
-  metric: number | null;
-  comparison: number | null;
-};
-
 type DashboardCardLayout = {
   x: number;
   y: number;
@@ -157,7 +133,21 @@ const cloneConfig = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 
 const normalizeCurrencyCode = (currency?: string): string => {
   const normalized = currency?.trim().toUpperCase();
-  return normalized && normalized.length === 3 ? normalized : "USD";
+  return normalized && normalized.length === 3 ? normalized : "PLN";
+};
+
+const formatCurrencyValue = (value: number, currency?: string): string => {
+  const normalized = normalizeCurrencyCode(currency);
+  const amount = value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (normalized === "PLN") {
+    return `${amount} zł`;
+  }
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: normalized,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
 };
 
 const formatMetricValue = (
@@ -171,11 +161,7 @@ const formatMetricValue = (
 
   switch (format) {
     case "currency":
-      return new Intl.NumberFormat("en-US", {
-        style: "currency",
-        currency: normalizeCurrencyCode(currency),
-        maximumFractionDigits: 2,
-      }).format(value);
+      return formatCurrencyValue(value, currency);
     case "percentage":
       return `${value.toFixed(2)}%`;
     default:
@@ -312,6 +298,42 @@ const normalizeQueryRange = (
     return null;
   }
   return { from, to };
+};
+
+const extractFilterRange = (filter?: QueryConfigFilter | null): { from: string; to: string } | null => {
+  if (!filter || filter.operator !== "between") {
+    return null;
+  }
+  const value = filter.value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const from = typeof value.from === "string" ? value.from : null;
+    const to = typeof value.to === "string" ? value.to : null;
+    if (from && to) {
+      return { from, to };
+    }
+  }
+  return null;
+};
+
+const resolveVisualDateRange = (
+  config: DashboardVisualCardViewConfig,
+  periodOverride: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null,
+): { from: string; to: string } | null => {
+  const overrideRange =
+    periodOverride && cardSupportsPeriodOverride(config) ? computePeriodRange(periodOverride) : null;
+  if (overrideRange) {
+    return overrideRange;
+  }
+  if (config.dateFilter && Array.isArray(config.queryConfig?.filters)) {
+    const match = config.queryConfig.filters.find(
+      (filter) => filter.modelId === config.dateFilter?.modelId && filter.fieldId === config.dateFilter?.fieldId,
+    );
+    const filterRange = extractFilterRange(match);
+    if (filterRange) {
+      return filterRange;
+    }
+  }
+  return normalizeQueryRange(config.queryConfig?.time?.range ?? undefined);
 };
 
 const formatRangeLabel = (range: { from: string; to: string } | null): string | null => {
@@ -489,6 +511,7 @@ type CardHydrationDescriptor =
 
 type PreviewPeriodValue = DashboardPreviewPeriodPreset | "custom";
 type SpotlightPeriodSelection = DashboardPreviewPeriodPreset | "custom";
+type VisualPeriodSelection = DashboardPreviewPeriodPreset | "custom";
 
 const PERIOD_OPTIONS: Array<{ value: PreviewPeriodValue; label: string }> = [
   { value: "this_month", label: "This month" },
@@ -512,6 +535,35 @@ const getSpotlightPeriodLabel = (preset: DashboardPreviewPeriodPreset): string =
 
 const normalizeSpotlightPeriodConfig = (
   config: DashboardSpotlightCardViewConfig | null | undefined,
+): {
+  presets: DashboardPreviewPeriodPreset[];
+  defaultPreset: DashboardPreviewPeriodPreset;
+  allowCustom?: boolean;
+} | null => {
+  if (!config?.periodConfig || !config.dateFilter) {
+    return null;
+  }
+  const presets = Array.isArray(config.periodConfig.presets)
+    ? config.periodConfig.presets.filter(
+        (preset): preset is DashboardPreviewPeriodPreset =>
+          typeof preset === "string" && SPOTLIGHT_PERIOD_LABEL_LOOKUP.has(preset),
+      )
+    : [];
+  if (presets.length === 0) {
+    return null;
+  }
+  const defaultPreset = presets.includes(config.periodConfig.defaultPreset)
+    ? config.periodConfig.defaultPreset
+    : presets[0];
+  return {
+    presets,
+    defaultPreset,
+    allowCustom: Boolean(config.periodConfig.allowCustom),
+  };
+};
+
+const normalizeVisualPeriodConfig = (
+  config: DashboardVisualCardViewConfig | null | undefined,
 ): {
   presets: DashboardPreviewPeriodPreset[];
   defaultPreset: DashboardPreviewPeriodPreset;
@@ -1064,77 +1116,6 @@ const mapRowsToVisualPoints = (
     .filter((entry): entry is VisualChartPoint => entry !== null);
 };
 
-const buildVisualSample = (config: DashboardVisualCardViewConfig): VisualChartPoint[] => {
-  const rows = Array.isArray(config.sample?.rows) ? config.sample.rows : [];
-  return mapRowsToVisualPoints(rows, config);
-};
-
-const renderVisualChart = (config: DashboardVisualCardViewConfig, data: VisualChartPoint[]) => {
-  if (config.visual.type === "scatter") {
-    return (
-      <ResponsiveContainer width="100%" height="100%">
-        <ScatterChart>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="dimension" name={config.visual.dimensionLabel} />
-          <YAxis name={config.visual.metricLabel} />
-          <ChartTooltip />
-          <Legend />
-          <Scatter
-            name={config.visual.metricLabel ?? "Metric"}
-            data={data}
-            fill={chartColors.metric}
-            line={{ stroke: chartColors.metric }}
-          />
-        </ScatterChart>
-      </ResponsiveContainer>
-    );
-  }
-
-  const metricLabel = config.visual.metricLabel ?? "Metric";
-  const primaryElement =
-    config.visual.type === "bar" || config.visual.type === "stackedBar" ? (
-      <Bar
-        dataKey="metric"
-        name={metricLabel}
-        fill={chartColors.metric}
-        stackId={config.visual.type === "stackedBar" ? "stack" : undefined}
-      />
-    ) : config.visual.type === "area" || config.visual.type === "stackedArea" ? (
-      <Area
-        type="monotone"
-        dataKey="metric"
-        name={metricLabel}
-        stroke={chartColors.metric}
-        fill={chartColors.metric}
-        stackId={config.visual.type === "stackedArea" ? "stack" : undefined}
-      />
-    ) : (
-      <Line type="monotone" dataKey="metric" name={metricLabel} stroke={chartColors.metric} dot={false} />
-    );
-
-  return (
-    <ResponsiveContainer width="100%" height="100%">
-      <ComposedChart data={data}>
-        <CartesianGrid strokeDasharray="3 3" />
-        <XAxis dataKey="dimension" />
-        <YAxis />
-        <ChartTooltip />
-        <Legend />
-        {primaryElement}
-        {config.visual.comparison && (
-          <Line
-            type="monotone"
-            dataKey="comparison"
-            name={config.visual.comparisonLabel ?? "Comparison"}
-            stroke={chartColors.comparison}
-            dot={false}
-          />
-        )}
-      </ComposedChart>
-    </ResponsiveContainer>
-  );
-};
-
 const getComparisonLabel = (
   comparison?: MetricSpotlightDefinitionDto["comparison"],
   comparisonRange?: MetricSpotlightDefinitionDto["comparisonRange"] | null,
@@ -1469,6 +1450,7 @@ const Home = (props: GenericPageProps) => {
   const [globalCustomInputs, setGlobalCustomInputs] = useState<{ from: string; to: string }>({ from: "", to: "" });
   const [globalCustomAppliedRange, setGlobalCustomAppliedRange] = useState<{ from: string; to: string } | null>(null);
   const [globalSegmentValue, setGlobalSegmentValue] = useState<string | null>(null);
+  const [linkedCardStates, setLinkedCardStates] = useState<Record<string, boolean>>({});
   const globalPeriodOverride = useMemo<DashboardPreviewPeriodPreset | DashboardPreviewPeriodOverride | null>(() => {
     if (!cardsSupportPeriod) {
       return null;
@@ -1478,6 +1460,119 @@ const Home = (props: GenericPageProps) => {
     }
     return globalPeriodSelection;
   }, [globalCustomAppliedRange, globalPeriodSelection, cardsSupportPeriod]);
+  useEffect(() => {
+    setLinkedCardStates((current) => {
+      const next: Record<string, boolean> = { ...current };
+      const activeIds = new Set(orderedActiveCards.map((card) => card.id));
+      orderedActiveCards.forEach((card) => {
+        if (next[card.id] === undefined) {
+          next[card.id] = true;
+        }
+      });
+      Object.keys(next).forEach((cardId) => {
+        if (!activeIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
+  }, [orderedActiveCards]);
+  const handleToggleCardLink = useCallback((cardId: string) => {
+    setLinkedCardStates((current) => ({
+      ...current,
+      [cardId]: !(current[cardId] ?? true),
+    }));
+  }, []);
+  const cardViewConfigById = useMemo(() => {
+    const map = new Map<string, DashboardCardViewConfig | null>();
+    orderedActiveCards.forEach((card) => {
+      map.set(card.id, (card.viewConfig as DashboardCardViewConfig) ?? null);
+    });
+    return map;
+  }, [orderedActiveCards]);
+  const periodGroupKeyById = useMemo(() => {
+    const map = new Map<string, string>();
+    orderedActiveCards.forEach((card) => {
+      const viewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
+      if (!viewConfig || typeof viewConfig !== "object") {
+        return;
+      }
+      if (isSpotlightCardViewConfig(viewConfig)) {
+        const periodConfig = normalizeSpotlightPeriodConfig(viewConfig);
+        const dateFilter = viewConfig.dateFilter;
+        if (!periodConfig || !dateFilter) {
+          return;
+        }
+        const presetsKey = periodConfig.presets.join("|");
+        const allowCustom = periodConfig.allowCustom ? "1" : "0";
+        const templateId = card.templateId ?? "template";
+        map.set(
+          card.id,
+          `${templateId}:${dateFilter.modelId}.${dateFilter.fieldId}.${dateFilter.operator}:${presetsKey}:${allowCustom}`,
+        );
+        return;
+      }
+      if (isVisualCardViewConfig(viewConfig)) {
+        const periodConfig = normalizeVisualPeriodConfig(viewConfig);
+        const dateFilter = viewConfig.dateFilter;
+        if (!periodConfig || !dateFilter) {
+          return;
+        }
+        const presetsKey = periodConfig.presets.join("|");
+        const allowCustom = periodConfig.allowCustom ? "1" : "0";
+        const templateId = card.templateId ?? "template";
+        map.set(
+          card.id,
+          `${templateId}:${dateFilter.modelId}.${dateFilter.fieldId}.${dateFilter.operator}:${presetsKey}:${allowCustom}`,
+        );
+      }
+    });
+    return map;
+  }, [orderedActiveCards]);
+  const getLinkedCardTargets = useCallback(
+    (sourceCardId: string): { visualIds: string[]; spotlightIds: string[] } => {
+      const isLinked = linkedCardStates[sourceCardId] ?? true;
+      const groupKey = periodGroupKeyById.get(sourceCardId);
+      const candidates =
+        isLinked && groupKey
+          ? orderedActiveCards.filter(
+              (card) =>
+                periodGroupKeyById.get(card.id) === groupKey && (linkedCardStates[card.id] ?? true),
+            )
+          : orderedActiveCards.filter((card) => card.id === sourceCardId);
+      const visualIds: string[] = [];
+      const spotlightIds: string[] = [];
+      candidates.forEach((card) => {
+        const viewConfig = cardViewConfigById.get(card.id) ?? null;
+        if (isVisualCardViewConfig(viewConfig)) {
+          visualIds.push(card.id);
+          return;
+        }
+        if (isSpotlightCardViewConfig(viewConfig)) {
+          spotlightIds.push(card.id);
+        }
+      });
+      return { visualIds, spotlightIds };
+    },
+    [cardViewConfigById, linkedCardStates, orderedActiveCards, periodGroupKeyById],
+  );
+  const visualPeriodConfigById = useMemo(() => {
+    const map = new Map<
+      string,
+      { presets: DashboardPreviewPeriodPreset[]; defaultPreset: DashboardPreviewPeriodPreset; allowCustom?: boolean }
+    >();
+    orderedActiveCards.forEach((card) => {
+      const viewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
+      if (!isVisualCardViewConfig(viewConfig)) {
+        return;
+      }
+      const normalized = normalizeVisualPeriodConfig(viewConfig);
+      if (normalized) {
+        map.set(card.id, normalized);
+      }
+    });
+    return map;
+  }, [orderedActiveCards]);
   const spotlightPeriodConfigById = useMemo(() => {
     const map = new Map<
       string,
@@ -1495,6 +1590,56 @@ const Home = (props: GenericPageProps) => {
     });
     return map;
   }, [orderedActiveCards]);
+  const [visualPeriodSelections, setVisualPeriodSelections] = useState<Record<string, VisualPeriodSelection>>({});
+  const [visualCustomInputs, setVisualCustomInputs] = useState<Record<string, { from: string; to: string }>>({});
+  const [visualCustomAppliedRanges, setVisualCustomAppliedRanges] = useState<
+    Record<string, { from: string; to: string }>
+  >({});
+  useEffect(() => {
+    setVisualPeriodSelections((current) => {
+      const next: Record<string, VisualPeriodSelection> = { ...current };
+      const validIds = new Set<string>();
+      visualPeriodConfigById.forEach((config, cardId) => {
+        validIds.add(cardId);
+        const existing = current[cardId];
+        if (
+          !existing ||
+          (existing === "custom" && !config.allowCustom) ||
+          (existing !== "custom" && !config.presets.includes(existing))
+        ) {
+          next[cardId] = config.defaultPreset;
+        }
+      });
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
+  }, [visualPeriodConfigById]);
+  useEffect(() => {
+    setVisualCustomInputs((current) => {
+      const next: Record<string, { from: string; to: string }> = { ...current };
+      const validIds = new Set<string>(visualPeriodConfigById.keys());
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
+    setVisualCustomAppliedRanges((current) => {
+      const next: Record<string, { from: string; to: string }> = { ...current };
+      const validIds = new Set<string>(visualPeriodConfigById.keys());
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
+  }, [visualPeriodConfigById]);
   const [spotlightPeriodSelections, setSpotlightPeriodSelections] = useState<
     Record<string, SpotlightPeriodSelection>
   >({});
@@ -1549,14 +1694,153 @@ const Home = (props: GenericPageProps) => {
       return next;
     });
   }, [spotlightPeriodConfigById]);
+  const handleVisualPeriodChange = useCallback(
+    (cardId: string, preset: VisualPeriodSelection) => {
+      const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
+      setVisualPeriodSelections((current) => {
+        const next = { ...current };
+        visualIds.forEach((id) => {
+          next[id] = preset;
+        });
+        return next;
+      });
+      if (spotlightIds.length > 0) {
+        setSpotlightPeriodSelections((current) => {
+          const next = { ...current };
+          spotlightIds.forEach((id) => {
+            next[id] = preset;
+          });
+          return next;
+        });
+      }
+    },
+    [getLinkedCardTargets],
+  );
+  const handleVisualCustomInputChange = useCallback((cardId: string, key: "from" | "to", value: string) => {
+    setVisualCustomInputs((current) => ({
+      ...current,
+      [cardId]: {
+        from: key === "from" ? value : current[cardId]?.from ?? "",
+        to: key === "to" ? value : current[cardId]?.to ?? "",
+      },
+    }));
+  }, []);
+  const handleVisualApplyCustomRange = useCallback(
+    (cardId: string) => {
+      const inputs = visualCustomInputs[cardId];
+      if (!inputs) {
+        return;
+      }
+      const normalized = normalizeCustomDateRange(inputs.from, inputs.to);
+      if (!normalized) {
+        return;
+      }
+      const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
+      setVisualCustomInputs((current) => {
+        const next = { ...current };
+        visualIds.forEach((id) => {
+          next[id] = inputs;
+        });
+        return next;
+      });
+      setSpotlightCustomInputs((current) => {
+        const next = { ...current };
+        spotlightIds.forEach((id) => {
+          next[id] = inputs;
+        });
+        return next;
+      });
+      setVisualCustomAppliedRanges((current) => {
+        const next = { ...current };
+        visualIds.forEach((id) => {
+          next[id] = normalized;
+        });
+        return next;
+      });
+      if (spotlightIds.length > 0) {
+        setSpotlightCustomAppliedRanges((current) => {
+          const next = { ...current };
+          spotlightIds.forEach((id) => {
+            next[id] = normalized;
+          });
+          return next;
+        });
+      }
+      setVisualPeriodSelections((current) => {
+        const next = { ...current };
+        visualIds.forEach((id) => {
+          next[id] = "custom";
+        });
+        return next;
+      });
+      if (spotlightIds.length > 0) {
+        setSpotlightPeriodSelections((current) => {
+          const next = { ...current };
+          spotlightIds.forEach((id) => {
+            next[id] = "custom";
+          });
+          return next;
+        });
+      }
+    },
+    [getLinkedCardTargets, visualCustomInputs],
+  );
+  const getVisualPeriodSelection = useCallback(
+    (cardId: string): VisualPeriodSelection | null => {
+      const config = visualPeriodConfigById.get(cardId);
+      if (!config) {
+        return null;
+      }
+      const selected = visualPeriodSelections[cardId];
+      if (selected === "custom" && config.allowCustom) {
+        return "custom";
+      }
+      if (selected && selected !== "custom" && config.presets.includes(selected)) {
+        return selected;
+      }
+      return config.defaultPreset;
+    },
+    [visualPeriodConfigById, visualPeriodSelections],
+  );
+  const getVisualPeriodOverride = useCallback(
+    (cardId: string): DashboardPreviewPeriodPreset | DashboardPreviewPeriodOverride | null => {
+      const config = visualPeriodConfigById.get(cardId);
+      if (!config) {
+        return null;
+      }
+      const selected = visualPeriodSelections[cardId];
+      if (selected === "custom" && config.allowCustom) {
+        const applied = visualCustomAppliedRanges[cardId];
+        return applied ? { mode: "custom", from: applied.from, to: applied.to } : config.defaultPreset;
+      }
+      if (selected && selected !== "custom" && config.presets.includes(selected)) {
+        return selected;
+      }
+      return config.defaultPreset;
+    },
+    [visualCustomAppliedRanges, visualPeriodConfigById, visualPeriodSelections],
+  );
   const handleSpotlightPeriodChange = useCallback(
     (cardId: string, preset: SpotlightPeriodSelection) => {
-      setSpotlightPeriodSelections((current) => ({
-        ...current,
-        [cardId]: preset,
-      }));
+      const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
+      setSpotlightPeriodSelections((current) => {
+        const next = { ...current };
+        spotlightIds.forEach((id) => {
+          next[id] = preset;
+        });
+        return next;
+      });
+      if (visualIds.length > 0) {
+        setVisualPeriodSelections((current) => {
+          const next = { ...current };
+          visualIds.forEach((id) => {
+            next[id] = preset;
+          });
+          return next;
+        });
+      }
     },
-    [],
+    [getLinkedCardTargets],
   );
   const handleSpotlightCustomInputChange = useCallback((cardId: string, key: "from" | "to", value: string) => {
     setSpotlightCustomInputs((current) => ({
@@ -1577,16 +1861,55 @@ const Home = (props: GenericPageProps) => {
       if (!normalized) {
         return;
       }
-      setSpotlightCustomAppliedRanges((current) => ({
-        ...current,
-        [cardId]: normalized,
-      }));
-      setSpotlightPeriodSelections((current) => ({
-        ...current,
-        [cardId]: "custom",
-      }));
+      const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
+      setSpotlightCustomInputs((current) => {
+        const next = { ...current };
+        spotlightIds.forEach((id) => {
+          next[id] = inputs;
+        });
+        return next;
+      });
+      setVisualCustomInputs((current) => {
+        const next = { ...current };
+        visualIds.forEach((id) => {
+          next[id] = inputs;
+        });
+        return next;
+      });
+      setSpotlightCustomAppliedRanges((current) => {
+        const next = { ...current };
+        spotlightIds.forEach((id) => {
+          next[id] = normalized;
+        });
+        return next;
+      });
+      if (visualIds.length > 0) {
+        setVisualCustomAppliedRanges((current) => {
+          const next = { ...current };
+          visualIds.forEach((id) => {
+            next[id] = normalized;
+          });
+          return next;
+        });
+      }
+      setSpotlightPeriodSelections((current) => {
+        const next = { ...current };
+        spotlightIds.forEach((id) => {
+          next[id] = "custom";
+        });
+        return next;
+      });
+      if (visualIds.length > 0) {
+        setVisualPeriodSelections((current) => {
+          const next = { ...current };
+          visualIds.forEach((id) => {
+            next[id] = "custom";
+          });
+          return next;
+        });
+      }
     },
-    [spotlightCustomInputs],
+    [getLinkedCardTargets, spotlightCustomInputs],
   );
   const getSpotlightPeriodSelection = useCallback(
     (cardId: string): SpotlightPeriodSelection | null => {
@@ -1749,7 +2072,8 @@ const Home = (props: GenericPageProps) => {
       if (isVisualCardViewConfig(rawViewConfig) && rawViewConfig.queryConfig) {
         queryConfig = cloneConfig(rawViewConfig.queryConfig);
         if (queryConfig) {
-          applyPeriodOverrideToQueryConfig(queryConfig, globalPeriodOverride, rawViewConfig.dateFilter ?? null);
+          const visualPeriodOverride = getVisualPeriodOverride(card.id) ?? globalPeriodOverride;
+          applyPeriodOverrideToQueryConfig(queryConfig, visualPeriodOverride, rawViewConfig.dateFilter ?? null);
           queryConfig.options = {
             ...queryConfig.options,
             templateId: card.templateId || queryConfig.options?.templateId || null,
@@ -1822,7 +2146,7 @@ const Home = (props: GenericPageProps) => {
         cacheKey: JSON.stringify({ refreshNonce }),
       };
     });
-  }, [activeCards, globalPeriodOverride, refreshNonce, shouldHydrateLiveData, getSpotlightPeriodOverride]);
+  }, [activeCards, globalPeriodOverride, refreshNonce, shouldHydrateLiveData, getSpotlightPeriodOverride, getVisualPeriodOverride]);
 
   const cardLiveQueries = useQueries({
     queries: cardHydrationDescriptors.map((descriptor) => {
@@ -2269,6 +2593,10 @@ const Home = (props: GenericPageProps) => {
         <style>{homeGridCss}</style>
         {gridLayoutCards.map(({ card, gridX, gridY, columnSpan, rowSpan, approxHeightPx }) => {
           const spotlightConfig = spotlightPeriodConfigById.get(card.id);
+          const visualPeriodConfig = visualPeriodConfigById.get(card.id) ?? null;
+          const visualPeriodSelection = getVisualPeriodSelection(card.id);
+          const visualPeriodOverride = getVisualPeriodOverride(card.id) ?? globalPeriodOverride ?? null;
+          const isLinked = linkedCardStates[card.id] ?? true;
           return (
             <Box
               key={card.id}
@@ -2287,6 +2615,13 @@ const Home = (props: GenericPageProps) => {
                   liveState={liveCardSamples.get(card.id)}
                   layoutMetrics={{ approxHeightPx, columnSpan, rowSpan }}
                   periodOverride={globalPeriodOverride ?? null}
+                  visualPeriodConfig={visualPeriodConfig}
+                  visualPeriodSelection={visualPeriodSelection}
+                  visualPeriodOverride={visualPeriodOverride}
+                  onVisualPeriodChange={handleVisualPeriodChange}
+                  visualCustomInput={visualCustomInputs[card.id] ?? null}
+                  onVisualCustomInputChange={handleVisualCustomInputChange}
+                  onVisualApplyCustomRange={handleVisualApplyCustomRange}
                   spotlightPeriodConfig={spotlightConfig ?? null}
                   spotlightPeriodSelection={
                     getSpotlightPeriodSelection(card.id) ?? spotlightConfig?.defaultPreset ?? null
@@ -2295,6 +2630,8 @@ const Home = (props: GenericPageProps) => {
                   spotlightCustomInput={spotlightCustomInputs[card.id] ?? null}
                   onSpotlightCustomInputChange={handleSpotlightCustomInputChange}
                   onSpotlightApplyCustomRange={handleSpotlightApplyCustomRange}
+                  isLinked={isLinked}
+                  onToggleLink={handleToggleCardLink}
                   segmentFilter={globalSegmentValue}
                 />
               </div>
@@ -2333,18 +2670,38 @@ const DashboardCard = ({
   liveState,
   layoutMetrics,
   periodOverride,
+  visualPeriodConfig,
+  visualPeriodSelection,
+  visualPeriodOverride,
+  onVisualPeriodChange,
+  visualCustomInput,
+  onVisualCustomInputChange,
+  onVisualApplyCustomRange,
   spotlightPeriodConfig,
   spotlightPeriodSelection,
   onSpotlightPeriodChange,
   spotlightCustomInput,
   onSpotlightCustomInputChange,
   onSpotlightApplyCustomRange,
+  isLinked,
+  onToggleLink,
   segmentFilter,
 }: {
   card: DashboardCardDto;
   liveState?: DashboardCardLiveState;
   layoutMetrics?: CardLayoutMetrics;
   periodOverride?: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null;
+  visualPeriodConfig?: {
+    presets: DashboardPreviewPeriodPreset[];
+    defaultPreset: DashboardPreviewPeriodPreset;
+    allowCustom?: boolean;
+  } | null;
+  visualPeriodSelection?: VisualPeriodSelection | null;
+  visualPeriodOverride?: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null;
+  onVisualPeriodChange?: (cardId: string, preset: VisualPeriodSelection) => void;
+  visualCustomInput?: { from: string; to: string } | null;
+  onVisualCustomInputChange?: (cardId: string, key: "from" | "to", value: string) => void;
+  onVisualApplyCustomRange?: (cardId: string) => void;
   spotlightPeriodConfig?: {
     presets: DashboardPreviewPeriodPreset[];
     defaultPreset: DashboardPreviewPeriodPreset;
@@ -2355,6 +2712,8 @@ const DashboardCard = ({
   spotlightCustomInput?: { from: string; to: string } | null;
   onSpotlightCustomInputChange?: (cardId: string, key: "from" | "to", value: string) => void;
   onSpotlightApplyCustomRange?: (cardId: string) => void;
+  isLinked?: boolean;
+  onToggleLink?: (cardId: string) => void;
   segmentFilter?: string | null;
 }) => {
   const viewConfig = card.viewConfig as DashboardCardViewConfig;
@@ -2380,13 +2739,23 @@ const DashboardCard = ({
   }
 
   if (isVisualCardViewConfig(viewConfig)) {
+    const visualRange = resolveVisualDateRange(viewConfig, visualPeriodOverride ?? null);
+    const visualRangeLabel = formatRangeLabel(visualRange) ?? "Date range not set";
     return (
       <VisualDashboardCard
         card={card}
         config={viewConfig}
         liveState={liveState ?? { status: "idle" }}
-        layoutMetrics={layoutMetrics}
         segmentFilter={segmentFilter}
+        infoLabel={visualRangeLabel}
+        periodConfig={visualPeriodConfig ?? undefined}
+        periodSelection={visualPeriodSelection ?? undefined}
+        onPeriodChange={(preset) => onVisualPeriodChange?.(card.id, preset)}
+        customInput={visualCustomInput ?? undefined}
+        onCustomInputChange={(key, value) => onVisualCustomInputChange?.(card.id, key, value)}
+        onApplyCustomRange={() => onVisualApplyCustomRange?.(card.id)}
+        isLinked={isLinked}
+        onToggleLink={() => onToggleLink?.(card.id)}
       />
     );
   }
@@ -2403,6 +2772,8 @@ const DashboardCard = ({
         customInput={spotlightCustomInput ?? undefined}
         onCustomInputChange={(key, value) => onSpotlightCustomInputChange?.(card.id, key, value)}
         onApplyCustomRange={() => onSpotlightApplyCustomRange?.(card.id)}
+        isLinked={isLinked}
+        onToggleLink={() => onToggleLink?.(card.id)}
       />
     );
   }
@@ -2441,94 +2812,73 @@ const VisualDashboardCard = ({
   card,
   config,
   liveState,
-  layoutMetrics,
   segmentFilter,
+  infoLabel,
+  periodConfig,
+  periodSelection,
+  onPeriodChange,
+  customInput,
+  onCustomInputChange,
+  onApplyCustomRange,
+  isLinked,
+  onToggleLink,
 }: {
   card: DashboardCardDto;
   config: DashboardVisualCardViewConfig;
   liveState: DashboardCardLiveState;
-  layoutMetrics?: CardLayoutMetrics;
   segmentFilter?: string | null;
+  infoLabel?: string | null;
+  periodConfig?: {
+    presets: DashboardPreviewPeriodPreset[];
+    defaultPreset: DashboardPreviewPeriodPreset;
+    allowCustom?: boolean;
+  };
+  periodSelection?: VisualPeriodSelection;
+  onPeriodChange?: (preset: VisualPeriodSelection) => void;
+  customInput?: { from: string; to: string };
+  onCustomInputChange?: (key: "from" | "to", value: string) => void;
+  onApplyCustomRange?: () => void;
+  isLinked?: boolean;
+  onToggleLink?: () => void;
 }) => {
-  const sample = liveState.visualSample ?? buildVisualSample(config);
-  const filteredSample = segmentFilter ? sample.filter((point) => point.dimension === segmentFilter) : sample;
-  const chartSample = filteredSample.length > 0 ? filteredSample : sample;
-  const filterEmptyState = Boolean(segmentFilter && filteredSample.length === 0 && sample.length > 0);
-  const isLoading = liveState.status === "loading";
-  const error = liveState.status === "error" ? liveState.error : null;
-  const [cardRef, cardSize] = useElementSize<HTMLDivElement>();
-  const layoutHeight = layoutMetrics?.approxHeightPx ?? 320;
-  const measuredHeight = cardSize.height > 0 ? cardSize.height : layoutHeight;
-  const headerAllowance = 140;
-  const plotHeight = Math.max(160, measuredHeight - headerAllowance);
+  const sample = liveState.visualSample ?? [];
+  const chartSample = segmentFilter ? sample.filter((point) => point.dimension === segmentFilter) : sample;
+  const hasPeriodConfig = Boolean(periodConfig && config.dateFilter && periodConfig.presets.length > 0);
+  const canEdit = hasPeriodConfig && typeof onPeriodChange === "function";
+  const allowCustom = Boolean(periodConfig?.allowCustom);
+  const activePreset = periodSelection ?? periodConfig?.defaultPreset ?? null;
+  const customInputs = customInput ?? { from: "", to: "" };
+  const activeLabel = activePreset
+    ? activePreset === "custom"
+      ? "Custom"
+      : getSpotlightPeriodLabel(activePreset)
+    : null;
+  const periodOptions = hasPeriodConfig
+    ? [
+        ...(periodConfig?.presets ?? []).map((preset) => ({
+          value: preset,
+          label: getSpotlightPeriodLabel(preset),
+        })),
+        ...(allowCustom ? [{ value: "custom", label: "Custom" }] : []),
+      ]
+    : [];
 
   return (
-    <StyledDashboardCard ref={cardRef} variant="outlined">
-      <CardAccent />
-      <CardContent
-        sx={{
-          flexGrow: 1,
-          display: "flex",
-          flexDirection: "column",
-          gap: 1.5,
-          justifyContent: "space-between",
-          p: { xs: 2.5, md: 3 },
-        }}
-      >
-        <Stack gap={0.5} alignItems="center" textAlign="center">
-          <CardTitle variant="subtitle1">{card.title}</CardTitle>
-          {config.description && <CardSubtitle variant="body2">{config.description}</CardSubtitle>}
-        </Stack>
-        {segmentFilter && (
-          <Chip size="small" color="info" label={`Focused on ${segmentFilter}`} variant="outlined" />
-        )}
-        {liveState.warning && <Alert severity="warning">{liveState.warning}</Alert>}
-        {isLoading && (
-          <Stack direction="row" gap={1} alignItems="center" justifyContent="center">
-            <CircularProgress size={16} />
-            <CardSubtitle variant="body2">Refreshing data...</CardSubtitle>
-          </Stack>
-        )}
-        {error && <Alert severity="error">{error}</Alert>}
-        {filterEmptyState && (
-          <Alert severity="info" variant="outlined">
-            No data available for “{segmentFilter}”. Showing the full trend for context.
-          </Alert>
-        )}
-        <Box
-          sx={{
-            flexGrow: 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            minHeight: plotHeight,
-          }}
-        >
-          {chartSample.length > 0 ? (
-            <Box sx={{ flexGrow: 1, height: "100%" }}>
-              {renderVisualChart(config, chartSample)}
-            </Box>
-          ) : (
-            <CardSubtitle variant="body2" sx={{ textAlign: "center" }}>
-              {isLoading ? "Loading chart data..." : "No data returned. Adjust the template filters to see values."}
-            </CardSubtitle>
-          )}
-        </Box>
-        <Stack direction="row" gap={1} justifyContent="center">
-          <Button
-            component={RouterLink}
-            to={`/reports?templateId=${card.templateId}`}
-            variant="outlined"
-            size="small"
-          >
-            Open template
-          </Button>
-          <Button component={RouterLink} to="/reports/dashboards" variant="text" size="small">
-            Edit card
-          </Button>
-        </Stack>
-      </CardContent>
-    </StyledDashboardCard>
+    <GraphicCard
+      title={card.title}
+      config={config}
+      points={chartSample}
+      infoLabel={infoLabel}
+      periodLabel={hasPeriodConfig ? activeLabel ?? undefined : undefined}
+      periodOptions={periodOptions}
+      activePeriod={activePreset ?? undefined}
+      onSelectPeriod={canEdit ? (value) => onPeriodChange?.(value as VisualPeriodSelection) : undefined}
+      customInput={allowCustom ? customInputs : undefined}
+      onCustomInputChange={allowCustom && canEdit ? onCustomInputChange : undefined}
+      onApplyCustomRange={allowCustom && canEdit ? onApplyCustomRange : undefined}
+      isLinked={isLinked}
+      onToggleLink={onToggleLink}
+    />
   );
 };
 
@@ -2542,6 +2892,8 @@ const SpotlightDashboardCard = ({
   customInput,
   onCustomInputChange,
   onApplyCustomRange,
+  isLinked,
+  onToggleLink,
 }: {
   card: DashboardCardDto;
   config: DashboardSpotlightCardViewConfig;
@@ -2556,11 +2908,10 @@ const SpotlightDashboardCard = ({
   customInput?: { from: string; to: string };
   onCustomInputChange?: (key: "from" | "to", value: string) => void;
   onApplyCustomRange?: () => void;
+  isLinked?: boolean;
+  onToggleLink?: () => void;
 }) => {
-  const isLiveSuccess = liveState.status === "success";
-  const sampleCards = isLiveSuccess
-    ? liveState.spotlightSample?.cards ?? []
-    : liveState.spotlightSample?.cards ?? config.sample?.cards ?? [];
+  const sampleCards = liveState.spotlightSample?.cards ?? [];
   const isLoading = liveState.status === "loading";
   const error = liveState.status === "error" ? liveState.error : null;
   const showPeriodControls =
@@ -2619,6 +2970,8 @@ const SpotlightDashboardCard = ({
       customInput={allowCustom ? customInputs : undefined}
       onCustomInputChange={allowCustom ? onCustomInputChange : undefined}
       onApplyCustomRange={allowCustom ? onApplyCustomRange : undefined}
+      isLinked={isLinked}
+      onToggleLink={onToggleLink}
     />
   );
 };
@@ -2912,10 +3265,7 @@ const HeroSpotlightCard = ({
   if (!isSpotlightCardViewConfig(config)) {
     return null;
   }
-  const isLiveSuccess = liveState?.status === "success";
-  const sampleCards = isLiveSuccess
-    ? liveState?.spotlightSample?.cards ?? []
-    : liveState?.spotlightSample?.cards ?? config.sample?.cards ?? [];
+  const sampleCards = liveState?.spotlightSample?.cards ?? [];
   const primary = sampleCards[0];
   const showPeriodControls =
     Boolean(periodConfig && config.dateFilter && periodConfig.presets.length > 0) &&

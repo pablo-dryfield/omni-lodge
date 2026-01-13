@@ -69,12 +69,15 @@ import {
   CartesianGrid,
   ComposedChart,
   Line,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Scatter,
   Tooltip as RechartsTooltip,
   XAxis,
   YAxis,
   Legend,
+  Cell,
 } from "recharts";
 import type { Formatter, Payload } from "recharts/types/component/DefaultTooltipContent";
 import { useAppDispatch } from "../store/hooks";
@@ -185,6 +188,7 @@ type PreviewColumnMeta = {
   tableName?: string;
   fieldId?: string;
   sourceColumn?: string;
+  fieldType?: DataField["type"];
 };
 
 type SelectedFieldDetail = DataField & {
@@ -216,7 +220,7 @@ type ManualJoinDraft = {
 type VisualDefinition = {
   id: string;
   name: string;
-  type: "line" | "area" | "bar" | "stackedArea" | "stackedBar" | "scatter";
+  type: "line" | "area" | "bar" | "stackedArea" | "stackedBar" | "scatter" | "pie";
   metric: string;
   metricAggregation?: QueryConfigMetric["aggregation"];
   dimension: string;
@@ -1135,7 +1139,21 @@ const formatDeliveryTargetsLabel = (targets: TemplateScheduleDeliveryTarget[]): 
 
 const normalizeCurrencyCode = (currency?: string): string => {
   const normalized = currency?.trim().toUpperCase();
-  return normalized && normalized.length === 3 ? normalized : "USD";
+  return normalized && normalized.length === 3 ? normalized : "PLN";
+};
+
+const formatCurrencyValue = (value: number, currency?: string): string => {
+  const normalized = normalizeCurrencyCode(currency);
+  const amount = value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (normalized === "PLN") {
+    return `${amount} zł`;
+  }
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: normalized,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
 };
 
 const formatMetricValue = (
@@ -1149,11 +1167,7 @@ const formatMetricValue = (
 
   switch (format) {
     case "currency":
-      return new Intl.NumberFormat("en-US", {
-        style: "currency",
-        currency: normalizeCurrencyCode(currency),
-        maximumFractionDigits: 2,
-      }).format(value);
+      return formatCurrencyValue(value, currency);
     case "percentage":
       return `${value.toFixed(2)}%`;
     default:
@@ -1552,6 +1566,7 @@ const VISUAL_TYPE_OPTIONS: Array<{ value: VisualDefinition["type"]; label: strin
   { value: "stackedArea", label: "Stacked area" },
   { value: "stackedBar", label: "Stacked column" },
   { value: "scatter", label: "Scatter" },
+  { value: "pie", label: "Pie" },
 ];
 
 const VISUAL_TYPE_SET = new Set(VISUAL_TYPE_OPTIONS.map((option) => option.value));
@@ -3087,6 +3102,8 @@ const Reports = (props: GenericPageProps) => {
         }),
     [draft.filters, filterFieldLookup],
   );
+  const visualDateFilterMetadata = spotlightDateFilterMetadata;
+  const visualDateFilterOptions = spotlightDateFilterOptions;
 
   const previewColumnsFromSelection = useMemo(() => {
     const columns = previewResult?.columns ?? [];
@@ -3246,13 +3263,14 @@ const Reports = (props: GenericPageProps) => {
             tableName: model?.tableName,
             fieldId,
             sourceColumn: field?.sourceColumn,
+            fieldType: field?.type,
           },
         ];
       }),
     );
   }, [derivedFieldMap, draft.columnAliases, modelMap, previewColumns]);
 
-  const getColumnLabel = useCallback(
+const getColumnLabel = useCallback(
     (alias: string) => {
       if (!alias) {
         return "Select column";
@@ -3261,6 +3279,43 @@ const Reports = (props: GenericPageProps) => {
       return metadata?.customLabel ?? metadata?.fieldLabel ?? humanizeAlias(alias);
     },
     [previewColumnMetadata],
+  );
+
+  const inferMetricFormat = useCallback((label?: string, metric?: string) => {
+    const candidate = `${label ?? ""} ${metric ?? ""}`.toLowerCase();
+    if (/(price|amount|revenue|gross|net|earning|income|sales|cost|balance|currency)/.test(candidate)) {
+      return "currency" as MetricSpotlightDefinitionDto["format"];
+    }
+    if (/(percent|percentage|ratio|rate|pct)/.test(candidate)) {
+      return "percentage" as MetricSpotlightDefinitionDto["format"];
+    }
+    return "number" as MetricSpotlightDefinitionDto["format"];
+  }, []);
+  const getColumnType = useCallback(
+    (alias: string) => {
+      if (!alias) {
+        return null;
+      }
+      const metadata = previewColumnMetadata.get(alias);
+      if (metadata?.fieldType) {
+        return metadata.fieldType;
+      }
+      const [modelId, fieldId] = alias.split("__");
+      if (!modelId || !fieldId) {
+        return null;
+      }
+      const aggregationSuffixes = ["_sum", "_avg", "_min", "_max", "_count", "_count_distinct"];
+      const baseFieldId = aggregationSuffixes.reduce((result, suffix) => {
+        if (result.endsWith(suffix)) {
+          return result.slice(0, -suffix.length);
+        }
+        return result;
+      }, fieldId);
+      const model = modelMap.get(modelId);
+      const field = model?.fields.find((candidate) => candidate.id === baseFieldId);
+      return field?.type ?? null;
+    },
+    [modelMap, previewColumnMetadata],
   );
 
   const previewColumnSets = useMemo(() => {
@@ -3471,6 +3526,7 @@ const Reports = (props: GenericPageProps) => {
 
       const metricBaseAlias = visual.metric;
       const dimensionBaseAlias = visual.dimension;
+      const allowComparison = visual.type !== "pie";
 
       if (!metricBaseAlias || !dimensionBaseAlias) {
         return emptyDescriptor;
@@ -3553,7 +3609,7 @@ const Reports = (props: GenericPageProps) => {
       ];
 
       let comparisonAlias: string | null = null;
-      if (visual.comparison) {
+      if (allowComparison && visual.comparison) {
         const comparisonBaseAlias = visual.comparison;
         const comparisonDetail = fieldDetailByAlias.get(comparisonBaseAlias);
         if (comparisonDetail) {
@@ -3646,7 +3702,7 @@ const Reports = (props: GenericPageProps) => {
         dimensionBaseAlias,
         metricLabel: getColumnLabel(metricBaseAlias),
         dimensionLabel: getColumnLabel(dimensionBaseAlias),
-        comparisonLabel: visual.comparison ? getColumnLabel(visual.comparison) : undefined,
+        comparisonLabel: allowComparison && visual.comparison ? getColumnLabel(visual.comparison) : undefined,
         warnings,
       };
 
@@ -3669,7 +3725,8 @@ const Reports = (props: GenericPageProps) => {
 
   const chartMetricAlias = visualQueryDescriptor.metricAlias ?? "";
   const chartDimensionAlias = visualQueryDescriptor.dimensionAlias ?? "";
-  const chartComparisonAlias = visualQueryDescriptor.comparisonAlias ?? undefined;
+  const isPieVisualization = activeVisual.type === "pie";
+  const chartComparisonAlias = isPieVisualization ? undefined : visualQueryDescriptor.comparisonAlias ?? undefined;
   const visualRows = useMemo(() => visualResult?.rows ?? [], [visualResult]);
   const visualColumns = useMemo(() => visualResult?.columns ?? [], [visualResult]);
 
@@ -3819,6 +3876,22 @@ const Reports = (props: GenericPageProps) => {
 
   const isStackedVisualization =
     activeVisual.type === "stackedArea" || activeVisual.type === "stackedBar";
+  const pieColors = [
+    "#1c7ed6",
+    "#4dabf7",
+    "#74c0fc",
+    "#a5d8ff",
+    "#5c7cfa",
+    "#845ef7",
+    "#cc5de8",
+    "#f06595",
+    "#ffa8a8",
+    "#ff922b",
+    "#ffd43b",
+    "#69db7c",
+    "#38d9a9",
+    "#3bc9db",
+  ];
 
   const renderPrimarySeries = () => {
     switch (activeVisual.type) {
@@ -3874,7 +3947,7 @@ const Reports = (props: GenericPageProps) => {
   };
 
   const renderComparisonSeries = () => {
-    if (!chartComparisonAlias) {
+    if (!chartComparisonAlias || isPieVisualization) {
       return null;
     }
     const comparisonYAxisId = isStackedVisualization ? "left" : "right";
@@ -5148,6 +5221,7 @@ const Reports = (props: GenericPageProps) => {
       options?: {
         sample?: DashboardVisualCardViewConfig["sample"];
         dateFilterMetadata?: ReturnType<typeof findDateFilterMetadata> | null;
+        periodConfig?: DashboardVisualCardViewConfig["periodConfig"];
       },
     ): DashboardVisualCardViewConfig | null => {
       if (!visual.metric || !visual.dimension) {
@@ -5160,8 +5234,58 @@ const Reports = (props: GenericPageProps) => {
       const comparisonLabel =
         visual.comparison &&
         (descriptor.comparisonLabel ?? getColumnLabel(visual.comparison) ?? visual.comparison);
+      const spotlightFormatMatch = (draft.metricsSpotlight ?? []).find(
+        (spotlight) => spotlight.metric === visual.metric,
+      );
+      const metricType = getColumnType(visual.metric);
+      const metricFormat =
+        spotlightFormatMatch?.format ??
+        (metricType === "currency"
+          ? "currency"
+          : metricType === "percentage"
+          ? "percentage"
+          : inferMetricFormat(metricLabel, visual.metric));
+      const fallbackCurrency =
+        metricFormat === "currency"
+          ? (draft.metricsSpotlight ?? []).find((spotlight) => Boolean(spotlight.currency))?.currency
+          : undefined;
+      const metricCurrency = metricFormat === "currency" ? spotlightFormatMatch?.currency ?? fallbackCurrency : undefined;
       const normalizedName =
         visual.name && visual.name.trim().length > 0 ? visual.name.trim() : `${metricLabel} vs ${dimensionLabel}`;
+      const defaultPeriodPresets = DEFAULT_SPOTLIGHT_PERIOD_PRESETS.filter((preset) =>
+        SPOTLIGHT_PERIOD_PRESET_OPTIONS.some((option) => option.value === preset),
+      );
+      const normalizedPeriodConfig = (() => {
+        if (options?.periodConfig?.presets) {
+          const presets = options.periodConfig.presets.filter((preset): preset is DashboardPreviewPeriodPreset =>
+            SPOTLIGHT_PERIOD_PRESET_OPTIONS.some((option) => option.value === preset),
+          );
+          if (presets.length === 0) {
+            return null;
+          }
+          const defaultPreset = presets.includes(options.periodConfig.defaultPreset)
+            ? options.periodConfig.defaultPreset
+            : presets[0];
+          return {
+            presets,
+            defaultPreset,
+            allowCustom: Boolean(options.periodConfig.allowCustom),
+          };
+        }
+        if (options?.dateFilterMetadata && defaultPeriodPresets.length > 0) {
+          const defaultPreset = defaultPeriodPresets.includes(DEFAULT_SPOTLIGHT_PERIOD_DEFAULT)
+            ? DEFAULT_SPOTLIGHT_PERIOD_DEFAULT
+            : defaultPeriodPresets[0];
+          if (!defaultPreset) {
+            return null;
+          }
+          return {
+            presets: defaultPeriodPresets,
+            defaultPreset,
+          };
+        }
+        return null;
+      })();
       return {
         mode: "visual",
         description: `Visual: ${metricLabel} vs ${dimensionLabel}`,
@@ -5170,6 +5294,7 @@ const Reports = (props: GenericPageProps) => {
         dimensionAlias: descriptor.dimensionAlias ?? undefined,
         comparisonAlias: descriptor.comparisonAlias ?? undefined,
         ...(options?.dateFilterMetadata ? { dateFilter: { ...options.dateFilterMetadata } } : {}),
+        ...(normalizedPeriodConfig ? { periodConfig: normalizedPeriodConfig } : {}),
         visual: {
           id: visual.id,
           name: normalizedName,
@@ -5180,6 +5305,8 @@ const Reports = (props: GenericPageProps) => {
               ? visual.metricAggregation
               : "sum",
           metricLabel,
+          metricFormat,
+          metricCurrency,
           dimension: visual.dimension,
           dimensionLabel,
           dimensionBucket: visual.dimensionBucket,
@@ -5197,7 +5324,7 @@ const Reports = (props: GenericPageProps) => {
         sample: options?.sample,
       };
     },
-    [buildVisualDescriptor, getColumnLabel],
+    [buildVisualDescriptor, draft.metricsSpotlight, getColumnLabel, getColumnType, inferMetricFormat],
   );
 
   const handleAddVisualToDashboard = () => {
@@ -5324,7 +5451,8 @@ const Reports = (props: GenericPageProps) => {
             if (matchingVisual) {
               const updatedConfig = buildVisualCardViewConfig(matchingVisual, {
                 sample: viewConfig.sample,
-                dateFilterMetadata,
+                dateFilterMetadata: dateFilterMetadata ?? viewConfig.dateFilter ?? null,
+                periodConfig: viewConfig.periodConfig,
               });
               if (updatedConfig) {
                 enqueueUpdate(dashboard.id, card, updatedConfig);
@@ -5511,6 +5639,21 @@ const Reports = (props: GenericPageProps) => {
     handleOpenDashboardModal(cardDraft);
   };
 
+  const updateVisualCardDraft = useCallback(
+    (updater: (current: DashboardVisualCardViewConfig) => DashboardVisualCardViewConfig) => {
+      setDashboardCardDraft((current) => {
+        if (!current || !isVisualCardViewConfig(current.viewConfig)) {
+          return current;
+        }
+        return {
+          ...current,
+          viewConfig: updater(current.viewConfig),
+        };
+      });
+    },
+    [],
+  );
+
   const updateSpotlightCardDraft = useCallback(
     (updater: (current: DashboardSpotlightCardViewConfig) => DashboardSpotlightCardViewConfig) => {
       setDashboardCardDraft((current) => {
@@ -5525,6 +5668,28 @@ const Reports = (props: GenericPageProps) => {
     },
     [],
   );
+
+  const selectedVisualDateFilterId = useMemo(() => {
+    if (!dashboardCardDraft || !isVisualCardViewConfig(dashboardCardDraft.viewConfig)) {
+      return null;
+    }
+    const dateFilter = dashboardCardDraft.viewConfig.dateFilter;
+    if (!dateFilter) {
+      return null;
+    }
+    for (const option of visualDateFilterOptions) {
+      const metadata = visualDateFilterMetadata.get(option.value);
+      if (
+        metadata &&
+        metadata.modelId === dateFilter.modelId &&
+        metadata.fieldId === dateFilter.fieldId &&
+        metadata.operator === dateFilter.operator
+      ) {
+        return option.value;
+      }
+    }
+    return null;
+  }, [dashboardCardDraft, visualDateFilterMetadata, visualDateFilterOptions]);
 
   const selectedSpotlightDateFilterId = useMemo(() => {
     if (!dashboardCardDraft || !isSpotlightCardViewConfig(dashboardCardDraft.viewConfig)) {
@@ -5547,6 +5712,13 @@ const Reports = (props: GenericPageProps) => {
     }
     return null;
   }, [dashboardCardDraft, spotlightDateFilterMetadata, spotlightDateFilterOptions]);
+
+  const visualDashboardConfig = useMemo(() => {
+    if (!dashboardCardDraft || !isVisualCardViewConfig(dashboardCardDraft.viewConfig)) {
+      return null;
+    }
+    return dashboardCardDraft.viewConfig;
+  }, [dashboardCardDraft]);
 
   const spotlightDashboardConfig = useMemo(() => {
     if (!dashboardCardDraft || !isSpotlightCardViewConfig(dashboardCardDraft.viewConfig)) {
@@ -5843,6 +6015,10 @@ const Reports = (props: GenericPageProps) => {
   const handleVisualChange = (patch: Partial<VisualDefinition>) => {
     setDraft((current) => {
       const nextVisual = { ...current.visuals[0], ...patch };
+      if (patch.type === "pie") {
+        nextVisual.comparison = undefined;
+        nextVisual.comparisonAggregation = undefined;
+      }
       return {
         ...current,
         visuals: current.visuals.length > 0 ? [nextVisual, ...current.visuals.slice(1)] : [nextVisual],
@@ -8716,8 +8892,8 @@ const Reports = (props: GenericPageProps) => {
                             comparison: value ?? undefined,
                           })
                         }
-                        placeholder="Optional secondary series"
-                        disabled={metricOptions.length <= 1}
+                        placeholder={isPieVisualization ? "Not available for pie charts" : "Optional secondary series"}
+                        disabled={metricOptions.length <= 1 || isPieVisualization}
                         searchable
                         clearable
                       />
@@ -8798,26 +8974,51 @@ const Reports = (props: GenericPageProps) => {
                         </Flex>
                       ) : hasChartData ? (
                         <ResponsiveContainer width="100%" height={240}>
-                          <ComposedChart data={chartData}>
-                            <CartesianGrid stroke="#f1f3f5" strokeDasharray="4 4" />
-                            <XAxis dataKey="dimension" tick={{ fontSize: 12 }} />
-                            <YAxis yAxisId="left" tick={{ fontSize: 12 }} stroke="#1c7ed6" />
-                            {chartComparisonAlias && !isStackedVisualization && (
-                              <YAxis
-                                yAxisId="right"
-                                orientation="right"
-                                tick={{ fontSize: 12 }}
-                                stroke="#2b8a3e"
+                          {isPieVisualization ? (
+                            <PieChart>
+                              <RechartsTooltip
+                                formatter={tooltipFormatter}
+                                labelFormatter={(label) => `${dimensionLabel}: ${label}`}
                               />
-                            )}
-                            <RechartsTooltip
-                              formatter={tooltipFormatter}
-                              labelFormatter={(label) => `${dimensionLabel}: ${label}`}
-                            />
-                            <Legend />
-                            {renderPrimarySeries()}
-                            {renderComparisonSeries()}
-                          </ComposedChart>
+                              <Legend />
+                              <Pie
+                                data={chartData}
+                                dataKey="primary"
+                                nameKey="dimension"
+                                innerRadius={48}
+                                outerRadius={90}
+                                paddingAngle={2}
+                              >
+                                {chartData.map((entry, index) => (
+                                  <Cell
+                                    key={`pie-${entry.dimension}-${index}`}
+                                    fill={pieColors[index % pieColors.length]}
+                                  />
+                                ))}
+                              </Pie>
+                            </PieChart>
+                          ) : (
+                            <ComposedChart data={chartData}>
+                              <CartesianGrid stroke="#f1f3f5" strokeDasharray="4 4" />
+                              <XAxis dataKey="dimension" tick={{ fontSize: 12 }} />
+                              <YAxis yAxisId="left" tick={{ fontSize: 12 }} stroke="#1c7ed6" />
+                              {chartComparisonAlias && !isStackedVisualization && (
+                                <YAxis
+                                  yAxisId="right"
+                                  orientation="right"
+                                  tick={{ fontSize: 12 }}
+                                  stroke="#2b8a3e"
+                                />
+                              )}
+                              <RechartsTooltip
+                                formatter={tooltipFormatter}
+                                labelFormatter={(label) => `${dimensionLabel}: ${label}`}
+                              />
+                              <Legend />
+                              {renderPrimarySeries()}
+                              {renderComparisonSeries()}
+                            </ComposedChart>
+                          )}
                         </ResponsiveContainer>
                       ) : (
                         <Flex align="center" justify="center" h={240}>
@@ -10003,6 +10204,121 @@ const Reports = (props: GenericPageProps) => {
               }
               placeholder="Optional note shown with the card."
             />
+            {visualDashboardConfig && (
+              <Paper withBorder radius="md" p="md">
+                <Stack gap="sm">
+                  <Text fw={600} fz="sm">
+                    Visual filters
+                  </Text>
+                  {visualDateFilterOptions.length === 0 ? (
+                    <Text fz="sm" c="dimmed">
+                      Add a date filter to the template to enable per-card period buttons.
+                    </Text>
+                  ) : (
+                    <>
+                      <Select
+                        label="Date field"
+                        data={visualDateFilterOptions}
+                        value={selectedVisualDateFilterId}
+                        placeholder="Select date field"
+                        onChange={(value) => {
+                          updateVisualCardDraft((current) => {
+                            if (!value) {
+                              const { dateFilter, ...rest } = current;
+                              return rest;
+                            }
+                            const metadata = visualDateFilterMetadata.get(value);
+                            return {
+                              ...current,
+                              ...(metadata ? { dateFilter: { ...metadata } } : {}),
+                            };
+                          });
+                        }}
+                      />
+                      <MultiSelect
+                        label="Quick filter buttons"
+                        data={SPOTLIGHT_PERIOD_PRESET_OPTIONS}
+                        value={visualDashboardConfig.periodConfig?.presets ?? []}
+                        onChange={(value) => {
+                          updateVisualCardDraft((current) => {
+                            const normalized = value.filter((entry) =>
+                              SPOTLIGHT_PERIOD_PRESET_OPTIONS.some((option) => option.value === entry),
+                            ) as DashboardPreviewPeriodPreset[];
+                            if (normalized.length === 0) {
+                              const { periodConfig, ...rest } = current;
+                              return rest;
+                            }
+                            const existingDefault = current.periodConfig?.defaultPreset;
+                            const allowCustom = Boolean(current.periodConfig?.allowCustom);
+                            const defaultPreset =
+                              existingDefault && normalized.includes(existingDefault)
+                                ? existingDefault
+                                : normalized[0];
+                            return {
+                              ...current,
+                              periodConfig: {
+                                presets: normalized,
+                                defaultPreset,
+                                allowCustom,
+                              },
+                            };
+                          });
+                        }}
+                        searchable
+                        disabled={!selectedVisualDateFilterId}
+                      />
+                      <Select
+                        label="Default period"
+                        data={(visualDashboardConfig.periodConfig?.presets ?? []).map((preset) => ({
+                          value: preset,
+                          label: SPOTLIGHT_PERIOD_LABEL_LOOKUP.get(preset) ?? preset,
+                        }))}
+                        value={visualDashboardConfig.periodConfig?.defaultPreset ?? null}
+                        placeholder="Select default"
+                        onChange={(value) => {
+                          if (!value) {
+                            return;
+                          }
+                          updateVisualCardDraft((current) => {
+                            if (!current.periodConfig) {
+                              return current;
+                            }
+                            return {
+                              ...current,
+                              periodConfig: {
+                                ...current.periodConfig,
+                                defaultPreset: value as DashboardPreviewPeriodPreset,
+                              },
+                            };
+                          });
+                        }}
+                        disabled={!selectedVisualDateFilterId || !visualDashboardConfig.periodConfig}
+                      />
+                      <Switch
+                        label="Allow custom range"
+                        checked={Boolean(visualDashboardConfig.periodConfig?.allowCustom)}
+                        onChange={(event) => {
+                          const allowCustom = event.currentTarget.checked;
+                          updateVisualCardDraft((current) => {
+                            if (!current.periodConfig) {
+                              return current;
+                            }
+                            return {
+                              ...current,
+                              periodConfig: {
+                                ...current.periodConfig,
+                                allowCustom,
+                              },
+                            };
+                          });
+                        }}
+                        disabled={!selectedVisualDateFilterId || !visualDashboardConfig.periodConfig}
+                      />
+                    </>
+                  )}
+                </Stack>
+              </Paper>
+            )}
             {spotlightDashboardConfig && (
               <Paper withBorder radius="md" p="md">
                 <Stack gap="sm">

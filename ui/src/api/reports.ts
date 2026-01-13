@@ -250,10 +250,12 @@ export type DashboardVisualCardViewConfig = {
   visual: {
     id: string;
     name: string;
-    type: "line" | "area" | "bar" | "stackedArea" | "stackedBar" | "scatter";
+    type: "line" | "area" | "bar" | "stackedArea" | "stackedBar" | "scatter" | "pie";
     metric: string;
     metricAggregation: QueryConfigMetric["aggregation"];
     metricLabel: string;
+    metricFormat?: "number" | "currency" | "percentage";
+    metricCurrency?: string;
     dimension: string;
     dimensionLabel: string;
     dimensionBucket?: QueryConfigDimension["bucket"];
@@ -261,6 +263,11 @@ export type DashboardVisualCardViewConfig = {
     comparisonLabel?: string;
     comparisonAggregation?: QueryConfigMetric["aggregation"];
     limit?: number | null;
+  };
+  periodConfig?: {
+    presets: DashboardPreviewPeriodPreset[];
+    defaultPreset: DashboardPreviewPeriodPreset;
+    allowCustom?: boolean;
   };
   sample?: {
     rows: Array<Record<string, unknown>>;

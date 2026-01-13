@@ -1,5 +1,7 @@
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
+import LinkOffRoundedIcon from "@mui/icons-material/LinkOffRounded";
+import LinkRoundedIcon from "@mui/icons-material/LinkRounded";
 import {
   Box,
   Button,
@@ -15,7 +17,6 @@ import {
   Typography,
 } from "@mui/material";
 import { alpha, styled } from "@mui/material/styles";
-import useMediaQuery from "@mui/material/useMediaQuery";
 import { useState, type MouseEvent } from "react";
 
 type SpotlightHeaderProps = {
@@ -23,6 +24,7 @@ type SpotlightHeaderProps = {
   description?: string | null;
   titleVariant?: "subtitle1" | "h6" | "h5";
   titleFontFamily?: string;
+  rangeLabel?: string | null;
 };
 
 type SpotlightPeriodOption = {
@@ -32,7 +34,6 @@ type SpotlightPeriodOption = {
 
 type SpotlightPeriodRowProps = {
   label: string;
-  rangeLabel?: string | null;
   options?: SpotlightPeriodOption[];
   activeValue?: string | null;
   onSelectOption?: (value: string) => void;
@@ -59,6 +60,8 @@ type SpotlightCardProps = {
   onCustomInputChange?: (key: "from" | "to", value: string) => void;
   onApplyCustomRange?: () => void;
   titleVariant?: "subtitle1" | "h6" | "h5";
+  isLinked?: boolean;
+  onToggleLink?: () => void;
 };
 
 export const SpotlightPeriodGroup = styled("div")(({ theme }) => ({
@@ -135,59 +138,8 @@ const SpotlightMetricValue = styled(Typography)(({ theme: muiTheme }) => ({
   fontVariantNumeric: "tabular-nums",
 }));
 
-const SpotlightRangeInfo = ({ label, rangeLabel }: { label?: string; rangeLabel: string }) => {
-  const isMobile = useMediaQuery("(max-width:600px)");
-  const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
-  const infoText = rangeLabel || "Range unavailable";
-  const handleToggle = (event: MouseEvent<HTMLButtonElement>) => {
-    setAnchorEl((current) => (current ? null : event.currentTarget));
-  };
-  const handleClose = () => setAnchorEl(null);
-
-  return (
-    <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, flexWrap: "nowrap" }}>
-      {label && (
-        <Typography variant="body2" fontWeight={600} color="text.secondary">
-          {label}
-        </Typography>
-      )}
-      {isMobile ? (
-        <>
-          <IconButton
-            size="small"
-            onClick={handleToggle}
-            aria-label="Show date range"
-            sx={{ p: 0.25, color: "text.secondary" }}
-          >
-            <InfoOutlinedIcon fontSize="inherit" />
-          </IconButton>
-          <Popover
-            open={Boolean(anchorEl)}
-            anchorEl={anchorEl}
-            onClose={handleClose}
-            anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-            transformOrigin={{ vertical: "top", horizontal: "left" }}
-            PaperProps={{ sx: { p: 1, maxWidth: 240 } }}
-          >
-            <Typography variant="caption" color="text.secondary">
-              {infoText}
-            </Typography>
-          </Popover>
-        </>
-      ) : (
-        <Tooltip title={infoText} arrow placement="top">
-          <IconButton size="small" aria-label="Show date range" sx={{ p: 0.25, color: "text.secondary" }}>
-            <InfoOutlinedIcon fontSize="inherit" />
-          </IconButton>
-        </Tooltip>
-      )}
-    </Box>
-  );
-};
-
 export const SpotlightPeriodRow = ({
   label,
-  rangeLabel,
   options = [],
   activeValue,
   onSelectOption,
@@ -199,7 +151,6 @@ export const SpotlightPeriodRow = ({
   const isMenuOpen = Boolean(anchorEl);
   const canEdit = options.length > 0 && typeof onSelectOption === "function";
   const showCustomForm = activeValue === "custom" && Boolean(onCustomInputChange && onApplyCustomRange);
-  const infoLabel = rangeLabel ?? "Range unavailable";
   const canApplyCustom =
     Boolean(onApplyCustomRange) &&
     Boolean(customInput?.from && customInput?.to && customInput.from.trim().length > 0 && customInput.to.trim().length > 0);
@@ -225,7 +176,6 @@ export const SpotlightPeriodRow = ({
       <Typography variant="body2" fontWeight={600} color="text.secondary" sx={{ fontSize: 12 }}>
         {label}
       </Typography>
-      <SpotlightRangeInfo rangeLabel={infoLabel} />
       {options.length > 0 && (
         <>
           <IconButton
@@ -315,6 +265,8 @@ export const SpotlightCard = ({
   onCustomInputChange,
   onApplyCustomRange,
   titleVariant = "subtitle1",
+  isLinked,
+  onToggleLink,
 }: SpotlightCardProps) => {
   const normalizedTitle = title.trim().toLowerCase();
   const normalizedMetricLabel = (metricLabel ?? "").trim().toLowerCase();
@@ -326,6 +278,8 @@ export const SpotlightCard = ({
   const normalizedDelta = (deltaText ?? "").trim();
   const shouldShowDelta = normalizedDelta.length > 0 && normalizedDelta !== "-" && normalizedDelta !== "—";
   const shouldShowRangeText = Boolean(rangeText && !periodLabel);
+  const linkState = isLinked ?? true;
+  const canToggleLink = typeof onToggleLink === "function";
 
   return (
     <SpotlightCardShell variant="outlined">
@@ -342,7 +296,49 @@ export const SpotlightCard = ({
           gap: 1.5,
         }}
       >
-        <SpotlightHeaderRow title={title} titleVariant={titleVariant} titleFontFamily={SPOTLIGHT_TITLE_FONT} />
+        <Box
+          sx={{
+            position: "absolute",
+            top: 10,
+            right: 12,
+            display: "flex",
+            alignItems: "center",
+          }}
+        >
+          <Tooltip title={linkState ? "Linked period" : "Unlinked period"} arrow placement="top">
+            <span>
+              <IconButton
+                size="small"
+                onClick={onToggleLink}
+                disabled={!canToggleLink}
+                aria-label={linkState ? "Unlink period" : "Link period"}
+                sx={{ p: 0.4 }}
+              >
+                {linkState ? (
+                  <LinkRoundedIcon
+                    sx={{
+                      fontSize: 16,
+                      color: "text.primary",
+                    }}
+                  />
+                ) : (
+                  <LinkOffRoundedIcon
+                    sx={{
+                      fontSize: 16,
+                      color: "text.disabled",
+                    }}
+                  />
+                )}
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Box>
+        <SpotlightHeaderRow
+          title={title}
+          titleVariant={titleVariant}
+          titleFontFamily={SPOTLIGHT_TITLE_FONT}
+          rangeLabel={rangeLabel ?? undefined}
+        />
         <Box
           sx={{
             flexGrow: 1,
@@ -382,7 +378,6 @@ export const SpotlightCard = ({
         {periodLabel && (
           <SpotlightPeriodRow
             label={periodLabel}
-            rangeLabel={rangeLabel ?? undefined}
             options={periodOptions}
             activeValue={activePeriod ?? undefined}
             onSelectOption={onSelectPeriod}
@@ -401,25 +396,75 @@ export const SpotlightHeaderRow = ({
   description,
   titleVariant = "subtitle1",
   titleFontFamily,
-}: SpotlightHeaderProps) => (
-  <Box sx={{ textAlign: "center" }}>
-    <Box
-      sx={{
-        display: "flex",
-        flexWrap: "wrap",
-        alignItems: "center",
-        gap: 1,
-        justifyContent: "center",
-      }}
-    >
-      <Typography variant={titleVariant} fontWeight={700} fontFamily={titleFontFamily}>
-        {title}
-      </Typography>
+  rangeLabel,
+}: SpotlightHeaderProps) => {
+  const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
+  const infoText = rangeLabel?.trim() ?? "";
+  const hasInfo = infoText.length > 0;
+  const handleToggle = (event: MouseEvent<HTMLButtonElement>) => {
+    if (!hasInfo) {
+      return;
+    }
+    setAnchorEl((current) => (current ? null : event.currentTarget));
+  };
+  const handleClose = () => setAnchorEl(null);
+
+  return (
+    <Box sx={{ textAlign: "center" }}>
+      <Box
+        sx={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: 0.5,
+          justifyContent: "center",
+        }}
+      >
+        <Typography variant={titleVariant} fontWeight={700} fontFamily={titleFontFamily}>
+          {title}
+        </Typography>
+        {hasInfo && (
+          <>
+            <Tooltip title={infoText} arrow placement="top">
+              <IconButton
+                size="small"
+                onClick={handleToggle}
+                aria-label="Show date range"
+                sx={{ p: 0.25, color: "text.secondary" }}
+              >
+                <InfoOutlinedIcon fontSize="inherit" />
+              </IconButton>
+            </Tooltip>
+            <Popover
+              open={Boolean(anchorEl)}
+              anchorEl={anchorEl}
+              onClose={handleClose}
+              anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+              transformOrigin={{ vertical: "top", horizontal: "center" }}
+              PaperProps={{
+                sx: {
+                  px: 1.25,
+                  py: 0.75,
+                  maxWidth: 200,
+                  borderRadius: 1.5,
+                  bgcolor: "rgba(17, 24, 39, 0.96)",
+                  color: "#fff",
+                  boxShadow: "0 12px 30px rgba(15, 23, 42, 0.35)",
+                },
+              }}
+            >
+              <Typography variant="caption" sx={{ color: "rgba(255,255,255,0.9)" }}>
+                {infoText}
+              </Typography>
+            </Popover>
+          </>
+        )}
+      </Box>
+      {description && (
+        <Typography variant="body2" color="text.secondary" sx={{ fontSize: 13, lineHeight: 1.5 }}>
+          {description}
+        </Typography>
+      )}
     </Box>
-    {description && (
-      <Typography variant="body2" color="text.secondary" sx={{ fontSize: 13, lineHeight: 1.5 }}>
-        {description}
-      </Typography>
-    )}
-  </Box>
-);
+  );
+};
