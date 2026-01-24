@@ -9,6 +9,7 @@ import {
   PAYMENT_METHOD_SEED,
   initializeAccessControl,
 } from "../utils/initializeAccessControl.js";
+import { seedMaintenanceAccess } from "../utils/seedMaintenanceAccess.js";
 
 const DEFAULT_PAYMENT_METHOD_NAME = "Online/Card";
 
@@ -128,6 +129,14 @@ async function ensurePaymentMethodInfrastructure(): Promise<void> {
 async function syncAccessControl() {
   try {
     defineAssociations();
+    const scope = (process.env.SEED_ACCESS_CONTROL_SCOPE ?? "maintenance").trim().toLowerCase();
+
+    if (scope === "maintenance") {
+      await seedMaintenanceAccess();
+      console.log("Maintenance access seeded.");
+      return;
+    }
+
     await ensurePaymentMethodInfrastructure();
     try {
       await sequelize.sync({ alter: true });

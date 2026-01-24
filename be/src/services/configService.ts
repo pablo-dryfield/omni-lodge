@@ -1,11 +1,12 @@
 import ConfigKey from '../models/ConfigKey.js';
 import ConfigValue from '../models/ConfigValue.js';
 import ConfigHistory from '../models/ConfigHistory.js';
-import ConfigSeedRun from '../models/ConfigSeedRun.js';
 import logger from '../utils/logger.js';
+import type ConfigSeedRun from '../models/ConfigSeedRun.js';
 import { CONFIG_DEFINITION_MAP, CONFIG_DEFINITIONS, type ConfigDefinition } from '../config/appConfigRegistry.js';
 import { decryptSecret, encryptSecret } from './configEncryptionService.js';
 import HttpError from '../errors/HttpError.js';
+import { hasSeedRun, recordSeedRun, listSeedRuns } from './seedRunService.js';
 
 const DEFAULT_SEED_KEY = 'defaults';
 const AUTO_SEED_RUN_TYPE = 'auto';
@@ -334,35 +335,18 @@ export const refreshConfigCache = async (): Promise<void> => {
   }
 };
 
-const hasAutoSeedRun = async (): Promise<boolean> => {
-  const count = await ConfigSeedRun.count({
-    where: { seedKey: DEFAULT_SEED_KEY, runType: AUTO_SEED_RUN_TYPE },
-  });
-  return count > 0;
-};
-
-const recordSeedRun = async (params: {
-  runType: string;
-  seededKeys: string[];
-  actorId?: number | null;
-}): Promise<void> => {
-  const { runType, seededKeys, actorId } = params;
-  await ConfigSeedRun.create({
-    seedKey: DEFAULT_SEED_KEY,
-    runType,
-    seededBy: actorId ?? null,
-    seededCount: seededKeys.length,
-    seedDetails: { keys: seededKeys },
-  });
-};
-
 export const initializeConfigRegistry = async (): Promise<void> => {
   await syncConfigDefinitions();
 
-  const shouldAutoSeed = !(await hasAutoSeedRun());
+  const shouldAutoSeed = !(await hasSeedRun(DEFAULT_SEED_KEY, AUTO_SEED_RUN_TYPE));
   if (shouldAutoSeed) {
     const seededKeys = await seedConfigValues();
-    await recordSeedRun({ runType: AUTO_SEED_RUN_TYPE, seededKeys });
+    await recordSeedRun({
+      seedKey: DEFAULT_SEED_KEY,
+      runType: AUTO_SEED_RUN_TYPE,
+      seededCount: seededKeys.length,
+      seedDetails: { keys: seededKeys },
+    });
   }
 
   await refreshConfigCache();
@@ -370,17 +354,19 @@ export const initializeConfigRegistry = async (): Promise<void> => {
 
 export const restoreMissingConfigValues = async (actorId?: number | null): Promise<string[]> => {
   const seededKeys = await seedConfigValues();
-  await recordSeedRun({ runType: MANUAL_SEED_RUN_TYPE, seededKeys, actorId });
+  await recordSeedRun({
+    seedKey: DEFAULT_SEED_KEY,
+    runType: MANUAL_SEED_RUN_TYPE,
+    seededBy: actorId ?? null,
+    seededCount: seededKeys.length,
+    seedDetails: { keys: seededKeys },
+  });
   await refreshConfigCache();
   return seededKeys;
 };
 
 export const listConfigSeedRuns = async (limit = 5): Promise<ConfigSeedRun[]> => {
-  const safeLimit = Math.max(1, Math.min(limit, 50));
-  return ConfigSeedRun.findAll({
-    order: [['created_at', 'DESC']],
-    limit: safeLimit,
-  });
+  return listSeedRuns(limit);
 };
 
 export const getConfigValueRaw = (key: string): string | null => {

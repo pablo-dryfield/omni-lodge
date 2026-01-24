@@ -13,6 +13,7 @@ import Addon from '../models/Addon.js';
 import Product from '../models/Product.js';
 import ProductAddon from '../models/ProductAddon.js';
 import PaymentMethod from '../models/PaymentMethod.js';
+import { runSeedOnce } from '../services/seedRunService.js';
 
 const slugify = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
@@ -339,17 +340,24 @@ const PRODUCT_ADDON_SEEDS = [
   { addonName: 'Photos', maxPerAttendee: null, sortOrder: 2 },
 ];
 
-async function seedPubCrawlCatalog(): Promise<void> {
-  await sequelize.transaction(async (transaction: Transaction) => {
+const PUB_CRAWL_SEED_KEY = 'catalog-pub-crawl-v1';
+
+async function seedPubCrawlCatalog(): Promise<{ createdCount: number; updatedCount: number }> {
+  return sequelize.transaction(async (transaction: Transaction) => {
+    let createdCount = 0;
+    let updatedCount = 0;
     const paymentMethodMap = new Map<string, PaymentMethod>();
     for (const method of PAYMENT_METHOD_SEED) {
-      const [record] = await PaymentMethod.findOrCreate({
+      const [record, created] = await PaymentMethod.findOrCreate({
         where: { name: method.name },
         defaults: {
           description: method.description,
         },
         transaction,
       });
+      if (created) {
+        createdCount += 1;
+      }
       paymentMethodMap.set(record.name.toLowerCase(), record);
     }
 
@@ -403,15 +411,18 @@ async function seedPubCrawlCatalog(): Promise<void> {
           needsUpdate = true;
         }
         if (needsUpdate) {
+          updatedCount += 1;
           await channel.save({ transaction });
         }
+      } else {
+        createdCount += 1;
       }
     }
 
     const addonMap = new Map<string, Addon>();
 
     for (const addonSeed of ADDON_SEEDS) {
-      const [addon] = await Addon.findOrCreate({
+      const [addon, created] = await Addon.findOrCreate({
         where: { name: addonSeed.name },
         defaults: {
           basePrice: null,
@@ -420,6 +431,9 @@ async function seedPubCrawlCatalog(): Promise<void> {
         },
         transaction,
       });
+      if (created) {
+        createdCount += 1;
+      }
 
       let addonNeedsUpdate = false;
       if (!addon.isActive) {
@@ -431,6 +445,7 @@ async function seedPubCrawlCatalog(): Promise<void> {
         addonNeedsUpdate = true;
       }
       if (addonNeedsUpdate) {
+        updatedCount += 1;
         await addon.save({ transaction });
       }
       addonMap.set(addonSeed.name, addon);
@@ -440,7 +455,7 @@ async function seedPubCrawlCatalog(): Promise<void> {
     const productTypeId = referenceProduct?.productTypeId ?? 1;
     const createdBy = referenceProduct?.createdBy ?? 1;
 
-    const [product] = await Product.findOrCreate({
+    const [product, created] = await Product.findOrCreate({
       where: { name: PRODUCT_NAME },
       defaults: {
         productTypeId,
@@ -451,6 +466,9 @@ async function seedPubCrawlCatalog(): Promise<void> {
       },
       transaction,
     });
+    if (created) {
+      createdCount += 1;
+    }
 
     let productNeedsUpdate = false;
     if (product.productTypeId == null) {
@@ -474,6 +492,7 @@ async function seedPubCrawlCatalog(): Promise<void> {
       productNeedsUpdate = true;
     }
     if (productNeedsUpdate) {
+      updatedCount += 1;
       await product.save({ transaction });
     }
 
@@ -494,12 +513,25 @@ async function seedPubCrawlCatalog(): Promise<void> {
         },
         { transaction },
       );
+      createdCount += 1;
     }
+
+    return { createdCount, updatedCount };
   });
 }
 
 export async function initializeAccessControl(): Promise<void> {
-  await seedPubCrawlCatalog();
+  await runSeedOnce({
+    seedKey: PUB_CRAWL_SEED_KEY,
+    runType: 'sync',
+    run: async () => {
+      const summary = await seedPubCrawlCatalog();
+      return {
+        seededCount: summary.createdCount,
+        details: summary,
+      };
+    },
+  });
 
   const existingRoles = await UserType.findAll();
   await Promise.all(existingRoles.map(async role => {
