@@ -1,6 +1,13 @@
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
-import type { BookingEmailParser, BookingFieldPatch, BookingParserContext, ParsedBookingEvent } from '../types.js';
+import type {
+  BookingEmailParser,
+  BookingParserCheck,
+  BookingFieldPatch,
+  BookingParserContext,
+  BookingParserDiagnostics,
+  ParsedBookingEvent,
+} from '../types.js';
 import type { BookingEventType, BookingPlatform, BookingStatus } from '../../../constants/bookings.js';
 
 dayjs.extend(customParseFormat);
@@ -186,8 +193,27 @@ const extractGuestName = (raw?: string | null): { firstName?: string | null; las
 export class BasicBookingParser implements BookingEmailParser {
   public readonly name = 'basic-heuristics';
 
+  private buildDiagnostics(context: BookingParserContext): BookingParserDiagnostics {
+    const textPresent = Boolean(context.textBody?.trim().length);
+    const bookingId = extractBookingId(context);
+    const canParseChecks: BookingParserCheck[] = [
+      { label: 'text body present', passed: textPresent },
+      { label: 'booking id detected', passed: Boolean(bookingId), value: bookingId },
+    ];
+
+    return {
+      name: this.name,
+      canParse: textPresent && Boolean(bookingId),
+      canParseChecks,
+    };
+  }
+
+  diagnose(context: BookingParserContext): BookingParserDiagnostics {
+    return this.buildDiagnostics(context);
+  }
+
   canParse(context: BookingParserContext): boolean {
-    return Boolean(context.textBody?.trim().length) && Boolean(extractBookingId(context));
+    return this.buildDiagnostics(context).canParse;
   }
 
   async parse(context: BookingParserContext): Promise<ParsedBookingEvent | null> {

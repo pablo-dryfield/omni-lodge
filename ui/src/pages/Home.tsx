@@ -71,6 +71,9 @@ import {
   type DashboardPreviewPeriodPreset,
 } from "../api/reports";
 import dayjs from "dayjs";
+import isoWeek from "dayjs/plugin/isoWeek";
+
+dayjs.extend(isoWeek);
 
 const PAGE_SLUG = PAGE_SLUGS.dashboard;
 const DEFAULT_HOME_PREFERENCE: HomeDashboardPreferenceDto = {
@@ -223,12 +226,33 @@ const computePeriodRange = (
   }
   if (typeof override === "string") {
     const today = dayjs();
+    const getQuarterStart = (value: dayjs.Dayjs) => {
+      const quarterIndex = Math.floor(value.month() / 3);
+      const startMonth = quarterIndex * 3;
+      return value.month(startMonth).startOf("month");
+    };
+    const getQuarterEnd = (value: dayjs.Dayjs) => value.add(2, "month").endOf("month");
     switch (override) {
       case "today":
         return {
           from: formatPeriodBoundary(today.startOf("day")),
           to: formatPeriodBoundary(today.endOf("day")),
         };
+      case "yesterday": {
+        const base = today.subtract(1, "day");
+        return {
+          from: formatPeriodBoundary(base.startOf("day")),
+          to: formatPeriodBoundary(base.endOf("day")),
+        };
+      }
+      case "all_time": {
+        const from = dayjs("1900-01-01").startOf("day");
+        const to = dayjs("2100-12-31").endOf("day");
+        return {
+          from: formatPeriodBoundary(from),
+          to: formatPeriodBoundary(to),
+        };
+      }
       case "last_7_days": {
         const from = today.subtract(6, "day");
         return {
@@ -236,6 +260,18 @@ const computePeriodRange = (
           to: formatPeriodBoundary(today.endOf("day")),
         };
       }
+      case "last_week": {
+        const base = today.subtract(1, "week");
+        return {
+          from: formatPeriodBoundary(base.startOf("isoWeek")),
+          to: formatPeriodBoundary(base.endOf("isoWeek")),
+        };
+      }
+      case "this_week":
+        return {
+          from: formatPeriodBoundary(today.startOf("isoWeek")),
+          to: formatPeriodBoundary(today.endOf("isoWeek")),
+        };
       case "last_30_days": {
         const from = today.subtract(29, "day");
         return {
@@ -255,6 +291,25 @@ const computePeriodRange = (
         return {
           from: formatPeriodBoundary(base.startOf("month")),
           to: formatPeriodBoundary(base.endOf("month")),
+        };
+      }
+      case "this_year":
+        return {
+          from: formatPeriodBoundary(today.startOf("year")),
+          to: formatPeriodBoundary(today.endOf("year")),
+        };
+      case "this_quarter": {
+        const quarterStart = getQuarterStart(today);
+        return {
+          from: formatPeriodBoundary(quarterStart),
+          to: formatPeriodBoundary(getQuarterEnd(quarterStart)),
+        };
+      }
+      case "last_quarter": {
+        const quarterStart = getQuarterStart(today).subtract(3, "month");
+        return {
+          from: formatPeriodBoundary(quarterStart),
+          to: formatPeriodBoundary(getQuarterEnd(quarterStart)),
         };
       }
       case "this_month":
@@ -318,15 +373,17 @@ const extractFilterRange = (filter?: QueryConfigFilter | null): { from: string; 
 const resolveVisualDateRange = (
   config: DashboardVisualCardViewConfig,
   periodOverride: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null,
+  dateFilterOverride?: { modelId: string; fieldId: string; operator: FilterOperator } | null,
 ): { from: string; to: string } | null => {
   const overrideRange =
     periodOverride && cardSupportsPeriodOverride(config) ? computePeriodRange(periodOverride) : null;
   if (overrideRange) {
     return overrideRange;
   }
-  if (config.dateFilter && Array.isArray(config.queryConfig?.filters)) {
+  const activeDateFilter = dateFilterOverride ?? config.dateFilter ?? null;
+  if (activeDateFilter && Array.isArray(config.queryConfig?.filters)) {
     const match = config.queryConfig.filters.find(
-      (filter) => filter.modelId === config.dateFilter?.modelId && filter.fieldId === config.dateFilter?.fieldId,
+      (filter) => filter.modelId === activeDateFilter.modelId && filter.fieldId === activeDateFilter.fieldId,
     );
     const filterRange = extractFilterRange(match);
     if (filterRange) {
@@ -444,7 +501,7 @@ const cardSupportsPeriodOverride = (viewConfig: DashboardCardViewConfig | null |
     return Boolean(viewConfig.dateFilter);
   }
   if (isVisualCardViewConfig(viewConfig)) {
-    return Boolean(viewConfig.dateFilter || viewConfig.queryConfig?.time?.field);
+    return Boolean(viewConfig.dateFilter || viewConfig.dateFilterOptions?.length || viewConfig.queryConfig?.time?.field);
   }
   if (isSpotlightCardViewConfig(viewConfig)) {
     return false;
@@ -521,9 +578,18 @@ const PERIOD_OPTIONS: Array<{ value: PreviewPeriodValue; label: string }> = [
 
 const SPOTLIGHT_PERIOD_OPTIONS: Array<{ value: DashboardPreviewPeriodPreset; label: string }> = [
   { value: "today", label: "Today" },
+  { value: "yesterday", label: "Yesterday" },
+  { value: "all_time", label: "All time" },
   { value: "last_7_days", label: "Last 7 days" },
+  { value: "last_week", label: "Last week" },
+  { value: "this_week", label: "This week" },
   { value: "last_30_days", label: "Last 30 days" },
   { value: "last_30_months", label: "Last 30 months" },
+  { value: "this_month", label: "This month" },
+  { value: "last_month", label: "Last month" },
+  { value: "this_year", label: "This year" },
+  { value: "this_quarter", label: "This quarter" },
+  { value: "last_quarter", label: "Last quarter" },
 ];
 
 const SPOTLIGHT_PERIOD_LABEL_LOOKUP = new Map(
@@ -540,7 +606,8 @@ const normalizeSpotlightPeriodConfig = (
   defaultPreset: DashboardPreviewPeriodPreset;
   allowCustom?: boolean;
 } | null => {
-  if (!config?.periodConfig || !config.dateFilter) {
+  const hasDateFilter = Boolean(config?.dateFilter || config?.dateFilterOptions?.length);
+  if (!config?.periodConfig || !hasDateFilter) {
     return null;
   }
   const presets = Array.isArray(config.periodConfig.presets)
@@ -569,7 +636,8 @@ const normalizeVisualPeriodConfig = (
   defaultPreset: DashboardPreviewPeriodPreset;
   allowCustom?: boolean;
 } | null => {
-  if (!config?.periodConfig || !config.dateFilter) {
+  const hasDateFilter = Boolean(config?.dateFilter || config?.dateFilterOptions?.length);
+  if (!config?.periodConfig || !hasDateFilter) {
     return null;
   }
   const presets = Array.isArray(config.periodConfig.presets)
@@ -589,6 +657,221 @@ const normalizeVisualPeriodConfig = (
     defaultPreset,
     allowCustom: Boolean(config.periodConfig.allowCustom),
   };
+};
+
+type DashboardDateFilterOption = {
+  id: string;
+  modelId: string;
+  fieldId: string;
+  operator: FilterOperator;
+  label?: string;
+  filterIndex?: number;
+  clauseSql?: string;
+  filterPath?: number[];
+};
+
+const buildDateFilterOptionId = (entry: { id?: string; modelId: string; fieldId: string; operator: FilterOperator }) =>
+  entry.id ?? `${entry.modelId}.${entry.fieldId}.${entry.operator}`;
+
+const sanitizeDateFilterLabel = (value: string): string => value.replace(/\s*\([^)]*\)\s*$/, "").trim();
+
+const buildDateFilterOptionLabel = (entry: { label?: string; modelId: string; fieldId: string }) => {
+  const base = entry.label ?? `${entry.modelId}.${entry.fieldId}`;
+  return sanitizeDateFilterLabel(base);
+};
+
+const resolveDateFilterOptions = (
+  config: DashboardVisualCardViewConfig | DashboardSpotlightCardViewConfig,
+): DashboardDateFilterOption[] => {
+  const options: DashboardDateFilterOption[] = Array.isArray(config.dateFilterOptions)
+    ? config.dateFilterOptions
+        .map((option) => ({
+          ...option,
+          id: buildDateFilterOptionId(option),
+          label: buildDateFilterOptionLabel(option),
+        }))
+        .filter((option) => option.id.length > 0)
+    : [];
+  const defaultFilter = config.dateFilter
+    ? {
+        id: buildDateFilterOptionId(config.dateFilter),
+        modelId: config.dateFilter.modelId,
+        fieldId: config.dateFilter.fieldId,
+        operator: config.dateFilter.operator,
+        label: buildDateFilterOptionLabel(config.dateFilter),
+        ...(config.dateFilter.filterIndex !== undefined ? { filterIndex: config.dateFilter.filterIndex } : {}),
+        ...(config.dateFilter.filterPath ? { filterPath: config.dateFilter.filterPath } : {}),
+        ...(config.dateFilter.clauseSql ? { clauseSql: config.dateFilter.clauseSql } : {}),
+      }
+    : null;
+  if (
+    defaultFilter &&
+    !options.some((option) => option.id === defaultFilter.id) &&
+    !options.some(
+      (option) =>
+        option.modelId === defaultFilter.modelId &&
+        option.fieldId === defaultFilter.fieldId &&
+        option.operator === defaultFilter.operator,
+    )
+  ) {
+    return [defaultFilter, ...options];
+  }
+  return options;
+};
+
+const resolveSelectedDateFilterIds = (
+  config: DashboardVisualCardViewConfig | DashboardSpotlightCardViewConfig,
+  options: DashboardDateFilterOption[],
+): string[] => {
+  const allowedIds = options.map((option) => option.id);
+  const configured = Array.isArray(config.dateFilterSelections) ? config.dateFilterSelections : [];
+  const normalized = configured.filter((id) => allowedIds.includes(id));
+  if (normalized.length > 0) {
+    return normalized;
+  }
+  if (config.dateFilter) {
+    const match = options.find(
+      (option) =>
+        option.modelId === config.dateFilter?.modelId &&
+        option.fieldId === config.dateFilter?.fieldId &&
+        option.operator === config.dateFilter?.operator,
+    );
+    if (match) {
+      return [match.id];
+    }
+  }
+  return allowedIds.length > 0 ? [allowedIds[0]] : [];
+};
+
+const resolveSelectedDateFilters = (
+  config: DashboardVisualCardViewConfig | DashboardSpotlightCardViewConfig,
+): DashboardDateFilterOption[] => {
+  const options = resolveDateFilterOptions(config);
+  if (options.length === 0) {
+    return [];
+  }
+  const selectedIds = resolveSelectedDateFilterIds(config, options);
+  const selected = options.filter((option) => selectedIds.includes(option.id));
+  return selected.length > 0 ? selected : options;
+};
+
+const resolveSelectedDateFiltersForCard = (
+  config: DashboardVisualCardViewConfig | DashboardSpotlightCardViewConfig,
+  selectedIdsOverride?: string[] | null,
+): DashboardDateFilterOption[] => {
+  const options = resolveDateFilterOptions(config);
+  if (options.length === 0) {
+    return [];
+  }
+  if (selectedIdsOverride && selectedIdsOverride.length > 0) {
+    const selected = options.filter((option) => selectedIdsOverride.includes(option.id));
+    if (selected.length > 0) {
+      return selected;
+    }
+  }
+  return resolveSelectedDateFilters(config);
+};
+
+const resolveNextSelectedDateFilterIds = (
+  options: DashboardDateFilterOption[] | undefined,
+  currentIds: string[] | undefined,
+  toggledId: string,
+): string[] => {
+  if (!options || options.length === 0) {
+    return currentIds ?? [];
+  }
+  const optionIds = options.map((option) => option.id);
+  const normalizedCurrent = (currentIds ?? []).filter((id) => optionIds.includes(id));
+  if (!optionIds.includes(toggledId)) {
+    return normalizedCurrent.length > 0 ? normalizedCurrent : [optionIds[0]];
+  }
+  const isSelected = normalizedCurrent.includes(toggledId);
+  const next = isSelected
+    ? normalizedCurrent.filter((id) => id !== toggledId)
+    : [...normalizedCurrent, toggledId];
+  const ordered = optionIds.filter((id) => next.includes(id));
+  return ordered.length > 0 ? ordered : [optionIds[0]];
+};
+
+type DateFilterSignature = { modelId: string; fieldId: string; operator: FilterOperator };
+
+const resolveDateFilterSignature = (
+  options: DashboardDateFilterOption[] | undefined,
+  dateFilterId: string,
+): DateFilterSignature | null => {
+  if (!options || options.length === 0) {
+    return null;
+  }
+  const match = options.find((option) => option.id === dateFilterId);
+  return match ? { modelId: match.modelId, fieldId: match.fieldId, operator: match.operator } : null;
+};
+
+const findOptionIdBySignature = (
+  options: DashboardDateFilterOption[] | undefined,
+  signature: DateFilterSignature | null,
+): string | null => {
+  if (!options || options.length === 0 || !signature) {
+    return null;
+  }
+  const match = options.find(
+    (option) =>
+      option.modelId === signature.modelId &&
+      option.fieldId === signature.fieldId &&
+      option.operator === signature.operator,
+  );
+  return match?.id ?? null;
+};
+
+const resolveToggleIdForOptions = (
+  options: DashboardDateFilterOption[] | undefined,
+  signature: DateFilterSignature | null,
+  fallbackId: string,
+): string | null => {
+  if (!options || options.length === 0) {
+    return null;
+  }
+  if (signature) {
+    const matched = findOptionIdBySignature(options, signature);
+    if (matched) {
+      return matched;
+    }
+  }
+  return options.some((option) => option.id === fallbackId) ? fallbackId : null;
+};
+
+const resolveActiveDateFilter = (
+  config: DashboardVisualCardViewConfig | DashboardSpotlightCardViewConfig,
+  selectedId: string | null | undefined,
+): DashboardDateFilterOption | null => {
+  const options = resolveDateFilterOptions(config);
+  if (selectedId) {
+    const match = options.find((option) => option.id === selectedId);
+    if (match) {
+      return match;
+    }
+  }
+  if (config.dateFilter) {
+    const match = options.find(
+      (option) =>
+        option.modelId === config.dateFilter?.modelId &&
+        option.fieldId === config.dateFilter?.fieldId &&
+        option.operator === config.dateFilter?.operator,
+    );
+    if (match) {
+      return match;
+    }
+    return {
+      id: buildDateFilterOptionId(config.dateFilter),
+      modelId: config.dateFilter.modelId,
+      fieldId: config.dateFilter.fieldId,
+      operator: config.dateFilter.operator,
+      label: buildDateFilterOptionLabel(config.dateFilter),
+      ...(config.dateFilter.filterIndex !== undefined ? { filterIndex: config.dateFilter.filterIndex } : {}),
+      ...(config.dateFilter.filterPath ? { filterPath: config.dateFilter.filterPath } : {}),
+      ...(config.dateFilter.clauseSql ? { clauseSql: config.dateFilter.clauseSql } : {}),
+    };
+  }
+  return options[0] ?? null;
 };
 
 const buildCustomPeriodOverride = (
@@ -1490,6 +1773,90 @@ const Home = (props: GenericPageProps) => {
     });
     return map;
   }, [orderedActiveCards]);
+  const visualDateFilterOptionsById = useMemo(() => {
+    const map = new Map<string, DashboardDateFilterOption[]>();
+    orderedActiveCards.forEach((card) => {
+      const viewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
+      if (!isVisualCardViewConfig(viewConfig)) {
+        return;
+      }
+      const options = resolveDateFilterOptions(viewConfig);
+      if (options.length > 0) {
+        map.set(card.id, options);
+      }
+    });
+    return map;
+  }, [orderedActiveCards]);
+  const spotlightDateFilterOptionsById = useMemo(() => {
+    const map = new Map<string, DashboardDateFilterOption[]>();
+    orderedActiveCards.forEach((card) => {
+      const viewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
+      if (!isSpotlightCardViewConfig(viewConfig)) {
+        return;
+      }
+      const options = resolveDateFilterOptions(viewConfig);
+      if (options.length > 0) {
+        map.set(card.id, options);
+      }
+    });
+    return map;
+  }, [orderedActiveCards]);
+  const [visualDateFilterSelectionSets, setVisualDateFilterSelectionSets] = useState<Record<string, string[]>>({});
+  const [spotlightDateFilterSelectionSets, setSpotlightDateFilterSelectionSets] = useState<Record<string, string[]>>({});
+  useEffect(() => {
+    setVisualDateFilterSelectionSets((current) => {
+      const next: Record<string, string[]> = { ...current };
+      const validIds = new Set<string>();
+      visualDateFilterOptionsById.forEach((options, cardId) => {
+        const viewConfig = cardViewConfigById.get(cardId);
+        if (!viewConfig || !isVisualCardViewConfig(viewConfig)) {
+          return;
+        }
+        validIds.add(cardId);
+        const optionIds = new Set(options.map((option) => option.id));
+        const existing = current[cardId] ?? [];
+        const normalized = existing.filter((id) => optionIds.has(id));
+        const fallback = resolveSelectedDateFilterIds(viewConfig, options);
+        const nextIds = normalized.length > 0 ? normalized : fallback;
+        if (nextIds.length > 0) {
+          next[cardId] = nextIds;
+        }
+      });
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
+  }, [visualDateFilterOptionsById, cardViewConfigById]);
+  useEffect(() => {
+    setSpotlightDateFilterSelectionSets((current) => {
+      const next: Record<string, string[]> = { ...current };
+      const validIds = new Set<string>();
+      spotlightDateFilterOptionsById.forEach((options, cardId) => {
+        const viewConfig = cardViewConfigById.get(cardId);
+        if (!viewConfig || !isSpotlightCardViewConfig(viewConfig)) {
+          return;
+        }
+        validIds.add(cardId);
+        const optionIds = new Set(options.map((option) => option.id));
+        const existing = current[cardId] ?? [];
+        const normalized = existing.filter((id) => optionIds.has(id));
+        const fallback = resolveSelectedDateFilterIds(viewConfig, options);
+        const nextIds = normalized.length > 0 ? normalized : fallback;
+        if (nextIds.length > 0) {
+          next[cardId] = nextIds;
+        }
+      });
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
+  }, [spotlightDateFilterOptionsById, cardViewConfigById]);
   const periodGroupKeyById = useMemo(() => {
     const map = new Map<string, string>();
     orderedActiveCards.forEach((card) => {
@@ -1499,8 +1866,7 @@ const Home = (props: GenericPageProps) => {
       }
       if (isSpotlightCardViewConfig(viewConfig)) {
         const periodConfig = normalizeSpotlightPeriodConfig(viewConfig);
-        const dateFilter = viewConfig.dateFilter;
-        if (!periodConfig || !dateFilter) {
+        if (!periodConfig) {
           return;
         }
         const presetsKey = periodConfig.presets.join("|");
@@ -1508,14 +1874,13 @@ const Home = (props: GenericPageProps) => {
         const templateId = card.templateId ?? "template";
         map.set(
           card.id,
-          `${templateId}:${dateFilter.modelId}.${dateFilter.fieldId}.${dateFilter.operator}:${presetsKey}:${allowCustom}`,
+          `${templateId}:${presetsKey}:${allowCustom}`,
         );
         return;
       }
       if (isVisualCardViewConfig(viewConfig)) {
         const periodConfig = normalizeVisualPeriodConfig(viewConfig);
-        const dateFilter = viewConfig.dateFilter;
-        if (!periodConfig || !dateFilter) {
+        if (!periodConfig) {
           return;
         }
         const presetsKey = periodConfig.presets.join("|");
@@ -1523,7 +1888,7 @@ const Home = (props: GenericPageProps) => {
         const templateId = card.templateId ?? "template";
         map.set(
           card.id,
-          `${templateId}:${dateFilter.modelId}.${dateFilter.fieldId}.${dateFilter.operator}:${presetsKey}:${allowCustom}`,
+          `${templateId}:${presetsKey}:${allowCustom}`,
         );
       }
     });
@@ -1555,6 +1920,119 @@ const Home = (props: GenericPageProps) => {
       return { visualIds, spotlightIds };
     },
     [cardViewConfigById, linkedCardStates, orderedActiveCards, periodGroupKeyById],
+  );
+  const getLinkedDateFilterTargets = useCallback(
+    (sourceCardId: string): { visualIds: string[]; spotlightIds: string[] } => {
+      const isLinked = linkedCardStates[sourceCardId] ?? true;
+      const sourceCard = orderedActiveCards.find((card) => card.id === sourceCardId) ?? null;
+      const sourceTemplateId = sourceCard?.templateId ?? null;
+      const candidates =
+        isLinked && sourceTemplateId
+          ? orderedActiveCards.filter(
+              (card) => card.templateId === sourceTemplateId && (linkedCardStates[card.id] ?? true),
+            )
+          : orderedActiveCards.filter((card) => card.id === sourceCardId);
+      const visualIds: string[] = [];
+      const spotlightIds: string[] = [];
+      candidates.forEach((card) => {
+        const viewConfig = cardViewConfigById.get(card.id) ?? null;
+        if (isVisualCardViewConfig(viewConfig) && (visualDateFilterOptionsById.get(card.id) ?? []).length > 0) {
+          visualIds.push(card.id);
+          return;
+        }
+        if (isSpotlightCardViewConfig(viewConfig) && (spotlightDateFilterOptionsById.get(card.id) ?? []).length > 0) {
+          spotlightIds.push(card.id);
+        }
+      });
+      return { visualIds, spotlightIds };
+    },
+    [
+      cardViewConfigById,
+      linkedCardStates,
+      orderedActiveCards,
+      spotlightDateFilterOptionsById,
+      visualDateFilterOptionsById,
+    ],
+  );
+  const handleToggleVisualDateFilter = useCallback(
+    (cardId: string, dateFilterId: string) => {
+      const { visualIds, spotlightIds } = getLinkedDateFilterTargets(cardId);
+      const sourceSignature = resolveDateFilterSignature(
+        visualDateFilterOptionsById.get(cardId),
+        dateFilterId,
+      );
+      setVisualDateFilterSelectionSets((current) => {
+        const next = { ...current };
+        visualIds.forEach((id) => {
+          const options = visualDateFilterOptionsById.get(id);
+          const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFilterId);
+          if (toggleId) {
+            const nextIds = resolveNextSelectedDateFilterIds(options, current[id], toggleId);
+            if (nextIds.length > 0) {
+              next[id] = nextIds;
+            }
+          }
+        });
+        return next;
+      });
+      if (spotlightIds.length > 0) {
+        setSpotlightDateFilterSelectionSets((current) => {
+          const next = { ...current };
+          spotlightIds.forEach((id) => {
+            const options = spotlightDateFilterOptionsById.get(id);
+            const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFilterId);
+            if (toggleId) {
+              const nextIds = resolveNextSelectedDateFilterIds(options, current[id], toggleId);
+              if (nextIds.length > 0) {
+                next[id] = nextIds;
+              }
+            }
+          });
+          return next;
+        });
+      }
+    },
+    [getLinkedDateFilterTargets, spotlightDateFilterOptionsById, visualDateFilterOptionsById],
+  );
+  const handleToggleSpotlightDateFilter = useCallback(
+    (cardId: string, dateFilterId: string) => {
+      const { visualIds, spotlightIds } = getLinkedDateFilterTargets(cardId);
+      const sourceSignature = resolveDateFilterSignature(
+        spotlightDateFilterOptionsById.get(cardId),
+        dateFilterId,
+      );
+      setSpotlightDateFilterSelectionSets((current) => {
+        const next = { ...current };
+        spotlightIds.forEach((id) => {
+          const options = spotlightDateFilterOptionsById.get(id);
+          const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFilterId);
+          if (toggleId) {
+            const nextIds = resolveNextSelectedDateFilterIds(options, current[id], toggleId);
+            if (nextIds.length > 0) {
+              next[id] = nextIds;
+            }
+          }
+        });
+        return next;
+      });
+      if (visualIds.length > 0) {
+        setVisualDateFilterSelectionSets((current) => {
+          const next = { ...current };
+          visualIds.forEach((id) => {
+            const options = visualDateFilterOptionsById.get(id);
+            const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFilterId);
+            if (toggleId) {
+              const nextIds = resolveNextSelectedDateFilterIds(options, current[id], toggleId);
+              if (nextIds.length > 0) {
+                next[id] = nextIds;
+              }
+            }
+          });
+          return next;
+        });
+      }
+    },
+    [getLinkedDateFilterTargets, spotlightDateFilterOptionsById, visualDateFilterOptionsById],
   );
   const visualPeriodConfigById = useMemo(() => {
     const map = new Map<
@@ -1591,9 +2069,18 @@ const Home = (props: GenericPageProps) => {
     return map;
   }, [orderedActiveCards]);
   const [visualPeriodSelections, setVisualPeriodSelections] = useState<Record<string, VisualPeriodSelection>>({});
+  const [visualPeriodSelectionsByField, setVisualPeriodSelectionsByField] = useState<
+    Record<string, Record<string, VisualPeriodSelection>>
+  >({});
   const [visualCustomInputs, setVisualCustomInputs] = useState<Record<string, { from: string; to: string }>>({});
+  const [visualCustomInputsByField, setVisualCustomInputsByField] = useState<
+    Record<string, Record<string, { from: string; to: string }>>
+  >({});
   const [visualCustomAppliedRanges, setVisualCustomAppliedRanges] = useState<
     Record<string, { from: string; to: string }>
+  >({});
+  const [visualCustomAppliedRangesByField, setVisualCustomAppliedRangesByField] = useState<
+    Record<string, Record<string, { from: string; to: string }>>
   >({});
   useEffect(() => {
     setVisualPeriodSelections((current) => {
@@ -1639,15 +2126,54 @@ const Home = (props: GenericPageProps) => {
       });
       return next;
     });
+    setVisualPeriodSelectionsByField((current) => {
+      const next: Record<string, Record<string, VisualPeriodSelection>> = { ...current };
+      const validIds = new Set<string>(visualPeriodConfigById.keys());
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
+    setVisualCustomInputsByField((current) => {
+      const next: Record<string, Record<string, { from: string; to: string }>> = { ...current };
+      const validIds = new Set<string>(visualPeriodConfigById.keys());
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
+    setVisualCustomAppliedRangesByField((current) => {
+      const next: Record<string, Record<string, { from: string; to: string }>> = { ...current };
+      const validIds = new Set<string>(visualPeriodConfigById.keys());
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
   }, [visualPeriodConfigById]);
   const [spotlightPeriodSelections, setSpotlightPeriodSelections] = useState<
     Record<string, SpotlightPeriodSelection>
   >({});
+  const [spotlightPeriodSelectionsByField, setSpotlightPeriodSelectionsByField] = useState<
+    Record<string, Record<string, SpotlightPeriodSelection>>
+  >({});
   const [spotlightCustomInputs, setSpotlightCustomInputs] = useState<
     Record<string, { from: string; to: string }>
   >({});
+  const [spotlightCustomInputsByField, setSpotlightCustomInputsByField] = useState<
+    Record<string, Record<string, { from: string; to: string }>>
+  >({});
   const [spotlightCustomAppliedRanges, setSpotlightCustomAppliedRanges] = useState<
     Record<string, { from: string; to: string }>
+  >({});
+  const [spotlightCustomAppliedRangesByField, setSpotlightCustomAppliedRangesByField] = useState<
+    Record<string, Record<string, { from: string; to: string }>>
   >({});
   useEffect(() => {
     setSpotlightPeriodSelections((current) => {
@@ -1693,144 +2219,41 @@ const Home = (props: GenericPageProps) => {
       });
       return next;
     });
+    setSpotlightPeriodSelectionsByField((current) => {
+      const next: Record<string, Record<string, SpotlightPeriodSelection>> = { ...current };
+      const validIds = new Set<string>(spotlightPeriodConfigById.keys());
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
+    setSpotlightCustomInputsByField((current) => {
+      const next: Record<string, Record<string, { from: string; to: string }>> = { ...current };
+      const validIds = new Set<string>(spotlightPeriodConfigById.keys());
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
+    setSpotlightCustomAppliedRangesByField((current) => {
+      const next: Record<string, Record<string, { from: string; to: string }>> = { ...current };
+      const validIds = new Set<string>(spotlightPeriodConfigById.keys());
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
   }, [spotlightPeriodConfigById]);
   const handleVisualPeriodChange = useCallback(
-    (cardId: string, preset: VisualPeriodSelection) => {
-      const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
-      setVisualPeriodSelections((current) => {
-        const next = { ...current };
-        visualIds.forEach((id) => {
-          next[id] = preset;
-        });
-        return next;
-      });
-      if (spotlightIds.length > 0) {
-        setSpotlightPeriodSelections((current) => {
-          const next = { ...current };
-          spotlightIds.forEach((id) => {
-            next[id] = preset;
-          });
-          return next;
-        });
-      }
-    },
-    [getLinkedCardTargets],
-  );
-  const handleVisualCustomInputChange = useCallback((cardId: string, key: "from" | "to", value: string) => {
-    setVisualCustomInputs((current) => ({
-      ...current,
-      [cardId]: {
-        from: key === "from" ? value : current[cardId]?.from ?? "",
-        to: key === "to" ? value : current[cardId]?.to ?? "",
-      },
-    }));
-  }, []);
-  const handleVisualApplyCustomRange = useCallback(
-    (cardId: string) => {
-      const inputs = visualCustomInputs[cardId];
-      if (!inputs) {
-        return;
-      }
-      const normalized = normalizeCustomDateRange(inputs.from, inputs.to);
-      if (!normalized) {
-        return;
-      }
-      const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
-      setVisualCustomInputs((current) => {
-        const next = { ...current };
-        visualIds.forEach((id) => {
-          next[id] = inputs;
-        });
-        return next;
-      });
-      setSpotlightCustomInputs((current) => {
-        const next = { ...current };
-        spotlightIds.forEach((id) => {
-          next[id] = inputs;
-        });
-        return next;
-      });
-      setVisualCustomAppliedRanges((current) => {
-        const next = { ...current };
-        visualIds.forEach((id) => {
-          next[id] = normalized;
-        });
-        return next;
-      });
-      if (spotlightIds.length > 0) {
-        setSpotlightCustomAppliedRanges((current) => {
-          const next = { ...current };
-          spotlightIds.forEach((id) => {
-            next[id] = normalized;
-          });
-          return next;
-        });
-      }
-      setVisualPeriodSelections((current) => {
-        const next = { ...current };
-        visualIds.forEach((id) => {
-          next[id] = "custom";
-        });
-        return next;
-      });
-      if (spotlightIds.length > 0) {
-        setSpotlightPeriodSelections((current) => {
-          const next = { ...current };
-          spotlightIds.forEach((id) => {
-            next[id] = "custom";
-          });
-          return next;
-        });
-      }
-    },
-    [getLinkedCardTargets, visualCustomInputs],
-  );
-  const getVisualPeriodSelection = useCallback(
-    (cardId: string): VisualPeriodSelection | null => {
-      const config = visualPeriodConfigById.get(cardId);
-      if (!config) {
-        return null;
-      }
-      const selected = visualPeriodSelections[cardId];
-      if (selected === "custom" && config.allowCustom) {
-        return "custom";
-      }
-      if (selected && selected !== "custom" && config.presets.includes(selected)) {
-        return selected;
-      }
-      return config.defaultPreset;
-    },
-    [visualPeriodConfigById, visualPeriodSelections],
-  );
-  const getVisualPeriodOverride = useCallback(
-    (cardId: string): DashboardPreviewPeriodPreset | DashboardPreviewPeriodOverride | null => {
-      const config = visualPeriodConfigById.get(cardId);
-      if (!config) {
-        return null;
-      }
-      const selected = visualPeriodSelections[cardId];
-      if (selected === "custom" && config.allowCustom) {
-        const applied = visualCustomAppliedRanges[cardId];
-        return applied ? { mode: "custom", from: applied.from, to: applied.to } : config.defaultPreset;
-      }
-      if (selected && selected !== "custom" && config.presets.includes(selected)) {
-        return selected;
-      }
-      return config.defaultPreset;
-    },
-    [visualCustomAppliedRanges, visualPeriodConfigById, visualPeriodSelections],
-  );
-  const handleSpotlightPeriodChange = useCallback(
-    (cardId: string, preset: SpotlightPeriodSelection) => {
-      const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
-      setSpotlightPeriodSelections((current) => {
-        const next = { ...current };
-        spotlightIds.forEach((id) => {
-          next[id] = preset;
-        });
-        return next;
-      });
-      if (visualIds.length > 0) {
+    (cardId: string, preset: VisualPeriodSelection, dateFieldId?: string) => {
+      if (!dateFieldId) {
+        const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
         setVisualPeriodSelections((current) => {
           const next = { ...current };
           visualIds.forEach((id) => {
@@ -1838,52 +2261,144 @@ const Home = (props: GenericPageProps) => {
           });
           return next;
         });
-      }
-    },
-    [getLinkedCardTargets],
-  );
-  const handleSpotlightCustomInputChange = useCallback((cardId: string, key: "from" | "to", value: string) => {
-    setSpotlightCustomInputs((current) => ({
-      ...current,
-      [cardId]: {
-        from: key === "from" ? value : current[cardId]?.from ?? "",
-        to: key === "to" ? value : current[cardId]?.to ?? "",
-      },
-    }));
-  }, []);
-  const handleSpotlightApplyCustomRange = useCallback(
-    (cardId: string) => {
-      const inputs = spotlightCustomInputs[cardId];
-      if (!inputs) {
+        if (spotlightIds.length > 0) {
+          setSpotlightPeriodSelections((current) => {
+            const next = { ...current };
+            spotlightIds.forEach((id) => {
+              next[id] = preset;
+            });
+            return next;
+          });
+        }
         return;
       }
-      const normalized = normalizeCustomDateRange(inputs.from, inputs.to);
-      if (!normalized) {
-        return;
-      }
-      const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
-      setSpotlightCustomInputs((current) => {
-        const next = { ...current };
-        spotlightIds.forEach((id) => {
-          next[id] = inputs;
-        });
-        return next;
-      });
-      setVisualCustomInputs((current) => {
+      const { visualIds, spotlightIds } = getLinkedDateFilterTargets(cardId);
+      const sourceSignature = resolveDateFilterSignature(
+        visualDateFilterOptionsById.get(cardId),
+        dateFieldId,
+      );
+      setVisualPeriodSelectionsByField((current) => {
         const next = { ...current };
         visualIds.forEach((id) => {
-          next[id] = inputs;
+          const options = visualDateFilterOptionsById.get(id);
+          const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+          if (!toggleId) {
+            return;
+          }
+          const cardSelections = { ...(next[id] ?? {}) };
+          cardSelections[toggleId] = preset;
+          next[id] = cardSelections;
         });
         return next;
       });
-      setSpotlightCustomAppliedRanges((current) => {
+      if (spotlightIds.length > 0) {
+        setSpotlightPeriodSelectionsByField((current) => {
+          const next = { ...current };
+          spotlightIds.forEach((id) => {
+            const options = spotlightDateFilterOptionsById.get(id);
+            const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+            if (!toggleId) {
+              return;
+            }
+            const cardSelections = { ...(next[id] ?? {}) };
+            cardSelections[toggleId] = preset as SpotlightPeriodSelection;
+            next[id] = cardSelections;
+          });
+          return next;
+        });
+      }
+    },
+    [
+      getLinkedCardTargets,
+      getLinkedDateFilterTargets,
+      spotlightDateFilterOptionsById,
+      visualDateFilterOptionsById,
+    ],
+  );
+  const handleVisualCustomInputChange = useCallback(
+    (cardId: string, key: "from" | "to", value: string, dateFieldId?: string) => {
+      if (!dateFieldId) {
+        setVisualCustomInputs((current) => ({
+          ...current,
+          [cardId]: {
+            from: key === "from" ? value : current[cardId]?.from ?? "",
+            to: key === "to" ? value : current[cardId]?.to ?? "",
+          },
+        }));
+        return;
+      }
+      const { visualIds, spotlightIds } = getLinkedDateFilterTargets(cardId);
+      const sourceSignature = resolveDateFilterSignature(
+        visualDateFilterOptionsById.get(cardId),
+        dateFieldId,
+      );
+      setVisualCustomInputsByField((current) => {
         const next = { ...current };
-        spotlightIds.forEach((id) => {
-          next[id] = normalized;
+        visualIds.forEach((id) => {
+          const options = visualDateFilterOptionsById.get(id);
+          const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+          if (!toggleId) {
+            return;
+          }
+          const currentInputs = (next[id] ?? {})[toggleId];
+          const cardInputs = { ...(next[id] ?? {}) };
+          cardInputs[toggleId] = {
+            from: key === "from" ? value : currentInputs?.from ?? "",
+            to: key === "to" ? value : currentInputs?.to ?? "",
+          };
+          next[id] = cardInputs;
         });
         return next;
       });
-      if (visualIds.length > 0) {
+      if (spotlightIds.length > 0) {
+        setSpotlightCustomInputsByField((current) => {
+          const next = { ...current };
+          spotlightIds.forEach((id) => {
+            const options = spotlightDateFilterOptionsById.get(id);
+            const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+            if (!toggleId) {
+              return;
+            }
+            const currentInputs = (next[id] ?? {})[toggleId];
+            const cardInputs = { ...(next[id] ?? {}) };
+            cardInputs[toggleId] = {
+              from: key === "from" ? value : currentInputs?.from ?? "",
+              to: key === "to" ? value : currentInputs?.to ?? "",
+            };
+            next[id] = cardInputs;
+          });
+          return next;
+        });
+      }
+    },
+    [getLinkedDateFilterTargets, spotlightDateFilterOptionsById, visualDateFilterOptionsById],
+  );
+  const handleVisualApplyCustomRange = useCallback(
+    (cardId: string, dateFieldId?: string) => {
+      if (!dateFieldId) {
+        const inputs = visualCustomInputs[cardId];
+        if (!inputs) {
+          return;
+        }
+        const normalized = normalizeCustomDateRange(inputs.from, inputs.to);
+        if (!normalized) {
+          return;
+        }
+        const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
+        setVisualCustomInputs((current) => {
+          const next = { ...current };
+          visualIds.forEach((id) => {
+            next[id] = inputs;
+          });
+          return next;
+        });
+        setSpotlightCustomInputs((current) => {
+          const next = { ...current };
+          spotlightIds.forEach((id) => {
+            next[id] = inputs;
+          });
+          return next;
+        });
         setVisualCustomAppliedRanges((current) => {
           const next = { ...current };
           visualIds.forEach((id) => {
@@ -1891,15 +2406,15 @@ const Home = (props: GenericPageProps) => {
           });
           return next;
         });
-      }
-      setSpotlightPeriodSelections((current) => {
-        const next = { ...current };
-        spotlightIds.forEach((id) => {
-          next[id] = "custom";
-        });
-        return next;
-      });
-      if (visualIds.length > 0) {
+        if (spotlightIds.length > 0) {
+          setSpotlightCustomAppliedRanges((current) => {
+            const next = { ...current };
+            spotlightIds.forEach((id) => {
+              next[id] = normalized;
+            });
+            return next;
+          });
+        }
         setVisualPeriodSelections((current) => {
           const next = { ...current };
           visualIds.forEach((id) => {
@@ -1907,17 +2422,139 @@ const Home = (props: GenericPageProps) => {
           });
           return next;
         });
+        if (spotlightIds.length > 0) {
+          setSpotlightPeriodSelections((current) => {
+            const next = { ...current };
+            spotlightIds.forEach((id) => {
+              next[id] = "custom";
+            });
+            return next;
+          });
+        }
+        return;
+      }
+      const inputs = visualCustomInputsByField[cardId]?.[dateFieldId];
+      if (!inputs) {
+        return;
+      }
+      const normalized = normalizeCustomDateRange(inputs.from, inputs.to);
+      if (!normalized) {
+        return;
+      }
+      const { visualIds, spotlightIds } = getLinkedDateFilterTargets(cardId);
+      const sourceSignature = resolveDateFilterSignature(
+        visualDateFilterOptionsById.get(cardId),
+        dateFieldId,
+      );
+      setVisualCustomInputsByField((current) => {
+        const next = { ...current };
+        visualIds.forEach((id) => {
+          const options = visualDateFilterOptionsById.get(id);
+          const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+          if (!toggleId) {
+            return;
+          }
+          const cardInputs = { ...(next[id] ?? {}) };
+          cardInputs[toggleId] = inputs;
+          next[id] = cardInputs;
+        });
+        return next;
+      });
+      if (spotlightIds.length > 0) {
+        setSpotlightCustomInputsByField((current) => {
+          const next = { ...current };
+          spotlightIds.forEach((id) => {
+            const options = spotlightDateFilterOptionsById.get(id);
+            const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+            if (!toggleId) {
+              return;
+            }
+            const cardInputs = { ...(next[id] ?? {}) };
+            cardInputs[toggleId] = inputs;
+            next[id] = cardInputs;
+          });
+          return next;
+        });
+      }
+      setVisualCustomAppliedRangesByField((current) => {
+        const next = { ...current };
+        visualIds.forEach((id) => {
+          const options = visualDateFilterOptionsById.get(id);
+          const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+          if (!toggleId) {
+            return;
+          }
+          const cardRanges = { ...(next[id] ?? {}) };
+          cardRanges[toggleId] = normalized;
+          next[id] = cardRanges;
+        });
+        return next;
+      });
+      if (spotlightIds.length > 0) {
+        setSpotlightCustomAppliedRangesByField((current) => {
+          const next = { ...current };
+          spotlightIds.forEach((id) => {
+            const options = spotlightDateFilterOptionsById.get(id);
+            const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+            if (!toggleId) {
+              return;
+            }
+            const cardRanges = { ...(next[id] ?? {}) };
+            cardRanges[toggleId] = normalized;
+            next[id] = cardRanges;
+          });
+          return next;
+        });
+      }
+      setVisualPeriodSelectionsByField((current) => {
+        const next = { ...current };
+        visualIds.forEach((id) => {
+          const options = visualDateFilterOptionsById.get(id);
+          const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+          if (!toggleId) {
+            return;
+          }
+          const cardSelections = { ...(next[id] ?? {}) };
+          cardSelections[toggleId] = "custom";
+          next[id] = cardSelections;
+        });
+        return next;
+      });
+      if (spotlightIds.length > 0) {
+        setSpotlightPeriodSelectionsByField((current) => {
+          const next = { ...current };
+          spotlightIds.forEach((id) => {
+            const options = spotlightDateFilterOptionsById.get(id);
+            const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+            if (!toggleId) {
+              return;
+            }
+            const cardSelections = { ...(next[id] ?? {}) };
+            cardSelections[toggleId] = "custom";
+            next[id] = cardSelections;
+          });
+          return next;
+        });
       }
     },
-    [getLinkedCardTargets, spotlightCustomInputs],
+    [
+      getLinkedCardTargets,
+      getLinkedDateFilterTargets,
+      spotlightDateFilterOptionsById,
+      visualCustomInputs,
+      visualCustomInputsByField,
+      visualDateFilterOptionsById,
+    ],
   );
-  const getSpotlightPeriodSelection = useCallback(
-    (cardId: string): SpotlightPeriodSelection | null => {
-      const config = spotlightPeriodConfigById.get(cardId);
+  const getVisualPeriodSelection = useCallback(
+    (cardId: string, dateFieldId?: string): VisualPeriodSelection | null => {
+      const config = visualPeriodConfigById.get(cardId);
       if (!config) {
         return null;
       }
-      const selected = spotlightPeriodSelections[cardId];
+      const selected = dateFieldId
+        ? visualPeriodSelectionsByField[cardId]?.[dateFieldId] ?? visualPeriodSelections[cardId]
+        : visualPeriodSelections[cardId];
       if (selected === "custom" && config.allowCustom) {
         return "custom";
       }
@@ -1926,17 +2563,21 @@ const Home = (props: GenericPageProps) => {
       }
       return config.defaultPreset;
     },
-    [spotlightPeriodConfigById, spotlightPeriodSelections],
+    [visualPeriodConfigById, visualPeriodSelections, visualPeriodSelectionsByField],
   );
-  const getSpotlightPeriodOverride = useCallback(
-    (cardId: string): DashboardPreviewPeriodPreset | DashboardPreviewPeriodOverride | null => {
-      const config = spotlightPeriodConfigById.get(cardId);
+  const getVisualPeriodOverride = useCallback(
+    (cardId: string, dateFieldId?: string): DashboardPreviewPeriodPreset | DashboardPreviewPeriodOverride | null => {
+      const config = visualPeriodConfigById.get(cardId);
       if (!config) {
         return null;
       }
-      const selected = spotlightPeriodSelections[cardId];
+      const selected = dateFieldId
+        ? visualPeriodSelectionsByField[cardId]?.[dateFieldId] ?? visualPeriodSelections[cardId]
+        : visualPeriodSelections[cardId];
       if (selected === "custom" && config.allowCustom) {
-        const applied = spotlightCustomAppliedRanges[cardId];
+        const applied = dateFieldId
+          ? visualCustomAppliedRangesByField[cardId]?.[dateFieldId] ?? visualCustomAppliedRanges[cardId]
+          : visualCustomAppliedRanges[cardId];
         return applied ? { mode: "custom", from: applied.from, to: applied.to } : config.defaultPreset;
       }
       if (selected && selected !== "custom" && config.presets.includes(selected)) {
@@ -1944,7 +2585,356 @@ const Home = (props: GenericPageProps) => {
       }
       return config.defaultPreset;
     },
-    [spotlightPeriodConfigById, spotlightPeriodSelections, spotlightCustomAppliedRanges],
+    [
+      visualCustomAppliedRanges,
+      visualCustomAppliedRangesByField,
+      visualPeriodConfigById,
+      visualPeriodSelections,
+      visualPeriodSelectionsByField,
+    ],
+  );
+  const handleSpotlightPeriodChange = useCallback(
+    (cardId: string, preset: SpotlightPeriodSelection, dateFieldId?: string) => {
+      if (!dateFieldId) {
+        const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
+        setSpotlightPeriodSelections((current) => {
+          const next = { ...current };
+          spotlightIds.forEach((id) => {
+            next[id] = preset;
+          });
+          return next;
+        });
+        if (visualIds.length > 0) {
+          setVisualPeriodSelections((current) => {
+            const next = { ...current };
+            visualIds.forEach((id) => {
+              next[id] = preset as VisualPeriodSelection;
+            });
+            return next;
+          });
+        }
+        return;
+      }
+      const { visualIds, spotlightIds } = getLinkedDateFilterTargets(cardId);
+      const sourceSignature = resolveDateFilterSignature(
+        spotlightDateFilterOptionsById.get(cardId),
+        dateFieldId,
+      );
+      setSpotlightPeriodSelectionsByField((current) => {
+        const next = { ...current };
+        spotlightIds.forEach((id) => {
+          const options = spotlightDateFilterOptionsById.get(id);
+          const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+          if (!toggleId) {
+            return;
+          }
+          const cardSelections = { ...(next[id] ?? {}) };
+          cardSelections[toggleId] = preset;
+          next[id] = cardSelections;
+        });
+        return next;
+      });
+      if (visualIds.length > 0) {
+        setVisualPeriodSelectionsByField((current) => {
+          const next = { ...current };
+          visualIds.forEach((id) => {
+            const options = visualDateFilterOptionsById.get(id);
+            const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+            if (!toggleId) {
+              return;
+            }
+            const cardSelections = { ...(next[id] ?? {}) };
+            cardSelections[toggleId] = preset as VisualPeriodSelection;
+            next[id] = cardSelections;
+          });
+          return next;
+        });
+      }
+    },
+    [
+      getLinkedCardTargets,
+      getLinkedDateFilterTargets,
+      spotlightDateFilterOptionsById,
+      visualDateFilterOptionsById,
+    ],
+  );
+  const handleSpotlightCustomInputChange = useCallback(
+    (cardId: string, key: "from" | "to", value: string, dateFieldId?: string) => {
+      if (!dateFieldId) {
+        setSpotlightCustomInputs((current) => ({
+          ...current,
+          [cardId]: {
+            from: key === "from" ? value : current[cardId]?.from ?? "",
+            to: key === "to" ? value : current[cardId]?.to ?? "",
+          },
+        }));
+        return;
+      }
+      const { visualIds, spotlightIds } = getLinkedDateFilterTargets(cardId);
+      const sourceSignature = resolveDateFilterSignature(
+        spotlightDateFilterOptionsById.get(cardId),
+        dateFieldId,
+      );
+      setSpotlightCustomInputsByField((current) => {
+        const next = { ...current };
+        spotlightIds.forEach((id) => {
+          const options = spotlightDateFilterOptionsById.get(id);
+          const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+          if (!toggleId) {
+            return;
+          }
+          const currentInputs = (next[id] ?? {})[toggleId];
+          const cardInputs = { ...(next[id] ?? {}) };
+          cardInputs[toggleId] = {
+            from: key === "from" ? value : currentInputs?.from ?? "",
+            to: key === "to" ? value : currentInputs?.to ?? "",
+          };
+          next[id] = cardInputs;
+        });
+        return next;
+      });
+      if (visualIds.length > 0) {
+        setVisualCustomInputsByField((current) => {
+          const next = { ...current };
+          visualIds.forEach((id) => {
+            const options = visualDateFilterOptionsById.get(id);
+            const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+            if (!toggleId) {
+              return;
+            }
+            const currentInputs = (next[id] ?? {})[toggleId];
+            const cardInputs = { ...(next[id] ?? {}) };
+            cardInputs[toggleId] = {
+              from: key === "from" ? value : currentInputs?.from ?? "",
+              to: key === "to" ? value : currentInputs?.to ?? "",
+            };
+            next[id] = cardInputs;
+          });
+          return next;
+        });
+      }
+    },
+    [getLinkedDateFilterTargets, spotlightDateFilterOptionsById, visualDateFilterOptionsById],
+  );
+  const handleSpotlightApplyCustomRange = useCallback(
+    (cardId: string, dateFieldId?: string) => {
+      if (!dateFieldId) {
+        const inputs = spotlightCustomInputs[cardId];
+        if (!inputs) {
+          return;
+        }
+        const normalized = normalizeCustomDateRange(inputs.from, inputs.to);
+        if (!normalized) {
+          return;
+        }
+        const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
+        setSpotlightCustomInputs((current) => {
+          const next = { ...current };
+          spotlightIds.forEach((id) => {
+            next[id] = inputs;
+          });
+          return next;
+        });
+        setVisualCustomInputs((current) => {
+          const next = { ...current };
+          visualIds.forEach((id) => {
+            next[id] = inputs;
+          });
+          return next;
+        });
+        setSpotlightCustomAppliedRanges((current) => {
+          const next = { ...current };
+          spotlightIds.forEach((id) => {
+            next[id] = normalized;
+          });
+          return next;
+        });
+        if (visualIds.length > 0) {
+          setVisualCustomAppliedRanges((current) => {
+            const next = { ...current };
+            visualIds.forEach((id) => {
+              next[id] = normalized;
+            });
+            return next;
+          });
+        }
+        setSpotlightPeriodSelections((current) => {
+          const next = { ...current };
+          spotlightIds.forEach((id) => {
+            next[id] = "custom";
+          });
+          return next;
+        });
+        if (visualIds.length > 0) {
+          setVisualPeriodSelections((current) => {
+            const next = { ...current };
+            visualIds.forEach((id) => {
+              next[id] = "custom";
+            });
+            return next;
+          });
+        }
+        return;
+      }
+      const inputs = spotlightCustomInputsByField[cardId]?.[dateFieldId];
+      if (!inputs) {
+        return;
+      }
+      const normalized = normalizeCustomDateRange(inputs.from, inputs.to);
+      if (!normalized) {
+        return;
+      }
+      const { visualIds, spotlightIds } = getLinkedDateFilterTargets(cardId);
+      const sourceSignature = resolveDateFilterSignature(
+        spotlightDateFilterOptionsById.get(cardId),
+        dateFieldId,
+      );
+      setSpotlightCustomInputsByField((current) => {
+        const next = { ...current };
+        spotlightIds.forEach((id) => {
+          const options = spotlightDateFilterOptionsById.get(id);
+          const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+          if (!toggleId) {
+            return;
+          }
+          const cardInputs = { ...(next[id] ?? {}) };
+          cardInputs[toggleId] = inputs;
+          next[id] = cardInputs;
+        });
+        return next;
+      });
+      if (visualIds.length > 0) {
+        setVisualCustomInputsByField((current) => {
+          const next = { ...current };
+          visualIds.forEach((id) => {
+            const options = visualDateFilterOptionsById.get(id);
+            const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+            if (!toggleId) {
+              return;
+            }
+            const cardInputs = { ...(next[id] ?? {}) };
+            cardInputs[toggleId] = inputs;
+            next[id] = cardInputs;
+          });
+          return next;
+        });
+      }
+      setSpotlightCustomAppliedRangesByField((current) => {
+        const next = { ...current };
+        spotlightIds.forEach((id) => {
+          const options = spotlightDateFilterOptionsById.get(id);
+          const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+          if (!toggleId) {
+            return;
+          }
+          const cardRanges = { ...(next[id] ?? {}) };
+          cardRanges[toggleId] = normalized;
+          next[id] = cardRanges;
+        });
+        return next;
+      });
+      if (visualIds.length > 0) {
+        setVisualCustomAppliedRangesByField((current) => {
+          const next = { ...current };
+          visualIds.forEach((id) => {
+            const options = visualDateFilterOptionsById.get(id);
+            const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+            if (!toggleId) {
+              return;
+            }
+            const cardRanges = { ...(next[id] ?? {}) };
+            cardRanges[toggleId] = normalized;
+            next[id] = cardRanges;
+          });
+          return next;
+        });
+      }
+      setSpotlightPeriodSelectionsByField((current) => {
+        const next = { ...current };
+        spotlightIds.forEach((id) => {
+          const options = spotlightDateFilterOptionsById.get(id);
+          const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+          if (!toggleId) {
+            return;
+          }
+          const cardSelections = { ...(next[id] ?? {}) };
+          cardSelections[toggleId] = "custom";
+          next[id] = cardSelections;
+        });
+        return next;
+      });
+      if (visualIds.length > 0) {
+        setVisualPeriodSelectionsByField((current) => {
+          const next = { ...current };
+          visualIds.forEach((id) => {
+            const options = visualDateFilterOptionsById.get(id);
+            const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+            if (!toggleId) {
+              return;
+            }
+            const cardSelections = { ...(next[id] ?? {}) };
+            cardSelections[toggleId] = "custom";
+            next[id] = cardSelections;
+          });
+          return next;
+        });
+      }
+    },
+    [
+      getLinkedCardTargets,
+      getLinkedDateFilterTargets,
+      spotlightCustomInputs,
+      spotlightCustomInputsByField,
+      spotlightDateFilterOptionsById,
+      visualDateFilterOptionsById,
+    ],
+  );
+  const getSpotlightPeriodSelection = useCallback(
+    (cardId: string, dateFieldId?: string): SpotlightPeriodSelection | null => {
+      const config = spotlightPeriodConfigById.get(cardId);
+      if (!config) {
+        return null;
+      }
+      const selected = dateFieldId
+        ? spotlightPeriodSelectionsByField[cardId]?.[dateFieldId] ?? spotlightPeriodSelections[cardId]
+        : spotlightPeriodSelections[cardId];
+      if (selected === "custom" && config.allowCustom) {
+        return "custom";
+      }
+      if (selected && selected !== "custom" && config.presets.includes(selected)) {
+        return selected;
+      }
+      return config.defaultPreset;
+    },
+    [spotlightPeriodConfigById, spotlightPeriodSelections, spotlightPeriodSelectionsByField],
+  );
+  const getSpotlightPeriodOverride = useCallback(
+    (cardId: string, dateFieldId?: string): DashboardPreviewPeriodPreset | DashboardPreviewPeriodOverride | null => {
+      const config = spotlightPeriodConfigById.get(cardId);
+      if (!config) {
+        return null;
+      }
+      const selected = dateFieldId
+        ? spotlightPeriodSelectionsByField[cardId]?.[dateFieldId] ?? spotlightPeriodSelections[cardId]
+        : spotlightPeriodSelections[cardId];
+      if (selected === "custom" && config.allowCustom) {
+        const applied = dateFieldId
+          ? spotlightCustomAppliedRangesByField[cardId]?.[dateFieldId] ?? spotlightCustomAppliedRanges[cardId]
+          : spotlightCustomAppliedRanges[cardId];
+        return applied ? { mode: "custom", from: applied.from, to: applied.to } : config.defaultPreset;
+      }
+      if (selected && selected !== "custom" && config.presets.includes(selected)) {
+        return selected;
+      }
+      return config.defaultPreset;
+    },
+    [
+      spotlightCustomAppliedRanges,
+      spotlightCustomAppliedRangesByField,
+      spotlightPeriodConfigById,
+      spotlightPeriodSelections,
+      spotlightPeriodSelectionsByField,
+    ],
   );
   const handleGlobalPresetSelection = useCallback(
     (value: PreviewPeriodValue) => {
@@ -2072,8 +3062,23 @@ const Home = (props: GenericPageProps) => {
       if (isVisualCardViewConfig(rawViewConfig) && rawViewConfig.queryConfig) {
         queryConfig = cloneConfig(rawViewConfig.queryConfig);
         if (queryConfig) {
-          const visualPeriodOverride = getVisualPeriodOverride(card.id) ?? globalPeriodOverride;
-          applyPeriodOverrideToQueryConfig(queryConfig, visualPeriodOverride, rawViewConfig.dateFilter ?? null);
+          const selectedDateFilters = resolveSelectedDateFiltersForCard(
+            rawViewConfig,
+            visualDateFilterSelectionSets[card.id],
+          );
+          if (selectedDateFilters.length > 0) {
+            selectedDateFilters.forEach((filter) => {
+              const visualPeriodOverride = getVisualPeriodOverride(card.id, filter.id) ?? globalPeriodOverride;
+              if (visualPeriodOverride) {
+                applyPeriodOverrideToQueryConfig(queryConfig, visualPeriodOverride, filter);
+              }
+            });
+          } else {
+            const visualPeriodOverride = getVisualPeriodOverride(card.id) ?? globalPeriodOverride;
+            if (visualPeriodOverride) {
+              applyPeriodOverrideToQueryConfig(queryConfig, visualPeriodOverride, null);
+            }
+          }
           queryConfig.options = {
             ...queryConfig.options,
             templateId: card.templateId || queryConfig.options?.templateId || null,
@@ -2094,10 +3099,24 @@ const Home = (props: GenericPageProps) => {
         if (rawViewConfig.queryConfig) {
           queryConfig = cloneConfig(rawViewConfig.queryConfig);
           if (queryConfig) {
-            const spotlightPeriod = getSpotlightPeriodOverride(card.id);
+            const selectedDateFilters = resolveSelectedDateFiltersForCard(
+              rawViewConfig,
+              spotlightDateFilterSelectionSets[card.id],
+            );
+            const primaryDateFilter = selectedDateFilters[0] ?? null;
+            const spotlightPeriod = primaryDateFilter
+              ? getSpotlightPeriodOverride(card.id, primaryDateFilter.id)
+              : getSpotlightPeriodOverride(card.id);
             const spotlightRange = spotlightPeriod ? computePeriodRange(spotlightPeriod) : null;
             if (spotlightPeriod) {
-              applyPeriodOverrideToQueryConfig(queryConfig, spotlightPeriod, rawViewConfig.dateFilter ?? null);
+              if (selectedDateFilters.length > 0) {
+                selectedDateFilters.forEach((filter) => {
+                  const perFilterOverride = getSpotlightPeriodOverride(card.id, filter.id) ?? spotlightPeriod;
+                  applyPeriodOverrideToQueryConfig(queryConfig, perFilterOverride, filter);
+                });
+              } else {
+                applyPeriodOverrideToQueryConfig(queryConfig, spotlightPeriod, null);
+              }
             }
             baseRange = spotlightRange ?? normalizeQueryRange(queryConfig.time?.range ?? undefined);
             comparisonRange = computeComparisonRange(
@@ -2105,14 +3124,29 @@ const Home = (props: GenericPageProps) => {
               baseRange,
               rawViewConfig.spotlight.comparisonRange ?? null,
             );
-            if (comparisonRange && rawViewConfig.dateFilter) {
+            if (comparisonRange) {
+              const comparisonOverride: DashboardPreviewPeriodOverride = {
+                mode: "custom",
+                from: comparisonRange.from,
+                to: comparisonRange.to,
+              };
               comparisonQueryConfig = cloneConfig(rawViewConfig.queryConfig);
               if (comparisonQueryConfig) {
-                applyPeriodOverrideToQueryConfig(
-                  comparisonQueryConfig,
-                  { mode: "custom", from: comparisonRange.from, to: comparisonRange.to },
-                  rawViewConfig.dateFilter ?? null,
-                );
+                if (selectedDateFilters.length > 0) {
+                  selectedDateFilters.forEach((filter) =>
+                    applyPeriodOverrideToQueryConfig(
+                      comparisonQueryConfig,
+                      comparisonOverride,
+                      filter,
+                    ),
+                  );
+                } else {
+                  applyPeriodOverrideToQueryConfig(
+                    comparisonQueryConfig,
+                    comparisonOverride,
+                    null,
+                  );
+                }
                 comparisonQueryConfig.options = {
                   ...comparisonQueryConfig.options,
                   templateId: card.templateId || comparisonQueryConfig.options?.templateId || null,
@@ -2146,7 +3180,16 @@ const Home = (props: GenericPageProps) => {
         cacheKey: JSON.stringify({ refreshNonce }),
       };
     });
-  }, [activeCards, globalPeriodOverride, refreshNonce, shouldHydrateLiveData, getSpotlightPeriodOverride, getVisualPeriodOverride]);
+  }, [
+    activeCards,
+    globalPeriodOverride,
+    refreshNonce,
+    shouldHydrateLiveData,
+    getSpotlightPeriodOverride,
+    getVisualPeriodOverride,
+    spotlightDateFilterSelectionSets,
+    visualDateFilterSelectionSets,
+  ]);
 
   const cardLiveQueries = useQueries({
     queries: cardHydrationDescriptors.map((descriptor) => {
@@ -2595,7 +3638,6 @@ const Home = (props: GenericPageProps) => {
           const spotlightConfig = spotlightPeriodConfigById.get(card.id);
           const visualPeriodConfig = visualPeriodConfigById.get(card.id) ?? null;
           const visualPeriodSelection = getVisualPeriodSelection(card.id);
-          const visualPeriodOverride = getVisualPeriodOverride(card.id) ?? globalPeriodOverride ?? null;
           const isLinked = linkedCardStates[card.id] ?? true;
           return (
             <Box
@@ -2615,19 +3657,27 @@ const Home = (props: GenericPageProps) => {
                   liveState={liveCardSamples.get(card.id)}
                   layoutMetrics={{ approxHeightPx, columnSpan, rowSpan }}
                   periodOverride={globalPeriodOverride ?? null}
+                  getVisualPeriodOverride={getVisualPeriodOverride}
                   visualPeriodConfig={visualPeriodConfig}
                   visualPeriodSelection={visualPeriodSelection}
-                  visualPeriodOverride={visualPeriodOverride}
+                  visualPeriodSelectionByField={visualPeriodSelectionsByField[card.id] ?? {}}
+                  visualDateFilterSelectionIds={visualDateFilterSelectionSets[card.id] ?? null}
+                  onVisualDateFilterToggle={handleToggleVisualDateFilter}
                   onVisualPeriodChange={handleVisualPeriodChange}
                   visualCustomInput={visualCustomInputs[card.id] ?? null}
+                  visualCustomInputsByField={visualCustomInputsByField[card.id] ?? {}}
                   onVisualCustomInputChange={handleVisualCustomInputChange}
                   onVisualApplyCustomRange={handleVisualApplyCustomRange}
                   spotlightPeriodConfig={spotlightConfig ?? null}
                   spotlightPeriodSelection={
                     getSpotlightPeriodSelection(card.id) ?? spotlightConfig?.defaultPreset ?? null
                   }
+                  spotlightPeriodSelectionByField={spotlightPeriodSelectionsByField[card.id] ?? {}}
+                  spotlightDateFilterSelectionIds={spotlightDateFilterSelectionSets[card.id] ?? null}
+                  onSpotlightDateFilterToggle={handleToggleSpotlightDateFilter}
                   onSpotlightPeriodChange={handleSpotlightPeriodChange}
                   spotlightCustomInput={spotlightCustomInputs[card.id] ?? null}
+                  spotlightCustomInputsByField={spotlightCustomInputsByField[card.id] ?? {}}
                   onSpotlightCustomInputChange={handleSpotlightCustomInputChange}
                   onSpotlightApplyCustomRange={handleSpotlightApplyCustomRange}
                   isLinked={isLinked}
@@ -2670,17 +3720,25 @@ const DashboardCard = ({
   liveState,
   layoutMetrics,
   periodOverride,
+  getVisualPeriodOverride,
   visualPeriodConfig,
   visualPeriodSelection,
-  visualPeriodOverride,
+  visualPeriodSelectionByField,
+  visualDateFilterSelectionIds,
+  onVisualDateFilterToggle,
   onVisualPeriodChange,
   visualCustomInput,
+  visualCustomInputsByField,
   onVisualCustomInputChange,
   onVisualApplyCustomRange,
   spotlightPeriodConfig,
   spotlightPeriodSelection,
+  spotlightPeriodSelectionByField,
+  spotlightDateFilterSelectionIds,
+  onSpotlightDateFilterToggle,
   onSpotlightPeriodChange,
   spotlightCustomInput,
+  spotlightCustomInputsByField,
   onSpotlightCustomInputChange,
   onSpotlightApplyCustomRange,
   isLinked,
@@ -2691,27 +3749,38 @@ const DashboardCard = ({
   liveState?: DashboardCardLiveState;
   layoutMetrics?: CardLayoutMetrics;
   periodOverride?: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null;
+  getVisualPeriodOverride?: (
+    cardId: string,
+    dateFieldId?: string,
+  ) => DashboardPreviewPeriodPreset | DashboardPreviewPeriodOverride | null;
   visualPeriodConfig?: {
     presets: DashboardPreviewPeriodPreset[];
     defaultPreset: DashboardPreviewPeriodPreset;
     allowCustom?: boolean;
   } | null;
   visualPeriodSelection?: VisualPeriodSelection | null;
-  visualPeriodOverride?: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null;
-  onVisualPeriodChange?: (cardId: string, preset: VisualPeriodSelection) => void;
+  visualPeriodSelectionByField?: Record<string, VisualPeriodSelection>;
+  visualDateFilterSelectionIds?: string[] | null;
+  onVisualDateFilterToggle?: (cardId: string, dateFilterId: string) => void;
+  onVisualPeriodChange?: (cardId: string, preset: VisualPeriodSelection, dateFieldId?: string) => void;
   visualCustomInput?: { from: string; to: string } | null;
-  onVisualCustomInputChange?: (cardId: string, key: "from" | "to", value: string) => void;
-  onVisualApplyCustomRange?: (cardId: string) => void;
+  visualCustomInputsByField?: Record<string, { from: string; to: string }>;
+  onVisualCustomInputChange?: (cardId: string, key: "from" | "to", value: string, dateFieldId?: string) => void;
+  onVisualApplyCustomRange?: (cardId: string, dateFieldId?: string) => void;
   spotlightPeriodConfig?: {
     presets: DashboardPreviewPeriodPreset[];
     defaultPreset: DashboardPreviewPeriodPreset;
     allowCustom?: boolean;
   } | null;
   spotlightPeriodSelection?: SpotlightPeriodSelection | null;
-  onSpotlightPeriodChange?: (cardId: string, preset: SpotlightPeriodSelection) => void;
+  spotlightPeriodSelectionByField?: Record<string, SpotlightPeriodSelection>;
+  spotlightDateFilterSelectionIds?: string[] | null;
+  onSpotlightDateFilterToggle?: (cardId: string, dateFilterId: string) => void;
+  onSpotlightPeriodChange?: (cardId: string, preset: SpotlightPeriodSelection, dateFieldId?: string) => void;
   spotlightCustomInput?: { from: string; to: string } | null;
-  onSpotlightCustomInputChange?: (cardId: string, key: "from" | "to", value: string) => void;
-  onSpotlightApplyCustomRange?: (cardId: string) => void;
+  spotlightCustomInputsByField?: Record<string, { from: string; to: string }>;
+  onSpotlightCustomInputChange?: (cardId: string, key: "from" | "to", value: string, dateFieldId?: string) => void;
+  onSpotlightApplyCustomRange?: (cardId: string, dateFieldId?: string) => void;
   isLinked?: boolean;
   onToggleLink?: (cardId: string) => void;
   segmentFilter?: string | null;
@@ -2739,21 +3808,38 @@ const DashboardCard = ({
   }
 
   if (isVisualCardViewConfig(viewConfig)) {
-    const visualRange = resolveVisualDateRange(viewConfig, visualPeriodOverride ?? null);
+    const visualDateFieldOptions = resolveDateFilterOptions(viewConfig);
+    const selectedVisualDateFieldIds =
+      visualDateFilterSelectionIds && visualDateFilterSelectionIds.length > 0
+        ? visualDateFilterSelectionIds
+        : resolveSelectedDateFilterIds(viewConfig, visualDateFieldOptions);
+    const activeVisualDateFilter = resolveActiveDateFilter(viewConfig, selectedVisualDateFieldIds[0] ?? null);
+    const visualPeriodOverride = getVisualPeriodOverride?.(card.id, activeVisualDateFilter?.id) ?? null;
+    const visualRange = resolveVisualDateRange(viewConfig, visualPeriodOverride, activeVisualDateFilter);
     const visualRangeLabel = formatRangeLabel(visualRange) ?? "Date range not set";
+    const visualDateFieldLabel = activeVisualDateFilter ? buildDateFilterOptionLabel(activeVisualDateFilter) : null;
+    const visualInfoLabel =
+      visualDateFieldLabel && visualRangeLabel ? `${visualDateFieldLabel}\n${visualRangeLabel}` : visualRangeLabel;
     return (
       <VisualDashboardCard
         card={card}
         config={viewConfig}
         liveState={liveState ?? { status: "idle" }}
         segmentFilter={segmentFilter}
-        infoLabel={visualRangeLabel}
+        infoLabel={visualInfoLabel}
+        dateFieldSelection={selectedVisualDateFieldIds[0] ?? undefined}
+        selectedDateFieldIds={selectedVisualDateFieldIds}
+        onToggleDateField={(dateFilterId) => onVisualDateFilterToggle?.(card.id, dateFilterId)}
         periodConfig={visualPeriodConfig ?? undefined}
         periodSelection={visualPeriodSelection ?? undefined}
-        onPeriodChange={(preset) => onVisualPeriodChange?.(card.id, preset)}
+        periodSelectionByField={visualPeriodSelectionByField ?? undefined}
+        onPeriodChange={(preset, dateFieldId) => onVisualPeriodChange?.(card.id, preset, dateFieldId)}
         customInput={visualCustomInput ?? undefined}
-        onCustomInputChange={(key, value) => onVisualCustomInputChange?.(card.id, key, value)}
-        onApplyCustomRange={() => onVisualApplyCustomRange?.(card.id)}
+        customInputsByField={visualCustomInputsByField ?? undefined}
+        onCustomInputChange={(key, value, dateFieldId) =>
+          onVisualCustomInputChange?.(card.id, key, value, dateFieldId)
+        }
+        onApplyCustomRange={(dateFieldId) => onVisualApplyCustomRange?.(card.id, dateFieldId)}
         isLinked={isLinked}
         onToggleLink={() => onToggleLink?.(card.id)}
       />
@@ -2761,6 +3847,15 @@ const DashboardCard = ({
   }
 
   if (isSpotlightCardViewConfig(viewConfig)) {
+    const spotlightDateFieldOptions = resolveDateFilterOptions(viewConfig);
+    const selectedSpotlightDateFieldIds =
+      spotlightDateFilterSelectionIds && spotlightDateFilterSelectionIds.length > 0
+        ? spotlightDateFilterSelectionIds
+        : resolveSelectedDateFilterIds(viewConfig, spotlightDateFieldOptions);
+    const activeSpotlightDateFilter = resolveActiveDateFilter(
+      viewConfig,
+      selectedSpotlightDateFieldIds[0] ?? null,
+    );
     return (
       <SpotlightDashboardCard
         card={card}
@@ -2768,10 +3863,17 @@ const DashboardCard = ({
         liveState={liveState ?? { status: "idle" }}
         periodConfig={spotlightPeriodConfig ?? undefined}
         periodSelection={spotlightPeriodSelection ?? undefined}
-        onPeriodChange={(preset) => onSpotlightPeriodChange?.(card.id, preset)}
+        periodSelectionByField={spotlightPeriodSelectionByField ?? undefined}
+        dateFieldSelection={activeSpotlightDateFilter?.id ?? selectedSpotlightDateFieldIds[0] ?? undefined}
+        selectedDateFieldIds={selectedSpotlightDateFieldIds}
+        onToggleDateField={(dateFilterId) => onSpotlightDateFilterToggle?.(card.id, dateFilterId)}
+        onPeriodChange={(preset, dateFieldId) => onSpotlightPeriodChange?.(card.id, preset, dateFieldId)}
         customInput={spotlightCustomInput ?? undefined}
-        onCustomInputChange={(key, value) => onSpotlightCustomInputChange?.(card.id, key, value)}
-        onApplyCustomRange={() => onSpotlightApplyCustomRange?.(card.id)}
+        customInputsByField={spotlightCustomInputsByField ?? undefined}
+        onCustomInputChange={(key, value, dateFieldId) =>
+          onSpotlightCustomInputChange?.(card.id, key, value, dateFieldId)
+        }
+        onApplyCustomRange={(dateFieldId) => onSpotlightApplyCustomRange?.(card.id, dateFieldId)}
         isLinked={isLinked}
         onToggleLink={() => onToggleLink?.(card.id)}
       />
@@ -2814,10 +3916,16 @@ const VisualDashboardCard = ({
   liveState,
   segmentFilter,
   infoLabel,
+  dateFieldSelection,
+  onDateFieldChange,
+  selectedDateFieldIds,
+  onToggleDateField,
   periodConfig,
   periodSelection,
+  periodSelectionByField,
   onPeriodChange,
   customInput,
+  customInputsByField,
   onCustomInputChange,
   onApplyCustomRange,
   isLinked,
@@ -2828,26 +3936,67 @@ const VisualDashboardCard = ({
   liveState: DashboardCardLiveState;
   segmentFilter?: string | null;
   infoLabel?: string | null;
+  dateFieldSelection?: string | null;
+  onDateFieldChange?: (dateFilterId: string) => void;
+  selectedDateFieldIds?: string[] | null;
+  onToggleDateField?: (dateFilterId: string) => void;
   periodConfig?: {
     presets: DashboardPreviewPeriodPreset[];
     defaultPreset: DashboardPreviewPeriodPreset;
     allowCustom?: boolean;
   };
   periodSelection?: VisualPeriodSelection;
-  onPeriodChange?: (preset: VisualPeriodSelection) => void;
+  periodSelectionByField?: Record<string, VisualPeriodSelection>;
+  onPeriodChange?: (preset: VisualPeriodSelection, dateFieldId?: string) => void;
   customInput?: { from: string; to: string };
-  onCustomInputChange?: (key: "from" | "to", value: string) => void;
-  onApplyCustomRange?: () => void;
+  customInputsByField?: Record<string, { from: string; to: string }>;
+  onCustomInputChange?: (key: "from" | "to", value: string, dateFieldId?: string) => void;
+  onApplyCustomRange?: (dateFieldId?: string) => void;
   isLinked?: boolean;
   onToggleLink?: () => void;
 }) => {
   const sample = liveState.visualSample ?? [];
   const chartSample = segmentFilter ? sample.filter((point) => point.dimension === segmentFilter) : sample;
-  const hasPeriodConfig = Boolean(periodConfig && config.dateFilter && periodConfig.presets.length > 0);
+  const dateFieldOptions = resolveDateFilterOptions(config);
+  const resolvedSelectedDateFieldIds =
+    selectedDateFieldIds && selectedDateFieldIds.length > 0
+      ? selectedDateFieldIds
+      : resolveSelectedDateFilterIds(config, dateFieldOptions);
+  const selectedDateFieldOptions = dateFieldOptions.filter((option) =>
+    resolvedSelectedDateFieldIds.includes(option.id),
+  );
+  const activeDateField =
+    selectedDateFieldOptions[0] ?? resolveActiveDateFilter(config, dateFieldSelection);
+  const showDateFieldRow = false;
+  const dateFieldLabel = activeDateField ? buildDateFilterOptionLabel(activeDateField) : null;
+  const infoDateFieldLabel = dateFieldLabel;
+  const dateFieldMenuOptions = dateFieldOptions.map((option) => ({
+    value: option.id,
+    label: buildDateFilterOptionLabel(option),
+  }));
+  const hasPeriodConfig =
+    Boolean(periodConfig && activeDateField && periodConfig.presets.length > 0);
   const canEdit = hasPeriodConfig && typeof onPeriodChange === "function";
   const allowCustom = Boolean(periodConfig?.allowCustom);
-  const activePreset = periodSelection ?? periodConfig?.defaultPreset ?? null;
-  const customInputs = customInput ?? { from: "", to: "" };
+  const periodSelections = periodSelectionByField ?? {};
+  const customInputsByDateField = customInputsByField ?? {};
+  const resolvePreset = (selection?: VisualPeriodSelection | null): VisualPeriodSelection | null => {
+    if (!selection) {
+      return periodConfig?.defaultPreset ?? null;
+    }
+    if (selection === "custom") {
+      return allowCustom ? "custom" : periodConfig?.defaultPreset ?? null;
+    }
+    return periodConfig?.presets.includes(selection) ? selection : periodConfig?.defaultPreset ?? null;
+  };
+  const activeDateFieldId = activeDateField?.id ?? selectedDateFieldOptions[0]?.id;
+  const activePreset = resolvePreset(
+    activeDateFieldId ? periodSelections[activeDateFieldId] ?? periodSelection ?? null : periodSelection ?? null,
+  );
+  const customInputs =
+    (activeDateFieldId ? customInputsByDateField[activeDateFieldId] : null) ??
+    customInput ??
+    { from: "", to: "" };
   const activeLabel = activePreset
     ? activePreset === "custom"
       ? "Custom"
@@ -2862,6 +4011,36 @@ const VisualDashboardCard = ({
         ...(allowCustom ? [{ value: "custom", label: "Custom" }] : []),
       ]
     : [];
+  const periodRows =
+    hasPeriodConfig && selectedDateFieldOptions.length > 0
+      ? selectedDateFieldOptions.map((option) => {
+          const rowPreset = resolvePreset(periodSelections[option.id] ?? periodSelection ?? null);
+          const rowCustomInputs =
+            customInputsByDateField[option.id] ?? customInput ?? { from: "", to: "" };
+          const rowLabel = option.label ?? buildDateFilterOptionLabel(option);
+          const label = rowPreset ? (rowPreset === "custom" ? "Custom" : getSpotlightPeriodLabel(rowPreset)) : "";
+          return {
+            label,
+            options: periodOptions,
+            activeValue: rowPreset ?? undefined,
+            onSelectOption: canEdit
+              ? (value: string) => onPeriodChange?.(value as VisualPeriodSelection, option.id)
+              : undefined,
+            dateFieldLabel: rowLabel,
+            dateFieldOptions: dateFieldMenuOptions,
+            activeDateField: activeDateField?.id,
+            onSelectDateField: onDateFieldChange,
+            selectedDateFieldIds: resolvedSelectedDateFieldIds,
+            onToggleDateField,
+            customInput: allowCustom ? rowCustomInputs : undefined,
+            onCustomInputChange:
+              allowCustom && canEdit
+                ? (key: "from" | "to", value: string) => onCustomInputChange?.(key, value, option.id)
+                : undefined,
+            onApplyCustomRange: allowCustom && canEdit ? () => onApplyCustomRange?.(option.id) : undefined,
+          };
+        })
+      : undefined;
 
   return (
     <GraphicCard
@@ -2869,6 +4048,11 @@ const VisualDashboardCard = ({
       config={config}
       points={chartSample}
       infoLabel={infoLabel}
+      periodRows={periodRows}
+      dateFieldLabel={dateFieldLabel ?? undefined}
+      dateFieldOptions={dateFieldMenuOptions}
+      activeDateField={activeDateField?.id}
+      onSelectDateField={onDateFieldChange}
       periodLabel={hasPeriodConfig ? activeLabel ?? undefined : undefined}
       periodOptions={periodOptions}
       activePeriod={activePreset ?? undefined}
@@ -2888,8 +4072,14 @@ const SpotlightDashboardCard = ({
   liveState,
   periodConfig,
   periodSelection,
+  periodSelectionByField,
+  dateFieldSelection,
+  onDateFieldChange,
+  selectedDateFieldIds,
+  onToggleDateField,
   onPeriodChange,
   customInput,
+  customInputsByField,
   onCustomInputChange,
   onApplyCustomRange,
   isLinked,
@@ -2904,22 +4094,62 @@ const SpotlightDashboardCard = ({
     allowCustom?: boolean;
   };
   periodSelection?: SpotlightPeriodSelection;
-  onPeriodChange?: (preset: SpotlightPeriodSelection) => void;
+  periodSelectionByField?: Record<string, SpotlightPeriodSelection>;
+  dateFieldSelection?: string | null;
+  onDateFieldChange?: (dateFilterId: string) => void;
+  selectedDateFieldIds?: string[] | null;
+  onToggleDateField?: (dateFilterId: string) => void;
+  onPeriodChange?: (preset: SpotlightPeriodSelection, dateFieldId?: string) => void;
   customInput?: { from: string; to: string };
-  onCustomInputChange?: (key: "from" | "to", value: string) => void;
-  onApplyCustomRange?: () => void;
+  customInputsByField?: Record<string, { from: string; to: string }>;
+  onCustomInputChange?: (key: "from" | "to", value: string, dateFieldId?: string) => void;
+  onApplyCustomRange?: (dateFieldId?: string) => void;
   isLinked?: boolean;
   onToggleLink?: () => void;
 }) => {
   const sampleCards = liveState.spotlightSample?.cards ?? [];
   const isLoading = liveState.status === "loading";
   const error = liveState.status === "error" ? liveState.error : null;
+  const dateFieldOptions = resolveDateFilterOptions(config);
+  const resolvedSelectedDateFieldIds =
+    selectedDateFieldIds && selectedDateFieldIds.length > 0
+      ? selectedDateFieldIds
+      : resolveSelectedDateFilterIds(config, dateFieldOptions);
+  const selectedDateFieldOptions = dateFieldOptions.filter((option) =>
+    resolvedSelectedDateFieldIds.includes(option.id),
+  );
+  const activeDateField =
+    selectedDateFieldOptions[0] ?? resolveActiveDateFilter(config, dateFieldSelection);
+  const showDateFieldRow = false;
+  const dateFieldLabel = activeDateField ? buildDateFilterOptionLabel(activeDateField) : null;
+  const infoDateFieldLabel = dateFieldLabel;
+  const dateFieldMenuOptions = dateFieldOptions.map((option) => ({
+    value: option.id,
+    label: buildDateFilterOptionLabel(option),
+  }));
   const showPeriodControls =
-    Boolean(periodConfig && config.dateFilter && periodConfig.presets.length > 0) &&
+    Boolean(periodConfig && activeDateField && periodConfig.presets.length > 0) &&
     typeof onPeriodChange === "function";
   const allowCustom = Boolean(periodConfig?.allowCustom);
-  const activePreset = periodSelection ?? periodConfig?.defaultPreset ?? null;
-  const customInputs = customInput ?? { from: "", to: "" };
+  const periodSelections = periodSelectionByField ?? {};
+  const customInputsByDateField = customInputsByField ?? {};
+  const resolvePreset = (selection?: SpotlightPeriodSelection | null): SpotlightPeriodSelection | null => {
+    if (!selection) {
+      return periodConfig?.defaultPreset ?? null;
+    }
+    if (selection === "custom") {
+      return allowCustom ? "custom" : periodConfig?.defaultPreset ?? null;
+    }
+    return periodConfig?.presets.includes(selection) ? selection : periodConfig?.defaultPreset ?? null;
+  };
+  const activeDateFieldId = activeDateField?.id ?? selectedDateFieldOptions[0]?.id;
+  const activePreset = resolvePreset(
+    activeDateFieldId ? periodSelections[activeDateFieldId] ?? periodSelection ?? null : periodSelection ?? null,
+  );
+  const customInputs =
+    (activeDateFieldId ? customInputsByDateField[activeDateFieldId] : null) ??
+    customInput ??
+    { from: "", to: "" };
   const activeLabel = activePreset
     ? activePreset === "custom"
       ? "Custom"
@@ -2932,6 +4162,8 @@ const SpotlightDashboardCard = ({
         ? activePreset
         : null;
   const activeRangeLabel = formatSpotlightRangeLabel(computePeriodRange(activeRangeOverride));
+  const infoRangeLabel =
+    infoDateFieldLabel && activeRangeLabel ? `${infoDateFieldLabel}\n${activeRangeLabel}` : activeRangeLabel;
   const periodOptions = showPeriodControls
     ? [
         ...(periodConfig?.presets ?? []).map((preset) => ({
@@ -2941,6 +4173,33 @@ const SpotlightDashboardCard = ({
         ...(allowCustom ? [{ value: "custom", label: "Custom" }] : []),
       ]
     : [];
+  const periodRows =
+    showPeriodControls && selectedDateFieldOptions.length > 0
+      ? selectedDateFieldOptions.map((option) => {
+          const rowPreset = resolvePreset(periodSelections[option.id] ?? periodSelection ?? null);
+          const rowCustomInputs =
+            customInputsByDateField[option.id] ?? customInput ?? { from: "", to: "" };
+          const rowLabel = option.label ?? buildDateFilterOptionLabel(option);
+          const label = rowPreset ? (rowPreset === "custom" ? "Custom" : getSpotlightPeriodLabel(rowPreset)) : "";
+          return {
+            label,
+            options: periodOptions,
+            activeValue: rowPreset ?? undefined,
+            onSelectOption: (value: string) => onPeriodChange?.(value as SpotlightPeriodSelection, option.id),
+            dateFieldLabel: rowLabel,
+            dateFieldOptions: dateFieldMenuOptions,
+            activeDateField: activeDateField?.id,
+            onSelectDateField: onDateFieldChange,
+            selectedDateFieldIds: resolvedSelectedDateFieldIds,
+            onToggleDateField,
+            customInput: allowCustom ? rowCustomInputs : undefined,
+            onCustomInputChange: allowCustom
+              ? (key: "from" | "to", value: string) => onCustomInputChange?.(key, value, option.id)
+              : undefined,
+            onApplyCustomRange: allowCustom ? () => onApplyCustomRange?.(option.id) : undefined,
+          };
+        })
+      : undefined;
   const primarySample = sampleCards[0];
   const metricLabel = primarySample ? primarySample.label ?? config.spotlight.metricLabel ?? "Metric" : null;
   const fallbackMetricValue = formatMetricValue(0, config.spotlight.format, config.spotlight.currency);
@@ -2962,8 +4221,13 @@ const SpotlightDashboardCard = ({
       contextText={filteredContextText}
       statusText={statusText ?? undefined}
       statusTone={statusTone ?? undefined}
+      periodRows={periodRows}
+      dateFieldLabel={dateFieldLabel ?? undefined}
+      dateFieldOptions={dateFieldMenuOptions}
+      activeDateField={activeDateField?.id}
+      onSelectDateField={onDateFieldChange}
       periodLabel={showPeriodControls ? activeLabel ?? undefined : undefined}
-      rangeLabel={showPeriodControls ? activeRangeLabel ?? undefined : undefined}
+      rangeLabel={showPeriodControls ? infoRangeLabel ?? undefined : undefined}
       periodOptions={showPeriodControls ? periodOptions : []}
       activePeriod={activePreset ?? undefined}
       onSelectPeriod={showPeriodControls ? (value) => onPeriodChange?.(value as SpotlightPeriodSelection) : undefined}
@@ -3197,10 +4461,10 @@ const HeroSpotlightRow = ({
     { presets: DashboardPreviewPeriodPreset[]; defaultPreset: DashboardPreviewPeriodPreset; allowCustom?: boolean }
   >;
   getSpotlightPeriodSelection?: (cardId: string) => SpotlightPeriodSelection | null;
-  onSpotlightPeriodChange?: (cardId: string, preset: SpotlightPeriodSelection) => void;
+  onSpotlightPeriodChange?: (cardId: string, preset: SpotlightPeriodSelection, dateFieldId?: string) => void;
   spotlightCustomInputs?: Record<string, { from: string; to: string }>;
-  onSpotlightCustomInputChange?: (cardId: string, key: "from" | "to", value: string) => void;
-  onSpotlightApplyCustomRange?: (cardId: string) => void;
+  onSpotlightCustomInputChange?: (cardId: string, key: "from" | "to", value: string, dateFieldId?: string) => void;
+  onSpotlightApplyCustomRange?: (cardId: string, dateFieldId?: string) => void;
 }) => {
   if (cards.length === 0) {
     return null;
@@ -3229,7 +4493,9 @@ const HeroSpotlightRow = ({
             }
             onPeriodChange={(preset) => onSpotlightPeriodChange?.(card.id, preset)}
             customInput={spotlightCustomInputs?.[card.id]}
-            onCustomInputChange={(key, value) => onSpotlightCustomInputChange?.(card.id, key, value)}
+            onCustomInputChange={(key: "from" | "to", value: string) =>
+              onSpotlightCustomInputChange?.(card.id, key, value)
+            }
             onApplyCustomRange={() => onSpotlightApplyCustomRange?.(card.id)}
           />
         </Grid>

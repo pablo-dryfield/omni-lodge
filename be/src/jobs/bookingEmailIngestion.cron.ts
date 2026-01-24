@@ -1,9 +1,7 @@
 import cron, { ScheduledTask } from 'node-cron';
 import logger from '../utils/logger.js';
 import { ingestLatestBookingEmails } from '../services/bookings/bookingIngestionService.js';
-
-const CRON_EXPRESSION = process.env.BOOKING_EMAIL_POLL_CRON ?? '*/5 * * * *';
-const CRON_TZ = process.env.BOOKING_EMAIL_POLL_TZ ?? 'UTC';
+import { getConfigValue } from '../services/configService.js';
 
 let scheduledTask: ScheduledTask | null = null;
 
@@ -12,14 +10,17 @@ export const startBookingEmailIngestionJob = (): void => {
     scheduledTask.stop();
   }
 
+  const cronExpression = (getConfigValue('BOOKING_EMAIL_POLL_CRON') as string) ?? '*/5 * * * *';
+  const cronTimezone = (getConfigValue('BOOKING_EMAIL_POLL_TZ') as string) ?? 'UTC';
+
   scheduledTask = cron.schedule(
-    CRON_EXPRESSION,
+    cronExpression,
     async () => {
       logger.debug('[booking-email] Cron tick triggered ingestion');
       await ingestLatestBookingEmails();
     },
-    { timezone: CRON_TZ },
+    { timezone: cronTimezone },
   );
 
-  logger.info(`[booking-email] Gmail ingestion cron scheduled (${CRON_EXPRESSION} ${CRON_TZ})`);
+  logger.info(`[booking-email] Gmail ingestion cron scheduled (${cronExpression} ${cronTimezone})`);
 };

@@ -1,14 +1,16 @@
 import axios, { AxiosInstance } from 'axios';
+import { getConfigValue } from './configService.js';
 
 const DEFAULT_BASE_URL = 'https://app.ecwid.com/api/v3';
 const DEFAULT_STORE_ID = '100323031';
 const DEFAULT_API_TOKEN = 'secret_irQQxVweXvCFtrLyphyxncNJGE2zn25v';
 
-const resolveBaseUrl = () => (process.env.ECWID_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+const resolveBaseUrl = () =>
+  ((getConfigValue('ECWID_BASE_URL') as string | null) ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
 
 const resolveCredentials = () => {
-  const storeId = (process.env.ECWID_STORE_ID ?? DEFAULT_STORE_ID).trim();
-  const apiToken = (process.env.ECWID_API_TOKEN ?? DEFAULT_API_TOKEN).trim();
+  const storeId = ((getConfigValue('ECWID_STORE_ID') as string | null) ?? DEFAULT_STORE_ID).trim();
+  const apiToken = ((getConfigValue('ECWID_API_TOKEN') as string | null) ?? DEFAULT_API_TOKEN).trim();
 
   if (!storeId) {
     throw new Error('ECWID_STORE_ID is not configured');
@@ -22,18 +24,24 @@ const resolveCredentials = () => {
 };
 
 let client: AxiosInstance | null = null;
+let clientSignature: string | null = null;
 
 const getEcwidClient = (): AxiosInstance => {
-  if (!client) {
-    const { storeId, apiToken } = resolveCredentials();
-    client = axios.create({
-      baseURL: `${resolveBaseUrl()}/${storeId}`,
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-      },
-      timeout: 15000,
-    });
+  const { storeId, apiToken } = resolveCredentials();
+  const signature = JSON.stringify({ storeId, apiToken, baseUrl: resolveBaseUrl() });
+
+  if (client && clientSignature === signature) {
+    return client;
   }
+
+  client = axios.create({
+    baseURL: `${resolveBaseUrl()}/${storeId}`,
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+    },
+    timeout: 15000,
+  });
+  clientSignature = signature;
 
   return client;
 };

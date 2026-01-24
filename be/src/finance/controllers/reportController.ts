@@ -8,11 +8,15 @@ import FinanceCategory from '../models/FinanceCategory.js';
 import FinanceAccount from '../models/FinanceAccount.js';
 import FinanceVendor from '../models/FinanceVendor.js';
 import FinanceClient from '../models/FinanceClient.js';
+import { getConfigValue } from '../../services/configService.js';
 
 dayjs.extend(isSameOrBefore);
 
 const DEFAULT_MONTH_WINDOW = 6;
-const BASE_CURRENCY = process.env.FINANCE_BASE_CURRENCY?.trim().toUpperCase() ?? 'PLN';
+const resolveBaseCurrency = (): string =>
+  String(getConfigValue('FINANCE_BASE_CURRENCY') ?? 'PLN')
+    .trim()
+    .toUpperCase();
 const NON_REPORTABLE_STATUSES = ['void'];
 const PNL_KINDS = ['income', 'expense', 'refund'] as const;
 const UNCATEGORIZED_CATEGORY_NAME = 'Uncategorized';
@@ -458,7 +462,7 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
         start: startDate.format('YYYY-MM-DD'),
         end: endDate.format('YYYY-MM-DD'),
       },
-      currency: BASE_CURRENCY,
+      currency: resolveBaseCurrency(),
       profitAndLoss: {
         totals: {
           income: incomeTotal,

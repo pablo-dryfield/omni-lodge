@@ -50,8 +50,11 @@ import staffProfileRoutes from './routes/staffProfileRoutes.js';
 import shiftRoleRoutes from './routes/shiftRoles.js';
 import sqlHelperRoutes from './routes/sqlHelperRoutes.js';
 import dbBackupRoutes from './routes/dbBackupRoutes.js';
+import pm2Routes from './routes/pm2Routes.js';
+import configRoutes from './routes/configRoutes.js';
 import channelNumbersRoutes from './routes/channelNumbersRoutes.js';
 import gameScoreRoutes from './routes/gameScoreRoutes.js';
+import migrationAuditRoutes from './routes/migrationAuditRoutes.js';
 import { financeRouter } from './finance/index.js';
 import { startFinanceRecurringJob } from './finance/jobs/recurringJob.js';
 import { startScheduleJobs } from './jobs/schedules.cron.js';
@@ -65,6 +68,7 @@ import instrumentMiddleware from './middleware/instrumentMiddleware.js';
 import errorMiddleware from './middleware/errorMiddleware.js';
 import { defineAssociations } from './models/defineAssociations.js';
 import { initializeAccessControl } from './utils/initializeAccessControl.js';
+import { getConfigValue, initializeConfigRegistry } from './services/configService.js';
 
 // Scrapers
 // import { scrapeTripAdvisor } from './scrapers/tripAdvisorScraper.js';
@@ -79,7 +83,24 @@ const environment = (process.env.NODE_ENV || 'development').trim();
 const envFile = environment === 'production' ? '.env.prod' : '.env.dev';
 dotenv.config({ path: envFile });
 
-const shouldAlterSchema = (process.env.DB_SYNC_ALTER ?? 'false').toLowerCase() === 'true';
+const resolveBoolean = (value: unknown, fallback: boolean): boolean => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y'].includes(normalized)) {
+      return true;
+    }
+    if (['false', '0', 'no', 'n'].includes(normalized)) {
+      return false;
+    }
+  }
+  return fallback;
+};
 
 // API Requests limiter
 const apiLimiter = rateLimit({
@@ -168,6 +189,9 @@ app.use('/api/channelNumbers', channelNumbersRoutes);
 app.use('/api/schedules', schedulesRoutes);
 app.use('/api/sql-helper', sqlHelperRoutes);
 app.use('/api/db-backups', dbBackupRoutes);
+app.use('/api/pm2', pm2Routes);
+app.use('/api/config', configRoutes);
+app.use('/api/migrations', migrationAuditRoutes);
 app.use('/api/gameScores', gameScoreRoutes);
 app.use('/api/rolePagePermissions', rolePagePermissionRoutes);
 app.use('/api/roleModulePermissions', roleModulePermissionRoutes);
@@ -185,23 +209,30 @@ const PORT: number = parseInt(process.env.PORT || '3001');
 
 defineAssociations();
 
-const shouldSeedAccessControl = process.env.SEED_ACCESS_CONTROL === 'true';
-const shouldSkipDbSync = process.env.SKIP_DB_SYNC === 'true';
-
-if (shouldAlterSchema) {
-  logger.warn('DB_SYNC_ALTER=true: sequelize.sync will attempt to alter existing tables. Prefer running migrations instead.');
-}
-
-const syncOptions = { force: false, alter: shouldAlterSchema } as const;
-
 async function bootstrap(): Promise<void> {
   try {
+    const shouldAlterSchema = resolveBoolean(getConfigValue('DB_SYNC_ALTER'), false);
+    const shouldSkipDbSync = resolveBoolean(getConfigValue('SKIP_DB_SYNC'), false);
+    const shouldSeedAccessControl = resolveBoolean(getConfigValue('SEED_ACCESS_CONTROL'), false);
+
+    if (shouldAlterSchema) {
+      logger.warn('DB_SYNC_ALTER=true: sequelize.sync will attempt to alter existing tables. Prefer running migrations instead.');
+    }
+
+    const syncOptions = { force: false, alter: shouldAlterSchema } as const;
+
     if (shouldSkipDbSync) {
       await sequelize.authenticate();
       logger.info('[database] SKIP_DB_SYNC=true: skipping sequelize.sync (ensure migrations are up-to-date).');
     } else {
       logger.info(`Synchronizing database schema (alter=${shouldAlterSchema})`);
       await sequelize.sync(syncOptions);
+    }
+
+    try {
+      await initializeConfigRegistry();
+    } catch (error) {
+      logger.warn('[config] Failed to initialize config registry', error);
     }
 
     if (shouldSeedAccessControl) {

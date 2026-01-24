@@ -24,6 +24,7 @@ import { renderScheduleHTML } from './renderSchedule.js';
 import { ensureFolderPath, uploadBuffer } from './googleDrive.js';
 import { sendSchedulingNotification } from './notificationService.js';
 import HttpError from '../errors/HttpError.js';
+import { getConfigValue } from './configService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -31,9 +32,9 @@ dayjs.extend(isoWeek);
 dayjs.extend(weekday);
 dayjs.extend(customParseFormat);
 
-const SCHED_TZ = process.env.SCHED_TZ || 'Europe/Warsaw';
-const LOCK_DAY = Number(process.env.SCHED_LOCK_DAY ?? 0);
-const LOCK_HOUR = Number(process.env.SCHED_LOCK_HOUR ?? 18);
+const resolveScheduleTimezone = (): string => (getConfigValue('SCHED_TZ') as string) ?? 'Europe/Warsaw';
+const resolveLockDay = (): number => Number(getConfigValue('SCHED_LOCK_DAY') ?? 0);
+const resolveLockHour = (): number => Number(getConfigValue('SCHED_LOCK_HOUR') ?? 18);
 
 const PUBLISHED_STATES: ScheduleWeekState[] = ['published'];
 const PUB_CRAWL_KEYS = new Set(['PUB_CRAWL', 'PRIVATE_PUB_CRAWL']);
@@ -57,7 +58,7 @@ const DEFAULT_SHIFT_DURATION_HOURS = 2;
 
 function getWeekStart(year: number, week: number): dayjs.Dayjs {
   // Derive the Monday of the ISO week directly to avoid parsing quirks around year boundaries.
-  return dayjs().tz(SCHED_TZ).year(year).isoWeek(week).startOf('isoWeek');
+  return dayjs().tz(resolveScheduleTimezone()).year(year).isoWeek(week).startOf('isoWeek');
 }
 
 function formatWeekLabel(year: number, week: number): string {
@@ -87,7 +88,7 @@ export function parseWeekParam(weekParam?: string | null): WeekIdentifier {
       return { year: Number(year), isoWeek: Number(week) };
     }
   }
-  const target = dayjs().tz(SCHED_TZ).add(1, 'week');
+  const target = dayjs().tz(resolveScheduleTimezone()).add(1, 'week');
   return { year: target.isoWeekYear(), isoWeek: target.isoWeek() };
 }
 
@@ -211,7 +212,7 @@ async function logAudit(options: { actorId?: number | null; action: string; enti
     entity: options.entity,
     entityId: options.entityId,
     metaJson: options.meta ?? {},
-    createdAt: dayjs().tz(SCHED_TZ).toDate(),
+    createdAt: dayjs().tz(resolveScheduleTimezone()).toDate(),
   });
 }
 
@@ -219,7 +220,7 @@ async function ensureWeekExists(identifier: WeekIdentifier, transaction?: Transa
   const [week, created] = await ScheduleWeek.findOrCreate({
     where: { year: identifier.year, isoWeek: identifier.isoWeek },
     defaults: {
-      tz: SCHED_TZ,
+      tz: resolveScheduleTimezone(),
       state: 'collecting',
     },
     transaction,
@@ -883,7 +884,7 @@ function assertWeekMutable(week: ScheduleWeek): void {
 
 async function renderAndUploadWeek(week: ScheduleWeek, actorId: number | null): Promise<Export[]> {
   const { html } = await renderScheduleHTML(week.id);
-  const headlessEnv = process.env.PUPPETEER_HEADLESS?.toLowerCase();
+  const headlessEnv = String(getConfigValue('PUPPETEER_HEADLESS') ?? '').toLowerCase();
   const headlessMode: boolean | 'shell' | undefined =
     headlessEnv === 'shell' ? 'shell' : headlessEnv === 'false' ? false : true;
   const browser = await puppeteer.launch({
@@ -924,7 +925,7 @@ async function renderAndUploadWeek(week: ScheduleWeek, actorId: number | null): 
         scheduleWeekId: week.id,
         driveFileId: upload.id,
         url: upload.webViewLink ?? upload.webContentLink ?? '',
-        createdAt: dayjs().tz(SCHED_TZ).toDate(),
+        createdAt: dayjs().tz(resolveScheduleTimezone()).toDate(),
       });
       records.push(record);
     }
@@ -2129,7 +2130,10 @@ export async function sendAvailabilityReminder(reminderKey: 'availability_remind
   }
 
   const weekLabel = formatWeekLabel(week.year, week.isoWeek);
-  const deadline = getWeekStart(week.year, week.isoWeek).weekday(LOCK_DAY).hour(LOCK_HOUR).format('dddd HH:mm');
+  const deadline = getWeekStart(week.year, week.isoWeek)
+    .weekday(resolveLockDay())
+    .hour(resolveLockHour())
+    .format('dddd HH:mm');
 
   const staff = await StaffProfile.findAll({
     where: { active: true },

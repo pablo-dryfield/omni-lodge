@@ -1,10 +1,11 @@
 import logger from '../../utils/logger.js';
 import { executeRecurringRules } from '../services/recurringRuleService.js';
+import { getConfigValue } from '../../services/configService.js';
 
 let timerHandle: ReturnType<typeof setInterval> | null = null;
 
 function resolveAutomationUserId(): number {
-  const raw = process.env.FINANCE_AUTOMATION_USER_ID;
+  const raw = getConfigValue('FINANCE_AUTOMATION_USER_ID');
   if (!raw) {
     return 1;
   }
@@ -16,7 +17,7 @@ function resolveAutomationUserId(): number {
 }
 
 export function startFinanceRecurringJob(): void {
-  const pollIntervalMs = Number(process.env.FINANCE_RECURRING_POLL_MS ?? 15 * 60 * 1000);
+  const pollIntervalMs = Number(getConfigValue('FINANCE_RECURRING_POLL_MS') ?? 15 * 60 * 1000);
   if (timerHandle) {
     clearInterval(timerHandle);
   }

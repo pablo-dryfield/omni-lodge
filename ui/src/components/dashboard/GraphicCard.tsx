@@ -1,5 +1,6 @@
 import {
   Box,
+  Button,
   Card,
   CardContent,
   IconButton,
@@ -32,7 +33,7 @@ import {
   Cell,
 } from "recharts";
 import type { DashboardVisualCardViewConfig } from "../../api/reports";
-import { SpotlightPeriodRow } from "./SpotlightCardParts";
+import { SpotlightPeriodRow, type SpotlightPeriodRowConfig } from "./SpotlightCardParts";
 
 export type VisualChartPoint = {
   dimension: string;
@@ -47,9 +48,14 @@ type GraphicCardProps = {
   rows?: Array<Record<string, unknown>>;
   infoLabel?: string | null;
   periodLabel?: string | null;
+  periodRows?: SpotlightPeriodRowConfig[];
   periodOptions?: Array<{ value: string; label: string }>;
   activePeriod?: string | null;
   onSelectPeriod?: (value: string) => void;
+  dateFieldLabel?: string | null;
+  dateFieldOptions?: Array<{ value: string; label: string }>;
+  activeDateField?: string | null;
+  onSelectDateField?: (value: string) => void;
   customInput?: { from: string; to: string };
   onCustomInputChange?: (key: "from" | "to", value: string) => void;
   onApplyCustomRange?: () => void;
@@ -275,9 +281,14 @@ export const GraphicCard = ({
   rows,
   infoLabel: infoLabelOverride,
   periodLabel,
+  periodRows,
   periodOptions = [],
   activePeriod,
   onSelectPeriod,
+  dateFieldLabel,
+  dateFieldOptions = [],
+  activeDateField,
+  onSelectDateField,
   customInput,
   onCustomInputChange,
   onApplyCustomRange,
@@ -306,6 +317,7 @@ export const GraphicCard = ({
   const infoLabel = infoText.length > 0 ? infoText : "Date range not set";
   const linkState = isLinked ?? true;
   const canToggleLink = typeof onToggleLink === "function";
+  const showDateFieldRow = false;
   const inferredFormat = inferMetricFormat(config.visual.metricLabel, config.visual.metric);
   const metricFormat: MetricFormat =
     config.visual.metricCurrency
@@ -315,6 +327,32 @@ export const GraphicCard = ({
       : inferredFormat;
   const metricCurrency =
     config.visual.metricCurrency ?? (metricFormat === "currency" ? getStoredBaseCurrency() : undefined);
+  const periodRowsToRender =
+    periodRows && periodRows.length > 0
+      ? periodRows
+      : periodLabel
+        ? [
+            {
+              label: periodLabel,
+              options: periodOptions,
+              activeValue: activePeriod ?? undefined,
+              onSelectOption: onSelectPeriod,
+              dateFieldLabel: dateFieldLabel ?? undefined,
+              dateFieldOptions,
+              activeDateField: activeDateField ?? undefined,
+              onSelectDateField,
+              customInput,
+              onCustomInputChange,
+              onApplyCustomRange,
+            },
+          ]
+        : [];
+  const [filtersAnchorEl, setFiltersAnchorEl] = useState<HTMLElement | null>(null);
+  const hasMultiplePeriodRows = periodRowsToRender.length > 1;
+  const handleOpenFilters = (event: MouseEvent<HTMLButtonElement>) => {
+    setFiltersAnchorEl(event.currentTarget);
+  };
+  const handleCloseFilters = () => setFiltersAnchorEl(null);
   const tooltipFormatter = (value: unknown) => [formatChartValue(value, metricFormat, metricCurrency), metricLabel];
   const pieTooltipFormatter = (value: unknown, _name: string, props: { payload?: { dimension?: string } }) => {
     const dimension = props?.payload?.dimension ?? _name;
@@ -618,7 +656,7 @@ export const GraphicCard = ({
           <Typography variant="subtitle1" fontWeight={700} textAlign="center">
             {title}
           </Typography>
-          <Tooltip title={infoLabel} arrow placement="top">
+          <Tooltip title={<span style={{ whiteSpace: "pre-line" }}>{infoLabel}</span>} arrow placement="top">
             <IconButton
               size="small"
               onClick={handleInfoToggle}
@@ -646,7 +684,7 @@ export const GraphicCard = ({
               },
             }}
           >
-            <Typography variant="caption" sx={{ color: "rgba(255,255,255,0.9)" }}>
+            <Typography variant="caption" sx={{ color: "rgba(255,255,255,0.9)", whiteSpace: "pre-line" }}>
               {infoLabel}
             </Typography>
           </Popover>
@@ -654,16 +692,72 @@ export const GraphicCard = ({
         <Box sx={{ flexGrow: 1, minHeight: 0 }}>
           {hasData ? renderChart() : null}
         </Box>
-        {periodLabel && (
+        {showDateFieldRow && (
           <SpotlightPeriodRow
-            label={periodLabel}
-            options={periodOptions}
-            activeValue={activePeriod ?? undefined}
-            onSelectOption={onSelectPeriod}
-            customInput={customInput}
-            onCustomInputChange={onCustomInputChange}
-            onApplyCustomRange={onApplyCustomRange}
+            label={dateFieldLabel ?? ""}
+            options={dateFieldOptions}
+            activeValue={activeDateField ?? undefined}
+            onSelectOption={onSelectDateField}
           />
+        )}
+        {hasMultiplePeriodRows ? (
+          <Box sx={{ display: "flex", justifyContent: "center" }}>
+            <Button size="small" variant="outlined" onClick={handleOpenFilters}>
+              Date filters
+            </Button>
+            <Popover
+              open={Boolean(filtersAnchorEl)}
+              anchorEl={filtersAnchorEl}
+              onClose={handleCloseFilters}
+              anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+              transformOrigin={{ vertical: "top", horizontal: "center" }}
+              PaperProps={{ sx: { p: 1.25 } }}
+            >
+              <Stack spacing={1} alignItems="center">
+                {periodRowsToRender.map((row, index) => (
+                  <SpotlightPeriodRow
+                    key={`${row.label}-${index}`}
+                    label={
+                      row.dateFieldLabel && row.label
+                        ? `${row.dateFieldLabel} - ${row.label}`
+                        : row.dateFieldLabel ?? row.label
+                    }
+                    options={row.options}
+                    activeValue={row.activeValue}
+                    onSelectOption={row.onSelectOption}
+                    dateFieldLabel={row.dateFieldLabel}
+                    dateFieldOptions={row.dateFieldOptions}
+                    activeDateField={row.activeDateField}
+                    onSelectDateField={row.onSelectDateField}
+                    selectedDateFieldIds={row.selectedDateFieldIds}
+                    onToggleDateField={row.onToggleDateField}
+                    customInput={row.customInput}
+                    onCustomInputChange={row.onCustomInputChange}
+                    onApplyCustomRange={row.onApplyCustomRange}
+                  />
+                ))}
+              </Stack>
+            </Popover>
+          </Box>
+        ) : (
+          periodRowsToRender.map((row, index) => (
+            <SpotlightPeriodRow
+              key={`${row.label}-${index}`}
+              label={row.label}
+              options={row.options}
+              activeValue={row.activeValue}
+              onSelectOption={row.onSelectOption}
+              dateFieldLabel={row.dateFieldLabel}
+              dateFieldOptions={row.dateFieldOptions}
+              activeDateField={row.activeDateField}
+              onSelectDateField={row.onSelectDateField}
+              selectedDateFieldIds={row.selectedDateFieldIds}
+              onToggleDateField={row.onToggleDateField}
+              customInput={row.customInput}
+              onCustomInputChange={row.onCustomInputChange}
+              onApplyCustomRange={row.onApplyCustomRange}
+            />
+          ))
         )}
       </CardContent>
     </GraphicCardShell>

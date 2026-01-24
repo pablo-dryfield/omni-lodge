@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
-import stripe from '../services/stripeClient.js';
+import HttpError from '../../errors/HttpError.js';
+import { getStripeClient } from '../services/stripeClient.js';
 
 const clampLimit = (value: number, fallback: number): number => {
   if (!Number.isFinite(value) || value <= 0) {
@@ -29,6 +30,7 @@ export const listStripeRefunds = async (req: Request, res: Response): Promise<vo
     if (typeof req.query.payment_intent === 'string' && req.query.payment_intent.trim().length > 0) {
       params.payment_intent = req.query.payment_intent.trim();
     }
+    const stripe = getStripeClient();
     const refunds: Stripe.Refund[] = [];
     for await (const refund of stripe.refunds.list(params)) {
       refunds.push(refund);
@@ -39,6 +41,10 @@ export const listStripeRefunds = async (req: Request, res: Response): Promise<vo
 
     res.status(200).json({ data: refunds, has_more: Boolean(maxResults && refunds.length >= maxResults) });
   } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message, details: error.details }]);
+      return;
+    }
     res.status(500).json([{ message: (error as Error).message }]);
   }
 };

@@ -2,6 +2,7 @@ import path from 'path';
 import { promises as fs, createReadStream } from 'fs';
 import { Readable } from 'stream';
 import { ensureFolderPath, uploadBuffer, getDriveClient } from './googleDrive.js';
+import { getConfigValue } from './configService.js';
 
 const DEFAULT_UPLOAD_DIR = path.resolve(process.cwd(), 'uploads', 'profile-photos');
 const DRIVE_PREFIX = 'drive:';
@@ -22,7 +23,7 @@ export type StoreProfilePhotoResult = {
 };
 
 function getBaseDir(): string {
-  const raw = process.env.PROFILE_PHOTO_UPLOAD_DIR;
+  const raw = getConfigValue('PROFILE_PHOTO_UPLOAD_DIR') as string | null;
   if (!raw) {
     return DEFAULT_UPLOAD_DIR;
   }

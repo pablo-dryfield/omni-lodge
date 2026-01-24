@@ -1,25 +1,27 @@
 import { google, gmail_v1 } from 'googleapis';
+import type { OAuth2Client } from 'google-auth-library';
 import logger from '../../utils/logger.js';
+import { getConfigValue } from '../configService.js';
 
-const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN } = process.env;
-
-const oauthClient = new google.auth.OAuth2(
-  GOOGLE_CLIENT_ID,
-  GOOGLE_CLIENT_SECRET,
-);
-
-if (GOOGLE_REFRESH_TOKEN) {
-  oauthClient.setCredentials({ refresh_token: GOOGLE_REFRESH_TOKEN });
-}
-
-const assertCredentials = (): void => {
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN) {
+const resolveCredentials = (): { clientId: string; clientSecret: string; refreshToken: string } => {
+  const clientId = getConfigValue('GOOGLE_CLIENT_ID') as string | null;
+  const clientSecret = getConfigValue('GOOGLE_CLIENT_SECRET') as string | null;
+  const refreshToken = getConfigValue('GOOGLE_REFRESH_TOKEN') as string | null;
+  if (!clientId || !clientSecret || !refreshToken) {
     throw new Error('Missing Google API credentials for Gmail ingestion');
   }
+  return { clientId, clientSecret, refreshToken };
+};
+
+const buildOauthClient = (): OAuth2Client => {
+  const { clientId, clientSecret, refreshToken } = resolveCredentials();
+  const client = new google.auth.OAuth2(clientId, clientSecret);
+  client.setCredentials({ refresh_token: refreshToken });
+  return client;
 };
 
 export const getGmailClient = (): gmail_v1.Gmail => {
-  assertCredentials();
+  const oauthClient = buildOauthClient();
   return google.gmail({ version: 'v1', auth: oauthClient });
 };
 

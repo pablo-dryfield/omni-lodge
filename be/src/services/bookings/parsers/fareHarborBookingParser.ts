@@ -4,18 +4,23 @@ import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
 import type {
   BookingEmailParser,
+  BookingParserCheck,
   BookingParserContext,
+  BookingParserDiagnostics,
   BookingFieldPatch,
   ParsedBookingEvent,
 } from '../types.js';
 import type { BookingEventType, BookingStatus, NormalizedAddonInput } from '../../../constants/bookings.js';
+import { getConfigValue } from '../../configService.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const DEFAULT_BOOKING_TIMEZONE = process.env.BOOKING_PARSER_TIMEZONE ?? 'Europe/Warsaw';
-const FAREHARBOR_TIMEZONE = process.env.FAREHARBOR_TIMEZONE ?? DEFAULT_BOOKING_TIMEZONE;
+const DEFAULT_BOOKING_TIMEZONE =
+  (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ?? 'Europe/Warsaw';
+const FAREHARBOR_TIMEZONE =
+  (getConfigValue('FAREHARBOR_TIMEZONE') as string | null) ?? DEFAULT_BOOKING_TIMEZONE;
 
 const MONEY_PATTERN = /(PLN|USD|EUR|GBP)?\s*([\d.,]+)/i;
 const BOOKING_NUMBER_PATTERN = /Booking\s*#(\d+)/i;
@@ -669,10 +674,37 @@ const deriveAddonsFromDetailLines = (
 export class FareHarborBookingParser implements BookingEmailParser {
   public readonly name = 'fareharbor';
 
-  canParse(context: BookingParserContext): boolean {
+  private buildDiagnostics(context: BookingParserContext): BookingParserDiagnostics {
     const from = context.from ?? context.headers.from ?? '';
     const subject = context.subject ?? '';
-    return /fareharbor/i.test(from) || /fareharbor/i.test(subject);
+    const fromMatch = /fareharbor/i.test(from);
+    const subjectMatch = /fareharbor/i.test(subject);
+    const text = normalize(context.textBody || context.rawTextBody || context.snippet);
+    const bookingNumber = text ? extractBookingNumber(text) : null;
+
+    const canParseChecks: BookingParserCheck[] = [
+      { label: 'from matches /fareharbor/i', passed: fromMatch, value: from },
+      { label: 'subject matches /fareharbor/i', passed: subjectMatch, value: subject },
+    ];
+    const parseChecks: BookingParserCheck[] = [
+      { label: 'text body present', passed: Boolean(text) },
+      { label: 'booking number detected', passed: Boolean(bookingNumber), value: bookingNumber ?? null },
+    ];
+
+    return {
+      name: this.name,
+      canParse: fromMatch || subjectMatch,
+      canParseChecks,
+      parseChecks,
+    };
+  }
+
+  diagnose(context: BookingParserContext): BookingParserDiagnostics {
+    return this.buildDiagnostics(context);
+  }
+
+  canParse(context: BookingParserContext): boolean {
+    return this.buildDiagnostics(context).canParse;
   }
 
   async parse(context: BookingParserContext): Promise<ParsedBookingEvent | null> {

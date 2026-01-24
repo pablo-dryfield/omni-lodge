@@ -7,12 +7,13 @@ import ShiftInstance from '../models/ShiftInstance.js';
 import ShiftType from '../models/ShiftType.js';
 import ShiftAssignment from '../models/ShiftAssignment.js';
 import User from '../models/User.js';
+import { getConfigValue } from './configService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
 dayjs.extend(isoWeek);
 
-const SCHED_TZ = process.env.SCHED_TZ || 'Europe/Warsaw';
+const resolveScheduleTimezone = (): string => (getConfigValue('SCHED_TZ') as string) ?? 'Europe/Warsaw';
 
 type AssignmentView = {
   id: number;
@@ -62,7 +63,7 @@ export async function buildScheduleView(weekId: number): Promise<{ week: Schedul
 
   shifts.forEach((shift) => {
     const dateStr = shift.date;
-    const date = dayjs.tz(dateStr, SCHED_TZ);
+    const date = dayjs.tz(dateStr, resolveScheduleTimezone());
     const dayLabel = date.format('dddd, MMM D');
     const assignments = (shift.assignments ?? []).map((assignment) => {
       const assignee = (assignment as unknown as { assignee?: User }).assignee;
@@ -107,7 +108,8 @@ export async function buildScheduleView(weekId: number): Promise<{ week: Schedul
 export async function renderScheduleHTML(weekId: number): Promise<{ html: string; days: DayView[]; week: ScheduleWeek }> {
   const { week, days } = await buildScheduleView(weekId);
   const title = `Week ${week.isoWeek} – ${week.year}`;
-  const generatedAt = dayjs().tz(SCHED_TZ).format('YYYY-MM-DD HH:mm');
+  const scheduleTimezone = resolveScheduleTimezone();
+  const generatedAt = dayjs().tz(scheduleTimezone).format('YYYY-MM-DD HH:mm');
 
   const dayColumns = days.map((day) => {
     const shiftBlocks = day.shifts.map((shift) => {
@@ -215,7 +217,7 @@ export async function renderScheduleHTML(weekId: number): Promise<{ html: string
     </head>
     <body>
       <h1>${title}</h1>
-      <div class="subtitle">Generated ${generatedAt} (${SCHED_TZ})</div>
+      <div class="subtitle">Generated ${generatedAt} (${scheduleTimezone})</div>
       <div class="grid">
         ${dayColumns}
       </div>

@@ -5,8 +5,12 @@ import StaffProfile from '../models/StaffProfile.js';
 import FinanceTransaction from '../finance/models/FinanceTransaction.js';
 import HttpError from '../errors/HttpError.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
+import { getConfigValue } from '../services/configService.js';
 
-const DEFAULT_CURRENCY = process.env.FINANCE_BASE_CURRENCY?.trim().toUpperCase() ?? 'PLN';
+const resolveDefaultCurrency = (): string =>
+  String(getConfigValue('FINANCE_BASE_CURRENCY') ?? 'PLN')
+    .trim()
+    .toUpperCase();
 
 const parseAmountToMinor = (value: unknown): number => {
   if (value === null || value === undefined || value === '') {
@@ -45,7 +49,7 @@ export const createStaffPayoutCollectionLog = async (
     const currency =
       typeof req.body.currency === 'string' && req.body.currency.trim().length > 0
         ? req.body.currency.trim().toUpperCase()
-        : DEFAULT_CURRENCY;
+        : resolveDefaultCurrency();
 
     const amountMinor = parseAmountToMinor(req.body.amount);
     const rangeStartRaw = typeof req.body.rangeStart === 'string' ? req.body.rangeStart : '';

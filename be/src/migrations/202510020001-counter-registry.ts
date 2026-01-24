@@ -2,24 +2,38 @@ import type { QueryInterface } from 'sequelize';
 import { DataTypes, QueryTypes } from 'sequelize';
 
 type MigrationParams = { context: QueryInterface };
+const debug = (process.env.MIGRATION_DEBUG ?? '').toLowerCase() === 'true';
+const log = (...args: unknown[]) => {
+    if (debug) {
+        console.log('[counter-registry]', ...args);
+    }
+};
 
 export async function up({ context }: MigrationParams): Promise<void> {
     const qi = context;
     const transaction = await qi.sequelize.transaction();
     try {
+        log('start');
         // Counters adjustments
         const countersTable = 'counters';
         const counterUsersTable = 'counterUsers';
-        const countersTableDescription = await qi.describeTable(countersTable);
+        log('describe counters');
+        const countersTableDescription = await (qi as any).describeTable(countersTable, { transaction });
+        log('change counters.date');
         await qi.changeColumn(countersTable, 'date', {
             type: DataTypes.DATEONLY,
             allowNull: false,
         }, { transaction });
         if ('total' in countersTableDescription) {
+            log('remove counters.total');
             await qi.removeColumn(countersTable, 'total', { transaction });
         }
-        const counterColumnsAfter = await qi.describeTable(countersTable);
+        log('describe counters after');
+        const counterColumnsAfter = await (qi as any).describeTable(countersTable, { transaction });
+        log('counter columns', Object.keys(counterColumnsAfter));
+        log('has product_id', 'product_id' in counterColumnsAfter);
         if (!('product_id' in counterColumnsAfter)) {
+            log('add counters.product_id');
             await qi.addColumn(countersTable, 'product_id', {
                 type: DataTypes.INTEGER,
                 allowNull: true,
@@ -31,22 +45,29 @@ export async function up({ context }: MigrationParams): Promise<void> {
                 onDelete: 'SET NULL',
             }, { transaction });
         }
+        log('has status', 'status' in counterColumnsAfter);
         if (!('status' in counterColumnsAfter)) {
+            log('add counters.status');
             await qi.addColumn(countersTable, 'status', {
                 type: DataTypes.ENUM('draft', 'final'),
                 allowNull: false,
                 defaultValue: 'draft',
             }, { transaction });
         }
+        log('has notes', 'notes' in counterColumnsAfter);
         if (!('notes' in counterColumnsAfter)) {
+            log('add counters.notes');
             await qi.addColumn(countersTable, 'notes', {
                 type: DataTypes.TEXT,
                 allowNull: true,
             }, { transaction });
         }
-        const counterIndexes = (await qi.showIndex(countersTable)) as Array<{ name?: string }>;
+        log('before counters indexes');
+        log('show counters indexes');
+        const counterIndexes = (await (qi as any).showIndex(countersTable, { transaction })) as Array<{ name?: string }>;
         const hasDateUnique = counterIndexes.some((index) => index.name === 'counters_date_unique');
         if (!hasDateUnique) {
+            log('add counters_date_unique');
             await qi.addIndex(countersTable, ['date'], {
                 unique: true,
                 name: 'counters_date_unique',
@@ -55,6 +76,7 @@ export async function up({ context }: MigrationParams): Promise<void> {
         }
         const hasProductIndex = counterIndexes.some((index) => index.name === 'counters_product_id_idx');
         if (!hasProductIndex) {
+            log('add counters_product_id_idx');
             await qi.addIndex(countersTable, ['product_id'], {
                 name: 'counters_product_id_idx',
                 transaction,
@@ -62,20 +84,22 @@ export async function up({ context }: MigrationParams): Promise<void> {
         }
         const hasUserIdIndex = counterIndexes.some((index) => index.name === 'counters_user_id_idx');
         if (!hasUserIdIndex) {
+            log('add counters_user_id_idx');
             await qi.addIndex(countersTable, ['userId'], {
                 name: 'counters_user_id_idx',
                 transaction,
             });
         }
+        log('counters adjusted');
         // CounterUsers adjustments
-        const counterUsersDescription = (await qi.describeTable(counterUsersTable)) as Record<string, unknown>;
+        const counterUsersDescription = (await (qi as any).describeTable(counterUsersTable, { transaction })) as Record<string, unknown>;
         if (!('counter_id' in counterUsersDescription)) {
             await qi.renameColumn(counterUsersTable, 'counterId', 'counter_id', { transaction });
         }
         if (!('user_id' in counterUsersDescription)) {
             await qi.renameColumn(counterUsersTable, 'userId', 'user_id', { transaction });
         }
-        const counterUsersColumnsAfter = (await qi.describeTable(counterUsersTable)) as Record<string, unknown>;
+        const counterUsersColumnsAfter = (await (qi as any).describeTable(counterUsersTable, { transaction })) as Record<string, unknown>;
         if (!('role' in counterUsersColumnsAfter)) {
             await qi.addColumn(counterUsersTable, 'role', {
                 type: DataTypes.ENUM('guide', 'assistant_manager'),
@@ -83,7 +107,7 @@ export async function up({ context }: MigrationParams): Promise<void> {
                 defaultValue: 'guide',
             }, { transaction });
         }
-        const counterUsersIndexes = (await qi.showIndex(counterUsersTable)) as Array<{ name?: string }>;
+        const counterUsersIndexes = (await (qi as any).showIndex(counterUsersTable, { transaction })) as Array<{ name?: string }>;
         const hasStaffUnique = counterUsersIndexes.some((index) => index.name === 'counter_users_counter_user_unique');
         if (!hasStaffUnique) {
             await qi.addIndex(counterUsersTable, ['counter_id', 'user_id'], {
@@ -92,6 +116,7 @@ export async function up({ context }: MigrationParams): Promise<void> {
                 transaction,
             });
         }
+        log('counterUsers adjusted');
         // Addons table
         const addonsExists = (await qi.sequelize.query(
             `SELECT to_regclass('public.addons') as table`,
@@ -133,6 +158,7 @@ export async function up({ context }: MigrationParams): Promise<void> {
                 },
             }, { transaction });
         }
+        log('addons checked');
         // Product Addons table
         const productAddonsExists = (await qi.sequelize.query(
             `SELECT to_regclass('public.product_addons') as table`,
@@ -205,6 +231,7 @@ export async function up({ context }: MigrationParams): Promise<void> {
                 transaction,
             });
         }
+        log('product_addons checked');
         // Counter channel metrics
         const metricsExists = (await qi.sequelize.query(
             `SELECT to_regclass('public.counter_channel_metrics') as table`,
@@ -312,9 +339,13 @@ export async function up({ context }: MigrationParams): Promise<void> {
             COALESCE(period, '-')
           )`, { transaction });
         }
+        log('counter_channel_metrics checked');
+        log('committing');
         await transaction.commit();
+        log('committed');
     }
     catch (error) {
+        log('error', error);
         await transaction.rollback();
         throw error;
     }
@@ -348,7 +379,7 @@ export async function down({ context }: MigrationParams): Promise<void> {
         await qi.removeIndex('counters', 'counters_date_unique', { transaction }).catch(() => { });
         await qi.removeIndex('counters', 'counters_product_id_idx', { transaction }).catch(() => { });
         await qi.removeIndex('counters', 'counters_user_id_idx', { transaction }).catch(() => { });
-        const countersDesc = (await qi.describeTable('counters')) as Record<string, unknown>;
+        const countersDesc = (await (qi as any).describeTable('counters', { transaction })) as Record<string, unknown>;
         if ('notes' in countersDesc) {
             await qi.removeColumn('counters', 'notes', { transaction });
         }
@@ -370,7 +401,7 @@ export async function down({ context }: MigrationParams): Promise<void> {
                 defaultValue: 0,
             }, { transaction });
         }
-        const countersDescAfter = (await qi.describeTable('counters')) as Record<string, unknown>;
+        const countersDescAfter = (await (qi as any).describeTable('counters', { transaction })) as Record<string, unknown>;
         if ('date' in countersDescAfter) {
             await qi.renameColumn('counters', 'date', 'date', { transaction });
         }

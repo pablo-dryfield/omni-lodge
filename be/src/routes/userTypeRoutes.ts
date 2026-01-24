@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction, Router } from 'express';
 import * as userTypeController from '../controllers/userTypeController.js';
 import { check, param, validationResult } from 'express-validator';
 import authMiddleware from '../middleware/authMiddleware.js';
+import { requireRoles } from '../middleware/authorizationMiddleware.js';
 
 const router: Router = express.Router();
 
@@ -12,6 +13,17 @@ const validateId = [
 const validateBody = [
   check('name').isString().trim().notEmpty().withMessage('Name is required'),
   check('slug').optional().isString().withMessage('Slug must be a string')
+];
+
+const validatePermissionsBody = [
+  check('action')
+    .isString()
+    .isIn(['add_all', 'remove_all', 'copy_from'])
+    .withMessage('action must be add_all, remove_all, or copy_from'),
+  check('sourceUserTypeId')
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage('sourceUserTypeId must be a positive integer'),
 ];
 
 const validate = (req: Request, res: Response, next: NextFunction): void => {
@@ -26,6 +38,14 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
 router.get('/', authMiddleware, validate, userTypeController.getAllUserTypes);
 router.get('/:id', authMiddleware, validateId, validate, userTypeController.getUserTypeById);
 router.post('/', authMiddleware, validateBody, validate, userTypeController.createUserType);
+router.post(
+  '/:id/permissions',
+  authMiddleware,
+  requireRoles(['admin']),
+  [...validateId, ...validatePermissionsBody],
+  validate,
+  userTypeController.applyUserTypePermissions,
+);
 router.put('/:id', authMiddleware, [...validateId, ...validateBody], validate, userTypeController.updateUserType);
 router.delete('/:id', authMiddleware, validateId, validate, userTypeController.deleteUserType);
 

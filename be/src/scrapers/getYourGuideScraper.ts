@@ -1,4 +1,5 @@
 import puppeteer, { Page } from 'puppeteer';
+import { getConfigValue } from '../services/configService.js';
 
 export type GetYourGuideReview = {
   reviewId?: string;
@@ -15,20 +16,22 @@ type GetYourGuideBlocksResponse = {
 };
 
 const DEFAULT_ENDPOINT =
-  process.env.GYG_REVIEWS_ENDPOINT ??
+  (getConfigValue('GYG_REVIEWS_ENDPOINT') as string | null) ??
   'https://travelers-api.getyourguide.com/user-interface/activity-details-page/blocks?ranking_uuid=2abbc102-010b-4c47-b440-376e2af70475';
 
-const DEFAULT_ACTIVITY_ID = Number(process.env.GYG_ACTIVITY_ID ?? 443425);
-const DEFAULT_RANKING_UUID = process.env.GYG_RANKING_UUID ?? '2abbc102-010b-4c47-b440-376e2af70475';
-const DEFAULT_LIMIT = Number(process.env.GYG_REVIEWS_LIMIT ?? 30);
-const PAGE_LIMIT = Number(process.env.GYG_PAGE_LIMIT ?? 10);
-const MIN_LIMIT = Number(process.env.GYG_MIN_LIMIT ?? 20);
-const MAX_LIMIT = Number(process.env.GYG_MAX_LIMIT ?? 150);
-const CACHE_TTL_MS = Number(process.env.GYG_CACHE_TTL_MS ?? 5 * 60 * 1000);
+const DEFAULT_ACTIVITY_ID = Number(getConfigValue('GYG_ACTIVITY_ID') ?? 443425);
+const DEFAULT_RANKING_UUID =
+  (getConfigValue('GYG_RANKING_UUID') as string | null) ?? '2abbc102-010b-4c47-b440-376e2af70475';
+const DEFAULT_LIMIT = Number(getConfigValue('GYG_REVIEWS_LIMIT') ?? 30);
+const PAGE_LIMIT = Number(getConfigValue('GYG_PAGE_LIMIT') ?? 10);
+const MIN_LIMIT = Number(getConfigValue('GYG_MIN_LIMIT') ?? 20);
+const MAX_LIMIT = Number(getConfigValue('GYG_MAX_LIMIT') ?? 150);
+const CACHE_TTL_MS = Number(getConfigValue('GYG_CACHE_TTL_MS') ?? 5 * 60 * 1000);
 
-const SESSION_PRIMER_URL = process.env.GYG_SESSION_URL ?? 'https://www.getyourguide.com/';
+const SESSION_PRIMER_URL =
+  (getConfigValue('GYG_SESSION_URL') as string | null) ?? 'https://www.getyourguide.com/';
 const SESSION_PRODUCT_URL =
-  process.env.GYG_PRODUCT_URL ??
+  (getConfigValue('GYG_PRODUCT_URL') as string | null) ??
   'https://www.getyourguide.com/krawl-through-krakow-pubcrawl-s264786/';
 
 const BROWSER_HEADERS = {
@@ -45,7 +48,7 @@ const BROWSER_HEADERS = {
   'sec-fetch-user': '?1',
   'upgrade-insecure-requests': '1',
   'User-Agent':
-    process.env.GYG_USER_AGENT ??
+    (getConfigValue('GYG_USER_AGENT') as string | null) ??
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
 };
 

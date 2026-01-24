@@ -25,6 +25,7 @@ import {
   IconDatabase,
   IconCloudDownload,
   IconCoin,
+  IconSettings,
 } from "@tabler/icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ActiveNavLink } from "./ActiveNavLink";
@@ -49,6 +50,18 @@ const settingsNav: SettingsNavSection[] = [
     title: "Control panel",
     links: [
       { label: "Overview", to: "/settings", slug: PAGE_SLUGS.settings, icon: <IconGauge size={20} /> },
+      {
+        label: "Maintenance",
+        to: "/settings/maintenance",
+        slug: PAGE_SLUGS.settingsMaintenance,
+        icon: <IconTools size={20} />,
+      },
+      {
+        label: "Control Panel",
+        to: "/settings/control-panel",
+        slug: PAGE_SLUGS.settingsControlPanel,
+        icon: <IconSettings size={20} />,
+      },
     ],
   },
   {
