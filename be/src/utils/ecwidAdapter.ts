@@ -4,8 +4,9 @@ import timezone from 'dayjs/plugin/timezone.js';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 import { EcwidOrder, EcwidOrderItem, EcwidOption, EcwidOptionSelection } from '../services/ecwidService.js';
 import { ManifestGroup, OrderExtras, UnifiedOrder, UnifiedProduct } from '../types/booking.js';
+import { getConfigValue } from '../services/configService.js';
 
-const STORE_TIMEZONE = process.env.ECWID_STORE_TIMEZONE ?? 'Europe/Warsaw';
+const STORE_TIMEZONE = (getConfigValue('ECWID_STORE_TIMEZONE') as string | null) ?? 'Europe/Warsaw';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);

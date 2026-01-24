@@ -1,13 +1,16 @@
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
+import CalendarMonthOutlinedIcon from "@mui/icons-material/CalendarMonthOutlined";
 import LinkOffRoundedIcon from "@mui/icons-material/LinkOffRounded";
 import LinkRoundedIcon from "@mui/icons-material/LinkRounded";
 import {
   Box,
+  Checkbox,
   Button,
   Card,
   CardContent,
   IconButton,
+  ListItemText,
   MenuItem,
   MenuList,
   Popover,
@@ -37,10 +40,18 @@ type SpotlightPeriodRowProps = {
   options?: SpotlightPeriodOption[];
   activeValue?: string | null;
   onSelectOption?: (value: string) => void;
+  dateFieldLabel?: string | null;
+  dateFieldOptions?: SpotlightPeriodOption[];
+  activeDateField?: string | null;
+  onSelectDateField?: (value: string) => void;
+  selectedDateFieldIds?: string[];
+  onToggleDateField?: (value: string) => void;
   customInput?: { from: string; to: string };
   onCustomInputChange?: (key: "from" | "to", value: string) => void;
   onApplyCustomRange?: () => void;
 };
+
+export type SpotlightPeriodRowConfig = SpotlightPeriodRowProps;
 
 type SpotlightCardProps = {
   title: string;
@@ -53,9 +64,14 @@ type SpotlightCardProps = {
   statusTone?: "info" | "warning" | "error";
   periodLabel?: string | null;
   rangeLabel?: string | null;
+  periodRows?: SpotlightPeriodRowConfig[];
   periodOptions?: SpotlightPeriodOption[];
   activePeriod?: string | null;
   onSelectPeriod?: (value: string) => void;
+  dateFieldLabel?: string | null;
+  dateFieldOptions?: SpotlightPeriodOption[];
+  activeDateField?: string | null;
+  onSelectDateField?: (value: string) => void;
   customInput?: { from: string; to: string };
   onCustomInputChange?: (key: "from" | "to", value: string) => void;
   onApplyCustomRange?: () => void;
@@ -143,13 +159,29 @@ export const SpotlightPeriodRow = ({
   options = [],
   activeValue,
   onSelectOption,
+  dateFieldLabel,
+  dateFieldOptions = [],
+  activeDateField,
+  onSelectDateField,
+  selectedDateFieldIds,
+  onToggleDateField,
   customInput,
   onCustomInputChange,
   onApplyCustomRange,
 }: SpotlightPeriodRowProps) => {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
+  const [dateAnchorEl, setDateAnchorEl] = useState<HTMLElement | null>(null);
   const isMenuOpen = Boolean(anchorEl);
+  const isDateMenuOpen = Boolean(dateAnchorEl);
   const canEdit = options.length > 0 && typeof onSelectOption === "function";
+  const canSelectDateField =
+    dateFieldOptions.length > 1 && (typeof onSelectDateField === "function" || typeof onToggleDateField === "function");
+  const selectedDateIds =
+    selectedDateFieldIds && selectedDateFieldIds.length > 0
+      ? selectedDateFieldIds
+      : activeDateField
+        ? [activeDateField]
+        : [];
   const showCustomForm = activeValue === "custom" && Boolean(onCustomInputChange && onApplyCustomRange);
   const canApplyCustom =
     Boolean(onApplyCustomRange) &&
@@ -163,12 +195,35 @@ export const SpotlightPeriodRow = ({
   };
 
   const handleClose = () => setAnchorEl(null);
+  const handleDateOpen = (event: MouseEvent<HTMLButtonElement>) => {
+    if (!dateFieldOptions.length) {
+      return;
+    }
+    setDateAnchorEl(event.currentTarget);
+  };
+  const handleDateClose = () => setDateAnchorEl(null);
 
   const handleSelect = (value: string) => {
     onSelectOption?.(value);
     if (value !== "custom") {
       setAnchorEl(null);
     }
+  };
+  const handleSelectDateField = (value: string) => {
+    if (onSelectDateField) {
+      onSelectDateField(value);
+      setDateAnchorEl(null);
+    }
+  };
+  const handleToggleDateField = (value: string) => {
+    if (!onToggleDateField) {
+      return;
+    }
+    const isSelected = selectedDateIds.includes(value);
+    if (isSelected && selectedDateIds.length <= 1) {
+      return;
+    }
+    onToggleDateField(value);
   };
 
   return (
@@ -187,6 +242,49 @@ export const SpotlightPeriodRow = ({
           >
             <EditOutlinedIcon fontSize="inherit" />
           </IconButton>
+          {canSelectDateField && (
+            <>
+              <Tooltip
+                title={dateFieldLabel ? `Date field: ${dateFieldLabel}` : "Select date fields"}
+                arrow
+              >
+                <IconButton
+                  size="small"
+                  onClick={handleDateOpen}
+                  aria-label="Change date field"
+                  sx={{ p: 0.25, color: "text.secondary" }}
+                >
+                  <CalendarMonthOutlinedIcon fontSize="inherit" />
+                </IconButton>
+              </Tooltip>
+              <Popover
+                open={isDateMenuOpen}
+                anchorEl={dateAnchorEl}
+                onClose={handleDateClose}
+                anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+                transformOrigin={{ vertical: "top", horizontal: "left" }}
+                PaperProps={{ sx: { p: 0.5, minWidth: 200 } }}
+              >
+                <MenuList dense>
+                  {dateFieldOptions.map((option) => (
+                    <MenuItem
+                      key={option.value}
+                      selected={!onToggleDateField && option.value === activeDateField}
+                      onClick={() =>
+                        onToggleDateField ? handleToggleDateField(option.value) : handleSelectDateField(option.value)
+                      }
+                      dense
+                    >
+                      {onToggleDateField && (
+                        <Checkbox size="small" checked={selectedDateIds.includes(option.value)} />
+                      )}
+                      <ListItemText primary={option.label} />
+                    </MenuItem>
+                  ))}
+                </MenuList>
+              </Popover>
+            </>
+          )}
           <Popover
             open={isMenuOpen}
             anchorEl={anchorEl}
@@ -258,9 +356,14 @@ export const SpotlightCard = ({
   statusTone,
   periodLabel,
   rangeLabel,
+  periodRows,
   periodOptions = [],
   activePeriod,
   onSelectPeriod,
+  dateFieldLabel,
+  dateFieldOptions = [],
+  activeDateField,
+  onSelectDateField,
   customInput,
   onCustomInputChange,
   onApplyCustomRange,
@@ -280,6 +383,33 @@ export const SpotlightCard = ({
   const shouldShowRangeText = Boolean(rangeText && !periodLabel);
   const linkState = isLinked ?? true;
   const canToggleLink = typeof onToggleLink === "function";
+  const showDateFieldRow = false;
+  const periodRowsToRender =
+    periodRows && periodRows.length > 0
+      ? periodRows
+      : periodLabel
+        ? [
+            {
+              label: periodLabel,
+              options: periodOptions,
+              activeValue: activePeriod ?? undefined,
+              onSelectOption: onSelectPeriod,
+              dateFieldLabel: dateFieldLabel ?? undefined,
+              dateFieldOptions,
+              activeDateField: activeDateField ?? undefined,
+              onSelectDateField,
+              customInput,
+              onCustomInputChange,
+              onApplyCustomRange,
+            },
+          ]
+        : [];
+  const [filtersAnchorEl, setFiltersAnchorEl] = useState<HTMLElement | null>(null);
+  const hasMultiplePeriodRows = periodRowsToRender.length > 1;
+  const handleOpenFilters = (event: MouseEvent<HTMLButtonElement>) => {
+    setFiltersAnchorEl(event.currentTarget);
+  };
+  const handleCloseFilters = () => setFiltersAnchorEl(null);
 
   return (
     <SpotlightCardShell variant="outlined">
@@ -375,16 +505,72 @@ export const SpotlightCard = ({
             </Typography>
           )}
         </Box>
-        {periodLabel && (
+        {showDateFieldRow && (
           <SpotlightPeriodRow
-            label={periodLabel}
-            options={periodOptions}
-            activeValue={activePeriod ?? undefined}
-            onSelectOption={onSelectPeriod}
-            customInput={customInput}
-            onCustomInputChange={onCustomInputChange}
-            onApplyCustomRange={onApplyCustomRange}
+            label={dateFieldLabel ?? ""}
+            options={dateFieldOptions}
+            activeValue={activeDateField ?? undefined}
+            onSelectOption={onSelectDateField}
           />
+        )}
+        {hasMultiplePeriodRows ? (
+          <Box sx={{ display: "flex", justifyContent: "center" }}>
+            <Button size="small" variant="outlined" onClick={handleOpenFilters}>
+              Date filters
+            </Button>
+            <Popover
+              open={Boolean(filtersAnchorEl)}
+              anchorEl={filtersAnchorEl}
+              onClose={handleCloseFilters}
+              anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+              transformOrigin={{ vertical: "top", horizontal: "center" }}
+              PaperProps={{ sx: { p: 1.25 } }}
+            >
+              <Stack spacing={1} alignItems="center">
+                {periodRowsToRender.map((row, index) => (
+                  <SpotlightPeriodRow
+                    key={`${row.label}-${index}`}
+                    label={
+                      row.dateFieldLabel && row.label
+                        ? `${row.dateFieldLabel} - ${row.label}`
+                        : row.dateFieldLabel ?? row.label
+                    }
+                    options={row.options}
+                    activeValue={row.activeValue}
+                    onSelectOption={row.onSelectOption}
+                    dateFieldLabel={row.dateFieldLabel}
+                    dateFieldOptions={row.dateFieldOptions}
+                    activeDateField={row.activeDateField}
+                    onSelectDateField={row.onSelectDateField}
+                    selectedDateFieldIds={row.selectedDateFieldIds}
+                    onToggleDateField={row.onToggleDateField}
+                    customInput={row.customInput}
+                    onCustomInputChange={row.onCustomInputChange}
+                    onApplyCustomRange={row.onApplyCustomRange}
+                  />
+                ))}
+              </Stack>
+            </Popover>
+          </Box>
+        ) : (
+          periodRowsToRender.map((row, index) => (
+                  <SpotlightPeriodRow
+                    key={`${row.label}-${index}`}
+                    label={row.label}
+                    options={row.options}
+              activeValue={row.activeValue}
+              onSelectOption={row.onSelectOption}
+              dateFieldLabel={row.dateFieldLabel}
+              dateFieldOptions={row.dateFieldOptions}
+              activeDateField={row.activeDateField}
+              onSelectDateField={row.onSelectDateField}
+              selectedDateFieldIds={row.selectedDateFieldIds}
+              onToggleDateField={row.onToggleDateField}
+              customInput={row.customInput}
+              onCustomInputChange={row.onCustomInputChange}
+              onApplyCustomRange={row.onApplyCustomRange}
+            />
+          ))
         )}
       </CardContent>
     </SpotlightCardShell>
@@ -425,7 +611,11 @@ export const SpotlightHeaderRow = ({
         </Typography>
         {hasInfo && (
           <>
-            <Tooltip title={infoText} arrow placement="top">
+            <Tooltip
+              title={<span style={{ whiteSpace: "pre-line" }}>{infoText}</span>}
+              arrow
+              placement="top"
+            >
               <IconButton
                 size="small"
                 onClick={handleToggle}
@@ -453,7 +643,7 @@ export const SpotlightHeaderRow = ({
                 },
               }}
             >
-              <Typography variant="caption" sx={{ color: "rgba(255,255,255,0.9)" }}>
+              <Typography variant="caption" sx={{ color: "rgba(255,255,255,0.9)", whiteSpace: "pre-line" }}>
                 {infoText}
               </Typography>
             </Popover>

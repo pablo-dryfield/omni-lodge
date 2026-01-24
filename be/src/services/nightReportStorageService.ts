@@ -3,6 +3,7 @@ import { promises as fs, createReadStream } from 'fs';
 import { Readable } from 'stream';
 import dayjs from 'dayjs';
 import { ensureFolderPath, uploadBuffer, getDriveClient } from './googleDrive.js';
+import { getConfigValue } from './configService.js';
 
 const DEFAULT_UPLOAD_DIR = path.resolve(process.cwd(), 'uploads', 'night-reports');
 const DRIVE_PREFIX = 'drive:';
@@ -24,7 +25,7 @@ type StoreNightReportPhotoResult = {
 };
 
 function getBaseDir(): string {
-  const raw = process.env.NIGHT_REPORT_UPLOAD_DIR;
+  const raw = getConfigValue('NIGHT_REPORT_UPLOAD_DIR') as string | null;
   if (!raw) {
     return DEFAULT_UPLOAD_DIR;
   }

@@ -2,15 +2,25 @@ import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
-import type { BookingEmailParser, BookingParserContext, BookingFieldPatch, ParsedBookingEvent } from '../types.js';
+import type {
+  BookingEmailParser,
+  BookingParserCheck,
+  BookingParserContext,
+  BookingParserDiagnostics,
+  BookingFieldPatch,
+  ParsedBookingEvent,
+} from '../types.js';
 import type { BookingEventType, BookingStatus } from '../../../constants/bookings.js';
+import { getConfigValue } from '../../configService.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const DEFAULT_BOOKING_TIMEZONE = process.env.BOOKING_PARSER_TIMEZONE ?? 'Europe/Warsaw';
-const VIATOR_TIMEZONE = process.env.VIATOR_TIMEZONE ?? DEFAULT_BOOKING_TIMEZONE;
+const DEFAULT_BOOKING_TIMEZONE =
+  (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ?? 'Europe/Warsaw';
+const VIATOR_TIMEZONE =
+  (getConfigValue('VIATOR_TIMEZONE') as string | null) ?? DEFAULT_BOOKING_TIMEZONE;
 
 const DATE_FORMATS = [
   'ddd, MMM D, YYYY',
@@ -310,12 +320,42 @@ const statusToEventType = (status: BookingStatus): BookingEventType => {
 export class ViatorBookingParser implements BookingEmailParser {
   public readonly name = 'viator';
 
+  private buildDiagnostics(context: BookingParserContext): BookingParserDiagnostics {
+    const from = context.from ?? '';
+    const subject = context.subject ?? '';
+    const haystack = `${from} ${subject}`.toLowerCase();
+    const hasViator = haystack.includes('viator');
+    const text = context.textBody ?? context.rawTextBody ?? '';
+    const hasBookingLabel = /booking reference:/i.test(text);
+    const normalizedText = text ? normalizeBookingText(text) : '';
+    const bookingReferenceRaw = normalizedText
+      ? extractField(normalizedText, 'Booking Reference:', ['Tour Name:'])
+      : null;
+    const bookingReference = bookingReferenceRaw ? normalizeBookingReferenceValue(bookingReferenceRaw) : null;
+
+    const canParseChecks: BookingParserCheck[] = [
+      { label: 'from/subject contains "viator"', passed: hasViator, value: `${from} ${subject}`.trim() },
+      { label: 'body has "Booking Reference:"', passed: hasBookingLabel },
+    ];
+    const parseChecks: BookingParserCheck[] = [
+      { label: 'text body present', passed: Boolean(text) },
+      { label: 'booking reference detected', passed: Boolean(bookingReference), value: bookingReference ?? null },
+    ];
+
+    return {
+      name: this.name,
+      canParse: hasViator && hasBookingLabel,
+      canParseChecks,
+      parseChecks,
+    };
+  }
+
+  diagnose(context: BookingParserContext): BookingParserDiagnostics {
+    return this.buildDiagnostics(context);
+  }
+
   canParse(context: BookingParserContext): boolean {
-    const haystack = `${context.from ?? ''} ${context.subject ?? ''}`.toLowerCase();
-    if (!haystack.includes('viator')) {
-      return false;
-    }
-    return /booking reference:/i.test(context.textBody ?? context.rawTextBody ?? '');
+    return this.buildDiagnostics(context).canParse;
   }
 
   async parse(context: BookingParserContext): Promise<ParsedBookingEvent | null> {

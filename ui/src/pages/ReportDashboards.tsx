@@ -66,6 +66,9 @@ import { GraphicCard } from "../components/dashboard/GraphicCard";
 import { SpotlightCard } from "../components/dashboard/SpotlightCardParts";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import dayjs from "dayjs";
+import isoWeek from "dayjs/plugin/isoWeek";
+
+dayjs.extend(isoWeek);
 
 type DashboardCardLayout = {
   x: number;
@@ -279,18 +282,34 @@ const normalizeLayoutForMode = (layout: DashboardCardLayout, mode: LayoutMode): 
 
 const SPOTLIGHT_PERIOD_LABELS: Record<DashboardPreviewPeriodPreset, string> = {
   today: "Today",
+  yesterday: "Yesterday",
+  all_time: "All time",
   last_7_days: "Last 7 days",
+  last_week: "Last week",
+  this_week: "This week",
   last_30_days: "Last 30 days",
   last_30_months: "Last 30 months",
+  this_year: "This year",
+  this_quarter: "This quarter",
+  last_quarter: "Last quarter",
   this_month: "This month",
   last_month: "Last month",
 };
 
 const PERIOD_PRESET_OPTIONS: Array<{ value: DashboardPreviewPeriodPreset; label: string }> = [
   { value: "today", label: "Today" },
+  { value: "yesterday", label: "Yesterday" },
+  { value: "all_time", label: "All time" },
   { value: "last_7_days", label: "Last 7 days" },
+  { value: "last_week", label: "Last week" },
+  { value: "this_week", label: "This week" },
   { value: "last_30_days", label: "Last 30 days" },
   { value: "last_30_months", label: "Last 30 months" },
+  { value: "this_month", label: "This month" },
+  { value: "last_month", label: "Last month" },
+  { value: "this_year", label: "This year" },
+  { value: "this_quarter", label: "This quarter" },
+  { value: "last_quarter", label: "Last quarter" },
 ];
 
 const FILTER_OPERATORS: FilterOperator[] = [
@@ -318,6 +337,87 @@ type TemplateDateFilter = {
   modelId: string;
   fieldId: string;
   operator: FilterOperator;
+};
+
+type DashboardDateFilterOption = {
+  id: string;
+  modelId: string;
+  fieldId: string;
+  operator: FilterOperator;
+  label: string;
+};
+
+const buildDateFilterOptionId = (entry: { id?: string; modelId: string; fieldId: string; operator: FilterOperator }) =>
+  entry.id ?? `${entry.modelId}.${entry.fieldId}.${entry.operator}`;
+
+const sanitizeDateFilterLabel = (value: string): string => value.replace(/\s*\([^)]*\)\s*$/, "").trim();
+
+const buildDateFilterOptionLabel = (entry: { label?: string; modelId: string; fieldId: string }) => {
+  const base = entry.label ?? `${entry.modelId}.${entry.fieldId}`;
+  return sanitizeDateFilterLabel(base);
+};
+
+const resolveDashboardDateFilterOptions = (
+  config: DashboardVisualCardViewConfig | DashboardSpotlightCardViewConfig,
+): DashboardDateFilterOption[] => {
+  const options: DashboardDateFilterOption[] = Array.isArray(config.dateFilterOptions)
+    ? config.dateFilterOptions
+        .map((option) => ({
+          ...option,
+          id: buildDateFilterOptionId(option),
+          label: buildDateFilterOptionLabel(option),
+        }))
+        .filter((option) => option.id.length > 0)
+    : [];
+  const defaultFilter = config.dateFilter
+    ? {
+        id: buildDateFilterOptionId(config.dateFilter),
+        modelId: config.dateFilter.modelId,
+        fieldId: config.dateFilter.fieldId,
+        operator: config.dateFilter.operator,
+        label: buildDateFilterOptionLabel(config.dateFilter),
+        ...(config.dateFilter.filterIndex !== undefined ? { filterIndex: config.dateFilter.filterIndex } : {}),
+        ...(config.dateFilter.filterPath ? { filterPath: config.dateFilter.filterPath } : {}),
+        ...(config.dateFilter.clauseSql ? { clauseSql: config.dateFilter.clauseSql } : {}),
+      }
+    : null;
+  if (
+    defaultFilter &&
+    !options.some((option) => option.id === defaultFilter.id) &&
+    !options.some(
+      (option) =>
+        option.modelId === defaultFilter.modelId &&
+        option.fieldId === defaultFilter.fieldId &&
+        option.operator === defaultFilter.operator,
+    )
+  ) {
+    return [defaultFilter, ...options];
+  }
+  return options;
+};
+
+const resolveSelectedDateFilterIds = (
+  config: DashboardVisualCardViewConfig | DashboardSpotlightCardViewConfig,
+  options: DashboardDateFilterOption[],
+): string[] => {
+  const allowedIds = options.map((option) => option.id);
+  const configured = Array.isArray(config.dateFilterSelections) ? config.dateFilterSelections : [];
+  const normalized = configured.filter((id) => allowedIds.includes(id));
+  if (normalized.length > 0) {
+    return normalized;
+  }
+  if (config.dateFilter) {
+    const match = options.find(
+      (option) =>
+        option.modelId === config.dateFilter?.modelId &&
+        option.fieldId === config.dateFilter?.fieldId &&
+        option.operator === config.dateFilter?.operator,
+    );
+    if (match) {
+      return [match.id];
+    }
+  }
+  return allowedIds.length > 0 ? [allowedIds[0]] : [];
 };
 
 const getTemplateDateFilters = (template: ReportTemplateDto | null): TemplateDateFilter[] => {
@@ -377,11 +477,29 @@ const computeSpotlightPresetRange = (
   preset: DashboardPreviewPeriodPreset,
 ): { from: string; to: string } => {
   const today = dayjs();
+  const getQuarterStart = (value: dayjs.Dayjs) => {
+    const quarterIndex = Math.floor(value.month() / 3);
+    const startMonth = quarterIndex * 3;
+    return value.month(startMonth).startOf("month");
+  };
+  const getQuarterEnd = (value: dayjs.Dayjs) => value.add(2, "month").endOf("month");
   switch (preset) {
     case "today":
       return {
         from: today.startOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
         to: today.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    case "yesterday": {
+      const base = today.subtract(1, "day");
+      return {
+        from: base.startOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: base.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "all_time":
+      return {
+        from: dayjs("1900-01-01").startOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: dayjs("2100-12-31").endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
       };
     case "last_7_days": {
       const from = today.subtract(6, "day");
@@ -390,6 +508,18 @@ const computeSpotlightPresetRange = (
         to: today.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
       };
     }
+    case "last_week": {
+      const base = today.subtract(1, "week");
+      return {
+        from: base.startOf("isoWeek").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: base.endOf("isoWeek").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "this_week":
+      return {
+        from: today.startOf("isoWeek").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: today.endOf("isoWeek").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
     case "last_30_days": {
       const from = today.subtract(29, "day");
       return {
@@ -409,6 +539,25 @@ const computeSpotlightPresetRange = (
       return {
         from: base.startOf("month").format("YYYY-MM-DD HH:mm:ss.SSS"),
         to: base.endOf("month").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "this_year":
+      return {
+        from: today.startOf("year").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: today.endOf("year").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    case "this_quarter": {
+      const quarterStart = getQuarterStart(today);
+      return {
+        from: quarterStart.format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: getQuarterEnd(quarterStart).format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "last_quarter": {
+      const quarterStart = getQuarterStart(today).subtract(3, "month");
+      return {
+        from: quarterStart.format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: getQuarterEnd(quarterStart).format("YYYY-MM-DD HH:mm:ss.SSS"),
       };
     }
     case "this_month":
@@ -477,6 +626,31 @@ const resolveVisualDateRangeLabel = (config: DashboardVisualCardViewConfig): str
     return formatDateRangeLabel(filterRange);
   }
   return formatDateRangeLabel(config.queryConfig?.time?.range ?? null);
+};
+
+const resolveDateFilterLabel = (
+  config: DashboardVisualCardViewConfig | DashboardSpotlightCardViewConfig,
+): string | null => {
+  const sanitizeLabel = (value: string) => value.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const fallback = config.dateFilter ? `${config.dateFilter.modelId}.${config.dateFilter.fieldId}` : null;
+  const options = Array.isArray(config.dateFilterOptions) ? config.dateFilterOptions : [];
+  if (config.dateFilter) {
+    const match = options.find(
+      (option) =>
+        option.modelId === config.dateFilter?.modelId &&
+        option.fieldId === config.dateFilter?.fieldId &&
+        option.operator === config.dateFilter?.operator,
+    );
+    return match?.label ? sanitizeLabel(match.label) : fallback;
+  }
+  if (options.length > 0) {
+    const option = options[0];
+    if (option.label) {
+      return sanitizeLabel(option.label);
+    }
+    return `${option.modelId}.${option.fieldId}`;
+  }
+  return fallback;
 };
 
 const isSpotlightCardViewConfig = (
@@ -647,11 +821,16 @@ const DashboardLayoutEditor = ({
   cards,
   templateLookup,
   onLayoutCommit,
+  onUpdateCardViewConfig,
   layoutMode,
 }: {
   cards: DashboardCardDto[];
   templateLookup: Map<string, ReportTemplateDto>;
   onLayoutCommit: (layout: DashboardGridItem[], mode: LayoutMode) => void;
+  onUpdateCardViewConfig: (
+    cardId: string,
+    updater: (config: DashboardCardViewConfig) => DashboardCardViewConfig,
+  ) => void;
   layoutMode: LayoutMode;
 }) => {
   const gridRef = useRef<HTMLDivElement | null>(null);
@@ -678,6 +857,79 @@ const DashboardLayoutEditor = ({
     });
     return map;
   }, [layoutEntries]);
+  const [dateFieldSelections, setDateFieldSelections] = useState<Record<string, string>>({});
+  useEffect(() => {
+    setDateFieldSelections((current) => {
+      const next: Record<string, string> = { ...current };
+      const validIds = new Set<string>();
+      layoutEntries.forEach(({ card }) => {
+        const viewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
+        if (!viewConfig || typeof viewConfig !== "object") {
+          return;
+        }
+        if (!isSpotlightCardViewConfig(viewConfig) && !isVisualCardViewConfig(viewConfig)) {
+          return;
+        }
+        const options = resolveDashboardDateFilterOptions(viewConfig);
+        if (options.length === 0) {
+          return;
+        }
+        validIds.add(card.id);
+        const selectedIds = resolveSelectedDateFilterIds(viewConfig, options);
+        const existing = current[card.id];
+        if (!existing || !selectedIds.includes(existing)) {
+          const fallback = selectedIds[0] ?? options[0]?.id;
+          if (fallback) {
+            next[card.id] = fallback;
+          }
+        }
+      });
+      Object.keys(next).forEach((cardId) => {
+        if (!validIds.has(cardId)) {
+          delete next[cardId];
+        }
+      });
+      return next;
+    });
+  }, [layoutEntries]);
+  const handleDateFieldSelection = useCallback((cardId: string, dateFieldId: string) => {
+    setDateFieldSelections((current) => ({
+      ...current,
+      [cardId]: dateFieldId,
+    }));
+  }, []);
+  const handleToggleDateFieldSelection = useCallback(
+    (cardId: string, dateFieldId: string) => {
+      onUpdateCardViewConfig(cardId, (currentViewConfig) => {
+        if (!isSpotlightCardViewConfig(currentViewConfig) && !isVisualCardViewConfig(currentViewConfig)) {
+          return currentViewConfig;
+        }
+        const options = resolveDashboardDateFilterOptions(currentViewConfig);
+        if (options.length === 0) {
+          return currentViewConfig;
+        }
+        const selectedIds = resolveSelectedDateFilterIds(currentViewConfig, options);
+        const isSelected = selectedIds.includes(dateFieldId);
+        const nextIds = isSelected
+          ? selectedIds.filter((id) => id !== dateFieldId)
+          : [...selectedIds, dateFieldId];
+        const orderedIds = options.map((option) => option.id).filter((id) => nextIds.includes(id));
+        const safeIds =
+          orderedIds.length > 0
+            ? orderedIds
+            : selectedIds.length > 0
+              ? selectedIds
+              : options.length > 0
+                ? [options[0].id]
+                : [];
+        return {
+          ...currentViewConfig,
+          dateFilterSelections: safeIds,
+        };
+      });
+    },
+    [onUpdateCardViewConfig],
+  );
 
   const updateGridMinRows = useCallback(() => {
     const container = gridRef.current;
@@ -871,7 +1123,23 @@ const DashboardLayoutEditor = ({
           const spotlightConfig = viewConfig;
           const defaultPreset = spotlightConfig?.periodConfig?.defaultPreset ?? null;
           const defaultLabel = defaultPreset ? SPOTLIGHT_PERIOD_LABELS[defaultPreset] : null;
+          const dateFieldOptions = resolveDashboardDateFilterOptions(spotlightConfig);
+          const selectedDateFieldIds = resolveSelectedDateFilterIds(spotlightConfig, dateFieldOptions);
+          const selectedDateFieldOptions = dateFieldOptions.filter((option) =>
+            selectedDateFieldIds.includes(option.id),
+          );
+          const activeDateFieldId =
+            dateFieldSelections[card.id] ??
+            selectedDateFieldIds[0] ??
+            dateFieldOptions[0]?.id;
+          const activeDateField = dateFieldOptions.find((option) => option.id === activeDateFieldId) ?? null;
+          const dateFieldLabel = activeDateField?.label ?? resolveDateFilterLabel(spotlightConfig);
+          const dateFieldMenuOptions = dateFieldOptions.map((option) => ({
+            value: option.id,
+            label: option.label,
+          }));
           const rangeLabel = defaultPreset ? formatSpotlightRangeLabel(defaultPreset) : null;
+          const infoLabel = dateFieldLabel && rangeLabel ? `${dateFieldLabel}\n${rangeLabel}` : rangeLabel;
           const sampleCard = spotlightConfig?.sample?.cards?.[0];
           const metricLabel = sampleCard?.label ?? spotlightConfig?.spotlight?.metricLabel ?? "Metric";
           const metricValue = sampleCard?.value ?? "-";
@@ -887,13 +1155,31 @@ const DashboardLayoutEditor = ({
                 ...(allowCustom ? [{ value: "custom", label: "Custom" }] : []),
               ]
             : [];
+          const periodRows =
+            showPeriodControls && selectedDateFieldOptions.length > 0
+              ? selectedDateFieldOptions.map((option) => ({
+                  label: defaultLabel ?? "",
+                  options: periodOptions,
+                  activeValue: defaultPreset ?? undefined,
+                  dateFieldLabel: option.label,
+                  dateFieldOptions: dateFieldMenuOptions,
+                  activeDateField: activeDateField?.id,
+                  selectedDateFieldIds,
+                  onToggleDateField: (value: string) => handleToggleDateFieldSelection(card.id, value),
+                }))
+              : undefined;
           content = (
             <SpotlightCard
               title={card.title || "Untitled card"}
               metricLabel={metricLabel}
               metricValue={metricValue}
+              periodRows={periodRows}
               periodLabel={defaultLabel ?? undefined}
-              rangeLabel={rangeLabel ?? undefined}
+              rangeLabel={infoLabel ?? undefined}
+              dateFieldLabel={dateFieldLabel ?? undefined}
+              dateFieldOptions={dateFieldMenuOptions}
+              activeDateField={activeDateField?.id}
+              onSelectDateField={(value) => handleDateFieldSelection(card.id, value)}
               periodOptions={periodOptions}
               activePeriod={defaultPreset ?? undefined}
             />
@@ -913,13 +1199,49 @@ const DashboardLayoutEditor = ({
                   ...(allowCustom ? [{ value: "custom", label: "Custom" }] : []),
                 ]
               : [];
-          const rangeLabel = defaultPreset ? formatSpotlightRangeLabel(defaultPreset) : resolveVisualDateRangeLabel(viewConfig);
+          const dateFieldOptions = resolveDashboardDateFilterOptions(viewConfig);
+          const selectedDateFieldIds = resolveSelectedDateFilterIds(viewConfig, dateFieldOptions);
+          const selectedDateFieldOptions = dateFieldOptions.filter((option) =>
+            selectedDateFieldIds.includes(option.id),
+          );
+          const activeDateFieldId =
+            dateFieldSelections[card.id] ??
+            selectedDateFieldIds[0] ??
+            dateFieldOptions[0]?.id;
+          const activeDateField = dateFieldOptions.find((option) => option.id === activeDateFieldId) ?? null;
+          const dateFieldLabel = activeDateField?.label ?? resolveDateFilterLabel(viewConfig);
+          const dateFieldMenuOptions = dateFieldOptions.map((option) => ({
+            value: option.id,
+            label: option.label,
+          }));
+          const rangeLabel = defaultPreset
+            ? formatSpotlightRangeLabel(defaultPreset)
+            : resolveVisualDateRangeLabel(viewConfig);
+          const infoLabel = dateFieldLabel && rangeLabel ? `${dateFieldLabel}\n${rangeLabel}` : rangeLabel;
+          const periodRows =
+            periodLabel && selectedDateFieldOptions.length > 0
+              ? selectedDateFieldOptions.map((option) => ({
+                  label: periodLabel ?? "",
+                  options: periodOptions,
+                  activeValue: defaultPreset ?? undefined,
+                  dateFieldLabel: option.label,
+                  dateFieldOptions: dateFieldMenuOptions,
+                  activeDateField: activeDateField?.id,
+                  selectedDateFieldIds,
+                  onToggleDateField: (value: string) => handleToggleDateFieldSelection(card.id, value),
+                }))
+              : undefined;
           content = (
             <GraphicCard
               title={card.title || "Untitled card"}
               config={viewConfig}
               rows={viewConfig.sample?.rows ?? []}
-              infoLabel={rangeLabel ?? "Date range not set"}
+              infoLabel={infoLabel ?? "Date range not set"}
+              periodRows={periodRows}
+              dateFieldLabel={dateFieldLabel ?? undefined}
+              dateFieldOptions={dateFieldMenuOptions}
+              activeDateField={activeDateField?.id}
+              onSelectDateField={(value) => handleDateFieldSelection(card.id, value)}
               periodLabel={periodLabel ?? undefined}
               periodOptions={periodOptions}
               activePeriod={defaultPreset ?? undefined}
@@ -1024,6 +1346,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
   const [pendingLayoutChanges, setPendingLayoutChanges] = useState<
     Record<string, Partial<Record<LayoutMode, DashboardCardLayout>>>
   >({});
+  const [pendingCardConfigChanges, setPendingCardConfigChanges] = useState<Record<string, true>>({});
   const [isSavingLayout, setIsSavingLayout] = useState(false);
   const selectedCardTemplate = useMemo(
     () => (cardDraft ? templateLookup.get(cardDraft.templateId) ?? null : null),
@@ -1051,6 +1374,10 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
         label: `${filter.modelId}.${filter.fieldId} (${filter.operator})`,
       })),
     [templateDateFilters],
+  );
+  const templateDateFilterLabelById = useMemo(
+    () => new Map(templateDateFilterOptions.map((option) => [option.value, option.label])),
+    [templateDateFilterOptions],
   );
   const visualDashboardConfig = useMemo(() => {
     if (!cardDraft) {
@@ -1117,6 +1444,97 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     [],
   );
 
+  const resolveAllowedDateFilterIds = useCallback(
+    (
+      config: DashboardVisualCardViewConfig | DashboardSpotlightCardViewConfig,
+      allIds: string[],
+      defaultId: string | null,
+    ): string[] => {
+      if (Array.isArray(config.dateFilterOptions)) {
+        const optionIds = config.dateFilterOptions
+          .map((option) => option.id)
+          .filter((id): id is string => typeof id === "string" && id.length > 0);
+        if (optionIds.length > 0) {
+          return optionIds;
+        }
+        if (defaultId) {
+          return [defaultId];
+        }
+      }
+      return allIds;
+    },
+    [],
+  );
+
+  const buildDateFilterOptionsFromIds = useCallback(
+    (
+      ids: string[],
+      metadata: Map<string, { modelId: string; fieldId: string; operator: FilterOperator }>,
+      labels: Map<string, string>,
+    ) =>
+      ids
+        .map((id) => {
+          const entry = metadata.get(id);
+          if (!entry) {
+            return null;
+          }
+          const label = labels.get(id);
+          return {
+            id,
+            modelId: entry.modelId,
+            fieldId: entry.fieldId,
+            operator: entry.operator,
+            ...(label ? { label } : {}),
+          };
+        })
+        .filter(
+          (entry): entry is {
+            id: string;
+            modelId: string;
+            fieldId: string;
+            operator: FilterOperator;
+            label?: string;
+          } => Boolean(entry),
+        ),
+    [],
+  );
+
+  const selectedVisualExtraDateFilterIds = useMemo(() => {
+    if (!visualDashboardConfig) {
+      return [];
+    }
+    const allIds = templateDateFilterOptions.map((option) => option.value);
+    const allowedIds = resolveAllowedDateFilterIds(
+      visualDashboardConfig,
+      allIds,
+      selectedVisualDateFilterId,
+    );
+    return allowedIds.filter((id) => id !== selectedVisualDateFilterId);
+  }, [
+    resolveAllowedDateFilterIds,
+    selectedVisualDateFilterId,
+    templateDateFilterOptions,
+    visualDashboardConfig,
+  ]);
+
+  const selectedSpotlightExtraDateFilterIds = useMemo(() => {
+    if (!spotlightDashboardConfig) {
+      return [];
+    }
+    const allIds = templateDateFilterOptions.map((option) => option.value);
+    const allowedIds = resolveAllowedDateFilterIds(
+      spotlightDashboardConfig,
+      allIds,
+      selectedSpotlightDateFilterId,
+    );
+    return allowedIds.filter((id) => id !== selectedSpotlightDateFilterId);
+  }, [
+    resolveAllowedDateFilterIds,
+    selectedSpotlightDateFilterId,
+    spotlightDashboardConfig,
+    templateDateFilterOptions,
+  ]);
+
   useEffect(() => {
     if (!selectedDashboardId && dashboards.length > 0) {
       setSelectedDashboardId(dashboards[0].id);
@@ -1138,6 +1556,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
 
   useEffect(() => {
     setPendingLayoutChanges({});
+    setPendingCardConfigChanges({});
   }, [selectedDashboardId]);
 
   const createDashboardMutation = useCreateDashboard();
@@ -1290,19 +1709,49 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     });
   };
 
+  const handleUpdateCardViewConfig = useCallback(
+    (cardId: string, updater: (config: DashboardCardViewConfig) => DashboardCardViewConfig) => {
+      setDashboardDraft((current) => {
+        if (!current) {
+          return current;
+        }
+        const nextCards = current.cards.map((card) => {
+          if (card.id !== cardId) {
+            return card;
+          }
+          const viewConfig = (card.viewConfig as DashboardCardViewConfig) ?? null;
+          if (!viewConfig || typeof viewConfig !== "object") {
+            return card;
+          }
+          return {
+            ...card,
+            viewConfig: updater(viewConfig),
+          };
+        });
+        return { ...current, cards: nextCards };
+      });
+      setPendingCardConfigChanges((current) => ({ ...current, [cardId]: true }));
+    },
+    [],
+  );
+
   const handleSaveLayoutChanges = async () => {
     if (!dashboardDraft) {
       return;
     }
-    const entries = Object.entries(pendingLayoutChanges);
-    if (entries.length === 0) {
+    const layoutEntries = Object.entries(pendingLayoutChanges);
+    const pendingCardIds = new Set<string>([
+      ...layoutEntries.map(([cardId]) => cardId),
+      ...Object.keys(pendingCardConfigChanges),
+    ]);
+    if (pendingCardIds.size === 0) {
       return;
     }
     setIsSavingLayout(true);
     setFeedback(null);
     try {
       await Promise.all(
-        entries.map(([cardId]) => {
+        Array.from(pendingCardIds).map((cardId) => {
           const card = dashboardDraft.cards.find((candidate) => candidate.id === cardId);
           if (!card) {
             return null;
@@ -1320,6 +1769,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
         }),
       );
       setPendingLayoutChanges({});
+      setPendingCardConfigChanges({});
       await queryClient.invalidateQueries({ queryKey: ["reports", "dashboards"] });
       setFeedback({ type: "success", message: "Layout saved." });
     } catch (error) {
@@ -1347,10 +1797,42 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
         ? dashboardDraft?.cards.find((candidate) => candidate.id === cardDraft.id)?.layout ?? null
         : null;
     const layoutConfig = updateLayoutConfig(existingLayout, "desktop", cardDraft.layout);
+    let viewConfig = deepClone(cardDraft.viewConfig) as DashboardCardViewConfig;
+    if (isVisualCardViewConfig(viewConfig)) {
+      if (viewConfig.dateFilter && (!viewConfig.dateFilterOptions || viewConfig.dateFilterOptions.length === 0)) {
+        const allIds = templateDateFilterOptions.map((option) => option.value);
+        const resolvedOptions = buildDateFilterOptionsFromIds(
+          allIds,
+          templateDateFilterMetadata,
+          templateDateFilterLabelById,
+        );
+        if (resolvedOptions.length > 0) {
+          viewConfig = {
+            ...viewConfig,
+            dateFilterOptions: resolvedOptions,
+          };
+        }
+      }
+    } else if (isSpotlightCardViewConfig(viewConfig)) {
+      if (viewConfig.dateFilter && (!viewConfig.dateFilterOptions || viewConfig.dateFilterOptions.length === 0)) {
+        const allIds = templateDateFilterOptions.map((option) => option.value);
+        const resolvedOptions = buildDateFilterOptionsFromIds(
+          allIds,
+          templateDateFilterMetadata,
+          templateDateFilterLabelById,
+        );
+        if (resolvedOptions.length > 0) {
+          viewConfig = {
+            ...viewConfig,
+            dateFilterOptions: resolvedOptions,
+          };
+        }
+      }
+    }
     const payload: DashboardCardPayload = {
       templateId: cardDraft.templateId,
       title: cardDraft.title,
-      viewConfig: deepClone(cardDraft.viewConfig),
+      viewConfig,
       layout: layoutConfig,
     };
     setFeedback(null);
@@ -1396,7 +1878,10 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     deleteCardMutation.isPending ||
     exportDashboardMutation.isPending;
 
-  const pendingLayoutCount = Object.keys(pendingLayoutChanges).length;
+  const pendingLayoutCount = new Set([
+    ...Object.keys(pendingLayoutChanges),
+    ...Object.keys(pendingCardConfigChanges),
+  ]).size;
 
   const selectedDashboardCards = dashboardDraft?.cards ?? selectedDashboard?.cards ?? [];
 
@@ -1689,16 +2174,65 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                         onChange={(value) => {
                           updateVisualCardDraft((current) => {
                             if (!value) {
-                              const { dateFilter, ...rest } = current;
+                              const { dateFilter, dateFilterOptions, ...rest } = current;
                               return rest;
                             }
                             const metadata = templateDateFilterMetadata.get(value);
+                            if (!metadata) {
+                              return current;
+                            }
+                            const allIds = templateDateFilterOptions.map((option) => option.value);
+                            const allowedIds = resolveAllowedDateFilterIds(
+                              current,
+                              allIds,
+                              selectedVisualDateFilterId,
+                            );
+                            const nextIds = [value, ...allowedIds.filter((id) => id !== value)];
+                            const nextOptions = buildDateFilterOptionsFromIds(
+                              nextIds,
+                              templateDateFilterMetadata,
+                              templateDateFilterLabelById,
+                            );
                             return {
                               ...current,
-                              ...(metadata ? { dateFilter: { ...metadata } } : {}),
+                              dateFilter: { ...metadata },
+                              ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
                             };
                           });
                         }}
+                      />
+                      <MultiSelect
+                        label="Extra date fields"
+                        data={templateDateFilterOptions.filter(
+                          (option) => option.value !== selectedVisualDateFilterId,
+                        )}
+                        value={selectedVisualExtraDateFilterIds}
+                        onChange={(value) => {
+                          updateVisualCardDraft((current) => {
+                            const normalized = value.filter((entry) =>
+                              templateDateFilterOptions.some((option) => option.value === entry),
+                            );
+                            const defaultId = selectedVisualDateFilterId;
+                            const nextIds = defaultId
+                              ? [defaultId, ...normalized.filter((id) => id !== defaultId)]
+                              : normalized;
+                            if (nextIds.length === 0) {
+                              const { dateFilterOptions, ...rest } = current;
+                              return rest;
+                            }
+                            const nextOptions = buildDateFilterOptionsFromIds(
+                              nextIds,
+                              templateDateFilterMetadata,
+                              templateDateFilterLabelById,
+                            );
+                            return {
+                              ...current,
+                              ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
+                            };
+                          });
+                        }}
+                        searchable
+                        disabled={!selectedVisualDateFilterId}
                       />
                       <MultiSelect
                         label="Quick filter buttons"
@@ -1804,16 +2338,65 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                         onChange={(value) => {
                           updateSpotlightCardDraft((current) => {
                             if (!value) {
-                              const { dateFilter, ...rest } = current;
+                              const { dateFilter, dateFilterOptions, ...rest } = current;
                               return rest;
                             }
                             const metadata = templateDateFilterMetadata.get(value);
+                            if (!metadata) {
+                              return current;
+                            }
+                            const allIds = templateDateFilterOptions.map((option) => option.value);
+                            const allowedIds = resolveAllowedDateFilterIds(
+                              current,
+                              allIds,
+                              selectedSpotlightDateFilterId,
+                            );
+                            const nextIds = [value, ...allowedIds.filter((id) => id !== value)];
+                            const nextOptions = buildDateFilterOptionsFromIds(
+                              nextIds,
+                              templateDateFilterMetadata,
+                              templateDateFilterLabelById,
+                            );
                             return {
                               ...current,
-                              ...(metadata ? { dateFilter: { ...metadata } } : {}),
+                              dateFilter: { ...metadata },
+                              ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
                             };
                           });
                         }}
+                      />
+                      <MultiSelect
+                        label="Extra date fields"
+                        data={templateDateFilterOptions.filter(
+                          (option) => option.value !== selectedSpotlightDateFilterId,
+                        )}
+                        value={selectedSpotlightExtraDateFilterIds}
+                        onChange={(value) => {
+                          updateSpotlightCardDraft((current) => {
+                            const normalized = value.filter((entry) =>
+                              templateDateFilterOptions.some((option) => option.value === entry),
+                            );
+                            const defaultId = selectedSpotlightDateFilterId;
+                            const nextIds = defaultId
+                              ? [defaultId, ...normalized.filter((id) => id !== defaultId)]
+                              : normalized;
+                            if (nextIds.length === 0) {
+                              const { dateFilterOptions, ...rest } = current;
+                              return rest;
+                            }
+                            const nextOptions = buildDateFilterOptionsFromIds(
+                              nextIds,
+                              templateDateFilterMetadata,
+                              templateDateFilterLabelById,
+                            );
+                            return {
+                              ...current,
+                              ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
+                            };
+                          });
+                        }}
+                        searchable
+                        disabled={!selectedSpotlightDateFilterId}
                       />
                       <MultiSelect
                         label="Quick filter buttons"
@@ -2128,6 +2711,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
               cards={selectedDashboardCards}
               templateLookup={templateLookup}
               onLayoutCommit={handleLayoutCommit}
+              onUpdateCardViewConfig={handleUpdateCardViewConfig}
               layoutMode={layoutEditorMode}
             />
           </Box>

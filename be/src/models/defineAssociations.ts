@@ -56,6 +56,9 @@ import SwapRequest from './SwapRequest.js';
 import Export from './Export.js';
 import Notification from './Notification.js';
 import AuditLog from './AuditLog.js';
+import ConfigKey from './ConfigKey.js';
+import ConfigValue from './ConfigValue.js';
+import ConfigHistory from './ConfigHistory.js';
 import ShiftRole from './ShiftRole.js';
 import UserShiftRole from './UserShiftRole.js';
 import ReportTemplate from './ReportTemplate.js';
@@ -88,6 +91,8 @@ export function defineAssociations() {
   CompensationComponentAssignment.belongsTo(User, { foreignKey: 'user_id', as: 'userCompensation' });
   User.hasMany(StaffPayoutLedger, { foreignKey: 'staff_user_id', as: 'payoutLedgers' });
   StaffPayoutLedger.belongsTo(User, { foreignKey: 'staff_user_id', as: 'ledgerUser' });
+  User.hasMany(ConfigHistory, { foreignKey: 'actor_id', as: 'configHistory' });
+  User.hasMany(ConfigValue, { foreignKey: 'updated_by', as: 'configValuesUpdated' });
 
   // UserType Associations
   UserType.hasMany(User, { foreignKey: 'userTypeId', as: 'users' });
@@ -250,6 +255,10 @@ export function defineAssociations() {
   FinanceCategory.hasMany(FinanceClient, { foreignKey: 'defaultCategoryId', as: 'clients' });
 
   // Scheduling associations are defined via model decorators
+
+  // Config associations
+  ConfigKey.hasOne(ConfigValue, { foreignKey: 'key', as: 'currentValue' });
+  ConfigKey.hasMany(ConfigHistory, { foreignKey: 'key', as: 'history' });
 }
 
 

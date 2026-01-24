@@ -43,6 +43,7 @@ import {
   getAsyncJobStatus,
   type QueryExecutionResult,
 } from "../services/reporting/reportQueryService.js";
+import { getConfigValue } from "../services/configService.js";
 import { PreviewQueryError } from "../errors/PreviewQueryError.js";
 import { ensureReportingAccess } from "../utils/reportingAccess.js";
 import { normalizeDerivedFieldExpressionAst } from "../utils/derivedFieldExpression.js";
@@ -332,10 +333,16 @@ const resolveCounterManagerId = (
 const COMMISSION_RATE_PER_ATTENDEE = 0;
 const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-01");
 const REVIEW_MINIMUM_THRESHOLD = 15;
-const DEFAULT_PAYOUT_CURRENCY = process.env.FINANCE_BASE_CURRENCY?.trim().toUpperCase() ?? "PLN";
-const STAFF_LEDGER_START_DATE = dayjs(
-  process.env.STAFF_LEDGER_START_DATE ?? process.env.PAYOUT_LEDGER_START ?? "2025-10-01",
-);
+const resolvePayoutCurrency = (): string =>
+  String(getConfigValue('FINANCE_BASE_CURRENCY') ?? 'PLN')
+    .trim()
+    .toUpperCase();
+const resolveStaffLedgerStartDate = (): dayjs.Dayjs =>
+  dayjs(
+    (getConfigValue('STAFF_LEDGER_START_DATE') as string | null) ??
+      (getConfigValue('PAYOUT_LEDGER_START') as string | null) ??
+      '2025-10-01',
+  );
 const roundCurrencyValue = (value: number): number => Math.round(value * 100) / 100;
 const convertMinorUnitsToMajor = (value: unknown): number =>
   roundCurrencyValue(Number(value ?? 0) / 100);
@@ -1651,7 +1658,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       end.isSame(start.endOf("month"), "day") &&
       start.isSame(end, "month") &&
       start.year() === end.year();
-    const isLedgerEligible = isCanonicalRange && !start.isBefore(STAFF_LEDGER_START_DATE, "day");
+    const isLedgerEligible = isCanonicalRange && !start.isBefore(resolveStaffLedgerStartDate(), "day");
 
     const commissionDataByUser = new Map<number, CommissionSummary>();
     const productBucketsByUser: ProductBucketLookup = new Map();
@@ -1958,7 +1965,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         const currency =
           typeof row.currencyCode === "string" && row.currencyCode.trim().length > 0
             ? row.currencyCode.trim().toUpperCase()
-            : DEFAULT_PAYOUT_CURRENCY;
+            : resolvePayoutCurrency();
         const existing =
           collectionMap.get(staffProfileId) ?? {
             currency,
@@ -1981,7 +1988,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       const staffProfileKey = profile?.staffProfileKey ?? null;
       const collection =
         (staffProfileKey ? collectionMap.get(staffProfileKey) : undefined) ?? {
-          currency: DEFAULT_PAYOUT_CURRENCY,
+          currency: resolvePayoutCurrency(),
           receivable: 0,
           payable: 0,
         };
@@ -1995,7 +2002,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         summary.totalPayout < 0 ? roundCurrencyValue(Math.abs(summary.totalPayout)) : 0;
 
       summary.payouts = {
-        currency: collection.currency ?? DEFAULT_PAYOUT_CURRENCY,
+        currency: collection.currency ?? resolvePayoutCurrency(),
         payableDue,
         payablePaid: roundCurrencyValue(collection.payable),
         payableOutstanding: roundCurrencyValue(Math.max(payableDue - collection.payable, 0)),
@@ -2146,7 +2153,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             [Op.lt]: start.format("YYYY-MM-DD"),
           },
           rangeStart: {
-            [Op.gte]: STAFF_LEDGER_START_DATE.format("YYYY-MM-DD"),
+            [Op.gte]: resolveStaffLedgerStartDate().format("YYYY-MM-DD"),
           },
         },
         order: [
@@ -2181,7 +2188,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           }))
         : [];
       const payouts = entry.payouts ?? {
-        currency: DEFAULT_PAYOUT_CURRENCY,
+        currency: resolvePayoutCurrency(),
         payableDue: 0,
         payablePaid: 0,
         payableOutstanding: 0,
@@ -2233,7 +2240,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           amount: Number(locked.amount.toFixed(2)),
         })),
         payouts: {
-          currency: payouts.currency ?? DEFAULT_PAYOUT_CURRENCY,
+          currency: payouts.currency ?? resolvePayoutCurrency(),
           payableDue: roundCurrencyValue(payouts.payableDue ?? 0),
           payablePaid: roundCurrencyValue(payouts.payablePaid ?? 0),
           payableOutstanding: roundCurrencyValue(payouts.payableOutstanding ?? 0),
@@ -2264,7 +2271,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             staffUserId: summary.userId,
             rangeStart: rangeStartIso,
             rangeEnd: rangeEndIso,
-            currencyCode: summary.payouts?.currency ?? DEFAULT_PAYOUT_CURRENCY,
+            currencyCode: summary.payouts?.currency ?? resolvePayoutCurrency(),
             openingBalanceMinor,
             dueAmountMinor,
             paidAmountMinor,
@@ -3456,7 +3463,7 @@ const createEmptySummary = (userId: number, firstName: string, lastName = ""): C
   financeVendorId: null,
   financeClientId: null,
   payouts: {
-    currency: DEFAULT_PAYOUT_CURRENCY,
+    currency: resolvePayoutCurrency(),
     payableDue: 0,
     payablePaid: 0,
     payableOutstanding: 0,
@@ -6524,3 +6531,4 @@ function quoteIdentifier(value: string): string {
   const quoter = getDialectQuoter();
   return quoter.quoteIdentifier(value);
 }
+

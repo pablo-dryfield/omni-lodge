@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { Op } from "sequelize";
 import ReportQueryCacheEntry from "../../models/ReportQueryCacheEntry.js";
 import ReportAsyncJob from "../../models/ReportAsyncJob.js";
+import { getConfigValue } from "../configService.js";
 
 export type QueryExecutionResult = {
   rows: Array<Record<string, unknown>>;
@@ -12,7 +13,7 @@ export type QueryExecutionResult = {
 
 type AsyncJobHandler = () => Promise<QueryExecutionResult>;
 
-const DEFAULT_CACHE_TTL_SECONDS = Number(process.env.REPORT_CACHE_TTL_SECONDS ?? 300);
+const resolveCacheTtlSeconds = (): number => Number(getConfigValue("REPORT_CACHE_TTL_SECONDS") ?? 300);
 const jobQueue: Array<{ job: ReportAsyncJob; execute: AsyncJobHandler; hash: string; ttlSeconds: number; templateId?: string | null }> = [];
 let processing = false;
 
@@ -85,10 +86,11 @@ export const storeQueryCacheEntry = async (
   hash: string,
   templateId: string | null | undefined,
   payload: QueryExecutionResult,
-  ttlSeconds = DEFAULT_CACHE_TTL_SECONDS,
+  ttlSeconds?: number,
 ): Promise<void> => {
+  const resolvedTtlSeconds = ttlSeconds ?? resolveCacheTtlSeconds();
   const createdAt = new Date();
-  const expiresAt = new Date(createdAt.getTime() + ttlSeconds * 1000);
+  const expiresAt = new Date(createdAt.getTime() + resolvedTtlSeconds * 1000);
   await ReportQueryCacheEntry.upsert({
     hash,
     templateId: templateId ?? null,
@@ -144,8 +146,9 @@ export const enqueueQueryJob = async (
   hash: string,
   templateId: string | null | undefined,
   handler: AsyncJobHandler,
-  ttlSeconds = DEFAULT_CACHE_TTL_SECONDS,
+  ttlSeconds?: number,
 ): Promise<ReportAsyncJob> => {
+  const resolvedTtlSeconds = ttlSeconds ?? resolveCacheTtlSeconds();
   const job = await ReportAsyncJob.create({
     hash,
     status: "queued",
@@ -156,7 +159,7 @@ export const enqueueQueryJob = async (
     job,
     execute: handler,
     hash,
-    ttlSeconds,
+    ttlSeconds: resolvedTtlSeconds,
     templateId: templateId ?? null,
   });
 

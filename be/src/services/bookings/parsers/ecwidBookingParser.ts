@@ -2,14 +2,24 @@ import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
-import type { BookingEmailParser, BookingParserContext, BookingFieldPatch, ParsedBookingEvent } from '../types.js';
+import type {
+  BookingEmailParser,
+  BookingParserCheck,
+  BookingParserContext,
+  BookingParserDiagnostics,
+  BookingFieldPatch,
+  ParsedBookingEvent,
+} from '../types.js';
+import { getConfigValue } from '../../configService.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const DEFAULT_BOOKING_TIMEZONE = process.env.BOOKING_PARSER_TIMEZONE ?? 'Europe/Warsaw';
-const ECWID_TIMEZONE = process.env.ECWID_TIMEZONE ?? DEFAULT_BOOKING_TIMEZONE;
+const DEFAULT_BOOKING_TIMEZONE =
+  (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ?? 'Europe/Warsaw';
+const ECWID_TIMEZONE =
+  (getConfigValue('ECWID_TIMEZONE') as string | null) ?? DEFAULT_BOOKING_TIMEZONE;
 
 const normalizeText = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
@@ -358,13 +368,40 @@ const buildExperienceMoment = (dateRaw: string | null, timeRaw: string | null): 
 export class EcwidBookingParser implements BookingEmailParser {
   public readonly name = 'ecwid';
 
-  canParse(context: BookingParserContext): boolean {
+  private buildDiagnostics(context: BookingParserContext): BookingParserDiagnostics {
     const subject = context.subject ?? '';
-    if (subject.toLowerCase().startsWith('fwd:')) {
-      return false;
-    }
     const from = context.from ?? context.headers.from ?? '';
-    return /ecwid/i.test(from) || /new order #/i.test(subject);
+    const isForwarded = subject.toLowerCase().startsWith('fwd:');
+    const fromMatch = /ecwid/i.test(from);
+    const subjectMatch = /new order #/i.test(subject);
+    const text = context.textBody || context.rawTextBody || context.snippet || '';
+    const orderMatch = text.match(/New order\s+#([A-Z0-9]+)/i);
+
+    const canParseChecks: BookingParserCheck[] = [
+      { label: 'subject starts with "fwd:"', passed: !isForwarded, value: subject },
+      { label: 'from matches /ecwid/i', passed: fromMatch, value: from },
+      { label: 'subject matches /new order #/i', passed: subjectMatch, value: subject },
+    ];
+
+    const parseChecks: BookingParserCheck[] = [
+      { label: 'text body present', passed: Boolean(text) },
+      { label: 'order id matched /New order #/i', passed: Boolean(orderMatch), value: orderMatch?.[1] ?? null },
+    ];
+
+    return {
+      name: this.name,
+      canParse: !isForwarded && (fromMatch || subjectMatch),
+      canParseChecks,
+      parseChecks,
+    };
+  }
+
+  diagnose(context: BookingParserContext): BookingParserDiagnostics {
+    return this.buildDiagnostics(context);
+  }
+
+  canParse(context: BookingParserContext): boolean {
+    return this.buildDiagnostics(context).canParse;
   }
 
   async parse(context: BookingParserContext): Promise<ParsedBookingEvent | null> {

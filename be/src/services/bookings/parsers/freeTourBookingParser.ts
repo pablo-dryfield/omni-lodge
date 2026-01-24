@@ -2,15 +2,25 @@ import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
-import type { BookingEmailParser, BookingParserContext, BookingFieldPatch, ParsedBookingEvent } from '../types.js';
+import type {
+  BookingEmailParser,
+  BookingParserCheck,
+  BookingParserContext,
+  BookingParserDiagnostics,
+  BookingFieldPatch,
+  ParsedBookingEvent,
+} from '../types.js';
 import type { BookingEventType, BookingStatus } from '../../../constants/bookings.js';
+import { getConfigValue } from '../../configService.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const DEFAULT_BOOKING_TIMEZONE = process.env.BOOKING_PARSER_TIMEZONE ?? 'Europe/Warsaw';
-const FREETOUR_TIMEZONE = process.env.FREETOUR_TIMEZONE ?? DEFAULT_BOOKING_TIMEZONE;
+const DEFAULT_BOOKING_TIMEZONE =
+  (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ?? 'Europe/Warsaw';
+const FREETOUR_TIMEZONE =
+  (getConfigValue('FREETOUR_TIMEZONE') as string | null) ?? DEFAULT_BOOKING_TIMEZONE;
 
 const MONEY_SYMBOLS: Record<string, string> = {
   '\u20ac': 'EUR',
@@ -139,10 +149,50 @@ const statusToEventType = (status: BookingStatus): BookingEventType => {
 export class FreeTourBookingParser implements BookingEmailParser {
   public readonly name = 'freetour';
 
-  canParse(context: BookingParserContext): boolean {
+  private buildDiagnostics(context: BookingParserContext): BookingParserDiagnostics {
     const from = context.from ?? context.headers.from ?? '';
     const subject = context.subject ?? '';
-    return /freetour/i.test(from) || /freetour/i.test(subject);
+    const fromMatch = /freetour/i.test(from);
+    const subjectMatch = /freetour/i.test(subject);
+    const text = context.textBody || context.rawTextBody || context.snippet || '';
+    let bookingReference =
+      text && extractField(text, 'Booking Reference Number:', ['Booking Total Cost:']);
+    if (!bookingReference && text) {
+      const inlineMatch = text.match(/#([\w-]{6,})/);
+      if (inlineMatch) {
+        bookingReference = inlineMatch[1];
+      }
+    }
+    if (!bookingReference && subject) {
+      const subjectMatchRef = subject.match(/#([\w-]{6,})/);
+      if (subjectMatchRef) {
+        bookingReference = subjectMatchRef[1];
+      }
+    }
+
+    const canParseChecks: BookingParserCheck[] = [
+      { label: 'from matches /freetour/i', passed: fromMatch, value: from },
+      { label: 'subject matches /freetour/i', passed: subjectMatch, value: subject },
+    ];
+    const parseChecks: BookingParserCheck[] = [
+      { label: 'text body present', passed: Boolean(text) },
+      { label: 'booking reference detected', passed: Boolean(bookingReference), value: bookingReference ?? null },
+    ];
+
+    return {
+      name: this.name,
+      canParse: fromMatch || subjectMatch,
+      canParseChecks,
+      parseChecks,
+    };
+  }
+
+  diagnose(context: BookingParserContext): BookingParserDiagnostics {
+    return this.buildDiagnostics(context);
+  }
+
+  canParse(context: BookingParserContext): boolean {
+    return this.buildDiagnostics(context).canParse;
   }
 
   async parse(context: BookingParserContext): Promise<ParsedBookingEvent | null> {

@@ -2,14 +2,24 @@ import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
-import type { BookingEmailParser, BookingParserContext, BookingFieldPatch, ParsedBookingEvent } from '../types.js';
+import type {
+  BookingEmailParser,
+  BookingParserCheck,
+  BookingParserContext,
+  BookingParserDiagnostics,
+  BookingFieldPatch,
+  ParsedBookingEvent,
+} from '../types.js';
+import { getConfigValue } from '../../configService.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const DEFAULT_BOOKING_TIMEZONE = process.env.BOOKING_PARSER_TIMEZONE ?? 'Europe/Warsaw';
-const XPERIENCEPOLAND_TIMEZONE = process.env.XPERIENCEPOLAND_TIMEZONE ?? DEFAULT_BOOKING_TIMEZONE;
+const DEFAULT_BOOKING_TIMEZONE =
+  (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ?? 'Europe/Warsaw';
+const XPERIENCEPOLAND_TIMEZONE =
+  (getConfigValue('XPERIENCEPOLAND_TIMEZONE') as string | null) ?? DEFAULT_BOOKING_TIMEZONE;
 
 const DATE_TIME_FORMATS = [
   'MMMM D, YYYY HH:mm',
@@ -172,10 +182,41 @@ const parseExperienceDate = (dateText?: string | null, timeText?: string | null,
 export class XperiencePolandBookingParser implements BookingEmailParser {
   public readonly name = 'xperiencepoland';
 
-  canParse(context: BookingParserContext): boolean {
+  private buildDiagnostics(context: BookingParserContext): BookingParserDiagnostics {
     const from = context.from ?? context.headers.from ?? '';
     const subject = context.subject ?? '';
-    return /xperiencepoland\.com/i.test(from) || /xperience/i.test(subject);
+    const fromMatch = /xperiencepoland\.com/i.test(from);
+    const subjectMatch = /xperience/i.test(subject);
+    const body = context.textBody || context.rawTextBody || context.snippet || '';
+    const reservation =
+      (body &&
+        extractField(body, ['Reservation number:', 'Numer rezerwacji:'], [['Client:', 'Klient:']])) ??
+      context.subject?.match(/\|\s*([A-Z0-9]+)\)/)?.[1] ??
+      null;
+
+    const canParseChecks: BookingParserCheck[] = [
+      { label: 'from matches /xperiencepoland\\.com/i', passed: fromMatch, value: from },
+      { label: 'subject matches /xperience/i', passed: subjectMatch, value: subject },
+    ];
+    const parseChecks: BookingParserCheck[] = [
+      { label: 'text body present', passed: Boolean(body) },
+      { label: 'reservation detected', passed: Boolean(reservation), value: reservation ?? null },
+    ];
+
+    return {
+      name: this.name,
+      canParse: fromMatch || subjectMatch,
+      canParseChecks,
+      parseChecks,
+    };
+  }
+
+  diagnose(context: BookingParserContext): BookingParserDiagnostics {
+    return this.buildDiagnostics(context);
+  }
+
+  canParse(context: BookingParserContext): boolean {
+    return this.buildDiagnostics(context).canParse;
   }
 
   async parse(context: BookingParserContext): Promise<ParsedBookingEvent | null> {

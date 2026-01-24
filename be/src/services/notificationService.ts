@@ -5,6 +5,7 @@ import utc from 'dayjs/plugin/utc.js';
 import Notification from '../models/Notification.js';
 import User from '../models/User.js';
 import logger from '../utils/logger.js';
+import { getConfigValue } from './configService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -26,7 +27,7 @@ type TemplateConfig = {
   html: (payload: Record<string, unknown>) => string;
 };
 
-const SCHED_TZ = process.env.SCHED_TZ || 'Europe/Warsaw';
+const resolveScheduleTimezone = (): string => (getConfigValue('SCHED_TZ') as string) ?? 'Europe/Warsaw';
 
 const templateLibrary: Record<TemplateKey, TemplateConfig> = {
   availability_reminder_first: {
@@ -110,19 +111,23 @@ const templateLibrary: Record<TemplateKey, TemplateConfig> = {
 };
 
 let transporter: Transporter | null = null;
+let transporterSignature: string | null = null;
 
 function ensureTransporter(): Transporter | null {
-  if (transporter) {
+  const host = getConfigValue('SMTP_HOST') as string | null;
+  const port = getConfigValue('SMTP_PORT') as number | null;
+  const user = getConfigValue('SMTP_USER') as string | null;
+  const pass = getConfigValue('SMTP_PASS') as string | null;
+  const signature = JSON.stringify({ host, port, user, pass });
+
+  if (transporter && transporterSignature === signature) {
     return transporter;
   }
 
-  const host = process.env.SMTP_HOST;
-  const port = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : undefined;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-
   if (!host || !port || !user || !pass) {
     logger.warn('Email transport not configured. Set SMTP_HOST/PORT/USER/PASS to enable email notifications.');
+    transporter = null;
+    transporterSignature = signature;
     return null;
   }
 
@@ -135,6 +140,7 @@ function ensureTransporter(): Transporter | null {
       pass,
     },
   });
+  transporterSignature = signature;
 
   return transporter;
 }
@@ -151,7 +157,7 @@ async function sendEmail(template: TemplateConfig, user: User, payload: Record<s
     return;
   }
 
-  const from = process.env.SMTP_FROM ?? 'noreply@omni-lodge.test';
+  const from = (getConfigValue('SMTP_FROM') as string | null) ?? 'noreply@omni-lodge.test';
 
   try {
     await activeTransporter.sendMail({
@@ -171,7 +177,7 @@ async function persistNotification(userId: number, templateKey: TemplateKey, pay
     channel,
     templateKey,
     payloadJson: payload,
-    sentAt: dayjs().tz(SCHED_TZ).toDate(),
+    sentAt: dayjs().tz(resolveScheduleTimezone()).toDate(),
   });
 }
 
@@ -190,7 +196,7 @@ export async function sendSchedulingNotification(options: {
   const normalizedPayload = {
     ...payload,
     firstName: payload.firstName ?? user.firstName,
-    sentAt: dayjs().tz(SCHED_TZ).toISOString(),
+    sentAt: dayjs().tz(resolveScheduleTimezone()).toISOString(),
   };
 
   const operations: Array<Promise<void>> = [];

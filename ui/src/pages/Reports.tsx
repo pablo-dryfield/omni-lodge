@@ -38,6 +38,9 @@ import {
 import { DatePickerInput } from "@mantine/dates";
 import { useDebouncedValue, useMediaQuery } from "@mantine/hooks";
 import dayjs from "dayjs";
+import isoWeek from "dayjs/plugin/isoWeek";
+
+dayjs.extend(isoWeek);
 import {
   IconAdjustments,
   IconAlertTriangle,
@@ -1237,20 +1240,27 @@ const SPOTLIGHT_CURRENCY_OPTIONS: { value: string; label: string }[] = [
 
 const SPOTLIGHT_PERIOD_PRESET_OPTIONS: Array<{ value: DashboardPreviewPeriodPreset; label: string }> = [
   { value: "today", label: "Today" },
+  { value: "yesterday", label: "Yesterday" },
+  { value: "all_time", label: "All time" },
   { value: "last_7_days", label: "Last 7 days" },
+  { value: "last_week", label: "Last week" },
+  { value: "this_week", label: "This week" },
   { value: "last_30_days", label: "Last 30 days" },
   { value: "last_30_months", label: "Last 30 months" },
+  { value: "this_month", label: "This month" },
+  { value: "last_month", label: "Last month" },
+  { value: "this_year", label: "This year" },
+  { value: "this_quarter", label: "This quarter" },
+  { value: "last_quarter", label: "Last quarter" },
 ];
 
 const SPOTLIGHT_PERIOD_LABEL_LOOKUP = new Map(
   SPOTLIGHT_PERIOD_PRESET_OPTIONS.map((option) => [option.value, option.label]),
 );
 
-const DEFAULT_SPOTLIGHT_PERIOD_PRESETS: DashboardPreviewPeriodPreset[] = [
-  "today",
-  "last_7_days",
-  "last_30_days",
-];
+const DEFAULT_SPOTLIGHT_PERIOD_PRESETS: DashboardPreviewPeriodPreset[] = SPOTLIGHT_PERIOD_PRESET_OPTIONS.map(
+  (option) => option.value,
+);
 
 const DEFAULT_SPOTLIGHT_PERIOD_DEFAULT: DashboardPreviewPeriodPreset = "last_7_days";
 
@@ -1263,11 +1273,29 @@ const computeSpotlightPresetRange = (
   preset: DashboardPreviewPeriodPreset,
 ): { from: string; to: string } => {
   const today = dayjs();
+  const getQuarterStart = (value: dayjs.Dayjs) => {
+    const quarterIndex = Math.floor(value.month() / 3);
+    const startMonth = quarterIndex * 3;
+    return value.month(startMonth).startOf("month");
+  };
+  const getQuarterEnd = (value: dayjs.Dayjs) => value.add(2, "month").endOf("month");
   switch (preset) {
     case "today":
       return {
         from: today.startOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
         to: today.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    case "yesterday": {
+      const base = today.subtract(1, "day");
+      return {
+        from: base.startOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: base.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "all_time":
+      return {
+        from: dayjs("1900-01-01").startOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: dayjs("2100-12-31").endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
       };
     case "last_7_days": {
       const from = today.subtract(6, "day");
@@ -1276,6 +1304,18 @@ const computeSpotlightPresetRange = (
         to: today.endOf("day").format("YYYY-MM-DD HH:mm:ss.SSS"),
       };
     }
+    case "last_week": {
+      const base = today.subtract(1, "week");
+      return {
+        from: base.startOf("isoWeek").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: base.endOf("isoWeek").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "this_week":
+      return {
+        from: today.startOf("isoWeek").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: today.endOf("isoWeek").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
     case "last_30_days": {
       const from = today.subtract(29, "day");
       return {
@@ -1295,6 +1335,25 @@ const computeSpotlightPresetRange = (
       return {
         from: base.startOf("month").format("YYYY-MM-DD HH:mm:ss.SSS"),
         to: base.endOf("month").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "this_year":
+      return {
+        from: today.startOf("year").format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: today.endOf("year").format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    case "this_quarter": {
+      const quarterStart = getQuarterStart(today);
+      return {
+        from: quarterStart.format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: getQuarterEnd(quarterStart).format("YYYY-MM-DD HH:mm:ss.SSS"),
+      };
+    }
+    case "last_quarter": {
+      const quarterStart = getQuarterStart(today).subtract(3, "month");
+      return {
+        from: quarterStart.format("YYYY-MM-DD HH:mm:ss.SSS"),
+        to: getQuarterEnd(quarterStart).format("YYYY-MM-DD HH:mm:ss.SSS"),
       };
     }
     case "this_month":
@@ -3104,6 +3163,10 @@ const Reports = (props: GenericPageProps) => {
   );
   const visualDateFilterMetadata = spotlightDateFilterMetadata;
   const visualDateFilterOptions = spotlightDateFilterOptions;
+  const dateFilterLabelById = useMemo(
+    () => new Map(spotlightDateFilterOptions.map((option) => [option.value, option.label])),
+    [spotlightDateFilterOptions],
+  );
 
   const previewColumnsFromSelection = useMemo(() => {
     const columns = previewResult?.columns ?? [];
@@ -5222,6 +5285,7 @@ const getColumnLabel = useCallback(
         sample?: DashboardVisualCardViewConfig["sample"];
         dateFilterMetadata?: ReturnType<typeof findDateFilterMetadata> | null;
         periodConfig?: DashboardVisualCardViewConfig["periodConfig"];
+        dateFilterOptions?: DashboardVisualCardViewConfig["dateFilterOptions"];
       },
     ): DashboardVisualCardViewConfig | null => {
       if (!visual.metric || !visual.dimension) {
@@ -5269,7 +5333,7 @@ const getColumnLabel = useCallback(
           return {
             presets,
             defaultPreset,
-            allowCustom: Boolean(options.periodConfig.allowCustom),
+            allowCustom: options.periodConfig.allowCustom ?? true,
           };
         }
         if (options?.dateFilterMetadata && defaultPeriodPresets.length > 0) {
@@ -5282,6 +5346,7 @@ const getColumnLabel = useCallback(
           return {
             presets: defaultPeriodPresets,
             defaultPreset,
+            allowCustom: true,
           };
         }
         return null;
@@ -5294,6 +5359,9 @@ const getColumnLabel = useCallback(
         dimensionAlias: descriptor.dimensionAlias ?? undefined,
         comparisonAlias: descriptor.comparisonAlias ?? undefined,
         ...(options?.dateFilterMetadata ? { dateFilter: { ...options.dateFilterMetadata } } : {}),
+        ...(options?.dateFilterOptions && options.dateFilterOptions.length > 0
+          ? { dateFilterOptions: options.dateFilterOptions.map((option) => ({ ...option })) }
+          : {}),
         ...(normalizedPeriodConfig ? { periodConfig: normalizedPeriodConfig } : {}),
         visual: {
           id: visual.id,
@@ -5351,9 +5419,16 @@ const getColumnLabel = useCallback(
           }
         : undefined;
     const dateFilterMetadata = findDateFilterMetadata();
+    const dateFilterOptionIds = visualDateFilterOptions.map((option) => option.value);
+    const dateFilterOptions = buildDateFilterOptionsFromIds(
+      dateFilterOptionIds,
+      visualDateFilterMetadata,
+      dateFilterLabelById,
+    );
     const viewConfig = buildVisualCardViewConfig(activeVisual, {
       sample,
       dateFilterMetadata,
+      dateFilterOptions,
     });
     if (!viewConfig) {
       setTemplateError("Unable to build the visual configuration for this dashboard card.");
@@ -5449,10 +5524,20 @@ const getColumnLabel = useCallback(
             const visualId = viewConfig.visual?.id ?? null;
             const matchingVisual = visualId ? visualLookup.get(visualId) : undefined;
             if (matchingVisual) {
+              const dateFilterOptionIds = visualDateFilterOptions.map((option) => option.value);
+              const resolvedDateFilterOptions =
+                viewConfig.dateFilterOptions && viewConfig.dateFilterOptions.length > 0
+                  ? viewConfig.dateFilterOptions
+                  : buildDateFilterOptionsFromIds(
+                      dateFilterOptionIds,
+                      visualDateFilterMetadata,
+                      dateFilterLabelById,
+                    );
               const updatedConfig = buildVisualCardViewConfig(matchingVisual, {
                 sample: viewConfig.sample,
                 dateFilterMetadata: dateFilterMetadata ?? viewConfig.dateFilter ?? null,
                 periodConfig: viewConfig.periodConfig,
+                dateFilterOptions: resolvedDateFilterOptions,
               });
               if (updatedConfig) {
                 enqueueUpdate(dashboard.id, card, updatedConfig);
@@ -5468,9 +5553,21 @@ const getColumnLabel = useCallback(
               ) {
                 return;
               }
+              const dateFilterOptionIds = visualDateFilterOptions.map((option) => option.value);
+              const resolvedDateFilterOptions =
+                viewConfig.dateFilterOptions && viewConfig.dateFilterOptions.length > 0
+                  ? viewConfig.dateFilterOptions
+                  : buildDateFilterOptionsFromIds(
+                      dateFilterOptionIds,
+                      visualDateFilterMetadata,
+                      dateFilterLabelById,
+                    );
               enqueueUpdate(dashboard.id, card, {
                 ...viewConfig,
                 dateFilter: { ...dateFilterMetadata },
+                ...(resolvedDateFilterOptions.length > 0
+                  ? { dateFilterOptions: resolvedDateFilterOptions }
+                  : {}),
               });
             }
             return;
@@ -5484,6 +5581,15 @@ const getColumnLabel = useCallback(
               const resolvedDateFilter =
                 viewConfig.dateFilter ??
                 (dateFilterMetadata ? { ...dateFilterMetadata } : undefined);
+              const dateFilterOptionIds = spotlightDateFilterOptions.map((option) => option.value);
+              const resolvedDateFilterOptions =
+                viewConfig.dateFilterOptions && viewConfig.dateFilterOptions.length > 0
+                  ? viewConfig.dateFilterOptions
+                  : buildDateFilterOptionsFromIds(
+                      dateFilterOptionIds,
+                      spotlightDateFilterMetadata,
+                      dateFilterLabelById,
+                    );
               const updatedConfig: DashboardSpotlightCardViewConfig = {
                 ...viewConfig,
                 spotlight: {
@@ -5492,6 +5598,9 @@ const getColumnLabel = useCallback(
                   metricLabel: getColumnLabel(latestSpotlight.metric),
                 },
                 ...(resolvedDateFilter ? { dateFilter: resolvedDateFilter } : {}),
+                ...(resolvedDateFilterOptions.length > 0
+                  ? { dateFilterOptions: resolvedDateFilterOptions }
+                  : {}),
               };
               enqueueUpdate(dashboard.id, card, updatedConfig);
               return;
@@ -5505,9 +5614,21 @@ const getColumnLabel = useCallback(
               ) {
                 return;
               }
+              const dateFilterOptionIds = spotlightDateFilterOptions.map((option) => option.value);
+              const resolvedDateFilterOptions =
+                viewConfig.dateFilterOptions && viewConfig.dateFilterOptions.length > 0
+                  ? viewConfig.dateFilterOptions
+                  : buildDateFilterOptionsFromIds(
+                      dateFilterOptionIds,
+                      spotlightDateFilterMetadata,
+                      dateFilterLabelById,
+                    );
               enqueueUpdate(dashboard.id, card, {
                 ...viewConfig,
                 dateFilter: { ...dateFilterMetadata },
+                ...(resolvedDateFilterOptions.length > 0
+                  ? { dateFilterOptions: resolvedDateFilterOptions }
+                  : {}),
               });
             }
           }
@@ -5588,6 +5709,12 @@ const getColumnLabel = useCallback(
     const summaryCard = metricsSummary.find((card) => card.id === spotlightId);
     const { comparison: _comparison, comparisonRange: _comparisonRange, ...spotlightBase } = spotlight;
     const dateFilterMetadata = findDateFilterMetadata();
+    const dateFilterOptionIds = spotlightDateFilterOptions.map((option) => option.value);
+    const dateFilterOptions = buildDateFilterOptionsFromIds(
+      dateFilterOptionIds,
+      spotlightDateFilterMetadata,
+      dateFilterLabelById,
+    );
     const periodPresets = DEFAULT_SPOTLIGHT_PERIOD_PRESETS.filter(
       (preset) => preset && SPOTLIGHT_PERIOD_PRESET_OPTIONS.some((option) => option.value === preset),
     );
@@ -5603,11 +5730,13 @@ const getColumnLabel = useCallback(
         metricLabel,
       },
       ...(dateFilterMetadata ? { dateFilter: dateFilterMetadata } : {}),
+      ...(dateFilterOptions.length > 0 ? { dateFilterOptions } : {}),
       ...(dateFilterMetadata && periodPresets.length > 0 && periodDefault
         ? {
             periodConfig: {
               presets: periodPresets,
               defaultPreset: periodDefault,
+              allowCustom: true,
             },
           }
         : {}),
@@ -5669,6 +5798,63 @@ const getColumnLabel = useCallback(
     [],
   );
 
+  const resolveAllowedDateFilterIds = useCallback(
+    (
+      config: DashboardVisualCardViewConfig | DashboardSpotlightCardViewConfig,
+      allIds: string[],
+      defaultId: string | null,
+    ): string[] => {
+      if (Array.isArray(config.dateFilterOptions)) {
+        const optionIds = config.dateFilterOptions
+          .map((option) => option.id)
+          .filter((id): id is string => typeof id === "string" && id.length > 0);
+        if (optionIds.length > 0) {
+          return optionIds;
+        }
+        if (defaultId) {
+          return [defaultId];
+        }
+      }
+      return allIds;
+    },
+    [],
+  );
+
+  const buildDateFilterOptionsFromIds = useCallback(
+    (
+      ids: string[],
+      metadata: Map<string, { modelId: string; fieldId: string; operator: FilterOperator; filterIndex?: number }>,
+      labels: Map<string, string>,
+    ) =>
+      ids
+        .map((id) => {
+          const entry = metadata.get(id);
+          if (!entry) {
+            return null;
+          }
+          const label = labels.get(id);
+          return {
+            id,
+            modelId: entry.modelId,
+            fieldId: entry.fieldId,
+            operator: entry.operator,
+            ...(entry.filterIndex !== undefined ? { filterIndex: entry.filterIndex } : {}),
+            ...(label ? { label } : {}),
+          };
+        })
+        .filter(
+          (entry): entry is {
+            id: string;
+            modelId: string;
+            fieldId: string;
+            operator: FilterOperator;
+            label?: string;
+            filterIndex?: number;
+          } => Boolean(entry),
+        ),
+    [],
+  );
+
   const selectedVisualDateFilterId = useMemo(() => {
     if (!dashboardCardDraft || !isVisualCardViewConfig(dashboardCardDraft.viewConfig)) {
       return null;
@@ -5727,6 +5913,37 @@ const getColumnLabel = useCallback(
     return dashboardCardDraft.viewConfig;
   }, [dashboardCardDraft]);
 
+  const selectedVisualExtraDateFilterIds = useMemo(() => {
+    if (!visualDashboardConfig) {
+      return [];
+    }
+    const allIds = visualDateFilterOptions.map((option) => option.value);
+    const allowedIds = resolveAllowedDateFilterIds(
+      visualDashboardConfig,
+      allIds,
+      selectedVisualDateFilterId,
+    );
+    return allowedIds.filter((id) => id !== selectedVisualDateFilterId);
+  }, [resolveAllowedDateFilterIds, selectedVisualDateFilterId, visualDashboardConfig, visualDateFilterOptions]);
+
+  const selectedSpotlightExtraDateFilterIds = useMemo(() => {
+    if (!spotlightDashboardConfig) {
+      return [];
+    }
+    const allIds = spotlightDateFilterOptions.map((option) => option.value);
+    const allowedIds = resolveAllowedDateFilterIds(
+      spotlightDashboardConfig,
+      allIds,
+      selectedSpotlightDateFilterId,
+    );
+    return allowedIds.filter((id) => id !== selectedSpotlightDateFilterId);
+  }, [
+    resolveAllowedDateFilterIds,
+    selectedSpotlightDateFilterId,
+    spotlightDashboardConfig,
+    spotlightDateFilterOptions,
+  ]);
+
   const handleConfirmDashboardCard = async () => {
     if (!dashboardCardDraft) {
       setDashboardModalError("Select a visual or spotlight to create a card.");
@@ -5743,12 +5960,50 @@ const getColumnLabel = useCallback(
     }
     setDashboardModalError(null);
     try {
+      let payloadViewConfig = dashboardCardDraft.viewConfig;
+      if (isVisualCardViewConfig(payloadViewConfig)) {
+        if (
+          payloadViewConfig.dateFilter &&
+          (!payloadViewConfig.dateFilterOptions || payloadViewConfig.dateFilterOptions.length === 0)
+        ) {
+          const dateFilterOptionIds = visualDateFilterOptions.map((option) => option.value);
+          const dateFilterOptions = buildDateFilterOptionsFromIds(
+            dateFilterOptionIds,
+            visualDateFilterMetadata,
+            dateFilterLabelById,
+          );
+          if (dateFilterOptions.length > 0) {
+            payloadViewConfig = {
+              ...payloadViewConfig,
+              dateFilterOptions,
+            };
+          }
+        }
+      } else if (isSpotlightCardViewConfig(payloadViewConfig)) {
+        if (
+          payloadViewConfig.dateFilter &&
+          (!payloadViewConfig.dateFilterOptions || payloadViewConfig.dateFilterOptions.length === 0)
+        ) {
+          const dateFilterOptionIds = spotlightDateFilterOptions.map((option) => option.value);
+          const dateFilterOptions = buildDateFilterOptionsFromIds(
+            dateFilterOptionIds,
+            spotlightDateFilterMetadata,
+            dateFilterLabelById,
+          );
+          if (dateFilterOptions.length > 0) {
+            payloadViewConfig = {
+              ...payloadViewConfig,
+              dateFilterOptions,
+            };
+          }
+        }
+      }
       await upsertDashboardCardMutation.mutateAsync({
         dashboardId: selectedDashboardIdForModal,
         payload: {
           templateId: dashboardCardDraft.templateId,
           title: normalizedTitle,
-          viewConfig: dashboardCardDraft.viewConfig,
+          viewConfig: payloadViewConfig,
           layout: dashboardCardDraft.layout,
         },
       });
@@ -10224,16 +10479,65 @@ const getColumnLabel = useCallback(
                         onChange={(value) => {
                           updateVisualCardDraft((current) => {
                             if (!value) {
-                              const { dateFilter, ...rest } = current;
+                              const { dateFilter, dateFilterOptions, ...rest } = current;
                               return rest;
                             }
                             const metadata = visualDateFilterMetadata.get(value);
+                            if (!metadata) {
+                              return current;
+                            }
+                            const allIds = visualDateFilterOptions.map((option) => option.value);
+                            const allowedIds = resolveAllowedDateFilterIds(
+                              current,
+                              allIds,
+                              selectedVisualDateFilterId,
+                            );
+                            const nextIds = [value, ...allowedIds.filter((id) => id !== value)];
+                            const nextOptions = buildDateFilterOptionsFromIds(
+                              nextIds,
+                              visualDateFilterMetadata,
+                              dateFilterLabelById,
+                            );
                             return {
                               ...current,
-                              ...(metadata ? { dateFilter: { ...metadata } } : {}),
+                              dateFilter: { ...metadata },
+                              ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
                             };
                           });
                         }}
+                      />
+                      <MultiSelect
+                        label="Extra date fields"
+                        data={visualDateFilterOptions.filter(
+                          (option) => option.value !== selectedVisualDateFilterId,
+                        )}
+                        value={selectedVisualExtraDateFilterIds}
+                        onChange={(value) => {
+                          updateVisualCardDraft((current) => {
+                            const normalized = value.filter((entry) =>
+                              visualDateFilterOptions.some((option) => option.value === entry),
+                            );
+                            const defaultId = selectedVisualDateFilterId;
+                            const nextIds = defaultId
+                              ? [defaultId, ...normalized.filter((id) => id !== defaultId)]
+                              : normalized;
+                            if (nextIds.length === 0) {
+                              const { dateFilterOptions, ...rest } = current;
+                              return rest;
+                            }
+                            const nextOptions = buildDateFilterOptionsFromIds(
+                              nextIds,
+                              visualDateFilterMetadata,
+                              dateFilterLabelById,
+                            );
+                            return {
+                              ...current,
+                              ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
+                            };
+                          });
+                        }}
+                        searchable
+                        disabled={!selectedVisualDateFilterId}
                       />
                       <MultiSelect
                         label="Quick filter buttons"
@@ -10339,16 +10643,65 @@ const getColumnLabel = useCallback(
                         onChange={(value) => {
                           updateSpotlightCardDraft((current) => {
                             if (!value) {
-                              const { dateFilter, ...rest } = current;
+                              const { dateFilter, dateFilterOptions, ...rest } = current;
                               return rest;
                             }
                             const metadata = spotlightDateFilterMetadata.get(value);
+                            if (!metadata) {
+                              return current;
+                            }
+                            const allIds = spotlightDateFilterOptions.map((option) => option.value);
+                            const allowedIds = resolveAllowedDateFilterIds(
+                              current,
+                              allIds,
+                              selectedSpotlightDateFilterId,
+                            );
+                            const nextIds = [value, ...allowedIds.filter((id) => id !== value)];
+                            const nextOptions = buildDateFilterOptionsFromIds(
+                              nextIds,
+                              spotlightDateFilterMetadata,
+                              dateFilterLabelById,
+                            );
                             return {
                               ...current,
-                              ...(metadata ? { dateFilter: { ...metadata } } : {}),
+                              dateFilter: { ...metadata },
+                              ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
                             };
                           });
                         }}
+                      />
+                      <MultiSelect
+                        label="Extra date fields"
+                        data={spotlightDateFilterOptions.filter(
+                          (option) => option.value !== selectedSpotlightDateFilterId,
+                        )}
+                        value={selectedSpotlightExtraDateFilterIds}
+                        onChange={(value) => {
+                          updateSpotlightCardDraft((current) => {
+                            const normalized = value.filter((entry) =>
+                              spotlightDateFilterOptions.some((option) => option.value === entry),
+                            );
+                            const defaultId = selectedSpotlightDateFilterId;
+                            const nextIds = defaultId
+                              ? [defaultId, ...normalized.filter((id) => id !== defaultId)]
+                              : normalized;
+                            if (nextIds.length === 0) {
+                              const { dateFilterOptions, ...rest } = current;
+                              return rest;
+                            }
+                            const nextOptions = buildDateFilterOptionsFromIds(
+                              nextIds,
+                              spotlightDateFilterMetadata,
+                              dateFilterLabelById,
+                            );
+                            return {
+                              ...current,
+                              ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
+                            };
+                          });
+                        }}
+                        searchable
+                        disabled={!selectedSpotlightDateFilterId}
                       />
                       <MultiSelect
                         label="Quick filter buttons"

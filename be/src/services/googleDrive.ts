@@ -1,6 +1,8 @@
 import { google, drive_v3 } from 'googleapis';
+import type { OAuth2Client } from 'google-auth-library';
 import { Readable } from 'stream';
 import logger from '../utils/logger.js';
+import { getConfigValue } from './configService.js';
 
 type EnsureFolderResult = { id: string; path: string[] };
 
@@ -17,30 +19,25 @@ type UploadResult = {
   webContentLink: string | null;
 };
 
-const {
-  GOOGLE_CLIENT_ID,
-  GOOGLE_CLIENT_SECRET,
-  GOOGLE_REFRESH_TOKEN,
-  GOOGLE_DRIVE_SCHEDULES_PARENT_ID,
-} = process.env;
-
-const oauthClient = new google.auth.OAuth2(
-  GOOGLE_CLIENT_ID,
-  GOOGLE_CLIENT_SECRET,
-);
-
-if (GOOGLE_REFRESH_TOKEN) {
-  oauthClient.setCredentials({ refresh_token: GOOGLE_REFRESH_TOKEN });
-}
-
-function assertDriveCredentials(): void {
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN) {
+const resolveCredentials = (): { clientId: string; clientSecret: string; refreshToken: string } => {
+  const clientId = getConfigValue('GOOGLE_CLIENT_ID') as string | null;
+  const clientSecret = getConfigValue('GOOGLE_CLIENT_SECRET') as string | null;
+  const refreshToken = getConfigValue('GOOGLE_REFRESH_TOKEN') as string | null;
+  if (!clientId || !clientSecret || !refreshToken) {
     throw new Error('Missing Google API credentials for Drive integration');
   }
-}
+  return { clientId, clientSecret, refreshToken };
+};
+
+const buildOauthClient = (): OAuth2Client => {
+  const { clientId, clientSecret, refreshToken } = resolveCredentials();
+  const client = new google.auth.OAuth2(clientId, clientSecret);
+  client.setCredentials({ refresh_token: refreshToken });
+  return client;
+};
 
 export async function getDriveClient(): Promise<drive_v3.Drive> {
-  assertDriveCredentials();
+  const oauthClient = buildOauthClient();
   return google.drive({ version: 'v3', auth: oauthClient });
 }
 
@@ -101,7 +98,7 @@ export async function ensureFolderPath(path: string): Promise<EnsureFolderResult
   }
 
   const drive = await getDriveClient();
-  let parentId: string | null = GOOGLE_DRIVE_SCHEDULES_PARENT_ID ?? null;
+  let parentId: string | null = (getConfigValue('GOOGLE_DRIVE_SCHEDULES_PARENT_ID') as string | null) ?? null;
   const createdPath: string[] = parentId ? [] : [];
 
   for (const segment of segments) {

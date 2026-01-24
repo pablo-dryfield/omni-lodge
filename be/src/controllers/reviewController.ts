@@ -6,34 +6,35 @@ import { fetchTripAdvisorRaw, TRIP_ADVISOR_PAGE_SIZE } from '../scrapers/tripAdv
 import { scrapeGetYourGuideReviews } from '../scrapers/getYourGuideScraper.js';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import { getConfigValue } from '../services/configService.js';
 
 const environment = (process.env.NODE_ENV || 'development').trim();
 const envFile = environment === 'production' ? '.env.prod' : '.env.dev';
 dotenv.config({ path: envFile });
 
-const {
-  GOOGLE_CLIENT_ID,
-  GOOGLE_CLIENT_SECRET,
-  GOOGLE_REFRESH_TOKEN,
-  GYG_CACHE_TTL_MS,
-  GYG_MAX_LIMIT,
-  GYG_MIN_LIMIT,
-} = process.env;
-
 const ACCOUNT_ID = '113350814099227260053';
 const LOCATION_ID = '13077434667897843628';
-const GET_YOUR_GUIDE_TTL = Number(GYG_CACHE_TTL_MS ?? 5 * 60 * 1000);
-const GET_YOUR_GUIDE_MAX = Number(GYG_MAX_LIMIT ?? 150);
-const GET_YOUR_GUIDE_MIN = Number(GYG_MIN_LIMIT ?? 20);
+const resolveGetYourGuideTtl = (): number => Number(getConfigValue('GYG_CACHE_TTL_MS') ?? 5 * 60 * 1000);
+const resolveGetYourGuideMax = (): number => Number(getConfigValue('GYG_MAX_LIMIT') ?? 150);
+const resolveGetYourGuideMin = (): number => Number(getConfigValue('GYG_MIN_LIMIT') ?? 20);
 
 export const getAllGoogleReviews = async (req: Request, res: Response) => {
   try {
+    const clientId = getConfigValue('GOOGLE_CLIENT_ID') as string | null;
+    const clientSecret = getConfigValue('GOOGLE_CLIENT_SECRET') as string | null;
+    const refreshToken = getConfigValue('GOOGLE_REFRESH_TOKEN') as string | null;
+
+    if (!clientId || !clientSecret || !refreshToken) {
+      res.status(400).json({ error: 'Google API credentials are not configured.' });
+      return;
+    }
+
     // Step 1: Get fresh access token
     const tokenResponse = await axios.post('https://oauth2.googleapis.com/token', null, {
       params: {
-        client_id: GOOGLE_CLIENT_ID,
-        client_secret: GOOGLE_CLIENT_SECRET,
-        refresh_token: GOOGLE_REFRESH_TOKEN,
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
         grant_type: 'refresh_token',
       },
     });
@@ -176,11 +177,11 @@ export const getGetYourGuideReviews = async (req: Request, res: Response) => {
           {
             lastFetched: fetchedAt,
             fromCache,
-            cacheTtlMs: GET_YOUR_GUIDE_TTL,
+            cacheTtlMs: resolveGetYourGuideTtl(),
             limit,
             requestedLimit: requestedLimit ?? null,
-            maxLimit: GET_YOUR_GUIDE_MAX,
-            minLimit: GET_YOUR_GUIDE_MIN,
+            maxLimit: resolveGetYourGuideMax(),
+            minLimit: resolveGetYourGuideMin(),
           },
         ],
       },

@@ -49,6 +49,10 @@ import SwapRequest from "../models/SwapRequest.js";
 import Export from "../models/Export.js";
 import Notification from "../models/Notification.js";
 import AuditLog from "../models/AuditLog.js";
+import ConfigKey from "../models/ConfigKey.js";
+import ConfigValue from "../models/ConfigValue.js";
+import ConfigHistory from "../models/ConfigHistory.js";
+import ConfigSeedRun from "../models/ConfigSeedRun.js";
 import ShiftRole from "../models/ShiftRole.js";
 import UserShiftRole from "../models/UserShiftRole.js";
 import ReportTemplate from "../models/ReportTemplate.js";
@@ -170,6 +174,10 @@ const sequelize = new Sequelize({
     Export,
     Notification,
     AuditLog,
+    ConfigKey,
+    ConfigValue,
+    ConfigHistory,
+    ConfigSeedRun,
     ShiftRole,
     UserShiftRole,
     UserType,

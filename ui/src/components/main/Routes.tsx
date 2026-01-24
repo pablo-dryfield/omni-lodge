@@ -40,6 +40,8 @@ import SettingsUserShiftRoles from "../../pages/settings/SettingsUserShiftRoles"
 import SettingsSqlHelper from "../../pages/settings/SettingsSqlHelper";
 import SettingsDbBackups from "../../pages/settings/SettingsDbBackups";
 import SettingsHomeExperience from "../../pages/settings/SettingsHomeExperience";
+import SettingsControlPanel from "../../pages/settings/SettingsControlPanel";
+import SettingsMaintenance from "../../pages/settings/SettingsMaintenance";
 import SettingsReviewPlatforms from "../../pages/settings/SettingsReviewPlatforms";
 import SettingsCompensationComponents from "../../pages/settings/SettingsCompensationComponents";
 import AssistantManagerTasks from "../../pages/AssistantManagerTasks";
@@ -138,6 +140,8 @@ const Routes = () => {
         <Route path="review-platforms" element={<SettingsReviewPlatforms />} />
         <Route path="compensation-components" element={<SettingsCompensationComponents />} />
         <Route path="home-experience" element={<SettingsHomeExperience />} />
+        <Route path="control-panel" element={<SettingsControlPanel />} />
+        <Route path="maintenance" element={<SettingsMaintenance />} />
       </Route>
     </ReactRoutes>
   );

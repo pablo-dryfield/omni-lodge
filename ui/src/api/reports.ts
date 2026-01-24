@@ -247,6 +247,17 @@ export type DashboardVisualCardViewConfig = {
     clauseSql?: string;
     filterPath?: number[];
   };
+  dateFilterOptions?: Array<{
+    id: string;
+    modelId: string;
+    fieldId: string;
+    operator: FilterOperator;
+    label?: string;
+    filterIndex?: number;
+    clauseSql?: string;
+    filterPath?: number[];
+  }>;
+  dateFilterSelections?: string[];
   visual: {
     id: string;
     name: string;
@@ -304,6 +315,17 @@ export type DashboardSpotlightCardViewConfig = {
     clauseSql?: string;
     filterPath?: number[];
   };
+  dateFilterOptions?: Array<{
+    id: string;
+    modelId: string;
+    fieldId: string;
+    operator: FilterOperator;
+    label?: string;
+    filterIndex?: number;
+    clauseSql?: string;
+    filterPath?: number[];
+  }>;
+  dateFilterSelections?: string[];
   periodConfig?: {
     presets: DashboardPreviewPeriodPreset[];
     defaultPreset: DashboardPreviewPeriodPreset;
@@ -345,6 +367,16 @@ export type DashboardPreviewTableCardViewConfig = {
     clauseSql?: string;
     filterPath?: number[];
   };
+  dateFilterOptions?: Array<{
+    id: string;
+    modelId: string;
+    fieldId: string;
+    operator: FilterOperator;
+    label?: string;
+    filterIndex?: number;
+    clauseSql?: string;
+    filterPath?: number[];
+  }>;
 };
 
 export type DashboardCardViewConfig =
@@ -413,11 +445,18 @@ export type DashboardPreviewCardResponse = {
 
 export type DashboardPreviewPeriodPreset =
   | "today"
+  | "yesterday"
+  | "all_time"
   | "last_7_days"
+  | "last_week"
+  | "this_week"
   | "last_30_days"
   | "last_30_months"
   | "this_month"
-  | "last_month";
+  | "last_month"
+  | "this_year"
+  | "last_quarter"
+  | "this_quarter";
 
 export type DashboardPreviewPeriodOverride =
   | { mode: DashboardPreviewPeriodPreset }

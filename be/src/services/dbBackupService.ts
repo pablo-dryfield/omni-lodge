@@ -10,31 +10,50 @@ import sequelize from '../config/database.js';
 import { initializeAccessControl } from '../utils/initializeAccessControl.js';
 import logger from '../utils/logger.js';
 import { ensureFolderPath, getDriveClient } from './googleDrive.js';
+import { getConfigValue } from './configService.js';
 
 const DEFAULT_BACKUP_DIRECTORY = '/home/postgres/backups';
 const DEFAULT_BACKUP_SCRIPT = '/home/postgres/backup.sh';
-
-const backupDirectory = path.resolve(process.env.DB_BACKUP_DIRECTORY ?? DEFAULT_BACKUP_DIRECTORY);
-const backupScriptPath = path.resolve(process.env.DB_BACKUP_SCRIPT ?? DEFAULT_BACKUP_SCRIPT);
-const pgRestoreBinary = process.env.PG_RESTORE_BIN ?? 'pg_restore';
-const psqlBinary = process.env.PSQL_BIN ?? 'psql';
+const resolveBackupDirectory = (): string => {
+  const raw = (getConfigValue('DB_BACKUP_DIRECTORY') as string | null) ?? DEFAULT_BACKUP_DIRECTORY;
+  return path.resolve(raw);
+};
+const resolveBackupScriptPath = (): string => {
+  const raw = (getConfigValue('DB_BACKUP_SCRIPT') as string | null) ?? DEFAULT_BACKUP_SCRIPT;
+  return path.resolve(raw);
+};
+const resolvePgRestoreBinary = (): string =>
+  (getConfigValue('PG_RESTORE_BIN') as string | null) ?? 'pg_restore';
+const resolvePsqlBinary = (): string => (getConfigValue('PSQL_BIN') as string | null) ?? 'psql';
 const databaseName = process.env.DB_NAME ?? 'omni_lodge_db';
 const databaseUser = process.env.DB_USER ?? 'postgres';
-const restoreRole = process.env.DB_BACKUP_ROLE ?? databaseUser;
+const resolveRestoreRole = (): string =>
+  ((getConfigValue('DB_BACKUP_ROLE') as string | null) ?? databaseUser).trim();
 const databaseHost = process.env.DB_HOST ?? '127.0.0.1';
 const databasePort = process.env.DB_PORT ?? '5432';
 const adminDatabaseName = process.env.DB_ADMIN_DATABASE ?? 'postgres';
-const shouldAlterSchema = (process.env.DB_SYNC_ALTER ?? 'false').toLowerCase() === 'true';
-const syncOptions = { force: false, alter: shouldAlterSchema } as const;
 type BackupStorageMode = 'local' | 'drive';
-const backupStorageMode: BackupStorageMode =
-  (process.env.DB_BACKUP_STORAGE ?? 'local').toLowerCase() === 'drive' ? 'drive' : 'local';
-const driveBackupRootFolder = process.env.DB_BACKUP_DRIVE_FOLDER ?? 'Backups';
 const nodeEnv = (process.env.NODE_ENV ?? 'development').trim().toLowerCase();
 const driveEnvironmentFolderName = nodeEnv === 'production' ? 'Production' : 'Development';
 const utcMonthFormatter = new Intl.DateTimeFormat('en-US', { month: 'long', timeZone: 'UTC' });
-const driveEnvironmentPath = `${driveBackupRootFolder}/${driveEnvironmentFolderName}`;
 let driveEnvironmentFolderIdPromise: Promise<string> | null = null;
+let cachedDriveEnvironmentPath: string | null = null;
+
+const resolveBackupStorageMode = (): BackupStorageMode => {
+  const value = ((getConfigValue('DB_BACKUP_STORAGE') as string | null) ?? 'local').toLowerCase();
+  return value === 'drive' ? 'drive' : 'local';
+};
+
+const resolveDriveBackupRootFolder = (): string =>
+  (getConfigValue('DB_BACKUP_DRIVE_FOLDER') as string | null) ?? 'Database Backups';
+
+const resolveSyncOptions = () => {
+  const shouldAlterSchema = Boolean(getConfigValue('DB_SYNC_ALTER') ?? false);
+  return { force: false, alter: shouldAlterSchema } as const;
+};
+
+const resolveDriveEnvironmentPath = (): string =>
+  `${resolveDriveBackupRootFolder()}/${driveEnvironmentFolderName}`;
 
 export type BackupFileDescriptor = {
   filename: string;
@@ -65,6 +84,7 @@ const resolveBackupPath = async (filename: string): Promise<string> => {
     throw new HttpError(400, 'Invalid backup file name');
   }
 
+  const backupDirectory = resolveBackupDirectory();
   const sanitizedName = path.basename(filename);
   const fullPath = path.resolve(backupDirectory, sanitizedName);
 
@@ -147,6 +167,12 @@ const runCommand = (command: string, args: string[], workingDirectory?: string):
 };
 
 const getDriveEnvironmentFolderId = async (): Promise<string> => {
+  const driveEnvironmentPath = resolveDriveEnvironmentPath();
+  if (driveEnvironmentPath !== cachedDriveEnvironmentPath) {
+    cachedDriveEnvironmentPath = driveEnvironmentPath;
+    driveEnvironmentFolderIdPromise = null;
+  }
+
   if (!driveEnvironmentFolderIdPromise) {
     driveEnvironmentFolderIdPromise = ensureFolderPath(driveEnvironmentPath).then((result) => result.id);
   }
@@ -156,7 +182,7 @@ const getDriveEnvironmentFolderId = async (): Promise<string> => {
 const getDriveFolderIdForDate = async (date: Date): Promise<string> => {
   const year = date.getUTCFullYear().toString();
   const month = utcMonthFormatter.format(date);
-  const folderPath = `${driveEnvironmentPath}/${year}/${month}`;
+  const folderPath = `${resolveDriveEnvironmentPath()}/${year}/${month}`;
   const folder = await ensureFolderPath(folderPath);
   return folder.id;
 };
@@ -281,7 +307,7 @@ export const syncLocalBackupsToDrive = async (options: SyncOptions = {}): Promis
   uploaded: string[];
   skipped: string[];
 }> => {
-  if (backupStorageMode !== 'drive') {
+  if (resolveBackupStorageMode() !== 'drive') {
     return { uploaded: [], skipped: [] };
   }
 
@@ -339,11 +365,11 @@ const runSqlCommand = (sql: string, targetDatabase: string = databaseName): Prom
     sql,
   ];
 
-  return runCommand(psqlBinary, args);
+  return runCommand(resolvePsqlBinary(), args);
 };
 
 export const streamBackupFile = async (filename: string, destination: NodeJS.WritableStream): Promise<void> => {
-  if (backupStorageMode === 'drive') {
+  if (resolveBackupStorageMode() === 'drive') {
     const driveFile = await findDriveFileByName(filename);
     if (!driveFile) {
       throw new HttpError(404, 'Backup file not found on Drive');
@@ -358,6 +384,7 @@ export const streamBackupFile = async (filename: string, destination: NodeJS.Wri
 };
 
 const listLocalBackupFiles = async (): Promise<BackupFileDescriptor[]> => {
+  const backupDirectory = resolveBackupDirectory();
   await ensureDirectory(backupDirectory);
 
   const entries = await fs.readdir(backupDirectory, { withFileTypes: true });
@@ -423,11 +450,11 @@ const listDriveBackupFiles = async (): Promise<BackupFileDescriptor[]> => {
 };
 
 export const listBackupFiles = async (): Promise<BackupFileDescriptor[]> => {
-  return backupStorageMode === 'drive' ? listDriveBackupFiles() : listLocalBackupFiles();
+  return resolveBackupStorageMode() === 'drive' ? listDriveBackupFiles() : listLocalBackupFiles();
 };
 
 export const restoreBackupByFilename = async (filename: string): Promise<CommandResult> => {
-  if (backupStorageMode === 'drive') {
+  if (resolveBackupStorageMode() === 'drive') {
     const driveFile = await findDriveFileByName(filename);
     if (!driveFile) {
       throw new HttpError(404, 'Backup file not found on Drive');
@@ -459,6 +486,7 @@ export const restoreBackupByFilename = async (filename: string): Promise<Command
 const recreateDatabase = async (): Promise<void> => {
   const escapedDbLiteral = databaseName.replace(/'/g, "''");
   const normalizedDbName = databaseName.replace(/"/g, '""');
+  const restoreRole = resolveRestoreRole();
   const normalizedRole = restoreRole.replace(/"/g, '""');
   const quotedDbName = `"${normalizedDbName}"`;
   const quotedRole = `"${normalizedRole}"`;
@@ -532,12 +560,12 @@ export const restoreBackupFromPath = async (filePath: string): Promise<CommandRe
     '--no-owner',
     '--no-privileges',
     '--role',
-    restoreRole,
+    resolveRestoreRole(),
     '-v',
     filePath,
   ];
 
-  const result = await runCommand(pgRestoreBinary, args, path.dirname(filePath));
+  const result = await runCommand(resolvePgRestoreBinary(), args, path.dirname(filePath));
 
   try {
     await sequelize.authenticate();
@@ -547,7 +575,7 @@ export const restoreBackupFromPath = async (filePath: string): Promise<CommandRe
   }
 
   try {
-    await sequelize.sync(syncOptions);
+    await sequelize.sync(resolveSyncOptions());
   } catch (error) {
     if (isIgnorableSyncError(error)) {
       logger.warn('Sequelize sync reported duplicate object; continuing restore workflow', error);
@@ -567,6 +595,7 @@ export const restoreBackupFromPath = async (filePath: string): Promise<CommandRe
 };
 
 export const executeBackupScript = async (): Promise<CommandResult> => {
+  const backupScriptPath = resolveBackupScriptPath();
   try {
     await fs.access(backupScriptPath, fsConstants.X_OK);
   } catch (error) {
@@ -582,7 +611,8 @@ export const executeBackupScript = async (): Promise<CommandResult> => {
 
   const result = await runCommand(backupScriptPath, [], path.dirname(backupScriptPath));
 
-  if (backupStorageMode === 'drive') {
+  if (resolveBackupStorageMode() === 'drive') {
+    const backupDirectory = resolveBackupDirectory();
     await ensureDirectory(backupDirectory);
     await syncLocalBackupsToDrive({ deleteAfterUpload: true, skipExisting: true });
   }
@@ -595,12 +625,13 @@ export const persistUploadedBackup = async (tempPath: string, originalName: stri
   const uniqueSuffix = crypto.randomBytes(6).toString('hex');
   const targetName = `${Date.now()}_${uniqueSuffix}_${sanitizedName}`;
 
-  if (backupStorageMode === 'drive') {
+  if (resolveBackupStorageMode() === 'drive') {
     await uploadFileToDrive(tempPath, targetName, new Date());
     logger.info(`[db-backup] Uploaded manual backup ${targetName} to Drive`);
     return targetName;
   }
 
+  const backupDirectory = resolveBackupDirectory();
   await ensureDirectory(backupDirectory);
   const destination = path.resolve(backupDirectory, targetName);
 

@@ -63,6 +63,8 @@ const defaultPages = [
   { slug: 'settings-user-shift-roles', name: 'User Shift Roles', description: 'Assign shift roles to users', sortOrder: 21 },
   { slug: 'settings-db-backups', name: 'Database Backups', description: 'Review and manage PostgreSQL backups', sortOrder: 22 },
   { slug: 'settings-home-experience', name: 'Home Experience', description: 'Assign default home modules per user', sortOrder: 23 },
+  { slug: 'settings-control-panel', name: 'Control Panel', description: 'Manage dynamic configuration values', sortOrder: 24 },
+  { slug: 'settings-maintenance', name: 'Maintenance', description: 'Review seeds, migrations, and configuration health', sortOrder: 25 },
 ];
 
 const defaultModules = [
@@ -125,7 +127,9 @@ const rolePageMatrix: Record<string, string[]> = {
 'settings-shift-roles',
 'settings-user-shift-roles',
 'settings-db-backups',
-'settings-home-experience'],
+'settings-home-experience',
+'settings-control-panel',
+'settings-maintenance'],
   owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'channel-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'assistant-manager-tasks', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-review-platforms', 'settings-compensation-components', 'settings-home-experience'],
   manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'channel-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'assistant-manager-tasks'],
   'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'channel-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'assistant-manager-tasks'],

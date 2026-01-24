@@ -10,15 +10,27 @@ import Product from '../../models/Product.js';
 import logger from '../../utils/logger.js';
 import { fetchMessagePayload, listMessages } from './gmailClient.js';
 import { getBookingParsers } from './parsers/index.js';
-import type { BookingFieldPatch, BookingParserContext, ParsedBookingEvent } from './types.js';
+import type {
+  BookingFieldPatch,
+  BookingParserContext,
+  BookingParserDiagnostics,
+  ParsedBookingEvent,
+} from './types.js';
 import type { GmailMessagePayload } from './gmailClient.js';
 import type { BookingPlatform } from '../../constants/bookings.js';
 import { canonicalizeProductLabel } from '../../utils/productName.js';
+import { getConfigValue } from '../configService.js';
 
-const DEFAULT_QUERY =
-  process.env.BOOKING_GMAIL_QUERY ??
+const FALLBACK_QUERY =
   '(subject:(booking OR reservation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR airbnb.com OR airbnbmail.com))';
-const DEFAULT_BATCH = Number.parseInt(process.env.BOOKING_GMAIL_BATCH_SIZE ?? '20', 10);
+
+const resolveDefaultQuery = (): string =>
+  (getConfigValue('BOOKING_GMAIL_QUERY') as string) ?? FALLBACK_QUERY;
+
+const resolveDefaultBatch = (): number => {
+  const value = Number(getConfigValue('BOOKING_GMAIL_BATCH_SIZE') ?? 20);
+  return Number.isFinite(value) ? value : 20;
+};
 
 const PLATFORM_CHANNEL_NAMES: Partial<Record<BookingPlatform, string>> = {
   fareharbor: 'Fareharbor',
@@ -341,23 +353,87 @@ const updateEmailStatus = async (email: BookingEmail, status: string, failureRea
   await email.save();
 };
 
-const runParsers = async (context: BookingParserContext): Promise<ParsedBookingEvent | null> => {
+const sanitizeDiagnosticValue = (value?: string | null, maxLength = 160): string | null => {
+  if (!value) {
+    return null;
+  }
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength)}...`;
+};
+
+const formatDiagnosticChecks = (checks: BookingParserDiagnostics['canParseChecks']): string | null => {
+  if (!checks || checks.length === 0) {
+    return null;
+  }
+  const tokens = checks.map((check) => {
+    const value = sanitizeDiagnosticValue(check.value ?? null);
+    const status = check.passed ? 'yes' : 'no';
+    return value ? `${check.label}: ${status} (${value})` : `${check.label}: ${status}`;
+  });
+  return tokens.join('; ');
+};
+
+const buildIgnoredReason = (diagnostics: BookingParserDiagnostics[]): string => {
+  if (!diagnostics || diagnostics.length === 0) {
+    return 'No parser matched this email.';
+  }
+  const lines = diagnostics.map((diag) => {
+    const segments: string[] = [`canParse=${diag.canParse ? 'yes' : 'no'}`];
+    if (diag.canParse) {
+      segments.push(`parse=${diag.parseMatched ? 'matched' : 'no match'}`);
+    }
+    const canParseChecks = formatDiagnosticChecks(diag.canParseChecks);
+    if (canParseChecks) {
+      segments.push(`checks: ${canParseChecks}`);
+    }
+    if (diag.parseMatched !== undefined) {
+      const parseChecks = formatDiagnosticChecks(diag.parseChecks);
+      if (parseChecks) {
+        segments.push(`parseChecks: ${parseChecks}`);
+      }
+    }
+    return `${diag.name}: ${segments.join('; ')}`;
+  });
+  return `No parser matched this email. Parser checks:\n${lines.join('\n')}`;
+};
+
+const runParsers = async (
+  context: BookingParserContext,
+): Promise<{ parsed: ParsedBookingEvent | null; diagnostics: BookingParserDiagnostics[] }> => {
   const parsers = getBookingParsers();
+  const diagnostics: BookingParserDiagnostics[] = [];
   for (const parser of parsers) {
+    const diag = parser.diagnose
+      ? parser.diagnose(context)
+      : { name: parser.name, canParse: parser.canParse(context) };
+    diagnostics.push(diag);
     try {
-      if (!parser.canParse(context)) {
+      if (!diag.canParse) {
         continue;
       }
       const result = await parser.parse(context);
       if (result) {
+        diag.parseMatched = true;
         logger.debug(`[booking-email] ${parser.name} parsed message ${context.messageId} into booking ${result.platformBookingId}`);
-        return result;
+        return { parsed: result, diagnostics };
       }
+      diag.parseMatched = false;
     } catch (error) {
+      diag.parseMatched = false;
+      diag.parseChecks = [
+        ...(diag.parseChecks ?? []),
+        { label: 'parse error', passed: false, value: (error as Error).message },
+      ];
       logger.warn(`[booking-email] Parser ${parser.name} failed for ${context.messageId}: ${(error as Error).message}`);
     }
   }
-  return null;
+  return { parsed: null, diagnostics };
 };
 
 const syncAddons = async (
@@ -628,10 +704,10 @@ export const processBookingEmail = async (
   }
 
   const context = buildParserContext(emailRecord, payload);
-  const parsed = await runParsers(context);
+  const { parsed, diagnostics } = await runParsers(context);
 
   if (!parsed) {
-    await updateEmailStatus(emailRecord, 'ignored', 'No parser matched this email');
+    await updateEmailStatus(emailRecord, 'ignored', buildIgnoredReason(diagnostics));
     return 'ignored';
   }
 
@@ -716,8 +792,8 @@ const rebuildBookingTimeline = async (
 export const ingestLatestBookingEmails = async (): Promise<void> => {
   try {
     const { messages } = await listMessages({
-      query: DEFAULT_QUERY,
-      maxResults: DEFAULT_BATCH,
+      query: resolveDefaultQuery(),
+      maxResults: resolveDefaultBatch(),
     });
 
     if (messages.length === 0) {
@@ -771,8 +847,8 @@ const toDateOrNull = (value?: Date | string): Date | null => {
 };
 
 export const ingestAllBookingEmails = async (options: IngestAllOptions = {}): Promise<void> => {
-  const query = options.query ?? DEFAULT_QUERY;
-  const batchSize = options.batchSize ?? Math.max(DEFAULT_BATCH, 100);
+  const query = options.query ?? resolveDefaultQuery();
+  const batchSize = options.batchSize ?? Math.max(resolveDefaultBatch(), 100);
   const receivedAfter = toDateOrNull(options.receivedAfter);
   const receivedBefore = toDateOrNull(options.receivedBefore);
   let pageToken: string | null = null;

@@ -74,8 +74,23 @@ export type ParsedBookingEvent = {
   spawnedEvents?: ParsedBookingEvent[];
 };
 
+export type BookingParserCheck = {
+  label: string;
+  passed: boolean;
+  value?: string | null;
+};
+
+export type BookingParserDiagnostics = {
+  name: string;
+  canParse: boolean;
+  canParseChecks?: BookingParserCheck[];
+  parseChecks?: BookingParserCheck[];
+  parseMatched?: boolean;
+};
+
 export interface BookingEmailParser {
   name: string;
   canParse(context: BookingParserContext): boolean;
   parse(context: BookingParserContext): Promise<ParsedBookingEvent | null>;
+  diagnose?(context: BookingParserContext): BookingParserDiagnostics;
 }

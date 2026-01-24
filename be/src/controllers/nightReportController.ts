@@ -23,11 +23,18 @@ import {
   openNightReportPhotoStream,
 } from '../services/nightReportStorageService.js';
 import { fetchLeaderNightReportStats } from '../services/nightReportMetricsService.js';
+import { getConfigValue } from '../services/configService.js';
 
-const DEFAULT_PAYOUT_CURRENCY = process.env.FINANCE_BASE_CURRENCY?.trim().toUpperCase() ?? 'PLN';
-const VENUE_LEDGER_START_DATE = dayjs(
-  process.env.VENUE_LEDGER_START_DATE ?? process.env.VENUE_COMP_LEDGER_START ?? '2025-10-01',
-);
+const resolvePayoutCurrency = (): string =>
+  String(getConfigValue('FINANCE_BASE_CURRENCY') ?? 'PLN')
+    .trim()
+    .toUpperCase();
+const resolveVenueLedgerStartDate = (): dayjs.Dayjs =>
+  dayjs(
+    (getConfigValue('VENUE_LEDGER_START_DATE') as string | null) ??
+      (getConfigValue('VENUE_COMP_LEDGER_START') as string | null) ??
+      '2025-10-01',
+  );
 
 type RawVenueAggregate = {
   venueId: number | null;
@@ -1321,7 +1328,7 @@ export const createVenueCompensationCollectionLog = async (
     const currency =
       typeof req.body.currency === 'string' && req.body.currency.trim().length > 0
         ? req.body.currency.trim().toUpperCase()
-        : DEFAULT_PAYOUT_CURRENCY;
+        : resolvePayoutCurrency();
 
     const amountMinor = parseAmountToMinor(req.body.amount);
     if (amountMinor <= 0) {
@@ -1412,7 +1419,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       start.year() === end.year();
     const startIso = start.format('YYYY-MM-DD');
     const endIso = end.format('YYYY-MM-DD');
-    const ledgerEligible = isCanonicalRange && !start.isBefore(VENUE_LEDGER_START_DATE, 'day');
+    const ledgerEligible = isCanonicalRange && !start.isBefore(resolveVenueLedgerStartDate(), 'day');
 
     const detailRows = (await NightReportVenue.findAll({
       attributes: [
@@ -1614,7 +1621,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
               [Op.lt]: startIso,
             },
             rangeStart: {
-              [Op.gte]: VENUE_LEDGER_START_DATE.format('YYYY-MM-DD'),
+              [Op.gte]: resolveVenueLedgerStartDate().format('YYYY-MM-DD'),
             },
           },
           order: [

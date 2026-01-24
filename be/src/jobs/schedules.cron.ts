@@ -6,10 +6,26 @@ import {
   sendAvailabilityReminder,
   autoLockCollectingWeek,
 } from '../services/scheduleService.js';
+import { getConfigValue } from '../services/configService.js';
 
-const SCHED_TZ = process.env.SCHED_TZ || 'Europe/Warsaw';
+const resolveScheduleTimezone = (): string => (getConfigValue('SCHED_TZ') as string) ?? 'Europe/Warsaw';
+const resolveNumber = (key: string, fallback: number): number => {
+  const value = Number(getConfigValue(key) ?? fallback);
+  return Number.isFinite(value) ? value : fallback;
+};
+
+const buildCronExpression = (dayKey: string, hourKey: string, fallbackDay: number, fallbackHour: number): string => {
+  const day = resolveNumber(dayKey, fallbackDay);
+  const hour = resolveNumber(hourKey, fallbackHour);
+  return `0 ${hour} * * ${day}`;
+};
 
 export function startScheduleJobs(): void {
+  const timezone = resolveScheduleTimezone();
+  const reminder1Cron = buildCronExpression('SCHED_REMINDER1_DAY', 'SCHED_REMINDER1_HOUR', 6, 18);
+  const reminder2Cron = buildCronExpression('SCHED_REMINDER2_DAY', 'SCHED_REMINDER2_HOUR', 0, 12);
+  const lockCron = buildCronExpression('SCHED_LOCK_DAY', 'SCHED_LOCK_HOUR', 0, 18);
+
   cron.schedule(
     '0 0 * * 1',
     async () => {
@@ -20,37 +36,37 @@ export function startScheduleJobs(): void {
         logger.error(`[scheduling] Failed to generate week: ${(error as Error).message}`);
       }
     },
-    { timezone: SCHED_TZ },
+    { timezone },
   );
 
   cron.schedule(
-    '0 18 * * 6',
+    reminder1Cron,
     async () => {
       try {
         await sendAvailabilityReminder('availability_reminder_first');
-        logger.info('[scheduling] Sent Saturday availability reminder');
+        logger.info('[scheduling] Sent availability reminder 1');
       } catch (error) {
         logger.error(`[scheduling] Failed to send Saturday reminder: ${(error as Error).message}`);
       }
     },
-    { timezone: SCHED_TZ },
+    { timezone },
   );
 
   cron.schedule(
-    '0 12 * * 0',
+    reminder2Cron,
     async () => {
       try {
         await sendAvailabilityReminder('availability_reminder_final');
-        logger.info('[scheduling] Sent Sunday final reminder');
+        logger.info('[scheduling] Sent availability reminder 2');
       } catch (error) {
         logger.error(`[scheduling] Failed to send Sunday reminder: ${(error as Error).message}`);
       }
     },
-    { timezone: SCHED_TZ },
+    { timezone },
   );
 
   cron.schedule(
-    '0 18 * * 0',
+    lockCron,
     async () => {
       try {
         await autoLockCollectingWeek();
@@ -59,7 +75,7 @@ export function startScheduleJobs(): void {
         logger.error(`[scheduling] Failed to auto-lock week: ${(error as Error).message}`);
       }
     },
-    { timezone: SCHED_TZ },
+    { timezone },
   );
 
   logger.info('[scheduling] Cron jobs registered');

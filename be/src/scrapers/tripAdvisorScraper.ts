@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getConfigValue } from '../services/configService.js';
 
 export type TripAdvisorReview = {
   channel: string;
@@ -68,9 +69,9 @@ type TripAdvisorApiPage = {
 
 const GRAPHQL_ENDPOINT = 'https://www.tripadvisor.com/data/graphql/ids';
 
-const LOCATION_ID = Number.parseInt(process.env.TRIP_ADVISOR_LOCATION_ID ?? '2725527', 10);
-export const TRIP_ADVISOR_PAGE_SIZE = Number.parseInt(process.env.TRIP_ADVISOR_PAGE_SIZE ?? '20', 10);
-const LANGUAGE = process.env.TRIP_ADVISOR_LANGUAGE ?? 'en';
+const LOCATION_ID = Number(getConfigValue('TRIP_ADVISOR_LOCATION_ID') ?? 2725527);
+export const TRIP_ADVISOR_PAGE_SIZE = Number(getConfigValue('TRIP_ADVISOR_PAGE_SIZE') ?? 20);
+const LANGUAGE = (getConfigValue('TRIP_ADVISOR_LANGUAGE') as string | null) ?? 'en';
 
 const GRAPHQL_HEADERS = {
   accept: '*/*',
@@ -88,10 +89,10 @@ const GRAPHQL_HEADERS = {
   'sec-fetch-mode': 'same-origin',
   'sec-fetch-site': 'same-origin',
   cookie:
-    process.env.TRIP_ADVISOR_COOKIE ??
+    (getConfigValue('TRIP_ADVISOR_COOKIE') as string | null) ??
     'TAUnique=%1%enc%3AfP3UWefxDLGshPonIpy3mbk%2FIgjcWHKTsHpRcTPjgwDrPpCRcPmdOp0gqPK3zLEENox8JbUSTxk%3D',
   Referer:
-    process.env.TRIP_ADVISOR_REFERER ??
+    (getConfigValue('TRIP_ADVISOR_REFERER') as string | null) ??
     'https://www.tripadvisor.com/Attraction_Review-g274772-d2725527-Reviews-Krawl_Through_Krakow_Pub_Crawl-Krakow_Lesser_Poland_Province_Southern_Poland.html',
 };
 

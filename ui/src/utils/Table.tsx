@@ -22,6 +22,7 @@ const Table = <T extends object>({
   actions,
   initialState,
   renderDetailPanel,
+  renderToolbarActions,
   moduleSlug,
   permissionsOverride,
 }: TableProps<T>) => {
@@ -203,6 +204,7 @@ const Table = <T extends object>({
             <MRTToggleFiltersButton table={table} />
           </Flex>
           <Flex gap="sm" wrap="wrap" justify="flex-end">
+            {renderToolbarActions ? renderToolbarActions(table) : null}
             {canCreate && (
               <Button
                 color="green"
