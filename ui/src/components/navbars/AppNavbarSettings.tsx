@@ -21,6 +21,7 @@ import {
   IconPercentage,
   IconAddressBook,
   IconHierarchy3,
+  IconCalendarEvent,
   IconUserCog,
   IconDatabase,
   IconCloudDownload,
@@ -73,6 +74,12 @@ const settingsNav: SettingsNavSection[] = [
         to: "/settings/shift-roles",
         slug: PAGE_SLUGS.settingsShiftRoles,
         icon: <IconHierarchy3 size={20} />,
+      },
+      {
+        label: "Shift Types",
+        to: "/settings/shift-types",
+        slug: PAGE_SLUGS.settingsShiftTypes,
+        icon: <IconCalendarEvent size={20} />,
       },
       {
         label: "Staff Profiles",

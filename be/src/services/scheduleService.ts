@@ -10,6 +10,7 @@ import sequelize from '../config/database.js';
 import ScheduleWeek, { type ScheduleWeekState } from '../models/ScheduleWeek.js';
 import ShiftTemplate, { type ShiftTemplateRoleRequirement } from '../models/ShiftTemplate.js';
 import ShiftType from '../models/ShiftType.js';
+import ShiftTypeProduct from '../models/ShiftTypeProduct.js';
 import ShiftInstance from '../models/ShiftInstance.js';
 import ShiftAssignment from '../models/ShiftAssignment.js';
 import Availability from '../models/Availability.js';
@@ -20,6 +21,7 @@ import SwapRequest, { type SwapRequestStatus } from '../models/SwapRequest.js';
 import AuditLog from '../models/AuditLog.js';
 import ShiftRole from '../models/ShiftRole.js';
 import UserShiftRole from '../models/UserShiftRole.js';
+import Product from '../models/Product.js';
 import { renderScheduleHTML } from './renderSchedule.js';
 import { ensureFolderPath, uploadBuffer } from './googleDrive.js';
 import { sendSchedulingNotification } from './notificationService.js';
@@ -1064,7 +1066,22 @@ export async function listShiftTypes(): Promise<ShiftType[]> {
     });
 
     if (existing.length > 0) {
-      return existing;
+      const links = await ShiftTypeProduct.findAll({
+        attributes: ['shiftTypeId', 'productId'],
+        transaction,
+      });
+      const productIdsByShiftType = new Map<number, number[]>();
+      links.forEach((link) => {
+        const list = productIdsByShiftType.get(link.shiftTypeId) ?? [];
+        list.push(link.productId);
+        productIdsByShiftType.set(link.shiftTypeId, list);
+      });
+
+      return existing.map((record) => {
+        const plain = record.get({ plain: true }) as ShiftType & { productIds?: number[] };
+        plain.productIds = productIdsByShiftType.get(record.id) ?? [];
+        return plain as ShiftType;
+      });
     }
 
     await ShiftType.bulkCreate(DEFAULT_SHIFT_TYPES, {
@@ -1072,11 +1089,125 @@ export async function listShiftTypes(): Promise<ShiftType[]> {
       transaction,
     });
 
-    return ShiftType.findAll({
+    const created = await ShiftType.findAll({
       order: [['name', 'ASC']],
       transaction,
     });
+    return created.map((record) => {
+      const plain = record.get({ plain: true }) as ShiftType & { productIds?: number[] };
+      plain.productIds = [];
+      return plain as ShiftType;
+    });
   });
+}
+
+export async function updateShiftTypeProducts(
+  shiftTypeId: number,
+  productIds: number[],
+  actorId: number | null,
+): Promise<{ shiftTypeId: number; productIds: number[] }> {
+  const normalizedIds = Array.from(
+    new Set(
+      productIds
+        .map((value) => Number(value))
+        .filter((value): value is number => Number.isInteger(value) && value > 0),
+    ),
+  );
+
+  return sequelize.transaction(async (transaction) => {
+    const shiftType = await ShiftType.findByPk(shiftTypeId, { transaction });
+    if (!shiftType) {
+      throw new HttpError(404, 'Shift type not found');
+    }
+
+    if (normalizedIds.length > 0) {
+      const count = await Product.count({ where: { id: { [Op.in]: normalizedIds } }, transaction });
+      if (count !== normalizedIds.length) {
+        throw new HttpError(400, 'One or more products do not exist');
+      }
+    }
+
+    await ShiftTypeProduct.destroy({ where: { shiftTypeId }, transaction });
+
+    if (normalizedIds.length > 0) {
+      await ShiftTypeProduct.bulkCreate(
+        normalizedIds.map((productId) => ({ shiftTypeId, productId })),
+        { transaction },
+      );
+    }
+
+    await logAudit({
+      actorId,
+      action: 'schedule.shift-type.products.update',
+      entity: 'shift_type',
+      entityId: String(shiftTypeId),
+      meta: { productIds: normalizedIds },
+    });
+
+    return { shiftTypeId, productIds: normalizedIds };
+  });
+}
+
+export async function listScheduledStaffForProduct(
+  date: string,
+  productId: number,
+): Promise<{ userIds: number[]; managerIds: number[] }> {
+  if (!date || !productId) {
+    return { userIds: [], managerIds: [] };
+  }
+
+  const shiftTypeLinks = await ShiftTypeProduct.findAll({ where: { productId } });
+  const shiftTypeIds = shiftTypeLinks.map((link) => link.shiftTypeId);
+  if (shiftTypeIds.length === 0) {
+    return { userIds: [], managerIds: [] };
+  }
+
+  const shiftRoles = await ShiftRole.findAll({
+    where: {
+      [Op.or]: [
+        { slug: { [Op.in]: ['guide', 'manager'] } },
+        { name: { [Op.in]: ['Guide', 'Manager'] } },
+      ],
+    },
+  });
+  const allowedRoleIds = new Set(shiftRoles.map((role) => role.id));
+  const managerRoleIds = new Set(
+    shiftRoles.filter((role) => role.slug === 'manager' || role.name === 'Manager').map((role) => role.id),
+  );
+
+  const instances = await ShiftInstance.findAll({
+    where: { date, shiftTypeId: { [Op.in]: shiftTypeIds } },
+    include: [{ model: ShiftAssignment, as: 'assignments' }],
+  });
+
+  const userIds = new Set<number>();
+  const managerIds = new Set<number>();
+  instances.forEach((instance) => {
+    (instance.assignments ?? []).forEach((assignment) => {
+      if (!assignment.userId) {
+        return;
+      }
+      const roleId = assignment.shiftRoleId ?? null;
+      if (roleId != null && allowedRoleIds.has(roleId)) {
+        userIds.add(assignment.userId);
+        if (managerRoleIds.has(roleId)) {
+          managerIds.add(assignment.userId);
+        }
+        return;
+      }
+      const roleLabel = (assignment.roleInShift ?? '').trim().toLowerCase();
+      if (roleLabel === 'manager') {
+        userIds.add(assignment.userId);
+        managerIds.add(assignment.userId);
+        return;
+      }
+      if (roleLabel === 'guide') {
+        userIds.add(assignment.userId);
+      }
+    });
+  });
+
+  return { userIds: Array.from(userIds.values()), managerIds: Array.from(managerIds.values()) };
 }
 
 export async function upsertShiftTemplate(

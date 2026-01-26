@@ -34,10 +34,11 @@ export const runSeedOnce = async (params: {
   seedKey: string;
   runType: string;
   actorId?: number | null;
+  force?: boolean;
   run: () => Promise<SeedExecutionResult> | SeedExecutionResult;
 }): Promise<{ skipped: boolean; seededCount: number; details?: Record<string, unknown> | null }> => {
-  const { seedKey, runType, actorId, run } = params;
-  if (await hasSeedRun(seedKey)) {
+  const { seedKey, runType, actorId, run, force } = params;
+  if (!force && (await hasSeedRun(seedKey))) {
     return { skipped: true, seededCount: 0 };
   }
 

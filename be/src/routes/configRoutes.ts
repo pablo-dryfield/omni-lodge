@@ -9,6 +9,10 @@ import {
   getConfigHistoryByKey,
   restoreConfigDefaults,
   getConfigSeedRuns,
+  runConfigSeed,
+  getConfigSeedCatalog,
+  getConfigSeedPreview,
+  markConfigSeedRun,
 } from '../controllers/configController.js';
 
 const router = Router();
@@ -17,7 +21,11 @@ router.use(authMiddleware, requireRoles(['admin']));
 
 router.get('/', getConfigList);
 router.get('/seed/runs', getConfigSeedRuns);
+router.get('/seed/catalog', getConfigSeedCatalog);
+router.get('/seed/preview', getConfigSeedPreview);
 router.post('/seed/restore', restoreConfigDefaults);
+router.post('/seed/run', runConfigSeed);
+router.post('/seed/mark', markConfigSeedRun);
 router.get('/:key', getConfigByKey);
 router.post('/:key', updateConfigKey);
 router.post('/:key/reveal', revealConfigKey);

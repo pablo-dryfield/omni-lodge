@@ -62,6 +62,7 @@ export const PAGE_SLUGS = {
   settingsStaffProfiles: "settings-staff-profiles",
   settingsShiftRoles: "settings-shift-roles",
   settingsUserShiftRoles: "settings-user-shift-roles",
+  settingsShiftTypes: "settings-shift-types",
   settingsDbBackups: "settings-db-backups",
   settingsHomeExperience: "settings-home-experience",
   settingsControlPanel: "settings-control-panel",

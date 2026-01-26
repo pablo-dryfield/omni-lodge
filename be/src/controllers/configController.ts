@@ -13,6 +13,8 @@ import {
   restoreMissingConfigValues,
   listConfigSeedRuns,
 } from '../services/configService.js';
+import { ACCESS_CONTROL_SEED_KEYS, listSeedCatalog, previewSeedChanges, runAccessControlSeedByKey } from '../utils/initializeAccessControl.js';
+import { recordSeedRun } from '../services/seedRunService.js';
 
 const handleError = (res: Response, error: unknown): void => {
   if (error instanceof HttpError) {
@@ -72,6 +74,28 @@ export const getConfigSeedRuns = async (req: AuthenticatedRequest, res: Response
         updatedAt: run.updatedAt,
       })),
     });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const getConfigSeedCatalog = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    res.json({ seeds: listSeedCatalog() });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const getConfigSeedPreview = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const seedKey = typeof req.query.seedKey === 'string' ? req.query.seedKey.trim() : '';
+    if (!seedKey) {
+      res.status(400).json([{ message: 'seedKey is required.' }]);
+      return;
+    }
+    const preview = await previewSeedChanges(seedKey);
+    res.json({ preview });
   } catch (error) {
     handleError(res, error);
   }
@@ -189,6 +213,55 @@ export const restoreConfigDefaults = async (req: AuthenticatedRequest, res: Resp
     const actorId = req.authContext?.id ?? null;
     const seededKeys = await restoreMissingConfigValues(actorId);
     res.json({ seededCount: seededKeys.length, seededKeys });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const runConfigSeed = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const seedKey = typeof req.body?.seedKey === 'string' ? req.body.seedKey.trim() : '';
+    if (!seedKey) {
+      res.status(400).json([{ message: 'seedKey is required.' }]);
+      return;
+    }
+
+    const accessControlKeys = new Set(Object.values(ACCESS_CONTROL_SEED_KEYS));
+    if (!accessControlKeys.has(seedKey)) {
+      res.status(400).json([{ message: 'Unsupported seed key.' }]);
+      return;
+    }
+
+    const force = Boolean(req.body?.force);
+    const actorId = req.authContext?.id ?? null;
+    const result = await runAccessControlSeedByKey({
+      seedKey: seedKey as typeof ACCESS_CONTROL_SEED_KEYS[keyof typeof ACCESS_CONTROL_SEED_KEYS],
+      actorId,
+      force,
+      runType: force ? 'manual' : 'access-control',
+    });
+    res.json({ seedKey, result });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const markConfigSeedRun = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const seedKey = typeof req.body?.seedKey === 'string' ? req.body.seedKey.trim() : '';
+    if (!seedKey) {
+      res.status(400).json([{ message: 'seedKey is required.' }]);
+      return;
+    }
+    const actorId = req.authContext?.id ?? null;
+    await recordSeedRun({
+      seedKey,
+      runType: 'manual-mark',
+      seededBy: actorId,
+      seededCount: 0,
+      seedDetails: { note: 'Marked as completed without running.' },
+    });
+    res.json({ seedKey, status: 'marked' });
   } catch (error) {
     handleError(res, error);
   }

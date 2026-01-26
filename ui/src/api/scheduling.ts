@@ -315,6 +315,21 @@ export const useShiftTypes = (options?: { enabled?: boolean }) =>
     retry: false,
   });
 
+export const useUpdateShiftTypeProducts = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { shiftTypeId: number; productIds: number[] }) => {
+      const response = await axiosInstance.patch(`/schedules/shift-types/${payload.shiftTypeId}/products`, {
+        productIds: payload.productIds,
+      });
+      return response.data as { shiftTypeId: number; productIds: number[] };
+    },
+    onSuccess: () => {
+      invalidateQuery(queryClient, schedulingKeys.shiftTypes);
+    },
+  });
+};
+
 export const useUpsertShiftTemplate = () => {
   const queryClient = useQueryClient();
   return useMutation({
@@ -563,6 +578,11 @@ export const getUpcomingWeeks = (count = 4, includeCurrent = true) => {
       week,
     };
   });
+};
+
+export const fetchScheduledStaffForProduct = async (params: { date: string; productId: number }) => {
+  const response = await axiosInstance.get("/schedules/shift-assignments/by-date-product", { params });
+  return response.data as { userIds: number[]; managerIds?: number[] };
 };
 
 export const getRecentWeeks = (options?: { pastCount?: number; futureCount?: number; includeCurrent?: boolean }) => {

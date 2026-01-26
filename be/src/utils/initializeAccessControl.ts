@@ -13,7 +13,7 @@ import Addon from '../models/Addon.js';
 import Product from '../models/Product.js';
 import ProductAddon from '../models/ProductAddon.js';
 import PaymentMethod from '../models/PaymentMethod.js';
-import { runSeedOnce } from '../services/seedRunService.js';
+import { hasSeedRun, recordSeedRun, runSeedOnce } from '../services/seedRunService.js';
 
 const slugify = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
@@ -62,10 +62,11 @@ const defaultPages = [
   { slug: 'settings-staff-profiles', name: 'Staff Profiles', description: 'Maintain staff profile metadata', sortOrder: 19 },
   { slug: 'settings-shift-roles', name: 'Shift Roles', description: 'Manage scheduling shift role definitions', sortOrder: 20 },
   { slug: 'settings-user-shift-roles', name: 'User Shift Roles', description: 'Assign shift roles to users', sortOrder: 21 },
-  { slug: 'settings-db-backups', name: 'Database Backups', description: 'Review and manage PostgreSQL backups', sortOrder: 22 },
-  { slug: 'settings-home-experience', name: 'Home Experience', description: 'Assign default home modules per user', sortOrder: 23 },
-  { slug: 'settings-control-panel', name: 'Control Panel', description: 'Manage dynamic configuration values', sortOrder: 24 },
-  { slug: 'settings-maintenance', name: 'Maintenance', description: 'Review seeds, migrations, and configuration health', sortOrder: 25 },
+  { slug: 'settings-shift-types', name: 'Shift Types', description: 'Map shift types to products', sortOrder: 22 },
+  { slug: 'settings-db-backups', name: 'Database Backups', description: 'Review and manage PostgreSQL backups', sortOrder: 23 },
+  { slug: 'settings-home-experience', name: 'Home Experience', description: 'Assign default home modules per user', sortOrder: 24 },
+  { slug: 'settings-control-panel', name: 'Control Panel', description: 'Manage dynamic configuration values', sortOrder: 25 },
+  { slug: 'settings-maintenance', name: 'Maintenance', description: 'Review seeds, migrations, and configuration health', sortOrder: 26 },
 ];
 
 const defaultModules = [
@@ -111,6 +112,7 @@ const defaultModules = [
   { slug: 'action-registry', name: 'Action Registry', pageSlug: 'settings-actions', description: 'Maintain action catalog', componentRef: 'ActionRegistry', sortOrder: 1 },
   { slug: 'staff-profile-directory', name: 'Staff Profile Directory', pageSlug: 'settings-staff-profiles', description: 'Maintain staff profile metadata', componentRef: 'StaffProfileDirectory', sortOrder: 1 },
   { slug: 'shift-role-directory', name: 'Shift Role Directory', pageSlug: 'settings-shift-roles', description: 'Manage scheduling shift role definitions', componentRef: 'ShiftRoleDirectory', sortOrder: 1 },
+  { slug: 'shift-type-directory', name: 'Shift Type Directory', pageSlug: 'settings-shift-types', description: 'Map shift types to products', componentRef: 'ShiftTypeDirectory', sortOrder: 1 },
     { slug: 'user-shift-role-directory', name: 'User Shift Role Directory', pageSlug: 'settings-user-shift-roles', description: 'Assign shift roles to users', componentRef: 'UserShiftRoleDirectory', sortOrder: 1 },
     { slug: 'settings-home', name: 'Home Experience', pageSlug: 'settings-home-experience', description: 'Set default home experiences for users', componentRef: 'SettingsHomeExperience', sortOrder: 1 },
 ];
@@ -127,11 +129,12 @@ const rolePageMatrix: Record<string, string[]> = {
 'settings-staff-profiles',
 'settings-shift-roles',
 'settings-user-shift-roles',
+'settings-shift-types',
 'settings-db-backups',
 'settings-home-experience',
 'settings-control-panel',
 'settings-maintenance'],
-  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'channel-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'assistant-manager-tasks', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-review-platforms', 'settings-compensation-components', 'settings-home-experience'],
+  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'channel-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'assistant-manager-tasks', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-shift-types', 'settings-review-platforms', 'settings-compensation-components', 'settings-home-experience'],
   manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'channel-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'assistant-manager-tasks'],
   'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'channel-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'assistant-manager-tasks'],
   guide: ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'channel-numbers', 'pays', 'scheduling'],
@@ -147,6 +150,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'user-directory': ['view', 'create', 'update', 'delete'],
     'staff-profile-directory': ['view', 'create', 'update', 'delete'],
     'shift-role-directory': ['view', 'create', 'update', 'delete'],
+    'shift-type-directory': ['view', 'create', 'update', 'delete'],
     'user-shift-role-directory': ['view', 'create', 'update', 'delete'],
 'settings-home': ['view', 'create', 'update', 'delete'],
 'settings-users-admin': ['view', 'create', 'update', 'delete'],
@@ -199,6 +203,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'user-directory': ['view', 'create', 'update', 'delete'],
     'staff-profile-directory': ['view', 'create', 'update', 'delete'],
     'shift-role-directory': ['view', 'create', 'update', 'delete'],
+    'shift-type-directory': ['view', 'create', 'update', 'delete'],
     'user-shift-role-directory': ['view', 'create', 'update', 'delete'],
     'settings-home': ['view', 'create', 'update', 'delete'],
       reporting: ['view', 'create', 'update', 'delete'],
@@ -298,6 +303,266 @@ roleModuleMatrix['pub-crawl-guide'] = Object.fromEntries(
   Object.entries(roleModuleMatrix.guide).map(([moduleSlug, actions]) => [moduleSlug, [...actions]])
 );
 
+export const ACCESS_CONTROL_SEED_KEYS = {
+  roles: 'access-control.roles',
+  actions: 'access-control.actions',
+  pages: 'access-control.pages',
+  modules: 'access-control.modules',
+  moduleActions: 'access-control.module-actions',
+  rolePages: 'access-control.role-pages',
+  roleModules: 'access-control.role-modules',
+  sequences: 'access-control.sequences',
+  adminUser: 'access-control.admin-default-user',
+} as const;
+
+type AccessControlSeedKey = typeof ACCESS_CONTROL_SEED_KEYS[keyof typeof ACCESS_CONTROL_SEED_KEYS];
+
+export type SeedCatalogEntry = {
+  key: string;
+  label: string;
+  description: string;
+  group: 'access-control' | 'catalog';
+  sortOrder: number;
+};
+
+const PUB_CRAWL_SEED_KEY = 'catalog-pub-crawl-v1';
+
+const SEED_CATALOG: SeedCatalogEntry[] = [
+  {
+    key: PUB_CRAWL_SEED_KEY,
+    label: 'Pub Crawl Catalog',
+    description: 'Seeds channels, products, add-ons, and payment method defaults for Pub Crawl.',
+    group: 'catalog',
+    sortOrder: 1,
+  },
+  {
+    key: ACCESS_CONTROL_SEED_KEYS.roles,
+    label: 'Access Control Roles',
+    description: 'Ensures default user roles exist.',
+    group: 'access-control',
+    sortOrder: 10,
+  },
+  {
+    key: ACCESS_CONTROL_SEED_KEYS.actions,
+    label: 'Access Control Actions',
+    description: 'Ensures default action keys exist.',
+    group: 'access-control',
+    sortOrder: 20,
+  },
+  {
+    key: ACCESS_CONTROL_SEED_KEYS.pages,
+    label: 'Access Control Pages',
+    description: 'Creates missing pages for navigation.',
+    group: 'access-control',
+    sortOrder: 30,
+  },
+  {
+    key: ACCESS_CONTROL_SEED_KEYS.modules,
+    label: 'Access Control Modules',
+    description: 'Creates missing modules tied to pages.',
+    group: 'access-control',
+    sortOrder: 40,
+  },
+  {
+    key: ACCESS_CONTROL_SEED_KEYS.moduleActions,
+    label: 'Access Control Module Actions',
+    description: 'Adds missing module/action combinations.',
+    group: 'access-control',
+    sortOrder: 50,
+  },
+  {
+    key: ACCESS_CONTROL_SEED_KEYS.rolePages,
+    label: 'Access Control Role Pages',
+    description: 'Adds missing role/page permissions.',
+    group: 'access-control',
+    sortOrder: 60,
+  },
+  {
+    key: ACCESS_CONTROL_SEED_KEYS.roleModules,
+    label: 'Access Control Role Modules',
+    description: 'Adds missing role/module permissions.',
+    group: 'access-control',
+    sortOrder: 70,
+  },
+  {
+    key: ACCESS_CONTROL_SEED_KEYS.adminUser,
+    label: 'Access Control Admin User',
+    description: 'Ensures default admin user is assigned.',
+    group: 'access-control',
+    sortOrder: 80,
+  },
+];
+
+export const listSeedCatalog = (): SeedCatalogEntry[] => [...SEED_CATALOG].sort((a, b) => a.sortOrder - b.sortOrder);
+
+const capList = <T>(items: T[], cap = 50): { total: number; items: T[] } => ({
+  total: items.length,
+  items: items.slice(0, cap),
+});
+
+export async function previewSeedChanges(seedKey: string): Promise<{
+  supported: boolean;
+  seedKey: string;
+  pendingCount: number;
+  details?: Record<string, unknown> | null;
+}> {
+  if (!Object.values(ACCESS_CONTROL_SEED_KEYS).includes(seedKey as AccessControlSeedKey)) {
+    return { supported: false, seedKey, pendingCount: 0, details: null };
+  }
+
+  switch (seedKey) {
+    case ACCESS_CONTROL_SEED_KEYS.roles: {
+      const existing = await UserType.findAll({ attributes: ['slug'] });
+      const existingSlugs = new Set(existing.map((role) => role.slug));
+      const missing = defaultRoles.filter((role) => !existingSlugs.has(role.slug));
+      const summary = capList(missing.map((role) => ({ slug: role.slug, name: role.name })));
+      return { supported: true, seedKey, pendingCount: summary.total, details: { missing: summary } };
+    }
+    case ACCESS_CONTROL_SEED_KEYS.actions: {
+      const existing = await Action.findAll({ attributes: ['key'] });
+      const existingKeys = new Set(existing.map((action) => action.key));
+      const missing = defaultActions.filter((action) => !existingKeys.has(action.key));
+      const summary = capList(missing.map((action) => ({ key: action.key, name: action.name })));
+      return { supported: true, seedKey, pendingCount: summary.total, details: { missing: summary } };
+    }
+    case ACCESS_CONTROL_SEED_KEYS.pages: {
+      const existing = await Page.findAll({ attributes: ['slug'] });
+      const existingSlugs = new Set(existing.map((page) => page.slug));
+      const missing = defaultPages.filter((page) => !existingSlugs.has(page.slug));
+      const summary = capList(missing.map((page) => ({ slug: page.slug, name: page.name })));
+      return { supported: true, seedKey, pendingCount: summary.total, details: { missing: summary } };
+    }
+    case ACCESS_CONTROL_SEED_KEYS.modules: {
+      const existingPages = await Page.findAll({ attributes: ['slug', 'id'] });
+      const pageMap = new Map(existingPages.map((page) => [page.slug, page.id]));
+      const existingModules = await Module.findAll({ attributes: ['slug'] });
+      const existingSlugs = new Set(existingModules.map((module) => module.slug));
+      const missing = defaultModules
+        .filter((module) => pageMap.has(module.pageSlug))
+        .filter((module) => !existingSlugs.has(module.slug));
+      const missingPages = defaultModules
+        .filter((module) => !pageMap.has(module.pageSlug))
+        .map((module) => module.pageSlug);
+      const summary = capList(missing.map((module) => ({ slug: module.slug, name: module.name, pageSlug: module.pageSlug })));
+      return {
+        supported: true,
+        seedKey,
+        pendingCount: summary.total,
+        details: { missing: summary, missingPages: Array.from(new Set(missingPages)) },
+      };
+    }
+    case ACCESS_CONTROL_SEED_KEYS.moduleActions: {
+      const actionRecords = await Action.findAll({ attributes: ['id', 'key'] });
+      const actionMap = new Map(actionRecords.map((action) => [action.key, action.id]));
+      const moduleRecords = await Module.findAll({ attributes: ['id', 'slug'] });
+      const moduleMap = new Map(moduleRecords.map((module) => [module.slug, module.id]));
+
+      const existing = await ModuleAction.findAll({ attributes: ['moduleId', 'actionId'] });
+      const existingKeys = new Set(existing.map((entry) => `${entry.moduleId}:${entry.actionId}`));
+
+      const missing: Array<{ moduleSlug: string; actionKey: string }> = [];
+      for (const module of defaultModules) {
+        const moduleId = moduleMap.get(module.slug);
+        if (!moduleId) {
+          continue;
+        }
+        for (const action of defaultActions) {
+          const actionId = actionMap.get(action.key);
+          if (!actionId) {
+            continue;
+          }
+          const key = `${moduleId}:${actionId}`;
+          if (!existingKeys.has(key)) {
+            missing.push({ moduleSlug: module.slug, actionKey: action.key });
+          }
+        }
+      }
+      const summary = capList(missing);
+      return { supported: true, seedKey, pendingCount: summary.total, details: { missing: summary } };
+    }
+    case ACCESS_CONTROL_SEED_KEYS.rolePages: {
+      const roleRecords = await UserType.findAll({ attributes: ['id', 'slug'] });
+      const roleMap = new Map(roleRecords.map((role) => [role.slug, role.id]));
+      const pageRecords = await Page.findAll({ attributes: ['id', 'slug'] });
+      const pageMap = new Map(pageRecords.map((page) => [page.slug, page.id]));
+      const existing = await RolePagePermission.findAll({ attributes: ['userTypeId', 'pageId'] });
+      const existingKeys = new Set(existing.map((entry) => `${entry.userTypeId}:${entry.pageId}`));
+
+      const missing: Array<{ roleSlug: string; pageSlug: string }> = [];
+      for (const [roleSlug, pages] of Object.entries(rolePageMatrix)) {
+        const roleId = roleMap.get(roleSlug);
+        if (!roleId) {
+          continue;
+        }
+        for (const pageSlug of pages) {
+          const pageId = pageMap.get(pageSlug);
+          if (!pageId) {
+            continue;
+          }
+          const key = `${roleId}:${pageId}`;
+          if (!existingKeys.has(key)) {
+            missing.push({ roleSlug, pageSlug });
+          }
+        }
+      }
+      const summary = capList(missing);
+      return { supported: true, seedKey, pendingCount: summary.total, details: { missing: summary } };
+    }
+    case ACCESS_CONTROL_SEED_KEYS.roleModules: {
+      const roleRecords = await UserType.findAll({ attributes: ['id', 'slug'] });
+      const roleMap = new Map(roleRecords.map((role) => [role.slug, role.id]));
+      const moduleRecords = await Module.findAll({ attributes: ['id', 'slug'] });
+      const moduleMap = new Map(moduleRecords.map((module) => [module.slug, module.id]));
+      const actionRecords = await Action.findAll({ attributes: ['id', 'key'] });
+      const actionMap = new Map(actionRecords.map((action) => [action.key, action.id]));
+      const existing = await RoleModulePermission.findAll({ attributes: ['userTypeId', 'moduleId', 'actionId'] });
+      const existingKeys = new Set(existing.map((entry) => `${entry.userTypeId}:${entry.moduleId}:${entry.actionId}`));
+
+      const missing: Array<{ roleSlug: string; moduleSlug: string; actionKey: string }> = [];
+      for (const [roleSlug, moduleConfig] of Object.entries(roleModuleMatrix)) {
+        const roleId = roleMap.get(roleSlug);
+        if (!roleId) {
+          continue;
+        }
+        for (const [moduleSlug, actions] of Object.entries(moduleConfig)) {
+          const moduleId = moduleMap.get(moduleSlug);
+          if (!moduleId) {
+            continue;
+          }
+          for (const actionKey of actions) {
+            const actionId = actionMap.get(actionKey);
+            if (!actionId) {
+              continue;
+            }
+            const key = `${roleId}:${moduleId}:${actionId}`;
+            if (!existingKeys.has(key)) {
+              missing.push({ roleSlug, moduleSlug, actionKey });
+            }
+          }
+        }
+      }
+      const summary = capList(missing);
+      return { supported: true, seedKey, pendingCount: summary.total, details: { missing: summary } };
+    }
+    case ACCESS_CONTROL_SEED_KEYS.adminUser: {
+      const adminRole = await UserType.findOne({ where: { slug: 'admin' }, attributes: ['id'] });
+      if (!adminRole) {
+        return { supported: true, seedKey, pendingCount: 0, details: { reason: 'Admin role missing' } };
+      }
+      const adminUser = await User.findByPk(1);
+      const needsUpdate = Boolean(adminUser && adminUser.userTypeId !== adminRole.id);
+      return {
+        supported: true,
+        seedKey,
+        pendingCount: needsUpdate ? 1 : 0,
+        details: needsUpdate ? { userId: adminUser?.id, roleId: adminRole.id } : null,
+      };
+    }
+    default:
+      return { supported: false, seedKey, pendingCount: 0, details: null };
+  }
+}
+
 export const PAYMENT_METHOD_SEED = [
   { name: 'Online/Card', description: 'Online or card-based payments' },
   { name: 'Bank Transfer', description: 'Payments received via bank transfer' },
@@ -339,8 +604,6 @@ const PRODUCT_ADDON_SEEDS = [
   { addonName: 'T-Shirts', maxPerAttendee: null, sortOrder: 1 },
   { addonName: 'Photos', maxPerAttendee: null, sortOrder: 2 },
 ];
-
-const PUB_CRAWL_SEED_KEY = 'catalog-pub-crawl-v1';
 
 async function seedPubCrawlCatalog(): Promise<{ createdCount: number; updatedCount: number }> {
   return sequelize.transaction(async (transaction: Transaction) => {
@@ -520,6 +783,328 @@ async function seedPubCrawlCatalog(): Promise<{ createdCount: number; updatedCou
   });
 }
 
+async function seedAccessControlRoles() {
+  return sequelize.transaction(async (transaction) => {
+    let updatedCount = 0;
+    const existingRoles = await UserType.findAll({ transaction });
+    await Promise.all(existingRoles.map(async role => {
+      if (!role.slug || !role.slug.trim()) {
+        role.slug = slugify(role.name || `role-${role.id}`);
+        await role.save({ transaction });
+        updatedCount += 1;
+      }
+    }));
+
+    let createdCount = 0;
+    for (const role of defaultRoles) {
+      const [, created] = await UserType.findOrCreate({
+        where: { slug: role.slug },
+        defaults: {
+          name: role.name,
+          description: role.description,
+          isDefault: role.isDefault,
+          status: true,
+        },
+        transaction,
+      });
+      if (created) {
+        createdCount += 1;
+      }
+    }
+
+    return { seededCount: createdCount, details: { createdCount, updatedCount } };
+  });
+}
+
+async function seedAccessControlActions() {
+  return sequelize.transaction(async (transaction) => {
+    let createdCount = 0;
+    for (const action of defaultActions) {
+      const [, created] = await Action.findOrCreate({
+        where: { key: action.key },
+        defaults: {
+          name: action.name,
+          description: action.description,
+          isAssignable: true,
+          status: true,
+        },
+        transaction,
+      });
+      if (created) {
+        createdCount += 1;
+      }
+    }
+    return { seededCount: createdCount, details: { createdCount } };
+  });
+}
+
+async function seedAccessControlPages() {
+  return sequelize.transaction(async (transaction) => {
+    let createdCount = 0;
+    for (const page of defaultPages) {
+      const [, created] = await Page.findOrCreate({
+        where: { slug: page.slug },
+        defaults: {
+          name: page.name,
+          description: page.description,
+          sortOrder: page.sortOrder,
+          status: true,
+        },
+        transaction,
+      });
+      if (created) {
+        createdCount += 1;
+      }
+    }
+    return { seededCount: createdCount, details: { createdCount } };
+  });
+}
+
+async function seedAccessControlModules() {
+  return sequelize.transaction(async (transaction) => {
+    const pageSlugs = Array.from(new Set(defaultModules.map((module) => module.pageSlug)));
+    const pages = await Page.findAll({
+      where: { slug: { [Op.in]: pageSlugs } },
+      transaction,
+    });
+    const pageMap = new Map(pages.map((page) => [page.slug, page]));
+    let createdCount = 0;
+
+    for (const module of defaultModules) {
+      const page = pageMap.get(module.pageSlug);
+      if (!page) {
+        continue;
+      }
+      const [, created] = await Module.findOrCreate({
+        where: { slug: module.slug },
+        defaults: {
+          name: module.name,
+          description: module.description,
+          componentRef: module.componentRef,
+          sortOrder: module.sortOrder,
+          status: true,
+          pageId: page.id,
+        },
+        transaction,
+      });
+      if (created) {
+        createdCount += 1;
+      }
+    }
+
+    return { seededCount: createdCount, details: { createdCount } };
+  });
+}
+
+async function seedAccessControlModuleActions() {
+  return sequelize.transaction(async (transaction) => {
+    const actionRecords = await Action.findAll({
+      where: { key: { [Op.in]: defaultActions.map((action) => action.key) } },
+      transaction,
+    });
+    const actionMap = new Map(actionRecords.map((action) => [action.key, action]));
+    const moduleRecords = await Module.findAll({
+      where: { slug: { [Op.in]: defaultModules.map((module) => module.slug) } },
+      transaction,
+    });
+    const moduleMap = new Map(moduleRecords.map((module) => [module.slug, module]));
+
+    let createdCount = 0;
+    for (const module of defaultModules) {
+      const moduleRecord = moduleMap.get(module.slug);
+      if (!moduleRecord) {
+        continue;
+      }
+      for (const action of defaultActions) {
+        const actionRecord = actionMap.get(action.key);
+        if (!actionRecord) {
+          continue;
+        }
+        const [, created] = await ModuleAction.findOrCreate({
+          where: {
+            moduleId: moduleRecord.id,
+            actionId: actionRecord.id,
+          },
+          defaults: {
+            enabled: true,
+          },
+          transaction,
+        });
+        if (created) {
+          createdCount += 1;
+        }
+      }
+    }
+
+    return { seededCount: createdCount, details: { createdCount } };
+  });
+}
+
+async function seedAccessControlRolePages() {
+  return sequelize.transaction(async (transaction) => {
+    const roleRecords = await UserType.findAll({
+      where: { slug: { [Op.in]: Object.keys(rolePageMatrix) } },
+      transaction,
+    });
+    const roleMap = new Map(roleRecords.map((role) => [role.slug, role]));
+
+    let createdCount = 0;
+    for (const [roleSlug, pages] of Object.entries(rolePageMatrix)) {
+      const role = roleMap.get(roleSlug);
+      if (!role) {
+        continue;
+      }
+      const pageRecords = await Page.findAll({
+        where: { slug: { [Op.in]: pages } },
+        transaction,
+      });
+      for (const page of pageRecords) {
+        const [, created] = await RolePagePermission.findOrCreate({
+          where: {
+            userTypeId: role.id,
+            pageId: page.id,
+          },
+          defaults: {
+            canView: true,
+            status: true,
+          },
+          transaction,
+        });
+        if (created) {
+          createdCount += 1;
+        }
+      }
+    }
+
+    return { seededCount: createdCount, details: { createdCount } };
+  });
+}
+
+async function seedAccessControlRoleModules() {
+  return sequelize.transaction(async (transaction) => {
+    const roleRecords = await UserType.findAll({
+      where: { slug: { [Op.in]: Object.keys(roleModuleMatrix) } },
+      transaction,
+    });
+    const roleMap = new Map(roleRecords.map((role) => [role.slug, role]));
+    const moduleSlugSet = new Set<string>();
+    Object.values(roleModuleMatrix).forEach((modules) => {
+      Object.keys(modules).forEach((moduleSlug) => moduleSlugSet.add(moduleSlug));
+    });
+    const moduleRecords = await Module.findAll({
+      where: { slug: { [Op.in]: Array.from(moduleSlugSet) } },
+      transaction,
+    });
+    const moduleMap = new Map(moduleRecords.map((module) => [module.slug, module]));
+    const actionRecords = await Action.findAll({
+      where: { key: { [Op.in]: defaultActions.map((action) => action.key) } },
+      transaction,
+    });
+    const actionMap = new Map(actionRecords.map((action) => [action.key, action]));
+
+    let createdCount = 0;
+    for (const [roleSlug, moduleConfig] of Object.entries(roleModuleMatrix)) {
+      const role = roleMap.get(roleSlug);
+      if (!role) {
+        continue;
+      }
+      for (const [moduleSlug, actions] of Object.entries(moduleConfig)) {
+        const moduleRecord = moduleMap.get(moduleSlug);
+        if (!moduleRecord) {
+          continue;
+        }
+        for (const actionKey of actions) {
+          const actionRecord = actionMap.get(actionKey);
+          if (!actionRecord) {
+            continue;
+          }
+          const [, created] = await RoleModulePermission.findOrCreate({
+            where: {
+              userTypeId: role.id,
+              moduleId: moduleRecord.id,
+              actionId: actionRecord.id,
+            },
+            defaults: {
+              allowed: true,
+              status: true,
+            },
+            transaction,
+          });
+          if (created) {
+            createdCount += 1;
+          }
+        }
+      }
+    }
+
+    return { seededCount: createdCount, details: { createdCount } };
+  });
+}
+
+async function seedAccessControlSequences() {
+  await resetSequence('pages');
+  await resetSequence('actions');
+  await resetSequence('modules');
+  await resetSequence('moduleActions');
+  await resetSequence('rolePagePermissions');
+  await resetSequence('roleModulePermissions');
+  return { seededCount: 0, details: { reset: true } };
+}
+
+async function seedAccessControlAdminUser() {
+  const adminRole = await UserType.findOne({ where: { slug: 'admin' } });
+  if (!adminRole) {
+    return { seededCount: 0 };
+  }
+  const adminUser = await User.findByPk(1);
+  if (adminUser && adminUser.userTypeId !== adminRole.id) {
+    adminUser.userTypeId = adminRole.id;
+    await adminUser.save();
+    return { seededCount: 1, details: { userId: adminUser.id } };
+  }
+  return { seededCount: 0 };
+}
+
+const accessControlSeedHandlers: Record<AccessControlSeedKey, () => Promise<{ seededCount: number; details?: Record<string, unknown> | null }>> = {
+  [ACCESS_CONTROL_SEED_KEYS.roles]: seedAccessControlRoles,
+  [ACCESS_CONTROL_SEED_KEYS.actions]: seedAccessControlActions,
+  [ACCESS_CONTROL_SEED_KEYS.pages]: seedAccessControlPages,
+  [ACCESS_CONTROL_SEED_KEYS.modules]: seedAccessControlModules,
+  [ACCESS_CONTROL_SEED_KEYS.moduleActions]: seedAccessControlModuleActions,
+  [ACCESS_CONTROL_SEED_KEYS.rolePages]: seedAccessControlRolePages,
+  [ACCESS_CONTROL_SEED_KEYS.roleModules]: seedAccessControlRoleModules,
+  [ACCESS_CONTROL_SEED_KEYS.sequences]: seedAccessControlSequences,
+  [ACCESS_CONTROL_SEED_KEYS.adminUser]: seedAccessControlAdminUser,
+};
+
+export async function runAccessControlSeedByKey(params: {
+  seedKey: AccessControlSeedKey;
+  actorId?: number | null;
+  force?: boolean;
+  runType?: string;
+}): Promise<{ skipped: boolean; seededCount: number; details?: Record<string, unknown> | null }> {
+  const { seedKey, actorId, force, runType } = params;
+  const handler = accessControlSeedHandlers[seedKey];
+  if (!handler) {
+    return { skipped: true, seededCount: 0 };
+  }
+
+  if (!force && (await hasSeedRun(seedKey))) {
+    return { skipped: true, seededCount: 0 };
+  }
+
+  const result = await handler();
+  await recordSeedRun({
+    seedKey,
+    runType: runType ?? (force ? 'manual' : 'access-control'),
+    seededBy: actorId ?? null,
+    seededCount: result.seededCount,
+    seedDetails: result.details ?? null,
+  });
+
+  return { skipped: false, seededCount: result.seededCount, details: result.details ?? null };
+}
+
 export async function initializeAccessControl(): Promise<void> {
   await runSeedOnce({
     seedKey: PUB_CRAWL_SEED_KEY,
@@ -533,169 +1118,19 @@ export async function initializeAccessControl(): Promise<void> {
     },
   });
 
-  const existingRoles = await UserType.findAll();
-  await Promise.all(existingRoles.map(async role => {
-    if (!role.slug || !role.slug.trim()) {
-      role.slug = slugify(role.name || `role-${role.id}`);
-      await role.save();
-    }
-  }));
+  const orderedSeeds: AccessControlSeedKey[] = [
+    ACCESS_CONTROL_SEED_KEYS.roles,
+    ACCESS_CONTROL_SEED_KEYS.actions,
+    ACCESS_CONTROL_SEED_KEYS.pages,
+    ACCESS_CONTROL_SEED_KEYS.modules,
+    ACCESS_CONTROL_SEED_KEYS.moduleActions,
+    ACCESS_CONTROL_SEED_KEYS.rolePages,
+    ACCESS_CONTROL_SEED_KEYS.roleModules,
+    ACCESS_CONTROL_SEED_KEYS.adminUser,
+  ];
 
-  const roleMap = new Map<string, UserType>();
-  for (const role of defaultRoles) {
-    const [record] = await UserType.findOrCreate({
-      where: { slug: role.slug },
-      defaults: {
-        name: role.name,
-        description: role.description,
-        isDefault: role.isDefault,
-        status: true,
-      },
-    });
-    roleMap.set(role.slug, record);
-  }
-
-  await resetSequence('pages');
-  await resetSequence('actions');
-  await resetSequence('modules');
-  await resetSequence('moduleActions');
-  await resetSequence('rolePagePermissions');
-  await resetSequence('roleModulePermissions');
-
-  const actionMap = new Map<string, Action>();
-  for (const action of defaultActions) {
-    const [record] = await Action.findOrCreate({
-      where: { key: action.key },
-      defaults: {
-        name: action.name,
-        description: action.description,
-        isAssignable: true,
-        status: true,
-      },
-    });
-    actionMap.set(action.key, record);
-  }
-
-  const pageMap = new Map<string, Page>();
-  for (const page of defaultPages) {
-    const [record] = await Page.findOrCreate({
-      where: { slug: page.slug },
-      defaults: {
-        name: page.name,
-        description: page.description,
-        sortOrder: page.sortOrder,
-        status: true,
-      },
-    });
-    pageMap.set(page.slug, record);
-  }
-
-  const moduleMap = new Map<string, Module>();
-  for (const module of defaultModules) {
-    const page = pageMap.get(module.pageSlug);
-    if (!page) {
-      continue;
-    }
-    const [record] = await Module.findOrCreate({
-      where: { slug: module.slug },
-      defaults: {
-        name: module.name,
-        description: module.description,
-        componentRef: module.componentRef,
-        sortOrder: module.sortOrder,
-        status: true,
-        pageId: page.id,
-      },
-    });
-    moduleMap.set(module.slug, record);
-  }
-
-  for (const [moduleSlug, record] of moduleMap.entries()) {
-    for (const action of defaultActions) {
-      const actionRecord = actionMap.get(action.key);
-      if (!actionRecord) {
-        continue;
-      }
-      await ModuleAction.findOrCreate({
-        where: {
-          moduleId: record.id,
-          actionId: actionRecord.id,
-        },
-        defaults: {
-          enabled: true,
-        },
-      });
-    }
-  }
-
-  for (const [roleSlug, pages] of Object.entries(rolePageMatrix)) {
-    const role = roleMap.get(roleSlug);
-    if (!role) {
-      continue;
-    }
-
-    const pageRecords = await Page.findAll({
-      where: {
-        slug: {
-          [Op.in]: pages,
-        },
-      },
-    });
-
-    for (const page of pageRecords) {
-      await RolePagePermission.findOrCreate({
-        where: {
-          userTypeId: role.id,
-          pageId: page.id,
-        },
-        defaults: {
-          canView: true,
-          status: true,
-        },
-      });
-    }
-  }
-
-  for (const [roleSlug, moduleConfig] of Object.entries(roleModuleMatrix)) {
-    const role = roleMap.get(roleSlug);
-    if (!role) {
-      continue;
-    }
-
-    for (const [moduleSlug, actions] of Object.entries(moduleConfig)) {
-      const moduleRecord = moduleMap.get(moduleSlug);
-      if (!moduleRecord) {
-        continue;
-      }
-
-      for (const actionKey of actions) {
-        const actionRecord = actionMap.get(actionKey);
-        if (!actionRecord) {
-          continue;
-        }
-
-        await RoleModulePermission.findOrCreate({
-          where: {
-            userTypeId: role.id,
-            moduleId: moduleRecord.id,
-            actionId: actionRecord.id,
-          },
-          defaults: {
-            allowed: true,
-            status: true,
-          },
-        });
-      }
-    }
-  }
-
-  const adminRole = roleMap.get('admin');
-  if (adminRole) {
-    const adminUser = await User.findByPk(1);
-    if (adminUser && adminUser.userTypeId !== adminRole.id) {
-      adminUser.userTypeId = adminRole.id;
-      await adminUser.save();
-    }
+  for (const seedKey of orderedSeeds) {
+    await runAccessControlSeedByKey({ seedKey });
   }
 }
 

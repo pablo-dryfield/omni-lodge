@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Badge,
   Button,
   Card,
+  Collapse,
   Group,
   Modal,
   Stack,
@@ -16,7 +17,14 @@ import { IconAlertCircle, IconDatabase, IconRefresh, IconSettings, IconTerminal2
 import { useNavigate } from "react-router-dom";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
-import { restoreConfigDefaults } from "../../api/config";
+import {
+  fetchSeedCatalog,
+  fetchSeedPreview,
+  markConfigSeedRun,
+  restoreConfigDefaults,
+  runConfigSeed,
+  type SeedCatalogEntry,
+} from "../../api/config";
 import {
   runMaintenanceCommand,
   useConfigSeedRuns,
@@ -81,7 +89,7 @@ const statusColor = (status: string): string => {
 
 const SettingsMaintenance = () => {
   const navigate = useNavigate();
-  const seedRunsQuery = useConfigSeedRuns(5);
+  const seedRunsQuery = useConfigSeedRuns(25);
   const migrationRunsQuery = useMigrationAuditRuns(5);
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [restorePassword, setRestorePassword] = useState("");
@@ -91,9 +99,28 @@ const SettingsMaintenance = () => {
   const [commandRunning, setCommandRunning] = useState<MaintenanceCommandAction | null>(null);
   const [commandResult, setCommandResult] = useState<MaintenanceCommandResult | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
+  const [seedActionRunning, setSeedActionRunning] = useState<string | null>(null);
+  const [seedActionError, setSeedActionError] = useState<string | null>(null);
+  const [seedActionResult, setSeedActionResult] = useState<string | null>(null);
+  const [seedCatalog, setSeedCatalog] = useState<SeedCatalogEntry[]>([]);
+  const [seedCatalogError, setSeedCatalogError] = useState<string | null>(null);
+  const [expandedSeedKey, setExpandedSeedKey] = useState<string | null>(null);
+  const [seedPreviewLoading, setSeedPreviewLoading] = useState(false);
+  const [seedPreviewError, setSeedPreviewError] = useState<string | null>(null);
+  const [seedPreview, setSeedPreview] = useState<Record<string, { pendingCount: number; details?: Record<string, unknown> | null; supported: boolean }>>({});
 
   const seedRuns = useMemo(() => seedRunsQuery.data ?? [], [seedRunsQuery.data]);
   const migrationRuns = useMemo(() => migrationRunsQuery.data ?? [], [migrationRunsQuery.data]);
+  const seedRunsByKey = useMemo(() => {
+    const map = new Map<string, typeof seedRuns[number]>();
+    seedRuns.forEach((run) => {
+      const existing = map.get(run.seedKey);
+      if (!existing || new Date(run.createdAt).getTime() > new Date(existing.createdAt).getTime()) {
+        map.set(run.seedKey, run);
+      }
+    });
+    return map;
+  }, [seedRuns]);
 
   const handleRestoreDefaults = async () => {
     if (!restorePassword.trim()) {
@@ -128,6 +155,83 @@ const SettingsMaintenance = () => {
       setCommandRunning(null);
     }
   };
+
+  const handleRunSeed = async (seedKey: string) => {
+    const confirmed = window.confirm(`Rerun seed ${seedKey}? This may overwrite defaults for this seed.`);
+    if (!confirmed) {
+      return;
+    }
+    setSeedActionRunning(seedKey);
+    setSeedActionError(null);
+    setSeedActionResult(null);
+    try {
+      const result = await runConfigSeed(seedKey, true);
+      setSeedActionResult(
+        `${result.seedKey}: ${result.result.seededCount} seeded${result.result.skipped ? " (skipped)" : ""}.`,
+      );
+      await seedRunsQuery.refetch();
+    } catch (err) {
+      setSeedActionError(extractErrorMessage(err));
+    } finally {
+      setSeedActionRunning(null);
+    }
+  };
+
+  const handleMarkSeed = async (seedKey: string) => {
+    const confirmed = window.confirm(`Mark seed ${seedKey} as completed? This will not run the seed.`);
+    if (!confirmed) {
+      return;
+    }
+    setSeedActionRunning(seedKey);
+    setSeedActionError(null);
+    setSeedActionResult(null);
+    try {
+      await markConfigSeedRun(seedKey);
+      setSeedActionResult(`${seedKey} marked as completed.`);
+      await seedRunsQuery.refetch();
+    } catch (err) {
+      setSeedActionError(extractErrorMessage(err));
+    } finally {
+      setSeedActionRunning(null);
+    }
+  };
+
+  const handleToggleSeed = async (seedKey: string) => {
+    if (expandedSeedKey === seedKey) {
+      setExpandedSeedKey(null);
+      return;
+    }
+    setExpandedSeedKey(seedKey);
+    if (seedPreview[seedKey]) {
+      return;
+    }
+    setSeedPreviewLoading(true);
+    setSeedPreviewError(null);
+    try {
+      const result = await fetchSeedPreview(seedKey);
+      setSeedPreview((prev) => ({ ...prev, [seedKey]: result.preview }));
+    } catch (err) {
+      setSeedPreviewError(extractErrorMessage(err));
+    } finally {
+      setSeedPreviewLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (seedCatalog.length === 0 && !seedCatalogError) {
+      fetchSeedCatalog()
+        .then((data) => setSeedCatalog(data))
+        .catch((err) => setSeedCatalogError(extractErrorMessage(err)));
+    }
+  }, [seedCatalog.length, seedCatalogError]);
+
+  const mostRecentSeed = useMemo(() => {
+    if (seedCatalog.length === 0) {
+      return null;
+    }
+    const sorted = [...seedCatalog].sort((a, b) => b.sortOrder - a.sortOrder);
+    return sorted[0] ?? null;
+  }, [seedCatalog]);
 
   return (
     <PageAccessGuard pageSlug={PAGE_SLUG}>
@@ -308,6 +412,177 @@ const SettingsMaintenance = () => {
                       <Table.Td>{formatDateTime(run.createdAt)}</Table.Td>
                     </Table.Tr>
                   ))
+                )}
+              </Table.Tbody>
+            </Table>
+          </Stack>
+        </Card>
+
+        <Card withBorder padding="lg" radius="md">
+          <Stack gap="md">
+            <Stack gap={4}>
+              <Group gap="sm">
+                <IconRefresh size={20} />
+                <Title order={4}>Seeds</Title>
+              </Group>
+              <Text size="sm" c="dimmed">
+                Run pending seeds automatically, or rerun a specific seed to refresh defaults.
+              </Text>
+            </Stack>
+
+            {mostRecentSeed ? (
+              <Alert color="blue" variant="light">
+                <Text size="sm">
+                  Most recent seed (catalog order):{" "}
+                  <Text component="span" fw={600}>
+                    {mostRecentSeed.label}
+                  </Text>{" "}
+                  <Text component="span" c="dimmed">
+                    ({mostRecentSeed.key})
+                  </Text>
+                </Text>
+              </Alert>
+            ) : null}
+
+            {seedCatalogError ? (
+              <Alert color="red" icon={<IconAlertCircle size={16} />}>
+                {seedCatalogError}
+              </Alert>
+            ) : null}
+
+            {seedActionError ? (
+              <Alert color="red" icon={<IconAlertCircle size={16} />}>
+                {seedActionError}
+              </Alert>
+            ) : null}
+
+            {seedActionResult ? (
+              <Alert color="teal" icon={<IconRefresh size={16} />}>
+                {seedActionResult}
+              </Alert>
+            ) : null}
+
+            <Table striped highlightOnHover withTableBorder>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Seed</Table.Th>
+                  <Table.Th>Status</Table.Th>
+                  <Table.Th>Last Run</Table.Th>
+                  <Table.Th>Actions</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {seedCatalog.length === 0 ? (
+                  <Table.Tr>
+                    <Table.Td colSpan={4}>
+                      <Text size="sm" c="dimmed">
+                        Loading seed catalog...
+                      </Text>
+                    </Table.Td>
+                  </Table.Tr>
+                ) : (
+                  seedCatalog.map((seed) => {
+                  const run = seedRunsByKey.get(seed.key);
+                  const status = run ? "Ran" : "Pending";
+                  const preview = seedPreview[seed.key];
+                  const isExpanded = expandedSeedKey === seed.key;
+                  const missingSummary =
+                    preview?.details &&
+                    typeof preview.details === "object" &&
+                    "missing" in preview.details
+                      ? (preview.details as { missing?: { total?: number; items?: unknown[] } }).missing ?? null
+                      : null;
+                  return (
+                    <Fragment key={seed.key}>
+                      <Table.Tr>
+                        <Table.Td>
+                          <Stack gap={2}>
+                            <Text size="sm" fw={500}>
+                              {seed.label}
+                            </Text>
+                            <Text size="xs" c="dimmed">
+                              {seed.key}
+                            </Text>
+                            <Text size="xs" c="dimmed">
+                              {seed.description}
+                            </Text>
+                          </Stack>
+                        </Table.Td>
+                        <Table.Td>
+                          <Badge color={run ? "green" : "gray"} variant="light">
+                            {status}
+                          </Badge>
+                        </Table.Td>
+                        <Table.Td>{run ? formatDateTime(run.createdAt) : "—"}</Table.Td>
+                        <Table.Td>
+                          <Group gap="xs" wrap="nowrap">
+                            <Button
+                              variant="light"
+                              size="xs"
+                              loading={seedActionRunning === seed.key}
+                              onClick={() => handleRunSeed(seed.key)}
+                            >
+                              Rerun
+                            </Button>
+                            <Button
+                              variant="default"
+                              size="xs"
+                              loading={seedActionRunning === seed.key}
+                              onClick={() => handleMarkSeed(seed.key)}
+                            >
+                              Mark done
+                            </Button>
+                            <Button
+                              variant="subtle"
+                              size="xs"
+                              loading={seedPreviewLoading && expandedSeedKey === seed.key}
+                              onClick={() => handleToggleSeed(seed.key)}
+                            >
+                              {isExpanded ? "Hide" : "Preview"}
+                            </Button>
+                          </Group>
+                        </Table.Td>
+                      </Table.Tr>
+                      <Table.Tr>
+                        <Table.Td colSpan={4} style={{ paddingTop: 0 }}>
+                          <Collapse in={isExpanded}>
+                            {seedPreviewError ? (
+                              <Alert color="red" icon={<IconAlertCircle size={16} />}>
+                                {seedPreviewError}
+                              </Alert>
+                            ) : null}
+                            {preview ? (
+                              <Stack gap={6} mt="xs">
+                                <Text size="sm">
+                                  Pending changes: <Text component="span" fw={600}>{preview.pendingCount}</Text>
+                                </Text>
+                                {!preview.supported ? (
+                                  <Text size="xs" c="dimmed">
+                                    Preview not available for this seed.
+                                  </Text>
+                                ) : missingSummary ? (
+                                  <Stack gap={4}>
+                                    <Text size="xs" c="dimmed">
+                                      Showing {missingSummary.items?.length ?? 0} of{" "}
+                                      {missingSummary.total ?? 0} missing entries.
+                                    </Text>
+                                    <Text size="xs" style={{ whiteSpace: "pre-wrap" }}>
+                                      {JSON.stringify(missingSummary.items ?? [], null, 2)}
+                                    </Text>
+                                  </Stack>
+                                ) : (
+                                  <Text size="xs" c="dimmed">
+                                    No preview details available.
+                                  </Text>
+                                )}
+                              </Stack>
+                            ) : null}
+                          </Collapse>
+                        </Table.Td>
+                      </Table.Tr>
+                    </Fragment>
+                  );
+                })
                 )}
               </Table.Tbody>
             </Table>
