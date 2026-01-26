@@ -1105,8 +1105,31 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
+    const normalizedProductId = typeof productId === 'string' ? productId.trim() : '';
+    const numericProductId = normalizedProductId ? Number.parseInt(normalizedProductId, 10) : NaN;
+    const hasNumericProductId = Number.isFinite(numericProductId);
+    const productRecord = hasNumericProductId ? await Product.findByPk(numericProductId) : null;
+    const canonicalProductKey = productRecord
+      ? canonicalizeProductKeyFromLabel(productRecord.name ?? null)
+      : null;
+    const acceptedProductKeys = new Set<string>();
+    if (normalizedProductId) {
+      acceptedProductKeys.add(normalizedProductId);
+    }
+    if (hasNumericProductId) {
+      acceptedProductKeys.add(String(numericProductId));
+    }
+    if (canonicalProductKey) {
+      acceptedProductKeys.add(canonicalProductKey);
+    }
+
     const rows = await Booking.findAll({
-      where: hasSearch ? buildSearchWhere(searchTerm) : { experienceDate: targetDate },
+      where: hasSearch
+        ? buildSearchWhere(searchTerm)
+        : {
+            experienceDate: targetDate,
+            ...(hasNumericProductId ? { productId: numericProductId } : {}),
+          },
       include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
       order: [
         ['experienceStartAt', 'ASC'],
@@ -1125,7 +1148,7 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
     const filteredOrders = hasSearch
       ? scopedOrders
       : scopedOrders.filter((order) => {
-          if (productId && order.productId !== productId) {
+          if (!hasNumericProductId && acceptedProductKeys.size > 0 && !acceptedProductKeys.has(order.productId)) {
             return false;
           }
           if (time && order.timeslot !== time) {

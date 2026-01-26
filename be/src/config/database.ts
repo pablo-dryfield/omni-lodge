@@ -40,6 +40,7 @@ import StaffProfile from "../models/StaffProfile.js";
 import StaffPayoutCollectionLog from "../models/StaffPayoutCollectionLog.js";
 import StaffPayoutLedger from "../models/StaffPayoutLedger.js";
 import ShiftType from "../models/ShiftType.js";
+import ShiftTypeProduct from "../models/ShiftTypeProduct.js";
 import ShiftTemplate from "../models/ShiftTemplate.js";
 import ScheduleWeek from "../models/ScheduleWeek.js";
 import ShiftInstance from "../models/ShiftInstance.js";
@@ -156,6 +157,7 @@ const sequelize = new Sequelize({
     StaffPayoutCollectionLog,
     StaffPayoutLedger,
     ShiftType,
+    ShiftTypeProduct,
     ShiftTemplate,
     ScheduleWeek,
     ShiftInstance,

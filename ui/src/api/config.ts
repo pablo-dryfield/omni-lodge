@@ -95,3 +95,51 @@ export const restoreConfigDefaults = async (
   const response = await axiosInstance.post("/config/seed/restore", { password });
   return response.data as { seededCount: number; seededKeys: string[] };
 };
+
+export const runConfigSeed = async (
+  seedKey: string,
+  force = false,
+): Promise<{ seedKey: string; result: { skipped: boolean; seededCount: number; details?: Record<string, unknown> | null } }> => {
+  const response = await axiosInstance.post("/config/seed/run", { seedKey, force });
+  return response.data as {
+    seedKey: string;
+    result: { skipped: boolean; seededCount: number; details?: Record<string, unknown> | null };
+  };
+};
+
+export type SeedCatalogEntry = {
+  key: string;
+  label: string;
+  description: string;
+  group: string;
+  sortOrder: number;
+};
+
+export const fetchSeedCatalog = async (): Promise<SeedCatalogEntry[]> => {
+  const response = await axiosInstance.get("/config/seed/catalog");
+  return (response.data?.seeds ?? []) as SeedCatalogEntry[];
+};
+
+export const fetchSeedPreview = async (seedKey: string): Promise<{
+  preview: {
+    supported: boolean;
+    seedKey: string;
+    pendingCount: number;
+    details?: Record<string, unknown> | null;
+  };
+}> => {
+  const response = await axiosInstance.get("/config/seed/preview", { params: { seedKey } });
+  return response.data as {
+    preview: {
+      supported: boolean;
+      seedKey: string;
+      pendingCount: number;
+      details?: Record<string, unknown> | null;
+    };
+  };
+};
+
+export const markConfigSeedRun = async (seedKey: string): Promise<{ seedKey: string; status: string }> => {
+  const response = await axiosInstance.post("/config/seed/mark", { seedKey });
+  return response.data as { seedKey: string; status: string };
+};

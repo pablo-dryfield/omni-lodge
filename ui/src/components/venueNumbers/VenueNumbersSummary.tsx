@@ -374,10 +374,14 @@ const VenueNumbersSummary = () => {
           nextCategoryId = "";
         } else if (prev.kind === "receivable") {
           const client = financeClientsById.get(Number(value));
-          nextCategoryId = client?.defaultCategoryId ? String(client.defaultCategoryId) : "";
+          if (client?.defaultCategoryId) {
+            nextCategoryId = String(client.defaultCategoryId);
+          }
         } else if (prev.kind === "payable") {
           const vendor = financeVendorsById.get(Number(value));
-          nextCategoryId = vendor?.defaultCategoryId ? String(vendor.defaultCategoryId) : "";
+          if (vendor?.defaultCategoryId) {
+            nextCategoryId = String(vendor.defaultCategoryId);
+          }
         }
         return { ...prev, counterpartyId: nextId, categoryId: nextCategoryId };
       });

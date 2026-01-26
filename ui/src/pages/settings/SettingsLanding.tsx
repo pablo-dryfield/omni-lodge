@@ -29,6 +29,7 @@ import {
   IconBolt,
   IconSettings,
   IconTools,
+  IconCalendarEvent,
 } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import { useAppSelector } from "../../store/hooks";
@@ -80,6 +81,13 @@ const sections: SettingsSection[] = [
     icon: IconHierarchy3,
     to: "/settings/shift-roles",
     pageSlug: PAGE_SLUGS.settingsShiftRoles,
+  },
+  {
+    label: "Shift Types",
+    description: "Map shift types to products for counters.",
+    icon: IconCalendarEvent,
+    to: "/settings/shift-types",
+    pageSlug: PAGE_SLUGS.settingsShiftTypes,
   },
   {
     label: "User Shift Roles",

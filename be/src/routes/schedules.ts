@@ -11,6 +11,7 @@ import {
   reopenWeek,
   listShiftTemplates,
   listShiftTypes,
+  updateShiftTypeProducts,
   upsertShiftTemplate,
   deleteShiftTemplate,
   listShiftInstances,
@@ -34,6 +35,7 @@ import {
   autoAssignWeek,
   generateShiftInstancesFromTemplates,
   clearShiftInstances,
+  listScheduledStaffForProduct,
 } from '../services/scheduleService.js';
 import ScheduleWeek from '../models/ScheduleWeek.js';
 import type { SwapRequestStatus } from '../models/SwapRequest.js';
@@ -185,6 +187,22 @@ router.get('/shift-types', authMiddleware, requireRoles(MANAGER_ROLES), async (_
   }
 });
 
+router.patch('/shift-types/:id/products', authMiddleware, requireRoles(MANAGER_ROLES), async (req, res) => {
+  try {
+    const shiftTypeId = Number(req.params.id);
+    if (!Number.isFinite(shiftTypeId) || shiftTypeId <= 0) {
+      res.status(400).json({ error: 'Valid shift type id is required.' });
+      return;
+    }
+    const productIds = Array.isArray(req.body?.productIds) ? (req.body.productIds as Array<number | string>) : [];
+    const normalized = productIds.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0);
+    const payload = await updateShiftTypeProducts(shiftTypeId, normalized, getActorId(req));
+    res.json(payload);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
 router.get('/shift-templates', authMiddleware, requireRoles(MANAGER_ROLES), async (_req, res) => {
   try {
     const templates = await listShiftTemplates();
@@ -226,6 +244,21 @@ router.get('/shift-instances', authMiddleware, async (req, res) => {
     const weekId = Number(req.query.weekId);
     const shifts = await listShiftInstances(weekId);
     res.json(shifts);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.get('/shift-assignments/by-date-product', authMiddleware, requireRoles(MANAGER_ROLES), async (req, res) => {
+  try {
+    const date = typeof req.query.date === 'string' ? req.query.date : null;
+    const productId = Number(req.query.productId);
+    if (!date || !productId || !Number.isFinite(productId)) {
+      res.status(400).json({ error: 'date and productId are required.' });
+      return;
+    }
+    const payload = await listScheduledStaffForProduct(date, productId);
+    res.json(payload);
   } catch (error) {
     res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
   }

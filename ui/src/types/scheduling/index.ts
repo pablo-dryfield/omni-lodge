@@ -56,6 +56,7 @@ export interface ShiftType {
   key: string;
   name: string;
   description?: string | null;
+  productIds?: number[];
 }
 
 export interface ShiftAssignment {

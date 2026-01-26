@@ -37,6 +37,7 @@ import SettingsChannels from "../../pages/settings/SettingsChannels";
 import SettingsStaffProfiles from "../../pages/settings/SettingsStaffProfiles";
 import SettingsShiftRoles from "../../pages/settings/SettingsShiftRoles";
 import SettingsUserShiftRoles from "../../pages/settings/SettingsUserShiftRoles";
+import SettingsShiftTypes from "../../pages/settings/SettingsShiftTypes";
 import SettingsSqlHelper from "../../pages/settings/SettingsSqlHelper";
 import SettingsDbBackups from "../../pages/settings/SettingsDbBackups";
 import SettingsHomeExperience from "../../pages/settings/SettingsHomeExperience";
@@ -136,6 +137,7 @@ const Routes = () => {
         <Route path="channels" element={<SettingsChannels />} />
         <Route path="staff-profiles" element={<SettingsStaffProfiles />} />
         <Route path="shift-roles" element={<SettingsShiftRoles />} />
+        <Route path="shift-types" element={<SettingsShiftTypes />} />
         <Route path="user-shift-roles" element={<SettingsUserShiftRoles />} />
         <Route path="review-platforms" element={<SettingsReviewPlatforms />} />
         <Route path="compensation-components" element={<SettingsCompensationComponents />} />

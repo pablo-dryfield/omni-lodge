@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import { Op, type WhereOptions } from 'sequelize';
+import { Op, type Transaction, type WhereOptions } from 'sequelize';
 
 import sequelize from '../config/database.js';
 import Counter, { type CounterStatus } from '../models/Counter.js';
@@ -13,6 +13,11 @@ import ProductAddon from '../models/ProductAddon.js';
 import ChannelProductPrice from '../models/ChannelProductPrice.js';
 import User from '../models/User.js';
 import UserType from '../models/UserType.js';
+import ShiftTypeProduct from '../models/ShiftTypeProduct.js';
+import ShiftInstance from '../models/ShiftInstance.js';
+import ShiftAssignment from '../models/ShiftAssignment.js';
+import ShiftRole from '../models/ShiftRole.js';
+import UserShiftRole from '../models/UserShiftRole.js';
 import HttpError from '../errors/HttpError.js';
 import NightReport from '../models/NightReport.js';
 import { DID_NOT_OPERATE_NOTE } from '../constants/nightReports.js';
@@ -150,6 +155,121 @@ function buildChannelConfigs(
 }
 
 export default class CounterRegistryService {
+  static resolveStaffRoleForUser(
+    userId: number,
+    userShiftRoles: Map<number, Set<number>>,
+    roles: { guideRoleId: number | null; managerRoleId: number | null },
+    fallbackSlug?: string | null,
+  ): CounterStaffRole | null {
+    const roleIds = userShiftRoles.get(userId);
+    if (roleIds) {
+      if (roles.managerRoleId != null && roleIds.has(roles.managerRoleId)) {
+        return 'assistant_manager';
+      }
+      if (roles.guideRoleId != null && roleIds.has(roles.guideRoleId)) {
+        return 'guide';
+      }
+    }
+    if (fallbackSlug) {
+      return this.resolveStaffRole(fallbackSlug);
+    }
+    return null;
+  }
+
+  static async syncScheduleAssignmentsForCounter(
+    params: {
+      date: string;
+      productId: number | null;
+      addedUserIds: number[];
+      removedUserIds: number[];
+      userShiftRoles: Map<number, Set<number>>;
+      roles: { guideRoleId: number | null; managerRoleId: number | null };
+    },
+    transaction: Transaction,
+  ): Promise<void> {
+    const { date, productId, addedUserIds, removedUserIds, userShiftRoles, roles } = params;
+    if (!date || !productId) {
+      return;
+    }
+    if (addedUserIds.length === 0 && removedUserIds.length === 0) {
+      return;
+    }
+
+    const shiftTypeLinks = await ShiftTypeProduct.findAll({
+      where: { productId },
+      transaction,
+    });
+    const shiftTypeIds = shiftTypeLinks.map((link) => link.shiftTypeId);
+    if (shiftTypeIds.length === 0) {
+      return;
+    }
+
+    const instances = await ShiftInstance.findAll({
+      where: { date, shiftTypeId: { [Op.in]: shiftTypeIds } },
+      transaction,
+    });
+    if (instances.length === 0) {
+      return;
+    }
+    const instanceIds = instances.map((instance) => instance.id);
+
+    const relevantUserIds = Array.from(new Set([...addedUserIds, ...removedUserIds]));
+    const existingAssignments = await ShiftAssignment.findAll({
+      where: {
+        shiftInstanceId: { [Op.in]: instanceIds },
+        userId: { [Op.in]: relevantUserIds },
+      },
+      transaction,
+    });
+
+    const assignmentsByInstanceUser = new Map<string, ShiftAssignment>();
+    existingAssignments.forEach((assignment) => {
+      assignmentsByInstanceUser.set(`${assignment.shiftInstanceId}:${assignment.userId}`, assignment);
+    });
+
+    if (removedUserIds.length > 0) {
+      const removedSet = new Set(removedUserIds);
+      const removals = existingAssignments.filter((assignment) => removedSet.has(assignment.userId));
+      for (const assignment of removals) {
+        await assignment.destroy({ transaction });
+      }
+    }
+
+    if (addedUserIds.length > 0) {
+      const addedSet = new Set(addedUserIds);
+      for (const instance of instances) {
+        for (const userId of addedSet) {
+          const key = `${instance.id}:${userId}`;
+          if (assignmentsByInstanceUser.has(key)) {
+            continue;
+          }
+          const roleIds = userShiftRoles.get(userId);
+          let shiftRoleId: number | null = null;
+          let roleInShift = 'Guide';
+          if (roles.managerRoleId != null && roleIds?.has(roles.managerRoleId)) {
+            shiftRoleId = roles.managerRoleId;
+            roleInShift = 'Manager';
+          } else if (roles.guideRoleId != null && roleIds?.has(roles.guideRoleId)) {
+            shiftRoleId = roles.guideRoleId;
+            roleInShift = 'Guide';
+          } else {
+            roleInShift = 'Staff';
+          }
+
+          await ShiftAssignment.create(
+            {
+              shiftInstanceId: instance.id,
+              userId,
+              shiftRoleId,
+              roleInShift,
+            },
+            { transaction },
+          );
+        }
+      }
+    }
+  }
+
   static async findOrCreateCounter(
     params: FindOrCreateParams,
     actorUserId: number,
@@ -330,22 +450,48 @@ export default class CounterRegistryService {
       throw new HttpError(400, 'One or more users not found');
     }
 
+    const shiftRoles = await ShiftRole.findAll({
+      where: {
+        [Op.or]: [
+          { slug: { [Op.in]: ['guide', 'manager'] } },
+          { name: { [Op.in]: ['Guide', 'Manager'] } },
+        ],
+      },
+    });
+    const guideRole = shiftRoles.find((role) => role.slug === 'guide' || role.name === 'Guide') ?? null;
+    const managerRole = shiftRoles.find((role) => role.slug === 'manager' || role.name === 'Manager') ?? null;
+    const roleIds = [guideRole?.id, managerRole?.id].filter((id): id is number => typeof id === 'number');
+    const userShiftRoles = new Map<number, Set<number>>();
+    if (roleIds.length > 0 && uniqueUserIds.length > 0) {
+      const shiftRoleLinks = await UserShiftRole.findAll({
+        where: { userId: { [Op.in]: uniqueUserIds }, shiftRoleId: { [Op.in]: roleIds } },
+      });
+      shiftRoleLinks.forEach((link) => {
+        const set = userShiftRoles.get(link.userId) ?? new Set<number>();
+        set.add(link.shiftRoleId);
+        userShiftRoles.set(link.userId, set);
+      });
+    }
+
     const assignments: Array<{ user: UserWithRole; role: CounterStaffRole }> = users.map((user) => {
-      const roleSlug = getUserRole(user)?.slug ?? '';
-      const role = this.resolveStaffRole(roleSlug);
-      if (!role) {
-        throw new HttpError(
-          400,
-          `User ${user.id} is not eligible for staff assignment`,
-        );
+      const roleSlug = getUserRole(user)?.slug ?? null;
+      const resolvedRole = this.resolveStaffRoleForUser(
+        user.id,
+        userShiftRoles,
+        { guideRoleId: guideRole?.id ?? null, managerRoleId: managerRole?.id ?? null },
+        roleSlug,
+      );
+      if (!resolvedRole) {
+        throw new HttpError(400, `User ${user.id} is not eligible for staff assignment`);
       }
-      return { user, role: role as CounterStaffRole };
+      return { user, role: resolvedRole as CounterStaffRole };
     });
 
     await sequelize.transaction(async (transaction) => {
       const existing = await CounterUser.findAll({ where: { counterId }, transaction });
       const existingMap = new Map<number, CounterUser>();
       existing.forEach((record) => existingMap.set(record.userId, record));
+      const existingUserIds = new Set(existing.map((record) => record.userId));
 
       const handledUserIds = new Set<number>();
 
@@ -377,6 +523,21 @@ export default class CounterRegistryService {
           await record.destroy({ transaction });
         }
       }
+
+      const addedUserIds = uniqueUserIds.filter((id) => !existingUserIds.has(id));
+      const removedUserIds = Array.from(existingUserIds).filter((id) => !uniqueUserIds.includes(id));
+
+      await this.syncScheduleAssignmentsForCounter(
+        {
+          date: counter.date,
+          productId: counter.productId ?? null,
+          addedUserIds,
+          removedUserIds,
+          userShiftRoles,
+          roles: { guideRoleId: guideRole?.id ?? null, managerRoleId: managerRole?.id ?? null },
+        },
+        transaction,
+      );
     });
 
     const refreshed = await this.loadCounterById(counterId);
@@ -680,6 +841,9 @@ export default class CounterRegistryService {
   static resolveStaffRole(slug: string): CounterStaffRole | null {
     if (slug === 'pub-crawl-guide' || slug === 'guide') {
       return 'guide';
+    }
+    if (slug === 'manager') {
+      return 'assistant_manager';
     }
     if (slug === 'assistant-manager') {
       return 'assistant_manager';

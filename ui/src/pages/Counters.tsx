@@ -48,6 +48,8 @@ import { createNightReport, fetchNightReports, submitNightReport, updateNightRep
 import { navigateToPage } from '../actions/navigationActions';
 import { GenericPageProps } from '../types/general/GenericPageProps';
 import { loadCatalog, selectCatalog } from '../store/catalogSlice';
+import { useShiftRoleAssignments, useShiftRoles } from '../api/shiftRoles';
+import { fetchScheduledStaffForProduct } from '../api/scheduling';
 import {
   clearDirtyMetrics,
   clearCounter,
@@ -81,9 +83,18 @@ import {
 import { buildMetricKey } from '../utils/counterMetrics';
 import { DID_NOT_OPERATE_NOTE } from '../constants/nightReports';
 import type { Counter } from '../types/counters/Counter';
+import type { ShiftRole } from '../types/shiftRoles/ShiftRole';
+import type { UserShiftRoleAssignment } from '../types/shiftRoles/UserShiftRoleAssignment';
 import axiosInstance from '../utils/axiosInstance';
 import type { ServerResponse } from '../types/general/ServerResponse';
 import type { NightReport, NightReportSummary } from '../types/nightReports/NightReport';
+import type {
+  BookingStatus,
+  ManifestGroup,
+  ManifestSummary,
+  OrderExtras,
+  UnifiedOrder,
+} from '../store/bookingPlatformsTypes';
 
 const COUNTER_DATE_FORMAT = 'YYYY-MM-DD';
 const WALK_IN_CHANNEL_SLUG = 'walk-in';
@@ -107,6 +118,82 @@ const BUCKETS: BucketDescriptor[] = [
   { tallyType: 'booked', period: 'before_cutoff', label: bucketLabels.before_cutoff },
   { tallyType: 'booked', period: 'after_cutoff', label: bucketLabels.after_cutoff },
 ];
+
+type ManifestResponse = {
+  date: string;
+  manifest: ManifestGroup[];
+  orders: UnifiedOrder[];
+  summary?: ManifestSummary;
+};
+
+type PlatformManifestTotals = {
+  people: number;
+  extras: OrderExtras;
+};
+
+const MANIFEST_ACTIVE_STATUSES = new Set<BookingStatus>([
+  'pending',
+  'confirmed',
+  'rebooked',
+  'completed',
+]);
+const MANIFEST_INCLUDED_STATUSES = new Set<BookingStatus>([...MANIFEST_ACTIVE_STATUSES, 'amended']);
+
+const normalizePlatformLookupKey = (value?: string | null): string => {
+  if (!value) {
+    return '';
+  }
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+};
+
+const buildPlatformTotalsFromOrders = (orders: UnifiedOrder[]): Map<string, PlatformManifestTotals> => {
+  const totals = new Map<string, PlatformManifestTotals>();
+  orders.forEach((order) => {
+    const status = order.status ?? 'unknown';
+    if (!MANIFEST_INCLUDED_STATUSES.has(status)) {
+      return;
+    }
+    const platformKey = normalizePlatformLookupKey(order.platform);
+    if (!platformKey) {
+      return;
+    }
+    const people = Number(order.quantity) || 0;
+    if (people <= 0 && !order.extras) {
+      return;
+    }
+    const entry = totals.get(platformKey) ?? {
+      people: 0,
+      extras: { cocktails: 0, tshirts: 0, photos: 0 },
+    };
+    entry.people += Math.max(0, people);
+    const extras = order.extras ?? { cocktails: 0, tshirts: 0, photos: 0 };
+    entry.extras.cocktails += Math.max(0, Number(extras.cocktails) || 0);
+    entry.extras.tshirts += Math.max(0, Number(extras.tshirts) || 0);
+    entry.extras.photos += Math.max(0, Number(extras.photos) || 0);
+    totals.set(platformKey, entry);
+  });
+  return totals;
+};
+
+const resolveAddonExtraKey = (addon: AddonConfig): keyof OrderExtras | null => {
+  const raw = (addon.key ?? addon.name ?? '').toLowerCase();
+  if (!raw) {
+    return null;
+  }
+  if (raw.includes('non-show') || raw.includes('noshow') || raw.includes('no show')) {
+    return null;
+  }
+  if (raw.includes('cocktail')) {
+    return 'cocktails';
+  }
+  if (raw.includes('t-shirt') || raw.includes('tshirt')) {
+    return 'tshirts';
+  }
+  if (raw.includes('photo')) {
+    return 'photos';
+  }
+  return null;
+};
 
 const WALK_IN_DISCOUNT_OPTIONS = [
   'Normal',
@@ -970,6 +1057,68 @@ const Counters = (props: GenericPageProps) => {
   const isMobileScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const catalog = useAppSelector(selectCatalog);
   const registry = useAppSelector(selectCounterRegistry);
+  const session = useAppSelector((state) => state.session);
+  const shiftRolesQuery = useShiftRoles();
+  const shiftRoleAssignmentsQuery = useShiftRoleAssignments();
+  const shiftRoleRecords = useMemo<ShiftRole[]>(
+    () => (shiftRolesQuery.data?.[0]?.data ?? []) as ShiftRole[],
+    [shiftRolesQuery.data],
+  );
+  const shiftRoleAssignments = useMemo<UserShiftRoleAssignment[]>(
+    () => (shiftRoleAssignmentsQuery.data?.[0]?.data ?? []) as UserShiftRoleAssignment[],
+    [shiftRoleAssignmentsQuery.data],
+  );
+  const managerRoleIdSet = useMemo(() => {
+    const managerIds = new Set<number>();
+    shiftRoleRecords.forEach((role) => {
+      const slug = role.slug?.toLowerCase();
+      const name = role.name?.toLowerCase();
+      if (slug === 'manager' || name === 'manager') {
+        managerIds.add(role.id);
+      }
+    });
+    return managerIds;
+  }, [shiftRoleRecords]);
+  const staffRoleIdSet = useMemo(() => {
+    const staffIds = new Set<number>();
+    shiftRoleRecords.forEach((role) => {
+      const slug = role.slug?.toLowerCase();
+      const name = role.name?.toLowerCase();
+      if (slug === 'guide' || name === 'guide' || slug === 'manager' || name === 'manager') {
+        staffIds.add(role.id);
+      }
+    });
+    return staffIds;
+  }, [shiftRoleRecords]);
+  const managerUserIdSet = useMemo(() => {
+    if (managerRoleIdSet.size === 0) {
+      return new Set<number>();
+    }
+    const users = new Set<number>();
+    shiftRoleAssignments.forEach((assignment) => {
+      if (assignment.roleIds?.some((roleId) => managerRoleIdSet.has(roleId))) {
+        users.add(assignment.userId);
+      }
+    });
+    return users;
+  }, [managerRoleIdSet, shiftRoleAssignments]);
+  const staffUserIdSet = useMemo(() => {
+    if (staffRoleIdSet.size === 0) {
+      return new Set<number>();
+    }
+    const users = new Set<number>();
+    shiftRoleAssignments.forEach((assignment) => {
+      if (assignment.roleIds?.some((roleId) => staffRoleIdSet.has(roleId))) {
+        users.add(assignment.userId);
+      }
+    });
+    return users;
+  }, [shiftRoleAssignments, staffRoleIdSet]);
+  const loggedUserId = session.loggedUserId ?? null;
+  const loggedUserIsManager = useMemo(
+    () => loggedUserId != null && managerUserIdSet.has(loggedUserId),
+    [loggedUserId, managerUserIdSet],
+  );
   const combinedAddonList = useMemo(() => {
     const map = new Map<number, AddonConfig>();
     registry.addons.forEach((addon) => map.set(addon.addonId, addon));
@@ -981,9 +1130,12 @@ const Counters = (props: GenericPageProps) => {
     return Array.from(map.values());
   }, [catalog.addons, registry.addons]);
   const nightReportListState = useAppSelector((state) => state.nightReports.list[0]);
-  const session = useAppSelector((state) => state.session);
   const [selectedDate, setSelectedDate] = useState<Dayjs>(dayjs());
-  const [selectedManagerId, setSelectedManagerId] = useState<number | null>(session.loggedUserId ?? null);
+  const [selectedManagerId, setSelectedManagerId] = useState<number | null>(null);
+  const resolvedManagerId = useMemo(
+    () => selectedManagerId ?? (loggedUserIsManager ? loggedUserId : null),
+    [loggedUserId, loggedUserIsManager, selectedManagerId],
+  );
   const [counterList, setCounterList] = useState<Partial<Counter>[]>([]);
   const [counterListLoading, setCounterListLoading] = useState(false);
   const [counterListError, setCounterListError] = useState<string | null>(null);
@@ -1002,6 +1154,7 @@ const Counters = (props: GenericPageProps) => {
   const lastPersistedStaffIdsRef = useRef<number[]>([]);
   const lastInitializedCounterRef = useRef<string | null>(null);
   const lastWalkInInitRef = useRef<string | null>(null);
+  const scheduledStaffRequestRef = useRef<string | null>(null);
   const [walkInCashByChannel, setWalkInCashByChannel] = useState<Record<number, string>>({});
   const [walkInDiscountsByChannel, setWalkInDiscountsByChannel] = useState<Record<number, string[]>>({});
   const [walkInTicketDataByChannel, setWalkInTicketDataByChannel] = useState<Record<number, WalkInChannelTicketState>>({});
@@ -1024,6 +1177,8 @@ const Counters = (props: GenericPageProps) => {
   const [summaryPreviewOpen, setSummaryPreviewOpen] = useState(false);
   const [summaryPreviewLoading, setSummaryPreviewLoading] = useState(false);
   const [summaryPreviewTitle, setSummaryPreviewTitle] = useState<string>('');
+  const [scheduledStaffIds, setScheduledStaffIds] = useState<number[]>([]);
+  const [scheduledStaffLoading, setScheduledStaffLoading] = useState(false);
   const computeReservationHoldActive = useCallback(() => {
     const now = dayjs();
     const holdStart = now.set('hour', 21).set('minute', 0).set('second', 0).set('millisecond', 0);
@@ -1217,6 +1372,7 @@ const Counters = (props: GenericPageProps) => {
   }, []);
 
   const currentProductId = pendingProductId ?? counterProductId ?? null;
+  const selectedDateString = selectedDate.format(COUNTER_DATE_FORMAT);
 
   const isFinal = counterStatus === 'final';
   const updateCounterStatusSafe = useCallback(
@@ -1236,7 +1392,28 @@ const Counters = (props: GenericPageProps) => {
   );
   const managerOptions = useMemo(() => {
     const map = new Map<number, StaffOption>();
-    catalog.managers.forEach((manager) => map.set(manager.id, manager));
+    const canFilterByShiftRole = shiftRoleAssignmentsQuery.isSuccess && managerRoleIdSet.size > 0;
+    if (canFilterByShiftRole) {
+      shiftRoleAssignments.forEach((assignment) => {
+        if (!assignment.roleIds?.some((roleId) => managerRoleIdSet.has(roleId))) {
+          return;
+        }
+        const fullName = composeName(assignment.firstName, assignment.lastName);
+        map.set(assignment.userId, {
+          id: assignment.userId,
+          firstName: assignment.firstName ?? null,
+          lastName: assignment.lastName ?? null,
+          fullName: fullName || `Manager #${assignment.userId}`,
+          userTypeSlug: null,
+          userTypeName: null,
+        });
+      });
+      catalog.managers.forEach((manager) => {
+        if (managerUserIdSet.has(manager.id)) {
+          map.set(manager.id, manager);
+        }
+      });
+    }
     const counterManager = registry.counter?.counter.manager;
     if (counterManager && !map.has(counterManager.id)) {
       const derivedFullName =
@@ -1253,12 +1430,90 @@ const Counters = (props: GenericPageProps) => {
       });
     }
     return Array.from(map.values());
-  }, [catalog.managers, registry.counter]);
+  }, [
+    catalog.managers,
+    managerRoleIdSet,
+    managerUserIdSet,
+    shiftRoleAssignments,
+    shiftRoleAssignmentsQuery.isSuccess,
+    registry.counter,
+  ]);
+
+  useEffect(() => {
+    if (registry.counter) {
+      return;
+    }
+    if (selectedManagerId != null) {
+      return;
+    }
+    if (shouldPrefillManagerRef.current) {
+      return;
+    }
+    if (!loggedUserIsManager || loggedUserId == null) {
+      return;
+    }
+    setSelectedManagerId(loggedUserId);
+  }, [loggedUserId, loggedUserIsManager, registry.counter, selectedManagerId]);
 
   const counterStaffIds = useMemo(
     () => (registry.counter ? registry.counter.staff.map((member) => member.userId) : []),
     [registry.counter],
   );
+
+  useEffect(() => {
+    if (!isModalOpen) {
+      return;
+    }
+    if (!currentProductId) {
+      setScheduledStaffIds([]);
+      return;
+    }
+    const dateString = selectedDate.format(COUNTER_DATE_FORMAT);
+    const requestKey = `${dateString}|${currentProductId}`;
+    if (scheduledStaffRequestRef.current === requestKey) {
+      return;
+    }
+    scheduledStaffRequestRef.current = requestKey;
+    setScheduledStaffLoading(true);
+    fetchScheduledStaffForProduct({ date: dateString, productId: currentProductId })
+      .then((payload) => {
+        const userIds = Array.isArray(payload.userIds) ? payload.userIds : [];
+        const managerIds = Array.isArray(payload.managerIds) ? payload.managerIds : [];
+        setScheduledStaffIds(userIds);
+        const shouldPrefill =
+          !pendingStaffDirty &&
+          pendingStaffIds.length === 0 &&
+          counterStaffIds.length === 0 &&
+          userIds.length > 0;
+        if (shouldPrefill) {
+          setPendingStaffIds(userIds);
+          setPendingStaffDirty(true);
+        }
+        if (shouldPrefillManagerRef.current) {
+          if (managerIds.length > 0) {
+            setSelectedManagerId(managerIds[0]);
+          } else if (userIds.length > 0) {
+            setSelectedManagerId(userIds[0]);
+          } else {
+            setSelectedManagerId(null);
+          }
+          shouldPrefillManagerRef.current = false;
+        }
+      })
+      .catch(() => {
+        setScheduledStaffIds([]);
+      })
+      .finally(() => {
+        setScheduledStaffLoading(false);
+      });
+  }, [
+    counterStaffIds.length,
+    currentProductId,
+    isModalOpen,
+    pendingStaffDirty,
+    pendingStaffIds.length,
+    selectedDate,
+  ]);
 
   const lastCounterSyncRef = useRef<string | null>(null);
 
@@ -1316,6 +1571,13 @@ const Counters = (props: GenericPageProps) => {
   useEffect(() => {
     if (!isModalOpen) {
       lastInitializedCounterRef.current = null;
+    }
+  }, [isModalOpen]);
+
+  useEffect(() => {
+    if (!isModalOpen) {
+      manifestAppliedRef.current = null;
+      manifestRequestRef.current = null;
     }
   }, [isModalOpen]);
 
@@ -1975,6 +2237,10 @@ const loadCounterById = useCallback(
 
   const appliedPlatformSelectionRef = useRef<number | null>(null);
   const appliedAfterCutoffSelectionRef = useRef<number | null>(null);
+  const manifestRequestRef = useRef<string | null>(null);
+  const manifestAppliedRef = useRef<string | null>(null);
+  const shouldPrefillManagerRef = useRef<boolean>(false);
+  const [manifestSearchRequested, setManifestSearchRequested] = useState(false);
   const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([]);
   const [selectedAfterCutoffChannelIds, setSelectedAfterCutoffChannelIds] = useState<number[]>([]);
 
@@ -2114,6 +2380,18 @@ const loadCounterById = useCallback(
     });
     return Array.from(ids);
   }, [mergedMetrics]);
+
+  const hasBookedBeforeMetrics = useMemo(
+    () =>
+      mergedMetrics.some(
+        (metric) =>
+          (metric.kind === 'people' || metric.kind === 'addon') &&
+          metric.tallyType === 'booked' &&
+          metric.period === 'before_cutoff' &&
+          metric.qty > 0,
+      ),
+    [mergedMetrics],
+  );
 
   const savedAfterCutoffChannelIds = useMemo(() => {
     const ids = new Set<number>();
@@ -3384,7 +3662,7 @@ useEffect(() => {
   }, [counterId, dispatch, handleCloseModal, selectedCounterId]);
 
   const handleAddNewCounter = useCallback(() => {
-    const managerId = selectedManagerId ?? session.loggedUserId;
+    const managerId = resolvedManagerId;
     if (!managerId) {
       setCounterListError('Select a manager before continuing.');
       return;
@@ -3409,8 +3687,7 @@ useEffect(() => {
 
     handleOpenModal('create');
   }, [
-    selectedManagerId,
-    session.loggedUserId,
+    resolvedManagerId,
     catalog.loaded,
     catalog.loading,
     dispatch,
@@ -3516,6 +3793,149 @@ useEffect(() => {
       return changed ? Array.from(merged) : prev;
     });
   }, [autoAfterCutoffChannelIds]);
+
+  useEffect(() => {
+    if (!manifestSearchRequested) {
+      return;
+    }
+    if (!isModalOpen || activeRegistryStep !== 'platforms') {
+      return;
+    }
+    if (!counterId || !currentProductId) {
+      setManifestSearchRequested(false);
+      return;
+    }
+    if (registry.channels.length === 0) {
+      return;
+    }
+    const requestKey = `${counterId}|${selectedDateString}|${currentProductId}`;
+    if (manifestRequestRef.current === requestKey) {
+      return;
+    }
+    manifestRequestRef.current = requestKey;
+    const controller = new AbortController();
+
+    const fetchManifest = async () => {
+      try {
+        const response = await axiosInstance.get<ManifestResponse>('/bookings/manifest', {
+          params: {
+            date: selectedDateString,
+            productId: currentProductId,
+          },
+          signal: controller.signal,
+          withCredentials: true,
+        });
+        const payload = response.data;
+        const orders = Array.isArray(payload?.orders) ? payload.orders : [];
+        const totalsByPlatform = buildPlatformTotalsFromOrders(orders);
+
+        const channelIdByPlatform = new Map<string, number>();
+        registry.channels.forEach((channel) => {
+          const key = normalizePlatformLookupKey(channel.name);
+          if (!key || key === WALK_IN_CHANNEL_SLUG) {
+            return;
+          }
+          channelIdByPlatform.set(key, channel.id);
+        });
+
+        const addonByExtraKey = new Map<keyof OrderExtras, AddonConfig[]>();
+        registry.addons.forEach((addon) => {
+          const extraKey = resolveAddonExtraKey(addon);
+          if (!extraKey) {
+            return;
+          }
+          const list = addonByExtraKey.get(extraKey) ?? [];
+          list.push(addon);
+          addonByExtraKey.set(extraKey, list);
+        });
+
+        const metricsToApply: MetricCell[] = [];
+        totalsByPlatform.forEach((totals, platformKey) => {
+          const channelId = channelIdByPlatform.get(platformKey);
+          if (!channelId) {
+            return;
+          }
+          if (totals.people > 0) {
+            metricsToApply.push({
+              counterId,
+              channelId,
+              kind: 'people',
+              addonId: null,
+              tallyType: 'booked',
+              period: 'before_cutoff',
+              qty: Math.round(totals.people),
+            });
+          }
+
+          (Object.keys(totals.extras) as Array<keyof OrderExtras>).forEach((extraKey) => {
+            const extraQty = Math.max(0, Math.round(Number(totals.extras[extraKey]) || 0));
+            if (extraQty <= 0) {
+              return;
+            }
+            const addonsForKey = addonByExtraKey.get(extraKey) ?? [];
+            addonsForKey.forEach((addon) => {
+              metricsToApply.push({
+                counterId,
+                channelId,
+                kind: 'addon',
+                addonId: addon.addonId,
+                tallyType: 'booked',
+                period: 'before_cutoff',
+                qty: extraQty,
+              });
+            });
+          });
+        });
+
+        metricsToApply.forEach((metric) => {
+          const existing = getMetric(
+            metric.channelId,
+            metric.tallyType,
+            metric.period,
+            metric.kind,
+            metric.addonId,
+          );
+          if (existing && (existing.qty ?? 0) > 0) {
+            return;
+          }
+          dispatch(setMetric(metric));
+        });
+      } catch (error) {
+        const isCanceled =
+          typeof error === 'object' &&
+          error !== null &&
+          ('code' in error || 'name' in error) &&
+          (String((error as { code?: string }).code) === 'ERR_CANCELED' ||
+            String((error as { name?: string }).name) === 'CanceledError');
+        if (!isCanceled) {
+          // eslint-disable-next-line no-console
+          console.error('Failed to fetch manifest data', error);
+        }
+      } finally {
+        if (manifestRequestRef.current === requestKey) {
+          manifestRequestRef.current = null;
+        }
+        setManifestSearchRequested(false);
+      }
+    };
+
+    fetchManifest();
+
+    return () => {
+      controller.abort();
+    };
+  }, [
+    activeRegistryStep,
+    counterId,
+    currentProductId,
+    dispatch,
+    getMetric,
+    isModalOpen,
+    manifestSearchRequested,
+    registry.addons,
+    registry.channels,
+    selectedDateString,
+  ]);
   const shouldHideAfterCutoffChannel = useCallback(
     (channel: ChannelConfig | undefined) => {
       if (!channel) {
@@ -4401,7 +4821,6 @@ useEffect(() => {
       </Stack>
     );
   };
-  const selectedDateString = selectedDate.format(COUNTER_DATE_FORMAT);
   const stepIndex = useMemo(
     () => STEP_CONFIGS.findIndex((step) => step.key === activeRegistryStep),
     [activeRegistryStep],
@@ -4413,7 +4832,7 @@ useEffect(() => {
       return;
     }
 
-    const managerId = selectedManagerId ?? session.loggedUserId;
+    const managerId = resolvedManagerId;
     if (!managerId) {
       setCounterListError('Select a manager before continuing.');
       return;
@@ -4485,8 +4904,7 @@ useEffect(() => {
     catalog.loading,
     registry.loading,
     ensuringCounter,
-    selectedManagerId,
-    session.loggedUserId,
+    resolvedManagerId,
     registry.counter,
     selectedDate,
     dispatch,
@@ -4578,7 +4996,30 @@ useEffect(() => {
 
   const staffOptions = useMemo(() => {
     const map = new Map<number, StaffOption>();
-    catalog.staff.forEach((staff) => map.set(staff.id, staff));
+    const canFilterByShiftRole = shiftRoleAssignmentsQuery.isSuccess && staffRoleIdSet.size > 0;
+    if (canFilterByShiftRole) {
+      shiftRoleAssignments.forEach((assignment) => {
+        if (!assignment.roleIds?.some((roleId) => staffRoleIdSet.has(roleId))) {
+          return;
+        }
+        const fullName = composeName(assignment.firstName, assignment.lastName);
+        map.set(assignment.userId, {
+          id: assignment.userId,
+          firstName: assignment.firstName ?? null,
+          lastName: assignment.lastName ?? null,
+          fullName: fullName || `Staff #${assignment.userId}`,
+          userTypeSlug: null,
+          userTypeName: null,
+        });
+      });
+      catalog.staff.forEach((staff) => {
+        if (staffUserIdSet.has(staff.id)) {
+          map.set(staff.id, staff);
+        }
+      });
+    } else if (!shiftRoleAssignmentsQuery.isSuccess) {
+      catalog.staff.forEach((staff) => map.set(staff.id, staff));
+    }
     registry.counter?.staff.forEach((member) => {
       if (!map.has(member.userId)) {
         const { firstName, lastName } = extractNameParts(member.name);
@@ -4593,7 +5034,14 @@ useEffect(() => {
       }
     });
     return Array.from(map.values());
-  }, [catalog.staff, registry.counter]);
+  }, [
+    catalog.staff,
+    shiftRoleAssignments,
+    shiftRoleAssignmentsQuery.isSuccess,
+    staffRoleIdSet,
+    staffUserIdSet,
+    registry.counter,
+  ]);
   const managerValue: StaffOption | null = useMemo(
     () => managerOptions.find((option) => option.id === selectedManagerId) ?? null,
     [managerOptions, selectedManagerId],
@@ -5516,7 +5964,7 @@ useEffect(() => {
             value={managerValue}
             onChange={handleManagerSelection}
             getOptionLabel={buildDisplayName}
-            loading={catalog.loading}
+            loading={catalog.loading || shiftRolesQuery.isLoading || shiftRoleAssignmentsQuery.isLoading}
             renderInput={(params) => (
               <TextField {...params} label="Manager" placeholder="Select manager" />
             )}
@@ -5546,6 +5994,7 @@ useEffect(() => {
             multiple
             options={staffOptions}
             disabled={registry.savingStaff || ensuringCounter}
+            loading={scheduledStaffLoading}
             value={staffOptions.filter((option) => effectiveStaffIds.includes(option.id))}
             getOptionLabel={buildDisplayName}
             onChange={handleStaffSelection}
@@ -5586,6 +6035,19 @@ useEffect(() => {
       <Stack spacing={3}>
         <Stack spacing={2}>
           <Typography variant="subtitle1">Select the platforms to include in this counter.</Typography>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => setManifestSearchRequested(true)}
+              disabled={registry.loading || registry.savingMetrics || confirmingMetrics || !currentProductId}
+            >
+              Automatic Search
+            </Button>
+            <Typography variant="caption" color="text.secondary">
+              Pulls bookings manifest data to prefill platform quantities.
+            </Typography>
+          </Stack>
           <ToggleButtonGroup
             value={effectiveSelectedChannelIds}
             onChange={handleChannelSelection}
@@ -6485,9 +6947,14 @@ type SummaryRowOptions = {
     if (!value) {
       return;
     }
+    shouldPrefillManagerRef.current = true;
     setSelectedDate(value);
+    setSelectedManagerId(null);
     setPendingProductId(null);
     setPendingStaffIds([]);
+    setPendingStaffDirty(false);
+    manifestAppliedRef.current = null;
+    manifestRequestRef.current = null;
     fetchCounterRequestRef.current = null;
     dispatch(clearDirtyMetrics());
   };
@@ -6501,6 +6968,7 @@ type SummaryRowOptions = {
     }
     setCounterListError(null);
     setSelectedManagerId(option.id);
+    shouldPrefillManagerRef.current = false;
     fetchCounterRequestRef.current = null;
   };
   const handleStaffSelection = (_event: SyntheticEvent, values: StaffOption[]) => {
@@ -6511,7 +6979,13 @@ type SummaryRowOptions = {
   const handleProductSelection = useCallback(
     (_event: SyntheticEvent, option: CatalogProduct | null) => {
       const nextProductId = option?.id ?? null;
+      shouldPrefillManagerRef.current = true;
       setPendingProductId(nextProductId);
+      setSelectedManagerId(null);
+      setPendingStaffIds([]);
+      setPendingStaffDirty(false);
+      manifestAppliedRef.current = null;
+      manifestRequestRef.current = null;
     },
     [setPendingProductId],
   );

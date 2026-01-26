@@ -47,6 +47,7 @@ import StaffProfile from './StaffProfile.js';
 import StaffPayoutCollectionLog from './StaffPayoutCollectionLog.js';
 import StaffPayoutLedger from './StaffPayoutLedger.js';
 import ShiftType from './ShiftType.js';
+import ShiftTypeProduct from './ShiftTypeProduct.js';
 import ShiftTemplate from './ShiftTemplate.js';
 import ScheduleWeek from './ScheduleWeek.js';
 import ShiftInstance from './ShiftInstance.js';
@@ -155,6 +156,12 @@ export function defineAssociations() {
   Product.belongsTo(ProductType, { foreignKey: 'productTypeId' });
   Product.belongsTo(User, { foreignKey: 'createdBy' });
   Product.belongsTo(User, { foreignKey: 'updatedBy' });
+  Product.belongsToMany(ShiftType, {
+    through: ShiftTypeProduct,
+    as: 'shiftTypes',
+    foreignKey: 'product_id',
+    otherKey: 'shift_type_id',
+  });
 
 
   // ProductType Associations
@@ -255,6 +262,12 @@ export function defineAssociations() {
   FinanceCategory.hasMany(FinanceClient, { foreignKey: 'defaultCategoryId', as: 'clients' });
 
   // Scheduling associations are defined via model decorators
+  ShiftType.belongsToMany(Product, {
+    through: ShiftTypeProduct,
+    as: 'products',
+    foreignKey: 'shift_type_id',
+    otherKey: 'product_id',
+  });
 
   // Config associations
   ConfigKey.hasOne(ConfigValue, { foreignKey: 'key', as: 'currentValue' });
