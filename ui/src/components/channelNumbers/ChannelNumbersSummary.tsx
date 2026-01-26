@@ -27,6 +27,7 @@ import { useMediaQuery } from '@mantine/hooks';
 import { DatePickerInput } from '@mantine/dates';
 import { IconAlertCircle, IconChartBar, IconInfoCircle } from '@tabler/icons-react';
 import dayjs from 'dayjs';
+import { useSearchParams } from 'react-router-dom';
 
 import {
   fetchChannelNumbersSummary,
@@ -53,6 +54,9 @@ const DATE_FORMAT = 'YYYY-MM-DD';
 const MAIN_PRODUCT_TYPE_SLUG = 'main product';
 const MAIN_PRODUCT_LABEL = 'Main Product';
 const ACTIVITY_PRODUCT_LABEL = 'Activities';
+const START_DATE_PARAM = 'startDate';
+const END_DATE_PARAM = 'endDate';
+const LEGACY_CUTOFF_DATE = '2025-10-01';
 
 const DETAIL_METRIC_META: Record<
   ChannelNumbersDetailMetric,
@@ -160,14 +164,30 @@ const ChannelNumbersSummary = () => {
   useFinanceBootstrap();
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
+  const [searchParams, setSearchParams] = useSearchParams();
   const accountsState = useAppSelector(selectFinanceAccounts);
   const categoriesState = useAppSelector(selectFinanceCategories);
   const clientsState = useAppSelector(selectFinanceClients);
-  const [preset, setPreset] = useState<Preset>('thisMonth');
-  const [range, setRange] = useState<[Date | null, Date | null]>([
-    dayjs().startOf('month').toDate(),
-    dayjs().endOf('month').toDate(),
-  ]);
+  const initialRange = useMemo<[Date | null, Date | null]>(() => {
+    const startParam = searchParams.get(START_DATE_PARAM);
+    const endParam = searchParams.get(END_DATE_PARAM);
+    const parsedStart = startParam ? dayjs(startParam, DATE_FORMAT, true) : null;
+    const parsedEnd = endParam ? dayjs(endParam, DATE_FORMAT, true) : null;
+    if (parsedStart?.isValid() && parsedEnd?.isValid()) {
+      return [parsedStart.toDate(), parsedEnd.toDate()];
+    }
+    return [dayjs().startOf('month').toDate(), dayjs().endOf('month').toDate()];
+  }, [searchParams]);
+  const initialPreset = useMemo<Preset>(() => {
+    const startParam = searchParams.get(START_DATE_PARAM);
+    const endParam = searchParams.get(END_DATE_PARAM);
+    if (startParam && endParam) {
+      return 'custom';
+    }
+    return 'thisMonth';
+  }, [searchParams]);
+  const [preset, setPreset] = useState<Preset>(initialPreset);
+  const [range, setRange] = useState<[Date | null, Date | null]>(initialRange);
   const [summary, setSummary] = useState<ChannelNumbersSummaryType | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -255,6 +275,24 @@ const ChannelNumbersSummary = () => {
       isMounted = false;
     };
   }, [fetchSummary]);
+
+  useEffect(() => {
+    const [start, end] = range;
+    if (!start || !end) {
+      return;
+    }
+    const startValue = dayjs(start).format(DATE_FORMAT);
+    const endValue = dayjs(end).format(DATE_FORMAT);
+    const currentStart = searchParams.get(START_DATE_PARAM);
+    const currentEnd = searchParams.get(END_DATE_PARAM);
+    if (currentStart === startValue && currentEnd === endValue) {
+      return;
+    }
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set(START_DATE_PARAM, startValue);
+    nextParams.set(END_DATE_PARAM, endValue);
+    setSearchParams(nextParams, { replace: true });
+  }, [range, searchParams, setSearchParams]);
 
   const productTypeGroups = useMemo<ProductTypeGroup[]>(() => {
     if (!summary) {
@@ -434,9 +472,35 @@ const ChannelNumbersSummary = () => {
   );
 
   const cashSummary = summary?.cashSummary;
-  const cashRows = cashSummary?.channels ?? [];
+  const isLegacyRange = useMemo(() => {
+    if (!summary?.endDate) {
+      return false;
+    }
+    return dayjs(summary.endDate).isBefore(LEGACY_CUTOFF_DATE, 'day');
+  }, [summary?.endDate]);
+  const cashRows = useMemo(() => {
+    const rows = cashSummary?.channels ?? [];
+    if (!isLegacyRange) {
+      return rows;
+    }
+    return rows.map((row) => ({
+      ...row,
+      collectedAmount: row.dueAmount,
+      outstandingAmount: 0,
+    }));
+  }, [cashSummary?.channels, isLegacyRange]);
   const cashEntries = cashSummary?.entries ?? [];
-  const cashTotals = cashSummary?.totals ?? [];
+  const cashTotals = useMemo(() => {
+    const totals = cashSummary?.totals ?? [];
+    if (!isLegacyRange) {
+      return totals;
+    }
+    return totals.map((total) => ({
+      ...total,
+      collectedAmount: total.dueAmount,
+      outstandingAmount: 0,
+    }));
+  }, [cashSummary?.totals, isLegacyRange]);
   const cashRangeIsCanonical = cashSummary?.rangeIsCanonical ?? false;
 
   const numberFormatter = useMemo(
@@ -850,7 +914,7 @@ const ChannelNumbersSummary = () => {
                         <tbody>
                           {cashRows.map((row) => {
                             const key = `${row.channelId}-${row.currency}`;
-                            const canCollect = cashRangeIsCanonical && row.outstandingAmount > 0;
+                            const canCollect = !isLegacyRange && cashRangeIsCanonical && row.outstandingAmount > 0;
                             return (
                               <tr key={key}>
                                 <td>
