@@ -378,12 +378,36 @@ const ChannelNumbersSummary = () => {
       });
     }
 
+    const prioritizedTypes = new Map<string, number>([
+      [MAIN_PRODUCT_TYPE_SLUG, 0],
+      [normalizeTypeName(ACTIVITY_PRODUCT_LABEL), 1],
+    ]);
+
+    const prioritizeMainProduct = (group: ProductTypeGroup) =>
+      group.products.sort((a, b) => {
+        if (group.slug === MAIN_PRODUCT_TYPE_SLUG) {
+          const aIsPub = a.name.toLowerCase() === 'pub crawl';
+          const bIsPub = b.name.toLowerCase() === 'pub crawl';
+          if (aIsPub || bIsPub) {
+            return Number(bIsPub) - Number(aIsPub);
+          }
+        }
+        return a.name.localeCompare(b.name);
+      });
+
     return Array.from(groups.values())
       .map((group) => ({
         ...group,
-        products: group.products.sort((a, b) => a.name.localeCompare(b.name)),
+        products: prioritizeMainProduct(group),
       }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => {
+        const aPriority = prioritizedTypes.get(a.slug);
+        const bPriority = prioritizedTypes.get(b.slug);
+        if (aPriority != null || bPriority != null) {
+          return (aPriority ?? Number.MAX_SAFE_INTEGER) - (bPriority ?? Number.MAX_SAFE_INTEGER);
+        }
+        return a.name.localeCompare(b.name);
+      });
   }, [summary]);
 
   const selectableProductTypes = useMemo(() => {
