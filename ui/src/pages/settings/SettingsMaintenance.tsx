@@ -12,12 +12,18 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-import { IconAlertCircle, IconDatabase, IconRefresh, IconSettings } from "@tabler/icons-react";
+import { IconAlertCircle, IconDatabase, IconRefresh, IconSettings, IconTerminal2 } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
 import { restoreConfigDefaults } from "../../api/config";
-import { useConfigSeedRuns, useMigrationAuditRuns } from "../../api/maintenance";
+import {
+  runMaintenanceCommand,
+  useConfigSeedRuns,
+  useMigrationAuditRuns,
+  type MaintenanceCommandAction,
+  type MaintenanceCommandResult,
+} from "../../api/maintenance";
 
 const PAGE_SLUG = PAGE_SLUGS.settingsMaintenance;
 
@@ -82,6 +88,9 @@ const SettingsMaintenance = () => {
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [restoreResult, setRestoreResult] = useState<{ seededCount: number; seededKeys: string[] } | null>(null);
   const [restoreLoading, setRestoreLoading] = useState(false);
+  const [commandRunning, setCommandRunning] = useState<MaintenanceCommandAction | null>(null);
+  const [commandResult, setCommandResult] = useState<MaintenanceCommandResult | null>(null);
+  const [commandError, setCommandError] = useState<string | null>(null);
 
   const seedRuns = useMemo(() => seedRunsQuery.data ?? [], [seedRunsQuery.data]);
   const migrationRuns = useMemo(() => migrationRunsQuery.data ?? [], [migrationRunsQuery.data]);
@@ -103,6 +112,20 @@ const SettingsMaintenance = () => {
       setRestoreError(extractErrorMessage(err));
     } finally {
       setRestoreLoading(false);
+    }
+  };
+
+  const handleRunCommand = async (action: MaintenanceCommandAction) => {
+    setCommandRunning(action);
+    setCommandError(null);
+    setCommandResult(null);
+    try {
+      const result = await runMaintenanceCommand(action);
+      setCommandResult(result);
+    } catch (err) {
+      setCommandError(extractErrorMessage(err));
+    } finally {
+      setCommandRunning(null);
     }
   };
 
@@ -130,6 +153,73 @@ const SettingsMaintenance = () => {
             <Text size="sm" c="dimmed">
               Update runtime configuration values and manage secrets for the platform.
             </Text>
+          </Stack>
+        </Card>
+
+        <Card withBorder padding="lg" radius="md">
+          <Stack gap="md">
+            <Stack gap={4}>
+              <Group gap="sm">
+                <IconTerminal2 size={20} />
+                <Title order={4}>Maintenance Commands</Title>
+              </Group>
+              <Text size="sm" c="dimmed">
+                Run routine maintenance scripts from the server. These commands execute on the host running the API.
+              </Text>
+            </Stack>
+
+            <Group align="flex-start" wrap="wrap">
+              <Button
+                variant="light"
+                leftSection={<IconRefresh size={16} />}
+                loading={commandRunning === "git-pull"}
+                onClick={() => handleRunCommand("git-pull")}
+              >
+                Git Pull (master)
+              </Button>
+              <Button
+                variant="light"
+                leftSection={<IconDatabase size={16} />}
+                loading={commandRunning === "migrate-prod"}
+                onClick={() => handleRunCommand("migrate-prod")}
+              >
+                Run Migrate (prod)
+              </Button>
+              <Button
+                variant="light"
+                leftSection={<IconSettings size={16} />}
+                loading={commandRunning === "sync-access-control-prod"}
+                onClick={() => handleRunCommand("sync-access-control-prod")}
+              >
+                Sync Access Control (prod)
+              </Button>
+            </Group>
+
+            {commandError ? (
+              <Alert color="red" icon={<IconAlertCircle size={16} />}>
+                {commandError}
+              </Alert>
+            ) : null}
+
+            {commandResult ? (
+              <Alert color={commandResult.status === "success" ? "teal" : "red"}>
+                <Stack gap={6}>
+                  <Text size="sm">
+                    {commandResult.action} {commandResult.status} (exit {commandResult.exitCode ?? "n/a"})
+                  </Text>
+                  {commandResult.stdout ? (
+                    <Text size="xs" style={{ whiteSpace: "pre-wrap" }}>
+                      {commandResult.stdout}
+                    </Text>
+                  ) : null}
+                  {commandResult.stderr ? (
+                    <Text size="xs" c="red" style={{ whiteSpace: "pre-wrap" }}>
+                      {commandResult.stderr}
+                    </Text>
+                  ) : null}
+                </Stack>
+              </Alert>
+            ) : null}
           </Stack>
         </Card>
 

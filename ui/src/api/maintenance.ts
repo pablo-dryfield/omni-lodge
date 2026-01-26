@@ -44,3 +44,23 @@ export const useMigrationAuditRuns = (limit = 5) =>
       return (response.data?.runs ?? []) as MigrationAuditRun[];
     },
   });
+
+export type MaintenanceCommandAction = 'git-pull' | 'migrate-prod' | 'sync-access-control-prod';
+
+export type MaintenanceCommandResult = {
+  action: MaintenanceCommandAction;
+  status: 'success' | 'failed';
+  exitCode: number | null;
+  command: string;
+  args: string[];
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+};
+
+export const runMaintenanceCommand = async (
+  action: MaintenanceCommandAction,
+): Promise<MaintenanceCommandResult> => {
+  const response = await axiosInstance.post('/maintenance/commands', { action });
+  return response.data?.result as MaintenanceCommandResult;
+};

@@ -3,6 +3,7 @@ import { Op, fn, col } from 'sequelize';
 
 import CounterChannelMetric from '../models/CounterChannelMetric.js';
 import Counter from '../models/Counter.js';
+import CounterProduct from '../models/CounterProduct.js';
 import Channel from '../models/Channel.js';
 import PaymentMethod from '../models/PaymentMethod.js';
 import Addon from '../models/Addon.js';
@@ -41,6 +42,15 @@ const CASH_SNAPSHOT_END = '-- CASH-SNAPSHOT END --';
 const FREE_SNAPSHOT_START = '-- FREE-SNAPSHOT START --';
 const FREE_SNAPSHOT_END = '-- FREE-SNAPSHOT END --';
 const WALK_IN_CHANNEL_SLUG = 'walk-in';
+const LEGACY_COUNTER_START = dayjs('2025-10-01');
+
+type LegacyCounterProductRow = {
+  counterId: number;
+  productId: number;
+  quantity: number;
+  total: number;
+  productName: string | null;
+};
 
 type CashSnapshotTicketCurrency = {
   currency: string;
@@ -140,6 +150,200 @@ const isCashCurrency = (value: unknown): value is string =>
 
 const sanitizeCurrency = (value: string | null | undefined): string =>
   (value ?? 'PLN').trim().toUpperCase().slice(0, 3) || 'PLN';
+
+const toChannelSlug = (value: string): string =>
+  value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+const isLegacyCounterDate = (value: string): boolean =>
+  dayjs(value).isBefore(LEGACY_COUNTER_START, 'day');
+
+const isLegacyCocktailProduct = (name: string): boolean =>
+  name.toLowerCase().includes('cocktail');
+
+const isLegacyCashProduct = (name: string): boolean =>
+  name.toLowerCase().includes('cash');
+
+const resolveLegacyChannelSlug = (productName: string): string => {
+  const normalized = productName.toLowerCase();
+  if (normalized.includes('fareharbor')) return toChannelSlug('Fareharbor');
+  if (normalized.includes('viator')) return toChannelSlug('Viator');
+  if (normalized.includes('getyourguide')) return toChannelSlug('GetYourGuide');
+  if (normalized.includes('ecwid')) return toChannelSlug('Ecwid');
+  if (normalized.includes('topdeck')) return toChannelSlug('TopDeck');
+  if (normalized.includes('atlantis')) return toChannelSlug('Hostel Atlantis');
+  if (normalized.includes('xperience')) return toChannelSlug('XperiencePoland');
+  if (normalized.includes('free tour')) return toChannelSlug('FreeTour');
+  if (normalized.includes('airbnb')) return toChannelSlug('Airbnb');
+  if (normalized.includes('walk-in') || normalized.includes('walk in')) return toChannelSlug('Walk-In');
+  return toChannelSlug('Walk-In');
+};
+
+const buildLegacyTicketSummaryMap = (params: {
+  rows: LegacyCounterProductRow[];
+  channelIdBySlug: Map<string, number>;
+}): Map<string, string> => {
+  const { rows, channelIdBySlug } = params;
+  const grouped = new Map<string, string[]>();
+
+  rows.forEach((row) => {
+    const productName = row.productName ?? '';
+    if (!isLegacyCashProduct(productName)) {
+      return;
+    }
+    const total = Number(row.total) || 0;
+    if (total <= 0) {
+      return;
+    }
+    const channelSlug = resolveLegacyChannelSlug(productName);
+    const channelId = channelIdBySlug.get(channelSlug) ?? channelIdBySlug.get(toChannelSlug('Walk-In'));
+    if (!channelId) {
+      return;
+    }
+    const key = `${row.counterId}|${channelId}`;
+    const qty = Math.max(0, Number(row.quantity) || 0);
+    const formattedAmount = total.toFixed(2);
+    const labelBase = productName.trim() || 'Walk-In';
+    const entry =
+      qty > 0
+        ? `${labelBase}: ${qty} (PLN ${formattedAmount})`
+        : `${labelBase}: PLN ${formattedAmount}`;
+    const bucket = grouped.get(key) ?? [];
+    bucket.push(entry);
+    grouped.set(key, bucket);
+  });
+
+  const summary = new Map<string, string>();
+  grouped.forEach((entries, key) => {
+    summary.set(key, entries.join(' | '));
+  });
+
+  return summary;
+};
+
+const buildLegacyMetrics = (params: {
+  rows: LegacyCounterProductRow[];
+  channelIdBySlug: Map<string, number>;
+  cocktailsAddonId: number | null;
+}): MetricCell[] => {
+  const { rows, channelIdBySlug, cocktailsAddonId } = params;
+  const buckets = new Map<
+    string,
+    {
+      counterId: number;
+      channelId: number;
+      peopleQty: number;
+      cocktailsQty: number;
+      cashAmount: number;
+    }
+  >();
+
+  rows.forEach((row) => {
+    const qty = Math.max(0, Number(row.quantity) || 0);
+    if (qty === 0) {
+      return;
+    }
+    const productName = row.productName ?? '';
+    const channelSlug = resolveLegacyChannelSlug(productName);
+    const channelId = channelIdBySlug.get(channelSlug) ?? channelIdBySlug.get(toChannelSlug('Walk-In'));
+    if (!channelId) {
+      return;
+    }
+    const key = `${row.counterId}|${channelId}`;
+    const bucket =
+      buckets.get(key) ??
+      {
+        counterId: row.counterId,
+        channelId,
+        peopleQty: 0,
+        cocktailsQty: 0,
+        cashAmount: 0,
+      };
+    if (!buckets.has(key)) {
+      buckets.set(key, bucket);
+    }
+
+    if (isLegacyCocktailProduct(productName)) {
+      bucket.cocktailsQty += qty;
+    } else {
+      bucket.peopleQty += qty;
+    }
+
+    const total = Number(row.total) || 0;
+    if (total > 0 && isLegacyCashProduct(productName)) {
+      bucket.cashAmount += total;
+    }
+  });
+
+  const metrics: MetricCell[] = [];
+  const pushMetricPair = (entry: {
+    counterId: number;
+    channelId: number;
+    kind: MetricKind;
+    addonId: number | null;
+    qty: number;
+  }) => {
+    const qty = Math.max(0, Number(entry.qty) || 0);
+    if (qty === 0) {
+      return;
+    }
+    metrics.push({
+      counterId: entry.counterId,
+      channelId: entry.channelId,
+      kind: entry.kind,
+      addonId: entry.addonId,
+      tallyType: 'booked',
+      period: 'before_cutoff',
+      qty,
+    });
+    metrics.push({
+      counterId: entry.counterId,
+      channelId: entry.channelId,
+      kind: entry.kind,
+      addonId: entry.addonId,
+      tallyType: 'attended',
+      period: null,
+      qty,
+    });
+  };
+
+  buckets.forEach((bucket) => {
+    let peopleQty = bucket.peopleQty;
+    if (bucket.cocktailsQty > 0 && peopleQty === 0) {
+      peopleQty = bucket.cocktailsQty;
+    }
+    if (peopleQty > 0) {
+      pushMetricPair({
+        counterId: bucket.counterId,
+        channelId: bucket.channelId,
+        kind: 'people',
+        addonId: null,
+        qty: peopleQty,
+      });
+    }
+    if (bucket.cocktailsQty > 0 && cocktailsAddonId != null) {
+      pushMetricPair({
+        counterId: bucket.counterId,
+        channelId: bucket.channelId,
+        kind: 'addon',
+        addonId: cocktailsAddonId,
+        qty: bucket.cocktailsQty,
+      });
+    }
+    if (bucket.cashAmount > 0) {
+      metrics.push({
+        counterId: bucket.counterId,
+        channelId: bucket.channelId,
+        kind: 'cash_payment',
+        addonId: null,
+        tallyType: 'attended',
+        period: null,
+        qty: Math.max(0, bucket.cashAmount),
+      });
+    }
+  });
+
+  return metrics;
+};
 
 const extractCashSnapshotMap = (note: string | null | undefined): Map<number, CashSnapshotEntry> => {
   const entries = new Map<number, CashSnapshotEntry>();
@@ -366,11 +570,12 @@ async function buildChannelCashSummary(params: {
   counters: Array<{ id: number; date: string; notes: string | null }>;
   metrics: MetricCell[];
   channels: ChannelConfig[];
+  legacyTicketSummaries?: Map<string, string>;
   startIso: string;
   endIso: string;
   rangeIsCanonical: boolean;
 }): Promise<ChannelCashSummary> {
-  const { counters, metrics, channels, startIso, endIso, rangeIsCanonical } = params;
+  const { counters, metrics, channels, legacyTicketSummaries, startIso, endIso, rangeIsCanonical } = params;
 
   const channelLookup = new Map<number, ChannelConfig>();
   channels.forEach((channel) => channelLookup.set(channel.id, channel));
@@ -489,7 +694,7 @@ async function buildChannelCashSummary(params: {
       channelName: channel.name,
       counterId: counter.id,
       counterDate: counter.date,
-      ticketSummary: null,
+      ticketSummary: legacyTicketSummaries?.get(key) ?? null,
       note: stripSnapshotFromNote(counter.notes),
       amounts: [{ currency: 'PLN', amount: normalizedAmount }],
     });
@@ -897,7 +1102,7 @@ export async function getChannelNumbersSummary(params: {
     return counter.id;
   });
 
-  const [channelRows, addonRows, rawProductAddons] = await Promise.all([
+  const [channelRows, addonRows, rawProductAddons, productNameRows] = await Promise.all([
     Channel.findAll({
       include: [{ model: PaymentMethod, as: 'paymentMethod' }],
     }),
@@ -913,19 +1118,45 @@ export async function getChannelNumbersSummary(params: {
         },
       ],
     }),
+    Product.findAll({
+      attributes: ['id', 'name'],
+      raw: true,
+    }),
   ]);
 
   const productAddonRows = rawProductAddons as Array<
     ProductAddon & { product?: (Product & { ProductType?: ProductType | null }) | null }
   >;
+  const productNameById = new Map<number, string>();
+  (productNameRows as Array<{ id: number; name: string }>).forEach((row) => {
+    productNameById.set(row.id, row.name);
+  });
 
   const channelConfigs: ChannelConfig[] = buildChannelConfigs(channelRows);
   const { configs: addonConfigs, meta: addonMeta } = buildAddonConfigs(addonRows, productAddonRows, null);
+  const channelIdBySlug = new Map<string, number>();
+  channelConfigs.forEach((channel) => channelIdBySlug.set(toChannelSlug(channel.name), channel.id));
+  const cocktailsAddonId =
+    addonRows.find((addon) => addon.name.toLowerCase() === 'cocktails')?.id ?? null;
   const { productTypes, products } = await loadActiveProducts(end, addonMeta);
+  const legacyProductId =
+    products.find((product) => product.name.toLowerCase() === 'pub crawl')?.id ?? null;
   const productMap = new Map<number, ChannelNumbersProduct>();
   products.forEach((product) => productMap.set(product.id, product));
   const buildProductList = () =>
     Array.from(productMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+  if (legacyProductId != null) {
+    counterMeta.forEach((entry) => {
+      if (!isLegacyCounterDate(entry.date)) {
+        return;
+      }
+      const current = counterProductLookup.get(entry.id) ?? null;
+      if (current == null) {
+        counterProductLookup.set(entry.id, legacyProductId);
+      }
+    });
+  }
 
   if (counterIds.length === 0) {
     const productList = buildProductList();
@@ -970,13 +1201,55 @@ export async function getChannelNumbersSummary(params: {
     };
   }
 
-  const metricRows = await CounterChannelMetric.findAll({
-    where: { counterId: { [Op.in]: counterIds } },
-    attributes: ['id', 'counterId', 'channelId', 'kind', 'addonId', 'tallyType', 'period', 'qty'],
-  });
+  const legacyCounterIds = counterMeta.filter((row) => isLegacyCounterDate(row.date)).map((row) => row.id);
+  const legacyCounterSet = new Set(legacyCounterIds);
+  const newCounterIds = counterIds.filter((id) => !legacyCounterSet.has(id));
+
+  const metricRows =
+    newCounterIds.length > 0
+      ? await CounterChannelMetric.findAll({
+          where: { counterId: { [Op.in]: newCounterIds } },
+          attributes: ['id', 'counterId', 'channelId', 'kind', 'addonId', 'tallyType', 'period', 'qty'],
+        })
+      : [];
+
+  const legacyRows =
+    legacyCounterIds.length > 0
+      ? ((await CounterProduct.findAll({
+          where: { counterId: { [Op.in]: legacyCounterIds } },
+          attributes: ['counterId', 'productId', 'quantity', 'total'],
+          raw: true,
+        })) as Array<{ counterId: number; productId: number; quantity: number; total: number }>).map((row) => ({
+          counterId: row.counterId,
+          productId: row.productId,
+          quantity: row.quantity,
+          total: row.total,
+          productName: productNameById.get(row.productId) ?? null,
+        }))
+      : [];
+
+  const legacyMetrics =
+    legacyRows.length > 0
+      ? buildLegacyMetrics({
+          rows: legacyRows,
+          channelIdBySlug,
+          cocktailsAddonId,
+        })
+      : [];
+  const legacyTicketSummaries =
+    legacyRows.length > 0 ? buildLegacyTicketSummaryMap({ rows: legacyRows, channelIdBySlug }) : undefined;
 
   const metricsByProduct = new Map<number | null, MetricCell[]>();
-  const metrics: MetricCell[] = metricRows.map((metric) => {
+  const metrics: MetricCell[] = [];
+  const pushMetric = (metric: MetricCell) => {
+    const productId = counterProductLookup.get(metric.counterId) ?? null;
+    const bucket = metricsByProduct.get(productId) ?? [];
+    bucket.push(metric);
+    metricsByProduct.set(productId, bucket);
+    metrics.push(metric);
+  };
+
+  metricRows.forEach((metric) => {
     const normalized: MetricCell = {
       id: metric.id,
       counterId: metric.counterId,
@@ -990,11 +1263,11 @@ export async function getChannelNumbersSummary(params: {
           : ((metric.period as MetricPeriod | null) ?? 'before_cutoff'),
       qty: Number(metric.qty ?? 0),
     };
-    const productId = counterProductLookup.get(metric.counterId) ?? null;
-    const bucket = metricsByProduct.get(productId) ?? [];
-    bucket.push(normalized);
-    metricsByProduct.set(productId, bucket);
-    return normalized;
+    pushMetric(normalized);
+  });
+
+  legacyMetrics.forEach((metric) => {
+    pushMetric(metric);
   });
 
   metricsByProduct.forEach((_, productId) => {
@@ -1140,6 +1413,7 @@ export async function getChannelNumbersSummary(params: {
     counters: counterMeta,
     metrics,
     channels: channelConfigs,
+    legacyTicketSummaries,
     startIso,
     endIso,
     rangeIsCanonical,
@@ -1218,9 +1492,23 @@ export async function getChannelNumbersDetails(
   const startIso = start.format('YYYY-MM-DD');
   const endIso = end.format('YYYY-MM-DD');
 
-  const channelRows = await Channel.findAll({ attributes: ['id', 'name'] });
+  const [channelRows, addonRows, productNameRows] = await Promise.all([
+    Channel.findAll({ attributes: ['id', 'name'] }),
+    Addon.findAll({ where: { isActive: true } }),
+    Product.findAll({ attributes: ['id', 'name'], raw: true }),
+  ]);
   const channelLookup = new Map<number, string>();
+  const channelIdBySlug = new Map<string, number>();
   channelRows.forEach((row) => channelLookup.set(row.id, row.name));
+  channelRows.forEach((row) => channelIdBySlug.set(toChannelSlug(row.name), row.id));
+
+  const productNameById = new Map<number, string>();
+  (productNameRows as Array<{ id: number; name: string }>).forEach((row) => {
+    productNameById.set(row.id, row.name);
+  });
+
+  const cocktailsAddonId =
+    addonRows.find((addon) => addon.name.toLowerCase() === 'cocktails')?.id ?? null;
 
   let addonLookup = new Map<
     number,
@@ -1232,7 +1520,6 @@ export async function getChannelNumbersDetails(
   let targetAddonId: number | null = null;
 
   if (requiresAddon) {
-    const addonRows = await Addon.findAll({ where: { isActive: true } });
     const productAddons = await ProductAddon.findAll({
       include: [
         {
@@ -1261,6 +1548,11 @@ export async function getChannelNumbersDetails(
     include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
   });
 
+  const legacyProductId =
+    (productNameRows as Array<{ id: number; name: string }>).find(
+      (row) => row.name.toLowerCase() === 'pub crawl',
+    )?.id ?? null;
+
   const filteredCounters = counters.filter((counter) => {
     if (productId === undefined) {
       return true;
@@ -1268,7 +1560,18 @@ export async function getChannelNumbersDetails(
     if (productId === null) {
       return counter.productId == null;
     }
-    return counter.productId === productId;
+    if (counter.productId === productId) {
+      return true;
+    }
+    if (
+      legacyProductId != null &&
+      productId === legacyProductId &&
+      counter.productId == null &&
+      isLegacyCounterDate(counter.date)
+    ) {
+      return true;
+    }
+    return false;
   });
 
   const counterLookup = new Map<
@@ -1282,10 +1585,15 @@ export async function getChannelNumbersDetails(
   >();
 
   filteredCounters.forEach((counter) => {
+    const isLegacy = isLegacyCounterDate(counter.date);
+    const resolvedProductId =
+      isLegacy && legacyProductId != null && counter.productId == null ? legacyProductId : counter.productId ?? null;
+    const fallbackName =
+      resolvedProductId != null ? productNameById.get(resolvedProductId) ?? `Product ${resolvedProductId}` : null;
     counterLookup.set(counter.id, {
       date: counter.date,
-      productId: counter.productId ?? null,
-      productName: counter.product?.name ?? (counter.productId != null ? `Product ${counter.productId}` : null),
+      productId: resolvedProductId,
+      productName: counter.product?.name ?? fallbackName,
       notes: counter.notes ?? null,
     });
   });
@@ -1321,9 +1629,56 @@ export async function getChannelNumbersDetails(
     metricWhere.addonId = targetAddonId;
   }
 
-  const metricRows = await CounterChannelMetric.findAll({
-    where: metricWhere,
-    attributes: ['counterId', 'channelId', 'addonId', 'tallyType', 'period', 'qty'],
+  const legacyCounterIds = counterIds.filter((id) => {
+    const counter = counterLookup.get(id);
+    return counter ? isLegacyCounterDate(counter.date) : false;
+  });
+  const legacyCounterSet = new Set(legacyCounterIds);
+  const newCounterIds = counterIds.filter((id) => !legacyCounterSet.has(id));
+
+  const metricRows =
+    newCounterIds.length > 0
+      ? await CounterChannelMetric.findAll({
+          where: { ...metricWhere, counterId: { [Op.in]: newCounterIds } },
+          attributes: ['counterId', 'channelId', 'addonId', 'tallyType', 'period', 'qty'],
+        })
+      : [];
+
+  const legacyRows =
+    legacyCounterIds.length > 0
+      ? ((await CounterProduct.findAll({
+          where: { counterId: { [Op.in]: legacyCounterIds } },
+          attributes: ['counterId', 'productId', 'quantity', 'total'],
+          raw: true,
+        })) as Array<{ counterId: number; productId: number; quantity: number; total: number }>).map((row) => ({
+          counterId: row.counterId,
+          productId: row.productId,
+          quantity: row.quantity,
+          total: row.total,
+          productName: productNameById.get(row.productId) ?? null,
+        }))
+      : [];
+
+  const legacyMetrics =
+    legacyRows.length > 0
+      ? buildLegacyMetrics({
+          rows: legacyRows,
+          channelIdBySlug,
+          cocktailsAddonId,
+        })
+      : [];
+
+  const filteredLegacyMetrics = legacyMetrics.filter((metric) => {
+    if (metric.kind !== (requiresAddon ? 'addon' : 'people')) {
+      return false;
+    }
+    if (channelId != null && metric.channelId !== channelId) {
+      return false;
+    }
+    if (requiresAddon && metric.addonId !== targetAddonId) {
+      return false;
+    }
+    return true;
   });
 
   type Bucket = {
@@ -1336,15 +1691,30 @@ export async function getChannelNumbersDetails(
   };
 
   const buckets = new Map<string, Bucket>();
+  const combinedMetrics: MetricCell[] = [
+    ...metricRows.map((row) => ({
+      counterId: row.counterId,
+      channelId: row.channelId,
+      addonId: row.addonId ?? null,
+      kind: (requiresAddon ? 'addon' : 'people') as MetricKind,
+      tallyType: row.tallyType as MetricTallyType,
+      period:
+        row.tallyType === 'attended'
+          ? null
+          : ((row.period as MetricPeriod | null) ?? 'before_cutoff'),
+      qty: Number(row.qty ?? 0),
+    })),
+    ...filteredLegacyMetrics,
+  ];
 
-  metricRows.forEach((row) => {
-    const addonId = row.addonId ?? null;
-    const key = [row.counterId, row.channelId, addonId ?? 'null'].join('|');
+  combinedMetrics.forEach((metric) => {
+    const addonId = metric.addonId ?? null;
+    const key = [metric.counterId, metric.channelId, addonId ?? 'null'].join('|');
     const existing =
       buckets.get(key) ??
       {
-        counterId: row.counterId,
-        channelId: row.channelId,
+        counterId: metric.counterId,
+        channelId: metric.channelId,
         addonId,
         bookedBefore: 0,
         bookedAfter: 0,
@@ -1355,14 +1725,14 @@ export async function getChannelNumbersDetails(
       buckets.set(key, existing);
     }
 
-    const qty = Number(row.qty ?? 0);
-    if (row.tallyType === 'booked') {
-      if (row.period === 'before_cutoff') {
+    const qty = Number(metric.qty ?? 0);
+    if (metric.tallyType === 'booked') {
+      if (metric.period === 'before_cutoff') {
         existing.bookedBefore += qty;
       } else {
         existing.bookedAfter += qty;
       }
-    } else if (row.tallyType === 'attended') {
+    } else if (metric.tallyType === 'attended') {
       existing.attended += qty;
     }
   });
