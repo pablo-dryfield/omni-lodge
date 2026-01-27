@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
 import axiosInstance from "../utils/axiosInstance";
 import type { ServerResponse } from "../types/general/ServerResponse";
 import type { ShiftRole } from "../types/shiftRoles/ShiftRole";
@@ -7,13 +7,29 @@ import type { UserShiftRoleAssignment } from "../types/shiftRoles/UserShiftRoleA
 const shiftRolesKey = ["shift-roles"] as const;
 const shiftRoleAssignmentsKey = ["shift-role-assignments"] as const;
 
-export const useShiftRoles = () =>
+type ShiftRolesQueryOptions = Omit<
+  UseQueryOptions<ServerResponse<ShiftRole>, Error, ServerResponse<ShiftRole>, typeof shiftRolesKey>,
+  "queryKey" | "queryFn"
+>;
+
+type ShiftRoleAssignmentsQueryOptions = Omit<
+  UseQueryOptions<
+    ServerResponse<UserShiftRoleAssignment>,
+    Error,
+    ServerResponse<UserShiftRoleAssignment>,
+    typeof shiftRoleAssignmentsKey
+  >,
+  "queryKey" | "queryFn"
+>;
+
+export const useShiftRoles = (options?: ShiftRolesQueryOptions) =>
   useQuery({
     queryKey: shiftRolesKey,
     queryFn: async () => {
       const response = await axiosInstance.get("/shiftRoles");
       return response.data as ServerResponse<ShiftRole>;
     },
+    ...options,
   });
 
 export const useCreateShiftRole = () => {
@@ -55,13 +71,14 @@ export const useDeleteShiftRole = () => {
   });
 };
 
-export const useShiftRoleAssignments = () =>
+export const useShiftRoleAssignments = (options?: ShiftRoleAssignmentsQueryOptions) =>
   useQuery({
     queryKey: shiftRoleAssignmentsKey,
     queryFn: async () => {
       const response = await axiosInstance.get("/shiftRoles/assignments");
       return response.data as ServerResponse<UserShiftRoleAssignment>;
     },
+    ...options,
   });
 
 export const useUpdateUserShiftRoles = () => {
@@ -76,4 +93,3 @@ export const useUpdateUserShiftRoles = () => {
     },
   });
 };
-

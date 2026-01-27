@@ -1,6 +1,9 @@
 import { Response } from 'express';
 import { DataType } from 'sequelize-typescript';
-import CounterRegistryService, { type MetricInput } from '../services/counterRegistryService.js';
+import CounterRegistryService, {
+  type CounterRegistryPayload,
+  type MetricInput,
+} from '../services/counterRegistryService.js';
 import HttpError from '../errors/HttpError.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import logger from '../utils/logger.js';
@@ -322,6 +325,65 @@ export const deleteCounter = async (req: AuthenticatedRequest, res: Response): P
   }
 };
 
+export const upsertCounterSetup = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  if (resolveFormat(req) !== REGISTRY_FORMAT) {
+    res.status(400).json({ message: 'Counter setup updates require registry format' });
+    return;
+  }
+
+  try {
+    const actorId = requireActorId(req);
+    const body = (req.body ?? {}) as {
+      date?: string;
+      userId?: number;
+      productId?: number | null;
+      notes?: string | null;
+      staffIds?: number[];
+      status?: string;
+    };
+
+    if (!body.date || typeof body.date !== 'string') {
+      throw new HttpError(400, 'date is required');
+    }
+
+    const userId = Number(body.userId ?? actorId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new HttpError(400, 'Invalid manager id');
+    }
+
+    let payload: CounterRegistryPayload = await CounterRegistryService.findOrCreateCounter(
+      {
+        date: body.date,
+        userId,
+        productId: body.productId ?? null,
+        notes: body.notes ?? null,
+      },
+      actorId,
+    );
+
+    const counterId = payload.counter?.id ?? null;
+    if (!counterId) {
+      throw new HttpError(404, 'Counter not found after setup');
+    }
+
+    if (Array.isArray(body.staffIds)) {
+      payload = await CounterRegistryService.updateCounterStaff(counterId, body.staffIds, actorId);
+    }
+
+    if (body.status) {
+      payload = await CounterRegistryService.updateCounterMetadata(
+        counterId,
+        { status: body.status },
+        actorId,
+      );
+    }
+
+    res.status(200).json(payload);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
 export const updateCounterStaff = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (resolveFormat(req) !== REGISTRY_FORMAT) {
@@ -344,6 +406,50 @@ export const updateCounterStaff = async (req: AuthenticatedRequest, res: Respons
     });
 
     const payload = await CounterRegistryService.updateCounterStaff(counterId, userIds, actorId);
+    res.status(200).json(payload);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const commitCounterRegistry = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (resolveFormat(req) !== REGISTRY_FORMAT) {
+      throw new HttpError(400, 'Counter registry commit requires registry format');
+    }
+
+    const actorId = requireActorId(req);
+    const counterId = Number(req.params.id);
+    if (!Number.isInteger(counterId) || counterId <= 0) {
+      throw new HttpError(400, 'Invalid counter id');
+    }
+
+    const body = (req.body ?? {}) as {
+      metrics?: unknown;
+      status?: string;
+      notes?: string | null;
+    };
+
+    if (body.metrics !== undefined) {
+      const rows = parseBodyAsArray(body.metrics);
+      await CounterRegistryService.upsertMetrics(counterId, rows, actorId);
+    }
+
+    const metadataUpdates: { status?: string; notes?: string | null } = {};
+    if (body.status) {
+      metadataUpdates.status = body.status;
+    }
+    if (body.notes !== undefined) {
+      metadataUpdates.notes = body.notes ?? null;
+    }
+
+    let payload;
+    if (Object.keys(metadataUpdates).length > 0) {
+      payload = await CounterRegistryService.updateCounterMetadata(counterId, metadataUpdates, actorId);
+    } else {
+      payload = await CounterRegistryService.getCounterById(counterId);
+    }
+
     res.status(200).json(payload);
   } catch (error) {
     handleError(res, error);

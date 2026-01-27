@@ -66,6 +66,31 @@ type UpdateCounterStaffArgs = {
   userIds: number[];
 };
 
+type CommitMetricInput = {
+  channelId: number;
+  kind: MetricKind;
+  addonId: number | null;
+  tallyType: MetricTallyType;
+  period: MetricPeriod;
+  qty: number;
+};
+
+type CommitCounterRegistryArgs = {
+  counterId: number;
+  metrics?: CommitMetricInput[];
+  status?: CounterStatus;
+  notes?: string | null;
+};
+
+type SubmitCounterSetupArgs = {
+  date: string;
+  userId: number;
+  productId?: number | null;
+  staffIds?: number[];
+  status?: CounterStatus;
+  notes?: string | null;
+};
+
 type FlushMetricsResult = {
   metrics: MetricCell[];
   derivedSummary: CounterSummary | null;
@@ -280,6 +305,44 @@ export const updateCounterStaff = createAsyncThunk<
   }
 });
 
+export const submitCounterSetup = createAsyncThunk<
+  CounterRegistryPayload,
+  SubmitCounterSetupArgs,
+  { rejectValue: CounterRegistryError }
+>('counterRegistry/submitSetup', async (payload, { rejectWithValue }) => {
+  try {
+    const response = await axiosInstance.post<CounterRegistryPayload>(
+      '/counters/setup?format=registry',
+      payload,
+      withCredentialsConfig,
+    );
+    return response.data;
+  } catch (error) {
+    return rejectWithValue(buildRejectValue(error, 'Failed to submit counter setup'));
+  }
+});
+
+export const commitCounterRegistry = createAsyncThunk<
+  CounterRegistryPayload,
+  CommitCounterRegistryArgs,
+  { rejectValue: CounterRegistryError }
+>('counterRegistry/commit', async ({ counterId, metrics, status, notes }, { rejectWithValue }) => {
+  try {
+    const response = await axiosInstance.post<CounterRegistryPayload>(
+      `/counters/${counterId}/commit?format=registry`,
+      {
+        ...(metrics ? { metrics } : {}),
+        ...(status ? { status } : {}),
+        ...(notes !== undefined ? { notes } : {}),
+      },
+      withCredentialsConfig,
+    );
+    return response.data;
+  } catch (error) {
+    return rejectWithValue(buildRejectValue(error, 'Failed to commit counter changes'));
+  }
+});
+
 export const flushDirtyMetrics = createAsyncThunk<
   FlushMetricsResult,
   void,
@@ -419,6 +482,18 @@ const counterRegistrySlice = createSlice({
         state.loading = false;
         state.error = action.payload?.message ?? action.error.message ?? 'Failed to ensure counter';
       })
+      .addCase(submitCounterSetup.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(submitCounterSetup.fulfilled, (state, action) => {
+        state.loading = false;
+        ingestPayload(state, action.payload);
+      })
+      .addCase(submitCounterSetup.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload?.message ?? action.error.message ?? 'Failed to submit counter setup';
+      })
       .addCase(fetchCounterByDate.pending, (state) => {
         state.loading = true;
         state.error = null;
@@ -499,6 +574,18 @@ const counterRegistrySlice = createSlice({
         state.savingStaff = false;
         state.error = action.payload?.message ?? action.error.message ?? 'Failed to update staff';
       })
+      .addCase(commitCounterRegistry.pending, (state) => {
+        state.savingMetrics = true;
+        state.error = null;
+      })
+      .addCase(commitCounterRegistry.fulfilled, (state, action) => {
+        state.savingMetrics = false;
+        ingestPayload(state, action.payload);
+      })
+      .addCase(commitCounterRegistry.rejected, (state, action) => {
+        state.savingMetrics = false;
+        state.error = action.payload?.message ?? action.error.message ?? 'Failed to save counter';
+      })
       .addCase(flushDirtyMetrics.pending, (state) => {
         state.savingMetrics = true;
       })
@@ -506,21 +593,20 @@ const counterRegistrySlice = createSlice({
         state.savingMetrics = false;
         const payload = action.payload;
         if (state.counter) {
-      state.counter.metrics = payload.metrics.map(normalizeMetric);
-    }
-    state.summary = payload.derivedSummary;
-    state.metricsByKey = {};
-    state.persistedMetricsByKey = {};
-    state.persistedMetricsByKey = {};
-    payload.metrics.forEach((metric) => {
-      const normalized = normalizeMetric(metric);
-      if (normalized.id != null) {
-        state.persistedMetricsByKey[buildMetricKey(normalized)] = normalized;
-      } else {
-        delete state.persistedMetricsByKey[buildMetricKey(normalized)];
-      }
-    });
-    state.dirtyMetricKeys = [];
+          state.counter.metrics = payload.metrics.map(normalizeMetric);
+        }
+        state.summary = payload.derivedSummary;
+        state.metricsByKey = {};
+        state.persistedMetricsByKey = {};
+        payload.metrics.forEach((metric) => {
+          const normalized = normalizeMetric(metric);
+          if (normalized.id != null) {
+            state.persistedMetricsByKey[buildMetricKey(normalized)] = normalized;
+          } else {
+            delete state.persistedMetricsByKey[buildMetricKey(normalized)];
+          }
+        });
+        state.dirtyMetricKeys = [];
       })
       .addCase(flushDirtyMetrics.rejected, (state, action) => {
         state.savingMetrics = false;

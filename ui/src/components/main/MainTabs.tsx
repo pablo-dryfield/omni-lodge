@@ -293,23 +293,19 @@ const MainTabs = ({
       margin: 0,
       transition: "all 120ms ease",
       cursor: "pointer",
-      "&:hover": {
-        backgroundColor: currentTheme.white,
-        color: currentTheme.black,
-        borderColor: "transparent",
-      },
-      "&[data-active]": {
-        backgroundColor: currentTheme.white,
-        color: currentTheme.black,
-        borderColor: "transparent",
-        boxShadow: "0 10px 25px rgba(0, 0, 0, 0.25)",
-        transform: "translateY(-1px)",
-      },
-      "&:active": {
-        transform: "translateY(0)",
-      },
     },
   });
+
+  const activeTabStyle = useMemo(
+    () => ({
+      backgroundColor: theme.white,
+      color: theme.black,
+      borderColor: "transparent",
+      boxShadow: "0 10px 25px rgba(0, 0, 0, 0.25)",
+      transform: "translateY(-1px)",
+    }),
+    [theme],
+  );
 
   return (
     <>
@@ -419,7 +415,11 @@ const MainTabs = ({
                 >
                   <Tabs.List>
                     {visiblePages.map((page) => (
-                      <Tabs.Tab value={page.path} key={page.name}>
+                      <Tabs.Tab
+                        value={page.path}
+                        key={page.name}
+                        style={activeTab === page.path ? activeTabStyle : undefined}
+                      >
                         {page.name}
                       </Tabs.Tab>
                     ))}
