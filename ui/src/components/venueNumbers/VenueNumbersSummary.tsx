@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Anchor,
@@ -36,8 +36,8 @@ import type {
   VenuePayoutCurrencyTotals,
   VenueLedgerSnapshot,
 } from "../../types/nightReports/VenuePayoutSummary";
+import { useSearchParams } from "react-router-dom";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
-import { useFinanceBootstrap } from "../../hooks/useFinanceBootstrap";
 import {
   selectFinanceAccounts,
   selectFinanceCategories,
@@ -47,8 +47,11 @@ import {
 import { createFinanceTransaction } from "../../actions/financeActions";
 import NightReportPhotoPreviewDialog from "./NightReportPhotoPreviewDialog";
 import { resolvePhotoDownloadUrl, type NightReportPhotoPreview } from "../../utils/nightReportPhotoUtils";
-import { fetchVenues } from "../../actions/venueActions";
+import { setFinanceBasics } from "../../reducers/financeReducer";
+import { setVenuesData } from "../../reducers/venueReducer";
 import type { Venue } from "../../types/venues/Venue";
+import type { FinanceAccount } from "../../types/finance/Account";
+import type { FinanceCategory } from "../../types/finance/Category";
 import type { FinanceClient } from "../../types/finance/Client";
 import type { FinanceVendor } from "../../types/finance/Vendor";
 import {
@@ -142,9 +145,9 @@ const LEDGER_LINE_CONFIG = [
   { key: "closing" as const, label: "Closing balance" },
 ];
 
-const VenueNumbersSummary = () => {
+const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
   const dispatch = useAppDispatch();
-  useFinanceBootstrap();
+  const [searchParams, setSearchParams] = useSearchParams();
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
   const accounts = useAppSelector(selectFinanceAccounts);
@@ -157,6 +160,8 @@ const VenueNumbersSummary = () => {
 
   const [period, setPeriod] = useState<string>("this_month");
   const [customRange, setCustomRange] = useState<[Date | null, Date | null]>([null, null]);
+  const [bootstrapLoading, setBootstrapLoading] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState<VenuePayoutSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -170,19 +175,128 @@ const VenueNumbersSummary = () => {
   const [previewObjectUrl, setPreviewObjectUrl] = useState<string | null>(null);
   const rangeIsCanonical = summary?.rangeIsCanonical ?? false;
   const canRecordPayments = rangeIsCanonical;
+  const summaryLoading = loading || bootstrapLoading;
 
   const venueRecords = useMemo(
     () => (venuesState?.data?.[0]?.data as Venue[] | undefined) ?? [],
     [venuesState?.data],
   );
-  const venuesLoading = Boolean(venuesState?.loading);
-  const venuesLoaded = venueRecords.length > 0;
+  const bootstrapRequestedRef = useRef(false);
+  const lastSummaryKeyRef = useRef<string | null>(null);
+
+  const parseSummaryPeriod = useCallback((value: string | null): string => {
+    if (value === "last_month" || value === "custom" || value === "this_month") {
+      return value;
+    }
+    return "this_month";
+  }, []);
+
+  const summaryPeriodParam = useMemo(
+    () => parseSummaryPeriod(searchParams.get("summaryPeriod")),
+    [parseSummaryPeriod, searchParams],
+  );
+  const summaryStartParam = useMemo(() => searchParams.get("summaryStart"), [searchParams]);
+  const summaryEndParam = useMemo(() => searchParams.get("summaryEnd"), [searchParams]);
+  const summaryStartDate = useMemo(() => {
+    if (!summaryStartParam) {
+      return null;
+    }
+    const parsed = dayjs(summaryStartParam);
+    return parsed.isValid() ? parsed.toDate() : null;
+  }, [summaryStartParam]);
+  const summaryEndDate = useMemo(() => {
+    if (!summaryEndParam) {
+      return null;
+    }
+    const parsed = dayjs(summaryEndParam);
+    return parsed.isValid() ? parsed.toDate() : null;
+  }, [summaryEndParam]);
+
+  const resolveRangeForPeriod = useCallback(
+    (periodValue: string, range: [Date | null, Date | null]) => {
+      if (periodValue === "custom") {
+        const start = range[0] ? dayjs(range[0]).startOf("day") : null;
+        const end = range[1] ? dayjs(range[1]).endOf("day") : null;
+        return { start, end };
+      }
+      if (range[0] && range[1]) {
+        return {
+          start: dayjs(range[0]).startOf("day"),
+          end: dayjs(range[1]).endOf("day"),
+        };
+      }
+      if (periodValue === "last_month") {
+        const start = dayjs().subtract(1, "month").startOf("month");
+        return { start, end: start.endOf("month") };
+      }
+      const start = dayjs().startOf("month");
+      return { start, end: start.endOf("month") };
+    },
+    [],
+  );
+
+  const updateSummaryParams = useCallback(
+    (periodValue: string, range: [Date | null, Date | null]) => {
+      const { start, end } = resolveRangeForPeriod(periodValue, range);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set("tab", "summary");
+          next.set("summaryPeriod", periodValue);
+          if (start && end) {
+            next.set("summaryStart", start.format("YYYY-MM-DD"));
+            next.set("summaryEnd", end.format("YYYY-MM-DD"));
+          } else {
+            next.delete("summaryStart");
+            next.delete("summaryEnd");
+          }
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [resolveRangeForPeriod, setSearchParams],
+  );
 
   useEffect(() => {
-    if (!venuesLoaded && !venuesLoading) {
-      dispatch(fetchVenues());
+    if (!active) {
+      return;
     }
-  }, [dispatch, venuesLoaded, venuesLoading]);
+    if (period !== summaryPeriodParam) {
+      setPeriod(summaryPeriodParam);
+    }
+    if (summaryStartDate || summaryEndDate || summaryPeriodParam === "custom") {
+      setCustomRange([summaryStartDate, summaryEndDate]);
+    }
+  }, [active, period, summaryEndDate, summaryPeriodParam, summaryStartDate]);
+
+  const handlePeriodChange = useCallback(
+    (value: string) => {
+      setPeriod(value);
+      if (value === "custom") {
+        updateSummaryParams(value, customRange);
+        return;
+      }
+      const nextRange: [Date | null, Date | null] =
+        value === "last_month"
+          ? [
+              dayjs().subtract(1, "month").startOf("month").toDate(),
+              dayjs().subtract(1, "month").endOf("month").toDate(),
+            ]
+          : [dayjs().startOf("month").toDate(), dayjs().endOf("month").toDate()];
+      setCustomRange(nextRange);
+      updateSummaryParams(value, nextRange);
+    },
+    [customRange, updateSummaryParams],
+  );
+
+  const handleCustomRangeChange = useCallback(
+    (range: [Date | null, Date | null]) => {
+      setCustomRange(range);
+      updateSummaryParams(period, range);
+    },
+    [period, updateSummaryParams],
+  );
 
   const toggleRow = (rowKey: string) => {
     setExpandedRows((prev) => {
@@ -205,6 +319,12 @@ const VenueNumbersSummary = () => {
   }, [previewObjectUrl]);
 
   const canFetch = period !== "custom" || (customRange[0] && customRange[1]);
+  const summaryKey = useMemo(() => {
+    const { start, end } = resolveRangeForPeriod(period, customRange);
+    const startKey = start ? start.format("YYYY-MM-DD") : "";
+    const endKey = end ? end.format("YYYY-MM-DD") : "";
+    return `${period}|${startKey}|${endKey}`;
+  }, [customRange, period, resolveRangeForPeriod]);
 
   const fetchSummary = useCallback(async () => {
     if (!canFetch) {
@@ -213,13 +333,14 @@ const VenueNumbersSummary = () => {
     setLoading(true);
     setError(null);
     try {
+      const { start, end } = resolveRangeForPeriod(period, customRange);
       const params: Record<string, string> = { period };
-      if (period === "custom" && customRange[0] && customRange[1]) {
-        params.startDate = dayjs(customRange[0]).format("YYYY-MM-DD");
-        params.endDate = dayjs(customRange[1]).format("YYYY-MM-DD");
+      if (start && end) {
+        params.startDate = start.format("YYYY-MM-DD");
+        params.endDate = end.format("YYYY-MM-DD");
       }
       const response = await axiosInstance.get<ServerResponse<VenuePayoutSummary>>(
-        "/nightReports/metrics/venue-summary",
+        "/venueNumbers/summary",
         {
           params,
           withCredentials: true,
@@ -238,13 +359,95 @@ const VenueNumbersSummary = () => {
     } finally {
       setLoading(false);
     }
-  }, [canFetch, customRange, period]);
+  }, [canFetch, customRange, period, resolveRangeForPeriod]);
+
+  const loadSummaryBootstrap = useCallback(async () => {
+    if (!canFetch) {
+      return;
+    }
+    setBootstrapLoading(true);
+    setBootstrapError(null);
+    try {
+      const { start, end } = resolveRangeForPeriod(period, customRange);
+      const params: Record<string, string> = { tab: "summary", period };
+      if (start && end) {
+        params.startDate = start.format("YYYY-MM-DD");
+        params.endDate = end.format("YYYY-MM-DD");
+      }
+      const response = await axiosInstance.get<{
+        venues: ServerResponse<Partial<Venue>>;
+        finance: {
+          accounts: FinanceAccount[];
+          categories: FinanceCategory[];
+          vendors: FinanceVendor[];
+          clients: FinanceClient[];
+        };
+        summary: ServerResponse<VenuePayoutSummary>;
+      }>("/venueNumbers/bootstrap", {
+        params,
+        withCredentials: true,
+      });
+      const payload = response.data;
+      if (payload?.venues) {
+        dispatch(setVenuesData(payload.venues));
+      }
+      if (payload?.finance) {
+        dispatch(
+          setFinanceBasics({
+            accounts: payload.finance.accounts ?? [],
+            categories: payload.finance.categories ?? [],
+            vendors: payload.finance.vendors ?? [],
+            clients: payload.finance.clients ?? [],
+          }),
+        );
+      }
+      const summaryPayload = payload?.summary?.[0]?.data;
+      if (Array.isArray(summaryPayload)) {
+        setSummary((summaryPayload[0] as VenuePayoutSummary) ?? null);
+      } else {
+        setSummary((summaryPayload as unknown as VenuePayoutSummary) ?? null);
+      }
+      lastSummaryKeyRef.current = summaryKey;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load summary";
+      setBootstrapError(message);
+      setSummary(null);
+    } finally {
+      setBootstrapLoading(false);
+    }
+  }, [accounts, canFetch, categories, clients, customRange, dispatch, period, resolveRangeForPeriod, summary, summaryKey, vendors]);
 
   useEffect(() => {
-    if (canFetch) {
-      fetchSummary();
+    if (!active || !canFetch) {
+      return;
     }
-  }, [fetchSummary, canFetch]);
+    if (!bootstrapRequestedRef.current) {
+      bootstrapRequestedRef.current = true;
+      lastSummaryKeyRef.current = summaryKey;
+      updateSummaryParams(period, customRange);
+      loadSummaryBootstrap();
+      return;
+    }
+    if (bootstrapLoading) {
+      return;
+    }
+    if (lastSummaryKeyRef.current === summaryKey) {
+      return;
+    }
+    lastSummaryKeyRef.current = summaryKey;
+    updateSummaryParams(period, customRange);
+    fetchSummary();
+  }, [
+    active,
+    bootstrapLoading,
+    canFetch,
+    customRange,
+    fetchSummary,
+    loadSummaryBootstrap,
+    period,
+    summaryKey,
+    updateSummaryParams,
+  ]);
 
   useEffect(() => {
     setExpandedRows(new Set());
@@ -725,7 +928,7 @@ const VenueNumbersSummary = () => {
               <Text fw={600}>Reporting period</Text>
               <SegmentedControl
                 value={period}
-                onChange={setPeriod}
+                onChange={handlePeriodChange}
                 data={PERIOD_OPTIONS}
                 size="sm"
                 fullWidth
@@ -735,7 +938,7 @@ const VenueNumbersSummary = () => {
               w={isMobile ? "100%" : "auto"}
               style={{ display: "flex", justifyContent: "flex-end", flexGrow: 0 }}
             >
-              <Button onClick={fetchSummary} disabled={!canFetch || loading} fullWidth={isMobile}>
+              <Button onClick={fetchSummary} disabled={!canFetch || summaryLoading} fullWidth={isMobile}>
                 Refresh
               </Button>
             </Box>
@@ -745,10 +948,11 @@ const VenueNumbersSummary = () => {
               type="range"
               label="Custom date range"
               value={customRange}
-              onChange={setCustomRange}
+              onChange={handleCustomRangeChange}
               allowSingleDateInRange
             />
           )}
+          {bootstrapError && <Alert color="red">{bootstrapError}</Alert>}
           {error && <Alert color="red">{error}</Alert>}
           {!canFetch && period === "custom" && (
             <Alert color="yellow">Select both start and end dates to load the summary.</Alert>
@@ -756,7 +960,7 @@ const VenueNumbersSummary = () => {
         </Stack>
       </Card>
 
-      {loading && (
+      {summaryLoading && (
         <Card withBorder padding="xl">
           <Group justify="center">
             <Loader />
@@ -765,7 +969,7 @@ const VenueNumbersSummary = () => {
         </Card>
       )}
 
-      {!loading && summary && (
+      {!summaryLoading && summary && (
         <Stack gap="xl">
           <Card withBorder padding="lg">
             <Stack gap="sm">

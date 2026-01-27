@@ -30,7 +30,7 @@ import dayjs from 'dayjs';
 import { useSearchParams } from 'react-router-dom';
 
 import {
-  fetchChannelNumbersSummary,
+  fetchChannelNumbersBootstrap,
   recordChannelCashCollection,
   fetchChannelNumbersDetails,
 } from '../../api/channelNumbers';
@@ -44,9 +44,9 @@ import {
   type ChannelNumbersDetailEntry,
 } from '../../types/channelNumbers/ChannelNumbersSummary';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { useFinanceBootstrap } from '../../hooks/useFinanceBootstrap';
 import { selectFinanceAccounts, selectFinanceCategories, selectFinanceClients } from '../../selectors/financeSelectors';
 import { createFinanceTransaction } from '../../actions/financeActions';
+import { setFinanceBasics } from '../../reducers/financeReducer';
 
 type Preset = 'thisMonth' | 'lastMonth' | 'custom';
 
@@ -161,7 +161,6 @@ const mergeCellStyles = (...styles: Array<CSSProperties | undefined>) =>
 
 const ChannelNumbersSummary = () => {
   const dispatch = useAppDispatch();
-  useFinanceBootstrap();
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -232,12 +231,22 @@ const ChannelNumbersSummary = () => {
     if (!start || !end) {
       return null;
     }
-    const response = await fetchChannelNumbersSummary({
+    const response = await fetchChannelNumbersBootstrap({
       startDate: dayjs(start).format(DATE_FORMAT),
       endDate: dayjs(end).format(DATE_FORMAT),
     });
-    return response;
-  }, [range]);
+    if (response?.finance) {
+      dispatch(
+        setFinanceBasics({
+          accounts: response.finance.accounts ?? [],
+          categories: response.finance.categories ?? [],
+          vendors: response.finance.vendors ?? [],
+          clients: response.finance.clients ?? [],
+        }),
+      );
+    }
+    return response.summary ?? null;
+  }, [dispatch, range]);
 
   useEffect(() => {
     let isMounted = true;

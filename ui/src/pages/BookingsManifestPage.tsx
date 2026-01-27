@@ -11,11 +11,13 @@ import {
   Group,
   Loader,
   Modal,
+  NumberInput,
   Paper,
   Select,
   SegmentedControl,
   Stack,
   Table,
+  Tabs,
   Text,
   Title,
   TextInput,
@@ -632,6 +634,41 @@ const formatStripeAmount = (amount: number, currency: string): string => {
   return `${value} ${currency.toUpperCase()}`;
 };
 
+const parseMoney = (value?: string | null): number => {
+  if (!value) {
+    return 0;
+  }
+  const normalized = value.replace(/\s+/g, '').replace(',', '.');
+  const parsed = Number.parseFloat(normalized);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const computeAddonRefundTotal = (addons: PartialRefundAddon[], quantities: Record<number, number>): number => {
+  return addons.reduce((total, addon) => {
+    const qty = quantities[addon.id] ?? 0;
+    if (qty <= 0) {
+      return total;
+    }
+    const unitPrice = addon.unitPrice ? parseMoney(addon.unitPrice) : 0;
+    if (unitPrice > 0) {
+      return total + unitPrice * qty;
+    }
+    const totalPrice = addon.totalPrice ? parseMoney(addon.totalPrice) : 0;
+    if (totalPrice > 0 && addon.quantity > 0) {
+      return total + (totalPrice / addon.quantity) * qty;
+    }
+    return total;
+  }, 0);
+};
+
+const formatDateTime = (value?: string | null): string => {
+  if (!value) {
+    return "-";
+  }
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed.format("YYYY-MM-DD HH:mm") : String(value);
+};
+
 const getStripeStatusColor = (status?: string | null): string => {
   switch (status) {
     case "succeeded":
@@ -657,6 +694,165 @@ type AmendModalState = {
   error: string | null;
 };
 
+type EcwidAmendPreview = {
+  status: "matched" | "order_missing" | "product_missing";
+  message?: string | null;
+  orderId?: string | null;
+  booking?: {
+    id: number;
+    platformBookingId?: string | null;
+    platformOrderId?: string | null;
+    productId?: number | null;
+    productName?: string | null;
+    productVariant?: string | null;
+  };
+  bookingItems?: Array<{
+    id?: number;
+    name?: string | null;
+    productId?: number | null;
+    matched?: boolean;
+    matchedIndex?: number | null;
+  }>;
+  missingItems?: string[];
+  ecwid?: {
+    id?: string | number | null;
+    pickupTime?: string | null;
+    items?: Array<{
+      name?: string | null;
+      quantity?: number | null;
+      pickupTime?: string | null;
+      options?: string[];
+      matched?: boolean;
+      matchedBookingNames?: string[];
+    }>;
+  };
+};
+
+type ReconcileState = {
+  itemIndex: string | null;
+  loading: boolean;
+  error: string | null;
+  success: string | null;
+};
+
+type BookingDetailsEmail = {
+  id: number;
+  messageId: string;
+  fromAddress?: string | null;
+  toAddresses?: string | null;
+  ccAddresses?: string | null;
+  subject?: string | null;
+  snippet?: string | null;
+  receivedAt?: string | null;
+  internalDate?: string | null;
+  ingestionStatus?: string | null;
+  failureReason?: string | null;
+};
+
+type BookingDetailsEvent = {
+  id: number;
+  eventType?: string | null;
+  statusAfter?: string | null;
+  emailMessageId?: string | null;
+  occurredAt?: string | null;
+  ingestedAt?: string | null;
+  processedAt?: string | null;
+  processingError?: string | null;
+  eventPayload?: Record<string, unknown> | null;
+};
+
+type BookingEmailPreview = BookingDetailsEmail & {
+  previewText: string | null;
+  textBody: string | null;
+  htmlBody: string | null;
+  htmlText: string | null;
+  gmailQuery?: string | null;
+};
+
+type BookingDetailsResponse = {
+  booking: UnifiedOrder & {
+    id: number;
+    platformOrderId?: string | null;
+    lastEmailMessageId?: string | null;
+  };
+  events: BookingDetailsEvent[];
+  emails: BookingDetailsEmail[];
+  stripe: {
+    id: string;
+    type: string;
+    amount: number;
+    amountRefunded: number;
+    currency: string;
+    status: string | null;
+    created: number;
+    receiptEmail?: string | null;
+    description?: string | null;
+    fullyRefunded: boolean;
+  } | null;
+  stripeError?: string | null;
+  ecwidOrderId?: string | null;
+};
+
+type BookingDetailsState = {
+  opened: boolean;
+  loading: boolean;
+  error: string | null;
+  data: BookingDetailsResponse | null;
+  activeTab: string;
+  previewMessageId: string | null;
+  previewLoading: boolean;
+  previewError: string | null;
+  previewData: BookingEmailPreview | null;
+  previewOpen: boolean;
+};
+
+type PartialRefundAddon = {
+  id: number;
+  platformAddonName: string | null;
+  quantity: number;
+  unitPrice: string | null;
+  totalPrice: string | null;
+  currency: string | null;
+};
+
+type PartialRefundPreview = {
+  bookingId: number;
+  orderId: string;
+  externalTransactionId: string;
+  stripe: {
+    id: string;
+    type: string;
+    amount: number;
+    amountRefunded: number;
+    currency: string;
+    status: string | null;
+    created: number;
+    receiptEmail?: string | null;
+    description?: string | null;
+    fullyRefunded: boolean;
+  };
+  remainingAmount: number;
+  addons: PartialRefundAddon[];
+};
+
+type PartialRefundState = {
+  opened: boolean;
+  loading: boolean;
+  submitting: boolean;
+  error: string | null;
+  success: string | null;
+  bookingId: number | null;
+  preview: PartialRefundPreview | null;
+  amount: number | null;
+  addonQuantities: Record<number, number>;
+};
+
+type EcwidAmendPreviewState = {
+  status: "idle" | "loading" | "error" | "matched" | "order_missing" | "product_missing";
+  data: EcwidAmendPreview | null;
+  error: string | null;
+};
+
 const createDefaultAmendState = (): AmendModalState => ({
   opened: false,
   order: null,
@@ -664,6 +860,12 @@ const createDefaultAmendState = (): AmendModalState => ({
   formDate: null,
   formTime: '',
   submitting: false,
+  error: null,
+});
+
+const createDefaultAmendPreview = (): EcwidAmendPreviewState => ({
+  status: "idle",
+  data: null,
   error: null,
 });
 
@@ -744,6 +946,36 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const [statusFilter, setStatusFilter] = useState<BookingFilter>("active");
   const [searchInput, setSearchInput] = useState(searchParam);
   const [amendState, setAmendState] = useState<AmendModalState>(createDefaultAmendState());
+  const [amendPreview, setAmendPreview] = useState<EcwidAmendPreviewState>(createDefaultAmendPreview());
+  const [reconcileState, setReconcileState] = useState<ReconcileState>({
+    itemIndex: null,
+    loading: false,
+    error: null,
+    success: null,
+  });
+  const [detailsState, setDetailsState] = useState<BookingDetailsState>({
+    opened: false,
+    loading: false,
+    error: null,
+    data: null,
+    activeTab: "emails",
+    previewMessageId: null,
+    previewLoading: false,
+    previewError: null,
+    previewData: null,
+    previewOpen: false,
+  });
+  const [partialRefundState, setPartialRefundState] = useState<PartialRefundState>({
+    opened: false,
+    loading: false,
+    submitting: false,
+    error: null,
+    success: null,
+    bookingId: null,
+    preview: null,
+    amount: null,
+    addonQuantities: {},
+  });
   const [cancelState, setCancelState] = useState<CancelRefundState>(createDefaultCancelState());
 
   useEffect(() => {
@@ -858,10 +1090,62 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       baseState.error = "Unable to locate OmniLodge booking reference for this order.";
     }
     setAmendState(baseState);
+    if (baseState.bookingId) {
+      setAmendPreview({ status: "loading", data: null, error: null });
+      setReconcileState((prev) => ({
+        ...prev,
+        itemIndex: null,
+        loading: false,
+        error: null,
+        success: null,
+      }));
+      axiosInstance
+        .get<EcwidAmendPreview>(`/bookings/${baseState.bookingId}/amend-ecwid-preview`)
+        .then((response) => {
+          const data = response.data;
+          const currentBookingMatch = data.bookingItems?.find((entry) => entry.id === baseState.bookingId);
+          const defaultIndex =
+            currentBookingMatch?.matchedIndex !== undefined && currentBookingMatch?.matchedIndex !== null
+              ? String(currentBookingMatch.matchedIndex)
+              : data.ecwid?.items && data.ecwid.items.length > 0
+                ? "0"
+                : null;
+          setAmendPreview({
+            status: response.data?.status ?? "matched",
+            data: response.data,
+            error: null,
+          });
+          setReconcileState((prev) => ({ ...prev, itemIndex: defaultIndex }));
+        })
+        .catch((error) => {
+          setAmendPreview({
+            status: "error",
+            data: null,
+            error: extractErrorMessage(error),
+          });
+        });
+    } else {
+      setAmendPreview(createDefaultAmendPreview());
+      setReconcileState((prev) => ({
+        ...prev,
+        itemIndex: null,
+        loading: false,
+        error: null,
+        success: null,
+      }));
+    }
   };
 
   const closeAmendModal = () => {
     setAmendState(createDefaultAmendState());
+    setAmendPreview(createDefaultAmendPreview());
+    setReconcileState((prev) => ({
+      ...prev,
+      itemIndex: null,
+      loading: false,
+      error: null,
+      success: null,
+    }));
   };
 
   const handleAmendDateChange = (value: Date | null) => {
@@ -897,6 +1181,272 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     } catch (error) {
       const message = extractErrorMessage(error);
       setAmendState((prev) => ({ ...prev, submitting: false, error: message }));
+    }
+  };
+
+  const handleReconcileSubmit = async () => {
+    if (!amendState.bookingId) {
+      setReconcileState((prev) => ({ ...prev, error: "Missing OmniLodge booking reference." }));
+      return;
+    }
+    if (reconcileState.itemIndex === null) {
+      setReconcileState((prev) => ({ ...prev, error: "Select an Ecwid item to sync." }));
+      return;
+    }
+    setReconcileState((prev) => ({ ...prev, loading: true, error: null, success: null }));
+    try {
+      await axiosInstance.post(`/bookings/${amendState.bookingId}/reconcile-ecwid`, {
+        itemIndex: Number.parseInt(reconcileState.itemIndex, 10),
+      });
+      setReconcileState((prev) => ({
+        ...prev,
+        loading: false,
+        success: "OmniLodge booking updated to match Ecwid.",
+      }));
+      setReloadToken((token) => token + 1);
+      if (amendState.bookingId) {
+        const response = await axiosInstance.get<EcwidAmendPreview>(`/bookings/${amendState.bookingId}/amend-ecwid-preview`);
+        setAmendPreview({
+          status: response.data?.status ?? "matched",
+          data: response.data,
+          error: null,
+        });
+      }
+    } catch (error) {
+      setReconcileState((prev) => ({
+        ...prev,
+        loading: false,
+        error: extractErrorMessage(error),
+      }));
+    }
+  };
+
+  const openDetailsModal = (order: UnifiedOrder) => {
+    const bookingId = getBookingIdFromOrder(order);
+    if (!bookingId) {
+      setDetailsState((prev) => ({
+        ...prev,
+        opened: true,
+        loading: false,
+        error: "Unable to locate OmniLodge booking reference for this order.",
+        data: null,
+      }));
+      return;
+    }
+    setDetailsState({
+      opened: true,
+      loading: true,
+      error: null,
+      data: null,
+      activeTab: "emails",
+      previewMessageId: null,
+      previewLoading: false,
+      previewError: null,
+      previewData: null,
+      previewOpen: false,
+    });
+    axiosInstance
+      .get<BookingDetailsResponse>(`/bookings/${bookingId}/details`)
+      .then((response) => {
+        setDetailsState((prev) => ({
+          ...prev,
+          loading: false,
+          data: response.data,
+          error: null,
+        }));
+      })
+      .catch((error) => {
+        setDetailsState((prev) => ({
+          ...prev,
+          loading: false,
+          error: extractErrorMessage(error),
+        }));
+      });
+  };
+
+  const closeDetailsModal = () => {
+    setDetailsState({
+      opened: false,
+      loading: false,
+      error: null,
+      data: null,
+      activeTab: "emails",
+      previewMessageId: null,
+      previewLoading: false,
+      previewError: null,
+      previewData: null,
+      previewOpen: false,
+    });
+  };
+
+  const handleDetailsPreview = async (messageId: string) => {
+    setDetailsState((prev) => ({
+      ...prev,
+      previewMessageId: messageId,
+      previewLoading: true,
+      previewError: null,
+      previewData: null,
+      previewOpen: true,
+    }));
+    try {
+      const response = await axiosInstance.get(`/bookings/emails/${encodeURIComponent(messageId)}/preview`);
+      setDetailsState((prev) => ({
+        ...prev,
+        previewLoading: false,
+        previewData: response.data as BookingEmailPreview,
+        previewError: null,
+      }));
+    } catch (error) {
+      setDetailsState((prev) => ({
+        ...prev,
+        previewLoading: false,
+        previewError: extractErrorMessage(error),
+      }));
+    }
+  };
+
+  const closeDetailsPreview = () => {
+    setDetailsState((prev) => ({
+      ...prev,
+      previewOpen: false,
+      previewLoading: false,
+      previewError: null,
+      previewData: null,
+      previewMessageId: null,
+    }));
+  };
+
+  const openPartialRefundModal = (order: UnifiedOrder) => {
+    const bookingId = getBookingIdFromOrder(order);
+    if (!bookingId) {
+      setPartialRefundState((prev) => ({
+        ...prev,
+        opened: true,
+        loading: false,
+        error: "Unable to locate OmniLodge booking reference for this order.",
+      }));
+      return;
+    }
+    setPartialRefundState({
+      opened: true,
+      loading: true,
+      submitting: false,
+      error: null,
+      success: null,
+      bookingId,
+      preview: null,
+      amount: null,
+      addonQuantities: {},
+    });
+    axiosInstance
+      .get<PartialRefundPreview>(`/bookings/${bookingId}/partial-refund-preview`)
+      .then((response) => {
+        const preview = response.data;
+        const addonQuantities: Record<number, number> = {};
+        preview.addons.forEach((addon) => {
+          addonQuantities[addon.id] = 0;
+        });
+        const computedAmount = computeAddonRefundTotal(preview.addons, addonQuantities);
+        const maxAmount = Math.max((preview.remainingAmount - 1) / 100, 0);
+        const nextAmount = Math.min(computedAmount, maxAmount);
+        setPartialRefundState((prev) => ({
+          ...prev,
+          loading: false,
+          preview,
+          addonQuantities,
+          amount: nextAmount > 0 ? Number(nextAmount.toFixed(2)) : null,
+        }));
+      })
+      .catch((error) => {
+        setPartialRefundState((prev) => ({
+          ...prev,
+          loading: false,
+          error: extractErrorMessage(error),
+        }));
+      });
+  };
+
+  const closePartialRefundModal = () => {
+    setPartialRefundState({
+      opened: false,
+      loading: false,
+      submitting: false,
+      error: null,
+      success: null,
+      bookingId: null,
+      preview: null,
+      amount: null,
+      addonQuantities: {},
+    });
+  };
+
+  const handlePartialRefundAddonChange = (addonId: number, value: number | string) => {
+    const nextValue = typeof value === "number" ? value : Number.parseInt(String(value), 10);
+    setPartialRefundState((prev) => {
+      if (!prev.preview) {
+        return prev;
+      }
+      const updated = {
+        ...prev.addonQuantities,
+        [addonId]: Number.isFinite(nextValue) && nextValue >= 0 ? nextValue : 0,
+      };
+      const computedAmount = computeAddonRefundTotal(prev.preview.addons, updated);
+      const maxAmount = Math.max((prev.preview.remainingAmount - 1) / 100, 0);
+      const nextAmount = Math.min(computedAmount, maxAmount);
+      return {
+        ...prev,
+        addonQuantities: updated,
+        amount: Number(nextAmount.toFixed(2)),
+        success: null,
+        error: null,
+      };
+    });
+  };
+
+  const handlePartialRefundAmountChange = (value: number | string) => {
+    const nextValue = typeof value === "number" ? value : Number.parseFloat(String(value));
+    setPartialRefundState((prev) => ({
+      ...prev,
+      amount: Number.isFinite(nextValue) ? nextValue : null,
+      success: null,
+      error: null,
+    }));
+  };
+
+  const handleSubmitPartialRefund = async () => {
+    if (!partialRefundState.bookingId || !partialRefundState.preview) {
+      setPartialRefundState((prev) => ({ ...prev, error: "Missing booking reference." }));
+      return;
+    }
+    if (!partialRefundState.amount || partialRefundState.amount <= 0) {
+      setPartialRefundState((prev) => ({ ...prev, error: "Enter a refund amount." }));
+      return;
+    }
+    const remainingMajor = (partialRefundState.preview.remainingAmount - 1) / 100;
+    if (partialRefundState.amount >= remainingMajor) {
+      setPartialRefundState((prev) => ({
+        ...prev,
+        error: "Amount must be less than the remaining paid amount. Use Cancel for a full refund.",
+      }));
+      return;
+    }
+    setPartialRefundState((prev) => ({ ...prev, submitting: true, error: null, success: null }));
+    try {
+      await axiosInstance.post(`/bookings/${partialRefundState.bookingId}/partial-refund`, {
+        amount: partialRefundState.amount,
+      });
+      setPartialRefundState((prev) => ({
+        ...prev,
+        submitting: false,
+        success: "Partial refund submitted.",
+      }));
+      setReloadToken((token) => token + 1);
+    } catch (error) {
+      setPartialRefundState((prev) => ({
+        ...prev,
+        submitting: false,
+        error: extractErrorMessage(error),
+      }));
     }
   };
 
@@ -1084,6 +1634,13 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     filteredSummary.extras.tshirts > 0 ||
     filteredSummary.extras.cocktails > 0 ||
     filteredSummary.extras.photos > 0;
+  const detailsPreviewHtml = detailsState.previewData?.htmlBody ?? null;
+  const detailsPreviewBody =
+    detailsState.previewData?.previewText ??
+    detailsState.previewData?.textBody ??
+    detailsState.previewData?.htmlText ??
+    detailsState.previewData?.snippet ??
+    null;
 
   const groupOptions = useMemo(() => {
 
@@ -1554,6 +2111,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               const bookingId = getBookingIdFromOrder(order);
                               const canAmend = isEcwidOrder(order) && Boolean(bookingId);
                               const canCancel = canAmend && order.status !== "cancelled";
+                              const canPartialRefund = canAmend && order.status !== "cancelled";
                               const undefinedOrderCount = getUndefinedGenreCount(
                                 order.quantity,
                                 order.menCount,
@@ -1657,6 +2215,19 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                           onClick={() => openAmendModal(order)}
                                         >
                                           Amend
+                                        </Button>
+                                      )}
+                                      <Button size="xs" variant="default" onClick={() => openDetailsModal(order)}>
+                                        Details
+                                      </Button>
+                                      {canPartialRefund && (
+                                        <Button
+                                          size="xs"
+                                          color="orange"
+                                          variant="outline"
+                                          onClick={() => openPartialRefundModal(order)}
+                                        >
+                                          Partial Refund
                                         </Button>
                                       )}
                                       {canCancel && (
@@ -1817,6 +2388,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                             const bookingId = getBookingIdFromOrder(order);
                             const canAmend = isEcwidOrder(order) && Boolean(bookingId);
                             const canCancel = canAmend && order.status !== "cancelled";
+                            const canPartialRefund = canAmend && order.status !== "cancelled";
                             const undefinedOrderCount = getUndefinedGenreCount(
                               order.quantity,
                               order.menCount,
@@ -1874,29 +2446,36 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               )}
                               <Table.Td>{order.timeslot}</Table.Td>
                               <Table.Td>
-                                {canAmend || canCancel ? (
-                                  <Group gap="xs">
-                                    {canAmend && (
-                                      <Button size="xs" variant="light" onClick={() => openAmendModal(order)}>
-                                        Amend
-                                      </Button>
-                                    )}
-                                    {canCancel && (
-                                      <Button
-                                        size="xs"
-                                        color="red"
-                                        variant="outline"
-                                        onClick={() => openCancelModal(order)}
-                                      >
-                                        Cancel
-                                      </Button>
-                                    )}
-                                  </Group>
-                                ) : (
-                                  <Text size="sm" c="dimmed">
-                                    -
-                                  </Text>
-                                )}
+                                <Group gap="xs">
+                                  {canAmend && (
+                                    <Button size="xs" variant="light" onClick={() => openAmendModal(order)}>
+                                      Amend
+                                    </Button>
+                                  )}
+                                  <Button size="xs" variant="default" onClick={() => openDetailsModal(order)}>
+                                    Details
+                                  </Button>
+                                  {canPartialRefund && (
+                                    <Button
+                                      size="xs"
+                                      color="orange"
+                                      variant="outline"
+                                      onClick={() => openPartialRefundModal(order)}
+                                    >
+                                      Partial Refund
+                                    </Button>
+                                  )}
+                                  {canCancel && (
+                                    <Button
+                                      size="xs"
+                                      color="red"
+                                      variant="outline"
+                                      onClick={() => openCancelModal(order)}
+                                    >
+                                      Cancel
+                                    </Button>
+                                  )}
+                                </Group>
                               </Table.Td>
                             </Table.Tr>
                           );
@@ -1932,6 +2511,159 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           <Text size="sm" c="dimmed">
             Updating the pickup details will sync the change to Ecwid first and then to OmniLodge.
           </Text>
+          {amendPreview.status === "loading" && (
+            <Group gap="sm">
+              <Loader size="sm" />
+              <Text size="sm">Loading Ecwid order details...</Text>
+            </Group>
+          )}
+          {amendPreview.status === "error" && (
+            <Alert color="red" title="Unable to load Ecwid details">
+              {amendPreview.error || "Failed to load Ecwid details."}
+            </Alert>
+          )}
+          {amendPreview.data && amendPreview.status !== "loading" && amendPreview.status !== "error" && (
+            <Stack gap="sm">
+              {amendPreview.status === "order_missing" && (
+                <Alert color="red" title="Ecwid order not found">
+                  {amendPreview.data.message || "No matching Ecwid order was found."}
+                </Alert>
+              )}
+              {amendPreview.status === "product_missing" && (
+                <Alert color="yellow" title="Product not found in Ecwid order">
+                  <Stack gap={4}>
+                    <Text size="sm">
+                      {amendPreview.data.message || "The Ecwid order exists, but the product is not listed."}
+                    </Text>
+                    {amendPreview.data.missingItems && amendPreview.data.missingItems.length > 0 && (
+                      <Text size="sm" fw={600}>
+                        {`Missing items: ${amendPreview.data.missingItems.join(", ")}`}
+                      </Text>
+                    )}
+                  </Stack>
+                </Alert>
+              )}
+              {amendPreview.status === "matched" && (
+                <Alert color="green" title="Ecwid match confirmed">
+                  {amendPreview.data.message || "Ecwid order and product match found."}
+                </Alert>
+              )}
+          {amendPreview.data.ecwid && (
+            <Stack gap="xs">
+              <Paper withBorder radius="md" p="sm" bg="#fff7ed">
+                <Stack gap="xs">
+                  <Text size="sm" fw={600}>
+                    Sync OmniLodge to Ecwid
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    Use this if Ecwid is the source of truth and OmniLodge needs to match the current Ecwid order item.
+                  </Text>
+                  <Select
+                    label="Ecwid item"
+                    placeholder="Select an item"
+                    data={
+                      amendPreview.data.ecwid.items?.map((item, index) => ({
+                        value: String(index),
+                        label: item.name ? `${item.name} (${item.quantity ?? "-"})` : `Item ${index + 1}`,
+                      })) ?? []
+                    }
+                    value={reconcileState.itemIndex}
+                    onChange={(value) =>
+                      setReconcileState((prev) => ({ ...prev, itemIndex: value, error: null, success: null }))
+                    }
+                  />
+                  {reconcileState.error && (
+                    <Alert color="red" title="Unable to sync">
+                      {reconcileState.error}
+                    </Alert>
+                  )}
+                  {reconcileState.success && (
+                    <Alert color="green" title="Synced">
+                      {reconcileState.success}
+                    </Alert>
+                  )}
+                  <Group justify="flex-end">
+                    <Button
+                      size="xs"
+                      variant="light"
+                      onClick={handleReconcileSubmit}
+                      loading={reconcileState.loading}
+                      disabled={!reconcileState.itemIndex || reconcileState.loading}
+                    >
+                      Update OmniLodge to Ecwid
+                    </Button>
+                  </Group>
+                </Stack>
+              </Paper>
+              <Table withColumnBorders>
+                <Table.Tbody>
+                      <Table.Tr>
+                        <Table.Th>Ecwid Order</Table.Th>
+                        <Table.Td>{amendPreview.data.ecwid.id ?? amendPreview.data.orderId ?? "-"}</Table.Td>
+                      </Table.Tr>
+                      <Table.Tr>
+                        <Table.Th>Order Pickup Time</Table.Th>
+                        <Table.Td>{amendPreview.data.ecwid.pickupTime ?? "-"}</Table.Td>
+                      </Table.Tr>
+                    </Table.Tbody>
+                  </Table>
+                  {amendPreview.data.bookingItems && amendPreview.data.bookingItems.length > 0 && (
+                    <Table withColumnBorders striped highlightOnHover>
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>OmniLodge Item</Table.Th>
+                          <Table.Th>Match</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {amendPreview.data.bookingItems.map((item, index) => (
+                          <Table.Tr key={`omnilodge-item-${index}`}>
+                            <Table.Td>{item.name ?? "-"}</Table.Td>
+                            <Table.Td>
+                              <Badge color={item.matched ? "green" : "red"} variant="light">
+                                {item.matched ? "Found" : "Missing"}
+                              </Badge>
+                            </Table.Td>
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  )}
+                  {amendPreview.data.ecwid.items && amendPreview.data.ecwid.items.length > 0 && (
+                    <Table withColumnBorders striped highlightOnHover>
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>Item</Table.Th>
+                          <Table.Th align="right">Qty</Table.Th>
+                          <Table.Th>Pickup Time</Table.Th>
+                          <Table.Th>Options</Table.Th>
+                          <Table.Th>Match</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {amendPreview.data.ecwid.items.map((item, index) => {
+                          const isMatch = Boolean(item.matched);
+                          return (
+                            <Table.Tr key={`ecwid-item-${index}`} style={isMatch ? { background: "#ecfdf3" } : undefined}>
+                              <Table.Td>{item.name ?? "-"}</Table.Td>
+                              <Table.Td align="right">{item.quantity ?? "-"}</Table.Td>
+                              <Table.Td>{item.pickupTime ?? "-"}</Table.Td>
+                              <Table.Td>{item.options && item.options.length > 0 ? item.options.join(", ") : "-"}</Table.Td>
+                              <Table.Td>
+                                <Badge color={isMatch ? "green" : "gray"} variant="light">
+                                  {isMatch ? "Matched" : "Other"}
+                                </Badge>
+                              </Table.Td>
+                            </Table.Tr>
+                          );
+                        })}
+                      </Table.Tbody>
+                    </Table>
+                  )}
+                </Stack>
+              )}
+            </Stack>
+          )}
           {amendState.order && (
             <Stack gap={2}>
               <Text fw={600}>{amendState.order.customerName || "Unnamed guest"}</Text>
@@ -1969,6 +2701,156 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               disabled={!amendState.formDate || !amendState.formTime || amendState.submitting}
             >
               Save changes
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={partialRefundState.opened}
+        onClose={closePartialRefundModal}
+        title="Partial Refund"
+        size="md"
+        centered
+      >
+        <Stack gap="md">
+          <Text size="sm" c="dimmed">
+            Partial refunds must be less than the remaining paid amount. Use Cancel for a full refund.
+          </Text>
+          {partialRefundState.loading && (
+            <Group gap="sm">
+              <Loader size="sm" />
+              <Text size="sm">Loading refund details...</Text>
+            </Group>
+          )}
+          {partialRefundState.error && (
+            <Alert color="red" title="Unable to load refund details">
+              {partialRefundState.error}
+            </Alert>
+          )}
+          {partialRefundState.preview && (
+            <Stack gap="sm">
+              <Table withColumnBorders>
+                <Table.Tbody>
+                  <Table.Tr>
+                    <Table.Th>Order</Table.Th>
+                    <Table.Td>{partialRefundState.preview.orderId}</Table.Td>
+                  </Table.Tr>
+                  <Table.Tr>
+                    <Table.Th>Paid</Table.Th>
+                    <Table.Td>
+                      {formatStripeAmount(
+                        partialRefundState.preview.stripe.amount,
+                        partialRefundState.preview.stripe.currency,
+                      )}
+                    </Table.Td>
+                  </Table.Tr>
+                  <Table.Tr>
+                    <Table.Th>Refunded</Table.Th>
+                    <Table.Td>
+                      {formatStripeAmount(
+                        partialRefundState.preview.stripe.amountRefunded,
+                        partialRefundState.preview.stripe.currency,
+                      )}
+                    </Table.Td>
+                  </Table.Tr>
+                  <Table.Tr>
+                    <Table.Th>Remaining</Table.Th>
+                    <Table.Td>
+                      {formatStripeAmount(
+                        partialRefundState.preview.remainingAmount,
+                        partialRefundState.preview.stripe.currency,
+                      )}
+                    </Table.Td>
+                  </Table.Tr>
+                </Table.Tbody>
+              </Table>
+
+              {partialRefundState.preview.addons.length > 0 && (
+                <Stack gap="xs">
+                  <Text size="sm" fw={600}>
+                    Add-ons refund
+                  </Text>
+                  <Table withColumnBorders striped highlightOnHover>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Addon</Table.Th>
+                        <Table.Th align="right">Qty</Table.Th>
+                        <Table.Th align="right">Unit Price</Table.Th>
+                        <Table.Th align="right">Refund Qty</Table.Th>
+                      </Table.Tr>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {partialRefundState.preview.addons.map((addon) => {
+                        const unitPrice = addon.unitPrice
+                          ? parseMoney(addon.unitPrice)
+                          : addon.totalPrice && addon.quantity
+                            ? parseMoney(addon.totalPrice) / addon.quantity
+                            : 0;
+                        return (
+                          <Table.Tr key={addon.id}>
+                            <Table.Td>{addon.platformAddonName ?? `Addon ${addon.id}`}</Table.Td>
+                            <Table.Td align="right">{addon.quantity}</Table.Td>
+                            <Table.Td align="right">
+                              {unitPrice > 0
+                                ? `${unitPrice.toFixed(2)} ${(addon.currency ?? partialRefundState.preview?.stripe.currency ?? "").toUpperCase()}`
+                                : "-"}
+                            </Table.Td>
+                            <Table.Td align="right">
+                              <NumberInput
+                                value={partialRefundState.addonQuantities[addon.id] ?? 0}
+                                min={0}
+                                max={addon.quantity}
+                                step={1}
+                                allowDecimal={false}
+                                onChange={(value) => handlePartialRefundAddonChange(addon.id, value)}
+                              />
+                            </Table.Td>
+                          </Table.Tr>
+                        );
+                      })}
+                    </Table.Tbody>
+                  </Table>
+                </Stack>
+              )}
+
+              <NumberInput
+                label="Refund amount"
+                value={partialRefundState.amount ?? 0}
+                min={0}
+                max={Math.max((partialRefundState.preview.remainingAmount - 1) / 100, 0)}
+                step={1}
+                decimalScale={2}
+                fixedDecimalScale
+                onChange={handlePartialRefundAmountChange}
+                description="Amount is auto-calculated from selected add-ons. You can override it."
+                rightSection={
+                  <Text size="xs" c="dimmed">
+                    {partialRefundState.preview.stripe.currency?.toUpperCase() ?? ""}
+                  </Text>
+                }
+                rightSectionWidth={64}
+              />
+
+              {partialRefundState.success && (
+                <Alert color="green" title="Refund submitted">
+                  {partialRefundState.success}
+                </Alert>
+              )}
+            </Stack>
+          )}
+
+          <Group justify="flex-end">
+            <Button variant="default" onClick={closePartialRefundModal} disabled={partialRefundState.submitting}>
+              Close
+            </Button>
+            <Button
+              color="orange"
+              onClick={handleSubmitPartialRefund}
+              loading={partialRefundState.submitting}
+              disabled={!partialRefundState.preview || partialRefundState.submitting}
+            >
+              Issue Partial Refund
             </Button>
           </Group>
         </Stack>
@@ -2071,6 +2953,240 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               {cancelState.preview?.stripe.fullyRefunded ? "Confirm Cancel" : "Confirm Refund"}
             </Button>
           </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={detailsState.opened}
+        onClose={closeDetailsModal}
+        title="Booking Details"
+        size="lg"
+        centered
+      >
+        <Stack gap="md">
+          {detailsState.loading && (
+            <Group gap="sm">
+              <Loader size="sm" />
+              <Text size="sm">Loading booking details...</Text>
+            </Group>
+          )}
+          {detailsState.error && (
+            <Alert color="red" title="Unable to load booking details">
+              {detailsState.error}
+            </Alert>
+          )}
+          {!detailsState.loading && !detailsState.error && detailsState.data && (
+            <>
+              <Stack gap={4}>
+                <Text fw={600}>
+                  {detailsState.data.booking.platformBookingId ?? detailsState.data.booking.id}
+                </Text>
+                <Text size="sm" c="dimmed">
+                  {detailsState.data.booking.productName} · {detailsState.data.booking.date}{" "}
+                  {detailsState.data.booking.timeslot ? `@ ${detailsState.data.booking.timeslot}` : ""}
+                </Text>
+              </Stack>
+              <Tabs
+                value={detailsState.activeTab}
+                onChange={(value) =>
+                  setDetailsState((prev) => ({ ...prev, activeTab: value ?? "emails" }))
+                }
+              >
+                <Tabs.List>
+                  <Tabs.Tab value="emails">Emails</Tabs.Tab>
+                  <Tabs.Tab value="events">Events</Tabs.Tab>
+                  <Tabs.Tab value="stripe">Stripe</Tabs.Tab>
+                </Tabs.List>
+
+                <Tabs.Panel value="emails" pt="md">
+                  {detailsState.data.emails.length === 0 ? (
+                    <Alert color="blue" title="No emails">
+                      No related emails were found for this booking.
+                    </Alert>
+                  ) : (
+                    <Stack gap="sm">
+                      <Table withColumnBorders striped highlightOnHover>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>Subject</Table.Th>
+                            <Table.Th>Received</Table.Th>
+                            <Table.Th>Status</Table.Th>
+                            <Table.Th>Actions</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {detailsState.data.emails.map((email) => (
+                            <Table.Tr key={email.messageId}>
+                              <Table.Td>{email.subject ?? email.messageId}</Table.Td>
+                              <Table.Td>{formatDateTime(email.receivedAt ?? email.internalDate ?? null)}</Table.Td>
+                              <Table.Td>{email.ingestionStatus ?? "-"}</Table.Td>
+                              <Table.Td>
+                                <Button
+                                  size="xs"
+                                  variant="light"
+                                  onClick={() => handleDetailsPreview(email.messageId)}
+                                >
+                                  Preview
+                                </Button>
+                              </Table.Td>
+                            </Table.Tr>
+                          ))}
+                        </Table.Tbody>
+                      </Table>
+                      {detailsState.previewError && (
+                        <Alert color="red" title="Unable to load email preview">
+                          {detailsState.previewError}
+                        </Alert>
+                      )}
+                    </Stack>
+                  )}
+                </Tabs.Panel>
+
+                <Tabs.Panel value="events" pt="md">
+                  {detailsState.data.events.length === 0 ? (
+                    <Alert color="blue" title="No events">
+                      No booking events were found.
+                    </Alert>
+                  ) : (
+                    <Table withColumnBorders striped highlightOnHover>
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>Type</Table.Th>
+                          <Table.Th>Status</Table.Th>
+                          <Table.Th>Occurred</Table.Th>
+                          <Table.Th>Processed</Table.Th>
+                          <Table.Th>Message ID</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {detailsState.data.events.map((event) => (
+                          <Table.Tr key={event.id}>
+                            <Table.Td>{event.eventType ?? "-"}</Table.Td>
+                            <Table.Td>{event.statusAfter ?? "-"}</Table.Td>
+                            <Table.Td>{formatDateTime(event.occurredAt ?? null)}</Table.Td>
+                            <Table.Td>{formatDateTime(event.processedAt ?? null)}</Table.Td>
+                            <Table.Td>{event.emailMessageId ?? "-"}</Table.Td>
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  )}
+                </Tabs.Panel>
+
+                <Tabs.Panel value="stripe" pt="md">
+                  {detailsState.data.stripe ? (
+                    <Table withColumnBorders>
+                      <Table.Tbody>
+                        <Table.Tr>
+                          <Table.Th>Transaction</Table.Th>
+                          <Table.Td>{detailsState.data.stripe.id}</Table.Td>
+                        </Table.Tr>
+                        <Table.Tr>
+                          <Table.Th>Type</Table.Th>
+                          <Table.Td>{detailsState.data.stripe.type}</Table.Td>
+                        </Table.Tr>
+                        <Table.Tr>
+                          <Table.Th>Status</Table.Th>
+                          <Table.Td>{detailsState.data.stripe.status ?? "-"}</Table.Td>
+                        </Table.Tr>
+                        <Table.Tr>
+                          <Table.Th>Amount</Table.Th>
+                          <Table.Td>
+                            {formatStripeAmount(detailsState.data.stripe.amount, detailsState.data.stripe.currency)}
+                          </Table.Td>
+                        </Table.Tr>
+                        <Table.Tr>
+                          <Table.Th>Refunded</Table.Th>
+                          <Table.Td>
+                            {formatStripeAmount(
+                              detailsState.data.stripe.amountRefunded,
+                              detailsState.data.stripe.currency,
+                            )}
+                          </Table.Td>
+                        </Table.Tr>
+                        <Table.Tr>
+                          <Table.Th>Receipt Email</Table.Th>
+                          <Table.Td>{detailsState.data.stripe.receiptEmail ?? "-"}</Table.Td>
+                        </Table.Tr>
+                        <Table.Tr>
+                          <Table.Th>Created</Table.Th>
+                          <Table.Td>{detailsState.data.stripe.created ? formatDateTime(new Date(detailsState.data.stripe.created * 1000).toISOString()) : "-"}</Table.Td>
+                        </Table.Tr>
+                      </Table.Tbody>
+                    </Table>
+                  ) : (
+                    <Alert color="blue" title="No Stripe data">
+                      {detailsState.data.stripeError ?? "No Stripe transaction was found for this booking."}
+                    </Alert>
+                  )}
+                </Tabs.Panel>
+              </Tabs>
+            </>
+          )}
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={detailsState.previewOpen}
+        onClose={closeDetailsPreview}
+        title="Email preview"
+        fullScreen
+        centered
+      >
+        <Stack gap="sm">
+          {detailsState.previewError && (
+            <Alert color="red" title="Failed to load email preview">
+              {detailsState.previewError}
+            </Alert>
+          )}
+          {detailsState.previewLoading && (
+            <Box style={{ minHeight: 120 }}>
+              <Loader variant="dots" />
+            </Box>
+          )}
+          {detailsState.previewData && (
+            <>
+              <Stack gap={4}>
+                <Text fw={600}>{detailsState.previewData.subject ?? "No subject"}</Text>
+                <Text size="sm" c="dimmed">
+                  {detailsState.previewData.fromAddress ?? "-"}
+                </Text>
+                <Text size="sm" c="dimmed">
+                  {detailsState.previewData.toAddresses ?? "-"}
+                </Text>
+                <Text size="sm">
+                  {formatDateTime(detailsState.previewData.receivedAt ?? detailsState.previewData.internalDate ?? null)}
+                </Text>
+                <Badge size="sm" variant="light">
+                  {(detailsState.previewData.ingestionStatus ?? "unknown").toUpperCase()}
+                </Badge>
+              </Stack>
+              {detailsPreviewHtml ? (
+                <Box style={{ height: "calc(100vh - 240px)" }}>
+                  <iframe
+                    title="Email HTML preview"
+                    srcDoc={detailsPreviewHtml}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 8,
+                    }}
+                  />
+                </Box>
+              ) : detailsPreviewBody ? (
+                <Paper withBorder radius="md" p="sm" bg="#f8fafc">
+                  <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
+                    {detailsPreviewBody}
+                  </Text>
+                </Paper>
+              ) : (
+                <Alert color="yellow" title="No preview content">
+                  No email preview content available.
+                </Alert>
+              )}
+            </>
+          )}
         </Stack>
       </Modal>
 

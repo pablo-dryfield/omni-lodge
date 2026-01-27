@@ -20,7 +20,13 @@ const initialState: DataState<Partial<Venue>> = [
 const venueSlice = createSlice({
   name: "venues",
   initialState,
-  reducers: {},
+  reducers: {
+    setVenuesData(state, action: PayloadAction<ServerResponse<Partial<Venue>>>) {
+      state[0].loading = false;
+      state[0].data = action.payload;
+      state[0].error = null;
+    },
+  },
   extraReducers: (builder) => {
     builder
       .addCase(fetchVenues.pending, (state) => {
@@ -83,5 +89,5 @@ const venueSlice = createSlice({
   },
 });
 
+export const { setVenuesData } = venueSlice.actions;
 export default venueSlice.reducer;
-

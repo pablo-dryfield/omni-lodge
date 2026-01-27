@@ -18,7 +18,11 @@ const counterSlice = createSlice({
   name: 'counters',
   initialState,
   reducers: {
-    // Synchronous actions (if any)
+    setCountersData(state, action: PayloadAction<ServerResponse<Partial<Counter>>>) {
+      state[0].loading = false;
+      state[0].data = action.payload;
+      state[0].error = null;
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -83,4 +87,5 @@ const counterSlice = createSlice({
   },
 });
 
+export const { setCountersData } = counterSlice.actions;
 export default counterSlice.reducer;

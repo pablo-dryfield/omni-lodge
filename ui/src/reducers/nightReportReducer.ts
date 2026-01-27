@@ -71,6 +71,11 @@ const nightReportSlice = createSlice({
     clearNightReportError(state) {
       state.ui.lastError = null;
     },
+    setNightReportList(state, action: PayloadAction<ServerResponse<NightReportSummary>>) {
+      state.list[0].loading = false;
+      state.list[0].data = action.payload;
+      state.list[0].error = null;
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -196,5 +201,5 @@ const nightReportSlice = createSlice({
   },
 });
 
-export const { clearNightReportError } = nightReportSlice.actions;
+export const { clearNightReportError, setNightReportList } = nightReportSlice.actions;
 export default nightReportSlice.reducer;

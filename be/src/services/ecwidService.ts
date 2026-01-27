@@ -63,6 +63,7 @@ export type EcwidOptionSelection = {
 export type EcwidOption = {
   name?: string;
   value?: string | number | null;
+  selectionTitle?: string;
   selections?: EcwidOptionSelection[];
 };
 

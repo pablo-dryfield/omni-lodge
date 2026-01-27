@@ -9,6 +9,11 @@ import {
   backfillBookingEmails,
   getManifest,
   ingestBookingEmails,
+  getEcwidAmendPreview,
+  getBookingDetails,
+  getPartialRefundPreview,
+  reconcileEcwidBooking,
+  partialRefundEcwidBooking,
   amendEcwidBooking,
   cancelEcwidBooking,
   getEcwidRefundPreview,
@@ -26,8 +31,13 @@ router.post('/emails/backfill', authMiddleware, backfillBookingEmails);
 router.get(['/manifest', 'manifest'], authMiddleware, getManifest);
 router.post('/ingest-emails', authMiddleware, ingestBookingEmails);
 router.post('/import-ecwid', authMiddleware, importEcwidBooking);
+router.get('/:bookingId/details', authMiddleware, getBookingDetails);
+router.get('/:bookingId/amend-ecwid-preview', authMiddleware, getEcwidAmendPreview);
+router.post('/:bookingId/reconcile-ecwid', authMiddleware, reconcileEcwidBooking);
 router.post('/:bookingId/amend-ecwid', authMiddleware, amendEcwidBooking);
 router.get('/:bookingId/refund-preview', authMiddleware, getEcwidRefundPreview);
+router.get('/:bookingId/partial-refund-preview', authMiddleware, getPartialRefundPreview);
+router.post('/:bookingId/partial-refund', authMiddleware, partialRefundEcwidBooking);
 router.post('/:bookingId/cancel-ecwid', authMiddleware, cancelEcwidBooking);
 
 export default router;

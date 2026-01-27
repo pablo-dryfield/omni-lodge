@@ -9,7 +9,11 @@ import BookingEmail from '../models/BookingEmail.js';
 import BookingAddon from '../models/BookingAddon.js';
 import BookingEvent from '../models/BookingEvent.js';
 import Channel from '../models/Channel.js';
+import Guest from '../models/Guest.js';
+import Addon from '../models/Addon.js';
 import Product from '../models/Product.js';
+import ProductAlias from '../models/ProductAlias.js';
+import ProductAddon from '../models/ProductAddon.js';
 import HttpError from '../errors/HttpError.js';
 import { getStripeClient } from '../finance/services/stripeClient.js';
 import type Stripe from 'stripe';
@@ -18,6 +22,7 @@ import {
   canonicalizeProductKeyFromLabel,
   canonicalizeProductKeyFromSources,
   canonicalizeProductLabelFromSources,
+  sanitizeProductSource,
 } from '../utils/productName.js';
 import {
   ingestAllBookingEmails,
@@ -60,6 +65,21 @@ type AmendEcwidRequestBody = {
   pickupTime?: string;
 };
 
+type ReconcileEcwidRequestBody = {
+  itemIndex?: number;
+};
+
+type EcwidAmendPreviewStatus = 'matched' | 'order_missing' | 'product_missing';
+
+type EcwidAmendPreviewItem = {
+  name: string | null;
+  quantity: number | null;
+  pickupTime: string | null;
+  options: string[];
+  matched?: boolean;
+  matchedBookingNames?: string[];
+};
+
 const normalizeDate = (value?: string, boundary: RangeBoundary = 'start'): string | null => {
   if (!value) {
     return null;
@@ -89,6 +109,84 @@ const resolveRange = (query: QueryParams): { start: string | null; end: string |
     return { start: end, end };
   }
   return { start, end };
+};
+
+const normalizeAliasLabel = (value: string): string => sanitizeProductSource(value).toLowerCase();
+
+const resolveAliasProductId = (aliases: ProductAlias[], value: string): number | null => {
+  const normalized = normalizeAliasLabel(value);
+  for (const alias of aliases) {
+    if (!alias.active) {
+      continue;
+    }
+    if (alias.matchType === 'exact') {
+      if (alias.normalizedLabel === normalized) {
+        return alias.productId ?? null;
+      }
+      continue;
+    }
+    if (alias.matchType === 'contains') {
+      if (normalized.includes(alias.normalizedLabel)) {
+        return alias.productId ?? null;
+      }
+      continue;
+    }
+    if (alias.matchType === 'regex') {
+      try {
+        const matcher = new RegExp(alias.label, 'i');
+        if (matcher.test(value)) {
+          return alias.productId ?? null;
+        }
+      } catch (error) {
+        logger.warn(`Invalid product alias regex: ${alias.label}`, error);
+      }
+    }
+  }
+  return null;
+};
+
+const stripEcwidItemSuffix = (value: string): string => value.replace(/-\d+$/, '');
+
+const extractEcwidItemOptions = (item: EcwidOrder['items'][number] | undefined): string[] => {
+  if (!item) {
+    return [];
+  }
+
+  const results: string[] = [];
+
+  (item.selectedOptions ?? []).forEach((entry) => {
+    const value = entry.selectionTitle ?? entry.value ?? entry.name;
+    if (value !== null && value !== undefined) {
+      const normalized = String(value).trim();
+      if (normalized) {
+        results.push(normalized);
+      }
+    }
+  });
+
+  (item.options ?? []).forEach((entry) => {
+    if (entry.selections && entry.selections.length > 0) {
+      entry.selections.forEach((selection) => {
+        const value = selection.selectionTitle ?? selection.value ?? selection.name;
+        if (value !== null && value !== undefined) {
+          const normalized = String(value).trim();
+          if (normalized) {
+            results.push(normalized);
+          }
+        }
+      });
+      return;
+    }
+    const value = entry.value ?? entry.name;
+    if (value !== null && value !== undefined) {
+      const normalized = String(value).trim();
+      if (normalized) {
+        results.push(normalized);
+      }
+    }
+  });
+
+  return results;
 };
 
 type BookingEmailQueryParams = QueryParams & {
@@ -1232,6 +1330,375 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
   }
 };
 
+export const getEcwidAmendPreview = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const booking = await Booking.findByPk(bookingIdParam, {
+      include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
+    });
+    if (!booking) {
+      res.status(404).json({ message: 'Booking not found' });
+      return;
+    }
+
+    if (booking.platform !== 'ecwid') {
+      res.status(400).json({ message: 'Only Ecwid bookings can be previewed through this endpoint' });
+      return;
+    }
+
+    const platformBookingId = booking.platformBookingId?.trim() ?? '';
+    const platformOrderId = booking.platformOrderId?.trim() ?? '';
+    const rawOrderId = platformOrderId || platformBookingId;
+    if (!rawOrderId) {
+      res.status(400).json({ message: 'Booking is missing Ecwid platform reference' });
+      return;
+    }
+
+    const orderId = stripEcwidItemSuffix(rawOrderId);
+    let ecwidOrder: EcwidOrder | null = null;
+    try {
+      ecwidOrder = await getEcwidOrder(orderId);
+    } catch (error) {
+      if (isAxiosError(error) && error.response?.status === 404) {
+        res.status(200).json({
+          status: 'order_missing' satisfies EcwidAmendPreviewStatus,
+          message: 'Ecwid order not found for this booking reference.',
+          orderId,
+          booking: {
+            id: booking.id,
+            platformBookingId: booking.platformBookingId,
+            platformOrderId: booking.platformOrderId,
+            productId: booking.productId,
+            productName: booking.product?.name ?? booking.productName,
+            productVariant: booking.productVariant,
+          },
+        });
+        return;
+      }
+      throw error;
+    }
+
+    const aliases = await ProductAlias.findAll({
+      where: { active: true },
+      order: [
+        ['priority', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    });
+
+    const bookingProductName = booking.product?.name ?? booking.productName ?? null;
+    const bookingProductVariant = booking.productVariant ?? null;
+
+    const orderBookings = await Booking.findAll({
+      where: {
+        platform: 'ecwid',
+        [Op.or]: [
+          { platformOrderId: orderId },
+          { platformBookingId: orderId },
+          { platformBookingId: { [Op.like]: `${orderId}-%` } },
+        ],
+      },
+      include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
+      order: [['id', 'ASC']],
+    });
+
+    const items: EcwidAmendPreviewItem[] = (ecwidOrder.items ?? []).map((item) => ({
+      name: item.name ? String(item.name).trim() : null,
+      quantity: item.quantity ?? null,
+      pickupTime: item.pickupTime ? String(item.pickupTime) : null,
+      options: extractEcwidItemOptions(item),
+      matched: false,
+      matchedBookingNames: [],
+    }));
+
+    const ecwidItemAliasIds = items.map((item) => (item.name ? resolveAliasProductId(aliases, item.name) : null));
+    const ecwidItemNormalized = items.map((item) => (item.name ? normalizeAliasLabel(item.name) : null));
+
+    const bookingItems = orderBookings.map((record) => {
+      const name = record.product?.name ?? record.productName ?? null;
+      const aliasProductId = name ? resolveAliasProductId(aliases, name) : null;
+      return {
+        id: record.id,
+        name,
+        productId: record.productId ?? aliasProductId ?? null,
+      };
+    });
+
+    const bookingMatches = bookingItems.map((bookingItem) => {
+      let matchedIndex: number | null = null;
+      if (bookingItem.name) {
+        const bookingNormalized = normalizeAliasLabel(bookingItem.name);
+        for (let index = 0; index < items.length; index += 1) {
+          const itemName = items[index].name;
+          if (!itemName) {
+            continue;
+          }
+          const itemAliasProductId = ecwidItemAliasIds[index];
+          if (bookingItem.productId !== null && itemAliasProductId !== null) {
+            if (bookingItem.productId === itemAliasProductId) {
+              matchedIndex = index;
+              break;
+            }
+          }
+          const itemNormalized = ecwidItemNormalized[index];
+          if (
+            itemNormalized &&
+            (itemNormalized.includes(bookingNormalized) || bookingNormalized.includes(itemNormalized))
+          ) {
+            matchedIndex = index;
+            break;
+          }
+        }
+      }
+      if (matchedIndex !== null) {
+        items[matchedIndex].matched = true;
+        if (bookingItem.name) {
+          items[matchedIndex].matchedBookingNames = Array.from(
+            new Set([...(items[matchedIndex].matchedBookingNames ?? []), bookingItem.name]),
+          );
+        }
+      }
+      return {
+        ...bookingItem,
+        matched: matchedIndex !== null,
+        matchedIndex,
+      };
+    });
+
+    const missingItems = bookingMatches.filter((entry) => !entry.matched && entry.name).map((entry) => entry.name as string);
+
+    const status: EcwidAmendPreviewStatus = missingItems.length > 0 ? 'product_missing' : 'matched';
+    const message =
+      status === 'matched'
+        ? 'Ecwid order contains all OmniLodge items for this booking.'
+        : 'Ecwid order found, but some OmniLodge items are missing.';
+
+    res.status(200).json({
+      status,
+      message,
+      orderId,
+      booking: {
+        id: booking.id,
+        platformBookingId: booking.platformBookingId,
+        platformOrderId: booking.platformOrderId,
+        productId: booking.productId,
+        productName: bookingProductName,
+        productVariant: bookingProductVariant,
+      },
+      bookingItems: bookingMatches.map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        productId: entry.productId,
+        matched: entry.matched,
+        matchedIndex: entry.matchedIndex,
+      })),
+      missingItems,
+      ecwid: {
+        id: ecwidOrder.id ?? orderId,
+        pickupTime: ecwidOrder.pickupTime ?? null,
+        items,
+      },
+    });
+  } catch (error) {
+    const status = isAxiosError(error) ? error.response?.status ?? 502 : 500;
+    const message = error instanceof Error ? error.message : 'Failed to preview Ecwid booking details';
+    res.status(status).json({ message });
+  }
+};
+
+export const reconcileEcwidBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const { itemIndex } = req.body as ReconcileEcwidRequestBody;
+    if (itemIndex === undefined || itemIndex === null || Number.isNaN(Number(itemIndex))) {
+      res.status(400).json({ message: 'itemIndex is required' });
+      return;
+    }
+
+    const booking = await Booking.findByPk(bookingIdParam);
+    if (!booking) {
+      res.status(404).json({ message: 'Booking not found' });
+      return;
+    }
+
+    if (booking.platform !== 'ecwid') {
+      res.status(400).json({ message: 'Only Ecwid bookings can be reconciled through this endpoint' });
+      return;
+    }
+
+    const platformBookingId = booking.platformBookingId?.trim() ?? '';
+    const platformOrderId = booking.platformOrderId?.trim() ?? '';
+    const rawOrderId = platformOrderId || platformBookingId;
+    if (!rawOrderId) {
+      res.status(400).json({ message: 'Booking is missing Ecwid platform reference' });
+      return;
+    }
+
+    const orderId = stripEcwidItemSuffix(rawOrderId);
+    const ecwidOrder = await getEcwidOrder(orderId);
+
+    const items = ecwidOrder.items ?? [];
+    const index = Number(itemIndex);
+    if (!Number.isFinite(index) || index < 0 || index >= items.length) {
+      res.status(400).json({ message: 'itemIndex is out of range' });
+      return;
+    }
+
+    const targetItem = items[index];
+    const itemName = targetItem?.name ? String(targetItem.name).trim() : null;
+    if (!itemName) {
+      res.status(400).json({ message: 'Selected Ecwid item is missing a name' });
+      return;
+    }
+
+    const aliases = await ProductAlias.findAll({
+      where: { active: true },
+      order: [
+        ['priority', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    });
+    const resolvedProductId = resolveAliasProductId(aliases, itemName);
+    const options = extractEcwidItemOptions(targetItem);
+    const variant = options.length > 0 ? options.join(' | ') : null;
+
+    booking.productName = itemName;
+    booking.productId = resolvedProductId ?? null;
+    booking.productVariant = variant;
+    booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
+
+    await booking.save();
+
+    res.status(200).json({
+      message: 'Booking updated to match Ecwid order item',
+      booking: {
+        id: booking.id,
+        platformBookingId: booking.platformBookingId,
+        platformOrderId: booking.platformOrderId,
+        productId: booking.productId,
+        productName: booking.productName,
+        productVariant: booking.productVariant,
+      },
+      ecwid: {
+        id: ecwidOrder.id ?? orderId,
+        itemIndex: index,
+        itemName,
+      },
+    });
+  } catch (error) {
+    const status = isAxiosError(error) ? error.response?.status ?? 502 : 500;
+    const message = error instanceof Error ? error.message : 'Failed to reconcile Ecwid booking';
+    res.status(status).json({ message });
+  }
+};
+
+export const getBookingDetails = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const booking = await Booking.findByPk(bookingIdParam, {
+      include: [
+        { model: Product, as: 'product', attributes: ['id', 'name'] },
+        { model: Guest, as: 'guest', attributes: ['id', 'name', 'email', 'phoneNumber'] },
+      ],
+    });
+    if (!booking) {
+      res.status(404).json({ message: 'Booking not found' });
+      return;
+    }
+
+    const bookingEvents = await BookingEvent.findAll({
+      where: { bookingId: booking.id },
+      order: [['id', 'DESC']],
+    });
+
+    const emailMessageIds = new Set<string>();
+    if (booking.lastEmailMessageId) {
+      emailMessageIds.add(booking.lastEmailMessageId);
+    }
+    bookingEvents.forEach((event) => {
+      if (event.emailMessageId) {
+        emailMessageIds.add(event.emailMessageId);
+      }
+    });
+
+    const emails = emailMessageIds.size > 0
+      ? await BookingEmail.findAll({
+          where: { messageId: { [Op.in]: Array.from(emailMessageIds) } },
+          attributes: [
+            'id',
+            'messageId',
+            'subject',
+            'snippet',
+            'receivedAt',
+            'internalDate',
+            'ingestionStatus',
+            'failureReason',
+          ],
+          order: [
+            ['receivedAt', 'DESC'],
+            ['internalDate', 'DESC'],
+            ['id', 'DESC'],
+          ],
+        })
+      : [];
+
+    let stripe: StripeTransactionSummary | null = null;
+    let stripeError: string | null = null;
+    let ecwidOrderId: string | null = null;
+
+    if (booking.platform === 'ecwid') {
+      const platformBookingId = booking.platformBookingId?.trim() ?? '';
+      const platformOrderId = booking.platformOrderId?.trim() ?? '';
+      const rawOrderId = platformOrderId || platformBookingId;
+      if (rawOrderId) {
+        ecwidOrderId = stripEcwidItemSuffix(rawOrderId);
+        try {
+          const ecwidOrder = await getEcwidOrder(ecwidOrderId);
+          const externalTransactionId = normalizeExternalTransactionId(ecwidOrder);
+          if (externalTransactionId) {
+            stripe = await resolveStripeTransaction(externalTransactionId);
+          }
+        } catch (error) {
+          if (isAxiosError(error) && error.response?.status === 404) {
+            stripeError = 'Ecwid order not found.';
+          } else if (isStripeResourceMissing(error)) {
+            stripeError = 'Stripe transaction not found.';
+          } else {
+            stripeError = error instanceof Error ? error.message : 'Failed to load Stripe details';
+          }
+        }
+      }
+    }
+
+    res.status(200).json({
+      booking: booking.get({ plain: true }),
+      events: bookingEvents.map((event) => event.get({ plain: true })),
+      emails: emails.map((email) => email.get({ plain: true })),
+      stripe,
+      stripeError,
+      ecwidOrderId,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to load booking details';
+    res.status(500).json({ message });
+  }
+};
+
 export const amendEcwidBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
@@ -1331,6 +1798,18 @@ type EcwidRefundPreview = {
   orderId: string;
   externalTransactionId: string;
   stripe: StripeTransactionSummary;
+};
+
+type PartialRefundPreview = EcwidRefundPreview & {
+  remainingAmount: number;
+  addons: Array<{
+    id: number;
+    platformAddonName: string | null;
+    quantity: number;
+    unitPrice: string | null;
+    totalPrice: string | null;
+    currency: string | null;
+  }>;
 };
 
 const normalizeExternalTransactionId = (order: EcwidOrder): string | null => {
@@ -1484,6 +1963,7 @@ const buildEcwidRefundPreview = async (booking: Booking): Promise<EcwidRefundPre
 const createStripeRefundFromSummary = async (
   summary: StripeTransactionSummary,
   metadata: { bookingId: number; orderId: string },
+  amount?: number,
 ): Promise<Stripe.Refund | null> => {
   const stripe = getStripeClient();
 
@@ -1497,6 +1977,9 @@ const createStripeRefundFromSummary = async (
       orderId: metadata.orderId,
     },
   };
+  if (amount && Number.isFinite(amount)) {
+    basePayload.amount = Math.max(0, Math.floor(amount));
+  }
   if (summary.type === 'payment_intent') {
     return stripe.refunds.create({ ...basePayload, payment_intent: summary.id });
   }
@@ -1589,5 +2072,245 @@ export const getEcwidRefundPreview = async (req: AuthenticatedRequest, res: Resp
     }
     const message = error instanceof Error ? error.message : 'Failed to load refund preview';
     res.status(500).json({ message });
+  }
+};
+
+export const getPartialRefundPreview = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const booking = await Booking.findByPk(bookingIdParam);
+    if (!booking) {
+      res.status(404).json({ message: 'Booking not found' });
+      return;
+    }
+
+    if (booking.platform !== 'ecwid') {
+      res.status(400).json({ message: 'Only Ecwid bookings can be refunded through this endpoint' });
+      return;
+    }
+
+    const preview = await buildEcwidRefundPreview(booking);
+    const remaining = Math.max(preview.stripe.amount - preview.stripe.amountRefunded, 0);
+
+    const addons = await BookingAddon.findAll({
+      where: { bookingId: booking.id },
+      include: [
+        {
+          model: Addon,
+          as: 'addon',
+          attributes: ['id', 'name', 'basePrice'],
+        },
+      ],
+      order: [['id', 'ASC']],
+    });
+
+    const normalizeAddonName = (value: string): string =>
+      value
+        .toLowerCase()
+        .replace(/add[-\s]?on/gi, '')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const priceOverrides = booking.productId
+      ? await ProductAddon.findAll({
+          where: { productId: booking.productId },
+          attributes: ['addonId', 'priceOverride'],
+          include: [{ model: Addon, as: 'addon', attributes: ['id', 'name', 'basePrice'] }],
+        })
+      : [];
+    const priceOverrideByAddonId = new Map(
+      priceOverrides.map((entry) => [entry.addonId, entry.priceOverride]),
+    );
+    const productAddonByName = new Map<
+      string,
+      { addonId: number; priceOverride: number | null; basePrice: number | null; name: string | null }
+    >();
+    priceOverrides.forEach((entry) => {
+      const addonRecord = entry.addon as Addon | undefined;
+      if (!addonRecord?.name) {
+        return;
+      }
+      const key = normalizeAddonName(addonRecord.name);
+      if (!key) {
+        return;
+      }
+      productAddonByName.set(key, {
+        addonId: addonRecord.id,
+        priceOverride: entry.priceOverride ?? null,
+        basePrice: addonRecord.basePrice ?? null,
+        name: addonRecord.name,
+      });
+    });
+
+    const hasMissingAddonId = addons.some((addon) => !addon.addonId && addon.platformAddonName);
+    const fallbackAddonByName = new Map<
+      string,
+      { addonId: number; priceOverride: number | null; basePrice: number | null; name: string | null }
+    >();
+    if (hasMissingAddonId) {
+      const allAddons = await Addon.findAll({ attributes: ['id', 'name', 'basePrice'] });
+      allAddons.forEach((addon) => {
+        if (!addon.name) {
+          return;
+        }
+        const key = normalizeAddonName(addon.name);
+        if (!key) {
+          return;
+        }
+        fallbackAddonByName.set(key, {
+          addonId: addon.id,
+          priceOverride: null,
+          basePrice: addon.basePrice ?? null,
+          name: addon.name,
+        });
+      });
+    }
+
+    const findAddonByName = (
+      rawName: string | null,
+    ): { addonId: number; priceOverride: number | null; basePrice: number | null; name: string | null } | null => {
+      if (!rawName) {
+        return null;
+      }
+      const normalized = normalizeAddonName(rawName);
+      if (!normalized) {
+        return null;
+      }
+      const direct = productAddonByName.get(normalized);
+      if (direct) {
+        return direct;
+      }
+      const fallbackDirect = fallbackAddonByName.get(normalized);
+      if (fallbackDirect) {
+        return fallbackDirect;
+      }
+      for (const [key, value] of productAddonByName.entries()) {
+        if (normalized.includes(key) || key.includes(normalized)) {
+          return value;
+        }
+      }
+      for (const [key, value] of fallbackAddonByName.entries()) {
+        if (normalized.includes(key) || key.includes(normalized)) {
+          return value;
+        }
+      }
+      return null;
+    };
+
+    res.status(200).json({
+      bookingId: preview.bookingId,
+      orderId: preview.orderId,
+      externalTransactionId: preview.externalTransactionId,
+      stripe: preview.stripe,
+      remainingAmount: remaining,
+      addons: addons.map((addon) => {
+        const addonRecord = addon.addon as Addon | undefined;
+        let addonId = addon.addonId ?? addonRecord?.id ?? null;
+        const toNumber = (value: unknown): number | null => {
+          if (value === null || value === undefined) {
+            return null;
+          }
+          if (typeof value === 'number') {
+            return Number.isFinite(value) ? value : null;
+          }
+          if (typeof value === 'string') {
+            const parsed = Number.parseFloat(value);
+            return Number.isFinite(parsed) ? parsed : null;
+          }
+          return null;
+        };
+
+        let override: number | null = addonId !== null ? toNumber(priceOverrideByAddonId.get(addonId)) : null;
+        let fallbackBase = toNumber(addonRecord?.basePrice ?? null);
+        if (addonId === null && addon.platformAddonName) {
+          const mapped = findAddonByName(addon.platformAddonName);
+          if (mapped) {
+            addonId = mapped.addonId;
+            override = toNumber(mapped.priceOverride);
+            fallbackBase = toNumber(mapped.basePrice);
+          }
+        }
+        const unitPriceValue = override ?? fallbackBase ?? null;
+        const fallbackUnitPrice = addon.unitPrice ? Number.parseFloat(addon.unitPrice) : null;
+        const computedUnitPrice =
+          fallbackUnitPrice ??
+          (addon.totalPrice && addon.quantity > 0
+            ? Number.parseFloat(addon.totalPrice) / addon.quantity
+            : null);
+        return {
+          id: addon.id,
+          platformAddonName: addon.platformAddonName ?? addonRecord?.name ?? null,
+          quantity: addon.quantity,
+          unitPrice:
+            unitPriceValue !== null
+              ? unitPriceValue.toFixed(2)
+              : computedUnitPrice !== null && Number.isFinite(computedUnitPrice)
+                ? computedUnitPrice.toFixed(2)
+                : null,
+          totalPrice: addon.totalPrice,
+          currency: addon.currency,
+        };
+      }),
+    } satisfies PartialRefundPreview);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to load partial refund preview';
+    res.status(500).json({ message });
+  }
+};
+
+export const partialRefundEcwidBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const booking = await Booking.findByPk(bookingIdParam);
+    if (!booking) {
+      res.status(404).json({ message: 'Booking not found' });
+      return;
+    }
+
+    if (booking.platform !== 'ecwid') {
+      res.status(400).json({ message: 'Only Ecwid bookings can be refunded through this endpoint' });
+      return;
+    }
+
+    const rawAmount = (req.body as { amount?: unknown }).amount;
+    const numericAmount = typeof rawAmount === 'string' ? Number.parseFloat(rawAmount) : Number(rawAmount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      res.status(400).json({ message: 'A valid refund amount is required' });
+      return;
+    }
+    const amountInCents = Math.round(numericAmount * 100);
+
+    const preview = await buildEcwidRefundPreview(booking);
+    const remaining = Math.max(preview.stripe.amount - preview.stripe.amountRefunded, 0);
+    if (amountInCents >= remaining) {
+      res.status(400).json({ message: 'Refund amount must be less than the remaining paid amount. Use Cancel for full refunds.' });
+      return;
+    }
+
+    const refund = await createStripeRefundFromSummary(preview.stripe, {
+      bookingId: booking.id,
+      orderId: preview.orderId,
+    }, amountInCents);
+
+    res.status(200).json({
+      message: refund ? 'Partial refund issued successfully' : 'Unable to issue refund',
+      refund,
+      stripe: preview.stripe,
+    });
+  } catch (error) {
+    const status = isAxiosError(error) ? error.response?.status ?? 502 : 500;
+    const message = error instanceof Error ? error.message : 'Failed to issue partial refund';
+    res.status(status).json({ message });
   }
 };
