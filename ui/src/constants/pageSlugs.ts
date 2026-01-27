@@ -48,6 +48,7 @@ export const PAGE_SLUGS = {
   settingsProducts: "settings-products",
   settingsProductTypes: "settings-product-types",
   settingsProductPrices: "settings-product-prices",
+  settingsProductAliases: "settings-product-aliases",
   settingsAddons: "settings-addons",
   settingsVenues: "settings-venues",
   settingsProductAddons: "settings-product-addons",

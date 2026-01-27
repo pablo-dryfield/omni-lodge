@@ -260,6 +260,20 @@ const getPlatformBookingLink = (platform?: string | null, bookingId?: string | n
   }
 };
 
+const normalizeManifestBookingId = (order: UnifiedOrder): string | null => {
+  const bookingId = order.platformBookingId ?? null;
+  if (!bookingId) {
+    return null;
+  }
+  if (order.platform?.toLowerCase() === "ecwid") {
+    const match = bookingId.match(/^(.+)-\d+$/);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return bookingId;
+};
+
 const formatStatusLabel = (value?: BookingStatus | null): string => {
   const status = value ?? "unknown";
   if (status === "no_show") {
@@ -1066,6 +1080,10 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     filteredSummary.men,
     filteredSummary.women,
   );
+  const showAddonColumns =
+    filteredSummary.extras.tshirts > 0 ||
+    filteredSummary.extras.cocktails > 0 ||
+    filteredSummary.extras.photos > 0;
 
   const groupOptions = useMemo(() => {
 
@@ -1529,9 +1547,10 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                           <Divider />
                           <Stack gap="sm">
                             {sortedOrders.map((order) => {
-                              const bookingDisplay = order.platformBookingId ?? order.id;
+                              const normalizedBookingId = normalizeManifestBookingId(order);
+                              const bookingDisplay = normalizedBookingId ?? order.platformBookingId ?? order.id;
                               const bookingLink =
-                                order.platformBookingUrl ?? getPlatformBookingLink(order.platform, order.platformBookingId);
+                                order.platformBookingUrl ?? getPlatformBookingLink(order.platform, normalizedBookingId ?? order.platformBookingId);
                               const bookingId = getBookingIdFromOrder(order);
                               const canAmend = isEcwidOrder(order) && Boolean(bookingId);
                               const canCancel = canAmend && order.status !== "cancelled";
@@ -1604,7 +1623,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                   </Group>
                                   <Stack gap={4}>
                                     <Text size="sm" c="dimmed">
-                                      Pickup time: {order.timeslot}
+                                      Activity Time: {order.timeslot}
                                     </Text>
                                     {(() => {
                                       const link = toWhatsAppLink(order.customerPhone);
@@ -1738,10 +1757,14 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                           <Table.Th align="right">Men</Table.Th>
                           <Table.Th align="right">Women</Table.Th>
                           <Table.Th align="right">Undefined Genre</Table.Th>
-                          <Table.Th align="right">T-Shirts</Table.Th>
-                          <Table.Th align="right">Cocktails</Table.Th>
-                          <Table.Th align="right">Photos</Table.Th>
-                          <Table.Th>Pickup time</Table.Th>
+                          {showAddonColumns && (
+                            <>
+                              <Table.Th align="right">T-Shirts</Table.Th>
+                              <Table.Th align="right">Cocktails</Table.Th>
+                              <Table.Th align="right">Photos</Table.Th>
+                            </>
+                          )}
+                          <Table.Th>Activity Time</Table.Th>
                           <Table.Th>Actions</Table.Th>
                         </Table.Tr>
                       </Table.Thead>
@@ -1770,22 +1793,27 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                             <Table.Td align="right" fw={600}>
                               {undefinedGroupCount}
                             </Table.Td>
-                            <Table.Td align="right" fw={600}>
-                              {formatAddonValue(group.extras.tshirts)}
-                            </Table.Td>
-                            <Table.Td align="right" fw={600}>
-                              {formatAddonValue(group.extras.cocktails)}
-                            </Table.Td>
-                            <Table.Td align="right" fw={600}>
-                              {formatAddonValue(group.extras.photos)}
-                            </Table.Td>
+                            {showAddonColumns && (
+                              <>
+                                <Table.Td align="right" fw={600}>
+                                  {formatAddonValue(group.extras.tshirts)}
+                                </Table.Td>
+                                <Table.Td align="right" fw={600}>
+                                  {formatAddonValue(group.extras.cocktails)}
+                                </Table.Td>
+                                <Table.Td align="right" fw={600}>
+                                  {formatAddonValue(group.extras.photos)}
+                                </Table.Td>
+                              </>
+                            )}
                             <Table.Td fw={600}>{group.time}</Table.Td>
                             <Table.Td />
                           </Table.Tr>
                           {sortedOrders.map((order) => {
-                            const bookingDisplay = order.platformBookingId ?? order.id;
+                            const normalizedBookingId = normalizeManifestBookingId(order);
+                            const bookingDisplay = normalizedBookingId ?? order.platformBookingId ?? order.id;
                             const bookingLink =
-                              order.platformBookingUrl ?? getPlatformBookingLink(order.platform, order.platformBookingId);
+                              order.platformBookingUrl ?? getPlatformBookingLink(order.platform, normalizedBookingId ?? order.platformBookingId);
                             const bookingId = getBookingIdFromOrder(order);
                             const canAmend = isEcwidOrder(order) && Boolean(bookingId);
                             const canCancel = canAmend && order.status !== "cancelled";
@@ -1837,9 +1865,13 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               <Table.Td align="right">{order.menCount}</Table.Td>
                               <Table.Td align="right">{order.womenCount}</Table.Td>
                               <Table.Td align="right">{undefinedOrderCount}</Table.Td>
-                              <Table.Td align="right">{formatAddonValue(order.extras?.tshirts)}</Table.Td>
-                              <Table.Td align="right">{formatAddonValue(order.extras?.cocktails)}</Table.Td>
-                              <Table.Td align="right">{formatAddonValue(order.extras?.photos)}</Table.Td>
+                              {showAddonColumns && (
+                                <>
+                                  <Table.Td align="right">{formatAddonValue(order.extras?.tshirts)}</Table.Td>
+                                  <Table.Td align="right">{formatAddonValue(order.extras?.cocktails)}</Table.Td>
+                                  <Table.Td align="right">{formatAddonValue(order.extras?.photos)}</Table.Td>
+                                </>
+                              )}
                               <Table.Td>{order.timeslot}</Table.Td>
                               <Table.Td>
                                 {canAmend || canCancel ? (

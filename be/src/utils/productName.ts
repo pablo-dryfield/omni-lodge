@@ -67,6 +67,22 @@ const PRODUCT_CANONICAL_PATTERNS: Array<{ canonical: string; patterns: RegExp[] 
     patterns: [/go[-\s]?kart/i, /karting/i],
   },
   {
+    canonical: 'Shooting Range',
+    patterns: [/shooting range/i, /gun range/i],
+  },
+  {
+    canonical: 'Strip Club',
+    patterns: [/strip club/i],
+  },
+  {
+    canonical: 'Polish Vodka Tasting',
+    patterns: [/polish\s+vodka/i, /vodka\s+tasting/i, /vodka/i],
+  },
+  {
+    canonical: 'Airsoft Combat',
+    patterns: [/airsoft/i, /paintball/i],
+  },
+  {
     canonical: 'Private Pub Crawl',
     patterns: [/private\s+pub\s+crawl/i, /private\s+krawl/i],
   },

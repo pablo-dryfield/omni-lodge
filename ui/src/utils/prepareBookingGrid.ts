@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import { UnifiedProduct, UnifiedOrder } from '../store/bookingPlatformsTypes';
 
 export type BookingCell = {
-  time: string;
+  time: string | null;
   date: string;
   productId: string;
   productName: string;
@@ -25,7 +25,7 @@ const normalizeCount = (value?: number): number => {
   return value;
 };
 
-const resolveDisplayTime = (order: UnifiedOrder): string => {
+const resolveDisplayTime = (order: UnifiedOrder): string | null => {
   if (order.timeslot && order.timeslot.trim() && order.timeslot !== '--:--') {
     return order.timeslot;
   }
@@ -37,7 +37,7 @@ const resolveDisplayTime = (order: UnifiedOrder): string => {
     }
   }
 
-  return '--:--';
+  return null;
 };
 
 const ensureProductDates = (
@@ -119,7 +119,7 @@ export function prepareBookingGrid(
     cell.menCount += menCount;
     cell.womenCount += womenCount;
     cell.undefinedCount += undefinedCount;
-    cell.orders.push({ ...order, timeslot: displayTime });
+    cell.orders.push({ ...order, timeslot: displayTime ?? undefined });
   });
 
   sortTimeslots(grid);

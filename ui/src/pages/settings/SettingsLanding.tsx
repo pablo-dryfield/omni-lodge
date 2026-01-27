@@ -30,6 +30,7 @@ import {
   IconSettings,
   IconTools,
   IconCalendarEvent,
+  IconTag,
 } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import { useAppSelector } from "../../store/hooks";
@@ -88,6 +89,13 @@ const sections: SettingsSection[] = [
     icon: IconCalendarEvent,
     to: "/settings/shift-types",
     pageSlug: PAGE_SLUGS.settingsShiftTypes,
+  },
+  {
+    label: "Product Aliases",
+    description: "Map incoming booking labels to products.",
+    icon: IconTag,
+    to: "/settings/product-aliases",
+    pageSlug: PAGE_SLUGS.settingsProductAliases,
   },
   {
     label: "User Shift Roles",

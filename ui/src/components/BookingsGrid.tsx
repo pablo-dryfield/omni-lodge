@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Stack, Table, Text } from "@mantine/core";
 import { useMediaQuery } from "@mantine/hooks";
 import { UnifiedProduct } from "../store/bookingPlatformsTypes";
@@ -12,7 +12,7 @@ type ManifestTarget = {
   productId: string;
   productName: string;
   date: string;
-  time: string;
+  time: string | null;
 };
 
 type BookingsGridProps = {
@@ -23,6 +23,8 @@ type BookingsGridProps = {
   onSelectDate: (date: string) => void;
   viewMode: ViewMode;
   onOpenManifest?: (target: ManifestTarget, orders: BookingCell["orders"]) => void;
+  scrollToDate?: string | null;
+  onScrollComplete?: () => void;
 };
 
 type ActiveCell = ManifestTarget | null;
@@ -141,7 +143,38 @@ const MonthlyCalendar: React.FC<{
   onToggleCell: (target: ManifestTarget) => void;
   onCloseCell: () => void;
   onOpenManifest?: (target: ManifestTarget, orders: BookingCell["orders"]) => void;
-}> = ({ weeks, products, grid, selectedDate, onSelectDate, activeCell, onToggleCell, onCloseCell, onOpenManifest }) => {
+  scrollToDate?: string | null;
+  onScrollComplete?: () => void;
+}> = ({
+  weeks,
+  products,
+  grid,
+  selectedDate,
+  onSelectDate,
+  activeCell,
+  onToggleCell,
+  onCloseCell,
+  onOpenManifest,
+  scrollToDate,
+  onScrollComplete,
+}) => {
+  const dateRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  useEffect(() => {
+    if (!scrollToDate) {
+      return;
+    }
+    const node = dateRefs.current[scrollToDate];
+    if (node) {
+      requestAnimationFrame(() => {
+        node.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+    if (onScrollComplete) {
+      onScrollComplete();
+    }
+  }, [scrollToDate, onScrollComplete]);
+
   if (weeks.length === 0) {
     return (
       <div
@@ -214,11 +247,18 @@ const MonthlyCalendar: React.FC<{
                       cell,
                     }));
                   })
-                  .sort((a, b) => (a.cell.time < b.cell.time ? -1 : a.cell.time > b.cell.time ? 1 : 0));
+                  .sort((a, b) => {
+                    const timeA = a.cell.time ?? "99:99";
+                    const timeB = b.cell.time ?? "99:99";
+                    return timeA < timeB ? -1 : timeA > timeB ? 1 : 0;
+                  });
 
                 return (
                   <div
                     key={date}
+                    ref={(node) => {
+                      dateRefs.current[date] = node;
+                    }}
                     style={{
                       borderRadius: 12,
                       border: "1px solid #e2e8f0",
@@ -228,6 +268,7 @@ const MonthlyCalendar: React.FC<{
                       flexDirection: "column",
                       gap: 10,
                       minHeight: 180,
+                      scrollMarginTop: 96,
                     }}
                   >
                       <div
@@ -283,7 +324,7 @@ const MonthlyCalendar: React.FC<{
                           const isOpen = matchesActiveCell(activeCell, target);
 
                           return (
-                            <div key={`${product.id}-${cell.time}`} style={{ position: "relative" }}>
+                            <div key={`${product.id}-${cell.time ?? "no-time"}`} style={{ position: "relative" }}>
                               <TimeslotRect
                                 rowKey={rowKey}
                                 cell={cell}
@@ -335,9 +376,27 @@ export const BookingsGrid: React.FC<BookingsGridProps> = ({
   onSelectDate,
   viewMode,
   onOpenManifest,
+  scrollToDate,
+  onScrollComplete,
 }) => {
   const isMobile = useMediaQuery("(max-width: 900px)");
   const [activeCell, setActiveCell] = useState<ActiveCell>(null);
+  const headerRefs = useRef<Record<string, HTMLTableCellElement | null>>({});
+
+  useEffect(() => {
+    if (!scrollToDate || viewMode === "month" || isMobile) {
+      return;
+    }
+    const headerCell = headerRefs.current[scrollToDate];
+    if (headerCell) {
+      requestAnimationFrame(() => {
+        headerCell.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+      });
+    }
+    if (onScrollComplete) {
+      onScrollComplete();
+    }
+  }, [scrollToDate, onScrollComplete, viewMode, isMobile]);
 
   const sanitizedProducts = useMemo(() => {
     if (products.length > 0) {
@@ -373,6 +432,8 @@ export const BookingsGrid: React.FC<BookingsGridProps> = ({
         onSelectDate={onSelectDate}
         viewMode={viewMode}
         onOpenManifest={onOpenManifest}
+        scrollToDate={scrollToDate}
+        onScrollComplete={onScrollComplete}
       />
     );
   }
@@ -389,6 +450,8 @@ export const BookingsGrid: React.FC<BookingsGridProps> = ({
         onToggleCell={toggleActiveCell}
         onCloseCell={closeActiveCell}
         onOpenManifest={onOpenManifest}
+        scrollToDate={scrollToDate}
+        onScrollComplete={onScrollComplete}
       />
     );
   }
@@ -420,6 +483,9 @@ export const BookingsGrid: React.FC<BookingsGridProps> = ({
                 return (
                   <Table.Th
                     key={date}
+                    ref={(node) => {
+                      headerRefs.current[date] = node;
+                    }}
                     onClick={() => onSelectDate(date)}
                     style={{
                       background: isActive ? "#fff0d6" : "#f5f6fa",
@@ -476,7 +542,7 @@ export const BookingsGrid: React.FC<BookingsGridProps> = ({
                             const isOpen = matchesActiveCell(activeCell, target);
 
                             return (
-                              <div key={`${cell.time}-${cell.date}`} style={{ position: "relative" }}>
+                            <div key={`${cell.time ?? "no-time"}-${cell.date}`} style={{ position: "relative" }}>
                                 <TimeslotRect
                                   rowKey={rowKey}
                                   cell={cell}
@@ -554,9 +620,11 @@ const TimeslotRect: React.FC<TimeslotRectProps> = ({ rowKey, cell, onClick, prod
         transform: hovered ? "translateY(-3px)" : undefined,
       }}
     >
-      <Text size="sm" fw={700} c="#1f2937">
-        {cell.time}
-      </Text>
+      {cell.time ? (
+        <Text size="sm" fw={700} c="#1f2937">
+          {cell.time}
+        </Text>
+      ) : null}
       {isCalendar && productName && (
         <Text size="xs" fw={600} c="#1f2937">
           {productName}

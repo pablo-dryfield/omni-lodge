@@ -7,6 +7,7 @@ import BookingEvent from '../../models/BookingEvent.js';
 import BookingAddon from '../../models/BookingAddon.js';
 import Channel from '../../models/Channel.js';
 import Product from '../../models/Product.js';
+import ProductAlias from '../../models/ProductAlias.js';
 import logger from '../../utils/logger.js';
 import { fetchMessagePayload, listMessages } from './gmailClient.js';
 import { getBookingParsers } from './parsers/index.js';
@@ -18,7 +19,7 @@ import type {
 } from './types.js';
 import type { GmailMessagePayload } from './gmailClient.js';
 import type { BookingPlatform } from '../../constants/bookings.js';
-import { canonicalizeProductLabel } from '../../utils/productName.js';
+import { canonicalizeProductLabel, sanitizeProductSource } from '../../utils/productName.js';
 import { getConfigValue } from '../configService.js';
 
 const FALLBACK_QUERY =
@@ -49,11 +50,112 @@ const CANONICAL_TO_PRODUCT_NAME: Record<string, string> = {
   'NYE Pub Crawl': 'NYE Pub Crawl',
   'Bottomless Brunch': 'Bottomless Brunch',
   'Go-Karting': 'Go-Karting',
+  'Shooting Range': 'Shooting Range',
+  'Strip Club': 'Strip Club',
+  'Polish Vodka Tasting': 'Polish Vodka Tasting',
+  'Airsoft Combat': 'Airsoft Combat',
+  Paintball: 'Airsoft Combat',
   'Private Pub Crawl': 'Private Pub Crawl',
   'Krawl Through Kazimierz': 'Kazimierz Pub Crawl',
 };
 
 const productIdCache = new Map<string, number | null>();
+const productNameCache = new Map<number, string | null>();
+const PRODUCT_ALIAS_CACHE_TTL_MS = 60 * 1000;
+let productAliasCache: { fetchedAt: number; records: ProductAlias[] } | null = null;
+
+const normalizeAliasInput = (value: string): string => sanitizeProductSource(value).toLowerCase();
+
+const loadProductAliases = async (): Promise<ProductAlias[]> => {
+  const now = Date.now();
+  if (productAliasCache && now - productAliasCache.fetchedAt < PRODUCT_ALIAS_CACHE_TTL_MS) {
+    return productAliasCache.records;
+  }
+  const records = await ProductAlias.findAll({
+    where: { active: true },
+    order: [
+      ['priority', 'ASC'],
+      ['id', 'ASC'],
+    ],
+  });
+  productAliasCache = { fetchedAt: now, records };
+  return records;
+};
+
+const resolveAliasMatch = (aliases: ProductAlias[], raw: string): ProductAlias | null => {
+  const normalized = normalizeAliasInput(raw);
+  if (!normalized) {
+    return null;
+  }
+  for (const alias of aliases) {
+    if (!alias.active) {
+      continue;
+    }
+    if (alias.matchType === 'exact') {
+      if (alias.normalizedLabel === normalized) {
+        return alias;
+      }
+      continue;
+    }
+    if (alias.matchType === 'contains') {
+      if (normalized.includes(alias.normalizedLabel)) {
+        return alias;
+      }
+      continue;
+    }
+    if (alias.matchType === 'regex') {
+      try {
+        const matcher = new RegExp(alias.label, 'i');
+        if (matcher.test(raw)) {
+          return alias;
+        }
+      } catch (error) {
+        logger.warn(`Invalid product alias regex: ${alias.label}`, error);
+      }
+    }
+  }
+  return null;
+};
+
+const recordPendingAlias = async (
+  rawLabel: string,
+  transaction?: Transaction,
+): Promise<void> => {
+  const normalized = normalizeAliasInput(rawLabel);
+  if (!normalized) {
+    return;
+  }
+  const now = new Date();
+  const existing = await ProductAlias.findOne({
+    where: { normalizedLabel: normalized, productId: null },
+    transaction,
+  });
+  if (existing) {
+    await existing.update(
+      {
+        lastSeenAt: now,
+        hitCount: (existing.hitCount ?? 0) + 1,
+      },
+      { transaction },
+    );
+    return;
+  }
+  await ProductAlias.create(
+    {
+      productId: null,
+      label: sanitizeProductSource(rawLabel),
+      normalizedLabel: normalized,
+      matchType: 'contains',
+      priority: 100,
+      active: true,
+      hitCount: 1,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      source: 'ingestion',
+    },
+    { transaction },
+  );
+};
 
 const decimalKeys = new Set([
   'baseAmount',
@@ -143,6 +245,64 @@ const resolveProductIdForCanonical = async (canonicalName: string | null): Promi
   const id = record?.id ?? null;
   productIdCache.set(cacheKey, id);
   return id;
+};
+
+const resolveProductNameById = async (
+  productId: number,
+  transaction?: Transaction,
+): Promise<string | null> => {
+  if (!Number.isInteger(productId) || productId <= 0) {
+    return null;
+  }
+  if (productNameCache.has(productId)) {
+    return productNameCache.get(productId) ?? null;
+  }
+  const record = await Product.findByPk(productId, {
+    attributes: ['id', 'name'],
+    transaction,
+  });
+  const name = record?.name ?? null;
+  productNameCache.set(productId, name);
+  return name;
+};
+
+const resolveProductIdFromAliases = async (
+  bookingFields: BookingFieldPatch,
+  transaction?: Transaction,
+): Promise<{ productId: number | null; matchedLabel: string | null }> => {
+  const candidates = [
+    bookingFields.productName,
+    bookingFields.productVariant,
+    bookingFields.notes,
+  ]
+    .map((value) => (typeof value === 'string' ? value.trim() : null))
+    .filter((value): value is string => Boolean(value));
+
+  if (candidates.length === 0) {
+    return { productId: null, matchedLabel: null };
+  }
+
+  const aliases = await loadProductAliases();
+  const now = new Date();
+
+  for (const candidate of candidates) {
+    const match = resolveAliasMatch(aliases, candidate);
+    if (match) {
+      await match.update(
+        {
+          lastSeenAt: now,
+          hitCount: (match.hitCount ?? 0) + 1,
+        },
+        { transaction },
+      );
+      if (match.productId) {
+        return { productId: match.productId, matchedLabel: candidate };
+      }
+      return { productId: null, matchedLabel: candidate };
+    }
+  }
+
+  return { productId: null, matchedLabel: candidates[0] ?? null };
 };
 
 class StaleBookingEventError extends Error {
@@ -468,7 +628,11 @@ const syncAddons = async (
   }
 };
 
-const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent): Promise<void> => {
+const applyParsedEvent = async (
+  email: BookingEmail,
+  event: ParsedBookingEvent,
+  options: { isReprocess?: boolean } = {},
+): Promise<void> => {
   await sequelize.transaction(async (transaction) => {
     const eventOccurredAt = event.occurredAt ?? event.sourceReceivedAt ?? email.receivedAt ?? new Date();
 
@@ -514,12 +678,23 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
       }
     }
     if (!bookingFields.productId) {
-      const canonicalProductName = resolveCanonicalProductName(bookingFields);
-      const inferredProductId = await resolveProductIdForCanonical(canonicalProductName);
-      if (inferredProductId != null) {
-        bookingFields.productId = inferredProductId;
-        if (!bookingFields.productName && canonicalProductName) {
-          bookingFields.productName = canonicalProductName;
+      const aliasMatch = await resolveProductIdFromAliases(bookingFields, transaction);
+      if (aliasMatch.productId != null) {
+        bookingFields.productId = aliasMatch.productId;
+        const aliasProductName = await resolveProductNameById(aliasMatch.productId, transaction);
+        if (aliasProductName) {
+          bookingFields.productName = aliasProductName;
+        }
+      } else {
+        const canonicalProductName = resolveCanonicalProductName(bookingFields);
+        const inferredProductId = await resolveProductIdForCanonical(canonicalProductName);
+        if (inferredProductId != null) {
+          bookingFields.productId = inferredProductId;
+          if (!bookingFields.productName && canonicalProductName) {
+            bookingFields.productName = canonicalProductName;
+          }
+        } else if (aliasMatch.matchedLabel) {
+          await recordPendingAlias(aliasMatch.matchedLabel, transaction);
         }
       }
     }
@@ -645,15 +820,25 @@ const applyParsedEvent = async (email: BookingEmail, event: ParsedBookingEvent):
 
     await bookingRecord.save({ transaction });
 
+    const basePayload: Record<string, unknown> =
+      event.rawPayload && typeof event.rawPayload === 'object'
+        ? { ...(event.rawPayload as Record<string, unknown>) }
+        : event.rawPayload != null
+          ? { rawPayload: event.rawPayload }
+          : {};
+    if (options.isReprocess) {
+      basePayload.reprocessed = true;
+      basePayload.originalEventType = event.eventType;
+    }
     const bookingEvent = BookingEvent.build(
       {
         bookingId: bookingRecord.id,
         emailId: email.id,
-        eventType: event.eventType,
+        eventType: options.isReprocess ? 'replayed' : event.eventType,
         platform: event.platform,
         statusAfter: event.status,
         emailMessageId: email.messageId,
-        eventPayload: event.rawPayload ?? null,
+        eventPayload: Object.keys(basePayload).length > 0 ? basePayload : null,
         occurredAt: eventOccurredAt,
         ingestedAt: new Date(),
         processedAt: new Date(),
@@ -717,7 +902,7 @@ export const processBookingEmail = async (
     while (pendingEvents.length > 0) {
       const current = pendingEvents.shift()!;
       const spawned = current.spawnedEvents ?? [];
-      await applyParsedEvent(emailRecord, current);
+      await applyParsedEvent(emailRecord, current, { isReprocess: Boolean(options.force) });
       if (spawned.length > 0) {
         pendingEvents.push(...spawned);
       }

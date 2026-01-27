@@ -869,6 +869,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const [activeTab, setActiveTab] = useState<"calendar" | "summary" | "pending" | "emails">("calendar");
   const [rangeAnchor, setRangeAnchor] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [selectedDate, setSelectedDate] = useState<Dayjs>(() => dayjs().startOf("day"));
+  const [calendarScrollDate, setCalendarScrollDate] = useState<string | null>(null);
   const [products, setProducts] = useState<UnifiedProduct[]>([]);
   const [orders, setOrders] = useState<UnifiedOrder[]>([]);
   const [pendingOrders, setPendingOrders] = useState<UnifiedOrder[]>([]);
@@ -1166,8 +1167,20 @@ const BookingsPage = ({ title }: GenericPageProps) => {
 
   const handleGoToToday = () => {
     const today = dayjs().startOf("day");
-    setSelectedDate(today);
-    setRangeAnchor(viewMode === "week" ? today : today.startOf("month"));
+    if (!selectedDate.isSame(today, "day")) {
+      setSelectedDate(today);
+    }
+    if (viewMode === "week") {
+      if (!rangeAnchor.isSame(today, "day")) {
+        setRangeAnchor(today);
+      }
+    } else {
+      const monthAnchor = today.startOf("month");
+      if (!rangeAnchor.isSame(monthAnchor, "month")) {
+        setRangeAnchor(monthAnchor);
+      }
+    }
+    setCalendarScrollDate(today.format(DATE_FORMAT));
   };
 
   const handleReload = async () => {
@@ -1208,12 +1221,14 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   };
 
   const handleOpenManifest = useCallback(
-    (target: { productId: string; productName: string; date: string; time: string }, orders: UnifiedOrder[]) => {
+    (target: { productId: string; productName: string; date: string; time: string | null }, orders: UnifiedOrder[]) => {
       const params = new URLSearchParams({
         date: target.date,
         productId: target.productId,
-        time: target.time,
       });
+      if (target.time) {
+        params.set("time", target.time);
+      }
       params.set("productName", target.productName);
 
       navigate(`/bookings/manifest?${params.toString()}`, { state: { orders } });
@@ -1998,6 +2013,8 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                     onSelectDate={(nextDate) => setSelectedDate(dayjs(nextDate))}
                     onOpenManifest={handleOpenManifest}
                     viewMode={viewMode}
+                    scrollToDate={calendarScrollDate}
+                    onScrollComplete={() => setCalendarScrollDate(null)}
                   />
                 )}
               </Tabs.Panel>

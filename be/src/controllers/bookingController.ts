@@ -405,7 +405,11 @@ const canonicalizeProductKey = (booking: Booking): string | null => {
 };
 
 const prettifyProductName = (booking: Booking): string | null => {
-  const sources = [booking.productName ?? null, booking.product?.name ?? null, booking.productVariant ?? null];
+  const directName = booking.product?.name ?? null;
+  if (directName && directName.trim().length > 0) {
+    return directName.trim();
+  }
+  const sources = [booking.productName ?? null, booking.productVariant ?? null];
   return canonicalizeProductLabelFromSources(sources);
 };
 

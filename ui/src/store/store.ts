@@ -9,6 +9,7 @@ import sessionReducer from './../reducers/sessionReducer';
 import userTypeReducer from './../reducers/userTypeReducer';
 import productTypeReducer from '../reducers/productTypeReducer';
 import productReducer from '../reducers/productReducer';
+import productAliasReducer from '../reducers/productAliasReducer';
 import moduleReducer from '../reducers/moduleReducer';
 import rolePagePermissionReducer from '../reducers/rolePagePermissionReducer';
 import roleModulePermissionReducer from '../reducers/roleModulePermissionReducer';
@@ -50,6 +51,7 @@ const reducer = {
   userTypes: userTypeReducer,
   productTypes: productTypeReducer,
   products: productReducer,
+  productAliases: productAliasReducer,
   addons: addonReducer,
   productPrices: productPriceReducer,
   paymentMethods: paymentMethodReducer,
