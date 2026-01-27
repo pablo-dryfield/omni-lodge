@@ -215,7 +215,8 @@ const extractFallbackTourName = (text: string): string | null => {
     return headingMatch[1].trim();
   }
 
-  const referenceIndex = text.toLowerCase().indexOf('booking reference:');
+  const referenceMatch = text.toLowerCase().match(/booking reference(?: number)?:/);
+  const referenceIndex = referenceMatch?.index ?? -1;
   if (referenceIndex !== -1) {
     const tail = text
       .slice(referenceIndex)
@@ -243,6 +244,25 @@ const extractFallbackTourName = (text: string): string | null => {
 
 const stripHtml = (value: string): string =>
   value.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim();
+
+const BOOKING_REFERENCE_LABELS = ['Booking Reference:', 'Booking reference number:'];
+const BOOKING_REFERENCE_NEXT_LABELS = [
+  'Tour Name:',
+  'Travel Date:',
+  'Booking Net Price:',
+  'Booking Net Rate:',
+  'Lead Traveler Name:',
+];
+
+const extractBookingReferenceRaw = (text: string): string | null => {
+  for (const label of BOOKING_REFERENCE_LABELS) {
+    const value = extractField(text, label, BOOKING_REFERENCE_NEXT_LABELS);
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+};
 
 const parsePhone = (value: string | null): string | null => {
   if (!value) {
@@ -293,11 +313,13 @@ const mergeCocktailExtras = (
 const deriveStatusFromContext = (context: BookingParserContext, textBody: string): BookingStatus => {
   const haystack = `${context.subject ?? ''}\n${textBody ?? ''}`.toLowerCase();
   const fromCustomerCare = /customer\.care@viator\.com/i.test(context.from ?? '');
+  const refundProcessed =
+    /refund (?:was )?processed|refund confirmation|request to refund/i.test(haystack);
 
   if (/(?:canceled|cancelled|cancellation)/i.test(haystack)) {
     return 'cancelled';
   }
-  if (fromCustomerCare && /refund/i.test(haystack)) {
+  if (refundProcessed || (fromCustomerCare && /refund/i.test(haystack))) {
     return 'cancelled';
   }
   if (/(?:amended|amendment|changed|change|modified|updated|rebooked|rebook)/i.test(haystack)) {
@@ -326,16 +348,14 @@ export class ViatorBookingParser implements BookingEmailParser {
     const haystack = `${from} ${subject}`.toLowerCase();
     const hasViator = haystack.includes('viator');
     const text = context.textBody ?? context.rawTextBody ?? '';
-    const hasBookingLabel = /booking reference:/i.test(text);
+    const hasBookingLabel = /booking reference(?: number)?:/i.test(text);
     const normalizedText = text ? normalizeBookingText(text) : '';
-    const bookingReferenceRaw = normalizedText
-      ? extractField(normalizedText, 'Booking Reference:', ['Tour Name:'])
-      : null;
+    const bookingReferenceRaw = normalizedText ? extractBookingReferenceRaw(normalizedText) : null;
     const bookingReference = bookingReferenceRaw ? normalizeBookingReferenceValue(bookingReferenceRaw) : null;
 
     const canParseChecks: BookingParserCheck[] = [
       { label: 'from/subject contains "viator"', passed: hasViator, value: `${from} ${subject}`.trim() },
-      { label: 'body has "Booking Reference:"', passed: hasBookingLabel },
+      { label: 'body has booking reference label', passed: hasBookingLabel },
     ];
     const parseChecks: BookingParserCheck[] = [
       { label: 'text body present', passed: Boolean(text) },
@@ -366,7 +386,7 @@ export class ViatorBookingParser implements BookingEmailParser {
 
     const normalizedText = normalizeBookingText(text);
 
-    const bookingReferenceRaw = extractField(normalizedText, 'Booking Reference:', ['Tour Name:']);
+    const bookingReferenceRaw = extractBookingReferenceRaw(normalizedText);
     const bookingReference = normalizeBookingReferenceValue(bookingReferenceRaw);
     if (!bookingReference) {
       return null;

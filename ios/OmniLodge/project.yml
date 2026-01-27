@@ -1,0 +1,33 @@
+name: OmniLodge
+options:
+  bundleIdPrefix: com.omnilodge
+settings:
+  base:
+    SWIFT_VERSION: 5.9
+    IPHONEOS_DEPLOYMENT_TARGET: 16.0
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  OmniLodge:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - OmniLodge
+    resources:
+      - Resources
+    info:
+      properties:
+        CFBundleDisplayName: OmniLodge
+        UILaunchScreen: {}
+        OMNI_BASE_URL: http://omni-lodge.com/api
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
