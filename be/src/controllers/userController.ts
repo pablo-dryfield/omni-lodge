@@ -315,7 +315,7 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
       maxAge: oneWeekMs,
     });
-    res.status(200).json([{ message: 'Logged in successfully', userId: user.id }]);
+    res.status(200).json([{ message: 'Logged in successfully', userId: user.id, token }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);

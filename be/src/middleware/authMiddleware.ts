@@ -28,7 +28,12 @@ const normalizeRoleSlug = (value?: string | null): string | null => {
 };
 
 const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
-  const token = req.cookies['token'];
+  const authHeader = req.headers.authorization;
+  const bearerToken =
+    typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')
+      ? authHeader.slice(7).trim()
+      : null;
+  const token = bearerToken || req.cookies['token'];
 
   if (!token) {
     res.status(401).json({ error: 'Unauthorized' });
