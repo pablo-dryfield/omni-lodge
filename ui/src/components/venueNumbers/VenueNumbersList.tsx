@@ -14,6 +14,8 @@ import {
   IconButton,
   List,
   ListItem,
+  MenuItem,
+  Pagination,
   Stack,
   TextField,
   Tooltip,
@@ -39,15 +41,16 @@ import {
   uploadNightReportPhoto,
   deleteNightReportPhoto,
 } from "../../actions/nightReportActions";
-import { fetchCounters } from "../../actions/counterActions";
-import { fetchVenues } from "../../actions/venueActions";
-import { loadCatalog, selectCatalog } from "../../store/catalogSlice";
+import { setCountersData } from "../../reducers/counterReducer";
+import { setNightReportList } from "../../reducers/nightReportReducer";
+import { setVenuesData } from "../../reducers/venueReducer";
 import axiosInstance from "../../utils/axiosInstance";
 import { compressImageFile } from "../../utils/imageCompression";
 
 import type { NightReport, NightReportPhoto, NightReportSummary, NightReportVenueInput } from "../../types/nightReports/NightReport";
 import type { Counter } from "../../types/counters/Counter";
 import type { StaffOption } from "../../types/counters/CounterRegistry";
+import type { ServerResponse } from "../../types/general/ServerResponse";
 import type { User } from "../../types/users/User";
 import type { Venue } from "../../types/venues/Venue";
 import { DID_NOT_OPERATE_NOTE } from "../../constants/nightReports";
@@ -291,7 +294,7 @@ const getManagerLabel = (counter: Counter | undefined): string => {
   return formatUserFullName(counter.manager as Partial<User>);
 };
 
-const VenueNumbersList = () => {
+const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -303,7 +306,6 @@ const VenueNumbersList = () => {
   const nightReportUi = useAppSelector((state) => state.nightReports.ui);
   const countersState = useAppSelector((state) => state.counters[0]);
   const venuesState = useAppSelector((state) => state.venues[0]);
-  const catalog = useAppSelector(selectCatalog);
 
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
   const [formState, setFormState] = useState<EditableReport>(() => toEditableReport(null));
@@ -327,6 +329,11 @@ const VenueNumbersList = () => {
   const previousNotesRef = useRef<string | null>(null);
   const previousEditableVenueKeysRef = useRef<Set<string> | null>(null);
   const [activePhotoPreview, setActivePhotoPreview] = useState<NightReportPhotoPreview | null>(null);
+  const [managerOptions, setManagerOptions] = useState<StaffOption[]>([]);
+  const [bootstrapLoading, setBootstrapLoading] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [reportPage, setReportPage] = useState<number>(1);
+  const [reportPageSize, setReportPageSize] = useState<number>(10);
 
   const requestedCounterId = useMemo(() => {
     const raw = searchParams.get("counterId");
@@ -409,6 +416,15 @@ const VenueNumbersList = () => {
     () => (nightReportListState.data[0]?.data as NightReportSummary[] | undefined) ?? [],
     [nightReportListState.data],
   );
+  const totalReports = reports.length;
+  const totalReportPages = useMemo(
+    () => Math.max(1, Math.ceil(totalReports / reportPageSize)),
+    [reportPageSize, totalReports],
+  );
+  const pagedReports = useMemo(() => {
+    const startIndex = (reportPage - 1) * reportPageSize;
+    return reports.slice(startIndex, startIndex + reportPageSize);
+  }, [reportPage, reportPageSize, reports]);
   const compensationByOrder = useMemo(() => {
     const map = new Map<
       number,
@@ -486,7 +502,7 @@ const VenueNumbersList = () => {
   const photoLimitReached = photos.length >= 1;
   const limitedPhotos = useMemo(() => photos.slice(0, 1), [photos]);
   const leaderOptions = useMemo(() => {
-    const base = (catalog.managers ?? []).filter((item): item is StaffOption => item != null);
+    const base = managerOptions.filter((item): item is StaffOption => item != null);
     if (formState.leaderId == null) {
       return base;
     }
@@ -509,7 +525,7 @@ const VenueNumbersList = () => {
       return [...base, fallbackOption];
     }
     return base;
-  }, [catalog.managers, formState.leaderId, nightReportDetail.data?.leader]);
+  }, [managerOptions, formState.leaderId, nightReportDetail.data?.leader]);
   const selectedLeaderOption = useMemo(
     () => leaderOptions.find((leader) => leader.id === formState.leaderId) ?? null,
     [leaderOptions, formState.leaderId],
@@ -519,17 +535,49 @@ const VenueNumbersList = () => {
     photoPreviewUrlsRef.current = photoPreviews;
   }, [photoPreviews]);
 
-  useEffect(() => {
-    dispatch(fetchNightReports());
-    dispatch(fetchCounters());
-    dispatch(fetchVenues());
-  }, [dispatch]);
+  const entriesBootstrapRequestedRef = useRef(false);
+  const loadEntriesBootstrap = useCallback(async () => {
+    setBootstrapError(null);
+    setBootstrapLoading(true);
+    try {
+      const response = await axiosInstance.get<{
+        counters: Array<{ data: Partial<Counter>[]; columns: unknown[] }>;
+        venues: Array<{ data: Venue[]; columns: unknown[] }>;
+        nightReports: Array<{ data: NightReportSummary[]; columns: unknown[] }>;
+        managers: StaffOption[];
+      }>("/venueNumbers/bootstrap", {
+        params: { tab: "entries" },
+        withCredentials: true,
+      });
+      const payload = response.data;
+      if (payload?.counters) {
+        dispatch(setCountersData(payload.counters as ServerResponse<Partial<Counter>>));
+      }
+      if (payload?.venues) {
+        dispatch(setVenuesData(payload.venues as ServerResponse<Partial<Venue>>));
+      }
+      if (payload?.nightReports) {
+        dispatch(setNightReportList(payload.nightReports as ServerResponse<NightReportSummary>));
+      }
+      setManagerOptions(payload?.managers ?? []);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load venue numbers data";
+      setBootstrapError(message);
+    } finally {
+      setBootstrapLoading(false);
+    }
+  }, [dispatch, counters]);
 
   useEffect(() => {
-    if (!catalog.loaded && !catalog.loading) {
-      dispatch(loadCatalog());
+    if (!active) {
+      return;
     }
-  }, [catalog.loaded, catalog.loading, dispatch]);
+    if (entriesBootstrapRequestedRef.current) {
+      return;
+    }
+    entriesBootstrapRequestedRef.current = true;
+    loadEntriesBootstrap();
+  }, [active, loadEntriesBootstrap]);
 
   useEffect(() => {
     if (!reports.length) {
@@ -544,6 +592,12 @@ const VenueNumbersList = () => {
       setSearchParams({});
     }
   }, [reports, selectedReportId, setSearchParams]);
+
+  useEffect(() => {
+    if (reportPage > totalReportPages) {
+      setReportPage(totalReportPages);
+    }
+  }, [reportPage, totalReportPages]);
 
   useEffect(() => {
     if (requestedCounterId == null) {
@@ -1267,7 +1321,7 @@ const VenueNumbersList = () => {
     }
   };
 
-  const reportsLoading = nightReportListState.loading;
+  const reportsLoading = nightReportListState.loading || bootstrapLoading;
   const detailLoading = nightReportDetail.loading;
   const submitting = nightReportUi.submitting;
   const uploadingPhoto = nightReportUi.uploadingPhoto;
@@ -2429,6 +2483,11 @@ const VenueNumbersList = () => {
             {validationError}
           </Alert>
         )}
+        {bootstrapError && (
+          <Alert severity="error" onClose={() => setBootstrapError(null)}>
+            {bootstrapError}
+          </Alert>
+        )}
 
         <Stack direction={isMobile ? "column" : "row"} spacing={2} alignItems="stretch">
           <Card sx={{ flex: isMobile ? "unset" : "0 0 320px" }}>
@@ -2444,94 +2503,166 @@ const VenueNumbersList = () => {
                   </Typography>
                 </Box>
               ) : (
-                <List disablePadding>
-                  {reports.map((report) => {
-                    const isActive = selectedReportId === report.id && activeReportMode != null;
-                    const isViewing = isActive && activeReportMode === "view";
-                    const isEditing = isActive && activeReportMode === "edit";
-                    const disableActions = pendingChanges && selectedReportId !== report.id;
-                    const isDraftReport = (report.status ?? "").toLowerCase() === "draft";
-                    const updateLabel = isDraftReport ? "Fill" : "Update";
-                    const counterForReport = counters.find((counter) => counter.id === report.counterId);
-                    const modeForReport =
-                      report.id === selectedReportId
-                        ? openBarMode
-                        : resolveOpenBarMode(counterForReport?.product?.name);
-                    const overriddenTotal = reportDisplayTotals[report.id];
-                    const displayPeopleCount =
-                      overriddenTotal != null &&
-                      (modeForReport === "pubCrawl" || modeForReport === "bottomlessBrunch" || report.id === selectedReportId)
-                        ? overriddenTotal
-                        : report.totalPeople;
+                <Stack spacing={1}>
+                  <List disablePadding>
+                    {pagedReports.map((report) => {
+                      const isActive = selectedReportId === report.id && activeReportMode != null;
+                      const isViewing = isActive && activeReportMode === "view";
+                      const isEditing = isActive && activeReportMode === "edit";
+                      const disableActions = pendingChanges && selectedReportId !== report.id;
+                      const isDraftReport = (report.status ?? "").toLowerCase() === "draft";
+                      const updateLabel = isDraftReport ? "Fill" : "Update";
+                      const counterForReport = counters.find((counter) => counter.id === report.counterId);
+                      const modeForReport =
+                        report.id === selectedReportId
+                          ? openBarMode
+                          : resolveOpenBarMode(counterForReport?.product?.name);
+                      const overriddenTotal = reportDisplayTotals[report.id];
+                      const displayPeopleCount =
+                        overriddenTotal != null &&
+                        (modeForReport === "pubCrawl" || modeForReport === "bottomlessBrunch" || report.id === selectedReportId)
+                          ? overriddenTotal
+                          : report.totalPeople;
 
-                    return (
-                      <ListItem
-                        key={report.id}
-                        disablePadding
-                        sx={{
-                          px: 2,
-                          py: 1.5,
-                          display: "block",
-                          bgcolor: isActive ? "action.selected" : "inherit",
-                          "&:not(:last-of-type)": { borderBottom: "1px solid", borderColor: "divider" },
-                        }}
-                      >
-                        <Stack spacing={1}>
-                          <Stack
-                            direction={{ xs: "column", sm: "row" }}
-                            spacing={1}
-                            alignItems={{ xs: "flex-start", sm: "center" }}
-                          >
-                            <Stack direction="row" spacing={1} alignItems="center" sx={{ flexGrow: 1 }}>
-                              <Typography fontWeight={600} sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                                {`${dayjs(report.activityDate).format("MMM D, YYYY")}${counterForReport?.product?.name ? " \u2022 " + counterForReport.product.name : ""}`}
-                              </Typography>
-                              <Chip
-                                size="small"
-                                label={report.status === "submitted" ? "Submitted" : "Draft"}
-                                color={report.status === "submitted" ? "success" : "default"}
-                              />
-                            </Stack>
+                      return (
+                        <ListItem
+                          key={report.id}
+                          disablePadding
+                          sx={{
+                            px: 2,
+                            py: 1.5,
+                            display: "block",
+                            bgcolor: isActive ? "action.selected" : "inherit",
+                            "&:not(:last-of-type)": { borderBottom: "1px solid", borderColor: "divider" },
+                          }}
+                        >
+                          <Stack spacing={1}>
                             <Stack
-                              direction="row"
+                              direction={{ xs: "column", sm: "row" }}
                               spacing={1}
-                              flexWrap="wrap"
-                              justifyContent={{ xs: "flex-start", sm: "flex-end" }}
-                              sx={{ width: { xs: "100%", sm: "auto" } }}
+                              alignItems={{ xs: "flex-start", sm: "center" }}
                             >
-                              <Button
-                                size="small"
-                                variant={isViewing ? "contained" : "outlined"}
-                                startIcon={<Visibility fontSize="small" />}
-                                onClick={() => handleOpenReport(report, "view")}
-                                disabled={disableActions}
+                              <Stack direction="row" spacing={1} alignItems="center" sx={{ flexGrow: 1 }}>
+                                <Typography fontWeight={600} sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                                  {`${dayjs(report.activityDate).format("MMM D, YYYY")}${counterForReport?.product?.name ? " \u2022 " + counterForReport.product.name : ""}`}
+                                </Typography>
+                                <Chip
+                                  size="small"
+                                  label={report.status === "submitted" ? "Submitted" : "Draft"}
+                                  color={report.status === "submitted" ? "success" : "default"}
+                                />
+                              </Stack>
+                              <Stack
+                                direction="row"
+                                spacing={1}
+                                flexWrap="wrap"
+                                justifyContent={{ xs: "flex-start", sm: "flex-end" }}
+                                sx={{ width: { xs: "100%", sm: "auto" } }}
                               >
-                                View
-                              </Button>
-                              <Button
-                                size="small"
-                                variant={isEditing ? "contained" : "outlined"}
-                                startIcon={<Edit fontSize="small" />}
-                                onClick={() => handleOpenReport(report, "edit")}
-                                disabled={disableActions}
-                              >
-                                {updateLabel}
-                              </Button>
+                                <Button
+                                  size="small"
+                                  variant={isViewing ? "contained" : "outlined"}
+                                  startIcon={<Visibility fontSize="small" />}
+                                  onClick={() => handleOpenReport(report, "view")}
+                                  disabled={disableActions}
+                                >
+                                  View
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant={isEditing ? "contained" : "outlined"}
+                                  startIcon={<Edit fontSize="small" />}
+                                  onClick={() => handleOpenReport(report, "edit")}
+                                  disabled={disableActions}
+                                >
+                                  {updateLabel}
+                                </Button>
+                              </Stack>
+                            </Stack>
+                            <Stack spacing={0.5}>
+                              <Typography variant="body2" color="text.secondary">
+                                Leader: {report.leaderName || "-"}
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                Venues: {report.venuesCount} {"\u2022"} People: {displayPeopleCount}
+                              </Typography>
                             </Stack>
                           </Stack>
-                          <Stack spacing={0.5}>
-                            <Typography variant="body2" color="text.secondary">
-                              Leader: {report.leaderName || "-"}
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                              Venues: {report.venuesCount} {"\u2022"} People: {displayPeopleCount}
-                            </Typography>
-                          </Stack>
-                        </Stack>
-                      </ListItem>
-                    );
-                  })}
-                </List>
+                        </ListItem>
+                      );
+                    })}
+                  </List>
+                  <Box
+                    sx={{
+                      borderTop: (theme) => `1px solid ${theme.palette.divider}`,
+                      px: 2,
+                      py: 1,
+                    }}
+                  >
+                    <Stack spacing={1.5} alignItems="stretch">
+                      <Stack direction="row" justifyContent="center" sx={{ width: "100%" }}>
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          sx={{ width: "100%", justifyContent: "center" }}
+                          label={
+                            totalReports === 0
+                              ? "0 reports"
+                              : (() => {
+                                  const start = (reportPage - 1) * reportPageSize + 1;
+                                  const end = Math.min(totalReports, reportPage * reportPageSize);
+                                  return `Showing ${start}-${end} of ${totalReports}`;
+                                })()
+                          }
+                        />
+                      </Stack>
+                      <Stack direction="row" justifyContent="center" sx={{ width: "100%" }}>
+                        <TextField
+                          select
+                          size="small"
+                          fullWidth
+                          label="Rows"
+                          value={reportPageSize}
+                          onChange={(event) => {
+                            const nextSize = Number(event.target.value) || 10;
+                            setReportPageSize(nextSize);
+                            setReportPage(1);
+                          }}
+                          SelectProps={{
+                            displayEmpty: true,
+                            MenuProps: { PaperProps: { sx: { minWidth: 120 } } },
+                          }}
+                          sx={{
+                            "& .MuiSelect-select": {
+                              textAlign: "center",
+                            },
+                          }}
+                        >
+                          {[5, 10, 15, 20, 30].map((size) => (
+                            <MenuItem key={`report-page-size-${size}`} value={size}>
+                              <Box sx={{ width: "100%", textAlign: "center" }}>{size}</Box>
+                            </MenuItem>
+                          ))}
+                        </TextField>
+                      </Stack>
+                      <Stack direction="row" justifyContent="center">
+                        <Pagination
+                          count={totalReportPages}
+                          page={reportPage}
+                          onChange={(_event, value) => setReportPage(value)}
+                          size="small"
+                          color="primary"
+                          shape="rounded"
+                          showFirstButton
+                          showLastButton
+                          siblingCount={1}
+                          boundaryCount={1}
+                          disabled={totalReportPages <= 1}
+                        />
+                      </Stack>
+                    </Stack>
+                  </Box>
+                </Stack>
               )}
             </CardContent>
           </Card>

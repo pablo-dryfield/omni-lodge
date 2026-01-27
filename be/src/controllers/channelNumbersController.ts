@@ -8,6 +8,10 @@ import {
   getChannelNumbersDetails,
   type ChannelNumbersDetailMetric,
 } from '../services/channelNumbersService.js';
+import FinanceAccount from '../finance/models/FinanceAccount.js';
+import FinanceCategory from '../finance/models/FinanceCategory.js';
+import FinanceClient from '../finance/models/FinanceClient.js';
+import FinanceVendor from '../finance/models/FinanceVendor.js';
 
 function handleError(res: Response, error: unknown): void {
   if (error instanceof HttpError) {
@@ -27,6 +31,40 @@ export const getSummary = async (req: AuthenticatedRequest, res: Response): Prom
       endDate: typeof endDate === 'string' ? endDate : undefined,
     });
     res.status(200).json(summary);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const getBootstrap = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { startDate, endDate } = req.query;
+    const [summary, accounts, categories, vendors, clients] = await Promise.all([
+      getChannelNumbersSummary({
+        startDate: typeof startDate === 'string' ? startDate : undefined,
+        endDate: typeof endDate === 'string' ? endDate : undefined,
+      }),
+      FinanceAccount.findAll({ order: [['name', 'ASC']] }),
+      FinanceCategory.findAll({
+        order: [
+          ['kind', 'ASC'],
+          ['parentId', 'ASC'],
+          ['name', 'ASC'],
+        ],
+      }),
+      FinanceVendor.findAll({ order: [['name', 'ASC']] }),
+      FinanceClient.findAll({ order: [['name', 'ASC']] }),
+    ]);
+
+    res.status(200).json({
+      summary,
+      finance: {
+        accounts,
+        categories,
+        vendors,
+        clients,
+      },
+    });
   } catch (error) {
     handleError(res, error);
   }

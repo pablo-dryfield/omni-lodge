@@ -137,7 +137,30 @@ const initialState: FinanceState = {
 const financeSlice = createSlice({
   name: 'finance',
   initialState,
-  reducers: {},
+  reducers: {
+    setFinanceBasics(
+      state,
+      action: PayloadAction<{
+        accounts: FinanceAccount[];
+        categories: FinanceCategory[];
+        vendors: FinanceVendor[];
+        clients: FinanceClient[];
+      }>,
+    ) {
+      state.accounts.loading = false;
+      state.accounts.error = null;
+      state.accounts.data = action.payload.accounts;
+      state.categories.loading = false;
+      state.categories.error = null;
+      state.categories.data = action.payload.categories;
+      state.vendors.loading = false;
+      state.vendors.error = null;
+      state.vendors.data = action.payload.vendors;
+      state.clients.loading = false;
+      state.clients.error = null;
+      state.clients.data = action.payload.clients;
+    },
+  },
   extraReducers: (builder) => {
     // Accounts
     builder
@@ -386,5 +409,5 @@ const financeSlice = createSlice({
   },
 });
 
+export const { setFinanceBasics } = financeSlice.actions;
 export default financeSlice.reducer;
-
