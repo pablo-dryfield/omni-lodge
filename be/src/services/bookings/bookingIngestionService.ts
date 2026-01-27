@@ -121,8 +121,24 @@ const recordPendingAlias = async (
   rawLabel: string,
   transaction?: Transaction,
 ): Promise<void> => {
-  const normalized = normalizeAliasInput(rawLabel);
+  const sanitizedLabel = sanitizeProductSource(rawLabel).trim();
+  if (!sanitizedLabel) {
+    return;
+  }
+  if (sanitizedLabel.length > 255) {
+    logger.warn('Skipping product alias capture; label exceeds 255 chars.', {
+      length: sanitizedLabel.length,
+    });
+    return;
+  }
+  const normalized = normalizeAliasInput(sanitizedLabel);
   if (!normalized) {
+    return;
+  }
+  if (normalized.length > 255) {
+    logger.warn('Skipping product alias capture; normalized label exceeds 255 chars.', {
+      length: normalized.length,
+    });
     return;
   }
   const now = new Date();
@@ -143,7 +159,7 @@ const recordPendingAlias = async (
   await ProductAlias.create(
     {
       productId: null,
-      label: sanitizeProductSource(rawLabel),
+      label: sanitizedLabel,
       normalizedLabel: normalized,
       matchType: 'contains',
       priority: 100,
