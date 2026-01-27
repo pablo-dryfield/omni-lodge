@@ -34,6 +34,9 @@ const DEFAULT_LABEL_TERMINATORS = [
   'Full Name',
   'Phone Number',
   'Group Time',
+  'Activity Time',
+  'Activity Date',
+  'Time',
   'Date',
   'Meeting Point',
   'Price per item',
@@ -289,13 +292,29 @@ const parsePickupDate = (text: string): string | null => {
   if (match?.[1]) {
     return match[1].trim();
   }
+  const activityDate = extractLabeledValue(text, 'Activity Date');
+  if (activityDate) {
+    return activityDate;
+  }
+  const pickupDate = extractLabeledValue(text, 'Pickup Date');
+  if (pickupDate) {
+    return pickupDate;
+  }
   return extractLabeledValue(text, 'Date');
 };
 
 const parsePickupTime = (text: string): string | null => {
-  const directMatch = text.match(/Time\s+([\d:.]+\s*(?:A\.M\.|P\.M\.|AM|PM)?)/i);
-  if (directMatch?.[1]) {
-    return normalizeMeridiem(directMatch[1]).trim();
+  const activityTime = extractLabeledValue(text, 'Activity Time');
+  if (activityTime) {
+    return normalizeMeridiem(activityTime).trim();
+  }
+  const pickupTime = extractLabeledValue(text, 'Pickup Time');
+  if (pickupTime) {
+    return normalizeMeridiem(pickupTime).trim();
+  }
+  const labeledTime = extractLabeledValue(text, 'Time');
+  if (labeledTime) {
+    return normalizeMeridiem(labeledTime).trim();
   }
   const pickupLineMatch = text.match(
     /Pickup date and time:? [A-Za-z]+\s+\d{1,2},\s+\d{4}[,\s]+(\d{1,2}:\d{2}\s*(?:AM|PM)?)/i,
@@ -305,6 +324,81 @@ const parsePickupTime = (text: string): string | null => {
   }
   const labeled = extractLabeledValue(text, 'Group Time');
   return labeled ? normalizeMeridiem(labeled).trim() : null;
+};
+
+const parsePickupLineTime = (text: string): string | null => {
+  const pickupLineMatch = text.match(
+    /Pickup date and time:? [A-Za-z]+\s+\d{1,2},\s+\d{4}[,\s]+(\d{1,2}:\d{2}\s*(?:AM|PM)?)/i,
+  );
+  if (pickupLineMatch?.[1]) {
+    return normalizeMeridiem(pickupLineMatch[1]).trim();
+  }
+  return null;
+};
+
+const parsePubCrawlDetailsTime = (text: string): string | null => {
+  const match = text.match(/Pub Crawl Details[\s\S]*?Time\s+([\d:.]+\s*(?:A\.M\.|P\.M\.|AM|PM)?)/i);
+  if (match?.[1]) {
+    return normalizeMeridiem(match[1]).trim();
+  }
+  return null;
+};
+
+type EcwidItemBlock = {
+  block: string;
+  price: number | null;
+  currency: string | null;
+  quantity: number;
+};
+
+const extractItemsSection = (text: string): string | null => {
+  const match = text.match(/Items\s+([\s\S]+?)(?:\s+Subtotal\b|\s+Shipping\b|\s+Discount\b|\s+Total\b|\s+Customer\b|$)/i);
+  return match?.[1]?.trim() ?? null;
+};
+
+const splitItemBlocks = (section: string | null): EcwidItemBlock[] => {
+  if (!section) {
+    return [];
+  }
+
+  const pattern = /Price per item:\s*([\d\s.,-]+)\s*([^\s\d]+)?\s*Quantity:\s*(\d+)/gi;
+  const blocks: EcwidItemBlock[] = [];
+  let match: RegExpExecArray | null;
+  let lastIndex = 0;
+
+  while ((match = pattern.exec(section))) {
+    const endIndex = match.index + match[0].length;
+    const block = section.slice(lastIndex, endIndex).trim();
+    const price = parseNumber(match[1]) ?? null;
+    const currency = currencyFromToken(match[2] ?? null);
+    const quantity = Number.parseInt(match[3], 10);
+    blocks.push({
+      block,
+      price,
+      currency,
+      quantity: Number.isNaN(quantity) || quantity <= 0 ? 1 : quantity,
+    });
+    lastIndex = endIndex;
+  }
+
+  return blocks;
+};
+
+const parseProductNameFromBlock = (block: string): string | null => {
+  if (!block) {
+    return null;
+  }
+  const match = block.match(
+    /^(.+?)(?:\s+(?:Man:|Woman:|Packages?:|Activity Date:|Activity Time:|Pickup Date:|Pickup Time:|Date:|Time:|Phone Number:|Vehicle Type:|Full Name:|Flight Number:|Price per item:|Quantity:|Subtotal|Total)\b|$)/i,
+  );
+  return match?.[1]?.trim() ?? null;
+};
+
+const parseVariantFromBlock = (block: string): string | null => {
+  const packageLabel = extractLabeledValue(block, 'Packages') ?? extractLabeledValue(block, 'Package');
+  const vehicleType = extractLabeledValue(block, 'Vehicle Type');
+  const parts = [packageLabel, vehicleType].filter(Boolean);
+  return parts.length > 0 ? parts.join(' | ') : null;
 };
 
 const buildExperienceMoment = (dateRaw: string | null, timeRaw: string | null): { experienceDate: string | null; startAt: Date | null } => {
@@ -339,7 +433,7 @@ const buildExperienceMoment = (dateRaw: string | null, timeRaw: string | null): 
       continue;
     }
     if (!normalizedTime) {
-      return { experienceDate: datePart.format('YYYY-MM-DD'), startAt: datePart.toDate() };
+      return { experienceDate: datePart.format('YYYY-MM-DD'), startAt: null };
     }
     for (const timeFormat of timeFormats) {
       let combined: dayjs.Dayjs | null = null;
@@ -406,7 +500,6 @@ export class EcwidBookingParser implements BookingEmailParser {
 
   async parse(context: BookingParserContext): Promise<ParsedBookingEvent | null> {
     const text = context.textBody || context.rawTextBody || context.snippet || '';
-    const rawText = context.rawTextBody && context.rawTextBody.trim().length > 0 ? context.rawTextBody : text;
     if (!text) {
       return null;
     }
@@ -417,42 +510,22 @@ export class EcwidBookingParser implements BookingEmailParser {
     }
     const orderId = orderMatch[1].trim();
 
-    const productMatch = text.match(/Items\s+(.+?)\s+Man:/i);
-    const productName = productMatch?.[1]?.trim() ?? null;
-
     const totals = parseOrderTotals(text);
-    const itemQuantity = parseItemQuantity(text);
-    const party = parsePartySize(text);
-    let scaledParty = { ...party };
-    let addonRows = parseAddonRows(rawText);
-    if (itemQuantity > 1) {
-      const scale = (value: number | null): number | null => (value !== null ? value * itemQuantity : null);
-      scaledParty = {
-        men: scale(party.men),
-        women: scale(party.women),
-        total: null,
-      };
-      if (scaledParty.men !== null || scaledParty.women !== null) {
-        const menCount = scaledParty.men ?? 0;
-        const womenCount = scaledParty.women ?? 0;
-        scaledParty.total = menCount + womenCount;
-      } else {
-        scaledParty.total = scale(party.total);
-      }
-      addonRows = addonRows.map((row) => ({
-        ...row,
-        quantity: row.quantity * itemQuantity,
-      }));
-    }
-    const addonCounters = summarizeAddonCategories(addonRows);
-    const addonsNote =
-      addonRows.length > 0
-        ? addonRows.map((row) => `${row.label}: ${row.rawValue}`).join(' | ')
-        : null;
+    const subjectProductMatch = (context.subject ?? '').match(/^(.+?)\s*:\s*New order/i);
+    const itemsSection = extractItemsSection(text);
+    const itemBlocks = splitItemBlocks(itemsSection);
+    const fallbackBlocks: EcwidItemBlock[] = itemBlocks.length > 0
+      ? itemBlocks
+      : [{
+          block: itemsSection ?? text,
+          price: null,
+          currency: totals.currency,
+          quantity: parseItemQuantity(text),
+        }];
+    const overallPickupDate = parsePickupDate(text);
+    const overallPickupTime = parsePickupLineTime(text);
+    const pubCrawlDetailsTime = parsePubCrawlDetailsTime(text);
     const location = parsePickupLocation(text);
-    const pickupDate = parsePickupDate(text);
-    const pickupTime = parsePickupTime(text);
-    const experienceMoment = buildExperienceMoment(pickupDate, pickupTime);
 
     const customerSection = extractCustomerSection(text);
     const email = parseEmail(customerSection) ?? parseEmail(text);
@@ -468,67 +541,133 @@ export class EcwidBookingParser implements BookingEmailParser {
     const paymentMethod =
       paymentMethodMatch?.[1]?.replace(/View order details/i, '').trim() ?? null;
 
-    const addonsSnapshot: Record<string, unknown> = {};
-    if (scaledParty.men !== null || scaledParty.women !== null) {
-      addonsSnapshot.partyBreakdown = {
-        men: scaledParty.men,
-        women: scaledParty.women,
-      };
-    }
-    if (addonRows.length > 0) {
-      addonsSnapshot.addons = addonRows;
-    }
-    if (Object.values(addonCounters).some((count) => count > 0)) {
-      addonsSnapshot.extras = addonCounters;
-    }
-
-    const bookingFields: BookingFieldPatch = {
-      productName,
-      guestFirstName: firstName,
-      guestLastName: lastName,
-      guestEmail: email,
-      guestPhone: phone,
-      experienceDate: experienceMoment.experienceDate,
-      experienceStartAt: experienceMoment.startAt,
-      partySizeTotal: scaledParty.total,
-      partySizeAdults: scaledParty.total,
-      currency: totals.currency ?? 'PLN',
-      priceGross: totals.total,
-      priceNet: totals.total,
-      baseAmount: totals.total,
-      paymentMethod,
-      pickupLocation: location,
-      notes: addonsNote ?? null,
-    };
-    if (Object.keys(addonsSnapshot).length > 0) {
-      bookingFields.addonsSnapshot = addonsSnapshot;
-    }
-
-    const normalizedAddons =
-      addonRows
-        .filter((row) => row.quantity > 0)
-        .map((row) => ({
-          platformAddonName: row.label,
-          quantity: row.quantity,
-          metadata: {
-            category: row.category ?? undefined,
-            rawValue: row.rawValue,
-          },
-        })) ?? [];
-
     const paymentStatus = /paid/i.test(context.subject ?? '') || /paid/i.test(text) ? 'paid' : 'unknown';
 
-    return {
-      platform: 'ecwid',
-      platformBookingId: orderId,
-      platformOrderId: orderId,
-      eventType: 'created',
-      status: 'confirmed',
-      paymentStatus,
-      addons: normalizedAddons.length > 0 ? normalizedAddons : undefined,
-      bookingFields,
-      occurredAt: context.receivedAt ?? context.internalDate ?? null,
-      sourceReceivedAt: context.receivedAt ?? context.internalDate ?? null,
+    const buildEvent = (item: EcwidItemBlock, index: number): ParsedBookingEvent => {
+      const itemQuantity = item.quantity > 0 ? item.quantity : parseItemQuantity(item.block);
+      const party = parsePartySize(item.block);
+      let scaledParty = { ...party };
+      let addonRows = parseAddonRows(item.block);
+      if (itemQuantity > 1) {
+        const scale = (value: number | null): number | null => (value !== null ? value * itemQuantity : null);
+        scaledParty = {
+          men: scale(party.men),
+          women: scale(party.women),
+          total: null,
+        };
+        if (scaledParty.men !== null || scaledParty.women !== null) {
+          const menCount = scaledParty.men ?? 0;
+          const womenCount = scaledParty.women ?? 0;
+          scaledParty.total = menCount + womenCount;
+        } else {
+          scaledParty.total = scale(party.total);
+        }
+        addonRows = addonRows.map((row) => ({
+          ...row,
+          quantity: row.quantity * itemQuantity,
+        }));
+      }
+      if (scaledParty.total === null && party.men === null && party.women === null && itemQuantity > 0) {
+        scaledParty = {
+          ...scaledParty,
+          total: itemQuantity,
+        };
+      }
+
+      const productName =
+        parseProductNameFromBlock(item.block) ??
+        (index === 0 ? subjectProductMatch?.[1]?.trim() ?? null : null);
+      const isPubCrawl = productName ? productName.toLowerCase().includes('pub crawl') : false;
+      const productVariant = parseVariantFromBlock(item.block);
+      const pickupDate = parsePickupDate(item.block) ?? overallPickupDate;
+      let pickupTime = parsePickupTime(item.block);
+      if (!pickupTime && isPubCrawl) {
+        pickupTime = pubCrawlDetailsTime ?? overallPickupTime ?? '21:00';
+      }
+      const experienceMoment = buildExperienceMoment(pickupDate, pickupTime);
+      const addonCounters = summarizeAddonCategories(addonRows);
+      const addonsNote =
+        addonRows.length > 0
+          ? addonRows.map((row) => `${row.label}: ${row.rawValue}`).join(' | ')
+          : null;
+      const flightNumber = extractLabeledValue(item.block, 'Flight Number');
+      const notesParts = [addonsNote, flightNumber ? `Flight Number: ${flightNumber}` : null].filter(Boolean);
+      const itemTotal =
+        item.price !== null
+          ? item.price * itemQuantity
+          : fallbackBlocks.length === 1
+            ? totals.total
+            : null;
+      const currency = item.currency ?? totals.currency ?? 'PLN';
+
+      const addonsSnapshot: Record<string, unknown> = {};
+      if (scaledParty.men !== null || scaledParty.women !== null) {
+        addonsSnapshot.partyBreakdown = {
+          men: scaledParty.men,
+          women: scaledParty.women,
+        };
+      }
+      if (addonRows.length > 0) {
+        addonsSnapshot.addons = addonRows;
+      }
+      if (Object.values(addonCounters).some((count) => count > 0)) {
+        addonsSnapshot.extras = addonCounters;
+      }
+
+      const bookingFields: BookingFieldPatch = {
+        productName,
+        productVariant,
+        guestFirstName: firstName,
+        guestLastName: lastName,
+        guestEmail: email,
+        guestPhone: phone,
+        experienceDate: experienceMoment.experienceDate,
+        experienceStartAt: experienceMoment.startAt,
+        partySizeTotal: scaledParty.total,
+        partySizeAdults: scaledParty.total,
+        currency,
+        priceGross: itemTotal,
+        priceNet: itemTotal,
+        baseAmount: itemTotal,
+        paymentMethod,
+        pickupLocation: location,
+        notes: notesParts.length > 0 ? notesParts.join(' | ') : null,
+      };
+      if (Object.keys(addonsSnapshot).length > 0) {
+        bookingFields.addonsSnapshot = addonsSnapshot;
+      }
+
+      const normalizedAddons =
+        addonRows
+          .filter((row) => row.quantity > 0)
+          .map((row) => ({
+            platformAddonName: row.label,
+            quantity: row.quantity,
+            metadata: {
+              category: row.category ?? undefined,
+              rawValue: row.rawValue,
+            },
+          })) ?? [];
+
+      return {
+        platform: 'ecwid',
+        platformBookingId: index === 0 ? orderId : `${orderId}-${index + 1}`,
+        platformOrderId: orderId,
+        eventType: 'created',
+        status: 'confirmed',
+        paymentStatus,
+        addons: normalizedAddons.length > 0 ? normalizedAddons : undefined,
+        bookingFields,
+        occurredAt: context.receivedAt ?? context.internalDate ?? null,
+        sourceReceivedAt: context.receivedAt ?? context.internalDate ?? null,
+      };
     };
+
+    const baseEvent = buildEvent(fallbackBlocks[0], 0);
+    if (fallbackBlocks.length > 1) {
+      baseEvent.spawnedEvents = fallbackBlocks.slice(1).map((item, index) => buildEvent(item, index + 1));
+    }
+
+    return baseEvent;
   }
 }

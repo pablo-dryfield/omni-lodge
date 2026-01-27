@@ -13,6 +13,7 @@ import {
   IconCategory2,
   IconPuzzle,
   IconHierarchy2,
+  IconTag,
   IconCreditCard,
   IconBroadcast,
   IconBolt,
@@ -122,6 +123,12 @@ const settingsNav: SettingsNavSection[] = [
         to: "/settings/product-types",
         slug: PAGE_SLUGS.settingsProductTypes,
         icon: <IconCategory2 size={20} />,
+      },
+      {
+        label: "Product Aliases",
+        to: "/settings/product-aliases",
+        slug: PAGE_SLUGS.settingsProductAliases,
+        icon: <IconTag size={20} />,
       },
       {
         label: "Product Prices",

@@ -14,6 +14,7 @@ import CounterUser from "../models/CounterUser.js";
 import Product from "../models/Product.js";
 import ProductType from "../models/ProductType.js";
 import UserType from "../models/UserType.js";
+import ProductAlias from "../models/ProductAlias.js";
 import Page from "../models/Page.js";
 import Module from "../models/Module.js";
 import Action from "../models/Action.js";
@@ -141,6 +142,7 @@ const sequelize = new Sequelize({
     CounterUser,
     CounterChannelMetric,
     Product,
+    ProductAlias,
     ProductAddon,
     ProductType,
     Addon,

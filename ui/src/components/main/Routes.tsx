@@ -26,6 +26,7 @@ import SettingsModulePermissions from "../../pages/settings/SettingsModulePermis
 import SettingsProducts from "../../pages/settings/SettingsProducts";
 import SettingsProductTypes from "../../pages/settings/SettingsProductTypes";
 import SettingsProductPrices from "../../pages/settings/SettingsProductPrices";
+import SettingsProductAliases from "../../pages/settings/SettingsProductAliases";
 import SettingsAddons from "../../pages/settings/SettingsAddons";
 import SettingsVenues from "../../pages/settings/SettingsVenues";
 import SettingsProductAddons from "../../pages/settings/SettingsProductAddons";
@@ -123,6 +124,7 @@ const Routes = () => {
         <Route path="permissions/pages" element={<SettingsPagePermissions />} />
         <Route path="permissions/modules" element={<SettingsModulePermissions />} />
         <Route path="products" element={<SettingsProducts />} />
+        <Route path="product-aliases" element={<SettingsProductAliases />} />
         <Route path="product-prices" element={<SettingsProductPrices />} />
         <Route path="product-types" element={<SettingsProductTypes />} />
         <Route path="addons" element={<SettingsAddons />} />

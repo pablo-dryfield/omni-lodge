@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import { Badge, Button, Group, Paper, Stack, Text } from "@mantine/core";
 import { UnifiedProduct, OrderExtras } from "../store/bookingPlatformsTypes";
 import { BookingCell, BookingGrid } from "../utils/prepareBookingGrid";
@@ -10,7 +10,7 @@ type ManifestTarget = {
   productId: string;
   productName: string;
   date: string;
-  time: string;
+  time: string | null;
 };
 
 type MobileBookingsListProps = {
@@ -21,6 +21,8 @@ type MobileBookingsListProps = {
   onSelectDate: (date: string) => void;
   viewMode: ViewMode;
   onOpenManifest?: (target: ManifestTarget, orders: BookingCell["orders"]) => void;
+  scrollToDate?: string | null;
+  onScrollComplete?: () => void;
 };
 
 type TimeslotGroup = {
@@ -137,7 +139,10 @@ export const MobileBookingsList: React.FC<MobileBookingsListProps> = ({
   onSelectDate,
   viewMode,
   onOpenManifest,
+  scrollToDate,
+  onScrollComplete,
 }) => {
+  const dateRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const sanitizedProducts = useMemo(() => {
     if (products.length > 0) {
       return products;
@@ -179,17 +184,40 @@ export const MobileBookingsList: React.FC<MobileBookingsListProps> = ({
 
     Object.values(map).forEach((entry) => {
       entry.slots.sort((a, b) => {
-        if (a.cell.time === b.cell.time) {
+        const aTime = a.cell.time ?? "";
+        const bTime = b.cell.time ?? "";
+        if (aTime === bTime) {
           const aName = a.product.name ?? a.product.id;
           const bName = b.product.name ?? b.product.id;
           return aName.localeCompare(bName);
         }
-        return a.cell.time.localeCompare(b.cell.time);
+        if (!aTime) {
+          return 1;
+        }
+        if (!bTime) {
+          return -1;
+        }
+        return aTime.localeCompare(bTime);
       });
     });
 
     return map;
   }, [sanitizedProducts, grid, dateRange]);
+
+  useEffect(() => {
+    if (!scrollToDate) {
+      return;
+    }
+    const node = dateRefs.current[scrollToDate];
+    if (node) {
+      requestAnimationFrame(() => {
+        node.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+    if (onScrollComplete) {
+      onScrollComplete();
+    }
+  }, [scrollToDate, onScrollComplete]);
 
   return (
     <Stack gap="lg">
@@ -201,7 +229,8 @@ export const MobileBookingsList: React.FC<MobileBookingsListProps> = ({
         const firstSlot = entry.slots[0];
 
         return (
-          <Stack key={date} gap="xs">
+          <div key={date} ref={(node) => { dateRefs.current[date] = node; }} style={{ scrollMarginTop: 96 }}>
+            <Stack gap="xs">
             <Paper
               onClick={() => onSelectDate(date)}
               withBorder
@@ -260,9 +289,11 @@ export const MobileBookingsList: React.FC<MobileBookingsListProps> = ({
                         <Stack gap={10}>
                           <Group justify="space-between" align="flex-start">
                             <Stack gap={2}>
-                              <Text fw={700} size="md">
-                                {cell.time}
-                              </Text>
+                              {cell.time && (
+                                <Text fw={700} size="md">
+                                  {cell.time}
+                                </Text>
+                              )}
                               <Text size="sm" c="dimmed">
                                 {product.name}
                               </Text>
@@ -331,7 +362,8 @@ export const MobileBookingsList: React.FC<MobileBookingsListProps> = ({
                 </Paper>
               )
             )}
-          </Stack>
+            </Stack>
+          </div>
         );
       })}
     </Stack>

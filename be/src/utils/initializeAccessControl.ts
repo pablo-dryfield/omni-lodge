@@ -46,6 +46,7 @@ const defaultPages = [
   { slug: 'scheduling', name: 'Scheduling', description: 'Manage weekly staff scheduling', sortOrder: 9 },
   { slug: 'finance', name: 'Finance', description: 'Finance operations and reporting', sortOrder: 10 },
   { slug: 'settings-products', name: 'Products', description: 'Manage saleable products', sortOrder: 7 },
+  { slug: 'settings-product-aliases', name: 'Product Aliases', description: 'Map booking labels to products', sortOrder: 7 },
   { slug: 'settings-product-types', name: 'Product Types', description: 'Group products into categories', sortOrder: 8 },
   { slug: 'settings-product-prices', name: 'Product Prices', description: 'Schedule base product prices', sortOrder: 9 },
   { slug: 'settings-venues', name: 'Venues', description: 'Maintain the partner venue directory', sortOrder: 10 },
@@ -96,6 +97,7 @@ const defaultModules = [
   { slug: 'finance-files', name: 'Finance Files', pageSlug: 'finance', description: 'Manage finance document uploads', componentRef: 'FinanceFiles', sortOrder: 10 },
   { slug: 'finance-reports', name: 'Finance Reports', pageSlug: 'finance', description: 'Finance reporting overview', componentRef: 'FinanceReports', sortOrder: 11 },
   { slug: 'product-catalog', name: 'Product Catalog', pageSlug: 'settings-products', description: 'Create and maintain products', componentRef: 'ProductCatalog', sortOrder: 1 },
+  { slug: 'product-alias-management', name: 'Product Aliases', pageSlug: 'settings-product-aliases', description: 'Map booking labels to products', componentRef: 'ProductAliasManagement', sortOrder: 1 },
   { slug: 'product-taxonomy', name: 'Product Types', pageSlug: 'settings-product-types', description: 'Define product categories and metadata', componentRef: 'ProductTypeManagement', sortOrder: 1 },
   { slug: 'product-price-management', name: 'Product Prices', pageSlug: 'settings-product-prices', description: 'Manage base price history', componentRef: 'ProductPriceManagement', sortOrder: 1 },
   { slug: 'venue-directory', name: 'Venue Directory', pageSlug: 'settings-venues', description: 'Maintain the partner venue directory', componentRef: 'VenueDirectory', sortOrder: 1 },
@@ -118,7 +120,7 @@ const defaultModules = [
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
-  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'channel-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'assistant-manager-tasks', 'settings-products', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-compensation-components', 'settings-actions', 'settings-channels', 'settings',
+  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'channel-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'assistant-manager-tasks', 'settings-products', 'settings-product-aliases', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-compensation-components', 'settings-actions', 'settings-channels', 'settings',
 'settings-users',
 'settings-user-types',
 'settings-pages',
@@ -134,7 +136,7 @@ const rolePageMatrix: Record<string, string[]> = {
 'settings-home-experience',
 'settings-control-panel',
 'settings-maintenance'],
-  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'channel-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'assistant-manager-tasks', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-shift-types', 'settings-review-platforms', 'settings-compensation-components', 'settings-home-experience'],
+  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'venue-numbers', 'channel-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'assistant-manager-tasks', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-shift-types', 'settings-review-platforms', 'settings-compensation-components', 'settings-home-experience', 'settings-product-aliases'],
   manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'channel-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'assistant-manager-tasks'],
   'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'venue-numbers', 'channel-numbers', 'reviews', 'finance', 'pays', 'scheduling', 'assistant-manager-tasks'],
   guide: ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'channel-numbers', 'pays', 'scheduling'],
@@ -182,6 +184,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'finance-reports': ['view', 'create', 'update', 'delete'],
     'venue-directory': ['view', 'create', 'update', 'delete'],
     'product-catalog': ['view', 'create', 'update', 'delete'],
+    'product-alias-management': ['view', 'create', 'update', 'delete'],
     'product-taxonomy': ['view', 'create', 'update', 'delete'],
     'product-price-management': ['view', 'create', 'update', 'delete'],
     'addon-management': ['view', 'create', 'update', 'delete'],
@@ -230,6 +233,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'compensation-component-management': ['view', 'create', 'update', 'delete'],
     'am-task-management': ['view', 'create', 'update', 'delete'],
     'review-counter-management': ['view', 'create', 'update', 'delete'],
+    'product-alias-management': ['view', 'create', 'update', 'delete'],
   },
   manager: {
     'dashboard-overview': ['view'],
