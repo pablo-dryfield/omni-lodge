@@ -6,6 +6,8 @@ import type {
   CatalogProduct,
   StaffOption,
 } from '../types/counters/CounterRegistry';
+import type { ShiftRole } from '../types/shiftRoles/ShiftRole';
+import type { UserShiftRoleAssignment } from '../types/shiftRoles/UserShiftRoleAssignment';
 import type { RootState } from './store';
 
 type CatalogChannel = {
@@ -20,6 +22,15 @@ type CatalogChannel = {
 type CatalogPayload = {
   managers: StaffOption[];
   staff: StaffOption[];
+  users: StaffOption[];
+  shiftRoles: ShiftRole[];
+  shiftRoleAssignments: UserShiftRoleAssignment[];
+  scheduledStaff: {
+    date: string;
+    productId: number;
+    userIds: number[];
+    managerIds: number[];
+  } | null;
   products: CatalogProduct[];
   channels: CatalogChannel[];
   addons: AddonConfig[];
@@ -37,6 +48,10 @@ const initialState: CatalogState = {
   error: null,
   managers: [],
   staff: [],
+  users: [],
+  shiftRoles: [],
+  shiftRoleAssignments: [],
+  scheduledStaff: null,
   products: [],
   channels: [],
   addons: [],
@@ -80,6 +95,21 @@ type AddonResponse = AddonConfig & {
   isActive?: boolean;
 };
 
+type CatalogBulkResponse = {
+  users: CompactUserResponse[];
+  products: CompactProductResponse[];
+  channels: CompactChannelResponse[];
+  addons: AddonResponse[];
+  shiftRoles: ShiftRole[];
+  shiftRoleAssignments: UserShiftRoleAssignment[];
+  scheduledStaff?: {
+    date: string;
+    productId: number;
+    userIds: number[];
+    managerIds: number[];
+  } | null;
+};
+
 const mapUserToStaffOption = (user: CompactUserResponse): StaffOption => ({
   id: user.id,
   firstName: user.firstName,
@@ -99,39 +129,29 @@ const uniqueById = <T extends { id: number }>(items: T[]): T[] => {
   return Array.from(map.values());
 };
 
-export const loadCatalog = createAsyncThunk<CatalogPayload, void, { rejectValue: string }>(
-  'catalog/load',
-  async (_, { rejectWithValue }) => {
-    try {
-      const [
-        userResponse,
-        productResponse,
-        channelResponse,
-        addonResponse,
-      ] = await Promise.all([
-        axiosInstance.get<CompactUserResponse[]>('/users', {
-          params: {
-            format: 'compact',
-            types: 'manager,assistant-manager,pub-crawl-guide',
-            active: 'true',
-          },
-          withCredentials: true,
-        }),
-        axiosInstance.get<CompactProductResponse[]>('/products', {
-          params: { format: 'compact', active: 'true' },
-          withCredentials: true,
-        }),
-        axiosInstance.get<CompactChannelResponse[]>('/channels', {
-          params: { format: 'compact' },
-          withCredentials: true,
-        }),
-        axiosInstance.get<AddonResponse[]>('/addons', {
-          params: { active: 'true' },
-          withCredentials: true,
-        }),
-      ]);
+type CatalogLoadOptions = {
+  date?: string;
+  productId?: number;
+  productName?: string;
+  includeScheduledStaff?: boolean;
+};
 
-      const allUsers = userResponse.data.map(mapUserToStaffOption);
+export const loadCatalog = createAsyncThunk<CatalogPayload, CatalogLoadOptions | void, { rejectValue: string }>(
+  'catalog/load',
+  async (options, { rejectWithValue }) => {
+    try {
+      const includeScheduledStaff = options?.includeScheduledStaff ?? false;
+      const response = await axiosInstance.get<CatalogBulkResponse>('/catalog/counter-setup', {
+        params: {
+          ...(includeScheduledStaff && options?.date ? { includeScheduledStaff: true, date: options.date } : {}),
+          ...(includeScheduledStaff && options?.productId ? { productId: options.productId } : {}),
+          ...(includeScheduledStaff && options?.productName ? { productName: options.productName } : {}),
+        },
+        withCredentials: true,
+      });
+      const payload = response.data;
+
+      const allUsers = payload.users.map(mapUserToStaffOption);
       const managers = uniqueById(
         allUsers.filter((user) => {
           const slug = user.userTypeSlug?.toLowerCase();
@@ -145,7 +165,7 @@ export const loadCatalog = createAsyncThunk<CatalogPayload, void, { rejectValue:
         }),
       );
 
-      const products: CatalogProduct[] = productResponse.data.map((product) => ({
+      const products: CatalogProduct[] = payload.products.map((product) => ({
         id: product.id,
         name: product.name,
         status: product.status,
@@ -162,7 +182,7 @@ export const loadCatalog = createAsyncThunk<CatalogPayload, void, { rejectValue:
         })),
       }));
 
-      const channels: CatalogChannel[] = channelResponse.data.map((channel) => ({
+      const channels: CatalogChannel[] = payload.channels.map((channel) => ({
         id: channel.id,
         name: channel.name,
         description: channel.description ?? null,
@@ -171,7 +191,7 @@ export const loadCatalog = createAsyncThunk<CatalogPayload, void, { rejectValue:
         paymentMethodName: channel.paymentMethodName ?? null,
       }));
 
-      const addons: AddonConfig[] = addonResponse.data.map((addon, index) => ({
+      const addons: AddonConfig[] = payload.addons.map((addon, index) => ({
         addonId: addon.addonId,
         name: addon.name,
         key: addon.key,
@@ -184,6 +204,10 @@ export const loadCatalog = createAsyncThunk<CatalogPayload, void, { rejectValue:
       return {
         managers,
         staff,
+        users: allUsers,
+        shiftRoles: payload.shiftRoles ?? [],
+        shiftRoleAssignments: payload.shiftRoleAssignments ?? [],
+        scheduledStaff: payload.scheduledStaff ?? null,
         products,
         channels,
         addons,
@@ -213,6 +237,10 @@ const catalogSlice = createSlice({
         state.error = null;
         state.managers = action.payload.managers;
         state.staff = action.payload.staff;
+        state.users = action.payload.users;
+        state.shiftRoles = action.payload.shiftRoles;
+        state.shiftRoleAssignments = action.payload.shiftRoleAssignments;
+        state.scheduledStaff = action.payload.scheduledStaff;
         state.products = action.payload.products;
         state.channels = action.payload.channels;
         state.addons = action.payload.addons;

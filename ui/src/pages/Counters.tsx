@@ -1,5 +1,5 @@
 import type { ChangeEvent, KeyboardEvent, MouseEvent, SyntheticEvent } from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react';
 import dayjs, { Dayjs } from 'dayjs';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
@@ -29,6 +29,8 @@ import {
   ListItem,
   ListItemButton,
   ListItemText,
+  MenuItem,
+  Pagination,
   Skeleton,
   Step,
   StepButton,
@@ -48,21 +50,17 @@ import { createNightReport, fetchNightReports, submitNightReport, updateNightRep
 import { navigateToPage } from '../actions/navigationActions';
 import { GenericPageProps } from '../types/general/GenericPageProps';
 import { loadCatalog, selectCatalog } from '../store/catalogSlice';
-import { useShiftRoleAssignments, useShiftRoles } from '../api/shiftRoles';
 import { fetchScheduledStaffForProduct } from '../api/scheduling';
 import {
   clearDirtyMetrics,
   clearCounter,
-  ensureCounterForDate,
   fetchCounterByDate,
   fetchCounterById,
-  flushDirtyMetrics,
+  commitCounterRegistry,
   selectCounterRegistry,
   setMetric,
-  updateCounterStaff,
+  submitCounterSetup,
   updateCounterProduct,
-  updateCounterManager,
-  updateCounterStatus,
   updateCounterNotes,
 } from '../store/counterRegistrySlice';
 import {
@@ -83,8 +81,6 @@ import {
 import { buildMetricKey } from '../utils/counterMetrics';
 import { DID_NOT_OPERATE_NOTE } from '../constants/nightReports';
 import type { Counter } from '../types/counters/Counter';
-import type { ShiftRole } from '../types/shiftRoles/ShiftRole';
-import type { UserShiftRoleAssignment } from '../types/shiftRoles/UserShiftRoleAssignment';
 import axiosInstance from '../utils/axiosInstance';
 import type { ServerResponse } from '../types/general/ServerResponse';
 import type { NightReport, NightReportSummary } from '../types/nightReports/NightReport';
@@ -1051,6 +1047,278 @@ const mapStatusToStep = (status: CounterStatus | null | undefined): RegistryStep
   }
 };
 
+type CounterListItemDisplay = {
+  counter: Partial<Counter>;
+  counterIdValue: number | null;
+  dateLabel: string;
+  managerDisplay: string;
+  productLabel: string;
+  rawNote: string;
+  notePreview?: string;
+  hasNote?: boolean;
+};
+
+type CounterListRowProps = {
+  item: CounterListItemDisplay;
+  isSelected: boolean;
+  isExpanded: boolean;
+  canModifyCounter: boolean;
+  onSelect: (counter: Partial<Counter>) => void;
+  onToggleExpand: (counterId: number | null) => void;
+  onViewSummary: (counter: Partial<Counter>) => void;
+  onOpenModal: (mode: 'create' | 'update') => void;
+  onDeleteCounter: () => void;
+  venueStatusForCounter: (counterId: number | null) => {
+    label: string;
+    color: 'primary' | 'success' | 'warning';
+    mode: 'edit' | 'view';
+  };
+};
+
+const CounterListRow = memo((props: CounterListRowProps) => {
+  const {
+    item,
+    isSelected,
+    isExpanded,
+    canModifyCounter,
+    onSelect,
+    onToggleExpand,
+    onViewSummary,
+    onOpenModal,
+    onDeleteCounter,
+    venueStatusForCounter,
+  } = props;
+  const { counter, counterIdValue, dateLabel, managerDisplay, productLabel } = item;
+  const notePreview = item.notePreview ?? '';
+  const hasNote = item.hasNote ?? false;
+  const venueStatus = venueStatusForCounter(counterIdValue);
+  const { label: venueButtonLabel, color: venueButtonColor, mode: venueButtonMode } = venueStatus;
+  const venueNumbersLink = (() => {
+    if (counterIdValue == null) {
+      return '/venueNumbers';
+    }
+    const params = new URLSearchParams();
+    params.set('counterId', String(counterIdValue));
+    if (venueButtonMode) {
+      params.set('mode', venueButtonMode);
+    }
+    const query = params.toString();
+    return `/venueNumbers${query ? `?${query}` : ''}`;
+  })();
+  const handleRowClick = () => {
+    onSelect(counter);
+    if (counterIdValue != null) {
+      onToggleExpand(counterIdValue);
+    }
+  };
+  const handleExpandClick = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    handleRowClick();
+  };
+
+  const managerProductLine = (
+    <Typography
+      component="span"
+      variant="body2"
+      color={isSelected ? 'grey.300' : 'text.secondary'}
+    >
+      <Box
+        component="span"
+        sx={{
+          fontWeight: 600,
+          color: isSelected ? 'grey.100' : undefined,
+        }}
+      >
+        Manager:
+      </Box>{' '}
+      <Box
+        component="span"
+        sx={{ color: isSelected ? 'grey.200' : undefined }}
+      >
+        {managerDisplay || '-'}
+      </Box>
+      <Box
+        component="span"
+        sx={{
+          mx: 0.75,
+          color: isSelected ? 'grey.400' : undefined,
+        }}
+      >
+        |
+      </Box>
+      <Box
+        component="span"
+        sx={{ color: isSelected ? 'grey.200' : undefined }}
+      >
+        {productLabel}
+      </Box>
+    </Typography>
+  );
+
+  const secondaryContent = (
+    <Stack spacing={hasNote ? 0.5 : 0}>
+      {managerProductLine}
+      {hasNote && (
+        <Typography
+          variant="caption"
+          color={isSelected ? 'grey.300' : 'text.secondary'}
+          sx={{
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}
+        >
+          Note: {notePreview}
+        </Typography>
+      )}
+    </Stack>
+  );
+
+  return (
+    <ListItem
+      key={(counter.id ?? 'counter') + '-' + dateLabel}
+      disablePadding
+      sx={{
+        borderBottom: (theme) => `1px dashed ${theme.palette.divider}`,
+        '&:last-of-type': { borderBottom: 'none' },
+        flexDirection: 'column',
+        alignItems: 'stretch',
+      }}
+    >
+      <ListItemButton
+        disableRipple
+        disableTouchRipple
+        onClick={handleRowClick}
+        selected={Boolean(isSelected)}
+        sx={(theme) => ({
+          width: '100%',
+          ...(isSelected
+            ? {
+                backgroundColor: '#000',
+                color: theme.palette.common.white,
+                '&:hover': {
+                  backgroundColor: '#111',
+                },
+                '& .MuiTypography-root': {
+                  color: theme.palette.common.white,
+                },
+              }
+            : {
+                '&:hover': {
+                  backgroundColor: theme.palette.action.hover,
+                },
+              }),
+          '&.Mui-selected': {
+            backgroundColor: '#000',
+            color: theme.palette.common.white,
+          },
+          '&.Mui-selected:hover': {
+            backgroundColor: '#111',
+          },
+        })}
+      >
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ width: '100%' }}>
+          <ListItemText
+            primary={
+              <Typography
+                variant="body1"
+                fontWeight={600}
+                color={isSelected ? 'common.white' : 'text.primary'}
+              >
+                {dateLabel}
+              </Typography>
+            }
+            secondary={secondaryContent}
+            secondaryTypographyProps={{ component: 'div' }}
+            sx={{ flexGrow: 1, minWidth: 0 }}
+          />
+          <IconButton
+            size="small"
+            edge="end"
+            onClick={handleExpandClick}
+            disabled={counterIdValue == null}
+            sx={{
+              transition: 'transform 150ms ease',
+              transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+              color: isSelected ? 'inherit' : 'text.secondary',
+              ml: 0.5,
+            }}
+          >
+            <KeyboardArrowRight fontSize="small" />
+          </IconButton>
+        </Stack>
+      </ListItemButton>
+      <Collapse in={isExpanded} timeout="auto" unmountOnExit>
+        <Box
+          sx={{
+            px: { xs: 2, sm: 3 },
+            py: 1.5,
+            bgcolor: (theme) =>
+              theme.palette.mode === 'dark'
+                ? 'rgba(255,255,255,0.04)'
+                : 'rgba(0,0,0,0.02)',
+          }}
+        >
+          <Stack
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            sx={{
+              flexWrap: 'wrap',
+              rowGap: 1,
+              columnGap: 1,
+              '& > *': { flexShrink: 0 },
+            }}
+          >
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={(event) => {
+                event.stopPropagation();
+                void onViewSummary(counter);
+              }}
+              disabled={counterIdValue == null}
+            >
+              <Visibility fontSize="small" sx={{ mr: 0.5 }} />
+              View
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<Edit />}
+              onClick={() => onOpenModal('update')}
+              disabled={!canModifyCounter}
+            >
+              Edit
+            </Button>
+            <Button
+              variant="outlined"
+              color="error"
+              size="small"
+              startIcon={<Delete />}
+              onClick={onDeleteCounter}
+              disabled={!canModifyCounter}
+            >
+              DEL
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              component={Link}
+              to={venueNumbersLink}
+              onClick={(event) => event.stopPropagation()}
+              color={venueButtonColor}
+              disabled={counterIdValue == null}
+            >
+              <MapIcon fontSize="small" sx={{ mr: 0.5 }} />
+              {venueButtonLabel}
+            </Button>
+          </Stack>
+        </Box>
+      </Collapse>
+    </ListItem>
+  );
+});
+
 const Counters = (props: GenericPageProps) => {
   const dispatch = useAppDispatch();
   const theme = useTheme();
@@ -1058,16 +1326,13 @@ const Counters = (props: GenericPageProps) => {
   const catalog = useAppSelector(selectCatalog);
   const registry = useAppSelector(selectCounterRegistry);
   const session = useAppSelector((state) => state.session);
-  const shiftRolesQuery = useShiftRoles();
-  const shiftRoleAssignmentsQuery = useShiftRoleAssignments();
-  const shiftRoleRecords = useMemo<ShiftRole[]>(
-    () => (shiftRolesQuery.data?.[0]?.data ?? []) as ShiftRole[],
-    [shiftRolesQuery.data],
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const shiftRoleRecords = useMemo(() => catalog.shiftRoles ?? [], [catalog.shiftRoles]);
+  const shiftRoleAssignments = useMemo(
+    () => catalog.shiftRoleAssignments ?? [],
+    [catalog.shiftRoleAssignments],
   );
-  const shiftRoleAssignments = useMemo<UserShiftRoleAssignment[]>(
-    () => (shiftRoleAssignmentsQuery.data?.[0]?.data ?? []) as UserShiftRoleAssignment[],
-    [shiftRoleAssignmentsQuery.data],
-  );
+  const scheduledStaffSnapshot = useMemo(() => catalog.scheduledStaff ?? null, [catalog.scheduledStaff]);
   const managerRoleIdSet = useMemo(() => {
     const managerIds = new Set<number>();
     shiftRoleRecords.forEach((role) => {
@@ -1115,10 +1380,18 @@ const Counters = (props: GenericPageProps) => {
     return users;
   }, [shiftRoleAssignments, staffRoleIdSet]);
   const loggedUserId = session.loggedUserId ?? null;
-  const loggedUserIsManager = useMemo(
-    () => loggedUserId != null && managerUserIdSet.has(loggedUserId),
-    [loggedUserId, managerUserIdSet],
-  );
+  const loggedUserIsManager = useMemo(() => {
+    if (loggedUserId == null) {
+      return false;
+    }
+    if (managerUserIdSet.size > 0) {
+      return managerUserIdSet.has(loggedUserId);
+    }
+    if (catalog.loaded) {
+      return catalog.managers.some((manager) => manager.id === loggedUserId);
+    }
+    return false;
+  }, [catalog.loaded, catalog.managers, loggedUserId, managerUserIdSet]);
   const combinedAddonList = useMemo(() => {
     const map = new Map<number, AddonConfig>();
     registry.addons.forEach((addon) => map.set(addon.addonId, addon));
@@ -1139,7 +1412,8 @@ const Counters = (props: GenericPageProps) => {
   const [counterList, setCounterList] = useState<Partial<Counter>[]>([]);
   const [counterListLoading, setCounterListLoading] = useState(false);
   const [counterListError, setCounterListError] = useState<string | null>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [counterPage, setCounterPage] = useState(1);
+  const [counterPageSize, setCounterPageSize] = useState(10);
   const [modalMode, setModalMode] = useState<'create' | 'update' | null>(null);
   const [activeRegistryStep, setActiveRegistryStep] = useState<RegistryStep>('details');
   const [confirmingMetrics, setConfirmingMetrics] = useState(false);
@@ -1155,6 +1429,7 @@ const Counters = (props: GenericPageProps) => {
   const lastInitializedCounterRef = useRef<string | null>(null);
   const lastWalkInInitRef = useRef<string | null>(null);
   const scheduledStaffRequestRef = useRef<string | null>(null);
+  const nightReportsRequestedRef = useRef(false);
   const [walkInCashByChannel, setWalkInCashByChannel] = useState<Record<number, string>>({});
   const [walkInDiscountsByChannel, setWalkInDiscountsByChannel] = useState<Record<number, string[]>>({});
   const [walkInTicketDataByChannel, setWalkInTicketDataByChannel] = useState<Record<number, WalkInChannelTicketState>>({});
@@ -1177,8 +1452,16 @@ const Counters = (props: GenericPageProps) => {
   const [summaryPreviewOpen, setSummaryPreviewOpen] = useState(false);
   const [summaryPreviewLoading, setSummaryPreviewLoading] = useState(false);
   const [summaryPreviewTitle, setSummaryPreviewTitle] = useState<string>('');
-  const [scheduledStaffIds, setScheduledStaffIds] = useState<number[]>([]);
   const [scheduledStaffLoading, setScheduledStaffLoading] = useState(false);
+  const blurActiveElement = useCallback(() => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) {
+      active.blur();
+    }
+  }, []);
   const computeReservationHoldActive = useCallback(() => {
     const now = dayjs();
     const holdStart = now.set('hour', 21).set('minute', 0).set('second', 0).set('millisecond', 0);
@@ -1375,24 +1658,18 @@ const Counters = (props: GenericPageProps) => {
   const selectedDateString = selectedDate.format(COUNTER_DATE_FORMAT);
 
   const isFinal = counterStatus === 'final';
-  const updateCounterStatusSafe = useCallback(
-    async (nextStatus: CounterStatus) => {
-      if (!counterId) {
-        return;
-      }
-      if (counterStatus === 'final' && nextStatus !== 'final') {
-        return;
-      }
-      if (counterStatus === nextStatus) {
-        return;
-      }
-      await dispatch(updateCounterStatus({ counterId, status: nextStatus })).unwrap();
-    },
-    [counterId, counterStatus, dispatch],
-  );
+  const allCatalogUsers = useMemo(() => {
+    if (catalog.users && catalog.users.length > 0) {
+      return catalog.users;
+    }
+    const map = new Map<number, StaffOption>();
+    catalog.managers.forEach((user) => map.set(user.id, user));
+    catalog.staff.forEach((user) => map.set(user.id, user));
+    return Array.from(map.values());
+  }, [catalog.managers, catalog.staff, catalog.users]);
   const managerOptions = useMemo(() => {
     const map = new Map<number, StaffOption>();
-    const canFilterByShiftRole = shiftRoleAssignmentsQuery.isSuccess && managerRoleIdSet.size > 0;
+    const canFilterByShiftRole = shiftRoleAssignments.length > 0 && managerRoleIdSet.size > 0;
     if (canFilterByShiftRole) {
       shiftRoleAssignments.forEach((assignment) => {
         if (!assignment.roleIds?.some((roleId) => managerRoleIdSet.has(roleId))) {
@@ -1408,11 +1685,13 @@ const Counters = (props: GenericPageProps) => {
           userTypeName: null,
         });
       });
-      catalog.managers.forEach((manager) => {
-        if (managerUserIdSet.has(manager.id)) {
-          map.set(manager.id, manager);
+      allCatalogUsers.forEach((user) => {
+        if (managerUserIdSet.has(user.id)) {
+          map.set(user.id, user);
         }
       });
+    } else {
+      catalog.managers.forEach((manager) => map.set(manager.id, manager));
     }
     const counterManager = registry.counter?.counter.manager;
     if (counterManager && !map.has(counterManager.id)) {
@@ -1431,13 +1710,92 @@ const Counters = (props: GenericPageProps) => {
     }
     return Array.from(map.values());
   }, [
+    allCatalogUsers,
     catalog.managers,
+    registry.counter,
     managerRoleIdSet,
     managerUserIdSet,
     shiftRoleAssignments,
-    shiftRoleAssignmentsQuery.isSuccess,
-    registry.counter,
   ]);
+  const managerOptionById = useMemo(() => {
+    const map = new Map<number, StaffOption>();
+    managerOptions.forEach((option) => {
+      map.set(option.id, option);
+    });
+    return map;
+  }, [managerOptions]);
+  const counterListDisplayData = useMemo(
+    () =>
+      counterList.map((counter) => {
+        const counterIdValue = counter.id ?? null;
+        const counterDate = counter.date ? dayjs(counter.date) : null;
+        const dateLabel = counterDate?.isValid()
+          ? counterDate.format('dddd, MMM D, YYYY')
+          : 'Unknown date';
+        const managerNameFromPayload = counter.manager
+          ? composeName(counter.manager.firstName, counter.manager.lastName)
+          : '';
+        const managerLookup = counter.userId ? managerOptionById.get(counter.userId) : undefined;
+        const managerDisplay =
+          managerNameFromPayload ||
+          (managerLookup ? buildDisplayName(managerLookup) : '');
+
+        const productDisplay =
+          counter.product && counter.product.name ? counter.product.name : '';
+        const productLabel = productDisplay || 'Old Product Version - Pub Crawl';
+        const rawNote = typeof counter.notes === 'string' ? counter.notes : '';
+
+        return {
+          counter,
+          counterIdValue,
+          dateLabel,
+          managerDisplay,
+          productLabel,
+          rawNote,
+        };
+      }),
+    [counterList, managerOptionById],
+  );
+  const totalCounters = counterListDisplayData.length;
+  const totalPages = Math.max(1, Math.ceil(totalCounters / counterPageSize));
+  const pagedCounterList = useMemo(() => {
+    const startIndex = (counterPage - 1) * counterPageSize;
+    return counterListDisplayData.slice(startIndex, startIndex + counterPageSize);
+  }, [counterListDisplayData, counterPage, counterPageSize]);
+  const pagedCounterDisplayData = useMemo(
+    () =>
+      pagedCounterList.map((item) => {
+        const notePreview = formatCounterNotePreview(item.rawNote, registry.channels, combinedAddonList);
+        return {
+          ...item,
+          notePreview,
+          hasNote: notePreview.trim().length > 0,
+        };
+      }),
+    [combinedAddonList, pagedCounterList, registry.channels],
+  );
+
+  useEffect(() => {
+    if (counterPage > totalPages) {
+      setCounterPage(totalPages);
+    }
+  }, [counterPage, totalPages]);
+
+  useEffect(() => {
+    if (selectedCounterId == null) {
+      return;
+    }
+    const selectedIndex = counterListDisplayData.findIndex(
+      (item) => item.counterIdValue === selectedCounterId,
+    );
+    if (selectedIndex < 0) {
+      return;
+    }
+    const desiredPage = Math.floor(selectedIndex / counterPageSize) + 1;
+    if (desiredPage !== counterPage) {
+      setCounterPage(desiredPage);
+    }
+  }, [counterListDisplayData, counterPage, counterPageSize, selectedCounterId]);
 
   useEffect(() => {
     if (registry.counter) {
@@ -1460,12 +1818,41 @@ const Counters = (props: GenericPageProps) => {
     [registry.counter],
   );
 
+  const applyScheduledStaffPayload = useCallback(
+    (payload: { userIds?: number[]; managerIds?: number[] }) => {
+      const userIds = Array.isArray(payload.userIds) ? payload.userIds : [];
+      const managerIds = Array.isArray(payload.managerIds) ? payload.managerIds : [];
+      const shouldPrefill =
+        !pendingStaffDirty &&
+        pendingStaffIds.length === 0 &&
+        counterStaffIds.length === 0 &&
+        userIds.length > 0;
+      if (shouldPrefill) {
+        setPendingStaffIds(userIds);
+        setPendingStaffDirty(true);
+      }
+      if (shouldPrefillManagerRef.current) {
+        if (managerIds.length > 0) {
+          setSelectedManagerId(managerIds[0]);
+        } else if (userIds.length > 0) {
+          setSelectedManagerId(userIds[0]);
+        } else {
+          setSelectedManagerId(null);
+        }
+        shouldPrefillManagerRef.current = false;
+      }
+    },
+    [counterStaffIds.length, pendingStaffDirty, pendingStaffIds.length],
+  );
+
   useEffect(() => {
-    if (!isModalOpen) {
+    if (!isModalOpen || activeRegistryStep !== 'details') {
       return;
     }
     if (!currentProductId) {
-      setScheduledStaffIds([]);
+      return;
+    }
+    if (pendingStaffDirty || pendingStaffIds.length > 0 || counterStaffIds.length > 0) {
       return;
     }
     const dateString = selectedDate.format(COUNTER_DATE_FORMAT);
@@ -1473,45 +1860,33 @@ const Counters = (props: GenericPageProps) => {
     if (scheduledStaffRequestRef.current === requestKey) {
       return;
     }
+    if (
+      scheduledStaffSnapshot &&
+      scheduledStaffSnapshot.date === dateString &&
+      scheduledStaffSnapshot.productId === currentProductId
+    ) {
+      scheduledStaffRequestRef.current = requestKey;
+      applyScheduledStaffPayload(scheduledStaffSnapshot);
+      return;
+    }
     scheduledStaffRequestRef.current = requestKey;
     setScheduledStaffLoading(true);
     fetchScheduledStaffForProduct({ date: dateString, productId: currentProductId })
       .then((payload) => {
-        const userIds = Array.isArray(payload.userIds) ? payload.userIds : [];
-        const managerIds = Array.isArray(payload.managerIds) ? payload.managerIds : [];
-        setScheduledStaffIds(userIds);
-        const shouldPrefill =
-          !pendingStaffDirty &&
-          pendingStaffIds.length === 0 &&
-          counterStaffIds.length === 0 &&
-          userIds.length > 0;
-        if (shouldPrefill) {
-          setPendingStaffIds(userIds);
-          setPendingStaffDirty(true);
-        }
-        if (shouldPrefillManagerRef.current) {
-          if (managerIds.length > 0) {
-            setSelectedManagerId(managerIds[0]);
-          } else if (userIds.length > 0) {
-            setSelectedManagerId(userIds[0]);
-          } else {
-            setSelectedManagerId(null);
-          }
-          shouldPrefillManagerRef.current = false;
-        }
-      })
-      .catch(() => {
-        setScheduledStaffIds([]);
+        applyScheduledStaffPayload(payload);
       })
       .finally(() => {
         setScheduledStaffLoading(false);
       });
   }, [
+    applyScheduledStaffPayload,
     counterStaffIds.length,
     currentProductId,
     isModalOpen,
+    activeRegistryStep,
     pendingStaffDirty,
     pendingStaffIds.length,
+    scheduledStaffSnapshot,
     selectedDate,
   ]);
 
@@ -2239,6 +2614,7 @@ const loadCounterById = useCallback(
   const appliedAfterCutoffSelectionRef = useRef<number | null>(null);
   const manifestRequestRef = useRef<string | null>(null);
   const manifestAppliedRef = useRef<string | null>(null);
+  const manifestTriggerRef = useRef<string | null>(null);
   const shouldPrefillManagerRef = useRef<boolean>(false);
   const [manifestSearchRequested, setManifestSearchRequested] = useState(false);
   const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([]);
@@ -3486,39 +3862,32 @@ const loadCounterById = useCallback(
     }
 
     const counterRecord = registry.counter.counter;
-    const updates: Array<Promise<unknown>> = [];
-
-    if (selectedManagerId != null && selectedManagerId !== counterRecord.userId) {
-      updates.push(dispatch(updateCounterManager({ counterId: counterRecord.id, userId: selectedManagerId })).unwrap());
-    }
-
-    const desiredProductId = pendingProductId ?? null;
-    const currentServerProductId = counterRecord.productId ?? null;
-    if (desiredProductId !== currentServerProductId) {
-      updates.push(
-        dispatch(updateCounterProduct({ counterId: counterRecord.id, productId: desiredProductId })).unwrap(),
-      );
-    }
-
+    const desiredManagerId = selectedManagerId ?? counterRecord.userId;
+    const desiredProductId = pendingProductId ?? (counterRecord.productId ?? null);
     const lastPersistedStaffIds = lastPersistedStaffIdsRef.current;
-    const staffDiffers = !idListsEqual(pendingStaffIds, lastPersistedStaffIds);
-    if (pendingStaffDirty && staffDiffers) {
-      updates.push(dispatch(updateCounterStaff({ counterId: counterRecord.id, userIds: pendingStaffIds })).unwrap());
-    }
-    if (pendingStaffDirty && !staffDiffers) {
-      setPendingStaffDirty(false);
-    }
+    const staffDiffers = pendingStaffDirty && !idListsEqual(pendingStaffIds, lastPersistedStaffIds);
 
-    if (updates.length === 0) {
+    const shouldUpdateManager = desiredManagerId != null && desiredManagerId !== counterRecord.userId;
+    const shouldUpdateProduct = desiredProductId !== (counterRecord.productId ?? null);
+    const shouldUpdateStaff = staffDiffers;
+
+    if (!shouldUpdateManager && !shouldUpdateProduct && !shouldUpdateStaff) {
       setPendingStaffDirty(false);
       return true;
     }
 
     try {
       setEnsuringCounter(true);
-      await Promise.all(updates);
+      await dispatch(
+        submitCounterSetup({
+          date: String(counterRecord.date),
+          userId: desiredManagerId ?? counterRecord.userId,
+          productId: desiredProductId,
+          staffIds: shouldUpdateStaff ? pendingStaffIds : undefined,
+        }),
+      ).unwrap();
       setPendingStaffDirty(false);
-      if (staffDiffers && pendingStaffIds.length > 0) {
+      if (shouldUpdateStaff && pendingStaffIds.length > 0) {
         lastPersistedStaffIdsRef.current = normalizeIdList(pendingStaffIds);
       }
       return true;
@@ -3541,6 +3910,7 @@ const loadCounterById = useCallback(
       if (mode === 'update' && selectedCounterId == null) {
         return;
       }
+      blurActiveElement();
       setModalMode(mode);
       if (mode === 'create') {
         setActiveRegistryStep('details');
@@ -3556,6 +3926,7 @@ const loadCounterById = useCallback(
       setIsModalOpen(true);
     },
     [
+      blurActiveElement,
       loadCounterById,
       registry.counter,
       selectedCounterId,
@@ -3572,13 +3943,32 @@ const loadCounterById = useCallback(
 
   useEffect(() => {
     if (isModalOpen && !catalog.loaded && !catalog.loading) {
+      const dateString = selectedDate.format(COUNTER_DATE_FORMAT);
       const handle = scheduleIdle(() => {
-        dispatch(loadCatalog());
+        dispatch(
+          loadCatalog({
+            includeScheduledStaff: true,
+            date: dateString,
+            productName: DEFAULT_PRODUCT_NAME,
+          }),
+        );
       });
       return () => cancelIdle(handle);
     }
     return undefined;
-  }, [catalog.loaded, catalog.loading, dispatch, isModalOpen]);
+  }, [catalog.loaded, catalog.loading, dispatch, isModalOpen, selectedDate]);
+
+const handleCounterListSelect = useCallback(
+  (counterSummary: Partial<Counter>) => {
+    const nextCounterId = counterSummary.id ?? null;
+    startTransition(() => {
+      setCounterListError(null);
+      setSelectedCounterId(nextCounterId);
+      setActiveRegistryStep('details');
+    });
+  },
+  [setActiveRegistryStep],
+);
 
 const handleCounterSelect = useCallback(
   (counterSummary: Partial<Counter>) => {
@@ -3613,17 +4003,18 @@ const handleCounterSelect = useCallback(
   [loadCounterById, setActiveRegistryStep],
 );
 
-const handleViewSummary = useCallback(
-  async (counterSummary: Partial<Counter>) => {
-    const counterIdValue = counterSummary.id ?? null;
-    const counterDateValue = counterSummary.date ? dayjs(counterSummary.date) : null;
-    if (!counterIdValue || !counterDateValue || !counterDateValue.isValid()) {
-      return;
-    }
-    handleCounterSelect(counterSummary);
-    setSummaryPreviewTitle(counterDateValue.format('MMM D, YYYY'));
-    setSummaryPreviewOpen(true);
-    setSummaryPreviewLoading(true);
+  const handleViewSummary = useCallback(
+    async (counterSummary: Partial<Counter>) => {
+      const counterIdValue = counterSummary.id ?? null;
+      const counterDateValue = counterSummary.date ? dayjs(counterSummary.date) : null;
+      if (!counterIdValue || !counterDateValue || !counterDateValue.isValid()) {
+        return;
+      }
+      blurActiveElement();
+      handleCounterSelect(counterSummary);
+      setSummaryPreviewTitle(counterDateValue.format('MMM D, YYYY'));
+      setSummaryPreviewOpen(true);
+      setSummaryPreviewLoading(true);
     try {
       const productIdForSummary = counterSummary.product?.id ?? counterProductId ?? null;
       await loadCounterForDate(counterDateValue.format(COUNTER_DATE_FORMAT), productIdForSummary);
@@ -3633,12 +4024,23 @@ const handleViewSummary = useCallback(
       setSummaryPreviewLoading(false);
     }
   },
-  [counterProductId, handleCounterSelect, loadCounterForDate],
+  [blurActiveElement, counterProductId, handleCounterSelect, loadCounterForDate],
 );
 
 useEffect(() => {
+  if (nightReportsRequestedRef.current) {
+    return;
+  }
+  if (nightReportListState.loading || nightReportSummaries.length > 0) {
+    nightReportsRequestedRef.current = true;
+    return;
+  }
+  if (expandedCounterId == null) {
+    return;
+  }
+  nightReportsRequestedRef.current = true;
   dispatch(fetchNightReports());
-}, [dispatch]);
+}, [dispatch, expandedCounterId, nightReportListState.loading, nightReportSummaries.length]);
 
   const handleDeleteCounter = useCallback(() => {
     const targetCounterId = counterId ?? selectedCounterId;
@@ -3664,17 +4066,22 @@ useEffect(() => {
   const handleAddNewCounter = useCallback(() => {
     const managerId = resolvedManagerId;
     if (!managerId) {
-      setCounterListError('Select a manager before continuing.');
-      return;
+      shouldPrefillManagerRef.current = true;
     }
     if (!catalog.loaded && !catalog.loading) {
-      dispatch(loadCatalog());
+      dispatch(
+        loadCatalog({
+          includeScheduledStaff: true,
+          date: dayjs().format(COUNTER_DATE_FORMAT),
+          productName: DEFAULT_PRODUCT_NAME,
+        }),
+      );
     }
 
     const today = dayjs();
 
     setCounterListError(null);
-    setSelectedManagerId(managerId);
+    setSelectedManagerId(managerId ?? null);
     setSelectedDate(today);
     setPendingProductId(null);
     setPendingStaffIds([]);
@@ -3809,12 +4216,13 @@ useEffect(() => {
       return;
     }
     const requestKey = `${counterId}|${selectedDateString}|${currentProductId}`;
-    if (manifestRequestRef.current === requestKey) {
+    if (manifestRequestRef.current === requestKey || manifestTriggerRef.current === requestKey) {
+      setManifestSearchRequested(false);
       return;
     }
+    manifestTriggerRef.current = requestKey;
+    setManifestSearchRequested(false);
     manifestRequestRef.current = requestKey;
-    const controller = new AbortController();
-
     const fetchManifest = async () => {
       try {
         const response = await axiosInstance.get<ManifestResponse>('/bookings/manifest', {
@@ -3822,7 +4230,6 @@ useEffect(() => {
             date: selectedDateString,
             productId: currentProductId,
           },
-          signal: controller.signal,
           withCredentials: true,
         });
         const payload = response.data;
@@ -3915,15 +4322,14 @@ useEffect(() => {
         if (manifestRequestRef.current === requestKey) {
           manifestRequestRef.current = null;
         }
+        if (manifestTriggerRef.current === requestKey) {
+          manifestTriggerRef.current = null;
+        }
         setManifestSearchRequested(false);
       }
     };
 
     fetchManifest();
-
-    return () => {
-      controller.abort();
-    };
   }, [
     activeRegistryStep,
     counterId,
@@ -4370,69 +4776,108 @@ useEffect(() => {
     );
   }, [freeAddonsByChannel, freePeopleByChannel]);
 
-  const flushMetrics = useCallback(async (): Promise<boolean> => {
-    const activeCounterId = counterId;
-    if (!activeCounterId) {
-      return true;
-    }
-    const noteUpdateNeeded = noteNeedsUpdate || walkInNoteDirty;
-    if (!hasDirtyMetrics && !noteUpdateNeeded) {
-      return true;
-    }
-    setConfirmingMetrics(true);
-    try {
-      let shouldRefreshCounter = false;
-      let shouldFlagList = false;
-      const dirtyCashMetric =
-        hasDirtyMetrics &&
-        registry.dirtyMetricKeys.some((key) => {
-          const parts = key.split('|');
-          return parts.length > 1 && parts[1] === 'cash_payment';
-        });
-      if (hasDirtyMetrics) {
-        await dispatch(flushDirtyMetrics()).unwrap();
-        shouldRefreshCounter = true;
-        if (dirtyCashMetric) {
-          shouldFlagList = true;
+  const flushMetrics = useCallback(
+    async (options: { status?: CounterStatus } = {}): Promise<boolean> => {
+      const activeCounterId = counterId;
+      const noteUpdateNeeded = noteNeedsUpdate || walkInNoteDirty;
+      if (!activeCounterId) {
+        if (noteUpdateNeeded) {
+          setWalkInNoteDirty(false);
         }
+        return true;
       }
-      if (noteUpdateNeeded) {
-        if (computedCounterNotes !== currentCounterNotes) {
-          await dispatch(
-            updateCounterNotes({
-              counterId: activeCounterId,
-              notes: computedCounterNotes,
-            }),
-          ).unwrap();
-          shouldFlagList = true;
+
+      const requestedStatus = options.status;
+      const statusCandidate =
+        requestedStatus && !(counterStatus === 'final' && requestedStatus !== 'final')
+          ? requestedStatus
+          : undefined;
+      const statusToCommit =
+        statusCandidate && statusCandidate !== counterStatus ? statusCandidate : undefined;
+
+      const dirtyMetrics = hasDirtyMetrics
+        ? registry.dirtyMetricKeys
+            .map((key) => registry.metricsByKey[key])
+            .filter((metric): metric is MetricCell => Boolean(metric))
+            .filter((metric) => {
+              const key = buildMetricKey(metric);
+              const persisted = registry.persistedMetricsByKey[key];
+              const nextQty = Math.max(0, Number(metric.qty) || 0);
+              if (persisted) {
+                const persistedQty = Math.max(0, Number(persisted.qty) || 0);
+                return nextQty !== persistedQty;
+              }
+              return nextQty > 0;
+            })
+            .map((metric) => {
+              const nextQty = Math.max(0, Number(metric.qty) || 0);
+              return {
+                channelId: metric.channelId,
+                kind: metric.kind,
+                addonId: metric.addonId,
+                tallyType: metric.tallyType,
+                period: metric.period,
+                qty: nextQty,
+              };
+            })
+        : [];
+
+      const shouldSendNotes = noteUpdateNeeded && computedCounterNotes !== currentCounterNotes;
+      const shouldCommit = dirtyMetrics.length > 0 || shouldSendNotes || Boolean(statusToCommit);
+      if (!shouldCommit) {
+        if (noteUpdateNeeded) {
+          setWalkInNoteDirty(false);
         }
-        setWalkInNoteDirty(false);
+        return true;
       }
-      if (shouldRefreshCounter) {
-        const formatted = selectedDate.format(COUNTER_DATE_FORMAT);
-        await dispatch(fetchCounterByDate({ date: formatted, productId: currentProductId ?? null })).unwrap();
+
+      setConfirmingMetrics(true);
+      try {
+        const dirtyCashMetric =
+          hasDirtyMetrics &&
+          registry.dirtyMetricKeys.some((key) => {
+            const parts = key.split('|');
+            return parts.length > 1 && parts[1] === 'cash_payment';
+          });
+
+        await dispatch(
+          commitCounterRegistry({
+            counterId: activeCounterId,
+            metrics: dirtyMetrics.length > 0 ? dirtyMetrics : undefined,
+            status: statusToCommit,
+            notes: shouldSendNotes ? computedCounterNotes : undefined,
+          }),
+        ).unwrap();
+
+        if (noteUpdateNeeded) {
+          setWalkInNoteDirty(false);
+        }
+
+        if (dirtyCashMetric || shouldSendNotes) {
+          setShouldRefreshCounterList(true);
+        }
+
+        return true;
+      } catch (_error) {
+        return false;
+      } finally {
+        setConfirmingMetrics(false);
       }
-      if (shouldFlagList) {
-        setShouldRefreshCounterList(true);
-      }
-      return true;
-    } catch (_error) {
-      return false;
-    } finally {
-      setConfirmingMetrics(false);
-    }
-  }, [
-    computedCounterNotes,
-    counterId,
-    currentCounterNotes,
-    currentProductId,
-    dispatch,
-    hasDirtyMetrics,
-    registry.dirtyMetricKeys,
-    noteNeedsUpdate,
-    selectedDate,
-    walkInNoteDirty,
-  ]);
+    },
+    [
+      computedCounterNotes,
+      counterId,
+      counterStatus,
+      currentCounterNotes,
+      dispatch,
+      hasDirtyMetrics,
+      noteNeedsUpdate,
+      registry.dirtyMetricKeys,
+      registry.metricsByKey,
+      registry.persistedMetricsByKey,
+      walkInNoteDirty,
+    ],
+  );
 
   const ensureNightReportFromSummary = useCallback(async () => {
     const counterRecord = registry.counter?.counter;
@@ -4840,60 +5285,34 @@ useEffect(() => {
 
     setCounterListError(null);
 
-    if (registry.counter) {
-      const setupOk = await ensureSetupPersisted();
-      if (!setupOk) {
-        return;
-      }
-
-      await updateCounterStatusSafe('platforms');
-      setActiveRegistryStep('platforms');
-      return;
-    }
-
     const formatted = selectedDate.format(COUNTER_DATE_FORMAT);
+    const counterRecord = registry.counter?.counter ?? null;
+    const payloadDate = counterRecord ? String(counterRecord.date) : formatted;
+    const shouldSendStaff = !counterRecord || pendingStaffDirty;
 
     try {
       setEnsuringCounter(true);
       const payload = await dispatch(
-        ensureCounterForDate({
-          date: formatted,
+        submitCounterSetup({
+          date: payloadDate,
           userId: managerId,
-          productId: currentProductId ?? undefined,
+          productId: currentProductId ?? null,
+          staffIds: shouldSendStaff ? pendingStaffIds : undefined,
+          status: 'platforms',
         }),
       ).unwrap();
 
-      const ensuredCounterId = payload.counter.id;
       const ensuredProductId = payload.counter.productId ?? null;
       const ensuredStaffIds = normalizeIdList(payload.staff.map((member) => member.userId));
-
-      const requestKey = `${formatted}|${(pendingProductId ?? ensuredProductId ?? null) ?? 'null'}`;
+      const requestKey = `${payloadDate}|${(ensuredProductId ?? null) ?? 'null'}`;
       fetchCounterRequestRef.current = requestKey;
 
-      if (pendingProductId != null) {
-        if (pendingProductId !== ensuredProductId) {
-          await dispatch(updateCounterProduct({ counterId: ensuredCounterId, productId: pendingProductId })).unwrap();
-        }
-        setPendingProductId(null);
-      }
-
-      if (pendingStaffDirty && pendingStaffIds.length > 0) {
-        await dispatch(updateCounterStaff({ counterId: ensuredCounterId, userIds: pendingStaffIds })).unwrap();
-        lastPersistedStaffIdsRef.current = normalizeIdList(pendingStaffIds);
-      } else {
-        lastPersistedStaffIdsRef.current = ensuredStaffIds;
-      }
-
-      if (!pendingStaffDirty) {
+      if (shouldSendStaff) {
         setPendingStaffIds(ensuredStaffIds);
         lastPersistedStaffIdsRef.current = ensuredStaffIds;
       }
       setPendingStaffDirty(false);
-
-      if (payload.counter.status !== 'final') {
-        await dispatch(updateCounterStatus({ counterId: ensuredCounterId, status: 'platforms' })).unwrap();
-      }
-
+      setPendingProductId(null);
       setActiveRegistryStep('platforms');
     } catch (_error) {
       fetchCounterRequestRef.current = null;
@@ -4905,41 +5324,35 @@ useEffect(() => {
     registry.loading,
     ensuringCounter,
     resolvedManagerId,
-    registry.counter,
     selectedDate,
     dispatch,
     currentProductId,
-    ensureSetupPersisted,
-    pendingProductId,
     pendingStaffDirty,
     pendingStaffIds,
-    updateCounterStatusSafe,
+    registry.counter,
   ]);
 
   const handleProceedToReservations = useCallback(async () => {
-    const saved = await flushMetrics();
+    const saved = await flushMetrics({ status: 'reservations' });
     if (!saved) {
       return;
     }
-    await updateCounterStatusSafe('reservations');
     setActiveRegistryStep('reservations');
-  }, [flushMetrics, updateCounterStatusSafe]);
+  }, [flushMetrics]);
   const handleProceedToSummary = useCallback(async () => {
-    const saved = await flushMetrics();
+    const saved = await flushMetrics({ status: 'final' });
     if (!saved) {
       return;
     }
-    await updateCounterStatusSafe('final');
     setActiveRegistryStep('summary');
-  }, [flushMetrics, updateCounterStatusSafe]);
+  }, [flushMetrics]);
   const handleReturnToSetup = useCallback(async () => {
-    const saved = await flushMetrics();
+    const saved = await flushMetrics({ status: 'draft' });
     if (!saved) {
       return;
     }
-    await updateCounterStatusSafe('draft');
     setActiveRegistryStep('details');
-  }, [flushMetrics, updateCounterStatusSafe]);
+  }, [flushMetrics]);
   const handleReturnToPlatforms = useCallback(async () => {
     const saved = await flushMetrics();
     if (!saved) {
@@ -4996,7 +5409,7 @@ useEffect(() => {
 
   const staffOptions = useMemo(() => {
     const map = new Map<number, StaffOption>();
-    const canFilterByShiftRole = shiftRoleAssignmentsQuery.isSuccess && staffRoleIdSet.size > 0;
+    const canFilterByShiftRole = shiftRoleAssignments.length > 0 && staffRoleIdSet.size > 0;
     if (canFilterByShiftRole) {
       shiftRoleAssignments.forEach((assignment) => {
         if (!assignment.roleIds?.some((roleId) => staffRoleIdSet.has(roleId))) {
@@ -5012,12 +5425,12 @@ useEffect(() => {
           userTypeName: null,
         });
       });
-      catalog.staff.forEach((staff) => {
-        if (staffUserIdSet.has(staff.id)) {
-          map.set(staff.id, staff);
+      allCatalogUsers.forEach((user) => {
+        if (staffUserIdSet.has(user.id)) {
+          map.set(user.id, user);
         }
       });
-    } else if (!shiftRoleAssignmentsQuery.isSuccess) {
+    } else {
       catalog.staff.forEach((staff) => map.set(staff.id, staff));
     }
     registry.counter?.staff.forEach((member) => {
@@ -5035,12 +5448,12 @@ useEffect(() => {
     });
     return Array.from(map.values());
   }, [
+    allCatalogUsers,
     catalog.staff,
+    registry.counter,
     shiftRoleAssignments,
-    shiftRoleAssignmentsQuery.isSuccess,
     staffRoleIdSet,
     staffUserIdSet,
-    registry.counter,
   ]);
   const managerValue: StaffOption | null = useMemo(
     () => managerOptions.find((option) => option.id === selectedManagerId) ?? null,
@@ -5964,7 +6377,7 @@ useEffect(() => {
             value={managerValue}
             onChange={handleManagerSelection}
             getOptionLabel={buildDisplayName}
-            loading={catalog.loading || shiftRolesQuery.isLoading || shiftRoleAssignmentsQuery.isLoading}
+            loading={catalog.loading}
             renderInput={(params) => (
               <TextField {...params} label="Manager" placeholder="Select manager" />
             )}
@@ -7091,256 +7504,118 @@ type SummaryRowOptions = {
                 <Typography color="text.secondary">No counters found yet.</Typography>
               </Box>
             ) : (
-              <List dense sx={{ flex: 1, overflowY: 'auto', pr: 1 }}>
-                {counterList.map((counter) => {
-                  const counterIdValue = counter.id ?? null;
-                  const counterDate = counter.date ? dayjs(counter.date) : null;
-                  const dateLabel = counterDate?.isValid()
-                    ? counterDate.format('dddd, MMM D, YYYY')
-                    : 'Unknown date';
-                  const managerNameFromPayload = counter.manager
-                    ? composeName(counter.manager.firstName, counter.manager.lastName)
-                    : '';
-                  const managerLookup = managerOptions.find((option) => option.id === counter.userId);
-                  const managerDisplay =
-                    managerNameFromPayload ||
-                    (managerLookup ? buildDisplayName(managerLookup) : '');
+              <Stack spacing={1} sx={{ flex: 1, minHeight: 0 }}>
+                <List dense sx={{ flex: 1, overflowY: 'auto', pr: 1 }}>
+                  {pagedCounterDisplayData.map((counterItem) => {
+                    const isSelected =
+                      selectedCounterId != null &&
+                      counterItem.counterIdValue != null &&
+                      counterItem.counterIdValue === selectedCounterId;
+                    const isExpanded =
+                      counterItem.counterIdValue != null &&
+                      counterItem.counterIdValue === expandedCounterId;
 
-                  const productDisplay =
-                    counter.product && counter.product.name ? counter.product.name : '';
-                  const productLabel = productDisplay || 'Old Product Version - Pub Crawl';
-                  const isSelected =
-                    selectedCounterId != null && counterIdValue != null && counterIdValue === selectedCounterId;
-                  const rawNote = typeof counter.notes === 'string' ? counter.notes : '';
-                  const notePreview = formatCounterNotePreview(rawNote, registry.channels, combinedAddonList);
-                  const hasNote = notePreview.trim().length > 0;
-                  const managerProductLine = (
-                    <Typography
-                      component="span"
-                      variant="body2"
-                      color={isSelected ? 'grey.300' : 'text.secondary'}
+                    return (
+                      <CounterListRow
+                        key={(counterItem.counter.id ?? 'counter') + '-' + counterItem.dateLabel}
+                        item={counterItem}
+                        isSelected={isSelected}
+                        isExpanded={isExpanded}
+                        canModifyCounter={canModifyCounter}
+                        onSelect={handleCounterListSelect}
+                        onToggleExpand={toggleCounterExpansion}
+                        onViewSummary={handleViewSummary}
+                        onOpenModal={handleOpenModal}
+                        onDeleteCounter={handleDeleteCounter}
+                        venueStatusForCounter={venueStatusForCounter}
+                      />
+                    );
+                  })}
+                </List>
+                <Box
+                  sx={{
+                    borderTop: (theme) => `1px solid ${theme.palette.divider}`,
+                    pt: 1,
+                  }}
+                >
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr 1fr' },
+                      gap: 1.5,
+                      alignItems: 'center',
+                    }}
+                  >
+                    <Stack
+                      direction="row"
+                      justifyContent={{ xs: 'center', sm: 'flex-start' }}
+                      sx={{ width: '100%' }}
                     >
-                      <Box
-                        component="span"
-                        sx={{
-                          fontWeight: 600,
-                          color: isSelected ? 'grey.100' : undefined,
-                        }}
-                      >
-                        Manager:
-                      </Box>{' '}
-                      <Box
-                        component="span"
-                        sx={{ color: isSelected ? 'grey.200' : undefined }}
-                      >
-                        {managerDisplay || '-'}
-                      </Box>
-                      <Box
-                        component="span"
-                        sx={{
-                          mx: 0.75,
-                          color: isSelected ? 'grey.400' : undefined,
-                        }}
-                      >
-                        |
-                      </Box>
-                      <Box
-                        component="span"
-                        sx={{ color: isSelected ? 'grey.200' : undefined }}
-                      >
-                        {productLabel}
-                      </Box>
-                    </Typography>
-                  );
-                  const secondaryContent = (
-                    <Stack spacing={hasNote ? 0.5 : 0}>
-                      {managerProductLine}
-                      {hasNote && (
-                        <Typography
-                          variant="caption"
-                          color={isSelected ? 'grey.300' : 'text.secondary'}
-                          sx={{
-                            whiteSpace: 'pre-wrap',
-                            wordBreak: 'break-word',
-                          }}
-                        >
-                          Note: {notePreview}
-                        </Typography>
-                      )}
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        sx={{ width: '100%', justifyContent: 'center' }}
+                        label={
+                          totalCounters === 0
+                            ? '0 counters'
+                            : (() => {
+                                const start = (counterPage - 1) * counterPageSize + 1;
+                                const end = Math.min(totalCounters, counterPage * counterPageSize);
+                                return `Showing ${start}-${end} of ${totalCounters}`;
+                              })()
+                        }
+                      />
                     </Stack>
-                  );
-                  const venueStatus = venueStatusForCounter(counterIdValue);
-                  const { label: venueButtonLabel, color: venueButtonColor, mode: venueButtonMode } = venueStatus;
-                  const venueNumbersLink = (() => {
-                    if (counterIdValue == null) {
-                      return '/venueNumbers';
-                    }
-                    const params = new URLSearchParams();
-                    params.set('counterId', String(counterIdValue));
-                    if (venueButtonMode) {
-                      params.set('mode', venueButtonMode);
-                    }
-                    const query = params.toString();
-                    return `/venueNumbers${query ? `?${query}` : ''}`;
-                  })();
-                  const isExpanded = counterIdValue != null && counterIdValue === expandedCounterId;
-                  const handleRowClick = () => {
-                    handleCounterSelect(counter);
-                    if (counterIdValue != null) {
-                      toggleCounterExpansion(counterIdValue);
-                    }
-                  };
-                  const handleExpandClick = (event: MouseEvent<HTMLButtonElement>) => {
-                    event.stopPropagation();
-                    handleRowClick();
-                  };
-
-                  return (
-                    <ListItem
-                      key={(counter.id ?? 'counter') + '-' + dateLabel}
-                      disablePadding
-                      sx={{
-                        borderBottom: (theme) => `1px dashed ${theme.palette.divider}`,
-                        '&:last-of-type': { borderBottom: 'none' },
-                        flexDirection: 'column',
-                        alignItems: 'stretch',
-                      }}
-                    >
-                      <ListItemButton
-                        disableRipple
-                        disableTouchRipple
-                        onClick={handleRowClick}
-                        selected={Boolean(isSelected)}
-                        sx={(theme) => ({
-                          width: '100%',
-                          ...(isSelected
-                            ? {
-                                backgroundColor: '#000',
-                                color: theme.palette.common.white,
-                                '&:hover': {
-                                  backgroundColor: '#111',
-                                },
-                                '& .MuiTypography-root': {
-                                  color: theme.palette.common.white,
-                                },
-                              }
-                            : {
-                                '&:hover': {
-                                  backgroundColor: theme.palette.action.hover,
-                                },
-                              }),
-                          '&.Mui-selected': {
-                            backgroundColor: '#000',
-                            color: theme.palette.common.white,
+                    <Stack direction="row" justifyContent="center" sx={{ width: '100%' }}>
+                      <TextField
+                        select
+                        size="small"
+                        fullWidth
+                        label="Rows"
+                        value={counterPageSize}
+                        onChange={(event) => {
+                          const nextSize = Number(event.target.value) || 10;
+                          setCounterPageSize(nextSize);
+                          setCounterPage(1);
+                        }}
+                        SelectProps={{
+                          displayEmpty: true,
+                          MenuProps: { PaperProps: { sx: { minWidth: 120 } } },
+                        }}
+                        sx={{
+                          '& .MuiSelect-select': {
+                            textAlign: 'center',
                           },
-                          '&.Mui-selected:hover': {
-                            backgroundColor: '#111',
-                          },
-                        })}
+                        }}
                       >
-                        <Stack direction="row" alignItems="center" spacing={1} sx={{ width: '100%' }}>
-                          <ListItemText
-                            primary={
-                              <Typography
-                                variant="body1"
-                                fontWeight={600}
-                                color={isSelected ? 'common.white' : 'text.primary'}
-                              >
-                                {dateLabel}
-                              </Typography>
-                            }
-                            secondary={secondaryContent}
-                            secondaryTypographyProps={{ component: 'div' }}
-                            sx={{ flexGrow: 1, minWidth: 0 }}
-                          />
-                          <IconButton
-                            size="small"
-                            edge="end"
-                            onClick={handleExpandClick}
-                            disabled={counterIdValue == null}
-                            sx={{
-                              transition: 'transform 150ms ease',
-                              transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                              color: isSelected ? 'inherit' : 'text.secondary',
-                              ml: 0.5,
-                            }}
-                          >
-                            <KeyboardArrowRight fontSize="small" />
-                          </IconButton>
-                        </Stack>
-                      </ListItemButton>
-                      <Collapse in={isExpanded} timeout="auto" unmountOnExit>
-                        <Box
-                          sx={{
-                            px: { xs: 2, sm: 3 },
-                            py: 1.5,
-                            bgcolor: (theme) =>
-                              theme.palette.mode === 'dark'
-                                ? 'rgba(255,255,255,0.04)'
-                                : 'rgba(0,0,0,0.02)',
-                          }}
-                        >
-                          <Stack
-                            direction="row"
-                            spacing={1}
-                            alignItems="center"
-                            sx={{
-                              flexWrap: 'wrap',
-                              rowGap: 1,
-                              columnGap: 1,
-                              '& > *': { flexShrink: 0 },
-                            }}
-                          >
-                            <Button
-                              variant="outlined"
-                              size="small"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void handleViewSummary(counter);
-                              }}
-                              disabled={counterIdValue == null}
-                          >
-                            <Visibility fontSize="small" sx={{ mr: 0.5 }} />
-                            View
-                          </Button>
-                          <Button
-                            variant="outlined"
-                            size="small"
-                            startIcon={<Edit />}
-                            onClick={() => handleOpenModal('update')}
-                              disabled={!canModifyCounter}
-                            >
-                              Edit
-                            </Button>
-                            <Button
-                              variant="outlined"
-                              color="error"
-                              size="small"
-                              startIcon={<Delete />}
-                              onClick={handleDeleteCounter}
-                            disabled={!canModifyCounter}
-                          >
-                            DEL
-                          </Button>
-                          <Button
-                            variant="outlined"
-                            size="small"
-                            component={Link}
-                            to={venueNumbersLink}
-                            onClick={(event) => event.stopPropagation()}
-                            color={venueButtonColor}
-                            disabled={counterIdValue == null}
-                          >
-                            <MapIcon fontSize="small" sx={{ mr: 0.5 }} />
-                            {venueButtonLabel}
-                          </Button>
-                        </Stack>
-                      </Box>
-                    </Collapse>
-                    </ListItem>
-                  );
-                })}
-              </List>
+                        {[5, 8, 10, 15, 20].map((size) => (
+                          <MenuItem key={`counter-page-size-${size}`} value={size}>
+                            <Box sx={{ width: '100%', textAlign: 'center' }}>{size}</Box>
+                          </MenuItem>
+                        ))}
+                      </TextField>
+                    </Stack>
+                    <Stack
+                      direction="row"
+                      justifyContent={{ xs: 'center', sm: 'flex-end' }}
+                    >
+                      <Pagination
+                        count={totalPages}
+                        page={counterPage}
+                        onChange={(_event, value) => setCounterPage(value)}
+                        size="small"
+                        color="primary"
+                        shape="rounded"
+                        showFirstButton
+                        showLastButton
+                        siblingCount={1}
+                        boundaryCount={1}
+                        disabled={totalPages <= 1}
+                      />
+                    </Stack>
+                  </Box>
+                </Box>
+              </Stack>
             )}
           </CardContent>
         </Card>
