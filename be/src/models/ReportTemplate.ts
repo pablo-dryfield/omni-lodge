@@ -92,6 +92,17 @@ export type ReportTemplateMetricSpotlight = {
   currency?: string;
 };
 
+export type ReportTemplateQueryGroup = {
+  id: string;
+  name: string;
+  models: string[];
+  fields: ReportTemplateFieldSelection[];
+  joins: unknown[];
+  filters: unknown[];
+  filterGroups?: unknown[];
+  rawFilterSql?: unknown[];
+};
+
 @Table({
   tableName: 'report_templates',
   modelName: 'ReportTemplate',
@@ -183,6 +194,11 @@ export default class ReportTemplate extends Model {
   @Default([])
   @Column({ field: 'metrics_spotlight', type: DataType.JSONB })
   declare metricsSpotlight: ReportTemplateMetricSpotlight[];
+
+  @AllowNull(false)
+  @Default([])
+  @Column({ field: 'query_groups', type: DataType.JSONB })
+  declare queryGroups: ReportTemplateQueryGroup[];
 
   @AllowNull(false)
   @Default([])
