@@ -53,6 +53,7 @@ export type PreviewFilterClausePayload = {
     | "gte"
     | "lt"
     | "lte"
+    | "in"
     | "between"
     | "contains"
     | "starts_with"
@@ -160,8 +161,16 @@ export type QueryConfigOptions = {
   };
 };
 
+export type QueryConfigUnion = {
+  all?: boolean;
+  queries: QueryConfig[];
+  orderBy?: QueryConfigOrderBy[];
+  limit?: number;
+  offset?: number;
+};
+
 export type QueryConfig = {
-  models: string[];
+  models?: string[];
   select?: QueryConfigSelect[];
   metrics?: QueryConfigMetric[];
   dimensions?: QueryConfigDimension[];
@@ -182,6 +191,7 @@ export type QueryConfig = {
   time?: QueryConfigTimeRange | null;
   comparisons?: QueryConfigComparison[];
   options?: QueryConfigOptions;
+  union?: QueryConfigUnion;
 };
 
 export type ReportQuerySuccessResponse = {
@@ -344,6 +354,7 @@ export type FilterOperator =
   | "gte"
   | "lt"
   | "lte"
+  | "in"
   | "between"
   | "contains"
   | "starts_with"
@@ -356,7 +367,7 @@ export type FilterOperator =
 export type DashboardPreviewTableCardViewConfig = {
   mode: "preview_table";
   description?: string;
-  previewRequest: ReportPreviewRequest;
+  previewRequest: ReportPreviewPayload;
   columnOrder: string[];
   columnAliases: Record<string, string>;
   dateFilter?: {
@@ -639,9 +650,11 @@ export type ReportPreviewResponse = {
   sql: string;
 };
 
+export type ReportPreviewPayload = ReportPreviewRequest | QueryConfig;
+
 export const useRunReportPreview = () =>
-  useMutation<ReportPreviewResponse, AxiosError<{ message?: string }>, ReportPreviewRequest>({
-    mutationFn: async (payload: ReportPreviewRequest) => {
+  useMutation<ReportPreviewResponse, AxiosError<{ message?: string }>, ReportPreviewPayload>({
+    mutationFn: async (payload: ReportPreviewPayload) => {
       const response = await axiosInstance.post("/reports/preview", payload);
       return response.data as ReportPreviewResponse;
     },
@@ -903,6 +916,17 @@ export type ReportTemplateOptionsDto = {
   autoRunOnOpen: boolean;
 };
 
+export type ReportTemplateQueryGroupDto = {
+  id: string;
+  name: string;
+  models: string[];
+  fields: Array<{ modelId: string; fieldIds: string[] }>;
+  joins: unknown[];
+  filters: unknown[];
+  filterGroups?: unknown[];
+  rawFilterSql?: unknown[];
+};
+
 export type ReportTemplateDto = {
   id: string;
   name: string;
@@ -919,6 +943,7 @@ export type ReportTemplateDto = {
   queryConfig: QueryConfig | null;
   derivedFields: DerivedFieldDefinitionDto[];
   metricsSpotlight: MetricSpotlightDefinitionDto[];
+  queryGroups?: ReportTemplateQueryGroupDto[];
   previewOrder: PreviewOrderRuleDto[];
   previewGrouping: PreviewGroupingRuleDto[];
   previewAggregations: PreviewAggregationRuleDto[];
@@ -953,6 +978,7 @@ export type SaveReportTemplateRequest = {
   queryConfig?: QueryConfig | null;
   derivedFields?: DerivedFieldDefinitionDto[];
   metricsSpotlight?: MetricSpotlightDefinitionDto[];
+  queryGroups?: ReportTemplateQueryGroupDto[];
   columnOrder?: string[];
   columnAliases?: Record<string, string>;
   previewOrder?: PreviewOrderRuleDto[];

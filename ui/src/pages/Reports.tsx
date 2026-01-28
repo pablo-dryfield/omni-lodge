@@ -20,6 +20,7 @@ import {
   MultiSelect,
   NumberInput,
   Paper,
+  Collapse,
   Popover,
   ScrollArea,
   SegmentedControl,
@@ -33,6 +34,7 @@ import {
   Title,
   SimpleGrid,
   Switch,
+  Tabs,
   Tooltip,
 } from "@mantine/core";
 import { DatePickerInput } from "@mantine/dates";
@@ -54,6 +56,8 @@ import {
   IconDatabase,
   IconDeviceFloppy,
   IconDownload,
+  IconChevronDown,
+  IconChevronUp,
   IconLayoutGrid,
   IconMail,
   IconMessage2,
@@ -103,6 +107,7 @@ import {
   type QueryConfigFilter,
   type QueryConfigFilterValue,
   type QueryConfigDerivedField,
+  type QueryConfigUnion,
   type ReportQueryResult,
   type ReportQuerySuccessResponse,
   type ReportQueryJobResponse,
@@ -132,7 +137,9 @@ import {
   type ReportModelPayload,
   type ReportPreviewRequest,
   type ReportPreviewResponse,
+  type ReportPreviewPayload,
   type PreviewOrderClausePayload,
+  type PreviewFilterClausePayload,
   type PreviewFilterNode,
   type PreviewFilterGroupPayload,
   type PreviewGroupingRuleDto,
@@ -180,6 +187,17 @@ type DataModelDefinition = {
   schema?: string;
   fields: DataField[];
   associations?: AssociationDefinition[];
+};
+
+type ReportTemplateQueryGroup = {
+  id: string;
+  name: string;
+  models: string[];
+  fields: Array<{ modelId: string; fieldIds: string[] }>;
+  joins: JoinCondition[];
+  filters: ReportFilter[];
+  filterGroups: ReportFilterGroup[];
+  rawFilterSql: string[];
 };
 
 type PreviewColumnMeta = {
@@ -242,6 +260,7 @@ type FilterOperator =
   | "gte"
   | "lt"
   | "lte"
+  | "in"
   | "between"
   | "contains"
   | "starts_with"
@@ -390,6 +409,8 @@ type ReportTemplate = {
   columnOrder: string[];
   columnAliases: Record<string, string>;
   queryConfig: QueryConfig | null;
+  queryGroups: ReportTemplateQueryGroup[];
+  activeGroupId: string;
   derivedFields: ReportDerivedField[];
   metricsSpotlight: MetricSpotlightDefinitionDto[];
   previewOrder: PreviewOrderRule[];
@@ -576,6 +597,21 @@ const getDefaultKey = (model: DataModelDefinition): string =>
 
 const deepClone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 const generateId = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+
+const createQueryGroup = (
+  index: number,
+  overrides: Partial<ReportTemplateQueryGroup> = {},
+): ReportTemplateQueryGroup => ({
+  id: overrides.id ?? `group-${index}`,
+  name: overrides.name ?? `Group ${index}`,
+  models: overrides.models ?? [],
+  fields: overrides.fields ?? [],
+  joins: overrides.joins ?? [],
+  filters: overrides.filters ?? [],
+  filterGroups:
+    overrides.filterGroups ?? [{ id: ROOT_FILTER_GROUP_ID, parentGroupId: null, logic: "and", childOrder: [] }],
+  rawFilterSql: overrides.rawFilterSql ?? [],
+});
 const buildChildToken = (kind: "filter" | "group", id: string) => `${kind}:${id}`;
 const parseChildToken = (
   token: string,
@@ -728,6 +764,19 @@ const createEmptyTemplate = (): ReportTemplate => ({
   columnOrder: [],
   columnAliases: {},
   queryConfig: null,
+  queryGroups: [
+    {
+      id: "group-1",
+      name: "Group 1",
+      models: [],
+      fields: [],
+      joins: [],
+      filters: [],
+      filterGroups: [{ id: ROOT_FILTER_GROUP_ID, parentGroupId: null, logic: "and", childOrder: [] }],
+      rawFilterSql: [],
+    },
+  ],
+  activeGroupId: "group-1",
   derivedFields: [],
   metricsSpotlight: [],
   previewOrder: [],
@@ -1421,6 +1470,7 @@ const normalizeFiltersForQuery = (
     gte: "gte",
     lt: "lt",
     lte: "lte",
+    in: "in",
     between: "between",
   };
 
@@ -1473,6 +1523,51 @@ const normalizeFiltersForQuery = (
         value = { from: fromNumeric, to: toNumeric };
       } else {
         value = { from, to };
+      }
+    } else if (filter.operator === "in") {
+      const rawList =
+        typeof filter.value === "string" ? filter.value : filter.value === undefined ? "" : String(filter.value);
+      const entries = rawList
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+      if (entries.length === 0) {
+        warnings.push(
+          `Filter on ${filter.leftModelId}.${filter.leftFieldId} requires at least one value.`,
+        );
+        return;
+      }
+      if (filter.valueKind === "number") {
+        const numericValues: number[] = [];
+        for (const entry of entries) {
+          const parsed = Number(entry);
+          if (!Number.isFinite(parsed)) {
+            warnings.push(
+              `Filter on ${filter.leftModelId}.${filter.leftFieldId} has an invalid number and was skipped.`,
+            );
+            return;
+          }
+          numericValues.push(parsed);
+        }
+        value = numericValues;
+      } else if (filter.valueKind === "boolean") {
+        const booleanValues: boolean[] = [];
+        for (const entry of entries) {
+          const normalized = entry.toLowerCase();
+          if (normalized === "true") {
+            booleanValues.push(true);
+          } else if (normalized === "false") {
+            booleanValues.push(false);
+          } else {
+            warnings.push(
+              `Filter on ${filter.leftModelId}.${filter.leftFieldId} has an invalid boolean value and was skipped.`,
+            );
+            return;
+          }
+        }
+        value = booleanValues;
+      } else {
+        value = entries;
       }
     } else if (filter.valueKind === "boolean") {
       if (filter.value === "true") {
@@ -1702,6 +1797,12 @@ const FILTER_OPERATOR_LIBRARY: FilterOperatorDefinition[] = [
     requiresValue: true,
   },
   {
+    value: "in",
+    label: "In list",
+    types: ["id", "string", "number", "currency", "date", "percentage", "boolean"],
+    requiresValue: true,
+  },
+  {
     value: "contains",
     label: "Contains",
     types: ["string", "id"],
@@ -1810,7 +1911,17 @@ const normalizeQueryConfig = (candidate: unknown): QueryConfig | null => {
     return null;
   }
   const parsed = candidate as QueryConfig;
-  if (!Array.isArray(parsed.models) || parsed.models.some((model) => typeof model !== "string")) {
+  if (
+    parsed.union &&
+    typeof parsed.union === "object" &&
+    Array.isArray(parsed.union.queries)
+  ) {
+    return deepClone(parsed);
+  }
+  if (
+    parsed.models !== undefined &&
+    (!Array.isArray(parsed.models) || parsed.models.some((model) => typeof model !== "string"))
+  ) {
     return null;
   }
   return deepClone(parsed);
@@ -2272,7 +2383,7 @@ const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitio
     .filter((entry): entry is MetricSpotlightDefinitionDto => Boolean(entry));
 };
 
-const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
+  const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
   const rawColumnOrder = Array.isArray(template.columnOrder)
     ? template.columnOrder
     : Array.isArray(template.options?.columnOrder)
@@ -2294,7 +2405,53 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
     return accumulator;
   }, {});
 
-  const queryConfig = normalizeQueryConfig(template.queryConfig);
+    const queryConfig = normalizeQueryConfig(template.queryConfig);
+    const queryGroups =
+      Array.isArray(template.queryGroups) && template.queryGroups.length > 0
+        ? template.queryGroups
+            .map((group, index): ReportTemplateQueryGroup | null => {
+              if (!group || typeof group !== "object") {
+                return null;
+              }
+              const id = typeof group.id === "string" && group.id.trim().length > 0 ? group.id.trim() : "";
+              const name =
+                typeof group.name === "string" && group.name.trim().length > 0
+                  ? group.name.trim()
+                  : `Group ${index + 1}`;
+              if (!id) {
+                return null;
+              }
+              return {
+                id,
+                name,
+                models: Array.isArray(group.models) ? group.models.filter((model) => typeof model === "string") : [],
+                fields: Array.isArray(group.fields)
+                  ? group.fields
+                      .map((entry) => {
+                        if (!entry || typeof entry !== "object") {
+                          return null;
+                        }
+                        const candidate = entry as { modelId?: string; fieldIds?: unknown };
+                        if (!candidate.modelId || !Array.isArray(candidate.fieldIds)) {
+                          return null;
+                        }
+                        const fieldIds = candidate.fieldIds.filter(
+                          (fieldId): fieldId is string => typeof fieldId === "string" && fieldId.length > 0,
+                        );
+                        return { modelId: candidate.modelId, fieldIds };
+                      })
+                      .filter((entry): entry is { modelId: string; fieldIds: string[] } => Boolean(entry))
+                  : [],
+                joins: Array.isArray(group.joins) ? (group.joins as JoinCondition[]) : [],
+                filters: Array.isArray(group.filters) ? (group.filters as ReportFilter[]) : [],
+                filterGroups: Array.isArray(group.filterGroups)
+                  ? (group.filterGroups as ReportFilterGroup[])
+                  : [{ id: ROOT_FILTER_GROUP_ID, parentGroupId: null, logic: "and", childOrder: [] }],
+                rawFilterSql: Array.isArray(group.rawFilterSql) ? (group.rawFilterSql as string[]) : [],
+              };
+            })
+            .filter((entry): entry is ReportTemplateQueryGroup => Boolean(entry))
+        : [];
   const derivedFields = reconcileDerivedFieldStatuses(
     normalizeDerivedFields(template.derivedFields).map((field) =>
       ensureDerivedFieldMetadata(field as ReportDerivedField),
@@ -2459,36 +2616,56 @@ const mapTemplateFromApi = (template: ReportTemplateDto): ReportTemplate => {
 
   const { filters, filterGroups, rawSql } = deserializeTemplateFilters(template.filters);
 
-  return {
-    id: template.id,
-    name: template.name ?? "Untitled report",
-    category: template.category ?? "Custom",
-    description: template.description ?? "",
-    schedule: template.schedule ?? "Manual",
-    lastUpdated: formatLastUpdatedLabel(template.updatedAt),
-    owner: template.owner?.name ?? "Shared",
-  autoDistribution: template.options?.autoDistribution ?? true,
-  notifyTeam: template.options?.notifyTeam ?? true,
-  autoRunOnOpen: template.options?.autoRunOnOpen ?? false,
-    models: Array.isArray(template.models) ? template.models : [],
-    fields: mappedFields,
-    joins: Array.isArray(template.joins) ? (template.joins as JoinCondition[]) : [],
-    visuals: visuals.length > 0 ? visuals : [DEFAULT_VISUAL],
-    metrics: Array.isArray(template.metrics)
-      ? template.metrics.filter(
-          (metric): metric is string =>
-            typeof metric === "string" && metric.trim().length > 0 && metric.includes("__"),
-        )
-      : [],
-    filters,
-    filterGroups,
-    rawFilterSql: rawSql,
-    columnOrder,
-    columnAliases,
-    queryConfig,
-    derivedFields,
-    metricsSpotlight,
-    previewOrder,
+    const normalizedQueryGroups =
+      queryGroups.length > 0
+        ? queryGroups
+          : [
+              {
+                id: "group-1",
+                name: "Group 1",
+                models: Array.isArray(template.models) ? template.models : [],
+                fields: mappedFields,
+                joins: Array.isArray(template.joins) ? (template.joins as JoinCondition[]) : [],
+                filters,
+                filterGroups,
+                rawFilterSql: rawSql,
+              },
+            ];
+
+    const activeGroup = normalizedQueryGroups[0];
+
+    return {
+      id: template.id,
+      name: template.name ?? "Untitled report",
+      category: template.category ?? "Custom",
+      description: template.description ?? "",
+      schedule: template.schedule ?? "Manual",
+      lastUpdated: formatLastUpdatedLabel(template.updatedAt),
+      owner: template.owner?.name ?? "Shared",
+      autoDistribution: template.options?.autoDistribution ?? true,
+      notifyTeam: template.options?.notifyTeam ?? true,
+      autoRunOnOpen: template.options?.autoRunOnOpen ?? false,
+      models: activeGroup?.models ?? (Array.isArray(template.models) ? template.models : []),
+      fields: activeGroup?.fields ?? mappedFields,
+      joins: activeGroup?.joins ?? (Array.isArray(template.joins) ? (template.joins as JoinCondition[]) : []),
+      visuals: visuals.length > 0 ? visuals : [DEFAULT_VISUAL],
+      metrics: Array.isArray(template.metrics)
+        ? template.metrics.filter(
+            (metric): metric is string =>
+              typeof metric === "string" && metric.trim().length > 0 && metric.includes("__"),
+          )
+        : [],
+      filters: activeGroup?.filters ?? filters,
+      filterGroups: activeGroup?.filterGroups ?? filterGroups,
+      rawFilterSql: activeGroup?.rawFilterSql ?? rawSql,
+      columnOrder,
+      columnAliases,
+      queryConfig,
+      queryGroups: normalizedQueryGroups,
+      activeGroupId: normalizedQueryGroups[0]?.id ?? "group-1",
+      derivedFields,
+      metricsSpotlight,
+      previewOrder,
     previewGrouping,
     previewAggregations,
     previewHaving,
@@ -2579,6 +2756,109 @@ const Reports = (props: GenericPageProps) => {
   const [visualWarnings, setVisualWarnings] = useState<string[]>([]);
   const [visualJob, setVisualJob] = useState<{ jobId: string; hash?: string } | null>(null);
   const [visualJobStatus, setVisualJobStatus] = useState<ReportQueryJobResponse["status"] | null>(null);
+  const [isUnionBuilderOpen, setIsUnionBuilderOpen] = useState(false);
+  const [unionDraftText, setUnionDraftText] = useState("");
+  const [addModelPopoverOpen, setAddModelPopoverOpen] = useState(false);
+  const [addModelId, setAddModelId] = useState<string | null>(null);
+  const [fieldInventoryQuery, setFieldInventoryQuery] = useState("");
+  const [showSelectedOnly, setShowSelectedOnly] = useState(false);
+  const groupOptions = useMemo(
+    () =>
+      draft.queryGroups.map((group) => ({
+        value: group.id,
+        label: group.name,
+      })),
+    [draft.queryGroups],
+  );
+  const activeQueryGroup =
+    draft.queryGroups.find((group) => group.id === draft.activeGroupId) ?? draft.queryGroups[0];
+
+  const syncQueryGroups = useCallback(
+    (current: ReportTemplate): ReportTemplateQueryGroup[] => {
+      const activeId = current.activeGroupId;
+      const existing = current.queryGroups ?? [];
+      const activeName =
+        existing.find((group) => group.id === activeId)?.name ?? activeQueryGroup?.name ?? "Group 1";
+      const snapshot: ReportTemplateQueryGroup = {
+        id: activeId,
+        name: activeName,
+        models: [...current.models],
+        fields: deepClone(current.fields),
+        joins: deepClone(current.joins),
+        filters: deepClone(current.filters),
+        filterGroups: deepClone(current.filterGroups),
+        rawFilterSql: [...current.rawFilterSql],
+      };
+      const nextGroups = existing.filter((group) => group.id !== activeId);
+      nextGroups.push(snapshot);
+      return nextGroups;
+    },
+    [activeQueryGroup?.name],
+  );
+
+  const applyGroupToDraft = useCallback((current: ReportTemplate, group: ReportTemplateQueryGroup) => {
+    const reconciledDerivedFields = reconcileDerivedFieldStatuses(
+      current.derivedFields,
+      group.models,
+    );
+    const sanitizedGroups = ensureRootFilterGroup(group.filterGroups ?? []);
+    return {
+      ...current,
+      activeGroupId: group.id,
+      models: [...group.models],
+      fields: deepClone(group.fields),
+      joins: deepClone(group.joins),
+      filters: deepClone(group.filters),
+      filterGroups: deepClone(sanitizedGroups),
+      rawFilterSql: [...group.rawFilterSql],
+      derivedFields: reconciledDerivedFields,
+    };
+  }, []);
+
+  const handleSelectQueryGroup = useCallback(
+    (groupId: string | null) => {
+      if (!groupId) {
+        return;
+      }
+      setDraft((current) => {
+        const nextGroups = syncQueryGroups(current);
+        const nextGroup = nextGroups.find((group) => group.id === groupId);
+        if (!nextGroup) {
+          return current;
+        }
+        return {
+          ...applyGroupToDraft(current, nextGroup),
+          queryGroups: nextGroups,
+        };
+      });
+    },
+    [applyGroupToDraft, syncQueryGroups],
+  );
+
+  const handleAddQueryGroup = useCallback(() => {
+    setDraft((current) => {
+      const nextGroups = syncQueryGroups(current);
+      const nextIndex = nextGroups.length + 1;
+      const newGroup = createQueryGroup(nextIndex, { id: generateId("group") });
+      return {
+        ...applyGroupToDraft(current, newGroup),
+        queryGroups: [...nextGroups, newGroup],
+      };
+    });
+  }, [applyGroupToDraft, syncQueryGroups]);
+
+  const handleRemoveQueryGroup = useCallback(() => {
+    setDraft((current) => {
+      const nextGroups = syncQueryGroups(current).filter((group) => group.id !== current.activeGroupId);
+      const fallback =
+        nextGroups[0] ??
+        createQueryGroup(1, { id: "group-1", name: "Group 1" });
+      return {
+        ...applyGroupToDraft(current, fallback),
+        queryGroups: nextGroups.length > 0 ? nextGroups : [fallback],
+      };
+    });
+  }, [applyGroupToDraft, syncQueryGroups]);
   const [isVisualQueryRunning, setIsVisualQueryRunning] = useState(false);
   const [visualExecutedAt, setVisualExecutedAt] = useState<string | null>(null);
   const [previewSql, setPreviewSql] = useState<string | null>(null);
@@ -2595,6 +2875,26 @@ const Reports = (props: GenericPageProps) => {
   const [dashboardModalError, setDashboardModalError] = useState<string | null>(null);
   const [templateSuccess, setTemplateSuccess] = useState<string | null>(null);
   const [isDerivedFieldsDrawerOpen, setDerivedFieldsDrawerOpen] = useState(false);
+  const sectionDefaults = {
+    templateDetails: false,
+    schedules: false,
+    joins: true,
+    fields: true,
+    visuals: true,
+    spotlight: true,
+    queryInspector: true,
+    filters: true,
+    preview: true,
+    metricsSummary: true,
+    templateLibrary: true,
+  } as const;
+  type SectionKey = keyof typeof sectionDefaults;
+  const [sectionOpen, setSectionOpen] = useState<Record<SectionKey, boolean>>(
+    () => ({ ...sectionDefaults })
+  );
+  const toggleSection = useCallback((key: SectionKey) => {
+    setSectionOpen((current) => ({ ...current, [key]: !current[key] }));
+  }, []);
   const [selectedDerivedFieldId, setSelectedDerivedFieldId] = useState<string | null>(() =>
     draft.derivedFields[0]?.id ?? null,
   );
@@ -2755,6 +3055,17 @@ const Reports = (props: GenericPageProps) => {
         .filter((value): value is DataModelDefinition => Boolean(value)),
     [draft.models, modelMap]
   );
+  const availableModelOptions = useMemo(() => {
+    const selectedIds = new Set(draft.models);
+    const models = dataModels ?? [];
+    return models
+      .filter((model) => !selectedIds.has(model.id))
+      .map((model) => ({
+        value: model.id,
+        label: model.name,
+      }))
+      .sort((first, second) => first.label.localeCompare(second.label));
+  }, [dataModels, draft.models]);
 
   const selectedFieldDetails = useMemo<SelectedFieldDetail[]>(() => {
     const details: SelectedFieldDetail[] = [];
@@ -2791,6 +3102,69 @@ const Reports = (props: GenericPageProps) => {
 
     return details;
   }, [draft.columnAliases, draft.fields, modelMap]);
+
+  const buildSelectedFieldDetailsForGroup = useCallback(
+    (group: ReportTemplateQueryGroup): SelectedFieldDetail[] => {
+      const details: SelectedFieldDetail[] = [];
+      group.fields.forEach((entry) => {
+        const model = modelMap.get(entry.modelId);
+        if (!model) {
+          return;
+        }
+        entry.fieldIds.forEach((fieldId) => {
+          const field = model.fields.find((candidate) => candidate.id === fieldId);
+          if (!field) {
+            return;
+          }
+          const aliasKey = toColumnAlias(model.id, field.id);
+          const aliasValue = draft.columnAliases[aliasKey];
+          const detail: SelectedFieldDetail = {
+            ...field,
+            modelId: model.id,
+            modelName: model.name,
+            source: "model",
+          };
+          if (aliasValue !== undefined) {
+            detail.alias = aliasValue;
+          }
+          details.push(detail);
+        });
+      });
+      return details;
+    },
+    [draft.columnAliases, modelMap],
+  );
+
+  const buildFieldDetailByAliasForGroup = useCallback(
+    (group: ReportTemplateQueryGroup): Map<string, SelectedFieldDetail> => {
+      const map = new Map<string, SelectedFieldDetail>();
+      const details = buildSelectedFieldDetailsForGroup(group);
+      details.forEach((detail) => {
+        map.set(toColumnAlias(detail.modelId, detail.id), detail);
+      });
+      draft.derivedFields.forEach((field) => {
+        if (!isDerivedFieldVisibleInBuilder(field)) {
+          map.delete(field.id);
+          return;
+        }
+        if (map.has(field.id)) {
+          return;
+        }
+        map.set(field.id, {
+          id: field.id,
+          label: field.name,
+          type: "number",
+          modelId: DERIVED_FIELD_SENTINEL,
+          modelName: field.scope === "workspace" ? "Workspace derived field" : "Template derived field",
+          sourceColumn: field.expression,
+          source: "derived",
+          derivedFieldId: field.id,
+        });
+      });
+      return map;
+    },
+    [buildSelectedFieldDetailsForGroup, draft.derivedFields],
+  );
 
   const fieldDetailByAlias = useMemo(() => {
     const map = new Map<string, SelectedFieldDetail>();
@@ -3569,7 +3943,15 @@ const getColumnLabel = useCallback(
 
   const activeVisual = draft.visuals[0] ?? DEFAULT_VISUAL;
   const buildVisualDescriptor = useCallback(
-    (visual: VisualDefinition | null): VisualQueryDescriptor => {
+    (
+      visual: VisualDefinition | null,
+      context: {
+        models: string[];
+        joins: JoinCondition[];
+        filters: ReportFilter[];
+        fieldDetailByAlias: Map<string, SelectedFieldDetail>;
+      },
+    ): VisualQueryDescriptor => {
       const emptyDescriptor: VisualQueryDescriptor = {
         config: null,
         metricAlias: null,
@@ -3583,7 +3965,7 @@ const getColumnLabel = useCallback(
         warnings: [],
       };
 
-      if (draft.models.length === 0 || !visual) {
+      if (context.models.length === 0 || !visual) {
         return emptyDescriptor;
       }
 
@@ -3601,7 +3983,7 @@ const getColumnLabel = useCallback(
         if (!alias) {
           return null;
         }
-        const detail = fieldDetailByAlias.get(alias);
+        const detail = context.fieldDetailByAlias.get(alias);
         if (!detail) {
           return null;
         }
@@ -3615,8 +3997,8 @@ const getColumnLabel = useCallback(
         return { kind: "model", ...parsed };
       };
 
-      const metricDetail = fieldDetailByAlias.get(metricBaseAlias);
-      const dimensionDetail = fieldDetailByAlias.get(dimensionBaseAlias);
+      const metricDetail = context.fieldDetailByAlias.get(metricBaseAlias);
+      const dimensionDetail = context.fieldDetailByAlias.get(dimensionBaseAlias);
 
       const warnings: string[] = [];
 
@@ -3674,7 +4056,7 @@ const getColumnLabel = useCallback(
       let comparisonAlias: string | null = null;
       if (allowComparison && visual.comparison) {
         const comparisonBaseAlias = visual.comparison;
-        const comparisonDetail = fieldDetailByAlias.get(comparisonBaseAlias);
+        const comparisonDetail = context.fieldDetailByAlias.get(comparisonBaseAlias);
         if (comparisonDetail) {
           const comparisonReference = resolveFieldReference(comparisonBaseAlias);
           if (comparisonReference) {
@@ -3711,7 +4093,7 @@ const getColumnLabel = useCallback(
       }
 
       const { filters: normalizedFilters, warnings: filterWarnings } = normalizeFiltersForQuery(
-        draft.filters,
+        context.filters,
       );
       warnings.push(...filterWarnings);
 
@@ -3721,8 +4103,8 @@ const getColumnLabel = useCallback(
           : 100;
 
       const joins =
-        draft.joins.length > 0
-          ? draft.joins.map(
+        context.joins.length > 0
+          ? context.joins.map(
               ({ id, leftModel, leftField, rightModel, rightField, joinType, description }) => ({
                 id,
                 leftModel,
@@ -3737,7 +4119,7 @@ const getColumnLabel = useCallback(
 
       const descriptor: VisualQueryDescriptor = {
         config: {
-          models: [...draft.models],
+          models: [...context.models],
           joins,
           filters: normalizedFilters.length > 0 ? normalizedFilters : undefined,
           metrics,
@@ -3772,19 +4154,148 @@ const getColumnLabel = useCallback(
       return descriptor;
     },
     [
-      draft.filters,
       draft.id,
-      draft.joins,
-      draft.models,
-      fieldDetailByAlias,
       getColumnLabel,
       derivedFieldPayloads,
     ],
   );
   const visualQueryDescriptor = useMemo(
-    () => buildVisualDescriptor(activeVisual ?? null),
-    [activeVisual, buildVisualDescriptor],
+    () =>
+      buildVisualDescriptor(activeVisual ?? null, {
+        models: draft.models,
+        joins: draft.joins,
+        filters: draft.filters,
+        fieldDetailByAlias,
+      }),
+    [activeVisual, buildVisualDescriptor, draft.filters, draft.joins, draft.models, fieldDetailByAlias],
   );
+  const buildUnionAnalyticsConfig = useCallback(() => {
+    const groups = syncQueryGroups(draft);
+    if (groups.length <= 1) {
+      return { config: null, warnings: [] };
+    }
+    const queries: QueryConfig[] = [];
+    const warnings: string[] = [];
+    groups.forEach((group) => {
+      const fieldMap = buildFieldDetailByAliasForGroup(group);
+      const descriptor = buildVisualDescriptor(activeVisual ?? null, {
+        models: group.models,
+        joins: group.joins,
+        filters: group.filters,
+        fieldDetailByAlias: fieldMap,
+      });
+      if (descriptor.config) {
+        queries.push(descriptor.config);
+      } else if (descriptor.warnings.length > 0) {
+        warnings.push(...descriptor.warnings);
+      }
+    });
+    if (queries.length === 0) {
+      return { config: null, warnings };
+    }
+    return {
+      config: {
+        union: {
+          all: true,
+          queries,
+          orderBy: queries[0]?.orderBy,
+          limit: queries[0]?.limit,
+        },
+      },
+      warnings,
+    };
+  }, [activeVisual, buildFieldDetailByAliasForGroup, buildVisualDescriptor, draft, syncQueryGroups]);
+
+  const buildSelectQueryConfigForGroup = useCallback(
+    (group: ReportTemplateQueryGroup): { config: QueryConfig | null; warnings: string[] } => {
+      if (!group.models || group.models.length === 0) {
+        return { config: null, warnings: ["Select at least one model to run a preview."] };
+      }
+      const selectEntries: QueryConfig["select"] = [];
+      group.fields.forEach((entry) => {
+        entry.fieldIds.forEach((fieldId) => {
+          const aliasKey = toColumnAlias(entry.modelId, fieldId);
+          const aliasValue = draft.columnAliases[aliasKey];
+          selectEntries.push({
+            modelId: entry.modelId,
+            fieldId,
+            alias: aliasValue,
+          });
+        });
+      });
+      if (selectEntries.length === 0) {
+        return { config: null, warnings: ["Select at least one field to run a preview."] };
+      }
+      const { filters: normalizedFilters, warnings } = normalizeFiltersForQuery(group.filters);
+      const joins =
+        group.joins.length > 0
+          ? group.joins.map(
+              ({ id, leftModel, leftField, rightModel, rightField, joinType, description }) => ({
+                id,
+                leftModel,
+                leftField,
+                rightModel,
+                rightField,
+                joinType,
+                description,
+              }),
+            )
+          : undefined;
+      return {
+        config: {
+          models: [...group.models],
+          joins,
+          filters: normalizedFilters.length > 0 ? normalizedFilters : undefined,
+          select: selectEntries,
+          limit: 500,
+          derivedFields: derivedFieldPayloads.length > 0 ? derivedFieldPayloads : undefined,
+        },
+        warnings,
+      };
+    },
+    [draft.columnAliases, derivedFieldPayloads],
+  );
+
+  const buildUnionPreviewConfig = useCallback(() => {
+    const groups = syncQueryGroups(draft);
+    if (groups.length <= 1) {
+      return { config: null, warnings: [] };
+    }
+    const queries: QueryConfig[] = [];
+    const warnings: string[] = [];
+    groups.forEach((group) => {
+      const { config, warnings: groupWarnings } = buildSelectQueryConfigForGroup(group);
+      if (config) {
+        queries.push(config);
+      }
+      warnings.push(...groupWarnings);
+    });
+    if (queries.length === 0) {
+      return { config: null, warnings };
+    }
+    return {
+      config: {
+        union: {
+          all: true,
+          queries,
+          orderBy: queries[0]?.orderBy,
+          limit: queries[0]?.limit,
+        },
+      },
+      warnings,
+    };
+  }, [buildSelectQueryConfigForGroup, draft, syncQueryGroups]);
+  const analyticsQueryConfig = useMemo(() => {
+    if (draft.queryConfig) {
+      return draft.queryConfig;
+    }
+    const unionConfig = buildUnionAnalyticsConfig();
+    if (unionConfig.config) {
+      return unionConfig.config;
+    }
+    return visualQueryDescriptor.config;
+  }, [buildUnionAnalyticsConfig, draft.queryConfig, visualQueryDescriptor.config]);
+  const isVisualQueryOverrideActive = Boolean(draft.queryConfig);
 
   const chartMetricAlias = visualQueryDescriptor.metricAlias ?? "";
   const chartDimensionAlias = visualQueryDescriptor.dimensionAlias ?? "";
@@ -4089,15 +4600,122 @@ const getColumnLabel = useCallback(
     : undefined;
   const supportsDimensionBuckets = dimensionDetail?.type === "date";
 
-  const runVisualAnalytics = useCallback(async () => {
-    setVisualWarnings(visualQueryDescriptor.warnings);
-
+  const handleApplyVisualQueryOverride = useCallback(() => {
     if (!visualQueryDescriptor.config) {
+      setTemplateError("Select a metric and dimension before overriding the analytics query.");
+      return;
+    }
+    setTemplateError(null);
+    setTemplateSuccess("Analytics query override captured. Save the template to persist it.");
+    setDraft((current) => ({
+      ...current,
+      queryConfig: deepClone(visualQueryDescriptor.config),
+      }));
+    }, [setDraft, setTemplateError, setTemplateSuccess, visualQueryDescriptor.config]);
+
+  const handleClearVisualQueryOverride = useCallback(() => {
+    setTemplateError(null);
+    setTemplateSuccess("Analytics query override cleared.");
+    setDraft((current) => ({
+      ...current,
+      queryConfig: null,
+    }));
+  }, [setDraft, setTemplateError, setTemplateSuccess]);
+
+  const buildUnionSeed = useCallback((): QueryConfigUnion => {
+    const existingUnion = draft.queryConfig?.union;
+    if (existingUnion && Array.isArray(existingUnion.queries)) {
+      return deepClone(existingUnion);
+    }
+    return { all: true, queries: [], orderBy: [], limit: 1000, offset: 0 };
+  }, [draft.queryConfig]);
+
+  useEffect(() => {
+    if (!isUnionBuilderOpen) {
+      return;
+    }
+    if (unionDraftText.trim().length > 0) {
+      return;
+    }
+    const seed = buildUnionSeed();
+    setUnionDraftText(JSON.stringify(seed, null, 2));
+  }, [buildUnionSeed, isUnionBuilderOpen, unionDraftText]);
+
+  const parseUnionDraft = useCallback((raw: string): QueryConfigUnion | null => {
+    if (!raw || raw.trim().length === 0) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(raw) as QueryConfigUnion;
+      if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.queries)) {
+        return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const unionDraftSummary = useMemo(() => {
+    const parsed = parseUnionDraft(unionDraftText);
+    return {
+      parsed,
+      isValid: Boolean(parsed),
+      count: parsed?.queries.length ?? 0,
+    };
+  }, [parseUnionDraft, unionDraftText]);
+
+  const handleResetUnionDraft = useCallback(() => {
+    const seed = buildUnionSeed();
+    setUnionDraftText(JSON.stringify(seed, null, 2));
+  }, [buildUnionSeed]);
+
+  const handleAddUnionSubquery = useCallback(() => {
+    if (!visualQueryDescriptor.config) {
+      setTemplateError("Select a metric and dimension before adding a subquery.");
+      return;
+    }
+    setTemplateError(null);
+    const existing = parseUnionDraft(unionDraftText) ?? { all: true, queries: [] };
+    const next = {
+      ...existing,
+      all: existing.all !== false,
+      queries: [...existing.queries, deepClone(visualQueryDescriptor.config)],
+    };
+    setUnionDraftText(JSON.stringify(next, null, 2));
+  }, [parseUnionDraft, setTemplateError, unionDraftText, visualQueryDescriptor.config]);
+
+  const handleApplyUnionOverride = useCallback(() => {
+    const parsed = parseUnionDraft(unionDraftText);
+    if (!parsed || !Array.isArray(parsed.queries) || parsed.queries.length === 0) {
+      setTemplateError("Union override requires a JSON object with a non-empty queries array.");
+      return;
+    }
+    setTemplateError(null);
+    setTemplateSuccess("Union query override captured. Save the template to persist it.");
+    setDraft((current) => ({
+      ...current,
+      queryConfig: {
+        union: parsed,
+      },
+    }));
+  }, [parseUnionDraft, setDraft, setTemplateError, setTemplateSuccess, unionDraftText]);
+
+  const runVisualAnalytics = useCallback(async () => {
+    const unionAnalytics = buildUnionAnalyticsConfig();
+    const warningSet = draft.queryConfig
+      ? visualQueryDescriptor.warnings
+      : unionAnalytics.config
+      ? unionAnalytics.warnings
+      : visualQueryDescriptor.warnings;
+    setVisualWarnings(warningSet);
+
+    if (!analyticsQueryConfig) {
       setVisualResult(null);
       setVisualExecutedAt(null);
       setVisualSql(null);
-      if (visualQueryDescriptor.warnings.length > 0) {
-        setVisualQueryError(visualQueryDescriptor.warnings[0]);
+      if (warningSet.length > 0) {
+        setVisualQueryError(warningSet[0]);
       } else {
         setVisualQueryError("Select a metric and dimension to run analytics.");
       }
@@ -4130,7 +4748,7 @@ const getColumnLabel = useCallback(
     setVisualSql(null);
 
     try {
-      const response = await runAnalyticsQuery(visualQueryDescriptor.config);
+      const response = await runAnalyticsQuery(analyticsQueryConfig);
       if (isReportQuerySuccess(response)) {
         setVisualResult(response);
         setVisualSql(typeof response.sql === "string" ? response.sql : null);
@@ -4160,7 +4778,15 @@ const getColumnLabel = useCallback(
       setVisualExecutedAt(null);
       setVisualSql(null);
     }
-  }, [hasStaleDerivedFields, runAnalyticsQuery, staleDerivedFieldNames, visualQueryDescriptor]);
+  }, [
+    analyticsQueryConfig,
+    buildUnionAnalyticsConfig,
+    draft.queryConfig,
+    hasStaleDerivedFields,
+    runAnalyticsQuery,
+    staleDerivedFieldNames,
+    visualQueryDescriptor,
+  ]);
 
   useEffect(() => {
     if (!visualJob) {
@@ -4619,7 +5245,7 @@ const getColumnLabel = useCallback(
     setDraft(deepClone(template));
   };
 
-  const handleToggleModel = (modelId: string) => {
+  const handleToggleModel = useCallback((modelId: string) => {
     setDraft((current) => {
       const hasModel = current.models.includes(modelId);
       if (hasModel) {
@@ -4674,7 +5300,15 @@ const getColumnLabel = useCallback(
         derivedFields: reconcileDerivedFieldStatuses(current.derivedFields, nextModels),
       };
     });
-  };
+  }, [setDraft]);
+  const handleAddModelFromPicker = useCallback(() => {
+    if (!addModelId) {
+      return;
+    }
+    handleToggleModel(addModelId);
+    setAddModelId(null);
+    setAddModelPopoverOpen(false);
+  }, [addModelId, handleToggleModel]);
 
   const handleFieldToggle = (modelId: string, fieldId: string) => {
     const aliasKey = toColumnAlias(modelId, fieldId);
@@ -5101,10 +5735,32 @@ const getColumnLabel = useCallback(
   }, [prepareFiltersForRequest]);
 
   const buildPreviewRequestPayload = useCallback((): {
-    payload?: ReportPreviewRequest;
+    payload?: ReportPreviewPayload;
     error?: string;
     visualError?: string;
   } => {
+    if (hasStaleDerivedFields) {
+      const staleMessage =
+        staleDerivedFieldNames.length > 0
+          ? `Resolve stale derived fields (${staleDerivedFieldNames}) before running a preview.`
+          : "Resolve stale derived fields before running a preview.";
+      return {
+        error: staleMessage,
+        visualError: staleMessage,
+      };
+    }
+
+    const unionPreview = buildUnionPreviewConfig();
+    if (unionPreview.config) {
+      if (unionPreview.warnings.length > 0) {
+        return {
+          error: unionPreview.warnings[0],
+          visualError: unionPreview.warnings[0],
+        };
+      }
+      return { payload: unionPreview.config };
+    }
+
     if (draft.models.length === 0) {
       return {
         error: "Select at least one data model to run a preview.",
@@ -5123,17 +5779,6 @@ const getColumnLabel = useCallback(
       return {
         error: "Select at least one field to include in your preview.",
         visualError: "Select at least one field to power analytics.",
-      };
-    }
-
-    if (hasStaleDerivedFields) {
-      const staleMessage =
-        staleDerivedFieldNames.length > 0
-          ? `Resolve stale derived fields (${staleDerivedFieldNames}) before running a preview.`
-          : "Resolve stale derived fields before running a preview.";
-      return {
-        error: staleMessage,
-        visualError: staleMessage,
       };
     }
 
@@ -5238,7 +5883,14 @@ const getColumnLabel = useCallback(
     };
 
     return { payload };
-  }, [draft, derivedFieldPayloads, hasStaleDerivedFields, staleDerivedFieldNames, prepareFiltersForRequest]);
+  }, [
+    buildUnionPreviewConfig,
+    draft,
+    derivedFieldPayloads,
+    hasStaleDerivedFields,
+    staleDerivedFieldNames,
+    prepareFiltersForRequest,
+  ]);
 
   const findDateFilterMetadata = useCallback((): ({
     modelId: string;
@@ -5291,7 +5943,12 @@ const getColumnLabel = useCallback(
       if (!visual.metric || !visual.dimension) {
         return null;
       }
-      const descriptor = buildVisualDescriptor(visual);
+      const descriptor = buildVisualDescriptor(visual, {
+        models: draft.models,
+        joins: draft.joins,
+        filters: draft.filters,
+        fieldDetailByAlias,
+      });
       const metricLabel = descriptor.metricLabel ?? getColumnLabel(visual.metric) ?? "Metric";
       const dimensionLabel =
         descriptor.dimensionLabel ?? getColumnLabel(visual.dimension) ?? "Dimension";
@@ -5392,7 +6049,17 @@ const getColumnLabel = useCallback(
         sample: options?.sample,
       };
     },
-    [buildVisualDescriptor, draft.metricsSpotlight, getColumnLabel, getColumnType, inferMetricFormat],
+    [
+      buildVisualDescriptor,
+      draft.filters,
+      draft.joins,
+      draft.metricsSpotlight,
+      draft.models,
+      fieldDetailByAlias,
+      getColumnLabel,
+      getColumnType,
+      inferMetricFormat,
+    ],
   );
 
   const handleAddVisualToDashboard = () => {
@@ -5467,6 +6134,41 @@ const getColumnLabel = useCallback(
       };
     },
     [buildPreviewRequestPayload, draft.columnAliases, findDateFilterMetadata, previewColumns],
+  );
+
+  const buildDateFilterOptionsFromIds = useCallback(
+    (
+      ids: string[],
+      metadata: Map<string, { modelId: string; fieldId: string; operator: FilterOperator; filterIndex?: number }>,
+      labels: Map<string, string>,
+    ) =>
+      ids
+        .map((id) => {
+          const entry = metadata.get(id);
+          if (!entry) {
+            return null;
+          }
+          const label = labels.get(id);
+          return {
+            id,
+            modelId: entry.modelId,
+            fieldId: entry.fieldId,
+            operator: entry.operator,
+            ...(entry.filterIndex !== undefined ? { filterIndex: entry.filterIndex } : {}),
+            ...(label ? { label } : {}),
+          };
+        })
+        .filter(
+          (entry): entry is {
+            id: string;
+            modelId: string;
+            fieldId: string;
+            operator: FilterOperator;
+            label?: string;
+            filterIndex?: number;
+          } => Boolean(entry),
+        ),
+    [],
   );
 
   const updateDashboardCardsForTemplate = useCallback(
@@ -5646,16 +6348,22 @@ const getColumnLabel = useCallback(
       }
     },
     [
+      buildDateFilterOptionsFromIds,
       buildPreviewTableViewConfig,
       buildVisualCardViewConfig,
       dashboards,
+      dateFilterLabelById,
       draft.metricsSpotlight,
       draft.visuals,
       findDateFilterMetadata,
       getColumnLabel,
       queryClient,
       setTemplateError,
+      spotlightDateFilterMetadata,
+      spotlightDateFilterOptions,
       upsertDashboardCardMutation,
+      visualDateFilterMetadata,
+      visualDateFilterOptions,
     ],
   );
 
@@ -5817,41 +6525,6 @@ const getColumnLabel = useCallback(
       }
       return allIds;
     },
-    [],
-  );
-
-  const buildDateFilterOptionsFromIds = useCallback(
-    (
-      ids: string[],
-      metadata: Map<string, { modelId: string; fieldId: string; operator: FilterOperator; filterIndex?: number }>,
-      labels: Map<string, string>,
-    ) =>
-      ids
-        .map((id) => {
-          const entry = metadata.get(id);
-          if (!entry) {
-            return null;
-          }
-          const label = labels.get(id);
-          return {
-            id,
-            modelId: entry.modelId,
-            fieldId: entry.fieldId,
-            operator: entry.operator,
-            ...(entry.filterIndex !== undefined ? { filterIndex: entry.filterIndex } : {}),
-            ...(label ? { label } : {}),
-          };
-        })
-        .filter(
-          (entry): entry is {
-            id: string;
-            modelId: string;
-            fieldId: string;
-            operator: FilterOperator;
-            label?: string;
-            filterIndex?: number;
-          } => Boolean(entry),
-        ),
     [],
   );
 
@@ -6310,6 +6983,8 @@ const getColumnLabel = useCallback(
     }
     filterMetadataRef.current = preparedFilters.metadata;
 
+    const queryGroups = syncQueryGroups(draft);
+
     const payload: SaveReportTemplateRequest = {
       id: templates.some((template) => template.id === draft.id) ? draft.id : undefined,
       name: draft.name.trim(),
@@ -6336,6 +7011,7 @@ const getColumnLabel = useCallback(
       queryConfig: draft.queryConfig ? deepClone(draft.queryConfig) : null,
       derivedFields: deepClone(draft.derivedFields),
       metricsSpotlight: deepClone(draft.metricsSpotlight),
+      queryGroups: deepClone(queryGroups),
       columnOrder: [...draft.columnOrder],
       columnAliases: { ...draft.columnAliases },
       previewOrder: draft.previewOrder.map((rule) => ({ ...rule })),
@@ -6401,6 +7077,7 @@ const getColumnLabel = useCallback(
       visuals: [deepClone(DEFAULT_VISUAL)],
       metrics: [],
       filters: [],
+      queryGroups: [createQueryGroup(1)],
       options: {
         autoDistribution: true,
         notifyTeam: true,
@@ -6468,6 +7145,7 @@ const getColumnLabel = useCallback(
       visuals: deepClone(selectedTemplate.visuals),
       metrics: [...selectedTemplate.metrics],
       filters: deepClone(selectedTemplate.filters),
+      queryGroups: deepClone(selectedTemplate.queryGroups),
       options: {
         autoDistribution: selectedTemplate.autoDistribution,
         notifyTeam: selectedTemplate.notifyTeam,
@@ -7058,7 +7736,25 @@ const getColumnLabel = useCallback(
           />
         );
       } else if (comparisonMode === "value") {
-        if (filter.valueKind === "boolean") {
+        if (filter.operator === "in") {
+          const placeholder =
+            filter.valueKind === "number"
+              ? "e.g. 10, 25, 40"
+              : filter.valueKind === "date"
+              ? "e.g. 2026-01-01, 2026-01-15"
+              : filter.valueKind === "boolean"
+              ? "true, false"
+              : "e.g. confirmed, amended";
+          valueControl = (
+            <TextInput
+              label="Values"
+              placeholder={placeholder}
+              value={filter.value ?? ""}
+              onChange={(event) => handleFilterValueChange(filter.id, event.currentTarget.value)}
+              w={260}
+            />
+          );
+        } else if (filter.valueKind === "boolean") {
           valueControl = (
             <Select
               label="Value"
@@ -7579,7 +8275,7 @@ const getColumnLabel = useCallback(
     const requiresValue = operatorDefinition?.requiresValue ?? true;
     const defaultKind = getValueKindForFieldType(defaultOption.field.type);
 
-    const baseFilter: ReportFilter = {
+    const baseFilter: Omit<ReportFilter, "parentGroupId"> = {
       id: `filter-${Date.now()}`,
       leftModelId: defaultOption.modelId,
       leftFieldId: defaultOption.fieldId,
@@ -8054,10 +8750,11 @@ const getColumnLabel = useCallback(
 
   return (
     <PageAccessGuard pageSlug={PAGE_SLUG}>
-      <Box bg="#f4f6f8" p="xl" style={{ minHeight: "100vh" }}>
-        <Stack gap="xl">
-          <Group justify="space-between" align="flex-start">
-            <div>
+      <>
+        <Box bg="#f4f6f8" p="xl" style={{ minHeight: "100vh" }}>
+          <Stack gap="xl">
+            <Group justify="space-between" align="flex-start">
+              <div>
               <Group gap="sm">
                 <Title order={2}>Enterprise report builder</Title>
                 <Badge color="blue" variant="light" size="lg">
@@ -8161,1740 +8858,1918 @@ const getColumnLabel = useCallback(
               )}
             </Paper>
           ) : (
-            <Flex gap="lg" align="flex-start">
-              <Stack gap="lg" style={{ width: 320 }}>
-                <Paper p="md" radius="lg" shadow="xs" withBorder>
-                  <Group justify="space-between" mb="sm">
-                    <Text fw={600} fz="lg">
-                      Template library
-                    </Text>
-                    <ActionIcon
-                    variant="subtle"
-                    color="blue"
-                    onClick={handleCreateTemplate}
-                    aria-label="Add template"
-                    disabled={saveTemplateMutation.isPending}
-                  >
-                    <IconPlus size={18} />
-                  </ActionIcon>
-                  </Group>
-                  <Divider mb="sm" />
-                  <Stack gap="xs" mb="sm">
-                    <TextInput
-                      placeholder="Search templates"
-                      value={templateSearch}
-                      onChange={(event) => setTemplateSearch(event.currentTarget.value)}
-                      leftSection={<IconSearch size={14} />}
-                      size="sm"
-                    />
-                    <Select
-                      placeholder="Filter by category"
-                      data={categorySelectOptions}
-                      value={templateCategoryFilter}
-                      onChange={(value) => setTemplateCategoryFilter(value ?? "all")}
-                      size="sm"
-                    />
-                    {categoryOptions.length > 0 && (
-                      <ScrollArea type="hover" offsetScrollbars>
-                        <Group gap="xs" wrap="nowrap" pb={4}>
-                          {["all", ...categoryOptions].map((category) => {
-                            const value = category === "all" ? "all" : category;
-                            const isActive = templateCategoryFilter === value;
-                            const label = value === "all" ? "All templates" : category;
-                            return (
-                              <Badge
-                                key={`template-category-${value}`}
-                                size="xs"
-                                variant={isActive ? "filled" : "outline"}
-                                color={isActive ? "blue" : "gray"}
-                                style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
-                                onClick={() => setTemplateCategoryFilter(value)}
-                              >
-                                {label}
-                              </Badge>
-                            );
-                          })}
-                        </Group>
-                      </ScrollArea>
-                    )}
-                  </Stack>
-                  <Group justify="space-between" align="center" mb="sm">
-                    <Text fz="xs" c="dimmed">
-                      Showing {filteredTemplates.length} of {templates.length} templates
-                    </Text>
-                    {highlightQuery && (
-                      <Badge size="xs" variant="outline" color="blue">
-                        Match: "{highlightQuery}"
-                      </Badge>
-                    )}
-                  </Group>
-                  {filteredTemplates.length === 0 ? (
-                    <Text c="dimmed" fz="sm">
-                      No templates match your filters.
-                    </Text>
-                  ) : (
-                    <ScrollArea h={260} type="always" offsetScrollbars>
-                      <Stack gap="sm">
-                        {filteredTemplates.map((template) => {
-                          const isActive = template.id === draft.id;
-                          const fieldCount = template.fields.reduce(
-                            (total, entry) => total + entry.fieldIds.length,
-                            0,
-                          );
-                          const metricsCount = template.metricsSpotlight?.length ?? 0;
-                          const description = template.description?.trim();
-
-                          return (
-                            <Card
-                              key={template.id}
-                              withBorder
-                              padding="md"
-                              radius="md"
-                              shadow={isActive ? "sm" : "xs"}
-                              style={{
-                                borderColor: isActive ? "#1c7ed6" : undefined,
-                                cursor: "pointer",
-                              }}
-                              onClick={() => handleSelectTemplate(template.id)}
-                            >
-                              <Stack gap="xs">
-                                <Group justify="space-between" align="flex-start">
-                                  <div>
-                                    <Text fw={600}>
-                                      <Highlight highlight={highlightQuery}>{template.name}</Highlight>
-                                    </Text>
-                                    <Group gap={6} mt={6}>
-                                      {template.category && (
-                                        <Badge size="xs" variant="light">
-                                          {template.category}
-                                        </Badge>
-                                      )}
-                                      <Badge size="xs" variant="light" color="gray">
-                                        {template.schedule}
-                                      </Badge>
-                                    </Group>
-                                  </div>
-                                  {isActive && (
-                                    <Badge color="blue" size="xs">
-                                      Active
-                                    </Badge>
-                                  )}
-                                </Group>
-                                {description && (
-                                  <Text size="xs" c="dimmed" lineClamp={2}>
-                                    <Highlight highlight={highlightQuery}>{description}</Highlight>
-                                  </Text>
-                                )}
-                                <Group gap={6} mt="xs">
-                                  <Badge size="xs" variant="outline" color="blue">
-                                    {template.models.length} models
-                                  </Badge>
-                                  <Badge size="xs" variant="outline" color="gray">
-                                    {fieldCount} fields
-                                  </Badge>
-                                  <Badge size="xs" variant="outline" color="violet">
-                                    {template.visuals.length} visuals
-                                  </Badge>
-                                  {metricsCount > 0 && (
-                                    <Badge size="xs" variant="outline" color="teal">
-                                      {metricsCount} spotlights
-                                    </Badge>
-                                  )}
-                                </Group>
-                                <Text size="xs" c="dimmed">
-                                  <Highlight highlight={highlightQuery}>
-                                    {`Updated ${template.lastUpdated} - Owner ${template.owner}`}
-                                  </Highlight>
-                                </Text>
-                              </Stack>
-                            </Card>
-                          );
-                        })}
-                      </Stack>
-                    </ScrollArea>
-                  )}
-                  <Divider my="sm" />
-                  <Group grow>
-                    <Button
-                      variant="light"
-                      leftSection={<IconCopy size={14} />}
-                      onClick={handleDuplicateTemplate}
-                      disabled={!selectedTemplate || saveTemplateMutation.isPending}
-                      loading={saveTemplateMutation.isPending && Boolean(selectedTemplate)}
-                    >
-                      Duplicate
-                    </Button>
-                    <Button
-                      variant="light"
-                      color="red"
-                      leftSection={<IconTrash size={14} />}
-                      onClick={handleDeleteTemplate}
-                      disabled={!selectedTemplate || deleteTemplateMutation.isPending}
-                      loading={deleteTemplateMutation.isPending && Boolean(selectedTemplate)}
-                    >
-                      Remove
-                    </Button>
-                  </Group>
-                </Paper>
-
-                <Paper p="md" radius="lg" shadow="xs" withBorder>
-                  <Group justify="space-between">
-                    <Text fw={600}>Data models</Text>
-                    <Badge variant="light">{draft.models.length} selected</Badge>
-                  </Group>
-                  <Divider my="sm" />
-                  <Stack gap="sm">
-                    {dataModels.map((model) => {
-                      const selected = draft.models.includes(model.id);
-                      const associationSummary =
-                        model.associations && model.associations.length > 0
-                          ? model.associations
-                              .map((association) =>
-                                association.alias
-                                  ? `${association.associationType} (${association.alias})`
-                                  : `${association.associationType} - ${association.targetModelId}`
-                              )
-                              .slice(0, 3)
-                              .join(" · ")
-                          : null;
-                      const description =
-                        model.description ??
-                        (model.tableName
-                          ? `Table ${model.schema ? `${model.schema}.` : ""}${model.tableName}`
-                          : "Data model");
-                      return (
-                        <Card key={model.id} withBorder padding="sm" radius="md">
-                          <Group align="flex-start" gap="sm">
-                            <ThemeIcon
-                              radius="md"
-                              size="lg"
-                              variant={selected ? "filled" : "light"}
-                              color={selected ? "blue" : "gray"}
-                            >
-                              <IconDatabase size={18} />
-                            </ThemeIcon>
-                            <Stack gap={4} style={{ flex: 1 }}>
-                              <Group justify="space-between" align="flex-start">
-                                <div>
-                                  <Text fw={600} fz="sm">
-                                    {model.name}
-                                  </Text>
-                                  <Text fz="xs" c="dimmed">
-                                    {description}
-                                  </Text>
-                                </div>
-                                <Checkbox
-                                  aria-label={`Toggle model ${model.name}`}
-                                  checked={selected}
-                                  onChange={() => handleToggleModel(model.id)}
-                                />
-                              </Group>
-                              <Group gap={6}>
-                                <Badge size="xs" variant="light">
-                                  {model.connection ?? DEFAULT_CONNECTION_LABEL}
-                                </Badge>
-                                {model.tableName && (
-                                  <Badge size="xs" variant="light">
-                                    {model.schema
-                                      ? `${model.schema}.${model.tableName}`
-                                      : model.tableName}
-                                  </Badge>
-                                )}
-                                {model.recordCount && model.recordCount !== "N/A" && (
-                                  <Badge size="xs" variant="light">
-                                    {model.recordCount}
-                                  </Badge>
-                                )}
-                                {model.lastSynced && (
-                                  <Badge size="xs" variant="light">
-                                    Synced {model.lastSynced}
-                                  </Badge>
-                                )}
-                              </Group>
-                              {selected && associationSummary && (
-                                <Text fz="xs" c="dimmed">
-                                  Joins: {associationSummary}
-                                </Text>
-                              )}
-                            </Stack>
-                          </Group>
-                        </Card>
-                      );
-                    })}
-                  </Stack>
-                </Paper>
-              </Stack>
-
-              <Stack gap="lg" style={{ flex: 1 }}>
-                <Paper p="md" radius="lg" shadow="xs" withBorder>
-                  <Group justify="space-between" mb="md">
-                    <Text fw={600}>Template details</Text>
-                    <Badge variant="light">{draft.owner}</Badge>
-                  </Group>
-                  <Stack gap="md">
-                    <TextInput
-                      label="Report name"
-                      value={draft.name}
-                      onChange={(event) =>
-                        setDraft((current) => ({ ...current, name: event.currentTarget.value }))
-                      }
-                      placeholder="Name your report"
-                    />
-                    <Textarea
-                      label="Purpose"
-                      minRows={2}
-                      value={draft.description}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          description: event.currentTarget.value,
-                        }))
-                      }
-                      placeholder="Summarize the business question this report answers."
-                    />
-                    <Flex gap="md" wrap="wrap">
-                      <Select
-                        label="Category"
-                        data={CATEGORY_OPTIONS}
-                        value={draft.category}
-                        onChange={(value) =>
-                          setDraft((current) => ({
-                            ...current,
-                            category: value ?? current.category,
-                          }))
-                        }
-                        placeholder="Select focus area"
-                        style={{ flex: 1, minWidth: 200 }}
-                      />
-                      <Select
-                        label="Delivery cadence"
-                        data={SCHEDULE_OPTIONS}
-                        value={draft.schedule}
-                        onChange={(value) =>
-                          setDraft((current) => ({
-                            ...current,
-                            schedule: value ?? current.schedule,
-                          }))
-                        }
-                        placeholder="Choose refresh schedule"
-                        style={{ flex: 1, minWidth: 200 }}
-                      />
-                    </Flex>
-                    <MultiSelect
-                      label="Key metrics to highlight"
-                      data={metricOptions}
-                      value={draft.metrics.filter((alias) =>
-                        metricOptions.some((option) => option.value === alias),
-                      )}
-                      onChange={(value) =>
-                        setDraft((current) => ({
-                          ...current,
-                          metrics: Array.from(new Set(value)),
-                        }))
-                      }
-                      placeholder={metricOptions.length === 0 ? "Add numeric fields" : "Select metrics"}
-                      searchable
-                      disabled={metricOptions.length === 0}
-                    />
-                    <Switch
-                      label="Auto-run preview on open"
-                      description="Automatically refresh the preview when this template loads."
-                      checked={draft.autoRunOnOpen}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          autoRunOnOpen: event.currentTarget.checked,
-                        }))
-                      }
-                    />
-                  </Stack>
-                </Paper>
-
-                <Paper p="md" radius="lg" shadow="xs" withBorder>
-                  <Group justify="space-between" mb="md">
-                    <Group gap="xs" align="center">
-                      <ThemeIcon variant="light" color="grape">
-                        <IconCalendarStats size={18} />
-                      </ThemeIcon>
-                      <Text fw={600}>Schedules & delivery</Text>
-                    </Group>
-                    <Badge variant="light">{scheduleList.length}</Badge>
-                  </Group>
-                  <Stack gap="md">
-                    {!isTemplatePersisted && (
-                      <Alert color="yellow" variant="light">
-                        Save the template before configuring automated deliveries.
-                      </Alert>
-                    )}
-                    {isTemplatePersisted && isSchedulesLoading && (
+            <Tabs defaultValue="setup" variant="outline">
+              <Tabs.List>
+                <Tabs.Tab value="setup" leftSection={<IconAdjustments size={14} />}>
+                  Setup
+                </Tabs.Tab>
+                <Tabs.Tab value="library" leftSection={<IconTemplate size={14} />}>
+                  Template library
+                </Tabs.Tab>
+              </Tabs.List>
+              <Tabs.Panel value="setup" pt="md">
+                <Stack gap="lg">
+                  
+                  
+                  
+                  
+                  
+                  <Paper p="md" radius="lg" shadow="xs" withBorder>
+                    <Group justify="space-between" mb="md" align="center">
                       <Group gap="xs" align="center">
-                        <Loader size="sm" color="blue" />
-                        <Text c="dimmed" fz="sm">
-                          Loading delivery schedules...
+                        <Text fw={600}>
+                          Template details - {draft.name.trim() ? draft.name.trim() : "Untitled"}
                         </Text>
+                        <Badge variant="light">{draft.owner}</Badge>
                       </Group>
-                    )}
-                    {isTemplatePersisted && isSchedulesError && (
-                      <Alert color="red" variant="light">
-                        Unable to load schedules. Try saving your changes and refreshing the page.
-                      </Alert>
-                    )}
-                    {isTemplatePersisted &&
-                      !isSchedulesLoading &&
-                      !isSchedulesError &&
-                      scheduleList.length > 0 && (
-                        <Stack gap="sm">
-                          {scheduleList.map((schedule) => {
-                            const isMutating = activeScheduleMutationId === schedule.id;
-                            const recipientsLabel = formatDeliveryTargetsLabel(schedule.deliveryTargets);
-                            const statusLabel =
-                              (schedule.status ?? "active") === "paused" ? "Paused" : "Active";
-                            return (
-                              <Card key={schedule.id} withBorder padding="md" radius="md">
-                                <Stack gap="sm">
-                                  <Group justify="space-between" align="center">
-                                    <Group gap="sm" align="center">
-                                      <Badge size="xs" variant="light" color="violet">
-                                        {schedule.cadence}
-                                      </Badge>
-                                      <Switch
-                                        size="sm"
-                                        label={statusLabel}
-                                        checked={(schedule.status ?? "active") !== "paused"}
-                                        onChange={() => handleToggleScheduleStatus(schedule)}
-                                        disabled={isMutating || updateScheduleMutation.isPending}
-                                      />
-                                      {isMutating && <Loader size="xs" color="blue" />}
-                                    </Group>
-                                    <ActionIcon
-                                      variant="subtle"
-                                      color="red"
-                                      onClick={() => handleDeleteSchedule(schedule.id)}
-                                      aria-label="Remove schedule"
-                                      disabled={isMutating || deleteScheduleMutation.isPending}
-                                    >
-                                      <IconTrash size={16} />
-                                    </ActionIcon>
-                                  </Group>
-                                  <Flex gap="sm" wrap="wrap">
-                                    <Select
-                                      label="Cadence"
-                                      data={SCHEDULE_OPTIONS}
-                                      value={schedule.cadence}
-                                      onChange={(value) => handleScheduleCadenceChange(schedule, value)}
-                                      style={{ flex: 1, minWidth: 200 }}
-                                      disabled={isMutating || updateScheduleMutation.isPending}
-                                    />
-                                    <TextInput
-                                      key={`${schedule.id}-timezone`}
-                                      label="Timezone"
-                                      defaultValue={schedule.timezone}
-                                      placeholder="UTC"
-                                      onBlur={(event) =>
-                                        handleScheduleTimezoneBlur(schedule, event.currentTarget.value)
-                                      }
-                                      onKeyDown={(event) => {
-                                        if (event.key === "Enter") {
-                                          event.currentTarget.blur();
-                                        }
-                                      }}
-                                      disabled={isMutating || updateScheduleMutation.isPending}
-                                      style={{ flex: 1, minWidth: 200 }}
-                                    />
-                                  </Flex>
-                                  <TextInput
-                                    key={`${schedule.id}-recipients`}
-                                    label="Recipients"
-                                    description="Comma-separated emails or Slack channels."
-                                    defaultValue={recipientsLabel}
-                                    leftSection={<IconMail size={16} />}
-                                    onBlur={(event) =>
-                                      handleScheduleRecipientsBlur(schedule, event.currentTarget.value)
-                                    }
-                                    onKeyDown={(event) => {
-                                      if (event.key === "Enter") {
-                                        event.currentTarget.blur();
-                                      }
-                                    }}
-                                    disabled={isMutating || updateScheduleMutation.isPending}
-                                  />
-                                  <Group justify="space-between" align="center">
-                                    <Text fz="xs" c="dimmed">
-                                      Last run:{" "}
-                                      {schedule.lastRunAt
-                                        ? formatLastUpdatedLabel(schedule.lastRunAt)
-                                        : "Never"}
-                                    </Text>
-                                    <Text fz="xs" c="dimmed">
-                                      Next run:{" "}
-                                      {schedule.nextRunAt
-                                        ? formatLastUpdatedLabel(schedule.nextRunAt)
-                                        : "Pending"}
-                                    </Text>
-                                  </Group>
-                                </Stack>
-                              </Card>
-                            );
-                          })}
-                        </Stack>
-                      )}
-                    <Divider />
-                    <Stack gap="sm">
-                      <Group justify="space-between" align="center">
-                        <Text fw={600} fz="sm">
-                          Create new schedule
-                        </Text>
-                        <Badge size="xs" variant="light" color="blue">
-                          Draft
-                        </Badge>
-                      </Group>
-                      <Flex gap="sm" wrap="wrap">
-                        <Select
-                          label="Cadence"
-                          data={SCHEDULE_OPTIONS}
-                          value={scheduleDraft.cadence}
-                          onChange={(value) =>
-                            handleScheduleDraftChange({ cadence: value ?? scheduleDraft.cadence })
-                          }
-                          disabled={!isTemplatePersisted || createScheduleMutation.isPending}
-                          style={{ flex: 1, minWidth: 180 }}
-                        />
-                        <Select
-                          label="Status"
-                          data={SCHEDULE_STATUS_OPTIONS}
-                          value={scheduleDraft.status}
-                          onChange={(value) =>
-                            handleScheduleDraftChange({
-                              status: (value ?? scheduleDraft.status) as ScheduleStatus,
-                            })
-                          }
-                          disabled={!isTemplatePersisted || createScheduleMutation.isPending}
-                          style={{ flex: 1, minWidth: 160 }}
-                        />
-                      </Flex>
-                      <Flex gap="sm" wrap="wrap">
-                        <TextInput
-                          label="Timezone"
-                          value={scheduleDraft.timezone}
-                          onChange={(event) =>
-                            handleScheduleDraftChange({ timezone: event.currentTarget.value })
-                          }
-                          placeholder="UTC"
-                          disabled={!isTemplatePersisted || createScheduleMutation.isPending}
-                          style={{ flex: 1, minWidth: 180 }}
-                        />
-                        <TextInput
-                          label="Recipients"
-                          value={scheduleDraft.recipients}
-                          onChange={(event) =>
-                            handleScheduleDraftChange({ recipients: event.currentTarget.value })
-                          }
-                          placeholder="email@example.com, #channel-name"
-                          leftSection={<IconSend size={16} />}
-                          disabled={!isTemplatePersisted || createScheduleMutation.isPending}
-                          style={{ flex: 1, minWidth: 240 }}
-                        />
-                      </Flex>
-                      <Group justify="flex-end">
+                      <Group gap="xs" align="center">
                         <Button
-                          leftSection={<IconSend size={14} />}
-                          onClick={handleCreateSchedule}
-                          disabled={!isTemplatePersisted || createScheduleMutation.isPending}
-                          loading={createScheduleMutation.isPending}
+                          size="xs"
+                          variant="light"
+                          leftSection={<IconDeviceFloppy size={12} />}
+                          onClick={handleSaveTemplate}
+                          loading={saveTemplateMutation.isPending}
                         >
-                          Save schedule
+                          Save
                         </Button>
-                      </Group>
-                    </Stack>
-                  </Stack>
-                </Paper>
-
-                <Paper p="md" radius="lg" shadow="xs" withBorder>
-                  <Group justify="space-between" mb="md">
-                    <Text fw={600}>Data model joins</Text>
-                    <Badge variant="light">{draft.joins.length} defined</Badge>
-                  </Group>
-                  <Stack gap="md">
-                    <Stack gap="xs">
-                      <Text fw={600} fz="sm">
-                        Create custom join
-                      </Text>
-                      {!joinModelsAvailable ? (
-                        <Text c="dimmed" fz="sm">
-                          Select at least two data models to configure a custom join.
-                        </Text>
-                      ) : (
-                        <Stack gap="xs">
-                          <Group align="flex-end" gap="sm" wrap="wrap">
-                            <Select
-                              label="Left model"
-                              data={joinModelOptions}
-                              placeholder="Select model"
-                              value={manualJoinDraft.leftModelId || null}
-                              onChange={(value) => updateManualJoinDraft({ leftModelId: value ?? "" })}
-                              style={{ flex: 1, minWidth: 200 }}
-                            />
-                            <Select
-                              label="Left field"
-                              data={getFieldOptions(manualJoinDraft.leftModelId)}
-                              placeholder="Select field"
-                              value={manualJoinDraft.leftFieldId || null}
-                              onChange={(value) => updateManualJoinDraft({ leftFieldId: value ?? "" })}
-                              disabled={!manualJoinDraft.leftModelId}
-                              style={{ flex: 1, minWidth: 200 }}
-                            />
-                          </Group>
-                          <Group align="flex-end" gap="sm" wrap="wrap">
-                            <Select
-                              label="Right model"
-                              data={joinModelOptions}
-                              placeholder="Select model"
-                              value={manualJoinDraft.rightModelId || null}
-                              onChange={(value) => updateManualJoinDraft({ rightModelId: value ?? "" })}
-                              style={{ flex: 1, minWidth: 200 }}
-                            />
-                            <Select
-                              label="Right field"
-                              data={getFieldOptions(manualJoinDraft.rightModelId)}
-                              placeholder="Select field"
-                              value={manualJoinDraft.rightFieldId || null}
-                              onChange={(value) => updateManualJoinDraft({ rightFieldId: value ?? "" })}
-                              disabled={!manualJoinDraft.rightModelId}
-                              style={{ flex: 1, minWidth: 200 }}
-                            />
-                            <Select
-                              label="Join type"
-                              data={JOIN_TYPE_OPTIONS}
-                              value={manualJoinDraft.joinType}
-                              onChange={(value) =>
-                                updateManualJoinDraft({
-                                  joinType: (value ?? manualJoinDraft.joinType) as JoinCondition["joinType"],
-                                })
-                              }
-                              style={{ width: 160 }}
-                            />
-                            <Button
-                              leftSection={<IconPlus size={14} />}
-                              onClick={handleManualJoinSubmit}
-                              disabled={!canSubmitManualJoin || !joinModelsAvailable}
-                            >
-                              Add join
-                            </Button>
-                          </Group>
-                        </Stack>
-                      )}
-                    </Stack>
-                    {draft.joins.length === 0 ? (
-                      <Text c="dimmed">
-                        Add relationships between models to enable blended reporting.
-                      </Text>
-                    ) : (
-                      <Stack gap="sm">
-                        {draft.joins.map((join) => {
-                          const leftModel = modelMap.get(join.leftModel);
-                          const rightModel = modelMap.get(join.rightModel);
-                          return (
-                            <Card key={join.id} withBorder padding="sm" radius="md">
-                              <Group justify="space-between" align="flex-start">
-                                <div>
-                                  <Group gap="xs">
-                                    <Badge variant="light" color="blue">
-                                      {join.joinType.toUpperCase()}
-                                    </Badge>
-                                    <Text fw={600} fz="sm">
-                                      {leftModel?.name ?? join.leftModel} - {rightModel?.name ?? join.rightModel}
-                                    </Text>
-                                  </Group>
-                                  <Text fz="xs" c="dimmed" mt={4}>
-                                    {join.leftModel}.{join.leftField} = {join.rightModel}.{join.rightField}
-                                  </Text>
-                                  {join.description && (
-                                    <Text fz="xs" mt={6}>
-                                      {join.description}
-                                    </Text>
-                                  )}
-                                </div>
-                                <ActionIcon
-                                  variant="subtle"
-                                  color="red"
-                                  onClick={() => handleRemoveJoin(join.id)}
-                                  aria-label="Remove join"
-                                >
-                                  <IconTrash size={16} />
-                                </ActionIcon>
-                              </Group>
-                            </Card>
-                          );
-                        })}
-                      </Stack>
-                    )}
-                    {joinSuggestions.length > 0 && (
-                      <>
-                        <Divider my="md" />
-                        <Text fw={600} fz="sm" mb={6}>
-                          Suggested joins
-                        </Text>
-                        <Stack gap="xs">
-                          {joinSuggestions.map((suggestion) => (
-                            <Group
-                              key={`${suggestion.source.id}-${suggestion.target.id}-${suggestion.leftField}`}
-                              justify="space-between"
-                              align="flex-start"
-                            >
-                              <div>
-                                <Text fw={500} fz="sm">
-                                  {`${suggestion.source.name} -> ${suggestion.target.name}`}
-                                </Text>
-                                <Text fz="xs" c="dimmed">
-                                  {suggestion.relationship}
-                                </Text>
-                              </div>
-                              <ActionIcon
-                                variant="subtle"
-                                color="blue"
-                                onClick={() =>
-                                  handleAddJoin(suggestion.source.id, suggestion.target.id, {
-                                    leftField: suggestion.leftField,
-                                    rightField: suggestion.rightField,
-                                    description: suggestion.relationship,
-                                  })
-                                }
-                                aria-label="Add join"
-                              >
-                                <IconPlus size={16} />
-                              </ActionIcon>
-                            </Group>
-                          ))}
-                        </Stack>
-                      </>
-                    )}
-                    {joinGraph.nodes.length > 0 && (
-                      <>
-                        <Divider my="md" />
-                        <Stack gap="sm">
-                          <Group justify="space-between" align="center">
-                            <Text fw={600} fz="sm">
-                              Join graph overview
-                            </Text>
-                            <Badge
-                              variant="light"
-                              color={joinGraph.disconnected.length === 0 ? "teal" : "red"}
-                            >
-                              {joinGraph.disconnected.length === 0
-                                ? "Fully connected"
-                                : `${joinGraph.disconnected.length} disconnected`}
-                            </Badge>
-                          </Group>
-                          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
-                            <Stack gap={6}>
-                              <Text fz="xs" fw={600} c="dimmed">
-                                Model coverage
-                              </Text>
-                              {joinGraphNodeStats.length === 0 ? (
-                                <Text fz="xs" c="dimmed">No models selected.</Text>
-                              ) : (
-                                joinGraphNodeStats.map((node) => (
-                                  <Group key={`join-node-${node.id}`} justify="space-between">
-                                    <Text fz="sm">{node.label}</Text>
-                                    <Badge size="xs" variant="light">
-                                      {node.connections} link{node.connections === 1 ? "" : "s"}
-                                    </Badge>
-                                  </Group>
-                                ))
-                              )}
-                            </Stack>
-                            <Stack gap={6}>
-                              <Text fz="xs" fw={600} c="dimmed">
-                                Connectivity
-                              </Text>
-                              {joinGraphComponentSummaries.length <= 1 ? (
-                                <Text fz="xs" c="dimmed">All selected models are reachable.</Text>
-                              ) : (
-                                joinGraphComponentSummaries.map((component) => (
-                                  <Stack key={component.id} gap={2}>
-                                    <Text fz="xs" fw={600}>
-                                      {component.title}
-                                    </Text>
-                                    <Text fz="xs" c="dimmed">
-                                      {component.members.join(", ")}
-                                    </Text>
-                                  </Stack>
-                                ))
-                              )}
-                            </Stack>
-                          </SimpleGrid>
-                          {joinGraph.disconnected.length > 0 && (
-                            <Alert color="red" variant="light" title="Disconnected models">
-                              {joinGraph.disconnected.map((node) => node.label).join(", ")} are not connected
-                              to the join graph. Add joins to include them in the analytics pipeline.
-                            </Alert>
+                        <ActionIcon
+                          size="sm"
+                          variant="subtle"
+                          onClick={() => toggleSection("templateDetails")}
+                          disabled={!draft.name.trim()}
+                          aria-label={
+                            sectionOpen.templateDetails ? "Collapse template details" : "Expand template details"
+                          }
+                        >
+                          {sectionOpen.templateDetails ? (
+                            <IconChevronUp size={16} />
+                          ) : (
+                            <IconChevronDown size={16} />
                           )}
-                        </Stack>
-                      </>
-                    )}
-                  </Stack>
-                </Paper>
-                <Paper p="md" radius="lg" shadow="xs" withBorder>
-                  <Group justify="space-between" mb="md">
-                    <Text fw={600}>Field inventory</Text>
-                    <Badge variant="light">{totalFieldInventoryCount} fields</Badge>
-                  </Group>
-                  {selectedModels.length === 0 ? (
-                    <Stack gap="md">
-                      <Text c="dimmed">
-                        Select at least one data model to begin adding fields to your report.
-                      </Text>
-                      {renderDerivedFieldInventory()}
-                    </Stack>
-                  ) : (
-                    <Stack gap="md">
-                      {selectedModels.map((model) => {
-                        const selections =
-                          draft.fields.find((entry) => entry.modelId === model.id)?.fieldIds ?? [];
-                        return (
-                          <Stack key={model.id} gap="xs">
-                            <Group justify="space-between">
-                              <Text fw={600} fz="sm">
-                                {model.name}
-                              </Text>
-                              <Badge size="xs" variant="light">
-                                {selections.length} selected
-                              </Badge>
-                            </Group>
-                            <ScrollArea h={160} offsetScrollbars type="always">
-                              <Table verticalSpacing="xs" highlightOnHover>
-                                <Table.Thead>
-                                  <Table.Tr>
-                                    <Table.Th>Field</Table.Th>
-                                    <Table.Th>Alias</Table.Th>
-                                    <Table.Th>Type</Table.Th>
-                                    <Table.Th>Column</Table.Th>
-                                    <Table.Th align="right">Include</Table.Th>
-                                  </Table.Tr>
-                                </Table.Thead>
-                                <Table.Tbody>
-                                  {model.fields.map((field) => {
-                                    const checked = selections.includes(field.id);
-                                    const aliasKey = toColumnAlias(model.id, field.id);
-                                    const aliasValue = draft.columnAliases[aliasKey] ?? "";
-                                    return (
-                                      <Table.Tr key={field.id}>
-                                        <Table.Td>
-                                          <Text fw={500} fz="sm">
-                                            {field.label}
+                        </ActionIcon>
+                      </Group>
+                    </Group>
+                    <Collapse in={sectionOpen.templateDetails}>
+                      <Stack gap="md">
+                                      <TextInput
+                                        label="Report name"
+                                        value={draft.name}
+                                        onChange={(event) =>
+                                          setDraft((current) => ({ ...current, name: event.currentTarget.value }))
+                                        }
+                                        placeholder="Name your report"
+                                      />
+                                      <Textarea
+                                        label="Purpose"
+                                        minRows={2}
+                                        value={draft.description}
+                                        onChange={(event) =>
+                                          setDraft((current) => ({
+                                            ...current,
+                                            description: event.currentTarget.value,
+                                          }))
+                                        }
+                                        placeholder="Summarize the business question this report answers."
+                                      />
+                                      <Flex gap="md" wrap="wrap">
+                                        <Select
+                                          label="Category"
+                                          data={CATEGORY_OPTIONS}
+                                          value={draft.category}
+                                          onChange={(value) =>
+                                            setDraft((current) => ({
+                                              ...current,
+                                              category: value ?? current.category,
+                                            }))
+                                          }
+                                          placeholder="Select focus area"
+                                          style={{ flex: 1, minWidth: 200 }}
+                                        />
+                                        <Select
+                                          label="Delivery cadence"
+                                          data={SCHEDULE_OPTIONS}
+                                          value={draft.schedule}
+                                          onChange={(value) =>
+                                            setDraft((current) => ({
+                                              ...current,
+                                              schedule: value ?? current.schedule,
+                                            }))
+                                          }
+                                          placeholder="Choose refresh schedule"
+                                          style={{ flex: 1, minWidth: 200 }}
+                                        />
+                                      </Flex>
+                                      <MultiSelect
+                                        label="Key metrics to highlight"
+                                        data={metricOptions}
+                                        value={draft.metrics.filter((alias) =>
+                                          metricOptions.some((option) => option.value === alias),
+                                        )}
+                                        onChange={(value) =>
+                                          setDraft((current) => ({
+                                            ...current,
+                                            metrics: Array.from(new Set(value)),
+                                          }))
+                                        }
+                                        placeholder={metricOptions.length === 0 ? "Add numeric fields" : "Select metrics"}
+                                        searchable
+                                        disabled={metricOptions.length === 0}
+                                      />
+                                      <Switch
+                                        label="Auto-run preview on open"
+                                        description="Automatically refresh the preview when this template loads."
+                                        checked={draft.autoRunOnOpen}
+                                        onChange={(event) =>
+                                          setDraft((current) => ({
+                                            ...current,
+                                            autoRunOnOpen: event.currentTarget.checked,
+                                          }))
+                                        }
+                                      />
+                      </Stack>
+                  </Collapse>
+                  </Paper>
+                  
+                                  <Paper p="md" radius="lg" shadow="xs" withBorder>
+                                    <Group justify="space-between" mb="md">
+                                      <Group gap="xs" align="center">
+                                        <ThemeIcon variant="light" color="grape">
+                                          <IconCalendarStats size={18} />
+                                        </ThemeIcon>
+                                        <Text fw={600}>Schedules & delivery</Text>
+                                      </Group>
+                                      <Group gap="xs" align="center">
+                                        <Badge variant="light">{scheduleList.length}</Badge>
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          leftSection={<IconDeviceFloppy size={12} />}
+                                          onClick={handleSaveTemplate}
+                                          loading={saveTemplateMutation.isPending}
+                                        >
+                                          Save
+                                        </Button>
+                                        <ActionIcon
+                                          size="sm"
+                                          variant="subtle"
+                                          onClick={() => toggleSection("schedules")}
+                                          aria-label={
+                                            sectionOpen.schedules
+                                              ? "Collapse schedules"
+                                              : "Expand schedules"
+                                          }
+                                        >
+                                          {sectionOpen.schedules ? (
+                                            <IconChevronUp size={16} />
+                                          ) : (
+                                            <IconChevronDown size={16} />
+                                          )}
+                                        </ActionIcon>
+                                      </Group>
+                                    </Group>
+                                    <Collapse in={sectionOpen.schedules}>
+                                      <Stack gap="md">
+                                      {!isTemplatePersisted && (
+                                        <Alert color="yellow" variant="light">
+                                          Save the template before configuring automated deliveries.
+                                        </Alert>
+                                      )}
+                                      {isTemplatePersisted && isSchedulesLoading && (
+                                        <Group gap="xs" align="center">
+                                          <Loader size="sm" color="blue" />
+                                          <Text c="dimmed" fz="sm">
+                                            Loading delivery schedules...
                                           </Text>
-                                          <Text fz="xs" c="dimmed">
-                                            {field.id}
+                                        </Group>
+                                      )}
+                                      {isTemplatePersisted && isSchedulesError && (
+                                        <Alert color="red" variant="light">
+                                          Unable to load schedules. Try saving your changes and refreshing the page.
+                                        </Alert>
+                                      )}
+                                      {isTemplatePersisted &&
+                                        !isSchedulesLoading &&
+                                        !isSchedulesError &&
+                                        scheduleList.length > 0 && (
+                                          <Stack gap="sm">
+                                            {scheduleList.map((schedule) => {
+                                              const isMutating = activeScheduleMutationId === schedule.id;
+                                              const recipientsLabel = formatDeliveryTargetsLabel(schedule.deliveryTargets);
+                                              const statusLabel =
+                                                (schedule.status ?? "active") === "paused" ? "Paused" : "Active";
+                                              return (
+                                                <Card key={schedule.id} withBorder padding="md" radius="md">
+                                                  <Stack gap="sm">
+                                                    <Group justify="space-between" align="center">
+                                                      <Group gap="sm" align="center">
+                                                        <Badge size="xs" variant="light" color="violet">
+                                                          {schedule.cadence}
+                                                        </Badge>
+                                                        <Switch
+                                                          size="sm"
+                                                          label={statusLabel}
+                                                          checked={(schedule.status ?? "active") !== "paused"}
+                                                          onChange={() => handleToggleScheduleStatus(schedule)}
+                                                          disabled={isMutating || updateScheduleMutation.isPending}
+                                                        />
+                                                        {isMutating && <Loader size="xs" color="blue" />}
+                                                      </Group>
+                                                      <ActionIcon
+                                                        variant="subtle"
+                                                        color="red"
+                                                        onClick={() => handleDeleteSchedule(schedule.id)}
+                                                        aria-label="Remove schedule"
+                                                        disabled={isMutating || deleteScheduleMutation.isPending}
+                                                      >
+                                                        <IconTrash size={16} />
+                                                      </ActionIcon>
+                                                    </Group>
+                                                    <Flex gap="sm" wrap="wrap">
+                                                      <Select
+                                                        label="Cadence"
+                                                        data={SCHEDULE_OPTIONS}
+                                                        value={schedule.cadence}
+                                                        onChange={(value) => handleScheduleCadenceChange(schedule, value)}
+                                                        style={{ flex: 1, minWidth: 200 }}
+                                                        disabled={isMutating || updateScheduleMutation.isPending}
+                                                      />
+                                                      <TextInput
+                                                        key={`${schedule.id}-timezone`}
+                                                        label="Timezone"
+                                                        defaultValue={schedule.timezone}
+                                                        placeholder="UTC"
+                                                        onBlur={(event) =>
+                                                          handleScheduleTimezoneBlur(schedule, event.currentTarget.value)
+                                                        }
+                                                        onKeyDown={(event) => {
+                                                          if (event.key === "Enter") {
+                                                            event.currentTarget.blur();
+                                                          }
+                                                        }}
+                                                        disabled={isMutating || updateScheduleMutation.isPending}
+                                                        style={{ flex: 1, minWidth: 200 }}
+                                                      />
+                                                    </Flex>
+                                                    <TextInput
+                                                      key={`${schedule.id}-recipients`}
+                                                      label="Recipients"
+                                                      description="Comma-separated emails or Slack channels."
+                                                      defaultValue={recipientsLabel}
+                                                      leftSection={<IconMail size={16} />}
+                                                      onBlur={(event) =>
+                                                        handleScheduleRecipientsBlur(schedule, event.currentTarget.value)
+                                                      }
+                                                      onKeyDown={(event) => {
+                                                        if (event.key === "Enter") {
+                                                          event.currentTarget.blur();
+                                                        }
+                                                      }}
+                                                      disabled={isMutating || updateScheduleMutation.isPending}
+                                                    />
+                                                    <Group justify="space-between" align="center">
+                                                      <Text fz="xs" c="dimmed">
+                                                        Last run:{" "}
+                                                        {schedule.lastRunAt
+                                                          ? formatLastUpdatedLabel(schedule.lastRunAt)
+                                                          : "Never"}
+                                                      </Text>
+                                                      <Text fz="xs" c="dimmed">
+                                                        Next run:{" "}
+                                                        {schedule.nextRunAt
+                                                          ? formatLastUpdatedLabel(schedule.nextRunAt)
+                                                          : "Pending"}
+                                                      </Text>
+                                                    </Group>
+                                                  </Stack>
+                                                </Card>
+                                              );
+                                            })}
+                                          </Stack>
+                                        )}
+                                      <Divider />
+                                      <Stack gap="sm">
+                                        <Group justify="space-between" align="center">
+                                          <Text fw={600} fz="sm">
+                                            Create new schedule
                                           </Text>
-                                        </Table.Td>
-                                        <Table.Td>
+                                          <Badge size="xs" variant="light" color="blue">
+                                            Draft
+                                          </Badge>
+                                        </Group>
+                                        <Flex gap="sm" wrap="wrap">
+                                          <Select
+                                            label="Cadence"
+                                            data={SCHEDULE_OPTIONS}
+                                            value={scheduleDraft.cadence}
+                                            onChange={(value) =>
+                                              handleScheduleDraftChange({ cadence: value ?? scheduleDraft.cadence })
+                                            }
+                                            disabled={!isTemplatePersisted || createScheduleMutation.isPending}
+                                            style={{ flex: 1, minWidth: 180 }}
+                                          />
+                                          <Select
+                                            label="Status"
+                                            data={SCHEDULE_STATUS_OPTIONS}
+                                            value={scheduleDraft.status}
+                                            onChange={(value) =>
+                                              handleScheduleDraftChange({
+                                                status: (value ?? scheduleDraft.status) as ScheduleStatus,
+                                              })
+                                            }
+                                            disabled={!isTemplatePersisted || createScheduleMutation.isPending}
+                                            style={{ flex: 1, minWidth: 160 }}
+                                          />
+                                        </Flex>
+                                        <Flex gap="sm" wrap="wrap">
                                           <TextInput
-                                            size="xs"
-                                            placeholder="Custom label"
-                                            value={aliasValue}
-                                            disabled={!checked}
+                                            label="Timezone"
+                                            value={scheduleDraft.timezone}
                                             onChange={(event) =>
-                                              handleFieldAliasChange(model.id, field.id, event.currentTarget.value)
+                                              handleScheduleDraftChange({ timezone: event.currentTarget.value })
+                                            }
+                                            placeholder="UTC"
+                                            disabled={!isTemplatePersisted || createScheduleMutation.isPending}
+                                            style={{ flex: 1, minWidth: 180 }}
+                                          />
+                                          <TextInput
+                                            label="Recipients"
+                                            value={scheduleDraft.recipients}
+                                            onChange={(event) =>
+                                              handleScheduleDraftChange({ recipients: event.currentTarget.value })
+                                            }
+                                            placeholder="email@example.com, #channel-name"
+                                            leftSection={<IconSend size={16} />}
+                                            disabled={!isTemplatePersisted || createScheduleMutation.isPending}
+                                            style={{ flex: 1, minWidth: 240 }}
+                                          />
+                                        </Flex>
+                                        <Group justify="flex-end">
+                                          <Button
+                                            leftSection={<IconSend size={14} />}
+                                            onClick={handleCreateSchedule}
+                                            disabled={!isTemplatePersisted || createScheduleMutation.isPending}
+                                            loading={createScheduleMutation.isPending}
+                                          >
+                                            Save schedule
+                                          </Button>
+                                        </Group>
+                                      </Stack>
+                                      </Stack>
+                                  </Collapse>
+                                  </Paper>
+                  
+                                  <Paper p="md" radius="lg" shadow="xs" withBorder>
+                                    <Stack gap="md">
+                    <Group justify="space-between" align="flex-start" wrap="wrap">
+                      <Stack gap={4}>
+                        <Text fw={700}>Data model joins</Text>
+                        <Text size="sm" c="dimmed">
+                          Define how models connect inside this group so analytics can traverse them.
+                        </Text>
+                      </Stack>
+                      <Group gap="xs" align="center" wrap="wrap">
+                        <Select
+                          size="xs"
+                          data={groupOptions}
+                          value={draft.activeGroupId}
+                          onChange={handleSelectQueryGroup}
+                          placeholder="Select group"
+                        />
+                                          <Popover
+                                            opened={addModelPopoverOpen}
+                                            onChange={setAddModelPopoverOpen}
+                                            position="bottom-end"
+                                            shadow="md"
+                                            withArrow
+                                          >
+                                            <Popover.Target>
+                                              <Button
+                                                size="xs"
+                                                variant="light"
+                                                leftSection={<IconPlus size={14} />}
+                                                onClick={() => setAddModelPopoverOpen((current) => !current)}
+                                              >
+                                                Add model
+                                              </Button>
+                                            </Popover.Target>
+                                            <Popover.Dropdown>
+                                              <Stack gap="xs" style={{ minWidth: 240 }}>
+                                                <Select
+                                                  label="Select model"
+                                                  placeholder={
+                                                    availableModelOptions.length === 0
+                                                      ? "All models already added"
+                                                      : "Type to search"
+                                                  }
+                                                  data={availableModelOptions ?? []}
+                                                  searchable
+                                                  clearable
+                                                  value={addModelId}
+                                                  onChange={setAddModelId}
+                                                  disabled={availableModelOptions.length === 0}
+                                                  nothingFoundMessage="No matching models"
+                                                  comboboxProps={{ withinPortal: false }}
+                                                />
+                                                <Button size="xs" onClick={handleAddModelFromPicker} disabled={!addModelId}>
+                                                  Add
+                                                </Button>
+                                              </Stack>
+                                            </Popover.Dropdown>
+                                          </Popover>
+                                          <Button size="xs" variant="light" onClick={handleAddQueryGroup}>
+                                            Add group
+                                          </Button>
+                                          <Button
+                                            size="xs"
+                                            variant="subtle"
+                                            color="red"
+                                            onClick={handleRemoveQueryGroup}
+                                            disabled={draft.queryGroups.length <= 1}
+                                          >
+                                            Remove
+                                          </Button>
+                                          <Badge variant="light">{draft.joins.length} joins</Badge>
+                                          <Button
+                                            size="xs"
+                                            variant="light"
+                                            leftSection={<IconDeviceFloppy size={12} />}
+                                            onClick={handleSaveTemplate}
+                                            loading={saveTemplateMutation.isPending}
+                                          >
+                                            Save
+                                          </Button>
+                                          <ActionIcon
+                                            size="sm"
+                                            variant="subtle"
+                                            onClick={() => toggleSection("joins")}
+                                            aria-label={sectionOpen.joins ? "Collapse joins" : "Expand joins"}
+                                          >
+                                            {sectionOpen.joins ? (
+                                              <IconChevronUp size={16} />
+                                            ) : (
+                                              <IconChevronDown size={16} />
+                                            )}
+                                          </ActionIcon>
+                                        </Group>
+                    </Group>
+                    <Divider />
+                  <Collapse in={sectionOpen.joins}>
+                  <Stack gap="md">
+                                      <Stack gap="xs">
+                                        <Text fw={600} fz="sm">
+                                          Create custom join
+                                        </Text>
+                                        {!joinModelsAvailable ? (
+                                          <Text c="dimmed" fz="sm">
+                                            Select at least two data models to configure a custom join.
+                                          </Text>
+                                        ) : (
+                                          <Stack gap="xs">
+                                            <Group align="flex-end" gap="sm" wrap="wrap">
+                                              <Select
+                                                label="Left model"
+                                                data={joinModelOptions}
+                                                placeholder="Select model"
+                                                value={manualJoinDraft.leftModelId || null}
+                                                onChange={(value) => updateManualJoinDraft({ leftModelId: value ?? "" })}
+                                                style={{ flex: 1, minWidth: 200 }}
+                                              />
+                                              <Select
+                                                label="Left field"
+                                                data={getFieldOptions(manualJoinDraft.leftModelId)}
+                                                placeholder="Select field"
+                                                value={manualJoinDraft.leftFieldId || null}
+                                                onChange={(value) => updateManualJoinDraft({ leftFieldId: value ?? "" })}
+                                                disabled={!manualJoinDraft.leftModelId}
+                                                style={{ flex: 1, minWidth: 200 }}
+                                              />
+                                            </Group>
+                                            <Group align="flex-end" gap="sm" wrap="wrap">
+                                              <Select
+                                                label="Right model"
+                                                data={joinModelOptions}
+                                                placeholder="Select model"
+                                                value={manualJoinDraft.rightModelId || null}
+                                                onChange={(value) => updateManualJoinDraft({ rightModelId: value ?? "" })}
+                                                style={{ flex: 1, minWidth: 200 }}
+                                              />
+                                              <Select
+                                                label="Right field"
+                                                data={getFieldOptions(manualJoinDraft.rightModelId)}
+                                                placeholder="Select field"
+                                                value={manualJoinDraft.rightFieldId || null}
+                                                onChange={(value) => updateManualJoinDraft({ rightFieldId: value ?? "" })}
+                                                disabled={!manualJoinDraft.rightModelId}
+                                                style={{ flex: 1, minWidth: 200 }}
+                                              />
+                                              <Select
+                                                label="Join type"
+                                                data={JOIN_TYPE_OPTIONS}
+                                                value={manualJoinDraft.joinType}
+                                                onChange={(value) =>
+                                                  updateManualJoinDraft({
+                                                    joinType: (value ?? manualJoinDraft.joinType) as JoinCondition["joinType"],
+                                                  })
+                                                }
+                                                style={{ width: 160 }}
+                                              />
+                                              <Button
+                                                leftSection={<IconPlus size={14} />}
+                                                onClick={handleManualJoinSubmit}
+                                                disabled={!canSubmitManualJoin || !joinModelsAvailable}
+                                              >
+                                                Add join
+                                              </Button>
+                                            </Group>
+                  </Stack>
+                                        )}
+                                      </Stack>
+                                      {draft.joins.length === 0 ? (
+                                        <Text c="dimmed">
+                                          Add relationships between models to enable blended reporting.
+                                        </Text>
+                                      ) : (
+                                        <Stack gap="sm">
+                                          {draft.joins.map((join) => {
+                                            const leftModel = modelMap.get(join.leftModel);
+                                            const rightModel = modelMap.get(join.rightModel);
+                                            return (
+                                              <Card key={join.id} withBorder padding="sm" radius="md">
+                                                <Group justify="space-between" align="flex-start">
+                                                  <div>
+                                                    <Group gap="xs">
+                                                      <Badge variant="light" color="blue">
+                                                        {join.joinType.toUpperCase()}
+                                                      </Badge>
+                                                      <Text fw={600} fz="sm">
+                                                        {leftModel?.name ?? join.leftModel} - {rightModel?.name ?? join.rightModel}
+                                                      </Text>
+                                                    </Group>
+                                                    <Text fz="xs" c="dimmed" mt={4}>
+                                                      {join.leftModel}.{join.leftField} = {join.rightModel}.{join.rightField}
+                                                    </Text>
+                                                    {join.description && (
+                                                      <Text fz="xs" mt={6}>
+                                                        {join.description}
+                                                      </Text>
+                                                    )}
+                                                  </div>
+                                                  <ActionIcon
+                                                    variant="subtle"
+                                                    color="red"
+                                                    onClick={() => handleRemoveJoin(join.id)}
+                                                    aria-label="Remove join"
+                                                  >
+                                                    <IconTrash size={16} />
+                                                  </ActionIcon>
+                                                </Group>
+                                              </Card>
+                                            );
+                                          })}
+                                        </Stack>
+                                      )}
+                                      {joinSuggestions.length > 0 && (
+                                        <>
+                                          <Divider my="md" />
+                                          <Text fw={600} fz="sm" mb={6}>
+                                            Suggested joins
+                                          </Text>
+                                          <Stack gap="xs">
+                                            {joinSuggestions.map((suggestion) => (
+                                              <Group
+                                                key={`${suggestion.source.id}-${suggestion.target.id}-${suggestion.leftField}`}
+                                                justify="space-between"
+                                                align="flex-start"
+                                              >
+                                                <div>
+                                                  <Text fw={500} fz="sm">
+                                                    {`${suggestion.source.name} -> ${suggestion.target.name}`}
+                                                  </Text>
+                                                  <Text fz="xs" c="dimmed">
+                                                    {suggestion.relationship}
+                                                  </Text>
+                                                </div>
+                                                <ActionIcon
+                                                  variant="subtle"
+                                                  color="blue"
+                                                  onClick={() =>
+                                                    handleAddJoin(suggestion.source.id, suggestion.target.id, {
+                                                      leftField: suggestion.leftField,
+                                                      rightField: suggestion.rightField,
+                                                      description: suggestion.relationship,
+                                                    })
+                                                  }
+                                                  aria-label="Add join"
+                                                >
+                                                  <IconPlus size={16} />
+                                                </ActionIcon>
+                                              </Group>
+                                            ))}
+                                          </Stack>
+                                        </>
+                                      )}
+                                      {joinGraph.nodes.length > 0 && (
+                                        <>
+                                          <Divider my="md" />
+                                          <Stack gap="sm">
+                                            <Group justify="space-between" align="center">
+                                              <Text fw={600} fz="sm">
+                                                Join graph overview
+                                              </Text>
+                                              <Badge
+                                                variant="light"
+                                                color={joinGraph.disconnected.length === 0 ? "teal" : "red"}
+                                              >
+                                                {joinGraph.disconnected.length === 0
+                                                  ? "Fully connected"
+                                                  : `${joinGraph.disconnected.length} disconnected`}
+                                              </Badge>
+                                            </Group>
+                                            <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
+                                              <Stack gap={6}>
+                                                <Text fz="xs" fw={600} c="dimmed">
+                                                  Model coverage
+                                                </Text>
+                                                {joinGraphNodeStats.length === 0 ? (
+                                                  <Text fz="xs" c="dimmed">No models selected.</Text>
+                                                ) : (
+                                                  joinGraphNodeStats.map((node) => (
+                                                    <Group key={`join-node-${node.id}`} justify="space-between">
+                                                      <Text fz="sm">{node.label}</Text>
+                                                      <Badge size="xs" variant="light">
+                                                        {node.connections} link{node.connections === 1 ? "" : "s"}
+                                                      </Badge>
+                                                    </Group>
+                                                  ))
+                                                )}
+                                              </Stack>
+                                              <Stack gap={6}>
+                                                <Text fz="xs" fw={600} c="dimmed">
+                                                  Connectivity
+                                                </Text>
+                                                {joinGraphComponentSummaries.length <= 1 ? (
+                                                  <Text fz="xs" c="dimmed">All selected models are reachable.</Text>
+                                                ) : (
+                                                  joinGraphComponentSummaries.map((component) => (
+                                                    <Stack key={component.id} gap={2}>
+                                                      <Text fz="xs" fw={600}>
+                                                        {component.title}
+                                                      </Text>
+                                                      <Text fz="xs" c="dimmed">
+                                                        {component.members.join(", ")}
+                                                      </Text>
+                                                    </Stack>
+                                                  ))
+                                                )}
+                                              </Stack>
+                                            </SimpleGrid>
+                                            {joinGraph.disconnected.length > 0 && (
+                                              <Alert color="red" variant="light" title="Disconnected models">
+                                                {joinGraph.disconnected.map((node) => node.label).join(", ")} are not connected
+                                                to the join graph. Add joins to include them in the analytics pipeline.
+                                              </Alert>
+                                            )}
+                                          </Stack>
+                                        </>
+                                      )}
+                                    </Stack>
+                                  </Collapse>
+                                </Stack>
+                              </Paper>
+                                  <Paper p="md" radius="lg" shadow="xs" withBorder>
+                                    <Stack gap="md">
+                                      <Group justify="space-between" align="flex-start" wrap="wrap">
+                                        <Stack gap={4}>
+                                          <Text fw={700}>Field inventory</Text>
+                                          <Text size="sm" c="dimmed">
+                                            Pick fields for the active group. Align aliases across groups for UNION ALL.
+                                          </Text>
+                                        </Stack>
+                                        <Group gap="xs" align="center" wrap="wrap">
+                                          <Select
+                                            size="xs"
+                                            data={groupOptions}
+                                            value={draft.activeGroupId}
+                                            onChange={handleSelectQueryGroup}
+                                            placeholder="Select group"
+                                          />
+                                          <Badge variant="light">{totalFieldInventoryCount} fields</Badge>
+                                          <Button
+                                            size="xs"
+                                            variant="light"
+                                            leftSection={<IconDeviceFloppy size={12} />}
+                                            onClick={handleSaveTemplate}
+                                            loading={saveTemplateMutation.isPending}
+                                          >
+                                            Save
+                                          </Button>
+                                          <ActionIcon
+                                            size="sm"
+                                            variant="subtle"
+                                            onClick={() => toggleSection("fields")}
+                                            aria-label={
+                                              sectionOpen.fields
+                                                ? "Collapse field inventory"
+                                                : "Expand field inventory"
+                                            }
+                                          >
+                                            {sectionOpen.fields ? (
+                                              <IconChevronUp size={16} />
+                                            ) : (
+                                              <IconChevronDown size={16} />
+                                            )}
+                                          </ActionIcon>
+                                        </Group>
+                                      </Group>
+                                      <Collapse in={sectionOpen.fields}>
+                                        <Group gap="xs" align="center" wrap="wrap">
+                                        <TextInput
+                                          size="sm"
+                                          placeholder="Search fields"
+                                          leftSection={<IconSearch size={14} />}
+                                          value={fieldInventoryQuery}
+                                          onChange={(event) => setFieldInventoryQuery(event.currentTarget.value)}
+                                          style={{ minWidth: 220 }}
+                                        />
+                                        <Switch
+                                          size="sm"
+                                          checked={showSelectedOnly}
+                                          onChange={(event) => setShowSelectedOnly(event.currentTarget.checked)}
+                                          label="Selected only"
+                                        />
+                                      </Group>
+                                      <Divider />
+                                    {selectedModels.length === 0 ? (
+                                      <Stack gap="md">
+                                        <Text c="dimmed">
+                                          Select at least one data model to begin adding fields to your report.
+                                        </Text>
+                                        {renderDerivedFieldInventory()}
+                                      </Stack>
+                                    ) : (
+                                      <Stack gap="md">
+                                        {selectedModels.map((model) => {
+                                          const selections =
+                                            draft.fields.find((entry) => entry.modelId === model.id)?.fieldIds ?? [];
+                                          const query = fieldInventoryQuery.trim().toLowerCase();
+                                          const filteredFields = model.fields.filter((field) => {
+                                            const matchesQuery =
+                                              query.length === 0 ||
+                                              field.label.toLowerCase().includes(query) ||
+                                              field.id.toLowerCase().includes(query);
+                                            const isSelected = selections.includes(field.id);
+                                            return matchesQuery && (!showSelectedOnly || isSelected);
+                                          });
+                                          return (
+                                            <Stack key={model.id} gap="xs">
+                                              <Group justify="space-between" align="center" wrap="wrap">
+                                                <Group gap="xs" align="center">
+                                                  <Text fw={600} fz="sm">
+                                                    {model.name}
+                                                  </Text>
+                                                  <Badge size="xs" variant="light">
+                                                    {selections.length} selected
+                                                  </Badge>
+                                                </Group>
+                                                {filteredFields.length !== model.fields.length && (
+                                                  <Badge size="xs" variant="outline" color="gray">
+                                                    {filteredFields.length} shown
+                                                  </Badge>
+                                                )}
+                                              </Group>
+                                              <ScrollArea h={160} offsetScrollbars type="always">
+                                                {filteredFields.length === 0 ? (
+                                                  <Alert color="gray" variant="light">
+                                                    No fields match this filter.
+                                                  </Alert>
+                                                ) : (
+                                                  <Table verticalSpacing="xs" highlightOnHover>
+                                                    <Table.Thead>
+                                                      <Table.Tr>
+                                                        <Table.Th>Field</Table.Th>
+                                                        <Table.Th>Alias</Table.Th>
+                                                        <Table.Th>Type</Table.Th>
+                                                        <Table.Th>Column</Table.Th>
+                                                        <Table.Th align="right">Include</Table.Th>
+                                                      </Table.Tr>
+                                                    </Table.Thead>
+                                                    <Table.Tbody>
+                                                      {filteredFields.map((field) => {
+                                                        const checked = selections.includes(field.id);
+                                                        const aliasKey = toColumnAlias(model.id, field.id);
+                                                        const aliasValue = draft.columnAliases[aliasKey] ?? "";
+                                                        return (
+                                                          <Table.Tr key={field.id}>
+                                                            <Table.Td>
+                                                              <Text fw={500} fz="sm">
+                                                                {field.label}
+                                                              </Text>
+                                                              <Text fz="xs" c="dimmed">
+                                                                {field.id}
+                                                              </Text>
+                                                            </Table.Td>
+                                                            <Table.Td>
+                                                              <TextInput
+                                                                size="xs"
+                                                                placeholder="Custom label"
+                                                                value={aliasValue}
+                                                                disabled={!checked}
+                                                                onChange={(event) =>
+                                                                  handleFieldAliasChange(model.id, field.id, event.currentTarget.value)
+                                                                }
+                                                              />
+                                                            </Table.Td>
+                                                            <Table.Td>
+                                                              <Badge size="xs" variant="light">
+                                                                {field.type}
+                                                              </Badge>
+                                                            </Table.Td>
+                                                            <Table.Td>
+                                                              <Text fz="xs" c="dimmed">
+                                                                {field.sourceColumn ?? "—"}
+                                                              </Text>
+                                                            </Table.Td>
+                                                            <Table.Td align="right">
+                                                              <Checkbox
+                                                                checked={checked}
+                                                                onChange={() => handleFieldToggle(model.id, field.id)}
+                                                              />
+                                                            </Table.Td>
+                                                          </Table.Tr>
+                                                        );
+                                                      })}
+                                                    </Table.Tbody>
+                                                  </Table>
+                                                )}
+                                              </ScrollArea>
+                                            </Stack>
+                                          );
+                                        })}
+                                        {renderDerivedFieldInventory()}
+                                      </Stack>
+                                    )}
+                                      </Collapse>
+                                    </Stack>
+                                  </Paper>
+                  
+                                  <Paper p="md" radius="lg" shadow="xs" withBorder>
+                                    <Group justify="space-between" mb="md">
+                                      <Group gap="xs">
+                                        <ThemeIcon variant="light" color="blue">
+                                          <IconChartHistogram size={18} />
+                                        </ThemeIcon>
+                                        <Text fw={600}>Visuals & analytics</Text>
+                                      </Group>
+                                      <Group gap="xs" align="center" wrap="wrap">
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          leftSection={<IconLayoutGrid size={14} />}
+                                          onClick={handleAddVisualToDashboard}
+                                          disabled={
+                                            !isTemplatePersisted || !activeVisual.metric || !activeVisual.dimension
+                                          }
+                                        >
+                                          Add to dashboard
+                                        </Button>
+                                          <Button
+                                            size="xs"
+                                            variant={isVisualQueryOverrideActive ? "filled" : "light"}
+                                            color={isVisualQueryOverrideActive ? "orange" : "gray"}
+                                            leftSection={<IconAdjustments size={14} />}
+                                            onClick={handleApplyVisualQueryOverride}
+                                            disabled={!visualQueryDescriptor.config}
+                                          >
+                                            {isVisualQueryOverrideActive ? "Update query override" : "Hard override query"}
+                                          </Button>
+                                          <Button
+                                            size="xs"
+                                            variant="subtle"
+                                            color="gray"
+                                            onClick={() => setIsUnionBuilderOpen((current) => !current)}
+                                          >
+                                            {isUnionBuilderOpen ? "Hide union builder" : "Union builder"}
+                                          </Button>
+                                          {isVisualQueryOverrideActive && (
+                                            <Button
+                                              size="xs"
+                                              variant="subtle"
+                                              color="gray"
+                                            onClick={handleClearVisualQueryOverride}
+                                          >
+                                            Clear override
+                                          </Button>
+                                        )}
+                                        <Badge variant="light">{chartData.length} points</Badge>
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          leftSection={<IconDeviceFloppy size={12} />}
+                                          onClick={handleSaveTemplate}
+                                          loading={saveTemplateMutation.isPending}
+                                        >
+                                          Save
+                                        </Button>
+                                        <ActionIcon
+                                          size="sm"
+                                          variant="subtle"
+                                          onClick={() => toggleSection("visuals")}
+                                          aria-label={
+                                            sectionOpen.visuals
+                                              ? "Collapse visuals and analytics"
+                                              : "Expand visuals and analytics"
+                                          }
+                                        >
+                                          {sectionOpen.visuals ? (
+                                            <IconChevronUp size={16} />
+                                          ) : (
+                                            <IconChevronDown size={16} />
+                                          )}
+                                        </ActionIcon>
+                                        {isVisualQueryOverrideActive && (
+                                          <Badge color="orange" variant="light">
+                                            Override active
+                                          </Badge>
+                                        )}
+                                        {visualJobStatusLabel && (
+                                          <Badge
+                                            color={
+                                              visualJobStatus === "failed"
+                                                ? "red"
+                                                : visualJobStatus === "completed"
+                                                ? "green"
+                                                : "yellow"
+                                            }
+                                          >
+                                            {visualJobStatusLabel}
+                                          </Badge>
+                                        )}
+                                          {analyticsRunLabel && (
+                                            <Badge variant="outline" color="gray">
+                                              Updated {analyticsRunLabel}
+                                            </Badge>
+                                          )}
+                                      </Group>
+                                    </Group>
+                                    <Collapse in={sectionOpen.visuals}>
+                                      {isUnionBuilderOpen && (
+                                        <Card withBorder radius="md" padding="sm">
+                                          <Stack gap="xs">
+                                            <Group justify="space-between" align="center">
+                                              <Text fw={600} size="sm">
+                                                Union builder
+                                              </Text>
+                                              <Badge variant="light" color={unionDraftSummary.isValid ? "green" : "red"}>
+                                                {unionDraftSummary.isValid
+                                                  ? `${unionDraftSummary.count} subqueries`
+                                                  : "Invalid JSON"}
+                                              </Badge>
+                                            </Group>
+                                            <Text size="xs" c="dimmed">
+                                              Build a UNION/UNION ALL override. Each subquery must return the same aliases and types.
+                                            </Text>
+                                            <Textarea
+                                              value={unionDraftText}
+                                              onChange={(event) => setUnionDraftText(event.currentTarget.value)}
+                                              minRows={8}
+                                              autosize
+                                              placeholder='{"all": true, "queries": []}'
+                                              spellCheck={false}
+                                              styles={{ input: { fontFamily: "monospace" } }}
+                                            />
+                                            <Group gap="xs">
+                                              <Button
+                                                size="xs"
+                                                variant="light"
+                                                onClick={handleAddUnionSubquery}
+                                                disabled={!visualQueryDescriptor.config}
+                                              >
+                                                Add current query
+                                              </Button>
+                                              <Button size="xs" onClick={handleApplyUnionOverride}>
+                                                Apply union override
+                                              </Button>
+                                              <Button size="xs" variant="subtle" color="gray" onClick={handleResetUnionDraft}>
+                                                Reset
+                                              </Button>
+                                            </Group>
+                                          </Stack>
+                                        </Card>
+                                      )}
+                                      <Flex gap="lg" align="flex-start" wrap="wrap">
+                                      <Stack gap="sm" style={{ minWidth: 260, flex: "0 0 260px" }}>
+                                        <Select
+                                          label="Visualization type"
+                                          data={VISUAL_TYPE_OPTIONS}
+                                          value={activeVisual.type}
+                                          onChange={(value) =>
+                                            handleVisualChange({
+                                              type: VISUAL_TYPE_SET.has(value as VisualDefinition["type"])
+                                                ? (value as VisualDefinition["type"])
+                                                : "line",
+                                            })
+                                          }
+                                        />
+                                        <Select
+                                          label="Metric"
+                                          data={metricOptions}
+                                          value={activeVisual.metric || null}
+                                          onChange={(value) =>
+                                            handleVisualChange({ metric: value ?? "" })
+                                          }
+                                          placeholder={
+                                            metricOptions.length === 0 ? "Add numeric fields to your preview" : undefined
+                                          }
+                                          disabled={metricOptions.length === 0}
+                                          searchable
+                                        />
+                                        <Select
+                                          label="Aggregation"
+                                          data={aggregationOptions}
+                                          value={activeVisual.metricAggregation ?? "sum"}
+                                          onChange={(value) =>
+                                            handleVisualChange({
+                                              metricAggregation: (value ?? "sum") as QueryConfigMetric["aggregation"],
+                                            })
+                                          }
+                                          disabled={metricOptions.length === 0}
+                                        />
+                                        <Select
+                                          label="Dimension"
+                                          data={dimensionOptions}
+                                          value={activeVisual.dimension || null}
+                                          onChange={(value) =>
+                                            handleVisualChange({
+                                              dimension: value ?? "",
+                                            })
+                                          }
+                                          placeholder={
+                                            dimensionOptions.length === 0 ? "Add textual fields to your preview" : undefined
+                                          }
+                                          disabled={dimensionOptions.length === 0}
+                                          searchable
+                                        />
+                                        {supportsDimensionBuckets && (
+                                          <Select
+                                            label="Time bucket"
+                                            data={bucketOptions}
+                                            value={activeVisual.dimensionBucket ?? null}
+                                            onChange={(value) =>
+                                              handleVisualChange({
+                                                dimensionBucket: (value ?? undefined) as
+                                                  | QueryConfigDimension["bucket"]
+                                                  | undefined,
+                                              })
+                                            }
+                                            placeholder="No bucketing"
+                                            clearable
+                                          />
+                                        )}
+                                        <Select
+                                          label="Comparison series"
+                                          data={metricOptions.filter((option) => option.value !== activeVisual.metric)}
+                                          value={activeVisual.comparison ?? null}
+                                          onChange={(value) =>
+                                            handleVisualChange({
+                                              comparison: value ?? undefined,
+                                            })
+                                          }
+                                          placeholder={isPieVisualization ? "Not available for pie charts" : "Optional secondary series"}
+                                          disabled={metricOptions.length <= 1 || isPieVisualization}
+                                          searchable
+                                          clearable
+                                        />
+                                        {activeVisual.comparison && (
+                                          <Select
+                                            label="Comparison aggregation"
+                                            data={aggregationOptions}
+                                            value={
+                                              activeVisual.comparisonAggregation ??
+                                              activeVisual.metricAggregation ??
+                                              "sum"
+                                            }
+                                            onChange={(value) =>
+                                              handleVisualChange({
+                                                comparisonAggregation: (value ?? undefined) as
+                                                  | QueryConfigMetric["aggregation"]
+                                                  | undefined,
+                                              })
                                             }
                                           />
-                                        </Table.Td>
-                                        <Table.Td>
-                                          <Badge size="xs" variant="light">
-                                            {field.type}
-                                          </Badge>
-                                        </Table.Td>
-                                        <Table.Td>
-                                          <Text fz="xs" c="dimmed">
-                                            {field.sourceColumn ?? "—"}
+                                        )}
+                                        <NumberInput
+                                          label="Row limit"
+                                          value={activeVisual.limit ?? 100}
+                                          onChange={(value) =>
+                                            handleVisualChange({
+                                              limit:
+                                                typeof value === "number" && Number.isFinite(value) && value > 0
+                                                  ? Math.round(value)
+                                                  : null,
+                                            })
+                                          }
+                                          min={10}
+                                          max={10000}
+                                          step={10}
+                                        />
+                                        <Button
+                                          variant="light"
+                                          leftSection={<IconPlayerPlay size={14} />}
+                                          onClick={runVisualAnalytics}
+                                          loading={isVisualQueryRunning || isAnalyticsMutationPending}
+                                        >
+                                          Re-run analytics
+                                        </Button>
+                                        {visualWarnings.length > 0 && (
+                                          <Stack gap={4}>
+                                            {visualWarnings.map((warning, index) => (
+                                              <Text key={`visual-warning-${index}`} c="orange" fz="xs">
+                                                {warning}
+                                              </Text>
+                                            ))}
+                                          </Stack>
+                                        )}
+                                        {visualQueryError && (
+                                          <Text c="red" fz="sm">
+                                            {visualQueryError}
                                           </Text>
-                                        </Table.Td>
-                                        <Table.Td align="right">
-                                          <Checkbox
-                                            checked={checked}
-                                            onChange={() => handleFieldToggle(model.id, field.id)}
-                                          />
-                                        </Table.Td>
-                                      </Table.Tr>
-                                    );
-                                  })}
-                                </Table.Tbody>
-                              </Table>
-                            </ScrollArea>
-                          </Stack>
-                        );
-                      })}
-                      {renderDerivedFieldInventory()}
-                    </Stack>
-                  )}
-                </Paper>
-
-                <Paper p="md" radius="lg" shadow="xs" withBorder>
-                  <Group justify="space-between" mb="md">
-                    <Group gap="xs">
-                      <ThemeIcon variant="light" color="blue">
-                        <IconChartHistogram size={18} />
-                      </ThemeIcon>
-                      <Text fw={600}>Visuals & analytics</Text>
-                    </Group>
-                    <Group gap="xs" align="center" wrap="wrap">
-                      <Button
-                        size="xs"
-                        variant="light"
-                        leftSection={<IconLayoutGrid size={14} />}
-                        onClick={handleAddVisualToDashboard}
-                        disabled={
-                          !isTemplatePersisted || !activeVisual.metric || !activeVisual.dimension
-                        }
-                      >
-                        Add to dashboard
-                      </Button>
-                      <Badge variant="light">{chartData.length} points</Badge>
-                      {visualJobStatusLabel && (
-                        <Badge
-                          color={
-                            visualJobStatus === "failed"
-                              ? "red"
-                              : visualJobStatus === "completed"
-                              ? "green"
-                              : "yellow"
-                          }
-                        >
-                          {visualJobStatusLabel}
-                        </Badge>
-                      )}
-                      {analyticsRunLabel && (
-                        <Badge variant="outline" color="gray">
-                          Updated {analyticsRunLabel}
-                        </Badge>
-                      )}
-                    </Group>
-                  </Group>
-                  <Flex gap="lg" align="flex-start" wrap="wrap">
-                    <Stack gap="sm" style={{ minWidth: 260, flex: "0 0 260px" }}>
-                      <Select
-                        label="Visualization type"
-                        data={VISUAL_TYPE_OPTIONS}
-                        value={activeVisual.type}
-                        onChange={(value) =>
-                          handleVisualChange({
-                            type: VISUAL_TYPE_SET.has(value as VisualDefinition["type"])
-                              ? (value as VisualDefinition["type"])
-                              : "line",
-                          })
-                        }
-                      />
-                      <Select
-                        label="Metric"
-                        data={metricOptions}
-                        value={activeVisual.metric || null}
-                        onChange={(value) =>
-                          handleVisualChange({ metric: value ?? "" })
-                        }
-                        placeholder={
-                          metricOptions.length === 0 ? "Add numeric fields to your preview" : undefined
-                        }
-                        disabled={metricOptions.length === 0}
-                        searchable
-                      />
-                      <Select
-                        label="Aggregation"
-                        data={aggregationOptions}
-                        value={activeVisual.metricAggregation ?? "sum"}
-                        onChange={(value) =>
-                          handleVisualChange({
-                            metricAggregation: (value ?? "sum") as QueryConfigMetric["aggregation"],
-                          })
-                        }
-                        disabled={metricOptions.length === 0}
-                      />
-                      <Select
-                        label="Dimension"
-                        data={dimensionOptions}
-                        value={activeVisual.dimension || null}
-                        onChange={(value) =>
-                          handleVisualChange({
-                            dimension: value ?? "",
-                          })
-                        }
-                        placeholder={
-                          dimensionOptions.length === 0 ? "Add textual fields to your preview" : undefined
-                        }
-                        disabled={dimensionOptions.length === 0}
-                        searchable
-                      />
-                      {supportsDimensionBuckets && (
-                        <Select
-                          label="Time bucket"
-                          data={bucketOptions}
-                          value={activeVisual.dimensionBucket ?? null}
-                          onChange={(value) =>
-                            handleVisualChange({
-                              dimensionBucket: (value ?? undefined) as
-                                | QueryConfigDimension["bucket"]
-                                | undefined,
-                            })
-                          }
-                          placeholder="No bucketing"
-                          clearable
-                        />
-                      )}
-                      <Select
-                        label="Comparison series"
-                        data={metricOptions.filter((option) => option.value !== activeVisual.metric)}
-                        value={activeVisual.comparison ?? null}
-                        onChange={(value) =>
-                          handleVisualChange({
-                            comparison: value ?? undefined,
-                          })
-                        }
-                        placeholder={isPieVisualization ? "Not available for pie charts" : "Optional secondary series"}
-                        disabled={metricOptions.length <= 1 || isPieVisualization}
-                        searchable
-                        clearable
-                      />
-                      {activeVisual.comparison && (
-                        <Select
-                          label="Comparison aggregation"
-                          data={aggregationOptions}
-                          value={
-                            activeVisual.comparisonAggregation ??
-                            activeVisual.metricAggregation ??
-                            "sum"
-                          }
-                          onChange={(value) =>
-                            handleVisualChange({
-                              comparisonAggregation: (value ?? undefined) as
-                                | QueryConfigMetric["aggregation"]
-                                | undefined,
-                            })
-                          }
-                        />
-                      )}
-                      <NumberInput
-                        label="Row limit"
-                        value={activeVisual.limit ?? 100}
-                        onChange={(value) =>
-                          handleVisualChange({
-                            limit:
-                              typeof value === "number" && Number.isFinite(value) && value > 0
-                                ? Math.round(value)
-                                : null,
-                          })
-                        }
-                        min={10}
-                        max={10000}
-                        step={10}
-                      />
-                      <Button
-                        variant="light"
-                        leftSection={<IconPlayerPlay size={14} />}
-                        onClick={runVisualAnalytics}
-                        loading={isVisualQueryRunning || isAnalyticsMutationPending}
-                      >
-                        Re-run analytics
-                      </Button>
-                      {visualWarnings.length > 0 && (
-                        <Stack gap={4}>
-                          {visualWarnings.map((warning, index) => (
-                            <Text key={`visual-warning-${index}`} c="orange" fz="xs">
-                              {warning}
-                            </Text>
-                          ))}
-                        </Stack>
-                      )}
-                      {visualQueryError && (
-                        <Text c="red" fz="sm">
-                          {visualQueryError}
-                        </Text>
-                      )}
-                    </Stack>
-                    <Paper
-                      withBorder
-                      radius="lg"
-                      shadow="xs"
-                      style={{
-                        flex: 1,
-                        minHeight: 260,
-                        minWidth: 320,
-                        padding: 12,
-                        background: "#ffffff",
-                      }}
-                    >
-                      {isVisualQueryRunning ? (
-                        <Flex align="center" justify="center" direction="column" h={240} gap="xs">
-                          <Loader size="sm" color="blue" />
-                          <Text c="dimmed" fz="sm">
-                            Running analytics query...
-                          </Text>
-                        </Flex>
-                      ) : hasChartData ? (
-                        <ResponsiveContainer width="100%" height={240}>
-                          {isPieVisualization ? (
-                            <PieChart>
-                              <RechartsTooltip
-                                formatter={tooltipFormatter}
-                                labelFormatter={(label) => `${dimensionLabel}: ${label}`}
-                              />
-                              <Legend />
-                              <Pie
-                                data={chartData}
-                                dataKey="primary"
-                                nameKey="dimension"
-                                innerRadius={48}
-                                outerRadius={90}
-                                paddingAngle={2}
-                              >
-                                {chartData.map((entry, index) => (
-                                  <Cell
-                                    key={`pie-${entry.dimension}-${index}`}
-                                    fill={pieColors[index % pieColors.length]}
-                                  />
-                                ))}
-                              </Pie>
-                            </PieChart>
-                          ) : (
-                            <ComposedChart data={chartData}>
-                              <CartesianGrid stroke="#f1f3f5" strokeDasharray="4 4" />
-                              <XAxis dataKey="dimension" tick={{ fontSize: 12 }} />
-                              <YAxis yAxisId="left" tick={{ fontSize: 12 }} stroke="#1c7ed6" />
-                              {chartComparisonAlias && !isStackedVisualization && (
-                                <YAxis
-                                  yAxisId="right"
-                                  orientation="right"
-                                  tick={{ fontSize: 12 }}
-                                  stroke="#2b8a3e"
-                                />
-                              )}
-                              <RechartsTooltip
-                                formatter={tooltipFormatter}
-                                labelFormatter={(label) => `${dimensionLabel}: ${label}`}
-                              />
-                              <Legend />
-                              {renderPrimarySeries()}
-                              {renderComparisonSeries()}
-                            </ComposedChart>
-                          )}
-                        </ResponsiveContainer>
-                      ) : (
-                        <Flex align="center" justify="center" h={240}>
-                          <Text c="dimmed" fz="sm" ta="center">
-                            {!activeVisual.metric || !activeVisual.dimension
-                              ? "Select a metric and dimension to render this visualization."
-                              : visualRows.length === 0
-                              ? "Run the analysis to populate this visualization."
-                              : "No chartable datapoints were returned for the selected fields."}
-                          </Text>
-                        </Flex>
-                      )}
-                    </Paper>
-                  </Flex>
-                </Paper>
-
-                <Paper p="md" radius="lg" shadow="xs" withBorder>
-                  <Group justify="space-between" mb="md">
-                    <Group gap="xs" align="center">
-                      <ThemeIcon variant="light" color="teal">
-                        <IconMessage2 size={18} />
-                      </ThemeIcon>
-                      <Text fw={600}>Metrics spotlight</Text>
-                    </Group>
-                    <Button
-                      variant="light"
-                      size="sm"
-                      leftSection={<IconPlus size={14} />}
-                      onClick={handleAddSpotlight}
-                      disabled={metricAliasOptions.length === 0}
-                    >
-                      Add card
-                    </Button>
-                  </Group>
-                  <Stack gap="sm">
-                    {metricAliasOptions.length === 0 && (
-                      <Text c="dimmed" fz="sm">
-                        Select numeric fields in the data preview to enable spotlight cards.
-                      </Text>
-                    )}
-                    {draft.metricsSpotlight.length === 0 ? (
-                      <Text c="dimmed" fz="sm">
-                        Highlight critical KPIs by adding spotlight cards. These surface alongside your
-                        analytics visualization.
-                      </Text>
-                    ) : (
-                      draft.metricsSpotlight.map((spotlight, index) => (
-                        <Card
-                          key={`${spotlight.metric ?? `spotlight-${index}`}-${index}`}
-                          withBorder
-                          radius="md"
-                          padding="md"
-                        >
-                          <Stack gap="sm">
-                            <Group justify="space-between" align="center">
-                              <Text fw={600} fz="sm">
-                                Spotlight {index + 1}
-                              </Text>
-                              <ActionIcon
-                                variant="subtle"
-                                color="red"
-                                aria-label="Remove spotlight"
-                                onClick={() => handleRemoveSpotlight(index)}
-                              >
-                                <IconTrash size={16} />
-                              </ActionIcon>
-                            </Group>
-                            <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="sm">
-                              <Select
-                                label="Metric"
-                                data={metricAliasOptions}
-                                value={spotlight.metric ?? null}
-                                onChange={(value) => {
-                                  if (value) {
-                                    handleSpotlightChange(index, { metric: value });
-                                  }
-                                }}
-                                searchable
-                                required
-                              />
-                              <TextInput
-                                label="Display label"
-                                value={spotlight.label ?? ""}
-                                onChange={(event) =>
-                                  handleSpotlightChange(index, { label: event.currentTarget.value })
-                                }
-                                placeholder={
-                                  spotlight.metric ? getColumnLabel(spotlight.metric) : "Metric label"
-                                }
-                              />
-                              <Select
-                                label="Format"
-                                data={SPOTLIGHT_FORMAT_OPTIONS}
-                                value={spotlight.format ?? "number"}
-                                onChange={(value) => {
-                                  const normalized =
-                                    (value ?? "number") as MetricSpotlightDefinitionDto["format"];
-                                  const patch: Partial<MetricSpotlightDefinitionDto> = { format: normalized };
-                                  if (normalized === "currency" && !spotlight.currency) {
-                                    patch.currency = SPOTLIGHT_CURRENCY_OPTIONS[0]?.value ?? "USD";
-                                  } else if (normalized !== "currency") {
-                                    patch.currency = undefined;
-                                  }
-                                  handleSpotlightChange(index, patch);
-                                }}
-                              />
-                              {spotlight.format === "currency" && (
-                                <Select
-                                  label="Currency"
-                                  data={SPOTLIGHT_CURRENCY_OPTIONS}
-                                  value={spotlight.currency ?? SPOTLIGHT_CURRENCY_OPTIONS[0]?.value ?? "USD"}
-                                  onChange={(value) =>
-                                    handleSpotlightChange(index, {
-                                      currency: value ?? undefined,
-                                    })
-                                  }
-                                />
-                              )}
-                            </SimpleGrid>
-                            <Flex gap="sm" wrap="wrap">
-                              <NumberInput
-                                label="Target"
-                                value={spotlight.target ?? undefined}
-                                onChange={(value) =>
-                                  handleSpotlightChange(index, {
-                                    target:
-                                      typeof value === "number" && Number.isFinite(value)
-                                        ? value
-                                        : undefined,
-                                  })
-                                }
-                                allowDecimal
-                                placeholder="Optional target"
-                                style={{ flex: 1, minWidth: 160 }}
-                              />
-                            </Flex>
-                            <Group justify="flex-end">
-                              <Button
-                                size="xs"
-                                variant="subtle"
-                                leftSection={<IconLayoutGrid size={14} />}
-                                onClick={() => handleAddSpotlightToDashboard(index)}
-                                disabled={!isTemplatePersisted || !spotlight.metric}
-                              >
-                                Add to dashboard
-                              </Button>
-                            </Group>
-                          </Stack>
-                        </Card>
-                      ))
-                    )}
-                  </Stack>
-                </Paper>
-
-                <Paper p="md" radius="lg" shadow="xs" withBorder>
-                  <Stack gap="md">
-                    <Group justify="space-between" align="center">
-                      <Group gap="xs" align="center">
-                        <ThemeIcon variant="light" color="gray">
-                          <IconAdjustments size={16} />
-                        </ThemeIcon>
-                        <Text fw={600}>Query inspector</Text>
-                      </Group>
-                      <Badge variant="light">Diagnostics</Badge>
-                    </Group>
-                    <Stack gap="xs">
-                      <Text fw={500} fz="sm">
-                        Preview query
-                      </Text>
-                      <Textarea
-                        value={
-                          previewSql ?? "Run data preview to capture the SQL backing the table."
-                        }
-                        readOnly
-                        autosize
-                        minRows={3}
-                        styles={{ input: { fontFamily: "monospace" } }}
-                      />
-                    </Stack>
-                    <Stack gap="xs">
-                      <Text fw={500} fz="sm">
-                        Visuals & analytics query
-                      </Text>
-                      <Textarea
-                        value={
-                          visualSql ?? "Run analytics to capture the SQL powering the chart."
-                        }
-                        readOnly
-                        autosize
-                        minRows={3}
-                        styles={{ input: { fontFamily: "monospace" } }}
-                      />
-                    </Stack>
-                  </Stack>
-                </Paper>
-
-                <Paper p="md" radius="lg" shadow="xs" withBorder>
-                  <Group justify="space-between" mb="md">
-                    <Group gap="xs">
-                      <ThemeIcon variant="light" color="indigo">
-                        <IconAdjustments size={18} />
-                      </ThemeIcon>
-                      <Text fw={600}>Filters & distribution</Text>
-                    </Group>
-                  </Group>
-                  <Stack gap="sm">
-                    {filterFieldOptions.length === 0 &&
-                    (!rootFilterGroup || rootFilterGroup.childOrder.length === 0) ? (
-                      <Text c="dimmed" fz="sm">
-                        Select at least one data model to start defining filter conditions.
-                      </Text>
-                    ) : rootFilterGroup ? (
-                      renderFilterGroup(rootFilterGroup)
-                    ) : (
-                      <Text c="dimmed" fz="sm">
-                        No filters applied. Add a condition to focus your preview.
-                      </Text>
-                    )}
-                    {draft.rawFilterSql.length > 0 && (
-                      <Stack gap="xs">
-                        {draft.rawFilterSql.map((entry, index) => (
-                          <Alert
-                            key={`raw-filter-${index}`}
-                            color="blue"
-                            variant="light"
-                            title="Custom SQL filter"
-                          >
-                            <Group justify="space-between" align="flex-start" gap="sm">
-                              <Text fz="xs" style={{ whiteSpace: "pre-wrap" }}>
-                                {entry}
-                              </Text>
-                              <ActionIcon
-                                variant="subtle"
-                                color="red"
-                                onClick={() => handleRemoveRawSql(index)}
-                                aria-label="Remove SQL filter"
-                              >
-                                <IconTrash size={16} />
-                              </ActionIcon>
-                            </Group>
-                          </Alert>
-                        ))}
-                      </Stack>
-                    )}
-                    <Divider my="sm" />
-                    <Stack gap="xs">
-                      <Group justify="space-between" align="center">
-                        <Text fw={600} fz="sm">
-                          Grouping
-                        </Text>
-                        <Button
-                          variant="subtle"
-                          size="xs"
-                          leftSection={<IconPlus size={12} />}
-                          onClick={handleAddGroupingRule}
-                          disabled={filterFieldOptions.length === 0}
-                        >
-                          Add group field
-                        </Button>
-                      </Group>
-                      {draft.previewGrouping.length === 0 ? (
-                        <Text c="dimmed" fz="sm">
-                          {filterFieldOptions.length === 0
-                            ? "Select data models to enable grouping."
-                            : "No grouping applied. Add a field to aggregate rows."}
-                        </Text>
-                      ) : (
-                        draft.previewGrouping.map((group) => {
-                          const optionKey =
-                            group.source === "derived"
-                              ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, group.fieldId)
-                              : group.modelId
-                              ? buildFilterOptionKey(group.modelId, group.fieldId)
-                              : "";
-                          const option = optionKey ? filterFieldLookup.get(optionKey) : undefined;
-                          const supportsBucket = option?.field.type === "date";
-                          return (
-                            <Paper key={group.id} withBorder radius="md" p="sm">
-                              <Stack gap="xs">
-                                <Group align="flex-end" gap="sm" wrap="wrap">
-                                  <Select
-                                    label="Field"
-                                    data={filterFieldOptions.map((candidate) => ({
-                                      value: candidate.value,
-                                      label: candidate.label,
-                                    }))}
-                                    value={option ? optionKey : null}
-                                    onChange={(value) => handleGroupingFieldChange(group.id, value)}
-                                    searchable
-                                    placeholder="Select field"
-                                    style={{ flex: 1, minWidth: 220 }}
-                                  />
-                                  {supportsBucket && (
-                                    <Select
-                                      label="Bucket"
-                                      data={bucketOptions}
-                                      value={group.bucket ?? null}
-                                      onChange={(value) =>
-                                        handleGroupingBucketChange(
-                                          group.id,
-                                          (value as TimeBucket | null | undefined) ?? null,
-                                        )
-                                      }
-                                      placeholder="No bucketing"
-                                      clearable
-                                      style={{ width: 180 }}
-                                    />
-                                  )}
-                                  <ActionIcon
-                                    variant="subtle"
-                                    color="red"
-                                    onClick={() => handleRemoveGroupingRule(group.id)}
-                                    aria-label="Remove grouping"
-                                  >
-                                    <IconTrash size={16} />
-                                  </ActionIcon>
-                                </Group>
-                              </Stack>
-                            </Paper>
-                          );
-                        })
-                      )}
-                    </Stack>
-                    <Divider my="sm" />
-                    <Stack gap="xs">
-                      <Group justify="space-between" align="center">
-                        <Text fw={600} fz="sm">
-                          Aggregations
-                        </Text>
-                        <Button
-                          variant="subtle"
-                          size="xs"
-                          leftSection={<IconPlus size={12} />}
-                          onClick={handleAddAggregationRule}
-                          disabled={numericFilterFieldOptions.length === 0}
-                        >
-                          Add aggregation
-                        </Button>
-                      </Group>
-                      {draft.previewAggregations.length === 0 ? (
-                        <Text c="dimmed" fz="sm">
-                          {numericFilterFieldOptions.length === 0
-                            ? "Select numeric fields in the preview to enable aggregations."
-                            : "No aggregated metrics defined."}
-                        </Text>
-                      ) : (
-                        draft.previewAggregations.map((aggregation) => {
-                          const optionKey =
-                            aggregation.source === "derived"
-                              ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, aggregation.fieldId)
-                              : aggregation.modelId
-                              ? buildFilterOptionKey(aggregation.modelId, aggregation.fieldId)
-                              : "";
-                          const option = optionKey ? filterFieldLookup.get(optionKey) : undefined;
-                          return (
-                            <Paper key={aggregation.id} withBorder radius="md" p="sm">
-                              <Stack gap="xs">
-                                <Group align="flex-end" gap="sm" wrap="wrap">
-                                  <Select
-                                    label="Field"
-                                    data={numericFilterFieldOptions.map((candidate) => ({
-                                      value: candidate.value,
-                                      label: candidate.label,
-                                    }))}
-                                    value={option ? optionKey : null}
-                                    onChange={(value) =>
-                                      handleAggregationFieldChange(aggregation.id, value)
-                                    }
-                                    searchable
-                                    placeholder="Select field"
-                                    style={{ flex: 1, minWidth: 220 }}
-                                  />
-                                  <Select
-                                    label="Aggregation"
-                                    data={METRIC_AGGREGATIONS.map((value) => ({
-                                      value,
-                                      label: AGGREGATION_LABELS[value],
-                                    }))}
-                                    value={aggregation.aggregation}
-                                    onChange={(value) =>
-                                      handleAggregationTypeChange(
-                                        aggregation.id,
-                                        (value as PreviewAggregationRule["aggregation"]) ?? "sum",
-                                      )
-                                    }
-                                    style={{ width: 180 }}
-                                  />
-                                  <TextInput
-                                    label="Alias"
-                                    value={aggregation.alias ?? ""}
-                                    onChange={(event) =>
-                                      handleAggregationAliasChange(
-                                        aggregation.id,
-                                        event.currentTarget.value,
-                                      )
-                                    }
-                                    placeholder="Optional label"
-                                    style={{ flex: 1, minWidth: 160 }}
-                                  />
-                                  <ActionIcon
-                                    variant="subtle"
-                                    color="red"
-                                    onClick={() => handleRemoveAggregationRule(aggregation.id)}
-                                    aria-label="Remove aggregation"
-                                  >
-                                    <IconTrash size={16} />
-                                  </ActionIcon>
-                                </Group>
-                              </Stack>
-                            </Paper>
-                          );
-                        })
-                      )}
-                    </Stack>
-                    <Divider my="sm" />
-                    <Stack gap="xs">
-                      <Group justify="space-between" align="center">
-                        <Text fw={600} fz="sm">
-                          Group filters (HAVING)
-                        </Text>
-                        <Button
-                          variant="subtle"
-                          size="xs"
-                          leftSection={<IconPlus size={12} />}
-                          onClick={handleAddHavingRule}
-                          disabled={draft.previewAggregations.length === 0}
-                        >
-                          Add group filter
-                        </Button>
-                      </Group>
-                      {draft.previewHaving.length === 0 ? (
-                        <Text c="dimmed" fz="sm">
-                          {draft.previewAggregations.length === 0
-                            ? "Add an aggregation to enable HAVING filters."
-                            : "No HAVING filters applied."}
-                        </Text>
-                      ) : (
-                        draft.previewHaving.map((clause) => {
-                          const aggregationOptions = draft.previewAggregations.map((aggregation) => {
-                            const optionKey =
-                              aggregation.source === "derived"
-                                ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, aggregation.fieldId)
-                                : aggregation.modelId
-                                ? buildFilterOptionKey(aggregation.modelId, aggregation.fieldId)
-                                : "";
-                            const option = optionKey ? filterFieldLookup.get(optionKey) : undefined;
-                            const baseLabel = option?.label ?? aggregation.fieldId;
-                            const label = aggregation.alias && aggregation.alias.trim().length > 0
-                              ? `${aggregation.alias} (${AGGREGATION_LABELS[aggregation.aggregation]})`
-                              : `${baseLabel} (${AGGREGATION_LABELS[aggregation.aggregation]})`;
-                            return {
-                              value: aggregation.id,
-                              label,
-                            };
-                          });
-                          const numericValue =
-                            clause.value !== undefined && clause.value !== ""
-                              ? Number(clause.value)
-                              : undefined;
-                          return (
-                            <Paper key={clause.id} withBorder radius="md" p="sm">
-                              <Stack gap="xs">
-                                <Group align="flex-end" gap="sm" wrap="wrap">
-                                  <Select
-                                    label="Aggregation"
-                                    data={aggregationOptions}
-                                    value={clause.aggregationId}
-                                    onChange={(value) =>
-                                      value && handleHavingAggregationChange(clause.id, value)
-                                    }
-                                    placeholder="Select aggregation"
-                                    style={{ flex: 1, minWidth: 220 }}
-                                  />
-                                  <Select
-                                    label="Operator"
-                                    data={HAVING_OPERATOR_OPTIONS}
-                                    value={clause.operator}
-                                    onChange={(value) =>
-                                      handleHavingOperatorChange(
-                                        clause.id,
-                                        (value as PreviewHavingRule["operator"]) ?? "gt",
-                                      )
-                                    }
-                                    style={{ width: 140 }}
-                                  />
-                                  <NumberInput
-                                    label="Value"
-                                    value={
-                                      typeof numericValue === "number" && Number.isFinite(numericValue)
-                                        ? numericValue
-                                        : undefined
-                                    }
-                                    onChange={(value) =>
-                                      handleHavingValueChange(
-                                        clause.id,
-                                        value === null || value === undefined
-                                          ? ""
-                                          : String(value),
-                                      )
-                                    }
-                                    allowDecimal
-                                    w={160}
-                                  />
-                                  <ActionIcon
-                                    variant="subtle"
-                                    color="red"
-                                    onClick={() => handleRemoveHavingRule(clause.id)}
-                                    aria-label="Remove group filter"
-                                  >
-                                    <IconTrash size={16} />
-                                  </ActionIcon>
-                                </Group>
-                              </Stack>
-                            </Paper>
-                          );
-                        })
-                      )}
-                    </Stack>
-                    <Divider my="sm" />
-                    <Stack gap="xs">
-                      <Group justify="space-between" align="center">
-                        <Text fw={600} fz="sm">
-                          Preview order
-                        </Text>
-                        <Button
-                          variant="subtle"
-                          size="xs"
-                          leftSection={<IconPlus size={12} />}
-                          onClick={handleAddPreviewOrderRule}
-                          disabled={filterFieldOptions.length === 0}
-                        >
-                          Add sort rule
-                        </Button>
-                      </Group>
-                      {draft.previewOrder.length === 0 ? (
-                        <Text c="dimmed" fz="sm">
-                          No ordering applied. Rows will follow the default database ordering.
-                        </Text>
-                      ) : (
-                        draft.previewOrder.map((rule) => {
-                          const optionKey =
-                            rule.source === "derived"
-                              ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, rule.fieldId)
-                              : rule.modelId
-                              ? buildFilterOptionKey(rule.modelId, rule.fieldId)
-                              : "";
-                          const optionMissing = !optionKey || !filterFieldLookup.has(optionKey);
-                          return (
-                            <Paper key={rule.id} withBorder radius="md" p="sm">
-                              <Stack gap="xs">
-                                <Group align="flex-end" gap="sm" wrap="wrap">
-                                  <Select
-                                    label="Field"
-                                    data={filterFieldOptions.map((option) => ({
-                                      value: option.value,
-                                      label: option.label,
-                                    }))}
-                                    value={optionMissing ? null : optionKey}
-                                    onChange={(value) => handlePreviewOrderFieldChange(rule.id, value)}
-                                    placeholder="Select field"
-                                    searchable
-                                    style={{ flex: 1, minWidth: 220 }}
-                                  />
-                                  <SegmentedControl
-                                    value={rule.direction}
-                                    onChange={(value) =>
-                                      handlePreviewOrderDirectionChange(
-                                        rule.id,
-                                        (value as "asc" | "desc") ?? "asc",
-                                      )
-                                    }
-                                    data={[
-                                      { value: "asc", label: "Asc" },
-                                      { value: "desc", label: "Desc" },
-                                    ]}
-                                  />
-                                  <ActionIcon
-                                    variant="subtle"
-                                    color="red"
-                                    onClick={() => handleRemovePreviewOrderRule(rule.id)}
-                                    aria-label="Remove sort rule"
-                                  >
-                                    <IconTrash size={16} />
-                                  </ActionIcon>
-                                </Group>
-                                {optionMissing && (
-                                  <Text fz="xs" c="red">
-                                    Field is no longer available. Select another column to keep this rule.
-                                  </Text>
-                                )}
-                              </Stack>
-                            </Paper>
-                          );
-                        })
-                      )}
-                    </Stack>
-                    <Divider my="sm" />
-                    <Checkbox
-                      label="Auto-publish PDF package to leadership workspace"
-                      checked={draft.autoDistribution}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          autoDistribution: event.currentTarget.checked,
-                        }))
-                      }
-                    />
-                    <Checkbox
-                      label="Send digest to #revenue-ops Slack channel on refresh"
-                      checked={draft.notifyTeam}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          notifyTeam: event.currentTarget.checked,
-                        }))
-                      }
-                    />
-                  </Stack>
-                </Paper>
-
-                <Paper p="md" radius="lg" shadow="xs" withBorder>
+                                        )}
+                                      </Stack>
+                                      <Paper
+                                        withBorder
+                                        radius="lg"
+                                        shadow="xs"
+                                        style={{
+                                          flex: 1,
+                                          minHeight: 260,
+                                          minWidth: 320,
+                                          padding: 12,
+                                          background: "#ffffff",
+                                        }}
+                                      >
+                                        {isVisualQueryRunning ? (
+                                          <Flex align="center" justify="center" direction="column" h={240} gap="xs">
+                                            <Loader size="sm" color="blue" />
+                                            <Text c="dimmed" fz="sm">
+                                              Running analytics query...
+                                            </Text>
+                                          </Flex>
+                                        ) : hasChartData ? (
+                                          <ResponsiveContainer width="100%" height={240}>
+                                            {isPieVisualization ? (
+                                              <PieChart>
+                                                <RechartsTooltip
+                                                  formatter={tooltipFormatter}
+                                                  labelFormatter={(label) => `${dimensionLabel}: ${label}`}
+                                                />
+                                                <Legend />
+                                                <Pie
+                                                  data={chartData}
+                                                  dataKey="primary"
+                                                  nameKey="dimension"
+                                                  innerRadius={48}
+                                                  outerRadius={90}
+                                                  paddingAngle={2}
+                                                >
+                                                  {chartData.map((entry, index) => (
+                                                    <Cell
+                                                      key={`pie-${entry.dimension}-${index}`}
+                                                      fill={pieColors[index % pieColors.length]}
+                                                    />
+                                                  ))}
+                                                </Pie>
+                                              </PieChart>
+                                            ) : (
+                                              <ComposedChart data={chartData}>
+                                                <CartesianGrid stroke="#f1f3f5" strokeDasharray="4 4" />
+                                                <XAxis dataKey="dimension" tick={{ fontSize: 12 }} />
+                                                <YAxis yAxisId="left" tick={{ fontSize: 12 }} stroke="#1c7ed6" />
+                                                {chartComparisonAlias && !isStackedVisualization && (
+                                                  <YAxis
+                                                    yAxisId="right"
+                                                    orientation="right"
+                                                    tick={{ fontSize: 12 }}
+                                                    stroke="#2b8a3e"
+                                                  />
+                                                )}
+                                                <RechartsTooltip
+                                                  formatter={tooltipFormatter}
+                                                  labelFormatter={(label) => `${dimensionLabel}: ${label}`}
+                                                />
+                                                <Legend />
+                                                {renderPrimarySeries()}
+                                                {renderComparisonSeries()}
+                                              </ComposedChart>
+                                            )}
+                                          </ResponsiveContainer>
+                                        ) : (
+                                          <Flex align="center" justify="center" h={240}>
+                                            <Text c="dimmed" fz="sm" ta="center">
+                                              {!activeVisual.metric || !activeVisual.dimension
+                                                ? "Select a metric and dimension to render this visualization."
+                                                : visualRows.length === 0
+                                                ? "Run the analysis to populate this visualization."
+                                                : "No chartable datapoints were returned for the selected fields."}
+                                            </Text>
+                                          </Flex>
+                                        )}
+                                      </Paper>
+                                      </Flex>
+                                    </Collapse>
+                                  </Paper>
+                  
+                                  <Paper p="md" radius="lg" shadow="xs" withBorder>
+                                    <Group justify="space-between" mb="md">
+                                      <Group gap="xs" align="center">
+                                        <ThemeIcon variant="light" color="teal">
+                                          <IconMessage2 size={18} />
+                                        </ThemeIcon>
+                                        <Text fw={600}>Metrics spotlight</Text>
+                                      </Group>
+                                      <Group gap="xs" align="center">
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          leftSection={<IconDeviceFloppy size={12} />}
+                                          onClick={handleSaveTemplate}
+                                          loading={saveTemplateMutation.isPending}
+                                        >
+                                          Save
+                                        </Button>
+                                        <ActionIcon
+                                          size="sm"
+                                          variant="subtle"
+                                          onClick={() => toggleSection("spotlight")}
+                                          aria-label={
+                                            sectionOpen.spotlight
+                                              ? "Collapse metrics spotlight"
+                                              : "Expand metrics spotlight"
+                                          }
+                                        >
+                                          {sectionOpen.spotlight ? (
+                                            <IconChevronUp size={16} />
+                                          ) : (
+                                            <IconChevronDown size={16} />
+                                          )}
+                                        </ActionIcon>
+                                        <Button
+                                          variant="light"
+                                          size="sm"
+                                          leftSection={<IconPlus size={14} />}
+                                          onClick={handleAddSpotlight}
+                                          disabled={metricAliasOptions.length === 0}
+                                        >
+                                          Add card
+                                        </Button>
+                                      </Group>
+                                    </Group>
+                                    <Collapse in={sectionOpen.spotlight}>
+                                    <Stack gap="sm">
+                                      {metricAliasOptions.length === 0 && (
+                                        <Text c="dimmed" fz="sm">
+                                          Select numeric fields in the data preview to enable spotlight cards.
+                                        </Text>
+                                      )}
+                                      {draft.metricsSpotlight.length === 0 ? (
+                                        <Text c="dimmed" fz="sm">
+                                          Highlight critical KPIs by adding spotlight cards. These surface alongside your
+                                          analytics visualization.
+                                        </Text>
+                                      ) : (
+                                        draft.metricsSpotlight.map((spotlight, index) => (
+                                          <Card
+                                            key={`${spotlight.metric ?? `spotlight-${index}`}-${index}`}
+                                            withBorder
+                                            radius="md"
+                                            padding="md"
+                                          >
+                                            <Stack gap="sm">
+                                              <Group justify="space-between" align="center">
+                                                <Text fw={600} fz="sm">
+                                                  Spotlight {index + 1}
+                                                </Text>
+                                                <ActionIcon
+                                                  variant="subtle"
+                                                  color="red"
+                                                  aria-label="Remove spotlight"
+                                                  onClick={() => handleRemoveSpotlight(index)}
+                                                >
+                                                  <IconTrash size={16} />
+                                                </ActionIcon>
+                                              </Group>
+                                              <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="sm">
+                                                <Select
+                                                  label="Metric"
+                                                  data={metricAliasOptions}
+                                                  value={spotlight.metric ?? null}
+                                                  onChange={(value) => {
+                                                    if (value) {
+                                                      handleSpotlightChange(index, { metric: value });
+                                                    }
+                                                  }}
+                                                  searchable
+                                                  required
+                                                />
+                                                <TextInput
+                                                  label="Display label"
+                                                  value={spotlight.label ?? ""}
+                                                  onChange={(event) =>
+                                                    handleSpotlightChange(index, { label: event.currentTarget.value })
+                                                  }
+                                                  placeholder={
+                                                    spotlight.metric ? getColumnLabel(spotlight.metric) : "Metric label"
+                                                  }
+                                                />
+                                                <Select
+                                                  label="Format"
+                                                  data={SPOTLIGHT_FORMAT_OPTIONS}
+                                                  value={spotlight.format ?? "number"}
+                                                  onChange={(value) => {
+                                                    const normalized =
+                                                      (value ?? "number") as MetricSpotlightDefinitionDto["format"];
+                                                    const patch: Partial<MetricSpotlightDefinitionDto> = { format: normalized };
+                                                    if (normalized === "currency" && !spotlight.currency) {
+                                                      patch.currency = SPOTLIGHT_CURRENCY_OPTIONS[0]?.value ?? "USD";
+                                                    } else if (normalized !== "currency") {
+                                                      patch.currency = undefined;
+                                                    }
+                                                    handleSpotlightChange(index, patch);
+                                                  }}
+                                                />
+                                                {spotlight.format === "currency" && (
+                                                  <Select
+                                                    label="Currency"
+                                                    data={SPOTLIGHT_CURRENCY_OPTIONS}
+                                                    value={spotlight.currency ?? SPOTLIGHT_CURRENCY_OPTIONS[0]?.value ?? "USD"}
+                                                    onChange={(value) =>
+                                                      handleSpotlightChange(index, {
+                                                        currency: value ?? undefined,
+                                                      })
+                                                    }
+                                                  />
+                                                )}
+                                              </SimpleGrid>
+                                              <Flex gap="sm" wrap="wrap">
+                                                <NumberInput
+                                                  label="Target"
+                                                  value={spotlight.target ?? undefined}
+                                                  onChange={(value) =>
+                                                    handleSpotlightChange(index, {
+                                                      target:
+                                                        typeof value === "number" && Number.isFinite(value)
+                                                          ? value
+                                                          : undefined,
+                                                    })
+                                                  }
+                                                  allowDecimal
+                                                  placeholder="Optional target"
+                                                  style={{ flex: 1, minWidth: 160 }}
+                                                />
+                                              </Flex>
+                                              <Group justify="flex-end">
+                                                <Button
+                                                  size="xs"
+                                                  variant="subtle"
+                                                  leftSection={<IconLayoutGrid size={14} />}
+                                                  onClick={() => handleAddSpotlightToDashboard(index)}
+                                                  disabled={!isTemplatePersisted || !spotlight.metric}
+                                                >
+                                                  Add to dashboard
+                                                </Button>
+                                              </Group>
+                                            </Stack>
+                                          </Card>
+                                        ))
+                                      )}
+                                    </Stack>
+                                    </Collapse>
+                                  </Paper>
+                  
+                                  <Paper p="md" radius="lg" shadow="xs" withBorder>
+                                    <Stack gap="md">
+                                      <Group justify="space-between" align="center">
+                                        <Group gap="xs" align="center">
+                                          <ThemeIcon variant="light" color="gray">
+                                            <IconAdjustments size={16} />
+                                          </ThemeIcon>
+                                          <Text fw={600}>Query inspector</Text>
+                                        </Group>
+                                        <Group gap="xs" align="center">
+                                          <Badge variant="light">Diagnostics</Badge>
+                                          <Button
+                                            size="xs"
+                                            variant="light"
+                                            leftSection={<IconDeviceFloppy size={12} />}
+                                            onClick={handleSaveTemplate}
+                                            loading={saveTemplateMutation.isPending}
+                                          >
+                                            Save
+                                          </Button>
+                                          <ActionIcon
+                                            size="sm"
+                                            variant="subtle"
+                                            onClick={() => toggleSection("queryInspector")}
+                                            aria-label={
+                                              sectionOpen.queryInspector
+                                                ? "Collapse query inspector"
+                                                : "Expand query inspector"
+                                            }
+                                          >
+                                            {sectionOpen.queryInspector ? (
+                                              <IconChevronUp size={16} />
+                                            ) : (
+                                              <IconChevronDown size={16} />
+                                            )}
+                                          </ActionIcon>
+                                        </Group>
+                                      </Group>
+                                      <Collapse in={sectionOpen.queryInspector}>
+                                      <Stack gap="xs">
+                                        <Text fw={500} fz="sm">
+                                          Preview query
+                                        </Text>
+                                        <Textarea
+                                          value={
+                                            previewSql ?? "Run data preview to capture the SQL backing the table."
+                                          }
+                                          readOnly
+                                          autosize
+                                          minRows={3}
+                                          styles={{ input: { fontFamily: "monospace" } }}
+                                        />
+                                      </Stack>
+                                      <Stack gap="xs">
+                                        <Text fw={500} fz="sm">
+                                          Visuals & analytics query
+                                        </Text>
+                                        <Textarea
+                                          value={
+                                            visualSql ?? "Run analytics to capture the SQL powering the chart."
+                                          }
+                                          readOnly
+                                          autosize
+                                          minRows={3}
+                                          styles={{ input: { fontFamily: "monospace" } }}
+                                        />
+                                      </Stack>
+                                      </Collapse>
+                                    </Stack>
+                                  </Paper>
+                  
+                                  <Paper p="md" radius="lg" shadow="xs" withBorder>
+                                    <Group justify="space-between" mb="md">
+                                      <Group gap="xs">
+                                        <ThemeIcon variant="light" color="indigo">
+                                          <IconAdjustments size={18} />
+                                        </ThemeIcon>
+                                        <Text fw={600}>Filters & distribution</Text>
+                                      </Group>
+                                      <Group gap="xs" align="center">
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          leftSection={<IconDeviceFloppy size={12} />}
+                                          onClick={handleSaveTemplate}
+                                          loading={saveTemplateMutation.isPending}
+                                        >
+                                          Save
+                                        </Button>
+                                        <ActionIcon
+                                          size="sm"
+                                          variant="subtle"
+                                          onClick={() => toggleSection("filters")}
+                                          aria-label={
+                                            sectionOpen.filters
+                                              ? "Collapse filters and distribution"
+                                              : "Expand filters and distribution"
+                                          }
+                                        >
+                                          {sectionOpen.filters ? (
+                                            <IconChevronUp size={16} />
+                                          ) : (
+                                            <IconChevronDown size={16} />
+                                          )}
+                                        </ActionIcon>
+                                      </Group>
+                                    </Group>
+                                    <Collapse in={sectionOpen.filters}>
+                                    <Stack gap="sm">
+                                      {filterFieldOptions.length === 0 &&
+                                      (!rootFilterGroup || rootFilterGroup.childOrder.length === 0) ? (
+                                        <Text c="dimmed" fz="sm">
+                                          Select at least one data model to start defining filter conditions.
+                                        </Text>
+                                      ) : rootFilterGroup ? (
+                                        renderFilterGroup(rootFilterGroup)
+                                      ) : (
+                                        <Text c="dimmed" fz="sm">
+                                          No filters applied. Add a condition to focus your preview.
+                                        </Text>
+                                      )}
+                                      {draft.rawFilterSql.length > 0 && (
+                                        <Stack gap="xs">
+                                          {draft.rawFilterSql.map((entry, index) => (
+                                            <Alert
+                                              key={`raw-filter-${index}`}
+                                              color="blue"
+                                              variant="light"
+                                              title="Custom SQL filter"
+                                            >
+                                              <Group justify="space-between" align="flex-start" gap="sm">
+                                                <Text fz="xs" style={{ whiteSpace: "pre-wrap" }}>
+                                                  {entry}
+                                                </Text>
+                                                <ActionIcon
+                                                  variant="subtle"
+                                                  color="red"
+                                                  onClick={() => handleRemoveRawSql(index)}
+                                                  aria-label="Remove SQL filter"
+                                                >
+                                                  <IconTrash size={16} />
+                                                </ActionIcon>
+                                              </Group>
+                                            </Alert>
+                                          ))}
+                                        </Stack>
+                                      )}
+                                      <Divider my="sm" />
+                                      <Stack gap="xs">
+                                        <Group justify="space-between" align="center">
+                                          <Text fw={600} fz="sm">
+                                            Grouping
+                                          </Text>
+                                          <Button
+                                            variant="subtle"
+                                            size="xs"
+                                            leftSection={<IconPlus size={12} />}
+                                            onClick={handleAddGroupingRule}
+                                            disabled={filterFieldOptions.length === 0}
+                                          >
+                                            Add group field
+                                          </Button>
+                                        </Group>
+                                        {draft.previewGrouping.length === 0 ? (
+                                          <Text c="dimmed" fz="sm">
+                                            {filterFieldOptions.length === 0
+                                              ? "Select data models to enable grouping."
+                                              : "No grouping applied. Add a field to aggregate rows."}
+                                          </Text>
+                                        ) : (
+                                          draft.previewGrouping.map((group) => {
+                                            const optionKey =
+                                              group.source === "derived"
+                                                ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, group.fieldId)
+                                                : group.modelId
+                                                ? buildFilterOptionKey(group.modelId, group.fieldId)
+                                                : "";
+                                            const option = optionKey ? filterFieldLookup.get(optionKey) : undefined;
+                                            const supportsBucket = option?.field.type === "date";
+                                            return (
+                                              <Paper key={group.id} withBorder radius="md" p="sm">
+                                                <Stack gap="xs">
+                                                  <Group align="flex-end" gap="sm" wrap="wrap">
+                                                    <Select
+                                                      label="Field"
+                                                      data={filterFieldOptions.map((candidate) => ({
+                                                        value: candidate.value,
+                                                        label: candidate.label,
+                                                      }))}
+                                                      value={option ? optionKey : null}
+                                                      onChange={(value) => handleGroupingFieldChange(group.id, value)}
+                                                      searchable
+                                                      placeholder="Select field"
+                                                      style={{ flex: 1, minWidth: 220 }}
+                                                    />
+                                                    {supportsBucket && (
+                                                      <Select
+                                                        label="Bucket"
+                                                        data={bucketOptions}
+                                                        value={group.bucket ?? null}
+                                                        onChange={(value) =>
+                                                          handleGroupingBucketChange(
+                                                            group.id,
+                                                            (value as TimeBucket | null | undefined) ?? null,
+                                                          )
+                                                        }
+                                                        placeholder="No bucketing"
+                                                        clearable
+                                                        style={{ width: 180 }}
+                                                      />
+                                                    )}
+                                                    <ActionIcon
+                                                      variant="subtle"
+                                                      color="red"
+                                                      onClick={() => handleRemoveGroupingRule(group.id)}
+                                                      aria-label="Remove grouping"
+                                                    >
+                                                      <IconTrash size={16} />
+                                                    </ActionIcon>
+                                                  </Group>
+                                                </Stack>
+                                              </Paper>
+                                            );
+                                          })
+                                        )}
+                                      </Stack>
+                                      <Divider my="sm" />
+                                      <Stack gap="xs">
+                                        <Group justify="space-between" align="center">
+                                          <Text fw={600} fz="sm">
+                                            Aggregations
+                                          </Text>
+                                          <Button
+                                            variant="subtle"
+                                            size="xs"
+                                            leftSection={<IconPlus size={12} />}
+                                            onClick={handleAddAggregationRule}
+                                            disabled={numericFilterFieldOptions.length === 0}
+                                          >
+                                            Add aggregation
+                                          </Button>
+                                        </Group>
+                                        {draft.previewAggregations.length === 0 ? (
+                                          <Text c="dimmed" fz="sm">
+                                            {numericFilterFieldOptions.length === 0
+                                              ? "Select numeric fields in the preview to enable aggregations."
+                                              : "No aggregated metrics defined."}
+                                          </Text>
+                                        ) : (
+                                          draft.previewAggregations.map((aggregation) => {
+                                            const optionKey =
+                                              aggregation.source === "derived"
+                                                ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, aggregation.fieldId)
+                                                : aggregation.modelId
+                                                ? buildFilterOptionKey(aggregation.modelId, aggregation.fieldId)
+                                                : "";
+                                            const option = optionKey ? filterFieldLookup.get(optionKey) : undefined;
+                                            return (
+                                              <Paper key={aggregation.id} withBorder radius="md" p="sm">
+                                                <Stack gap="xs">
+                                                  <Group align="flex-end" gap="sm" wrap="wrap">
+                                                    <Select
+                                                      label="Field"
+                                                      data={numericFilterFieldOptions.map((candidate) => ({
+                                                        value: candidate.value,
+                                                        label: candidate.label,
+                                                      }))}
+                                                      value={option ? optionKey : null}
+                                                      onChange={(value) =>
+                                                        handleAggregationFieldChange(aggregation.id, value)
+                                                      }
+                                                      searchable
+                                                      placeholder="Select field"
+                                                      style={{ flex: 1, minWidth: 220 }}
+                                                    />
+                                                    <Select
+                                                      label="Aggregation"
+                                                      data={METRIC_AGGREGATIONS.map((value) => ({
+                                                        value,
+                                                        label: AGGREGATION_LABELS[value],
+                                                      }))}
+                                                      value={aggregation.aggregation}
+                                                      onChange={(value) =>
+                                                        handleAggregationTypeChange(
+                                                          aggregation.id,
+                                                          (value as PreviewAggregationRule["aggregation"]) ?? "sum",
+                                                        )
+                                                      }
+                                                      style={{ width: 180 }}
+                                                    />
+                                                    <TextInput
+                                                      label="Alias"
+                                                      value={aggregation.alias ?? ""}
+                                                      onChange={(event) =>
+                                                        handleAggregationAliasChange(
+                                                          aggregation.id,
+                                                          event.currentTarget.value,
+                                                        )
+                                                      }
+                                                      placeholder="Optional label"
+                                                      style={{ flex: 1, minWidth: 160 }}
+                                                    />
+                                                    <ActionIcon
+                                                      variant="subtle"
+                                                      color="red"
+                                                      onClick={() => handleRemoveAggregationRule(aggregation.id)}
+                                                      aria-label="Remove aggregation"
+                                                    >
+                                                      <IconTrash size={16} />
+                                                    </ActionIcon>
+                                                  </Group>
+                                                </Stack>
+                                              </Paper>
+                                            );
+                                          })
+                                        )}
+                                      </Stack>
+                                      <Divider my="sm" />
+                                      <Stack gap="xs">
+                                        <Group justify="space-between" align="center">
+                                          <Text fw={600} fz="sm">
+                                            Group filters (HAVING)
+                                          </Text>
+                                          <Button
+                                            variant="subtle"
+                                            size="xs"
+                                            leftSection={<IconPlus size={12} />}
+                                            onClick={handleAddHavingRule}
+                                            disabled={draft.previewAggregations.length === 0}
+                                          >
+                                            Add group filter
+                                          </Button>
+                                        </Group>
+                                        {draft.previewHaving.length === 0 ? (
+                                          <Text c="dimmed" fz="sm">
+                                            {draft.previewAggregations.length === 0
+                                              ? "Add an aggregation to enable HAVING filters."
+                                              : "No HAVING filters applied."}
+                                          </Text>
+                                        ) : (
+                                          draft.previewHaving.map((clause) => {
+                                            const aggregationOptions = draft.previewAggregations.map((aggregation) => {
+                                              const optionKey =
+                                                aggregation.source === "derived"
+                                                  ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, aggregation.fieldId)
+                                                  : aggregation.modelId
+                                                  ? buildFilterOptionKey(aggregation.modelId, aggregation.fieldId)
+                                                  : "";
+                                              const option = optionKey ? filterFieldLookup.get(optionKey) : undefined;
+                                              const baseLabel = option?.label ?? aggregation.fieldId;
+                                              const label = aggregation.alias && aggregation.alias.trim().length > 0
+                                                ? `${aggregation.alias} (${AGGREGATION_LABELS[aggregation.aggregation]})`
+                                                : `${baseLabel} (${AGGREGATION_LABELS[aggregation.aggregation]})`;
+                                              return {
+                                                value: aggregation.id,
+                                                label,
+                                              };
+                                            });
+                                            const numericValue =
+                                              clause.value !== undefined && clause.value !== ""
+                                                ? Number(clause.value)
+                                                : undefined;
+                                            return (
+                                              <Paper key={clause.id} withBorder radius="md" p="sm">
+                                                <Stack gap="xs">
+                                                  <Group align="flex-end" gap="sm" wrap="wrap">
+                                                    <Select
+                                                      label="Aggregation"
+                                                      data={aggregationOptions}
+                                                      value={clause.aggregationId}
+                                                      onChange={(value) =>
+                                                        value && handleHavingAggregationChange(clause.id, value)
+                                                      }
+                                                      placeholder="Select aggregation"
+                                                      style={{ flex: 1, minWidth: 220 }}
+                                                    />
+                                                    <Select
+                                                      label="Operator"
+                                                      data={HAVING_OPERATOR_OPTIONS}
+                                                      value={clause.operator}
+                                                      onChange={(value) =>
+                                                        handleHavingOperatorChange(
+                                                          clause.id,
+                                                          (value as PreviewHavingRule["operator"]) ?? "gt",
+                                                        )
+                                                      }
+                                                      style={{ width: 140 }}
+                                                    />
+                                                    <NumberInput
+                                                      label="Value"
+                                                      value={
+                                                        typeof numericValue === "number" && Number.isFinite(numericValue)
+                                                          ? numericValue
+                                                          : undefined
+                                                      }
+                                                      onChange={(value) =>
+                                                        handleHavingValueChange(
+                                                          clause.id,
+                                                          value === null || value === undefined
+                                                            ? ""
+                                                            : String(value),
+                                                        )
+                                                      }
+                                                      allowDecimal
+                                                      w={160}
+                                                    />
+                                                    <ActionIcon
+                                                      variant="subtle"
+                                                      color="red"
+                                                      onClick={() => handleRemoveHavingRule(clause.id)}
+                                                      aria-label="Remove group filter"
+                                                    >
+                                                      <IconTrash size={16} />
+                                                    </ActionIcon>
+                                                  </Group>
+                                                </Stack>
+                                              </Paper>
+                                            );
+                                          })
+                                        )}
+                                      </Stack>
+                                      <Divider my="sm" />
+                                      <Stack gap="xs">
+                                        <Group justify="space-between" align="center">
+                                          <Text fw={600} fz="sm">
+                                            Preview order
+                                          </Text>
+                                          <Button
+                                            variant="subtle"
+                                            size="xs"
+                                            leftSection={<IconPlus size={12} />}
+                                            onClick={handleAddPreviewOrderRule}
+                                            disabled={filterFieldOptions.length === 0}
+                                          >
+                                            Add sort rule
+                                          </Button>
+                                        </Group>
+                                        {draft.previewOrder.length === 0 ? (
+                                          <Text c="dimmed" fz="sm">
+                                            No ordering applied. Rows will follow the default database ordering.
+                                          </Text>
+                                        ) : (
+                                          draft.previewOrder.map((rule) => {
+                                            const optionKey =
+                                              rule.source === "derived"
+                                                ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, rule.fieldId)
+                                                : rule.modelId
+                                                ? buildFilterOptionKey(rule.modelId, rule.fieldId)
+                                                : "";
+                                            const optionMissing = !optionKey || !filterFieldLookup.has(optionKey);
+                                            return (
+                                              <Paper key={rule.id} withBorder radius="md" p="sm">
+                                                <Stack gap="xs">
+                                                  <Group align="flex-end" gap="sm" wrap="wrap">
+                                                    <Select
+                                                      label="Field"
+                                                      data={filterFieldOptions.map((option) => ({
+                                                        value: option.value,
+                                                        label: option.label,
+                                                      }))}
+                                                      value={optionMissing ? null : optionKey}
+                                                      onChange={(value) => handlePreviewOrderFieldChange(rule.id, value)}
+                                                      placeholder="Select field"
+                                                      searchable
+                                                      style={{ flex: 1, minWidth: 220 }}
+                                                    />
+                                                    <SegmentedControl
+                                                      value={rule.direction}
+                                                      onChange={(value) =>
+                                                        handlePreviewOrderDirectionChange(
+                                                          rule.id,
+                                                          (value as "asc" | "desc") ?? "asc",
+                                                        )
+                                                      }
+                                                      data={[
+                                                        { value: "asc", label: "Asc" },
+                                                        { value: "desc", label: "Desc" },
+                                                      ]}
+                                                    />
+                                                    <ActionIcon
+                                                      variant="subtle"
+                                                      color="red"
+                                                      onClick={() => handleRemovePreviewOrderRule(rule.id)}
+                                                      aria-label="Remove sort rule"
+                                                    >
+                                                      <IconTrash size={16} />
+                                                    </ActionIcon>
+                                                  </Group>
+                                                  {optionMissing && (
+                                                    <Text fz="xs" c="red">
+                                                      Field is no longer available. Select another column to keep this rule.
+                                                    </Text>
+                                                  )}
+                                                </Stack>
+                                              </Paper>
+                                            );
+                                          })
+                                        )}
+                                      </Stack>
+                                      <Divider my="sm" />
+                                      <Checkbox
+                                        label="Auto-publish PDF package to leadership workspace"
+                                        checked={draft.autoDistribution}
+                                        onChange={(event) =>
+                                          setDraft((current) => ({
+                                            ...current,
+                                            autoDistribution: event.currentTarget.checked,
+                                          }))
+                                        }
+                                      />
+                                      <Checkbox
+                                        label="Send digest to #revenue-ops Slack channel on refresh"
+                                        checked={draft.notifyTeam}
+                                        onChange={(event) =>
+                                          setDraft((current) => ({
+                                            ...current,
+                                            notifyTeam: event.currentTarget.checked,
+                                          }))
+                                        }
+                                      />
+                                    </Stack>
+                                    </Collapse>
+                                  </Paper>
+                  
+                                  <Paper p="md" radius="lg" shadow="xs" withBorder>
                   <Group justify="space-between" mb="md" align="center">
                     <Group gap="xs" align="center">
                       <Group gap="xs" align="center">
@@ -9910,209 +10785,469 @@ const getColumnLabel = useCallback(
                       >
                         Add to dashboard
                       </Button>
+                      <Button
+                        size="xs"
+                        variant="light"
+                        leftSection={<IconDeviceFloppy size={12} />}
+                        onClick={handleSaveTemplate}
+                        loading={saveTemplateMutation.isPending}
+                      >
+                        Save
+                      </Button>
+                      <ActionIcon
+                        size="sm"
+                        variant="subtle"
+                        onClick={() => toggleSection("preview")}
+                        aria-label={
+                          sectionOpen.preview ? "Collapse data preview" : "Expand data preview"
+                        }
+                      >
+                        {sectionOpen.preview ? (
+                          <IconChevronUp size={16} />
+                        ) : (
+                          <IconChevronDown size={16} />
+                        )}
+                      </ActionIcon>
                     </Group>
                     <Text fz="xs" c="dimmed">
                       {lastRunAt === "Not run yet" ? "Preview not run yet" : `Last run: ${lastRunAt}`}
                     </Text>
                   </Group>
-                  {previewError && (
-                    <Box mb="sm">
-                      <Text fz="sm" c="red">
-                        {previewError}
+                  <Collapse in={sectionOpen.preview}>
+                    {previewError && (
+                      <Box mb="sm">
+                        <Text fz="sm" c="red">
+                          {previewError}
+                        </Text>
+                      </Box>
+                    )}
+                    {isPreviewLoading ? (
+                      <Text c="dimmed" fz="sm">
+                        Running preview&hellip;
                       </Text>
-                    </Box>
-                  )}
-                  {isPreviewLoading ? (
-                    <Text c="dimmed" fz="sm">
-                      Running preview&hellip;
-                    </Text>
-                  ) : previewRows.length === 0 || previewColumns.length === 0 ? (
-                    <Text c="dimmed" fz="sm">
-                      Configure your models, fields, and filters, then run the analysis to see sample rows.
-                    </Text>
-                  ) : (
-                    <ScrollArea>
-                      <Table
-                        highlightOnHover
-                        striped
-                        verticalSpacing="xs"
-                        style={{ fontSize: "0.85rem" }}
-                      >
-                        <Table.Thead>
-                          <Table.Tr>
-                            {previewColumns.map((column, columnIndex) => {
-                              const metadata = previewColumnMetadata.get(column);
-                              const tableDescriptor =
-                                metadata?.modelName ?? metadata?.tableName ?? metadata?.modelId;
-                              const technicalDescriptor =
-                                metadata?.modelId && metadata?.fieldId
-                                  ? `${metadata.modelId}.${metadata.fieldId}`
-                                  : metadata?.fieldId ?? metadata?.sourceColumn;
-                              const baseLabel = metadata?.fieldLabel ?? humanizeAlias(column);
-                              const customLabel =
-                                metadata?.customLabel && metadata.customLabel.length > 0
-                                  ? metadata.customLabel
-                                  : undefined;
-                              const displayLabel = customLabel ?? baseLabel;
-                              const secondarySegments: string[] = [];
-                              if (customLabel && customLabel !== baseLabel) {
-                                secondarySegments.push(baseLabel);
-                              }
-                              if (tableDescriptor) {
-                                secondarySegments.push(tableDescriptor);
-                              }
-                              if (technicalDescriptor) {
-                                secondarySegments.push(technicalDescriptor);
-                              }
-                              const subtitle = secondarySegments.join(" / ");
-                              const isFirst = columnIndex === 0;
-                              const isLast = columnIndex === previewColumns.length - 1;
-                              const showReorder = previewColumns.length > 1;
-                              return (
-                                <Table.Th key={column}>
-                                  <Group gap="xs" justify="space-between" align="flex-start">
-                                    <Box>
-                                      <Text fw={600} fz="sm">
-                                        {displayLabel}
-                                      </Text>
-                                      {subtitle && (
-                                        <Text fz="xs" c="dimmed">
-                                          {subtitle}
+                    ) : previewRows.length === 0 || previewColumns.length === 0 ? (
+                      <Text c="dimmed" fz="sm">
+                        Configure your models, fields, and filters, then run the analysis to see sample rows.
+                      </Text>
+                    ) : (
+                      <ScrollArea>
+                        <Table
+                          highlightOnHover
+                          striped
+                          verticalSpacing="xs"
+                          style={{ fontSize: "0.85rem" }}
+                        >
+                          <Table.Thead>
+                            <Table.Tr>
+                              {previewColumns.map((column, columnIndex) => {
+                                const metadata = previewColumnMetadata.get(column);
+                                const tableDescriptor =
+                                  metadata?.modelName ?? metadata?.tableName ?? metadata?.modelId;
+                                const technicalDescriptor =
+                                  metadata?.modelId && metadata?.fieldId
+                                    ? `${metadata.modelId}.${metadata.fieldId}`
+                                    : metadata?.fieldId ?? metadata?.sourceColumn;
+                                const baseLabel = metadata?.fieldLabel ?? humanizeAlias(column);
+                                const customLabel =
+                                  metadata?.customLabel && metadata.customLabel.length > 0
+                                    ? metadata.customLabel
+                                    : undefined;
+                                const displayLabel = customLabel ?? baseLabel;
+                                const secondarySegments: string[] = [];
+                                if (customLabel && customLabel !== baseLabel) {
+                                  secondarySegments.push(baseLabel);
+                                }
+                                if (tableDescriptor) {
+                                  secondarySegments.push(tableDescriptor);
+                                }
+                                if (technicalDescriptor) {
+                                  secondarySegments.push(technicalDescriptor);
+                                }
+                                const subtitle = secondarySegments.join(" / ");
+                                const isFirst = columnIndex === 0;
+                                const isLast = columnIndex === previewColumns.length - 1;
+                                const showReorder = previewColumns.length > 1;
+                                return (
+                                  <Table.Th key={column}>
+                                    <Group gap="xs" justify="space-between" align="flex-start">
+                                      <Box>
+                                        <Text fw={600} fz="sm">
+                                          {displayLabel}
                                         </Text>
+                                        {subtitle && (
+                                          <Text fz="xs" c="dimmed">
+                                            {subtitle}
+                                          </Text>
+                                        )}
+                                      </Box>
+                                      {showReorder && (
+                                        <Group gap={4}>
+                                          <ActionIcon
+                                            size="sm"
+                                            variant="subtle"
+                                            aria-label={`Move ${displayLabel} left`}
+                                            onClick={() => movePreviewColumn(column, "left")}
+                                            disabled={isFirst}
+                                          >
+                                            <IconArrowLeft size={14} />
+                                          </ActionIcon>
+                                          <ActionIcon
+                                            size="sm"
+                                            variant="subtle"
+                                            aria-label={`Move ${displayLabel} right`}
+                                            onClick={() => movePreviewColumn(column, "right")}
+                                            disabled={isLast}
+                                          >
+                                            <IconArrowRight size={14} />
+                                          </ActionIcon>
+                                        </Group>
                                       )}
-                                    </Box>
-                                    {showReorder && (
-                                      <Group gap={4}>
-                                        <ActionIcon
-                                          size="sm"
-                                          variant="subtle"
-                                          aria-label={`Move ${displayLabel} left`}
-                                          onClick={() => movePreviewColumn(column, "left")}
-                                          disabled={isFirst}
-                                        >
-                                          <IconArrowLeft size={14} />
-                                        </ActionIcon>
-                                        <ActionIcon
-                                          size="sm"
-                                          variant="subtle"
-                                          aria-label={`Move ${displayLabel} right`}
-                                          onClick={() => movePreviewColumn(column, "right")}
-                                          disabled={isLast}
-                                        >
-                                          <IconArrowRight size={14} />
-                                        </ActionIcon>
-                                      </Group>
-                                    )}
-                                  </Group>
-                                </Table.Th>
+                                    </Group>
+                                  </Table.Th>
+                                );
+                              })}
+                            </Table.Tr>
+                          </Table.Thead>
+                          <Table.Tbody>
+                            {previewRows.map((row, rowIndex) => {
+                              const rowData = row as Record<string, unknown>;
+                              return (
+                                <Table.Tr key={`preview-row-${rowIndex}`}>
+                                  {previewColumns.map((column) => (
+                                    <Table.Td key={`${rowIndex}-${column}`}>
+                                      {formatPreviewValue(rowData[column])}
+                                    </Table.Td>
+                                  ))}
+                                </Table.Tr>
                               );
                             })}
-                          </Table.Tr>
-                        </Table.Thead>
-                        <Table.Tbody>
-                          {previewRows.map((row, rowIndex) => {
-                            const rowData = row as Record<string, unknown>;
-                            return (
-                              <Table.Tr key={`preview-row-${rowIndex}`}>
-                                {previewColumns.map((column) => (
-                                  <Table.Td key={`${rowIndex}-${column}`}>
-                                    {formatPreviewValue(rowData[column])}
-                                  </Table.Td>
-                                ))}
-                              </Table.Tr>
-                            );
-                          })}
-                        </Table.Tbody>
-                      </Table>
-                    </ScrollArea>
-                  )}
+                          </Table.Tbody>
+                        </Table>
+                      </ScrollArea>
+                    )}
+                  </Collapse>
                 </Paper>
-
-                <Paper p="md" radius="lg" shadow="xs" withBorder>
-                  <Group justify="space-between" mb="md">
-                    <Text fw={600}>Metrics spotlight</Text>
-                    <Badge variant="light">{metricsSummary.length} cards</Badge>
-                  </Group>
-                  <Flex gap="md" wrap="wrap">
-                    {metricsSummary.map((summary) => (
-                      <Card
-                        key={summary.id}
-                        withBorder
-                        padding="md"
-                        radius="md"
-                        style={{ flex: "1 1 220px" }}
-                      >
-                        <Stack gap={4}>
-                          <Group justify="space-between">
-                            <Text fw={600}>{summary.label}</Text>
-                            <Badge
-                              variant="light"
-                              color={
-                                summary.tone === "negative"
-                                  ? "red"
-                                  : summary.tone === "positive"
-                                  ? "teal"
-                                  : "gray"
-                              }
-                            >
-                              {summary.delta}
-                            </Badge>
-                          </Group>
-                          <Text fz="xl" fw={700}>
-                            {summary.value}
-                          </Text>
-                          <Text fz="xs" c="dimmed">
-                            {summary.context}
-                          </Text>
-                        </Stack>
-                      </Card>
-                    ))}
-                  </Flex>
-                </Paper>
-
-              </Stack>
-            </Flex>
+                  
+                                  <Paper p="md" radius="lg" shadow="xs" withBorder>
+                                    <Group justify="space-between" mb="md">
+                                      <Text fw={600}>Metrics spotlight</Text>
+                                      <Group gap="xs" align="center">
+                                        <Badge variant="light">{metricsSummary.length} cards</Badge>
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          leftSection={<IconDeviceFloppy size={12} />}
+                                          onClick={handleSaveTemplate}
+                                          loading={saveTemplateMutation.isPending}
+                                        >
+                                          Save
+                                        </Button>
+                                        <ActionIcon
+                                          size="sm"
+                                          variant="subtle"
+                                          onClick={() => toggleSection("metricsSummary")}
+                                          aria-label={
+                                            sectionOpen.metricsSummary
+                                              ? "Collapse metrics summary"
+                                              : "Expand metrics summary"
+                                          }
+                                        >
+                                          {sectionOpen.metricsSummary ? (
+                                            <IconChevronUp size={16} />
+                                          ) : (
+                                            <IconChevronDown size={16} />
+                                          )}
+                                        </ActionIcon>
+                                      </Group>
+                                    </Group>
+                                    <Collapse in={sectionOpen.metricsSummary}>
+                                    <Flex gap="md" wrap="wrap">
+                                      {metricsSummary.map((summary) => (
+                                        <Card
+                                          key={summary.id}
+                                          withBorder
+                                          padding="md"
+                                          radius="md"
+                                          style={{ flex: "1 1 220px" }}
+                                        >
+                                          <Stack gap={4}>
+                                            <Group justify="space-between">
+                                              <Text fw={600}>{summary.label}</Text>
+                                              <Badge
+                                                variant="light"
+                                                color={
+                                                  summary.tone === "negative"
+                                                    ? "red"
+                                                    : summary.tone === "positive"
+                                                    ? "teal"
+                                                    : "gray"
+                                                }
+                                              >
+                                                {summary.delta}
+                                              </Badge>
+                                            </Group>
+                                            <Text fz="xl" fw={700}>
+                                              {summary.value}
+                                            </Text>
+                                            <Text fz="xs" c="dimmed">
+                                              {summary.context}
+                                            </Text>
+                                          </Stack>
+                                        </Card>
+                                      ))}
+                                    </Flex>
+                                    </Collapse>
+                                  </Paper>
+                
+                </Stack>
+              </Tabs.Panel>
+              <Tabs.Panel value="library" pt="md">
+                                <Paper p="md" radius="lg" shadow="xs" withBorder>
+                                  <Group justify="space-between" mb="sm">
+                                    <Text fw={600} fz="lg">
+                                      Template library
+                                    </Text>
+                                    <Group gap="xs" align="center">
+                                      <Button
+                                        size="xs"
+                                        variant="light"
+                                        leftSection={<IconDeviceFloppy size={12} />}
+                                        onClick={handleSaveTemplate}
+                                        loading={saveTemplateMutation.isPending}
+                                      >
+                                        Save
+                                      </Button>
+                                      <ActionIcon
+                                        size="sm"
+                                        variant="subtle"
+                                        onClick={() => toggleSection("templateLibrary")}
+                                        aria-label={
+                                          sectionOpen.templateLibrary
+                                            ? "Collapse template library"
+                                            : "Expand template library"
+                                        }
+                                      >
+                                        {sectionOpen.templateLibrary ? (
+                                          <IconChevronUp size={16} />
+                                        ) : (
+                                          <IconChevronDown size={16} />
+                                        )}
+                                      </ActionIcon>
+                                      <ActionIcon
+                                        variant="subtle"
+                                        color="blue"
+                                        onClick={handleCreateTemplate}
+                                        aria-label="Add template"
+                                        disabled={saveTemplateMutation.isPending}
+                                      >
+                                        <IconPlus size={18} />
+                                      </ActionIcon>
+                                    </Group>
+                                  </Group>
+                                  <Collapse in={sectionOpen.templateLibrary}>
+                                  <Divider mb="sm" />
+                                                  <Stack gap="xs" mb="sm">
+                                                    <TextInput
+                                                      placeholder="Search templates"
+                                                      value={templateSearch}
+                                                      onChange={(event) => setTemplateSearch(event.currentTarget.value)}
+                                                      leftSection={<IconSearch size={14} />}
+                                                      size="sm"
+                                                    />
+                                                    <Select
+                                                      placeholder="Filter by category"
+                                                      data={categorySelectOptions}
+                                                      value={templateCategoryFilter}
+                                                      onChange={(value) => setTemplateCategoryFilter(value ?? "all")}
+                                                      size="sm"
+                                                    />
+                                                    {categoryOptions.length > 0 && (
+                                                      <ScrollArea type="hover" offsetScrollbars>
+                                                        <Group gap="xs" wrap="nowrap" pb={4}>
+                                                          {["all", ...categoryOptions].map((category) => {
+                                                            const value = category === "all" ? "all" : category;
+                                                            const isActive = templateCategoryFilter === value;
+                                                            const label = value === "all" ? "All templates" : category;
+                                                            return (
+                                                              <Badge
+                                                                key={`template-category-${value}`}
+                                                                size="xs"
+                                                                variant={isActive ? "filled" : "outline"}
+                                                                color={isActive ? "blue" : "gray"}
+                                                                style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+                                                                onClick={() => setTemplateCategoryFilter(value)}
+                                                              >
+                                                                {label}
+                                                              </Badge>
+                                                            );
+                                                          })}
+                                                        </Group>
+                                                      </ScrollArea>
+                                                    )}
+                                                  </Stack>
+                                                  <Group justify="space-between" align="center" mb="sm">
+                                                    <Text fz="xs" c="dimmed">
+                                                      Showing {filteredTemplates.length} of {templates.length} templates
+                                                    </Text>
+                                                    {highlightQuery && (
+                                                      <Badge size="xs" variant="outline" color="blue">
+                                                        Match: "{highlightQuery}"
+                                                      </Badge>
+                                                    )}
+                                                  </Group>
+                                                  {filteredTemplates.length === 0 ? (
+                                                    <Text c="dimmed" fz="sm">
+                                                      No templates match your filters.
+                                                    </Text>
+                                                  ) : (
+                                                    <ScrollArea h={260} type="always" offsetScrollbars>
+                                                      <Stack gap="sm">
+                                                        {filteredTemplates.map((template) => {
+                                                          const isActive = template.id === draft.id;
+                                                          const fieldCount = template.fields.reduce(
+                                                            (total, entry) => total + entry.fieldIds.length,
+                                                            0,
+                                                          );
+                                                          const metricsCount = template.metricsSpotlight?.length ?? 0;
+                                                          const description = template.description?.trim();
+                
+                                                          return (
+                                                            <Card
+                                                              key={template.id}
+                                                              withBorder
+                                                              padding="md"
+                                                              radius="md"
+                                                              shadow={isActive ? "sm" : "xs"}
+                                                              style={{
+                                                                borderColor: isActive ? "#1c7ed6" : undefined,
+                                                                cursor: "pointer",
+                                                              }}
+                                                              onClick={() => handleSelectTemplate(template.id)}
+                                                            >
+                                                              <Stack gap="xs">
+                                                                <Group justify="space-between" align="flex-start">
+                                                                  <div>
+                                                                    <Text fw={600}>
+                                                                      <Highlight highlight={highlightQuery}>{template.name}</Highlight>
+                                                                    </Text>
+                                                                    <Group gap={6} mt={6}>
+                                                                      {template.category && (
+                                                                        <Badge size="xs" variant="light">
+                                                                          {template.category}
+                                                                        </Badge>
+                                                                      )}
+                                                                      <Badge size="xs" variant="light" color="gray">
+                                                                        {template.schedule}
+                                                                      </Badge>
+                                                                    </Group>
+                                                                  </div>
+                                                                  {isActive && (
+                                                                    <Badge color="blue" size="xs">
+                                                                      Active
+                                                                    </Badge>
+                                                                  )}
+                                                                </Group>
+                                                                {description && (
+                                                                  <Text size="xs" c="dimmed" lineClamp={2}>
+                                                                    <Highlight highlight={highlightQuery}>{description}</Highlight>
+                                                                  </Text>
+                                                                )}
+                                                                <Group gap={6} mt="xs">
+                                                                  <Badge size="xs" variant="outline" color="blue">
+                                                                    {template.models.length} models
+                                                                  </Badge>
+                                                                  <Badge size="xs" variant="outline" color="gray">
+                                                                    {fieldCount} fields
+                                                                  </Badge>
+                                                                  <Badge size="xs" variant="outline" color="violet">
+                                                                    {template.visuals.length} visuals
+                                                                  </Badge>
+                                                                  {metricsCount > 0 && (
+                                                                    <Badge size="xs" variant="outline" color="teal">
+                                                                      {metricsCount} spotlights
+                                                                    </Badge>
+                                                                  )}
+                                                                </Group>
+                                                                <Text size="xs" c="dimmed">
+                                                                  <Highlight highlight={highlightQuery}>
+                                                                    {`Updated ${template.lastUpdated} - Owner ${template.owner}`}
+                                                                  </Highlight>
+                                                                </Text>
+                                                              </Stack>
+                                                            </Card>
+                                                          );
+                                                        })}
+                                                      </Stack>
+                                                    </ScrollArea>
+                                                  )}
+                                                  <Divider my="sm" />
+                                  <Group grow>
+                                    <Button
+                                      variant="light"
+                                      leftSection={<IconCopy size={14} />}
+                                      onClick={handleDuplicateTemplate}
+                                      disabled={!selectedTemplate || saveTemplateMutation.isPending}
+                                      loading={saveTemplateMutation.isPending && Boolean(selectedTemplate)}
+                                    >
+                                      Duplicate
+                                    </Button>
+                                    <Button
+                                      variant="light"
+                                      color="red"
+                                      leftSection={<IconTrash size={14} />}
+                                      onClick={handleDeleteTemplate}
+                                      disabled={!selectedTemplate || deleteTemplateMutation.isPending}
+                                      loading={deleteTemplateMutation.isPending && Boolean(selectedTemplate)}
+                                    >
+                                      Remove
+                                    </Button>
+                                  </Group>
+                                  </Collapse>
+                                </Paper>
+                
+              </Tabs.Panel>
+            </Tabs>
           )}
-        </Stack>
-      </Box>
+          </Stack>
+        </Box>
 
-      <Drawer
-        opened={isDerivedFieldsDrawerOpen}
-        onClose={() => setDerivedFieldsDrawerOpen(false)}
-        position="right"
-        size="lg"
-        title="Derived fields workspace"
-        overlayProps={{ opacity: 0.2, blur: 2 }}
-        withinPortal={false}
-      >
-        <Stack gap="md">
-          <Group justify="space-between" align="flex-start">
-            <div>
-              <Text fw={600}>Cross-model expressions</Text>
-              <Text fz="sm" c="dimmed">
-                Monitor how derived fields interact with the models selected in this template.
-              </Text>
-            </div>
-            <Group gap="xs">
-              <Button
-                variant="light"
-                size="xs"
-                leftSection={<IconRefresh size={14} />}
-                onClick={handleRecheckDerivedFields}
-              >
-                Re-check joins
-              </Button>
-              <Button
-                variant="subtle"
-                size="xs"
-                leftSection={<IconAdjustments size={14} />}
-                onClick={handleOpenDerivedFieldManager}
-              >
-                Full manager
-              </Button>
+        <Drawer
+          opened={isDerivedFieldsDrawerOpen}
+          onClose={() => setDerivedFieldsDrawerOpen(false)}
+          position="right"
+          size="lg"
+          title="Derived fields workspace"
+          overlayProps={{ opacity: 0.2, blur: 2 }}
+          withinPortal={false}
+        >
+          <Stack gap="md">
+            <Group justify="space-between" align="flex-start">
+              <div>
+                <Text fw={600}>Cross-model expressions</Text>
+                <Text fz="sm" c="dimmed">
+                  Monitor how derived fields interact with the models selected in this template.
+                </Text>
+              </div>
+              <Group gap="xs">
+                <Button
+                  variant="light"
+                  size="xs"
+                  leftSection={<IconRefresh size={14} />}
+                  onClick={handleRecheckDerivedFields}
+                >
+                  Re-check joins
+                </Button>
+                <Button
+                  variant="subtle"
+                  size="xs"
+                  leftSection={<IconAdjustments size={14} />}
+                  onClick={handleOpenDerivedFieldManager}
+                >
+                  Full manager
+                </Button>
+              </Group>
             </Group>
-          </Group>
-          <Divider />
+            <Divider />
           {draft.derivedFields.length === 0 ? (
             <Alert color="gray" variant="light">
               No derived fields added yet. Use the full manager to create reusable expressions, or add
@@ -10884,6 +12019,7 @@ const getColumnLabel = useCallback(
           </Text>
         )}
       </Modal>
+      </>
     </PageAccessGuard>
   );
 };
