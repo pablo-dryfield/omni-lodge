@@ -213,6 +213,28 @@ export type ReportQueryJobResponse = {
 
 export type ReportQueryResult = ReportQuerySuccessResponse | ReportQueryJobResponse;
 
+export type ReportBulkQueryRequest = {
+  id: string;
+  config: QueryConfig;
+};
+
+export type ReportBulkQueryResultEntry =
+  | {
+      id: string;
+      status: "success";
+      response: ReportQuerySuccessResponse;
+    }
+  | {
+      id: string;
+      status: "error";
+      message: string;
+      details?: string;
+    };
+
+export type ReportBulkQueryResponse = {
+  results: ReportBulkQueryResultEntry[];
+};
+
 export type TemplateScheduleDeliveryTarget = Record<string, unknown>;
 
 export type TemplateScheduleDto = {
@@ -1078,6 +1100,13 @@ export const runReportQueryWithPolling = async (
 ): Promise<ReportQuerySuccessResponse> => {
   const response = await axiosInstance.post("/reports/query", payload);
   return resolveReportQueryResult(response.data as ReportQueryResult, options);
+};
+
+export const runBulkReportQueries = async (
+  requests: ReportBulkQueryRequest[],
+): Promise<ReportBulkQueryResponse> => {
+  const response = await axiosInstance.post("/reports/query/bulk", { requests });
+  return response.data as ReportBulkQueryResponse;
 };
 
 

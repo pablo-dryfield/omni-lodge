@@ -3439,6 +3439,53 @@ const executeSelectQueryConfig = async (
 const isAggregatedConfig = (config: QueryConfig): boolean =>
   (config.metrics?.length ?? 0) > 0 || (config.dimensions?.length ?? 0) > 0;
 
+const executeQueryConfigSync = async (
+  config: QueryConfig,
+): Promise<QueryExecutionResult> => {
+  const unionQueries = Array.isArray(config.union?.queries) ? config.union?.queries ?? [] : [];
+  const isUnionRequest = unionQueries.length > 0;
+  if (isUnionRequest) {
+    const union = await executeUnionQuery(config.union as QueryConfigUnion);
+    return {
+      rows: union.result.rows,
+      columns: union.result.columns,
+      sql: union.sql,
+      meta: union.meta,
+    };
+  }
+  if (isAggregatedConfig(config)) {
+    const aggregated = await executeAggregatedQuery(config);
+    return {
+      rows: aggregated.result.rows,
+      columns: aggregated.result.columns,
+      sql: aggregated.sql,
+      meta: aggregated.meta,
+    };
+  }
+  const preview = await executeSelectQueryConfig(config);
+  return {
+    rows: preview.result.rows,
+    columns: preview.result.columns,
+    sql: preview.sql,
+    meta: preview.meta,
+  };
+};
+
+const runQueryConfigWithCache = async (
+  config: QueryConfig,
+): Promise<{ execution: QueryExecutionResult; hash: string; cached: boolean }> => {
+  const hash = computeQueryHash(config);
+  const cached = await getCachedQueryResult(hash);
+  if (cached) {
+    return { execution: cached, hash, cached: true };
+  }
+  const execution = await executeQueryConfigSync(config);
+  const templateId = config.options?.templateId ?? null;
+  const cacheTtlSeconds = config.options?.cacheTtlSeconds ?? undefined;
+  await storeQueryCacheEntry(hash, templateId, execution, cacheTtlSeconds);
+  return { execution, hash, cached: false };
+};
+
 const buildQueryConfigSql = (config: QueryConfig, paramPrefix = ""): BuiltQueryConfigResult => {
   return isAggregatedConfig(config)
     ? buildAggregatedQuerySql(config, paramPrefix)
@@ -3600,16 +3647,16 @@ export const runReportPreview = async (
   }
 };
 
-  export const executeReportQuery = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-    let lastSql = "";
-    try {
-      ensureReportingAccess(req);
-      const config = req.body as QueryConfig;
-      const unionQueries = Array.isArray(config.union?.queries) ? config.union?.queries ?? [] : [];
-      const isUnionRequest = unionQueries.length > 0;
-      const templateId = config.options?.templateId ?? null;
-      const cacheTtlSeconds = config.options?.cacheTtlSeconds ?? undefined;
-      const hash = computeQueryHash(config);
+export const executeReportQuery = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  let lastSql = "";
+  try {
+    ensureReportingAccess(req);
+    const config = req.body as QueryConfig;
+    const unionQueries = Array.isArray(config.union?.queries) ? config.union?.queries ?? [] : [];
+    const isUnionRequest = unionQueries.length > 0;
+    const templateId = config.options?.templateId ?? null;
+    const cacheTtlSeconds = config.options?.cacheTtlSeconds ?? undefined;
+    const hash = computeQueryHash(config);
 
     const cached = await getCachedQueryResult(hash);
     if (cached) {
@@ -3623,51 +3670,26 @@ export const runReportPreview = async (
         },
       });
       return;
-      }
+    }
 
-      const executeQuery = async (): Promise<QueryExecutionResult> => {
-        if (isUnionRequest) {
-          const union = await executeUnionQuery(config.union as QueryConfigUnion);
-          lastSql = union.sql;
-          return {
-            rows: union.result.rows,
-            columns: union.result.columns,
-            sql: union.sql,
-            meta: union.meta,
-          };
-        }
-        if (isAggregatedConfig(config)) {
-          const aggregated = await executeAggregatedQuery(config);
-          lastSql = aggregated.sql;
-          return {
-            rows: aggregated.result.rows,
-            columns: aggregated.result.columns,
-            sql: aggregated.sql,
-            meta: aggregated.meta,
-          };
-        }
-        const preview = await executeSelectQueryConfig(config);
-        lastSql = preview.sql;
-        return {
-          rows: preview.result.rows,
-          columns: preview.result.columns,
-          sql: preview.sql,
-          meta: preview.meta,
-        };
-      };
+    const executeQuery = async (): Promise<QueryExecutionResult> => {
+      const execution = await executeQueryConfigSync(config);
+      lastSql = execution.sql;
+      return execution;
+    };
 
-      const shouldAllowAsync = Boolean(config.options?.allowAsync);
-      const forceAsync = Boolean(config.options?.forceAsync);
-      const metricsCount = isUnionRequest
-        ? unionQueries.reduce((total, query) => total + (query.metrics?.length ?? 0), 0)
-        : config.metrics?.length ?? 0;
-      const dimensionCount = isUnionRequest
-        ? unionQueries.reduce((total, query) => total + (query.dimensions?.length ?? 0), 0)
-        : config.dimensions?.length ?? 0;
-      const plannedLimit = isUnionRequest ? config.union?.limit ?? 0 : config.limit ?? 0;
-      const shouldProcessAsync =
-        shouldAllowAsync &&
-        (forceAsync || metricsCount > 2 || plannedLimit > 5000 || dimensionCount > 3);
+    const shouldAllowAsync = Boolean(config.options?.allowAsync);
+    const forceAsync = Boolean(config.options?.forceAsync);
+    const metricsCount = isUnionRequest
+      ? unionQueries.reduce((total, query) => total + (query.metrics?.length ?? 0), 0)
+      : config.metrics?.length ?? 0;
+    const dimensionCount = isUnionRequest
+      ? unionQueries.reduce((total, query) => total + (query.dimensions?.length ?? 0), 0)
+      : config.dimensions?.length ?? 0;
+    const plannedLimit = isUnionRequest ? config.union?.limit ?? 0 : config.limit ?? 0;
+    const shouldProcessAsync =
+      shouldAllowAsync &&
+      (forceAsync || metricsCount > 2 || plannedLimit > 5000 || dimensionCount > 3);
 
     if (shouldProcessAsync) {
       const job = await enqueueQueryJob(hash, templateId, executeQuery, cacheTtlSeconds);
@@ -3707,6 +3729,71 @@ export const runReportPreview = async (
         ? { message: "Failed to execute report query.", details: error.message }
         : { message: "Failed to execute report query." };
     res.status(500).json(payload);
+  }
+};
+
+export const executeReportQueryBulk = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    ensureReportingAccess(req);
+    const body = req.body as { requests?: Array<{ id?: unknown; config?: unknown }> };
+    const requests = Array.isArray(body?.requests) ? body.requests : [];
+    if (requests.length === 0) {
+      res.status(400).json({ message: "Provide at least one bulk query request." });
+      return;
+    }
+    const results = await Promise.all(
+      requests.map(async (request) => {
+        const id = typeof request.id === "string" ? request.id.trim() : "";
+        const config = request.config as QueryConfig | undefined;
+        if (!id || !config) {
+          return {
+            id: id || "unknown",
+            status: "error" as const,
+            message: "Each bulk request must include an id and config.",
+          };
+        }
+        try {
+          const { execution, hash, cached } = await runQueryConfigWithCache(config);
+          return {
+            id,
+            status: "success" as const,
+            response: {
+              rows: execution.rows,
+              columns: execution.columns,
+              sql: execution.sql,
+              meta: {
+                ...execution.meta,
+                hash,
+                cached,
+                executedAt: new Date().toISOString(),
+              },
+            },
+          };
+        } catch (error) {
+          if (error instanceof PreviewQueryError) {
+            return {
+              id,
+              status: "error" as const,
+              message: error.message,
+              details: error.details ? JSON.stringify(error.details) : undefined,
+            };
+          }
+          const message =
+            process.env.NODE_ENV !== "production" && error instanceof Error
+              ? error.message
+              : "Failed to execute report query.";
+          return {
+            id,
+            status: "error" as const,
+            message,
+          };
+        }
+      }),
+    );
+    res.status(200).json({ results });
+  } catch (error) {
+    console.error("Failed to execute bulk report query", error);
+    res.status(500).json({ message: "Failed to execute bulk report query." });
   }
 };
 
