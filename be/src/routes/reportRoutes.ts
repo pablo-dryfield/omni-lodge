@@ -31,6 +31,7 @@ router.post('/staffPayouts/collections', authMiddleware, createStaffPayoutCollec
 router.get('/models', authMiddleware, reportController.listReportModels);
 router.post('/preview', authMiddleware, reportController.runReportPreview);
 router.post('/query', authMiddleware, reportController.executeReportQuery);
+router.post('/query/bulk', authMiddleware, reportController.executeReportQueryBulk);
 router.get('/query/jobs/:jobId', authMiddleware, reportController.getReportQueryJobStatus);
 router.get('/templates', authMiddleware, reportController.listReportTemplates);
 router.post('/templates', authMiddleware, reportController.createReportTemplate);

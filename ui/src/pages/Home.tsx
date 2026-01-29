@@ -37,7 +37,7 @@ import { styled, alpha } from "@mui/material/styles";
 import { createTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import { GridStack } from "gridstack";
 import "gridstack/dist/gridstack.min.css";
@@ -53,7 +53,7 @@ import { PAGE_SLUGS } from "../constants/pageSlugs";
 import {
   useReportDashboards,
   useHomeDashboardPreference,
-  runReportQueryWithPolling,
+  runBulkReportQueries,
   runDashboardPreviewCard,
   type DashboardCardDto,
   type DashboardCardViewConfig,
@@ -64,6 +64,8 @@ import {
   type HomeDashboardPreferenceDto,
   type MetricSpotlightDefinitionDto,
   type ReportQuerySuccessResponse,
+  type ReportBulkQueryRequest,
+  type ReportBulkQueryResultEntry,
   type QueryConfig,
   type QueryConfigFilter,
   type DashboardPreviewCardResponse,
@@ -3032,13 +3034,6 @@ const Home = (props: GenericPageProps) => {
   }, []);
 
   useEffect(() => {
-    if (!shouldHydrateLiveData) {
-      return;
-    }
-    triggerRefresh();
-  }, [shouldHydrateLiveData, triggerRefresh]);
-
-  useEffect(() => {
     if (!shouldHydrateLiveData || !activeDashboardId) {
       return;
     }
@@ -3053,8 +3048,13 @@ const Home = (props: GenericPageProps) => {
     return () => clearInterval(handle);
   }, [refreshMode, shouldHydrateLiveData, triggerRefresh]);
 
+  const hasHandledInitialPeriodRefresh = useRef(false);
   useEffect(() => {
     if (!shouldHydrateLiveData) {
+      return;
+    }
+    if (!hasHandledInitialPeriodRefresh.current) {
+      hasHandledInitialPeriodRefresh.current = true;
       return;
     }
     triggerRefresh();
@@ -3228,74 +3228,97 @@ const Home = (props: GenericPageProps) => {
     visualDateFilterSelectionSets,
   ]);
 
-  const cardLiveQueries = useQueries({
-    queries: cardHydrationDescriptors.map((descriptor) => {
-      if (!shouldHydrateLiveData) {
-        return {
-          queryKey: ["reports", "dashboard-card", descriptor.card.id, "disabled"],
-          enabled: false,
-          queryFn: async () => null,
-        };
-      }
-      if (descriptor.mode === "preview_table") {
-        return {
-          queryKey: ["reports", "dashboard-card", descriptor.card.id, descriptor.cacheKey],
-          enabled: shouldHydrateLiveData,
-          queryFn: async () =>
-            runDashboardPreviewCard(descriptor.card.dashboardId, descriptor.card.id, {
-              period: descriptor.periodOverride ?? undefined,
-            }),
-          staleTime: Infinity,
-          refetchOnWindowFocus: false,
-          refetchOnReconnect: false,
-        };
-      }
-      if (descriptor.mode === "spotlight") {
-        return {
-          queryKey: ["reports", "dashboard-card", descriptor.card.id, descriptor.cacheKey],
-          enabled: shouldHydrateLiveData && Boolean(descriptor.queryConfig),
-          queryFn: async () => {
-            if (!descriptor.queryConfig) {
-              return null;
-            }
-            const primaryPromise = runReportQueryWithPolling(descriptor.queryConfig, {
-              pollIntervalMs: 1500,
-              timeoutMs: 45_000,
-            });
-            if (!descriptor.comparisonQueryConfig) {
-              const primary = await primaryPromise;
-              return { primary, comparison: null };
-            }
-            const comparisonPromise = runReportQueryWithPolling(descriptor.comparisonQueryConfig, {
-              pollIntervalMs: 1500,
-              timeoutMs: 45_000,
-            });
-            const [primary, comparison] = await Promise.all([primaryPromise, comparisonPromise]);
-            return { primary, comparison };
-          },
-          staleTime: Infinity,
-          refetchOnWindowFocus: false,
-          refetchOnReconnect: false,
-        };
-      }
-      return {
-        queryKey: ["reports", "dashboard-card", descriptor.card.id, descriptor.cacheKey],
-        enabled: shouldHydrateLiveData && Boolean(descriptor.queryConfig),
-        queryFn: async () => {
-          if (!descriptor.queryConfig) {
-            return null;
-          }
-          return runReportQueryWithPolling(descriptor.queryConfig, {
-            pollIntervalMs: 1500,
-            timeoutMs: 45_000,
+  const buildBulkRequestId = useCallback(
+    (cardId: string, kind: "primary" | "comparison") => `${cardId}:${kind}`,
+    [],
+  );
+  const reportBulkRequest = useMemo(() => {
+    const requests: ReportBulkQueryRequest[] = [];
+    const descriptorByRequestId = new Map<
+      string,
+      { cardId: string; kind: "visual" | "spotlight"; isComparison: boolean; descriptor: CardHydrationDescriptor }
+    >();
+    cardHydrationDescriptors.forEach((descriptor) => {
+      if (descriptor.mode === "visual" && descriptor.queryConfig) {
+        const id = buildBulkRequestId(descriptor.card.id, "primary");
+        requests.push({ id, config: descriptor.queryConfig });
+        descriptorByRequestId.set(id, {
+          cardId: descriptor.card.id,
+          kind: "visual",
+          isComparison: false,
+          descriptor,
+        });
+      } else if (descriptor.mode === "spotlight" && descriptor.queryConfig) {
+        const id = buildBulkRequestId(descriptor.card.id, "primary");
+        requests.push({ id, config: descriptor.queryConfig });
+        descriptorByRequestId.set(id, {
+          cardId: descriptor.card.id,
+          kind: "spotlight",
+          isComparison: false,
+          descriptor,
+        });
+        if (descriptor.comparisonQueryConfig) {
+          const comparisonId = buildBulkRequestId(descriptor.card.id, "comparison");
+          requests.push({ id: comparisonId, config: descriptor.comparisonQueryConfig });
+          descriptorByRequestId.set(comparisonId, {
+            cardId: descriptor.card.id,
+            kind: "spotlight",
+            isComparison: true,
+            descriptor,
           });
-        },
-        staleTime: Infinity,
-        refetchOnWindowFocus: false,
-        refetchOnReconnect: false,
-      };
-    }),
+        }
+      }
+    });
+    const cacheKey = JSON.stringify({
+      refreshNonce,
+      requests: requests.map((entry) => ({ id: entry.id, config: entry.config })),
+    });
+    return { requests, descriptorByRequestId, cacheKey };
+  }, [buildBulkRequestId, cardHydrationDescriptors, refreshNonce]);
+
+  const previewTableDescriptors = useMemo(
+    () => cardHydrationDescriptors.filter((descriptor) => descriptor.mode === "preview_table"),
+    [cardHydrationDescriptors],
+  );
+  const previewTableQueries = useQueries({
+    queries: previewTableDescriptors.map((descriptor) => ({
+      queryKey: ["reports", "dashboard-card", descriptor.card.id, descriptor.cacheKey],
+      enabled: shouldHydrateLiveData,
+      queryFn: async () =>
+        runDashboardPreviewCard(descriptor.card.dashboardId, descriptor.card.id, {
+          period: descriptor.periodOverride ?? undefined,
+        }),
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+    })),
   });
+
+  const previewQueryByCardId = useMemo(() => {
+    const map = new Map<string, (typeof previewTableQueries)[number]>();
+    previewTableDescriptors.forEach((descriptor, index) => {
+      map.set(descriptor.card.id, previewTableQueries[index]);
+    });
+    return map;
+  }, [previewTableDescriptors, previewTableQueries]);
+
+  const bulkReportQuery = useQuery({
+    queryKey: ["reports", "dashboard-card", "bulk", reportBulkRequest.cacheKey],
+    enabled: shouldHydrateLiveData && reportBulkRequest.requests.length > 0,
+    queryFn: async () => runBulkReportQueries(reportBulkRequest.requests),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+
+  const bulkResultsById = useMemo(() => {
+    const map = new Map<string, ReportBulkQueryResultEntry>();
+    const results = bulkReportQuery.data?.results ?? [];
+    results.forEach((entry) => {
+      map.set(entry.id, entry);
+    });
+    return map;
+  }, [bulkReportQuery.data]);
 
   const liveCardSamples = useMemo(() => {
     if (!shouldHydrateLiveData) {
@@ -3305,9 +3328,9 @@ const Home = (props: GenericPageProps) => {
     if (cardHydrationDescriptors.length === 0) {
       return map;
     }
-    cardHydrationDescriptors.forEach((descriptor, index) => {
-      const queryResult = cardLiveQueries[index];
+    cardHydrationDescriptors.forEach((descriptor) => {
       if (descriptor.mode === "preview_table") {
+        const queryResult = previewQueryByCardId.get(descriptor.card.id);
         if (!queryResult) {
           map.set(descriptor.card.id, { status: "idle" });
           return;
@@ -3354,33 +3377,40 @@ const Home = (props: GenericPageProps) => {
           map.set(descriptor.card.id, { status: "idle", warning });
           return;
         }
-        if (!queryResult) {
-          map.set(descriptor.card.id, { status: "idle" });
-          return;
-        }
-        if (queryResult.isLoading || queryResult.isFetching) {
+        if (bulkReportQuery.isLoading || bulkReportQuery.isFetching) {
           map.set(descriptor.card.id, { status: "loading" });
           return;
         }
-        if (queryResult.error) {
+        if (bulkReportQuery.error) {
           map.set(descriptor.card.id, {
             status: "error",
-            error: getErrorMessage(queryResult.error, "Failed to refresh spotlight data."),
+            error: getErrorMessage(bulkReportQuery.error, "Failed to refresh spotlight data."),
           });
           return;
         }
-        const data = queryResult.data as
-          | { primary: ReportQuerySuccessResponse; comparison?: ReportQuerySuccessResponse | null }
-          | null;
-        if (!data || !data.primary) {
+        const primaryEntry = bulkResultsById.get(buildBulkRequestId(descriptor.card.id, "primary"));
+        if (!primaryEntry) {
           map.set(descriptor.card.id, { status: "idle" });
           return;
         }
+        if (primaryEntry.status === "error") {
+          map.set(descriptor.card.id, {
+            status: "error",
+            error: primaryEntry.message ?? "Failed to refresh spotlight data.",
+          });
+          return;
+        }
+        const comparisonEntry = bulkResultsById.get(buildBulkRequestId(descriptor.card.id, "comparison"));
+        const primary = primaryEntry.response;
+        const comparison =
+          comparisonEntry && comparisonEntry.status === "success"
+            ? comparisonEntry.response
+            : null;
         map.set(
           descriptor.card.id,
           computeLiveCardState(descriptor.card, descriptor.viewConfig, {
-            data: data.primary,
-            comparisonData: data.comparison ?? null,
+            data: primary,
+            comparisonData: comparison,
             baseRange: descriptor.baseRange ?? null,
             comparisonRange: descriptor.comparisonRange ?? null,
             isLoading: false,
@@ -3396,30 +3426,49 @@ const Home = (props: GenericPageProps) => {
         map.set(descriptor.card.id, { status: "idle", warning });
         return;
       }
-      if (!queryResult) {
-        map.set(descriptor.card.id, { status: "idle" });
-        return;
-      }
-      if (queryResult.isLoading || queryResult.isFetching) {
+      if (bulkReportQuery.isLoading || bulkReportQuery.isFetching) {
         map.set(descriptor.card.id, { status: "loading" });
         return;
       }
-      if (queryResult.error) {
+      if (bulkReportQuery.error) {
         map.set(descriptor.card.id, {
           status: "error",
-          error: getErrorMessage(queryResult.error, "Failed to refresh dashboard data."),
+          error: getErrorMessage(bulkReportQuery.error, "Failed to refresh dashboard data."),
         });
         return;
       }
-      const data = queryResult.data as ReportQuerySuccessResponse | null;
-      if (!data) {
+      const primaryEntry = bulkResultsById.get(buildBulkRequestId(descriptor.card.id, "primary"));
+      if (!primaryEntry) {
         map.set(descriptor.card.id, { status: "idle" });
         return;
       }
-      map.set(descriptor.card.id, computeLiveCardState(descriptor.card, descriptor.viewConfig, { data, isLoading: false }));
+      if (primaryEntry.status === "error") {
+        map.set(descriptor.card.id, {
+          status: "error",
+          error: primaryEntry.message ?? "Failed to refresh dashboard data.",
+        });
+        return;
+      }
+      map.set(
+        descriptor.card.id,
+        computeLiveCardState(descriptor.card, descriptor.viewConfig, {
+          data: primaryEntry.response,
+          isLoading: false,
+        }),
+      );
     });
     return map;
-  }, [cardHydrationDescriptors, cardLiveQueries, effectiveViewMode, shouldHydrateLiveData]);
+  }, [
+    buildBulkRequestId,
+    bulkReportQuery.error,
+    bulkReportQuery.isFetching,
+    bulkReportQuery.isLoading,
+    bulkResultsById,
+    cardHydrationDescriptors,
+    effectiveViewMode,
+    previewQueryByCardId,
+    shouldHydrateLiveData,
+  ]);
 
   const globalSegmentOptions = useMemo(() => {
     const counts = new Map<string, number>();
