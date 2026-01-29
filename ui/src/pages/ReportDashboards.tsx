@@ -772,11 +772,13 @@ const DashboardCardList = ({
   cards,
   templateLookup,
   onEdit,
+  onClone,
   onRemove,
 }: {
   cards: DashboardCardDto[];
   templateLookup: Map<string, ReportTemplateDto>;
   onEdit: (card: DashboardCardDto) => void;
+  onClone: (card: DashboardCardDto) => void;
   onRemove: (card: DashboardCardDto) => void;
 }) => {
   if (cards.length === 0) {
@@ -802,6 +804,9 @@ const DashboardCardList = ({
                 <Group gap="xs">
                   <Button variant="light" size="xs" onClick={() => onEdit(card)}>
                     Edit
+                  </Button>
+                  <Button variant="default" size="xs" onClick={() => onClone(card)}>
+                    Clone
                   </Button>
                   <ActionIcon variant="subtle" color="red" onClick={() => onRemove(card)} aria-label="Remove card">
                     <IconTrash size={16} />
@@ -837,6 +842,8 @@ const DashboardLayoutEditor = ({
   const gridInstanceRef = useRef<GridStack | null>(null);
   const layoutCommitRef = useRef(onLayoutCommit);
   const isSyncingRef = useRef(false);
+  const ignoreChangeRef = useRef(true);
+  const userInteractedRef = useRef(false);
   const lastMinRowRef = useRef<number | null>(null);
   const columnCount = LAYOUT_EDITOR_COLUMN_COUNT_BY_MODE[layoutMode];
   const layoutEntries = useMemo(
@@ -937,7 +944,13 @@ const DashboardLayoutEditor = ({
     if (!container || !grid) {
       return;
     }
-    const baseHeight = container.parentElement?.getBoundingClientRect().height ?? container.clientHeight;
+    const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 0;
+    const fallbackHeight = Math.max(0, viewportHeight - 140);
+    const baseHeight = Math.max(
+      container.parentElement?.getBoundingClientRect().height ?? 0,
+      container.clientHeight,
+      fallbackHeight,
+    );
     if (!baseHeight) {
       return;
     }
@@ -947,14 +960,17 @@ const DashboardLayoutEditor = ({
     }
     const safeHeight = Math.max(0, baseHeight - 1);
     const nextMinRow = Math.max(1, Math.floor(safeHeight / cellHeight));
-    if (lastMinRowRef.current === nextMinRow) {
+    const layoutRows =
+      grid.engine?.nodes?.reduce((max, node) => Math.max(max, (node.y ?? 0) + (node.h ?? 1)), 0) ?? 0;
+    const resolvedMinRow = Math.max(nextMinRow, layoutRows, lastMinRowRef.current ?? 0);
+    if (lastMinRowRef.current === resolvedMinRow) {
       return;
     }
-    lastMinRowRef.current = nextMinRow;
-    grid.opts.minRow = nextMinRow;
-    grid.opts.maxRow = nextMinRow;
+    lastMinRowRef.current = resolvedMinRow;
+    grid.opts.minRow = resolvedMinRow;
+    grid.opts.maxRow = resolvedMinRow;
     if (grid.engine) {
-      grid.engine.maxRow = nextMinRow;
+      grid.engine.maxRow = resolvedMinRow;
     }
     const gridWithUpdate = grid as GridStack & { _updateContainerHeight?: () => void };
     gridWithUpdate._updateContainerHeight?.();
@@ -992,7 +1008,7 @@ const DashboardLayoutEditor = ({
       container,
     );
     const handleChange = () => {
-      if (isSyncingRef.current) {
+      if (isSyncingRef.current || ignoreChangeRef.current || !userInteractedRef.current) {
         return;
       }
       const nodes = grid?.engine?.nodes ?? [];
@@ -1010,12 +1026,25 @@ const DashboardLayoutEditor = ({
       }
     };
     grid.on("change", handleChange);
+    grid.on("dragstart", () => {
+      userInteractedRef.current = true;
+    });
+    grid.on("resizestart", () => {
+      userInteractedRef.current = true;
+    });
     gridInstanceRef.current = grid;
     updateGridMinRows();
     requestAnimationFrame(() => updateGridMinRows());
+    ignoreChangeRef.current = true;
+    userInteractedRef.current = false;
+    requestAnimationFrame(() => {
+      ignoreChangeRef.current = false;
+    });
     const activeGrid = grid;
     return () => {
       activeGrid.off("change");
+      activeGrid.off("dragstart");
+      activeGrid.off("resizestart");
       activeGrid.destroy(false);
       gridInstanceRef.current = null;
     };
@@ -1028,6 +1057,7 @@ const DashboardLayoutEditor = ({
       return;
     }
     isSyncingRef.current = true;
+    ignoreChangeRef.current = true;
     grid.batchUpdate();
     grid.removeAll(false);
     container.querySelectorAll<HTMLElement>(".grid-stack-item").forEach((element) => {
@@ -1049,6 +1079,9 @@ const DashboardLayoutEditor = ({
     isSyncingRef.current = false;
     updateGridMinRows();
     requestAnimationFrame(() => updateGridMinRows());
+    requestAnimationFrame(() => {
+      ignoreChangeRef.current = false;
+    });
   }, [layoutById, layoutEntries, updateGridMinRows]);
 
   useEffect(() => {
@@ -1295,6 +1328,33 @@ const createCardDraftFromCard = (card: DashboardCardDto): CardDraft => ({
   viewConfig: deepClone(card.viewConfig ?? DEFAULT_VIEW_CONFIG),
   layout: parseLayout(card.layout, "desktop"),
 });
+
+const buildClonedCardLayout = (layout: Record<string, unknown>): Record<string, unknown> => {
+  const clone = deepClone(layout ?? {});
+  const hasLayoutProps = (value: unknown): value is DashboardCardLayout =>
+    Boolean(
+      value &&
+        typeof value === "object" &&
+        typeof (value as DashboardCardLayout).x === "number" &&
+        typeof (value as DashboardCardLayout).y === "number" &&
+        typeof (value as DashboardCardLayout).w === "number" &&
+        typeof (value as DashboardCardLayout).h === "number",
+    );
+  const offset = (entry: DashboardCardLayout): DashboardCardLayout => ({
+    ...entry,
+    y: Math.max(0, entry.y + 1),
+  });
+  if (hasLayoutProps(clone)) {
+    return offset(clone);
+  }
+  if (clone.desktop && hasLayoutProps(clone.desktop)) {
+    clone.desktop = offset(clone.desktop);
+  }
+  if (clone.mobile && hasLayoutProps(clone.mobile)) {
+    clone.mobile = offset(clone.mobile);
+  }
+  return clone;
+};
 
 const ReportDashboards = ({ title }: GenericPageProps) => {
   const dispatch = useAppDispatch();
@@ -1654,6 +1714,30 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     } catch (error) {
       console.error("Failed to remove card", error);
       setFeedback({ type: "error", message: "Failed to remove card." });
+    }
+  };
+
+  const handleCloneCard = async (card: DashboardCardDto) => {
+    if (!dashboardDraft) {
+      return;
+    }
+    setFeedback(null);
+    try {
+      const nextTitle = `${card.title || "Dashboard card"} (copy)`;
+      await upsertCardMutation.mutateAsync({
+        dashboardId: dashboardDraft.id,
+        payload: {
+          templateId: card.templateId,
+          title: nextTitle,
+          viewConfig: deepClone(card.viewConfig ?? DEFAULT_VIEW_CONFIG),
+          layout: buildClonedCardLayout(card.layout ?? {}),
+        },
+      });
+      queryClient.invalidateQueries({ queryKey: ["reports", "dashboards"] });
+      setFeedback({ type: "success", message: "Card cloned." });
+    } catch (error) {
+      console.error("Failed to clone card", error);
+      setFeedback({ type: "error", message: "Failed to clone card." });
     }
   };
 
@@ -2078,6 +2162,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                       cards={selectedDashboardCards}
                       templateLookup={templateLookup}
                       onEdit={handleOpenEditCard}
+                      onClone={handleCloneCard}
                       onRemove={handleRemoveCard}
                     />
                   </Stack>

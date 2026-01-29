@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
@@ -16,10 +16,12 @@ import {
   Group,
   Highlight,
   Loader,
+  Menu,
   Modal,
   MultiSelect,
   NumberInput,
   Paper,
+  Pagination,
   Collapse,
   Popover,
   ScrollArea,
@@ -48,12 +50,15 @@ import {
   IconAlertTriangle,
   IconArrowLeft,
   IconArrowRight,
+  IconArrowDown,
+  IconArrowUp,
   IconCalendarStats,
   IconChartHistogram,
   IconCheck,
   IconClock,
   IconCopy,
   IconDatabase,
+  IconFileText,
   IconDeviceFloppy,
   IconDownload,
   IconChevronDown,
@@ -69,6 +74,7 @@ import {
   IconSend,
   IconTemplate,
   IconTrash,
+  IconX,
 } from "@tabler/icons-react";
 import {
   Area,
@@ -120,6 +126,7 @@ import {
   useUpdateDerivedField,
   useReportDashboards,
   useUpsertDashboardCard,
+  useDeleteDashboardCard,
   type DashboardCardViewConfig,
   type DashboardSpotlightCardViewConfig,
   type DashboardVisualCardViewConfig,
@@ -198,6 +205,8 @@ type ReportTemplateQueryGroup = {
   filters: ReportFilter[];
   filterGroups: ReportFilterGroup[];
   rawFilterSql: string[];
+  columnAliases?: Record<string, string>;
+  columnOrder?: string[];
 };
 
 type PreviewColumnMeta = {
@@ -417,6 +426,8 @@ type ReportTemplate = {
   previewGrouping: PreviewGroupingRule[];
   previewAggregations: PreviewAggregationRule[];
   previewHaving: PreviewHavingRule[];
+  previewSql?: string | null;
+  visualSql?: string | null;
 };
 
 const DEFAULT_CONNECTION_LABEL = "OmniLodge core database";
@@ -611,6 +622,8 @@ const createQueryGroup = (
   filterGroups:
     overrides.filterGroups ?? [{ id: ROOT_FILTER_GROUP_ID, parentGroupId: null, logic: "and", childOrder: [] }],
   rawFilterSql: overrides.rawFilterSql ?? [],
+  columnOrder: overrides.columnOrder ?? [],
+  columnAliases: overrides.columnAliases ?? {},
 });
 const buildChildToken = (kind: "filter" | "group", id: string) => `${kind}:${id}`;
 const parseChildToken = (
@@ -736,6 +749,37 @@ const ensureRootFilterGroup = (groups: ReportFilterGroup[]): ReportFilterGroup[]
   ];
 };
 
+const ensureFilterGroupLinks = (
+  filters: ReportFilter[],
+  groups: ReportFilterGroup[],
+): ReportFilterGroup[] => {
+  const normalizedGroups = ensureRootFilterGroup(groups);
+  const referencedFilters = new Set<string>();
+  normalizedGroups.forEach((group) => {
+    group.childOrder.forEach((token) => {
+      const parsed = parseChildToken(token);
+      if (parsed?.kind === "filter") {
+        referencedFilters.add(parsed.id);
+      }
+    });
+  });
+  const missingFilters = filters.filter((filter) => !referencedFilters.has(filter.id));
+  if (missingFilters.length === 0) {
+    return normalizedGroups;
+  }
+  return normalizedGroups.map((group) =>
+    group.id === ROOT_FILTER_GROUP_ID
+      ? {
+          ...group,
+          childOrder: [
+            ...group.childOrder,
+            ...missingFilters.map((filter) => buildChildToken("filter", filter.id)),
+          ],
+        }
+      : group,
+  );
+};
+
 const FILTER_GROUP_LOGIC_OPTIONS: { value: ReportFilterGroup["logic"]; label: string }[] = [
   { value: "and", label: "All (AND)" },
   { value: "or", label: "Any (OR)" },
@@ -774,6 +818,8 @@ const createEmptyTemplate = (): ReportTemplate => ({
       filters: [],
       filterGroups: [{ id: ROOT_FILTER_GROUP_ID, parentGroupId: null, logic: "and", childOrder: [] }],
       rawFilterSql: [],
+      columnOrder: [],
+      columnAliases: {},
     },
   ],
   activeGroupId: "group-1",
@@ -1112,6 +1158,37 @@ type DashboardCardModalDraft = {
 };
 
 const toColumnAlias = (modelId: string, fieldId: string) => `${modelId}__${fieldId}`;
+const buildGroupColumnOrderFromFields = (group: ReportTemplateQueryGroup): string[] => {
+  const baseOrder = group.fields.flatMap((entry) =>
+    entry.fieldIds
+      .filter((fieldId): fieldId is string => typeof fieldId === "string" && fieldId.length > 0)
+      .map((fieldId) => toColumnAlias(entry.modelId, fieldId)),
+  );
+  const allowed = new Set(baseOrder);
+  const rawOrder = Array.isArray(group.columnOrder)
+    ? group.columnOrder.filter((alias): alias is string => typeof alias === "string")
+    : [];
+  const sanitized = rawOrder.filter((alias) => allowed.has(alias));
+  const remainder = baseOrder.filter((alias) => !sanitized.includes(alias));
+  return [...sanitized, ...remainder];
+};
+
+const reorderGroupFieldsByAlias = (
+  group: ReportTemplateQueryGroup,
+  orderedAliases: string[],
+): Array<{ modelId: string; fieldIds: string[] }> => {
+  const byModel = new Map<string, string[]>();
+  orderedAliases.forEach((alias) => {
+    const [modelId, fieldId] = alias.split("__");
+    if (!modelId || !fieldId) {
+      return;
+    }
+    const fieldIds = byModel.get(modelId) ?? [];
+    fieldIds.push(fieldId);
+    byModel.set(modelId, fieldIds);
+  });
+  return Array.from(byModel.entries()).map(([modelId, fieldIds]) => ({ modelId, fieldIds }));
+};
 
 const parseColumnAlias = (
   alias: string | undefined,
@@ -1279,6 +1356,18 @@ const SPOTLIGHT_FORMAT_OPTIONS: {
   { value: "number", label: "Number" },
   { value: "currency", label: "Currency" },
   { value: "percentage", label: "Percentage" },
+];
+
+const SPOTLIGHT_AGGREGATION_OPTIONS: {
+  value: NonNullable<MetricSpotlightDefinitionDto["aggregation"]>;
+  label: string;
+}[] = [
+  { value: "sum", label: "Sum" },
+  { value: "avg", label: "Average" },
+  { value: "min", label: "Minimum" },
+  { value: "max", label: "Maximum" },
+  { value: "count", label: "Count" },
+  { value: "count_distinct", label: "Count distinct" },
 ];
 
 const SPOTLIGHT_CURRENCY_OPTIONS: { value: string; label: string }[] = [
@@ -2328,6 +2417,14 @@ const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitio
     "currency",
     "percentage",
   ];
+  const aggregationValues: ReadonlyArray<MetricSpotlightDefinitionDto["aggregation"]> = [
+    "sum",
+    "avg",
+    "min",
+    "max",
+    "count",
+    "count_distinct",
+  ];
 
   return candidate
     .map((entry) => {
@@ -2337,7 +2434,7 @@ const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitio
       const record = entry as Record<string, unknown>;
       const metric = typeof record.metric === "string" ? record.metric.trim() : "";
       const label = typeof record.label === "string" ? record.label.trim() : "";
-      if (!metric || !label) {
+      if (!metric) {
         return null;
       }
       const targetRaw = record.target;
@@ -2367,12 +2464,21 @@ const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitio
       const formatCandidate =
         typeof record.format === "string" ? (record.format as MetricSpotlightDefinitionDto["format"]) : null;
       const format = formatCandidate && formatValues.includes(formatCandidate) ? formatCandidate : undefined;
+      const aggregationCandidate =
+        typeof record.aggregation === "string"
+          ? (record.aggregation as MetricSpotlightDefinitionDto["aggregation"])
+          : null;
+      const aggregation =
+        aggregationCandidate && aggregationValues.includes(aggregationCandidate)
+          ? aggregationCandidate
+          : undefined;
       const currencyRaw = typeof record.currency === "string" ? record.currency.trim().toUpperCase() : "";
       const currency = currencyRaw.length === 3 ? currencyRaw : undefined;
 
       return {
         metric,
-        label,
+        ...(label ? { label } : {}),
+        ...(aggregation ? { aggregation } : {}),
         ...(target !== undefined ? { target } : {}),
         ...(comparison ? { comparison } : {}),
         ...(comparisonRange ? { comparisonRange } : {}),
@@ -2421,6 +2527,24 @@ const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitio
               if (!id) {
                 return null;
               }
+              const groupAliases = Object.entries(
+                (group as { columnAliases?: Record<string, unknown> }).columnAliases ?? {},
+              ).reduce<Record<string, string>>((aliasAccumulator, [key, value]) => {
+                if (typeof key === "string" && typeof value === "string") {
+                  aliasAccumulator[key] = value;
+                }
+                return aliasAccumulator;
+              }, {});
+
+              const groupOrder = Array.isArray(group.columnOrder)
+                ? group.columnOrder.filter((alias) => typeof alias === "string")
+                : [];
+
+              const groupFilters = Array.isArray(group.filters) ? (group.filters as ReportFilter[]) : [];
+              const normalizedFilterGroups = ensureFilterGroupLinks(
+                groupFilters,
+                Array.isArray(group.filterGroups) ? (group.filterGroups as ReportFilterGroup[]) : [],
+              );
               return {
                 id,
                 name,
@@ -2443,11 +2567,11 @@ const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitio
                       .filter((entry): entry is { modelId: string; fieldIds: string[] } => Boolean(entry))
                   : [],
                 joins: Array.isArray(group.joins) ? (group.joins as JoinCondition[]) : [],
-                filters: Array.isArray(group.filters) ? (group.filters as ReportFilter[]) : [],
-                filterGroups: Array.isArray(group.filterGroups)
-                  ? (group.filterGroups as ReportFilterGroup[])
-                  : [{ id: ROOT_FILTER_GROUP_ID, parentGroupId: null, logic: "and", childOrder: [] }],
+                filters: groupFilters,
+                filterGroups: normalizedFilterGroups,
                 rawFilterSql: Array.isArray(group.rawFilterSql) ? (group.rawFilterSql as string[]) : [],
+                ...(Object.keys(groupAliases).length > 0 ? { columnAliases: groupAliases } : {}),
+                ...(groupOrder.length > 0 ? { columnOrder: groupOrder } : {}),
               };
             })
             .filter((entry): entry is ReportTemplateQueryGroup => Boolean(entry))
@@ -2483,6 +2607,10 @@ const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitio
       : Array.isArray(template.options?.previewHaving)
       ? normalizePreviewHavingRules(template.options.previewHaving)
       : [];
+  const previewSql =
+    typeof template.options?.previewSql === "string" ? template.options.previewSql : null;
+  const visualSql =
+    typeof template.options?.visualSql === "string" ? template.options.visualSql : null;
 
   const columnOrder = rawColumnOrder.filter(
     (alias): alias is string => typeof alias === "string" && alias.length > 0,
@@ -2629,10 +2757,32 @@ const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitio
                 filters,
                 filterGroups,
                 rawFilterSql: rawSql,
+                ...(Object.keys(columnAliases).length > 0 ? { columnAliases } : {}),
+                ...(columnOrder.length > 0 ? { columnOrder } : {}),
               },
             ];
 
-    const activeGroup = normalizedQueryGroups[0];
+    const sortedQueryGroups = [...normalizedQueryGroups].sort((first, second) => {
+      const getOrder = (group: ReportTemplateQueryGroup, fallback: number) => {
+        const nameMatch = group.name.match(/group\s*(\d+)/i);
+        const idMatch = group.id.match(/group-(\d+)/i);
+        const value = Number(nameMatch?.[1] ?? idMatch?.[1] ?? fallback);
+        return Number.isFinite(value) ? value : fallback;
+      };
+      const firstIndex = normalizedQueryGroups.indexOf(first);
+      const secondIndex = normalizedQueryGroups.indexOf(second);
+      return getOrder(first, firstIndex + 1) - getOrder(second, secondIndex + 1);
+    });
+
+    const activeGroup = sortedQueryGroups[0];
+    const activeGroupAliases =
+      (activeGroup as { columnAliases?: Record<string, string> }).columnAliases ?? {};
+    const activeGroupOrder = Array.isArray(activeGroup?.columnOrder)
+      ? activeGroup.columnOrder.filter((alias): alias is string => typeof alias === "string")
+      : [];
+    const effectiveColumnOrder = activeGroupOrder.length > 0 ? activeGroupOrder : columnOrder;
+    const effectiveColumnAliases =
+      Object.keys(activeGroupAliases).length > 0 ? activeGroupAliases : columnAliases;
 
     return {
       id: template.id,
@@ -2658,17 +2808,19 @@ const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitio
       filters: activeGroup?.filters ?? filters,
       filterGroups: activeGroup?.filterGroups ?? filterGroups,
       rawFilterSql: activeGroup?.rawFilterSql ?? rawSql,
-      columnOrder,
-      columnAliases,
+      columnOrder: effectiveColumnOrder,
+      columnAliases: effectiveColumnAliases,
       queryConfig,
-      queryGroups: normalizedQueryGroups,
-      activeGroupId: normalizedQueryGroups[0]?.id ?? "group-1",
+      queryGroups: sortedQueryGroups,
+      activeGroupId: sortedQueryGroups[0]?.id ?? "group-1",
       derivedFields,
       metricsSpotlight,
       previewOrder,
-    previewGrouping,
-    previewAggregations,
-    previewHaving,
+      previewGrouping,
+      previewAggregations,
+      previewHaving,
+      previewSql,
+      visualSql,
   };
 };
 
@@ -2742,6 +2894,7 @@ const Reports = (props: GenericPageProps) => {
   const deleteTemplateMutation = useDeleteReportTemplate();
   const updateDerivedFieldMutation = useUpdateDerivedField();
   const upsertDashboardCardMutation = useUpsertDashboardCard();
+  const deleteDashboardCardMutation = useDeleteDashboardCard();
 
   const [templates, setTemplates] = useState<ReportTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
@@ -2760,8 +2913,6 @@ const Reports = (props: GenericPageProps) => {
   const [unionDraftText, setUnionDraftText] = useState("");
   const [addModelPopoverOpen, setAddModelPopoverOpen] = useState(false);
   const [addModelId, setAddModelId] = useState<string | null>(null);
-  const [fieldInventoryQuery, setFieldInventoryQuery] = useState("");
-  const [showSelectedOnly, setShowSelectedOnly] = useState(false);
   const groupOptions = useMemo(
     () =>
       draft.queryGroups.map((group) => ({
@@ -2779,6 +2930,10 @@ const Reports = (props: GenericPageProps) => {
       const existing = current.queryGroups ?? [];
       const activeName =
         existing.find((group) => group.id === activeId)?.name ?? activeQueryGroup?.name ?? "Group 1";
+      const hasCurrentFilters =
+        current.filters.length > 0 ||
+        current.rawFilterSql.length > 0 ||
+        current.filterGroups.some((group) => group.childOrder.length > 0);
       const snapshot: ReportTemplateQueryGroup = {
         id: activeId,
         name: activeName,
@@ -2788,10 +2943,28 @@ const Reports = (props: GenericPageProps) => {
         filters: deepClone(current.filters),
         filterGroups: deepClone(current.filterGroups),
         rawFilterSql: [...current.rawFilterSql],
+        columnOrder: [...current.columnOrder],
+        ...(Object.keys(current.columnAliases ?? {}).length > 0
+          ? { columnAliases: { ...current.columnAliases } }
+          : {}),
       };
-      const nextGroups = existing.filter((group) => group.id !== activeId);
-      nextGroups.push(snapshot);
-      return nextGroups;
+      const hasActive = existing.some((group) => group.id === activeId);
+      if (!hasActive) {
+        return [...existing, snapshot];
+      }
+      return existing.map((group) => {
+        if (group.id !== activeId) {
+          return group;
+        }
+        if (hasCurrentFilters) {
+          return snapshot;
+        }
+        const groupHasFilters =
+          (group.filters?.length ?? 0) > 0 ||
+          (group.rawFilterSql?.length ?? 0) > 0 ||
+          (group.filterGroups ?? []).some((entry) => entry.childOrder.length > 0);
+        return groupHasFilters ? group : snapshot;
+      });
     },
     [activeQueryGroup?.name],
   );
@@ -2802,7 +2975,7 @@ const Reports = (props: GenericPageProps) => {
       group.models,
     );
     const sanitizedGroups = ensureRootFilterGroup(group.filterGroups ?? []);
-    return {
+        return {
       ...current,
       activeGroupId: group.id,
       models: [...group.models],
@@ -2811,6 +2984,11 @@ const Reports = (props: GenericPageProps) => {
       filters: deepClone(group.filters),
       filterGroups: deepClone(sanitizedGroups),
       rawFilterSql: [...group.rawFilterSql],
+      columnAliases:
+        (group as { columnAliases?: Record<string, string> }).columnAliases
+          ? { ...(group as { columnAliases?: Record<string, string> }).columnAliases }
+          : { ...current.columnAliases },
+      columnOrder: buildGroupColumnOrderFromFields(group),
       derivedFields: reconciledDerivedFields,
     };
   }, []);
@@ -2863,6 +3041,33 @@ const Reports = (props: GenericPageProps) => {
   const [visualExecutedAt, setVisualExecutedAt] = useState<string | null>(null);
   const [previewSql, setPreviewSql] = useState<string | null>(null);
   const [visualSql, setVisualSql] = useState<string | null>(null);
+  const [previewPage, setPreviewPage] = useState(1);
+  const [previewPageSize, setPreviewPageSize] = useState(25);
+  const joinsCount = draft.queryGroups.reduce(
+    (sum, group) => sum + (group.joins?.length ?? 0),
+    0,
+  );
+  const visualsCount = Array.isArray(draft.visuals) ? draft.visuals.length : 0;
+  const queryInspectorCount = (previewSql ? 1 : 0) + (visualSql ? 1 : 0);
+  const filterSettingsCount = useMemo(() => {
+    const filterCount = draft.queryGroups.reduce(
+      (sum, group) => sum + (group.filters?.length ?? 0) + (group.rawFilterSql?.length ?? 0),
+      0,
+    );
+    return (
+      filterCount +
+      draft.previewGrouping.length +
+      draft.previewAggregations.length +
+      draft.previewHaving.length +
+      draft.previewOrder.length
+    );
+  }, [
+    draft.previewAggregations.length,
+    draft.previewGrouping.length,
+    draft.previewHaving.length,
+    draft.previewOrder.length,
+    draft.queryGroups,
+  ]);
   const [templateSearch, setTemplateSearch] = useState<string>("");
   const [debouncedTemplateSearch] = useDebouncedValue(templateSearch, 250);
   const [templateCategoryFilter, setTemplateCategoryFilter] = useState<string>("all");
@@ -2873,27 +3078,50 @@ const Reports = (props: GenericPageProps) => {
   const [selectedDashboardIdForModal, setSelectedDashboardIdForModal] = useState<string | null>(null);
   const [dashboardCardTitle, setDashboardCardTitle] = useState("");
   const [dashboardModalError, setDashboardModalError] = useState<string | null>(null);
+  const [pendingSpotlightRemoval, setPendingSpotlightRemoval] = useState<{
+    index: number;
+    linkedCards: Array<{ dashboardId: string; cardId: string; dashboardName: string; cardTitle: string }>;
+  } | null>(null);
   const [templateSuccess, setTemplateSuccess] = useState<string | null>(null);
   const [isDerivedFieldsDrawerOpen, setDerivedFieldsDrawerOpen] = useState(false);
   const sectionDefaults = {
     templateDetails: false,
     schedules: false,
-    joins: true,
-    fields: true,
-    visuals: true,
-    spotlight: true,
-    queryInspector: true,
-    filters: true,
-    preview: true,
-    metricsSummary: true,
+    joins: false,
+    fields: false,
+    visuals: false,
+    spotlight: false,
+    queryInspector: false,
+    filters: false,
+    preview: false,
+    metricsSummary: false,
     templateLibrary: true,
   } as const;
   type SectionKey = keyof typeof sectionDefaults;
+  type JoinsPanelKey = "joinsOverview" | "joinsCustom";
+  type FiltersPanelKey = "filtering" | "grouping" | "aggregations" | "having" | "previewOrder";
   const [sectionOpen, setSectionOpen] = useState<Record<SectionKey, boolean>>(
     () => ({ ...sectionDefaults })
   );
+  const [joinsPanelOpen, setJoinsPanelOpen] = useState<Record<JoinsPanelKey, boolean>>(() => ({
+    joinsOverview: sectionDefaults.joins,
+    joinsCustom: false,
+  }));
+  const [filtersPanelOpen, setFiltersPanelOpen] = useState<Record<FiltersPanelKey, boolean>>(() => ({
+    filtering: false,
+    grouping: false,
+    aggregations: false,
+    having: false,
+    previewOrder: false,
+  }));
+  const [unionModeByGroupId, setUnionModeByGroupId] = useState<Record<string, "all" | "distinct">>(
+    () => ({}),
+  );
   const toggleSection = useCallback((key: SectionKey) => {
     setSectionOpen((current) => ({ ...current, [key]: !current[key] }));
+  }, []);
+  const toggleFiltersPanel = useCallback((key: FiltersPanelKey) => {
+    setFiltersPanelOpen((current) => ({ ...current, [key]: !current[key] }));
   }, []);
   const [selectedDerivedFieldId, setSelectedDerivedFieldId] = useState<string | null>(() =>
     draft.derivedFields[0]?.id ?? null,
@@ -3039,6 +3267,8 @@ const Reports = (props: GenericPageProps) => {
   useEffect(() => {
     if (selectedTemplate) {
       setDraft(deepClone(selectedTemplate));
+      setPreviewSql(selectedTemplate.previewSql ?? null);
+      setVisualSql(selectedTemplate.visualSql ?? null);
     }
   }, [selectedTemplate]);
 
@@ -3105,7 +3335,7 @@ const Reports = (props: GenericPageProps) => {
 
   const buildSelectedFieldDetailsForGroup = useCallback(
     (group: ReportTemplateQueryGroup): SelectedFieldDetail[] => {
-      const details: SelectedFieldDetail[] = [];
+      const detailsByAlias = new Map<string, SelectedFieldDetail>();
       group.fields.forEach((entry) => {
         const model = modelMap.get(entry.modelId);
         if (!model) {
@@ -3117,7 +3347,9 @@ const Reports = (props: GenericPageProps) => {
             return;
           }
           const aliasKey = toColumnAlias(model.id, field.id);
-          const aliasValue = draft.columnAliases[aliasKey];
+          const groupAliases =
+            (group as { columnAliases?: Record<string, string> }).columnAliases ?? draft.columnAliases;
+          const aliasValue = groupAliases[aliasKey];
           const detail: SelectedFieldDetail = {
             ...field,
             modelId: model.id,
@@ -3127,10 +3359,13 @@ const Reports = (props: GenericPageProps) => {
           if (aliasValue !== undefined) {
             detail.alias = aliasValue;
           }
-          details.push(detail);
+          detailsByAlias.set(aliasKey, detail);
         });
       });
-      return details;
+      const orderedAliases = buildGroupColumnOrderFromFields(group);
+      return orderedAliases
+        .map((alias) => detailsByAlias.get(alias))
+        .filter((detail): detail is SelectedFieldDetail => Boolean(detail));
     },
     [draft.columnAliases, modelMap],
   );
@@ -3139,8 +3374,15 @@ const Reports = (props: GenericPageProps) => {
     (group: ReportTemplateQueryGroup): Map<string, SelectedFieldDetail> => {
       const map = new Map<string, SelectedFieldDetail>();
       const details = buildSelectedFieldDetailsForGroup(group);
+      const groupAliases =
+        (group as { columnAliases?: Record<string, string> }).columnAliases ?? draft.columnAliases;
       details.forEach((detail) => {
-        map.set(toColumnAlias(detail.modelId, detail.id), detail);
+        const aliasKey = toColumnAlias(detail.modelId, detail.id);
+        const alias = groupAliases[aliasKey] ?? aliasKey;
+        map.set(aliasKey, detail);
+        if (alias !== aliasKey) {
+          map.set(alias, detail);
+        }
       });
       draft.derivedFields.forEach((field) => {
         if (!isDerivedFieldVisibleInBuilder(field)) {
@@ -3163,7 +3405,7 @@ const Reports = (props: GenericPageProps) => {
       });
       return map;
     },
-    [buildSelectedFieldDetailsForGroup, draft.derivedFields],
+    [buildSelectedFieldDetailsForGroup, draft.columnAliases, draft.derivedFields],
   );
 
   const fieldDetailByAlias = useMemo(() => {
@@ -3483,6 +3725,44 @@ const Reports = (props: GenericPageProps) => {
     return [...baseOptions, ...derivedOptions];
   }, [draft.derivedFields, draft.models, modelMap]);
 
+  const buildFilterFieldOptionsForGroup = useCallback(
+    (group: ReportTemplateQueryGroup): FilterFieldOption[] => {
+      const baseOptions = group.models.flatMap((modelId) => {
+        const model = modelMap.get(modelId);
+        if (!model) {
+          return [];
+        }
+        return model.fields.map((field) => ({
+          value: buildFilterOptionKey(model.id, field.id),
+          label: `${model.name} • ${field.label}`,
+          modelId: model.id,
+          fieldId: field.id,
+          field,
+          source: "model" as const,
+        }));
+      });
+
+      const derivedOptions = draft.derivedFields
+        .filter((field) => isDerivedFieldVisibleInBuilder(field))
+        .map((field) => ({
+          value: buildFilterOptionKey(DERIVED_FIELD_SENTINEL, field.id),
+          label: `Derived • ${field.name}`,
+          modelId: DERIVED_FIELD_SENTINEL,
+          fieldId: field.id,
+          field: {
+            id: field.id,
+            label: field.name,
+            type: "number",
+            sourceColumn: field.expression,
+          } as DataField,
+          source: "derived" as const,
+        }));
+
+      return [...baseOptions, ...derivedOptions];
+    },
+    [draft.derivedFields, modelMap],
+  );
+
   const numericFilterFieldOptions = useMemo(
     () =>
       filterFieldOptions.filter((option) =>
@@ -3644,6 +3924,25 @@ const Reports = (props: GenericPageProps) => {
     () => previewResult?.rows ?? [],
     [previewResult],
   );
+  const previewTotalPages = useMemo(() => {
+    if (previewRows.length === 0) {
+      return 1;
+    }
+    return Math.max(1, Math.ceil(previewRows.length / previewPageSize));
+  }, [previewRows.length, previewPageSize]);
+  const previewPageRows = useMemo(() => {
+    if (previewRows.length === 0) {
+      return [];
+    }
+    const startIndex = (previewPage - 1) * previewPageSize;
+    return previewRows.slice(startIndex, startIndex + previewPageSize);
+  }, [previewPage, previewPageSize, previewRows]);
+
+  useEffect(() => {
+    if (previewPage > previewTotalPages) {
+      setPreviewPage(previewTotalPages);
+    }
+  }, [previewPage, previewTotalPages]);
 
   const movePreviewColumn = useCallback(
     (alias: string, direction: "left" | "right") => {
@@ -3990,6 +4289,9 @@ const getColumnLabel = useCallback(
         if (detail.source === "derived" || detail.derivedFieldId) {
           return { kind: "derived", fieldId: detail.derivedFieldId ?? detail.id };
         }
+        if (detail.modelId) {
+          return { kind: "model", modelId: detail.modelId, fieldId: detail.id };
+        }
         const parsed = parseColumnAlias(alias);
         if (!parsed) {
           return null;
@@ -4159,15 +4461,135 @@ const getColumnLabel = useCallback(
       derivedFieldPayloads,
     ],
   );
-  const visualQueryDescriptor = useMemo(
-    () =>
-      buildVisualDescriptor(activeVisual ?? null, {
-        models: draft.models,
-        joins: draft.joins,
-        filters: draft.filters,
-        fieldDetailByAlias,
-      }),
-    [activeVisual, buildVisualDescriptor, draft.filters, draft.joins, draft.models, fieldDetailByAlias],
+  const visualQueryDescriptor = useMemo(() => {
+    const activeGroup = activeQueryGroup ?? draft.queryGroups[0];
+    const fieldMap = activeGroup
+      ? buildFieldDetailByAliasForGroup(activeGroup)
+      : fieldDetailByAlias;
+    return buildVisualDescriptor(activeVisual ?? null, {
+      models: activeGroup?.models ?? draft.models,
+      joins: activeGroup?.joins ?? draft.joins,
+      filters: activeGroup?.filters ?? draft.filters,
+      fieldDetailByAlias: fieldMap,
+    });
+  }, [
+    activeQueryGroup,
+    activeVisual,
+    buildFieldDetailByAliasForGroup,
+    buildVisualDescriptor,
+    draft.filters,
+    draft.joins,
+    draft.models,
+    draft.queryGroups,
+    fieldDetailByAlias,
+  ]);
+
+  const resolveSpotlightGroup = useCallback(
+    (metricAlias: string) => {
+      const groups = syncQueryGroups(draft);
+      for (const group of groups) {
+        const fieldMap = buildFieldDetailByAliasForGroup(group);
+        if (fieldMap.has(metricAlias)) {
+          return group;
+        }
+      }
+      return activeQueryGroup ?? groups[0];
+    },
+    [activeQueryGroup, buildFieldDetailByAliasForGroup, draft, syncQueryGroups],
+  );
+
+  const buildSpotlightQueryConfig = useCallback(
+    (
+      metricAlias: string,
+      aggregation: MetricSpotlightDefinitionDto["aggregation"] | undefined,
+      group: ReportTemplateQueryGroup | undefined,
+    ): QueryConfig | null => {
+      if (!metricAlias) {
+        return null;
+      }
+      const resolvedGroup = group ?? activeQueryGroup ?? draft.queryGroups[0];
+      if (!resolvedGroup) {
+        return null;
+      }
+      const fieldMap = buildFieldDetailByAliasForGroup(resolvedGroup);
+      const detail = fieldMap.get(metricAlias);
+      if (!detail) {
+        return null;
+      }
+      const metricAggregation =
+        aggregation && METRIC_AGGREGATIONS.includes(aggregation as QueryConfigMetric["aggregation"])
+          ? (aggregation as QueryConfigMetric["aggregation"])
+          : "sum";
+      const metricAggAlias = buildMetricAggregationAlias(metricAlias, metricAggregation);
+      const metrics: QueryConfigMetric[] =
+        detail.source === "derived" || detail.derivedFieldId
+          ? [
+              {
+                modelId: DERIVED_FIELD_SENTINEL,
+                fieldId: detail.derivedFieldId ?? detail.id,
+                aggregation: metricAggregation,
+                alias: metricAggAlias,
+              },
+            ]
+          : detail.modelId
+          ? [
+              {
+                modelId: detail.modelId,
+                fieldId: detail.id,
+                aggregation: metricAggregation,
+                alias: metricAggAlias,
+              },
+            ]
+          : (() => {
+              const parsed = parseColumnAlias(metricAlias);
+              if (!parsed) {
+                return [];
+              }
+              return [
+                {
+                  modelId: parsed.modelId,
+                  fieldId: parsed.fieldId,
+                  aggregation: metricAggregation,
+                  alias: metricAggAlias,
+                },
+              ];
+            })();
+      if (metrics.length === 0) {
+        return null;
+      }
+      const { filters: normalizedFilters } = normalizeFiltersForQuery(resolvedGroup.filters ?? []);
+      const joins =
+        resolvedGroup.joins.length > 0
+          ? resolvedGroup.joins.map(
+              ({ id, leftModel, leftField, rightModel, rightField, joinType, description }) => ({
+                id,
+                leftModel,
+                leftField,
+                rightModel,
+                rightField,
+                joinType,
+                description,
+              }),
+            )
+          : undefined;
+      return {
+        models: [...resolvedGroup.models],
+        joins,
+        filters: normalizedFilters.length > 0 ? normalizedFilters : undefined,
+        metrics,
+        derivedFields: derivedFieldPayloads.length > 0 ? derivedFieldPayloads : undefined,
+        options: {
+          allowAsync: true,
+          templateId: draft.id && draft.id !== "template-empty" ? draft.id : undefined,
+        },
+      };
+    },
+    [
+      activeQueryGroup,
+      buildFieldDetailByAliasForGroup,
+      derivedFieldPayloads,
+      draft,
+    ],
   );
   const buildUnionAnalyticsConfig = useCallback(() => {
     const groups = syncQueryGroups(draft);
@@ -4211,11 +4633,12 @@ const getColumnLabel = useCallback(
       if (!group.models || group.models.length === 0) {
         return { config: null, warnings: ["Select at least one model to run a preview."] };
       }
+      const groupAliases = buildGroupAliasOverrides(group);
       const selectEntries: QueryConfig["select"] = [];
       group.fields.forEach((entry) => {
         entry.fieldIds.forEach((fieldId) => {
           const aliasKey = toColumnAlias(entry.modelId, fieldId);
-          const aliasValue = draft.columnAliases[aliasKey];
+          const aliasValue = groupAliases[aliasKey] ?? draft.columnAliases[aliasKey];
           selectEntries.push({
             modelId: entry.modelId,
             fieldId,
@@ -4226,6 +4649,15 @@ const getColumnLabel = useCallback(
       if (selectEntries.length === 0) {
         return { config: null, warnings: ["Select at least one field to run a preview."] };
       }
+      type SelectEntry = NonNullable<QueryConfig["select"]>[number];
+      const selectByAlias = new Map<string, SelectEntry>();
+      selectEntries.forEach((entry) => {
+        selectByAlias.set(toColumnAlias(entry.modelId, entry.fieldId), entry);
+      });
+      const orderedSelect = buildGroupColumnOrderFromFields(group)
+        .map((aliasKey) => selectByAlias.get(aliasKey))
+        .filter((entry): entry is SelectEntry => Boolean(entry));
+      const finalSelect = orderedSelect.length > 0 ? orderedSelect : selectEntries;
       const { filters: normalizedFilters, warnings } = normalizeFiltersForQuery(group.filters);
       const joins =
         group.joins.length > 0
@@ -4246,7 +4678,7 @@ const getColumnLabel = useCallback(
           models: [...group.models],
           joins,
           filters: normalizedFilters.length > 0 ? normalizedFilters : undefined,
-          select: selectEntries,
+          select: finalSelect,
           limit: 500,
           derivedFields: derivedFieldPayloads.length > 0 ? derivedFieldPayloads : undefined,
         },
@@ -4873,6 +5305,50 @@ const getColumnLabel = useCallback(
       tone: "positive" | "neutral" | "negative";
     };
 
+    const aggregateValues = (
+      values: number[],
+      aggregation: MetricSpotlightDefinitionDto["aggregation"] | undefined,
+    ): number | null => {
+      if (values.length === 0) {
+        return null;
+      }
+      switch (aggregation) {
+        case "avg":
+          return values.reduce((total, value) => total + value, 0) / values.length;
+        case "min":
+          return Math.min(...values);
+        case "max":
+          return Math.max(...values);
+        case "count":
+          return values.length;
+        case "count_distinct":
+          return new Set(values).size;
+        case "sum":
+        default:
+          return values.reduce((total, value) => total + value, 0);
+      }
+    };
+
+    const aggregationLabel = (
+      aggregation: MetricSpotlightDefinitionDto["aggregation"] | undefined,
+    ): string => {
+      switch (aggregation) {
+        case "avg":
+          return "Average";
+        case "min":
+          return "Minimum";
+        case "max":
+          return "Maximum";
+        case "count":
+          return "Count";
+        case "count_distinct":
+          return "Distinct count";
+        case "sum":
+        default:
+          return "Total";
+      }
+    };
+
     const cards: SummaryCard[] = [];
 
     if (draft.metricsSpotlight.length > 0) {
@@ -4882,7 +5358,8 @@ const getColumnLabel = useCallback(
           return;
         }
 
-        const values = visualRows
+        const sourceRows = visualRows.length > 0 ? visualRows : previewRows;
+        const values = sourceRows
           .map((row) => coerceNumber(row[alias]))
           .filter((value): value is number => value !== null);
 
@@ -4892,13 +5369,19 @@ const getColumnLabel = useCallback(
             label: spotlight.label || getColumnLabel(alias),
             value: "Run analytics",
             delta: "—",
-            context: "Execute the analytics query to populate this card.",
+            context:
+              visualRows.length > 0
+                ? "Execute the analytics query to populate this card."
+                : "Run the data preview to populate this card.",
             tone: "neutral",
           });
           return;
         }
 
-        const aggregatedValue = values.reduce((total, value) => total + value, 0);
+        const aggregatedValue = aggregateValues(values, spotlight.aggregation);
+        if (aggregatedValue === null) {
+          return;
+        }
         const formattedValue = formatMetricValue(aggregatedValue, spotlight.format, spotlight.currency);
 
         let deltaDisplay = "—";
@@ -4923,7 +5406,9 @@ const getColumnLabel = useCallback(
         }
 
         if (contextParts.length === 0) {
-          contextParts.push("Latest analytics result");
+          const label = aggregationLabel(spotlight.aggregation);
+          const sourceLabel = visualRows.length > 0 ? "analytics" : "preview";
+          contextParts.push(`${label} from ${values.length} ${sourceLabel} rows`);
         }
 
         cards.push({
@@ -5078,99 +5563,113 @@ const getColumnLabel = useCallback(
     metricLabel,
     visualColumns,
     visualRows,
+    previewRows,
     getColumnLabel,
   ]);
 
-  const joinGraph = useMemo(() => {
-    const nodes = draft.models.map((modelId) => ({
-      id: modelId,
-      label: modelMap.get(modelId)?.name ?? modelId,
-    }));
+  const buildJoinGraph = useCallback(
+    (models: string[], joins: JoinCondition[]) => {
+      const nodes = models.map((modelId) => ({
+        id: modelId,
+        label: modelMap.get(modelId)?.name ?? modelId,
+      }));
 
-    const edges = draft.joins.map((join) => ({
-      id: join.id,
-      from: join.leftModel,
-      to: join.rightModel,
-      joinType: join.joinType,
-      description: join.description ?? "",
-      leftLabel: modelMap.get(join.leftModel)?.name ?? join.leftModel,
-      rightLabel: modelMap.get(join.rightModel)?.name ?? join.rightModel,
-    }));
+      const edges = joins.map((join) => ({
+        id: join.id,
+        from: join.leftModel,
+        to: join.rightModel,
+        joinType: join.joinType,
+        description: join.description ?? "",
+        leftLabel: modelMap.get(join.leftModel)?.name ?? join.leftModel,
+        rightLabel: modelMap.get(join.rightModel)?.name ?? join.rightModel,
+      }));
 
-    const adjacency = new Map<string, Set<string>>();
-    nodes.forEach((node) => adjacency.set(node.id, new Set<string>()));
-    edges.forEach((edge) => {
-      adjacency.get(edge.from)?.add(edge.to);
-      adjacency.get(edge.to)?.add(edge.from);
-    });
+      const adjacency = new Map<string, Set<string>>();
+      nodes.forEach((node) => adjacency.set(node.id, new Set<string>()));
+      edges.forEach((edge) => {
+        adjacency.get(edge.from)?.add(edge.to);
+        adjacency.get(edge.to)?.add(edge.from);
+      });
 
-    const components: string[][] = [];
-    const visited = new Set<string>();
-    nodes.forEach((node) => {
-      if (visited.has(node.id)) {
-        return;
-      }
-      const queue: string[] = [node.id];
-      const members: string[] = [];
-      while (queue.length > 0) {
-        const current = queue.shift()!;
-        if (visited.has(current)) {
-          continue;
+      const components: string[][] = [];
+      const visited = new Set<string>();
+      nodes.forEach((node) => {
+        if (visited.has(node.id)) {
+          return;
         }
-        visited.add(current);
-        members.push(current);
-        adjacency.get(current)?.forEach((neighbor) => {
-          if (!visited.has(neighbor)) {
-            queue.push(neighbor);
+        const queue: string[] = [node.id];
+        const members: string[] = [];
+        while (queue.length > 0) {
+          const current = queue.shift()!;
+          if (visited.has(current)) {
+            continue;
           }
-        });
-      }
-      if (members.length > 0) {
-        components.push(members);
-      }
-    });
+          visited.add(current);
+          members.push(current);
+          adjacency.get(current)?.forEach((neighbor) => {
+            if (!visited.has(neighbor)) {
+              queue.push(neighbor);
+            }
+          });
+        }
+        if (members.length > 0) {
+          components.push(members);
+        }
+      });
 
-    const disconnectedIds = components
-      .slice(1)
-      .reduce<string[]>((accumulator, component) => accumulator.concat(component), []);
-    const disconnectedSet = new Set(disconnectedIds);
-    const disconnected = nodes.filter((node) => disconnectedSet.has(node.id));
+      const disconnectedIds = components
+        .slice(1)
+        .reduce<string[]>((accumulator, component) => accumulator.concat(component), []);
+      const disconnectedSet = new Set(disconnectedIds);
+      const disconnected = nodes.filter((node) => disconnectedSet.has(node.id));
 
-    return { nodes, edges, adjacency, components, disconnected };
-  }, [draft.joins, draft.models, modelMap]);
+      return { nodes, edges, adjacency, components, disconnected };
+    },
+    [modelMap],
+  );
 
-  const joinGraphLabelLookup = useMemo(() => {
-    const map = new Map<string, string>();
-    joinGraph.nodes.forEach((node) => {
-      map.set(node.id, node.label);
-    });
-    return map;
-  }, [joinGraph]);
-
-  const joinGraphNodeStats = useMemo(
-    () =>
-      joinGraph.nodes.map((node) => ({
+  const joinGraphSummaries = useMemo(() => {
+    const groups = syncQueryGroups(draft);
+    return groups.map((group) => {
+      const graph = buildJoinGraph(group.models, group.joins);
+      const labelLookup = new Map<string, string>();
+      graph.nodes.forEach((node) => {
+        labelLookup.set(node.id, node.label);
+      });
+      const nodeStats = graph.nodes.map((node) => ({
         ...node,
-        connections: joinGraph.adjacency.get(node.id)?.size ?? 0,
-      })),
-    [joinGraph],
-  );
-
-  const joinGraphComponentSummaries = useMemo(
-    () =>
-      joinGraph.components.map((component, index) => ({
-        id: `component-${index}`,
+        connections: graph.adjacency.get(node.id)?.size ?? 0,
+      }));
+      const componentSummaries = graph.components.map((component, index) => ({
+        id: `${group.id}-component-${index}`,
         title: `Cluster ${index + 1}`,
-        members: component.map((nodeId) => joinGraphLabelLookup.get(nodeId) ?? nodeId),
-      })),
-    [joinGraph, joinGraphLabelLookup],
-  );
+        members: component.map((nodeId) => labelLookup.get(nodeId) ?? nodeId),
+      }));
+      return {
+        groupId: group.id,
+        groupName: group.name,
+        joins: group.joins,
+        graph,
+        nodeStats,
+        componentSummaries,
+      };
+    });
+  }, [buildJoinGraph, draft, syncQueryGroups]);
 
   const joinSuggestions = useMemo(() => {
+    const normalizeFieldSignature = (fieldId: string) =>
+      fieldId.replace(/_/g, "").toLowerCase();
     const existingKeys = new Set(
-      draft.joins.map(
-        (join) => `${join.leftModel}:${join.leftField}->${join.rightModel}:${join.rightField}`
-      )
+      draft.joins.map((join) => {
+        const modelKey = [join.leftModel, join.rightModel].sort().join("|");
+        const fieldKey = [
+          normalizeFieldSignature(join.leftField),
+          normalizeFieldSignature(join.rightField),
+        ]
+          .sort()
+          .join("|");
+        return `${modelKey}|${fieldKey}`;
+      })
     );
 
     const suggestions: Array<{
@@ -5195,17 +5694,23 @@ const getColumnLabel = useCallback(
         const leftField = association.foreignKey ?? getDefaultKey(model);
         const rightField = association.sourceKey ?? getDefaultKey(target);
         const orientedKey = `${model.id}:${leftField}->${target.id}:${rightField}`;
-        const normalizedKey = [model.id, target.id].sort().join("|") + `|${leftField}|${rightField}`;
+        const normalizedKey =
+          [model.id, target.id].sort().join("|") +
+          `|${[normalizeFieldSignature(leftField), normalizeFieldSignature(rightField)]
+            .sort()
+            .join("|")}`;
 
-        if (existingKeys.has(orientedKey) || seenSignatures.has(normalizedKey)) {
+        if (
+          existingKeys.has(normalizedKey) ||
+          existingKeys.has(orientedKey) ||
+          seenSignatures.has(normalizedKey)
+        ) {
           return;
         }
 
         seenSignatures.add(normalizedKey);
 
-        const relationshipLabel = association.alias
-          ? `${association.associationType} (${association.alias})`
-          : association.associationType;
+        const relationshipLabel = `Inner Join Connection: ${model.id}.${leftField} - ${target.id}.${rightField}`;
 
         suggestions.push({
           source: model,
@@ -5309,53 +5814,6 @@ const getColumnLabel = useCallback(
     setAddModelId(null);
     setAddModelPopoverOpen(false);
   }, [addModelId, handleToggleModel]);
-
-  const handleFieldToggle = (modelId: string, fieldId: string) => {
-    const aliasKey = toColumnAlias(modelId, fieldId);
-    setDraft((current) => {
-      const existingEntry = current.fields.find((entry) => entry.modelId === modelId);
-      const existingFieldIds = existingEntry?.fieldIds ?? [];
-      const fieldWasSelected = existingFieldIds.includes(fieldId);
-      const updatedFieldIds = fieldWasSelected
-        ? existingFieldIds.filter((id) => id !== fieldId)
-        : [...existingFieldIds, fieldId];
-
-      const nextFields = existingEntry
-        ? current.fields.map((entry) =>
-            entry.modelId === modelId ? { ...entry, fieldIds: updatedFieldIds } : entry,
-          )
-        : [...current.fields, { modelId, fieldIds: [fieldId] }];
-
-      const nextColumnOrder = fieldWasSelected
-        ? current.columnOrder.filter((alias) => alias !== aliasKey)
-        : current.columnOrder;
-
-      const nextColumnAliases = fieldWasSelected
-        ? omitRecordKey(current.columnAliases, aliasKey)
-        : current.columnAliases;
-
-      const nextMetrics = fieldWasSelected
-        ? current.metrics.filter((alias) => alias !== aliasKey)
-        : current.metrics;
-
-      const nextVisuals = current.visuals.map((visual) => {
-        const metric = fieldWasSelected && visual.metric === aliasKey ? "" : visual.metric;
-        const dimension = fieldWasSelected && visual.dimension === aliasKey ? "" : visual.dimension;
-        const comparison =
-          fieldWasSelected && visual.comparison === aliasKey ? undefined : visual.comparison;
-        return { ...visual, metric, dimension, comparison };
-      });
-
-      return {
-        ...current,
-        fields: nextFields,
-        columnOrder: nextColumnOrder,
-        columnAliases: nextColumnAliases,
-        metrics: nextMetrics,
-        visuals: nextVisuals,
-      };
-    });
-  };
 
   const handleFieldAliasChange = (modelId: string, fieldId: string, alias: string) => {
     const aliasKey = toColumnAlias(modelId, fieldId);
@@ -5535,6 +5993,7 @@ const getColumnLabel = useCallback(
         {
           metric: defaultMetric,
           label: getColumnLabel(defaultMetric),
+          aggregation: "sum",
           format: "number",
         },
       ],
@@ -5572,8 +6031,15 @@ const getColumnLabel = useCallback(
     metadata: Map<string, FilterClauseMetadata>;
     errors: string[];
   } => {
-    if (!draft.filters || draft.filters.length === 0) {
-      const trimmedSql = draft.rawFilterSql.filter(
+    const syncedGroups = syncQueryGroups(draft);
+    const activeGroup =
+      syncedGroups.find((group) => group.id === draft.activeGroupId) ?? syncedGroups[0];
+    const sourceFilters = activeGroup?.filters ?? draft.filters;
+    const sourceFilterGroups = activeGroup?.filterGroups ?? draft.filterGroups;
+    const sourceRawFilterSql = activeGroup?.rawFilterSql ?? draft.rawFilterSql;
+
+    if (!sourceFilters || sourceFilters.length === 0) {
+      const trimmedSql = sourceRawFilterSql.filter(
         (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
       );
       return trimmedSql.length > 0
@@ -5584,7 +6050,7 @@ const getColumnLabel = useCallback(
     const errors: string[] = [];
     const clauses = new Map<string, PreviewFilterClausePayload>();
 
-    draft.filters.forEach((filter) => {
+    sourceFilters.forEach((filter) => {
       const leftOption = filterFieldLookup.get(buildFilterOptionKey(filter.leftModelId, filter.leftFieldId));
       if (!leftOption) {
         errors.push("A filter references a field that is no longer available.");
@@ -5712,7 +6178,11 @@ const getColumnLabel = useCallback(
       return { nodes: [], metadata: new Map(), errors };
     }
 
-    const serialization = serializeFiltersToPreviewNodes(clauses, draft.filterGroups, draft.rawFilterSql);
+    const serialization = serializeFiltersToPreviewNodes(
+      clauses,
+      sourceFilterGroups,
+      sourceRawFilterSql,
+    );
     const usedFilterIds = new Set(serialization.metadata.map((entry) => entry.filterId));
     if (clauses.size > usedFilterIds.size) {
       errors.push("Attach every filter to a group.");
@@ -5725,7 +6195,7 @@ const getColumnLabel = useCallback(
     });
 
     return { nodes: serialization.nodes, metadata: metadataMap, errors: [] };
-  }, [draft.filterGroups, draft.filters, draft.rawFilterSql, filterFieldLookup]);
+  }, [draft, filterFieldLookup, syncQueryGroups]);
 
   useEffect(() => {
     const prepared = prepareFiltersForRequest();
@@ -5949,6 +6419,24 @@ const getColumnLabel = useCallback(
         filters: draft.filters,
         fieldDetailByAlias,
       });
+      const unionConfig = buildUnionAnalyticsConfig();
+      const resolvedQueryConfig = draft.queryConfig ?? unionConfig.config ?? descriptor.config;
+      const resolveUnionAlias = (
+        resolver: (query: QueryConfig) => string | null,
+      ): string | null => {
+        const queries = unionConfig.config?.union?.queries ?? [];
+        if (queries.length === 0) {
+          return null;
+        }
+        return resolver(queries[0] ?? {}) ?? null;
+      };
+      const fallbackMetricAlias = resolveUnionAlias((query) => query.metrics?.[0]?.alias ?? null);
+      const fallbackDimensionAlias = resolveUnionAlias(
+        (query) => query.dimensions?.[0]?.alias ?? null,
+      );
+      const fallbackComparisonAlias = resolveUnionAlias(
+        (query) => query.metrics?.[1]?.alias ?? null,
+      );
       const metricLabel = descriptor.metricLabel ?? getColumnLabel(visual.metric) ?? "Metric";
       const dimensionLabel =
         descriptor.dimensionLabel ?? getColumnLabel(visual.dimension) ?? "Dimension";
@@ -6011,10 +6499,10 @@ const getColumnLabel = useCallback(
       return {
         mode: "visual",
         description: `Visual: ${metricLabel} vs ${dimensionLabel}`,
-        queryConfig: descriptor.config ? deepClone(descriptor.config) : null,
-        metricAlias: descriptor.metricAlias ?? undefined,
-        dimensionAlias: descriptor.dimensionAlias ?? undefined,
-        comparisonAlias: descriptor.comparisonAlias ?? undefined,
+        queryConfig: resolvedQueryConfig ? deepClone(resolvedQueryConfig) : null,
+        metricAlias: (descriptor.metricAlias ?? fallbackMetricAlias) ?? undefined,
+        dimensionAlias: (descriptor.dimensionAlias ?? fallbackDimensionAlias) ?? undefined,
+        comparisonAlias: (descriptor.comparisonAlias ?? fallbackComparisonAlias) ?? undefined,
         ...(options?.dateFilterMetadata ? { dateFilter: { ...options.dateFilterMetadata } } : {}),
         ...(options?.dateFilterOptions && options.dateFilterOptions.length > 0
           ? { dateFilterOptions: options.dateFilterOptions.map((option) => ({ ...option })) }
@@ -6050,7 +6538,9 @@ const getColumnLabel = useCallback(
       };
     },
     [
+      buildUnionAnalyticsConfig,
       buildVisualDescriptor,
+      draft.queryConfig,
       draft.filters,
       draft.joins,
       draft.metricsSpotlight,
@@ -6429,10 +6919,14 @@ const getColumnLabel = useCallback(
     const periodDefault = periodPresets.includes(DEFAULT_SPOTLIGHT_PERIOD_DEFAULT)
       ? DEFAULT_SPOTLIGHT_PERIOD_DEFAULT
       : periodPresets[0];
+    const spotlightGroup = resolveSpotlightGroup(spotlight.metric);
+    const spotlightQueryConfig =
+      visualQueryDescriptor.config ??
+      buildSpotlightQueryConfig(spotlight.metric, spotlight.aggregation, spotlightGroup);
     const viewConfig: DashboardCardViewConfig = {
       mode: "spotlight",
       description: `Spotlight: ${defaultTitle}`,
-      queryConfig: visualQueryDescriptor.config ?? null,
+      queryConfig: spotlightQueryConfig ?? null,
       spotlight: {
         ...spotlightBase,
         metricLabel,
@@ -6670,6 +7164,11 @@ const getColumnLabel = useCallback(
             };
           }
         }
+        const saved = await handleSaveTemplate();
+        if (!saved) {
+          setDashboardModalError("Save the template before adding this spotlight to a dashboard.");
+          return;
+        }
       }
       await upsertDashboardCardMutation.mutateAsync({
         dashboardId: selectedDashboardIdForModal,
@@ -6804,6 +7303,76 @@ const getColumnLabel = useCallback(
       ...current,
       metricsSpotlight: current.metricsSpotlight.filter((_, spotlightIndex) => spotlightIndex !== index),
     }));
+  };
+
+  const resolveSpotlightDashboardLinks = useCallback(
+    (metric: string) => {
+      if (!metric || !draft.id) {
+        return [];
+      }
+      const links: Array<{ dashboardId: string; cardId: string; dashboardName: string; cardTitle: string }> = [];
+      dashboards.forEach((dashboard) => {
+        dashboard.cards.forEach((card) => {
+          if (card.templateId !== draft.id || !isSpotlightCardViewConfig(card.viewConfig)) {
+            return;
+          }
+          const spotlightMetric = card.viewConfig.spotlight?.metric;
+          if (spotlightMetric && spotlightMetric === metric) {
+            links.push({
+              dashboardId: dashboard.id,
+              cardId: card.id,
+              dashboardName: dashboard.name,
+              cardTitle: card.title,
+            });
+          }
+        });
+      });
+      return links;
+    },
+    [dashboards, draft.id],
+  );
+
+  const handleRequestRemoveSpotlight = (index: number) => {
+    const spotlight = draft.metricsSpotlight[index];
+    if (!spotlight?.metric) {
+      handleRemoveSpotlight(index);
+      return;
+    }
+    const linkedCards = resolveSpotlightDashboardLinks(spotlight.metric);
+    if (linkedCards.length === 0) {
+      handleRemoveSpotlight(index);
+      return;
+    }
+    setPendingSpotlightRemoval({ index, linkedCards });
+  };
+
+  const handleConfirmSpotlightRemoval = async () => {
+    if (!pendingSpotlightRemoval) {
+      return;
+    }
+    const { index, linkedCards } = pendingSpotlightRemoval;
+    setPendingSpotlightRemoval(null);
+    if (linkedCards.length > 0) {
+      try {
+        await Promise.all(
+          linkedCards.map((card) =>
+            deleteDashboardCardMutation.mutateAsync({
+              dashboardId: card.dashboardId,
+              cardId: card.cardId,
+            }),
+          ),
+        );
+        await queryClient.invalidateQueries({ queryKey: ["reports", "dashboards"] });
+      } catch (error) {
+        setTemplateError(extractAxiosErrorMessage(error, "Failed to remove linked dashboard cards."));
+        return;
+      }
+    }
+    handleRemoveSpotlight(index);
+    const saved = await handleSaveTemplate();
+    if (!saved) {
+      setTemplateError("Spotlight removed locally but template could not be saved.");
+    }
   };
 
   const handleScheduleDraftChange = (patch: Partial<typeof scheduleDraft>) => {
@@ -6954,15 +7523,15 @@ const getColumnLabel = useCallback(
     });
   };
 
-  const handleSaveTemplate = async () => {
+  const handleSaveTemplate = async (): Promise<boolean> => {
     if (saveTemplateMutation.isPending) {
-      return;
+      return false;
     }
 
     setTemplateSuccess(null);
     if (!draft.name.trim()) {
       setTemplateError("Template name is required.");
-      return;
+      return false;
     }
 
     if (hasStaleDerivedFields) {
@@ -6971,7 +7540,7 @@ const getColumnLabel = useCallback(
           ? `Resolve stale derived fields (${staleDerivedFieldNames}) before saving.`
           : "Resolve stale derived fields before saving.",
       );
-      return;
+      return false;
     }
 
     setTemplateError(null);
@@ -6979,11 +7548,20 @@ const getColumnLabel = useCallback(
     const preparedFilters = prepareFiltersForRequest();
     if (preparedFilters.errors.length > 0) {
       setTemplateError(preparedFilters.errors.join(" | "));
-      return;
+      return false;
     }
     filterMetadataRef.current = preparedFilters.metadata;
 
-    const queryGroups = syncQueryGroups(draft);
+    const queryGroups = syncQueryGroups(draft).map((group) => {
+      const hasOrder = Array.isArray(group.columnOrder) && group.columnOrder.length > 0;
+      const shouldNormalizeOrder = group.id === draft.activeGroupId || !hasOrder;
+      return {
+        ...group,
+        columnOrder: shouldNormalizeOrder
+          ? buildGroupColumnOrderFromFields(group)
+          : [...(group.columnOrder ?? [])],
+      };
+    });
 
     const payload: SaveReportTemplateRequest = {
       id: templates.some((template) => template.id === draft.id) ? draft.id : undefined,
@@ -7007,11 +7585,19 @@ const getColumnLabel = useCallback(
         previewAggregations: serializePreviewAggregationRules(draft.previewAggregations),
         previewHaving: serializePreviewHavingRules(draft.previewHaving),
         autoRunOnOpen: draft.autoRunOnOpen,
+        previewSql,
+        visualSql,
       },
       queryConfig: draft.queryConfig ? deepClone(draft.queryConfig) : null,
       derivedFields: deepClone(draft.derivedFields),
       metricsSpotlight: deepClone(draft.metricsSpotlight),
-      queryGroups: deepClone(queryGroups),
+      queryGroups: deepClone(queryGroups).map((group) => ({
+        ...group,
+        columnOrder: Array.isArray(group.columnOrder) ? [...group.columnOrder] : [],
+        ...(Object.keys((group as { columnAliases?: Record<string, string> }).columnAliases ?? {}).length > 0
+          ? { columnAliases: { ...(group as { columnAliases?: Record<string, string> }).columnAliases } }
+          : {}),
+      })),
       columnOrder: [...draft.columnOrder],
       columnAliases: { ...draft.columnAliases },
       previewOrder: draft.previewOrder.map((rule) => ({ ...rule })),
@@ -7024,19 +7610,34 @@ const getColumnLabel = useCallback(
       const saved = await saveTemplateMutation.mutateAsync(payload);
       upsertTemplateInCache(saved);
       const mapped = mapTemplateFromApi(saved);
-      const mergedTemplate =
-        mapped.columnOrder.length > 0 || Object.keys(mapped.columnAliases).length > 0
-          ? mapped
-          : {
-              ...mapped,
-              columnOrder: [...draft.columnOrder],
-              columnAliases: { ...draft.columnAliases },
-              autoRunOnOpen: draft.autoRunOnOpen,
-              previewOrder: [...draft.previewOrder],
-              previewGrouping: [...draft.previewGrouping],
-              previewAggregations: [...draft.previewAggregations],
-              previewHaving: [...draft.previewHaving],
-            };
+      const mergedGroupsSource = queryGroups.length > 0 ? queryGroups : mapped.queryGroups;
+      const mergedGroups = (mergedGroupsSource.length > 0 ? mergedGroupsSource : queryGroups).map((group) => {
+        const previous = queryGroups.find((entry) => entry.id === group.id);
+        const previousAliases =
+          (previous as { columnAliases?: Record<string, string> }).columnAliases ?? {};
+        const previousOrder = Array.isArray(previous?.columnOrder) ? previous?.columnOrder ?? [] : [];
+        const groupOrder = Array.isArray(group.columnOrder) && group.columnOrder.length > 0
+          ? group.columnOrder
+          : previousOrder;
+        return {
+          ...group,
+          columnOrder: groupOrder.length > 0 ? [...groupOrder] : [],
+          ...(Object.keys(previousAliases).length > 0 ? { columnAliases: { ...previousAliases } } : {}),
+        };
+      });
+      const mergedTemplate = {
+        ...mapped,
+        queryGroups: mergedGroups,
+        columnOrder: mapped.columnOrder.length > 0 ? mapped.columnOrder : [...draft.columnOrder],
+        columnAliases: { ...draft.columnAliases, ...mapped.columnAliases },
+        autoRunOnOpen: mapped.autoRunOnOpen ?? draft.autoRunOnOpen,
+        previewOrder: mapped.previewOrder?.length ? mapped.previewOrder : [...draft.previewOrder],
+        previewGrouping: mapped.previewGrouping?.length ? mapped.previewGrouping : [...draft.previewGrouping],
+        previewAggregations: mapped.previewAggregations?.length
+          ? mapped.previewAggregations
+          : [...draft.previewAggregations],
+        previewHaving: mapped.previewHaving?.length ? mapped.previewHaving : [...draft.previewHaving],
+      };
       setTemplates((current) => {
         const exists = current.some((template) => template.id === mergedTemplate.id);
         if (exists) {
@@ -7048,8 +7649,10 @@ const getColumnLabel = useCallback(
       setDraft(deepClone(mergedTemplate));
       await updateDashboardCardsForTemplate(mergedTemplate.id);
       setTemplateSuccess("Template saved.");
+      return true;
     } catch (error) {
       setTemplateError(extractAxiosErrorMessage(error, "Failed to save template"));
+      return false;
     }
   };
 
@@ -7088,6 +7691,8 @@ const getColumnLabel = useCallback(
         previewAggregations: [],
         previewHaving: [],
         autoRunOnOpen: false,
+        previewSql: null,
+        visualSql: null,
       },
       queryConfig: null,
       derivedFields: [],
@@ -7156,6 +7761,8 @@ const getColumnLabel = useCallback(
         previewAggregations: serializePreviewAggregationRules(selectedTemplate.previewAggregations),
         previewHaving: serializePreviewHavingRules(selectedTemplate.previewHaving),
         autoRunOnOpen: selectedTemplate.autoRunOnOpen,
+        previewSql: selectedTemplate.previewSql ?? null,
+        visualSql: selectedTemplate.visualSql ?? null,
       },
       queryConfig: selectedTemplate.queryConfig
         ? deepClone(selectedTemplate.queryConfig)
@@ -7309,6 +7916,278 @@ const getColumnLabel = useCallback(
     }));
   };
 
+  const handleGroupFieldSelectionChange = useCallback(
+    (groupId: string, selectedValues: string[]) => {
+      setDraft((current) => {
+        const nextGroups = syncQueryGroups(current).map((group) => {
+          if (group.id !== groupId) {
+            return group;
+          }
+          const selectedAliases = selectedValues
+            .map((value) => {
+              const [modelId, fieldId] = value.split("::");
+              return modelId && fieldId ? toColumnAlias(modelId, fieldId) : null;
+            })
+            .filter((alias): alias is string => Boolean(alias));
+          const selectedAliasSet = new Set(selectedAliases);
+          const existingOrder = Array.isArray(group.columnOrder)
+            ? group.columnOrder.filter((alias): alias is string => typeof alias === "string")
+            : [];
+          const preservedOrder = existingOrder.filter((alias) => selectedAliasSet.has(alias));
+          const appendedOrder = selectedAliases.filter((alias) => !preservedOrder.includes(alias));
+          const nextOrder = [...preservedOrder, ...appendedOrder];
+          const byModel = new Map<string, string[]>();
+          selectedValues.forEach((value) => {
+            const [modelId, fieldId] = value.split("::");
+            if (!modelId || !fieldId) {
+              return;
+            }
+            const fieldIds = byModel.get(modelId) ?? [];
+            fieldIds.push(fieldId);
+            byModel.set(modelId, fieldIds);
+          });
+          const nextFields = Array.from(byModel.entries()).map(([modelId, fieldIds]) => ({
+            modelId,
+            fieldIds,
+          }));
+          return { ...group, fields: nextFields, columnOrder: nextOrder };
+        });
+
+        const updatedGroup = nextGroups.find((group) => group.id === groupId);
+        if (!updatedGroup) {
+          return current;
+        }
+        if (current.activeGroupId === groupId) {
+          const nextDraft = applyGroupToDraft(current, updatedGroup);
+          return { ...nextDraft, queryGroups: nextGroups };
+        }
+        return { ...current, queryGroups: nextGroups };
+      });
+    },
+    [applyGroupToDraft, syncQueryGroups],
+  );
+
+  const buildGroupFieldOptions = useCallback(
+    (group: ReportTemplateQueryGroup) => {
+      const options: { value: string; label: string }[] = [];
+      group.models.forEach((modelId) => {
+        const model = modelMap.get(modelId);
+        if (!model) {
+          return;
+        }
+        model.fields.forEach((field) => {
+          options.push({
+            value: `${modelId}::${field.id}`,
+            label: `${model.name} • ${field.label} (${field.type})`,
+          });
+        });
+      });
+      return options;
+    },
+    [modelMap],
+  );
+
+  const buildGroupSelectedValues = useCallback((group: ReportTemplateQueryGroup) => {
+    const aliasToValue = new Map<string, string>();
+    group.fields.forEach((entry) => {
+      entry.fieldIds.forEach((fieldId) => {
+        aliasToValue.set(toColumnAlias(entry.modelId, fieldId), `${entry.modelId}::${fieldId}`);
+      });
+    });
+    const orderedAliases = buildGroupColumnOrderFromFields(group);
+    return orderedAliases
+      .map((alias) => aliasToValue.get(alias))
+      .filter((value): value is string => Boolean(value));
+  }, []);
+
+  const buildGroupAliasOverrides = (group: ReportTemplateQueryGroup) => {
+    const aliases: Record<string, string> = {};
+    const raw = (group as { columnAliases?: Record<string, string> }).columnAliases;
+    if (raw && typeof raw === "object") {
+      Object.entries(raw).forEach(([key, value]) => {
+        if (typeof key === "string" && typeof value === "string") {
+          aliases[key] = value;
+        }
+      });
+    }
+    return aliases;
+  };
+
+  const getAliasValueForGroup = (group: ReportTemplateQueryGroup, modelId: string, fieldId: string) => {
+    const aliasKey = toColumnAlias(modelId, fieldId);
+    const groupAliases = buildGroupAliasOverrides(group);
+    return groupAliases[aliasKey] ?? draft.columnAliases[aliasKey] ?? "";
+  };
+
+  const handleGroupAliasChange = useCallback(
+    (groupId: string, modelId: string, fieldId: string, alias: string) => {
+      const aliasKey = toColumnAlias(modelId, fieldId);
+      const trimmed = alias.trim();
+      setDraft((current) => {
+        const nextGroups = syncQueryGroups(current).map((group) => {
+          if (group.id !== groupId) {
+            return group;
+          }
+          const rawAliases =
+            typeof (group as { columnAliases?: Record<string, string> }).columnAliases === "object"
+              ? ({ ...(group as { columnAliases?: Record<string, string> }).columnAliases } as Record<string, string>)
+              : {};
+          if (!trimmed) {
+            delete rawAliases[aliasKey];
+          } else {
+            rawAliases[aliasKey] = trimmed;
+          }
+          return { ...group, columnAliases: rawAliases } as ReportTemplateQueryGroup;
+        });
+        const updatedGroup = nextGroups.find((group) => group.id === groupId);
+        if (!updatedGroup) {
+          return current;
+        }
+        if (current.activeGroupId !== groupId) {
+          return { ...current, queryGroups: nextGroups };
+        }
+        return {
+          ...current,
+          queryGroups: nextGroups,
+          columnAliases:
+            (updatedGroup as { columnAliases?: Record<string, string> }).columnAliases
+              ? { ...(updatedGroup as { columnAliases?: Record<string, string> }).columnAliases }
+              : { ...current.columnAliases },
+        };
+      });
+    },
+    [syncQueryGroups],
+  );
+
+  const moveGroupFieldOrder = useCallback(
+    (groupId: string, aliasKey: string, direction: "up" | "down") => {
+      setDraft((current) => {
+        const nextGroups = syncQueryGroups(current).map((group) => {
+          if (group.id !== groupId) {
+            return group;
+          }
+          const workingOrder = buildGroupColumnOrderFromFields(group);
+          const currentIndex = workingOrder.indexOf(aliasKey);
+          if (currentIndex === -1) {
+            return group;
+          }
+          const delta = direction === "up" ? -1 : 1;
+          const targetIndex = currentIndex + delta;
+          if (targetIndex < 0 || targetIndex >= workingOrder.length) {
+            return group;
+          }
+          const nextOrder = [...workingOrder];
+          const [moved] = nextOrder.splice(currentIndex, 1);
+          nextOrder.splice(targetIndex, 0, moved);
+          const nextFields = reorderGroupFieldsByAlias(group, nextOrder);
+          return { ...group, columnOrder: nextOrder, fields: nextFields };
+        });
+        const updatedGroup = nextGroups.find((group) => group.id === groupId);
+        if (!updatedGroup) {
+          return current;
+        }
+        if (current.activeGroupId !== groupId) {
+          return { ...current, queryGroups: nextGroups };
+        }
+        return {
+          ...applyGroupToDraft(current, updatedGroup),
+          queryGroups: nextGroups,
+        };
+      });
+    },
+    [applyGroupToDraft, syncQueryGroups],
+  );
+
+  const buildUnionCheckSummary = useCallback(
+    (baseGroup: ReportTemplateQueryGroup, nextGroup: ReportTemplateQueryGroup) => {
+      const toAliasKey = (
+        group: ReportTemplateQueryGroup,
+        modelId: string,
+        fieldId: string,
+      ) => {
+        const aliasKey = toColumnAlias(modelId, fieldId);
+        const groupAliases =
+          (group as { columnAliases?: Record<string, string> }).columnAliases ?? draft.columnAliases;
+        const alias = groupAliases[aliasKey];
+        return (alias && alias.trim().length > 0 ? alias.trim() : aliasKey).toLowerCase();
+      };
+      const toTypeMap = (group: ReportTemplateQueryGroup) => {
+        const map = new Map<string, string>();
+        group.fields.forEach((entry) => {
+          const model = modelMap.get(entry.modelId);
+          if (!model) {
+            return;
+          }
+          entry.fieldIds.forEach((fieldId) => {
+            const field = model.fields.find((candidate) => candidate.id === fieldId);
+            if (!field) {
+              return;
+            }
+            map.set(toAliasKey(group, entry.modelId, fieldId), field.type);
+          });
+        });
+        return map;
+      };
+      const buildAliasOrder = (group: ReportTemplateQueryGroup) => {
+        const groupAliases =
+          (group as { columnAliases?: Record<string, string> }).columnAliases ?? draft.columnAliases;
+        return buildGroupColumnOrderFromFields(group)
+          .map((aliasKey) => {
+            const alias = groupAliases[aliasKey] ?? aliasKey;
+            return alias.trim().toLowerCase();
+          })
+          .filter((alias) => alias.length > 0);
+      };
+
+      const baseMap = toTypeMap(baseGroup);
+      const nextMap = toTypeMap(nextGroup);
+      const missingInNext: string[] = [];
+      const missingInBase: string[] = [];
+      const typeMismatch: string[] = [];
+
+      baseMap.forEach((type, alias) => {
+        if (!nextMap.has(alias)) {
+          missingInNext.push(alias);
+        } else if (nextMap.get(alias) !== type) {
+          typeMismatch.push(alias);
+        }
+      });
+      nextMap.forEach((_, alias) => {
+        if (!baseMap.has(alias)) {
+          missingInBase.push(alias);
+        }
+      });
+
+      const baseOrder = buildAliasOrder(baseGroup);
+      const nextOrder = buildAliasOrder(nextGroup);
+      const commonBase = baseOrder.filter((alias) => nextOrder.includes(alias));
+      const commonNext = nextOrder.filter((alias) => baseOrder.includes(alias));
+      const orderMismatch = !arraysShallowEqual(commonBase, commonNext);
+
+      return { missingInNext, missingInBase, typeMismatch, orderMismatch };
+    },
+    [draft.columnAliases, modelMap],
+  );
+
+  const handleRemoveJoinForGroup = useCallback(
+    (groupId: string, joinId: string) => {
+      setDraft((current) => {
+        const nextGroups = syncQueryGroups(current).map((group) =>
+          group.id === groupId ? { ...group, joins: group.joins.filter((join) => join.id !== joinId) } : group
+        );
+        if (current.activeGroupId !== groupId) {
+          return { ...current, queryGroups: nextGroups };
+        }
+        return {
+          ...current,
+          joins: current.joins.filter((join) => join.id !== joinId),
+          queryGroups: nextGroups,
+        };
+      });
+    },
+    [syncQueryGroups],
+  );
+
   const handleRunAnalysis = async () => {
     setPreviewError(null);
 
@@ -7343,6 +8222,35 @@ const getColumnLabel = useCallback(
       setIsVisualQueryRunning(false);
       setVisualResult(null);
       setVisualExecutedAt(null);
+    }
+  };
+
+  const handleRunPreviewOnly = async () => {
+    setPreviewError(null);
+
+    const { payload, error } = buildPreviewRequestPayload();
+    if (!payload) {
+      const previewMessage = error ?? "Unable to build preview configuration.";
+      setPreviewResult(null);
+      setPreviewError(previewMessage);
+      setPreviewSql(null);
+      return;
+    }
+
+    try {
+      const response = await runPreview(payload);
+      setPreviewResult(response);
+      setPreviewSql(typeof response.sql === "string" ? response.sql : null);
+      setPreviewError(null);
+      setLastRunAt(formatTimestamp());
+    } catch (error) {
+      console.error("Failed to run report preview", error);
+      const axiosError = error as AxiosError<{ message?: string }>;
+      const message =
+        axiosError?.response?.data?.message ?? axiosError?.message ?? "Failed to run report preview.";
+      setPreviewError(message);
+      setPreviewSql(null);
+      setPreviewResult(null);
     }
   };
 
@@ -7490,35 +8398,86 @@ const getColumnLabel = useCallback(
     setTemplateSuccess,
   ]);
 
-  const updateFilter = (filterId: string, updater: (filter: ReportFilter) => ReportFilter) => {
-    setDraft((current) => ({
-      ...current,
-      filters: current.filters.map((filter) => (filter.id === filterId ? updater(filter) : filter)),
+  const updateGroupFilterState = useCallback(
+    (
+      groupId: string,
+      updater: (state: {
+        filters: ReportFilter[];
+        filterGroups: ReportFilterGroup[];
+        rawFilterSql: string[];
+      }) => {
+        filters: ReportFilter[];
+        filterGroups: ReportFilterGroup[];
+        rawFilterSql: string[];
+      },
+    ) => {
+      setDraft((current) => {
+        const nextGroups = current.queryGroups.map((group) => {
+          if (group.id !== groupId) {
+            return group;
+          }
+          const normalizedGroups = ensureRootFilterGroup(group.filterGroups ?? []);
+          const nextState = updater({
+            filters: group.filters ?? [],
+            filterGroups: normalizedGroups,
+            rawFilterSql: group.rawFilterSql ?? [],
+          });
+          return {
+            ...group,
+            filters: nextState.filters,
+            filterGroups: nextState.filterGroups,
+            rawFilterSql: nextState.rawFilterSql,
+          };
+        });
+
+        const next = { ...current, queryGroups: nextGroups };
+        if (groupId === current.activeGroupId) {
+          const activeGroup = nextGroups.find((group) => group.id === groupId);
+          if (activeGroup) {
+            next.filters = deepClone(activeGroup.filters ?? []);
+            next.filterGroups = deepClone(activeGroup.filterGroups ?? []);
+            next.rawFilterSql = [...(activeGroup.rawFilterSql ?? [])];
+          }
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  const updateFilter = (
+    groupId: string,
+    filterId: string,
+    updater: (filter: ReportFilter) => ReportFilter,
+  ) => {
+    updateGroupFilterState(groupId, (state) => ({
+      ...state,
+      filters: state.filters.map((filter) => (filter.id === filterId ? updater(filter) : filter)),
     }));
   };
 
-  const handleRemoveFilter = (filterId: string) => {
-    setDraft((current) => {
-      const filter = current.filters.find((entry) => entry.id === filterId);
+  const handleRemoveFilter = (groupId: string, filterId: string) => {
+    updateGroupFilterState(groupId, (state) => {
+      const filter = state.filters.find((entry) => entry.id === filterId);
       if (!filter) {
-        return current;
+        return state;
       }
       const nextGroups = detachChildTokenFromGroup(
-        current.filterGroups,
+        state.filterGroups,
         filter.parentGroupId,
         buildChildToken("filter", filterId),
       );
       return {
-        ...current,
-        filters: current.filters.filter((entry) => entry.id !== filterId),
+        ...state,
+        filters: state.filters.filter((entry) => entry.id !== filterId),
         filterGroups: nextGroups,
       };
     });
   };
 
-  const handleAddFilterGroup = (parentGroupId: string) => {
-    setDraft((current) => {
-      const groups = ensureRootFilterGroup(current.filterGroups);
+  const handleAddFilterGroup = (groupId: string, parentGroupId: string) => {
+    updateGroupFilterState(groupId, (state) => {
+      const groups = ensureRootFilterGroup(state.filterGroups);
       const resolvedParentId = groups.some((group) => group.id === parentGroupId)
         ? parentGroupId
         : ROOT_FILTER_GROUP_ID;
@@ -7532,60 +8491,61 @@ const getColumnLabel = useCallback(
           : group,
       );
       return {
-        ...current,
+        ...state,
         filterGroups: [...nextGroups, childGroup],
       };
     });
   };
 
-  const handleRemoveFilterGroup = (groupId: string) => {
-    if (groupId === ROOT_FILTER_GROUP_ID) {
+  const handleRemoveFilterGroup = (groupId: string, targetGroupId: string) => {
+    if (targetGroupId === ROOT_FILTER_GROUP_ID) {
       return;
     }
-    setDraft((current) => {
-      const groups = ensureRootFilterGroup(current.filterGroups);
-      const { filterIds, groupIds } = collectGroupDescendants(groups, groupId);
-      if (!groupIds.has(groupId)) {
-        return current;
+    updateGroupFilterState(groupId, (state) => {
+      const groups = ensureRootFilterGroup(state.filterGroups);
+      const { filterIds, groupIds } = collectGroupDescendants(groups, targetGroupId);
+      if (!groupIds.has(targetGroupId)) {
+        return state;
       }
       const nextGroups = pruneFilterGroups(groups, filterIds, groupIds);
       return {
-        ...current,
-        filters: current.filters.filter((filter) => !filterIds.has(filter.id)),
+        ...state,
+        filters: state.filters.filter((filter) => !filterIds.has(filter.id)),
         filterGroups: nextGroups,
       };
     });
   };
 
-  const handleGroupLogicChange = (groupId: string, logic: ReportFilterGroup["logic"]) => {
-    setDraft((current) => ({
-      ...current,
-      filterGroups: current.filterGroups.map((group) =>
-        group.id === groupId ? { ...group, logic } : group,
+  const handleGroupLogicChange = (
+    groupId: string,
+    targetGroupId: string,
+    logic: ReportFilterGroup["logic"],
+  ) => {
+    updateGroupFilterState(groupId, (state) => ({
+      ...state,
+      filterGroups: state.filterGroups.map((group) =>
+        group.id === targetGroupId ? { ...group, logic } : group,
       ),
     }));
   };
 
-  const handleRemoveRawSql = (index: number) => {
-    setDraft((current) => ({
-      ...current,
-      rawFilterSql: current.rawFilterSql.filter((_, idx) => idx !== index),
+  const handleRemoveRawSql = (groupId: string, index: number) => {
+    updateGroupFilterState(groupId, (state) => ({
+      ...state,
+      rawFilterSql: state.rawFilterSql.filter((_, idx) => idx !== index),
     }));
   };
 
-  const filterLookup = useMemo(
-    () => new Map(draft.filters.map((filter) => [filter.id, filter])),
-    [draft.filters],
-  );
-  const groupLookup = useMemo(
-    () => new Map(draft.filterGroups.map((group) => [group.id, group])),
-    [draft.filterGroups],
-  );
-  const rootFilterGroup = groupLookup.get(ROOT_FILTER_GROUP_ID);
-
-  const renderFilterClause = (filter: ReportFilter): JSX.Element => {
+  const renderFilterClause = (
+    ownerGroupId: string,
+    filter: ReportFilter,
+    context: {
+      filterFieldOptions: FilterFieldOption[];
+      filterFieldLookup: Map<string, FilterFieldOption>;
+    },
+  ): JSX.Element => {
     const leftKey = buildFilterOptionKey(filter.leftModelId, filter.leftFieldId);
-    const leftOption = filterFieldLookup.get(leftKey);
+    const leftOption = context.filterFieldLookup.get(leftKey);
 
     if (!leftOption) {
       return (
@@ -7597,7 +8557,7 @@ const getColumnLabel = useCallback(
             <ActionIcon
               variant="subtle"
               color="red"
-              onClick={() => handleRemoveFilter(filter.id)}
+              onClick={() => handleRemoveFilter(ownerGroupId, filter.id)}
               aria-label="Remove filter"
             >
               <IconTrash size={16} />
@@ -7625,7 +8585,7 @@ const getColumnLabel = useCallback(
           ]
         : [{ label: "Value", value: "value" }];
     const targetKind = getValueKindForFieldType(leftOption.field.type);
-    const comparableFieldOptions = filterFieldOptions
+    const comparableFieldOptions = context.filterFieldOptions
       .filter(
         (option) =>
           getValueKindForFieldType(option.field.type) === targetKind &&
@@ -7658,7 +8618,11 @@ const getColumnLabel = useCallback(
             allowSingleDateInRange
             value={dateRange}
             onChange={(value) =>
-              handleFilterDateRangeChange(filter.id, value as [Date | null, Date | null])
+              handleFilterDateRangeChange(
+                ownerGroupId,
+                filter.id,
+                value as [Date | null, Date | null],
+              )
             }
             valueFormat="MMM DD, YYYY"
           />
@@ -7676,7 +8640,7 @@ const getColumnLabel = useCallback(
                 typeof fromNumeric === "number" && Number.isFinite(fromNumeric) ? fromNumeric : undefined
               }
               onChange={(value) =>
-                handleFilterRangeChange(filter.id, {
+                handleFilterRangeChange(ownerGroupId, filter.id, {
                   from: value === null || value === "" ? undefined : String(value),
                 })
               }
@@ -7689,7 +8653,7 @@ const getColumnLabel = useCallback(
                 typeof toNumeric === "number" && Number.isFinite(toNumeric) ? toNumeric : undefined
               }
               onChange={(value) =>
-                handleFilterRangeChange(filter.id, {
+                handleFilterRangeChange(ownerGroupId, filter.id, {
                   to: value === null || value === "" ? undefined : String(value),
                 })
               }
@@ -7705,7 +8669,7 @@ const getColumnLabel = useCallback(
               label="From"
               value={filter.range?.from ?? ""}
               onChange={(event) =>
-                handleFilterRangeChange(filter.id, {
+                handleFilterRangeChange(ownerGroupId, filter.id, {
                   from: event.currentTarget.value,
                 })
               }
@@ -7715,7 +8679,7 @@ const getColumnLabel = useCallback(
               label="To"
               value={filter.range?.to ?? ""}
               onChange={(event) =>
-                handleFilterRangeChange(filter.id, {
+                handleFilterRangeChange(ownerGroupId, filter.id, {
                   to: event.currentTarget.value,
                 })
               }
@@ -7731,7 +8695,7 @@ const getColumnLabel = useCallback(
             label="Compare to"
             data={comparableFieldOptions}
             value={rightFieldValue}
-            onChange={(value) => handleFilterRightFieldChange(filter.id, value)}
+            onChange={(value) => handleFilterRightFieldChange(ownerGroupId, filter.id, value, context)}
             w={260}
           />
         );
@@ -7750,7 +8714,9 @@ const getColumnLabel = useCallback(
               label="Values"
               placeholder={placeholder}
               value={filter.value ?? ""}
-              onChange={(event) => handleFilterValueChange(filter.id, event.currentTarget.value)}
+              onChange={(event) =>
+                handleFilterValueChange(ownerGroupId, filter.id, event.currentTarget.value)
+              }
               w={260}
             />
           );
@@ -7763,7 +8729,7 @@ const getColumnLabel = useCallback(
                 { value: "false", label: "False" },
               ]}
               value={filter.value ?? "true"}
-              onChange={(value) => handleFilterValueChange(filter.id, value ?? "true")}
+              onChange={(value) => handleFilterValueChange(ownerGroupId, filter.id, value ?? "true")}
               w={140}
             />
           );
@@ -7778,6 +8744,7 @@ const getColumnLabel = useCallback(
               }
               onChange={(value) =>
                 handleFilterValueChange(
+                  ownerGroupId,
                   filter.id,
                   value === "" || value === null ? "" : String(value),
                 )
@@ -7792,7 +8759,9 @@ const getColumnLabel = useCallback(
               label="Value"
               placeholder={filter.valueKind === "date" ? "YYYY-MM-DD" : "Enter value"}
               value={filter.value ?? ""}
-              onChange={(event) => handleFilterValueChange(filter.id, event.currentTarget.value)}
+              onChange={(event) =>
+                handleFilterValueChange(ownerGroupId, filter.id, event.currentTarget.value)
+              }
               w={240}
             />
           );
@@ -7806,12 +8775,12 @@ const getColumnLabel = useCallback(
           <Group align="flex-end" gap="sm" wrap="wrap">
             <Select
               label="Field"
-              data={filterFieldOptions.map((option) => ({
+              data={context.filterFieldOptions.map((option) => ({
                 value: option.value,
                 label: option.label,
               }))}
               value={leftOption.value}
-              onChange={(value) => handleFilterFieldChange(filter.id, value)}
+              onChange={(value) => handleFilterFieldChange(ownerGroupId, filter.id, value, context)}
               w={260}
             />
             <Select
@@ -7819,7 +8788,11 @@ const getColumnLabel = useCallback(
               data={operatorSelectData}
               value={filter.operator}
               onChange={(value) =>
-                handleFilterOperatorChange(filter.id, (value ?? filter.operator) as FilterOperator)
+                handleFilterOperatorChange(
+                  ownerGroupId,
+                  filter.id,
+                  (value ?? filter.operator) as FilterOperator,
+                )
               }
               w={200}
             />
@@ -7831,7 +8804,12 @@ const getColumnLabel = useCallback(
                 <SegmentedControl
                   value={comparisonMode}
                   onChange={(value) =>
-                    handleFilterComparisonModeChange(filter.id, value as FilterComparisonMode)
+                    handleFilterComparisonModeChange(
+                      ownerGroupId,
+                      filter.id,
+                      value as FilterComparisonMode,
+                      context,
+                    )
                   }
                   data={comparisonModeOptions}
                   disabled={comparableFieldOptions.length === 0}
@@ -7842,7 +8820,7 @@ const getColumnLabel = useCallback(
             <ActionIcon
               variant="subtle"
               color="red"
-              onClick={() => handleRemoveFilter(filter.id)}
+              onClick={() => handleRemoveFilter(ownerGroupId, filter.id)}
               aria-label="Remove filter"
             >
               <IconTrash size={16} />
@@ -7860,7 +8838,18 @@ const getColumnLabel = useCallback(
     );
   };
 
-  const renderFilterGroup = (group: ReportFilterGroup, depth = 0): JSX.Element => {
+  const renderFilterGroup = (
+    ownerGroupId: string,
+    group: ReportFilterGroup,
+    context: {
+      filterFieldOptions: FilterFieldOption[];
+      filterFieldLookup: Map<string, FilterFieldOption>;
+      filterLookup: Map<string, ReportFilter>;
+      groupLookup: Map<string, ReportFilterGroup>;
+    },
+    depth = 0,
+  ): JSX.Element => {
+    const isRootGroup = group.id === ROOT_FILTER_GROUP_ID;
     const children = group.childOrder
       .map((token) => {
         const parsed = parseChildToken(token);
@@ -7868,11 +8857,13 @@ const getColumnLabel = useCallback(
           return null;
         }
         if (parsed.kind === "group") {
-          const childGroup = groupLookup.get(parsed.id);
-          return childGroup ? renderFilterGroup(childGroup, depth + 1) : null;
+          const childGroup = context.groupLookup.get(parsed.id);
+          return childGroup
+            ? renderFilterGroup(ownerGroupId, childGroup, context, depth + 1)
+            : null;
         }
-        const clause = filterLookup.get(parsed.id);
-        return clause ? renderFilterClause(clause) : null;
+        const clause = context.filterLookup.get(parsed.id);
+        return clause ? renderFilterClause(ownerGroupId, clause, context) : null;
       })
       .filter((node): node is JSX.Element => Boolean(node));
 
@@ -7886,24 +8877,36 @@ const getColumnLabel = useCallback(
       >
         <Stack gap="sm">
           <Group justify="space-between" align="flex-start" wrap="wrap">
-            <Stack gap={4} style={{ flex: 1, minWidth: 220 }}>
-              <Text fw={500} fz="sm">
-                {group.id === ROOT_FILTER_GROUP_ID ? "Root group" : "Filter group"}
+            <Group gap="xs" align="center" style={{ flex: 1, minWidth: 220 }}>
+              {!isRootGroup && (
+                <Badge size="xs" variant="light">
+                  Group
+                </Badge>
+              )}
+              <Text fz="lg" c="dimmed">
+                (
               </Text>
               <SegmentedControl
                 size="xs"
                 value={group.logic}
                 data={FILTER_GROUP_LOGIC_OPTIONS}
                 onChange={(value) =>
-                  handleGroupLogicChange(group.id, value as ReportFilterGroup["logic"])
+                  handleGroupLogicChange(
+                    ownerGroupId,
+                    group.id,
+                    value as ReportFilterGroup["logic"],
+                  )
                 }
               />
-            </Stack>
-            {group.id !== ROOT_FILTER_GROUP_ID && (
+              <Text fz="lg" c="dimmed">
+                )
+              </Text>
+            </Group>
+            {!isRootGroup && (
               <ActionIcon
                 variant="subtle"
                 color="red"
-                onClick={() => handleRemoveFilterGroup(group.id)}
+                onClick={() => handleRemoveFilterGroup(ownerGroupId, group.id)}
                 aria-label="Remove filter group"
               >
                 <IconTrash size={16} />
@@ -7918,23 +8921,29 @@ const getColumnLabel = useCallback(
             <Stack gap="sm">{children}</Stack>
           )}
           <Group gap="xs">
-            <Button
-              variant="light"
-              leftSection={<IconPlus size={16} />}
-              onClick={() => handleAddFilterRow(group.id)}
-              disabled={filterFieldOptions.length === 0}
-            >
-              Add condition
-            </Button>
-            <Button
-              variant="subtle"
-              size="sm"
-              leftSection={<IconPlus size={12} />}
-              onClick={() => handleAddFilterGroup(group.id)}
-              disabled={filterFieldOptions.length === 0}
-            >
-              Add subgroup
-            </Button>
+            <Menu withinPortal position="bottom-start">
+              <Menu.Target>
+                <Button
+                  variant="light"
+                  leftSection={<IconPlus size={16} />}
+                  disabled={context.filterFieldOptions.length === 0}
+                >
+                  Add condition
+                </Button>
+              </Menu.Target>
+              <Menu.Dropdown>
+                <Menu.Item
+                  onClick={() =>
+                    handleAddFilterRow(ownerGroupId, group.id, context.filterFieldOptions)
+                  }
+                >
+                  Condition
+                </Menu.Item>
+                <Menu.Item onClick={() => handleAddFilterGroup(ownerGroupId, group.id)}>
+                  Group (parentheses)
+                </Menu.Item>
+              </Menu.Dropdown>
+            </Menu>
           </Group>
         </Stack>
       </Paper>
@@ -8261,8 +9270,12 @@ const getColumnLabel = useCallback(
     }));
   };
 
-  const handleAddFilterRow = (targetGroupId: string = ROOT_FILTER_GROUP_ID) => {
-    const defaultOption = filterFieldOptions[0];
+  const handleAddFilterRow = (
+    groupId: string,
+    targetGroupId: string = ROOT_FILTER_GROUP_ID,
+    options: FilterFieldOption[],
+  ) => {
+    const defaultOption = options[0];
     if (!defaultOption) {
       return;
     }
@@ -8294,8 +9307,8 @@ const getColumnLabel = useCallback(
       baseFilter.range = {};
     }
 
-    setDraft((current) => {
-      const groups = ensureRootFilterGroup(current.filterGroups);
+    updateGroupFilterState(groupId, (state) => {
+      const groups = ensureRootFilterGroup(state.filterGroups);
       const resolvedGroupId = groups.some((group) => group.id === targetGroupId)
         ? targetGroupId
         : ROOT_FILTER_GROUP_ID;
@@ -8309,23 +9322,31 @@ const getColumnLabel = useCallback(
           : group,
       );
       return {
-        ...current,
-        filters: [...current.filters, newFilter],
+        ...state,
+        filters: [...state.filters, newFilter],
         filterGroups: nextGroups,
       };
     });
   };
 
-  const handleFilterFieldChange = (filterId: string, optionValue: string | null) => {
+  const handleFilterFieldChange = (
+    groupId: string,
+    filterId: string,
+    optionValue: string | null,
+    context: {
+      filterFieldOptions: FilterFieldOption[];
+      filterFieldLookup: Map<string, FilterFieldOption>;
+    },
+  ) => {
     if (!optionValue) {
       return;
     }
-    const option = filterFieldOptions.find((candidate) => candidate.value === optionValue);
+    const option = context.filterFieldOptions.find((candidate) => candidate.value === optionValue);
     if (!option) {
       return;
     }
 
-    updateFilter(filterId, (filter) => {
+    updateFilter(groupId, filterId, (filter) => {
       const operatorOptions = getOperatorOptionsForFieldType(option.field.type);
       const nextOperator =
         operatorOptions.find((definition) => definition.value === filter.operator)?.value ??
@@ -8360,7 +9381,7 @@ const getColumnLabel = useCallback(
       }
 
       if (nextFilter.rightType === "field") {
-        const compatibleOption = filterFieldOptions.find(
+        const compatibleOption = context.filterFieldOptions.find(
           (candidate) =>
             getValueKindForFieldType(candidate.field.type) === nextValueKind &&
             (candidate.modelId !== option.modelId || candidate.fieldId !== option.fieldId),
@@ -8398,12 +9419,16 @@ const getColumnLabel = useCallback(
     });
   };
 
-  const handleFilterOperatorChange = (filterId: string, operator: FilterOperator) => {
+  const handleFilterOperatorChange = (
+    groupId: string,
+    filterId: string,
+    operator: FilterOperator,
+  ) => {
     const definition = FILTER_OPERATOR_LOOKUP.get(operator);
     if (!definition) {
       return;
     }
-    updateFilter(filterId, (filter) => {
+    updateFilter(groupId, filterId, (filter) => {
       const nextFilter: ReportFilter = { ...filter, operator };
       const requiresValue = definition.requiresValue;
       const allowFieldComparison = definition.allowFieldComparison ?? false;
@@ -8442,8 +9467,16 @@ const getColumnLabel = useCallback(
     });
   };
 
-  const handleFilterComparisonModeChange = (filterId: string, mode: FilterComparisonMode) => {
-    updateFilter(filterId, (filter) => {
+  const handleFilterComparisonModeChange = (
+    groupId: string,
+    filterId: string,
+    mode: FilterComparisonMode,
+    context: {
+      filterFieldOptions: FilterFieldOption[];
+      filterFieldLookup: Map<string, FilterFieldOption>;
+    },
+  ) => {
+    updateFilter(groupId, filterId, (filter) => {
       if (filter.operator === "between") {
         return filter;
       }
@@ -8452,14 +9485,14 @@ const getColumnLabel = useCallback(
         if (!operatorDefinition?.allowFieldComparison) {
           return filter;
         }
-        const leftOption = filterFieldLookup.get(
+        const leftOption = context.filterFieldLookup.get(
           buildFilterOptionKey(filter.leftModelId, filter.leftFieldId),
         );
         if (!leftOption) {
           return filter;
         }
         const targetKind = getValueKindForFieldType(leftOption.field.type);
-        const compatibleOption = filterFieldOptions.find(
+        const compatibleOption = context.filterFieldOptions.find(
           (candidate) =>
             getValueKindForFieldType(candidate.field.type) === targetKind &&
             !(candidate.modelId === leftOption.modelId && candidate.fieldId === leftOption.fieldId),
@@ -8491,23 +9524,32 @@ const getColumnLabel = useCallback(
     });
   };
 
-  const handleFilterRightFieldChange = (filterId: string, optionValue: string | null) => {
+  const handleFilterRightFieldChange = (
+    groupId: string,
+    filterId: string,
+    optionValue: string | null,
+    context: { filterFieldOptions: FilterFieldOption[] },
+  ) => {
     if (!optionValue) {
       return;
     }
-    const option = filterFieldOptions.find((candidate) => candidate.value === optionValue);
+    const option = context.filterFieldOptions.find((candidate) => candidate.value === optionValue);
     if (!option) {
       return;
     }
-    updateFilter(filterId, (filter) => ({
+    updateFilter(groupId, filterId, (filter) => ({
       ...filter,
       rightModelId: option.modelId,
       rightFieldId: option.fieldId,
     }));
   };
 
-  const handleFilterValueChange = (filterId: string, rawValue: string | null) => {
-    updateFilter(filterId, (filter) => {
+  const handleFilterValueChange = (
+    groupId: string,
+    filterId: string,
+    rawValue: string | null,
+  ) => {
+    updateFilter(groupId, filterId, (filter) => {
       if (filter.operator === "between") {
         return filter;
       }
@@ -8519,10 +9561,11 @@ const getColumnLabel = useCallback(
   };
 
   const handleFilterRangeChange = (
+    groupId: string,
     filterId: string,
     patch: { from?: string | undefined; to?: string | undefined },
   ) => {
-    updateFilter(filterId, (filter) => {
+    updateFilter(groupId, filterId, (filter) => {
       const nextRange = { ...(filter.range ?? {}), ...patch };
       const normalizedRange = {
         from:
@@ -8544,9 +9587,13 @@ const getColumnLabel = useCallback(
     });
   };
 
-  const handleFilterDateRangeChange = (filterId: string, value: [Date | null, Date | null]) => {
+  const handleFilterDateRangeChange = (
+    groupId: string,
+    filterId: string,
+    value: [Date | null, Date | null],
+  ) => {
     const [from, to] = value;
-    handleFilterRangeChange(filterId, {
+    handleFilterRangeChange(groupId, filterId, {
       from: formatDateForFilter(from),
       to: formatDateForFilter(to),
     });
@@ -8877,21 +9924,15 @@ const getColumnLabel = useCallback(
                   <Paper p="md" radius="lg" shadow="xs" withBorder>
                     <Group justify="space-between" mb="md" align="center">
                       <Group gap="xs" align="center">
+                        <ThemeIcon variant="light" color="gray">
+                          <IconFileText size={16} />
+                        </ThemeIcon>
                         <Text fw={600}>
                           Template details - {draft.name.trim() ? draft.name.trim() : "Untitled"}
                         </Text>
                         <Badge variant="light">{draft.owner}</Badge>
                       </Group>
                       <Group gap="xs" align="center">
-                        <Button
-                          size="xs"
-                          variant="light"
-                          leftSection={<IconDeviceFloppy size={12} />}
-                          onClick={handleSaveTemplate}
-                          loading={saveTemplateMutation.isPending}
-                        >
-                          Save
-                        </Button>
                         <ActionIcon
                           size="sm"
                           variant="subtle"
@@ -8911,6 +9952,17 @@ const getColumnLabel = useCallback(
                     </Group>
                     <Collapse in={sectionOpen.templateDetails}>
                       <Stack gap="md">
+                        <Group justify="flex-end">
+                          <Button
+                            size="xs"
+                            variant="light"
+                            leftSection={<IconDeviceFloppy size={12} />}
+                            onClick={handleSaveTemplate}
+                            loading={saveTemplateMutation.isPending}
+                          >
+                            Save
+                          </Button>
+                        </Group>
                                       <TextInput
                                         label="Report name"
                                         value={draft.name}
@@ -8997,18 +10049,9 @@ const getColumnLabel = useCallback(
                                           <IconCalendarStats size={18} />
                                         </ThemeIcon>
                                         <Text fw={600}>Schedules & delivery</Text>
+                                        <Badge variant="light">{scheduleList.length}</Badge>
                                       </Group>
                                       <Group gap="xs" align="center">
-                                        <Badge variant="light">{scheduleList.length}</Badge>
-                                        <Button
-                                          size="xs"
-                                          variant="light"
-                                          leftSection={<IconDeviceFloppy size={12} />}
-                                          onClick={handleSaveTemplate}
-                                          loading={saveTemplateMutation.isPending}
-                                        >
-                                          Save
-                                        </Button>
                                         <ActionIcon
                                           size="sm"
                                           variant="subtle"
@@ -9029,6 +10072,17 @@ const getColumnLabel = useCallback(
                                     </Group>
                                     <Collapse in={sectionOpen.schedules}>
                                       <Stack gap="md">
+                                        <Group justify="flex-end">
+                                          <Button
+                                            size="xs"
+                                            variant="light"
+                                            leftSection={<IconDeviceFloppy size={12} />}
+                                            onClick={handleSaveTemplate}
+                                            loading={saveTemplateMutation.isPending}
+                                          >
+                                            Save
+                                          </Button>
+                                        </Group>
                                       {!isTemplatePersisted && (
                                         <Alert color="yellow" variant="light">
                                           Save the template before configuring automated deliveries.
@@ -9221,216 +10275,124 @@ const getColumnLabel = useCallback(
                                   <Paper p="md" radius="lg" shadow="xs" withBorder>
                                     <Stack gap="md">
                     <Group justify="space-between" align="flex-start" wrap="wrap">
-                      <Stack gap={4}>
-                        <Text fw={700}>Data model joins</Text>
-                        <Text size="sm" c="dimmed">
-                          Define how models connect inside this group so analytics can traverse them.
-                        </Text>
-                      </Stack>
+                                        <Stack gap={4}>
+                                          <Group gap="xs" align="center">
+                                            <ThemeIcon variant="light" color="indigo">
+                                              <IconDatabase size={16} />
+                                            </ThemeIcon>
+                                            <Text fw={700}>Data model joins</Text>
+                                            <Badge variant="light">{joinsCount}</Badge>
+                                          </Group>
+                                          <Text size="sm" c="dimmed">
+                                            Define how models connect inside this group so analytics can traverse them.
+                                          </Text>
+                                        </Stack>
                       <Group gap="xs" align="center" wrap="wrap">
-                        <Select
-                          size="xs"
-                          data={groupOptions}
-                          value={draft.activeGroupId}
-                          onChange={handleSelectQueryGroup}
-                          placeholder="Select group"
-                        />
-                                          <Popover
-                                            opened={addModelPopoverOpen}
-                                            onChange={setAddModelPopoverOpen}
-                                            position="bottom-end"
-                                            shadow="md"
-                                            withArrow
-                                          >
-                                            <Popover.Target>
-                                              <Button
-                                                size="xs"
-                                                variant="light"
-                                                leftSection={<IconPlus size={14} />}
-                                                onClick={() => setAddModelPopoverOpen((current) => !current)}
-                                              >
-                                                Add model
-                                              </Button>
-                                            </Popover.Target>
-                                            <Popover.Dropdown>
-                                              <Stack gap="xs" style={{ minWidth: 240 }}>
-                                                <Select
-                                                  label="Select model"
-                                                  placeholder={
-                                                    availableModelOptions.length === 0
-                                                      ? "All models already added"
-                                                      : "Type to search"
-                                                  }
-                                                  data={availableModelOptions ?? []}
-                                                  searchable
-                                                  clearable
-                                                  value={addModelId}
-                                                  onChange={setAddModelId}
-                                                  disabled={availableModelOptions.length === 0}
-                                                  nothingFoundMessage="No matching models"
-                                                  comboboxProps={{ withinPortal: false }}
-                                                />
-                                                <Button size="xs" onClick={handleAddModelFromPicker} disabled={!addModelId}>
-                                                  Add
-                                                </Button>
-                                              </Stack>
-                                            </Popover.Dropdown>
-                                          </Popover>
-                                          <Button size="xs" variant="light" onClick={handleAddQueryGroup}>
-                                            Add group
-                                          </Button>
-                                          <Button
-                                            size="xs"
-                                            variant="subtle"
-                                            color="red"
-                                            onClick={handleRemoveQueryGroup}
-                                            disabled={draft.queryGroups.length <= 1}
-                                          >
-                                            Remove
-                                          </Button>
-                                          <Badge variant="light">{draft.joins.length} joins</Badge>
-                                          <Button
-                                            size="xs"
-                                            variant="light"
-                                            leftSection={<IconDeviceFloppy size={12} />}
-                                            onClick={handleSaveTemplate}
-                                            loading={saveTemplateMutation.isPending}
-                                          >
-                                            Save
-                                          </Button>
-                                          <ActionIcon
-                                            size="sm"
-                                            variant="subtle"
-                                            onClick={() => toggleSection("joins")}
-                                            aria-label={sectionOpen.joins ? "Collapse joins" : "Expand joins"}
-                                          >
-                                            {sectionOpen.joins ? (
-                                              <IconChevronUp size={16} />
-                                            ) : (
-                                              <IconChevronDown size={16} />
-                                            )}
-                                          </ActionIcon>
-                                        </Group>
+                        <ActionIcon
+                          size="sm"
+                          variant="subtle"
+                          onClick={() => toggleSection("joins")}
+                          aria-label={sectionOpen.joins ? "Collapse joins" : "Expand joins"}
+                        >
+                          {sectionOpen.joins ? (
+                            <IconChevronUp size={16} />
+                          ) : (
+                            <IconChevronDown size={16} />
+                          )}
+                        </ActionIcon>
+                      </Group>
                     </Group>
-                    <Divider />
                   <Collapse in={sectionOpen.joins}>
                   <Stack gap="md">
-                                      <Stack gap="xs">
-                                        <Text fw={600} fz="sm">
-                                          Create custom join
-                                        </Text>
-                                        {!joinModelsAvailable ? (
-                                          <Text c="dimmed" fz="sm">
-                                            Select at least two data models to configure a custom join.
-                                          </Text>
-                                        ) : (
-                                          <Stack gap="xs">
-                                            <Group align="flex-end" gap="sm" wrap="wrap">
-                                              <Select
-                                                label="Left model"
-                                                data={joinModelOptions}
-                                                placeholder="Select model"
-                                                value={manualJoinDraft.leftModelId || null}
-                                                onChange={(value) => updateManualJoinDraft({ leftModelId: value ?? "" })}
-                                                style={{ flex: 1, minWidth: 200 }}
-                                              />
-                                              <Select
-                                                label="Left field"
-                                                data={getFieldOptions(manualJoinDraft.leftModelId)}
-                                                placeholder="Select field"
-                                                value={manualJoinDraft.leftFieldId || null}
-                                                onChange={(value) => updateManualJoinDraft({ leftFieldId: value ?? "" })}
-                                                disabled={!manualJoinDraft.leftModelId}
-                                                style={{ flex: 1, minWidth: 200 }}
-                                              />
-                                            </Group>
-                                            <Group align="flex-end" gap="sm" wrap="wrap">
-                                              <Select
-                                                label="Right model"
-                                                data={joinModelOptions}
-                                                placeholder="Select model"
-                                                value={manualJoinDraft.rightModelId || null}
-                                                onChange={(value) => updateManualJoinDraft({ rightModelId: value ?? "" })}
-                                                style={{ flex: 1, minWidth: 200 }}
-                                              />
-                                              <Select
-                                                label="Right field"
-                                                data={getFieldOptions(manualJoinDraft.rightModelId)}
-                                                placeholder="Select field"
-                                                value={manualJoinDraft.rightFieldId || null}
-                                                onChange={(value) => updateManualJoinDraft({ rightFieldId: value ?? "" })}
-                                                disabled={!manualJoinDraft.rightModelId}
-                                                style={{ flex: 1, minWidth: 200 }}
-                                              />
-                                              <Select
-                                                label="Join type"
-                                                data={JOIN_TYPE_OPTIONS}
-                                                value={manualJoinDraft.joinType}
-                                                onChange={(value) =>
-                                                  updateManualJoinDraft({
-                                                    joinType: (value ?? manualJoinDraft.joinType) as JoinCondition["joinType"],
-                                                  })
-                                                }
-                                                style={{ width: 160 }}
-                                              />
-                                              <Button
-                                                leftSection={<IconPlus size={14} />}
-                                                onClick={handleManualJoinSubmit}
-                                                disabled={!canSubmitManualJoin || !joinModelsAvailable}
-                                              >
-                                                Add join
-                                              </Button>
-                                            </Group>
-                  </Stack>
+                                      <Group justify="flex-end">
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          leftSection={<IconDeviceFloppy size={12} />}
+                                          onClick={handleSaveTemplate}
+                                          loading={saveTemplateMutation.isPending}
+                                        >
+                                          Save
+                                        </Button>
+                                      </Group>
+                                      <Group gap="xs" align="center" wrap="wrap">
+                                        {groupOptions.length > 1 && (
+                                          <Select
+                                            size="xs"
+                                            data={groupOptions}
+                                            value={draft.activeGroupId}
+                                            onChange={handleSelectQueryGroup}
+                                            placeholder="Select group"
+                                          />
                                         )}
-                                      </Stack>
-                                      {draft.joins.length === 0 ? (
-                                        <Text c="dimmed">
-                                          Add relationships between models to enable blended reporting.
-                                        </Text>
-                                      ) : (
-                                        <Stack gap="sm">
-                                          {draft.joins.map((join) => {
-                                            const leftModel = modelMap.get(join.leftModel);
-                                            const rightModel = modelMap.get(join.rightModel);
-                                            return (
-                                              <Card key={join.id} withBorder padding="sm" radius="md">
-                                                <Group justify="space-between" align="flex-start">
-                                                  <div>
-                                                    <Group gap="xs">
-                                                      <Badge variant="light" color="blue">
-                                                        {join.joinType.toUpperCase()}
-                                                      </Badge>
-                                                      <Text fw={600} fz="sm">
-                                                        {leftModel?.name ?? join.leftModel} - {rightModel?.name ?? join.rightModel}
-                                                      </Text>
-                                                    </Group>
-                                                    <Text fz="xs" c="dimmed" mt={4}>
-                                                      {join.leftModel}.{join.leftField} = {join.rightModel}.{join.rightField}
-                                                    </Text>
-                                                    {join.description && (
-                                                      <Text fz="xs" mt={6}>
-                                                        {join.description}
-                                                      </Text>
-                                                    )}
-                                                  </div>
-                                                  <ActionIcon
-                                                    variant="subtle"
-                                                    color="red"
-                                                    onClick={() => handleRemoveJoin(join.id)}
-                                                    aria-label="Remove join"
-                                                  >
-                                                    <IconTrash size={16} />
-                                                  </ActionIcon>
-                                                </Group>
-                                              </Card>
-                                            );
-                                          })}
-                                        </Stack>
-                                      )}
+                                        <Popover
+                                          opened={addModelPopoverOpen}
+                                          onChange={setAddModelPopoverOpen}
+                                          position="bottom-end"
+                                          shadow="md"
+                                          withArrow
+                                        >
+                                          <Popover.Target>
+                                            <Button
+                                              size="xs"
+                                              variant="light"
+                                              leftSection={<IconPlus size={14} />}
+                                              onClick={() => setAddModelPopoverOpen((current) => !current)}
+                                            >
+                                              Add model
+                                            </Button>
+                                          </Popover.Target>
+                                          <Popover.Dropdown>
+                                            <Stack gap="xs" style={{ minWidth: 240 }}>
+                                              <Select
+                                                label="Select model"
+                                                placeholder={
+                                                  availableModelOptions.length === 0
+                                                    ? "All models already added"
+                                                    : "Type to search"
+                                                }
+                                                data={availableModelOptions ?? []}
+                                                searchable
+                                                clearable
+                                                value={addModelId}
+                                                onChange={setAddModelId}
+                                                disabled={availableModelOptions.length === 0}
+                                                nothingFoundMessage="No matching models"
+                                                comboboxProps={{ withinPortal: false }}
+                                              />
+                                              <Button size="xs" onClick={handleAddModelFromPicker} disabled={!addModelId}>
+                                                Add
+                                              </Button>
+                                            </Stack>
+                                          </Popover.Dropdown>
+                                        </Popover>
+                                        <Button size="xs" variant="light" onClick={handleAddQueryGroup}>
+                                          Add group
+                                        </Button>
+                                        <Button
+                                          size="xs"
+                                          variant="subtle"
+                                          color="red"
+                                          onClick={handleRemoveQueryGroup}
+                                          disabled={draft.queryGroups.length <= 1}
+                                        >
+                                          Remove
+                                        </Button>
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          leftSection={<IconPlus size={14} />}
+                                          onClick={() => {
+                                            setSectionOpen((current) => ({ ...current, joins: true }));
+                                            setJoinsPanelOpen((current) => ({ ...current, joinsCustom: true }));
+                                          }}
+                                        >
+                                          Create custom join
+                                        </Button>
+                                        <Badge variant="light">{draft.joins.length} joins</Badge>
+                                      </Group>
                                       {joinSuggestions.length > 0 && (
                                         <>
-                                          <Divider my="md" />
                                           <Text fw={600} fz="sm" mb={6}>
                                             Suggested joins
                                           </Text>
@@ -9457,6 +10419,7 @@ const getColumnLabel = useCallback(
                                                       leftField: suggestion.leftField,
                                                       rightField: suggestion.rightField,
                                                       description: suggestion.relationship,
+                                                      joinType: "inner",
                                                     })
                                                   }
                                                   aria-label="Add join"
@@ -9468,67 +10431,251 @@ const getColumnLabel = useCallback(
                                           </Stack>
                                         </>
                                       )}
-                                      {joinGraph.nodes.length > 0 && (
+                                      {joinsPanelOpen.joinsCustom && (
+                                        <>
+                                          <Divider />
+                                          <Paper withBorder radius="md" p="sm">
+                                            <Group justify="space-between" align="center" wrap="wrap">
+                                              <Text fw={600} fz="sm">
+                                                Create custom join
+                                              </Text>
+                                              <ActionIcon
+                                                size="sm"
+                                                variant="subtle"
+                                                onClick={() =>
+                                                  setJoinsPanelOpen((current) => ({
+                                                    ...current,
+                                                    joinsCustom: !current.joinsCustom,
+                                                  }))
+                                                }
+                                                aria-label={
+                                                  joinsPanelOpen.joinsCustom
+                                                    ? "Collapse custom join builder"
+                                                    : "Expand custom join builder"
+                                                }
+                                              >
+                                                {joinsPanelOpen.joinsCustom ? (
+                                                  <IconChevronUp size={16} />
+                                                ) : (
+                                                  <IconChevronDown size={16} />
+                                                )}
+                                              </ActionIcon>
+                                            </Group>
+                                            <Collapse in={joinsPanelOpen.joinsCustom}>
+                                              <Stack gap="xs" mt="sm">
+                                                {!joinModelsAvailable ? (
+                                                  <Text c="dimmed" fz="sm">
+                                                    Select at least two data models to configure a custom join.
+                                                  </Text>
+                                                ) : (
+                                                  <Stack gap="xs">
+                                                    <Group align="flex-end" gap="sm" wrap="wrap">
+                                                      <Select
+                                                        label="Left model"
+                                                        data={joinModelOptions}
+                                                        placeholder="Select model"
+                                                        value={manualJoinDraft.leftModelId || null}
+                                                        onChange={(value) =>
+                                                          updateManualJoinDraft({ leftModelId: value ?? "" })
+                                                        }
+                                                        style={{ flex: 1, minWidth: 200 }}
+                                                      />
+                                                      <Select
+                                                        label="Left field"
+                                                        data={getFieldOptions(manualJoinDraft.leftModelId)}
+                                                        placeholder="Select field"
+                                                        value={manualJoinDraft.leftFieldId || null}
+                                                        onChange={(value) =>
+                                                          updateManualJoinDraft({ leftFieldId: value ?? "" })
+                                                        }
+                                                        disabled={!manualJoinDraft.leftModelId}
+                                                        style={{ flex: 1, minWidth: 200 }}
+                                                      />
+                                                    </Group>
+                                                    <Group align="flex-end" gap="sm" wrap="wrap">
+                                                      <Select
+                                                        label="Right model"
+                                                        data={joinModelOptions}
+                                                        placeholder="Select model"
+                                                        value={manualJoinDraft.rightModelId || null}
+                                                        onChange={(value) =>
+                                                          updateManualJoinDraft({ rightModelId: value ?? "" })
+                                                        }
+                                                        style={{ flex: 1, minWidth: 200 }}
+                                                      />
+                                                      <Select
+                                                        label="Right field"
+                                                        data={getFieldOptions(manualJoinDraft.rightModelId)}
+                                                        placeholder="Select field"
+                                                        value={manualJoinDraft.rightFieldId || null}
+                                                        onChange={(value) =>
+                                                          updateManualJoinDraft({ rightFieldId: value ?? "" })
+                                                        }
+                                                        disabled={!manualJoinDraft.rightModelId}
+                                                        style={{ flex: 1, minWidth: 200 }}
+                                                      />
+                                                      <Select
+                                                        label="Join type"
+                                                        data={JOIN_TYPE_OPTIONS}
+                                                        value={manualJoinDraft.joinType}
+                                                        onChange={(value) =>
+                                                          updateManualJoinDraft({
+                                                            joinType: (value ?? manualJoinDraft.joinType) as JoinCondition["joinType"],
+                                                          })
+                                                        }
+                                                        style={{ width: 160 }}
+                                                      />
+                                                      <Button
+                                                        leftSection={<IconPlus size={14} />}
+                                                        onClick={handleManualJoinSubmit}
+                                                        disabled={!canSubmitManualJoin || !joinModelsAvailable}
+                                                      >
+                                                        Add join
+                                                      </Button>
+                                                    </Group>
+                                                  </Stack>
+                                                )}
+                                              </Stack>
+                                            </Collapse>
+                                          </Paper>
+                                        </>
+                                      )}
+                                      {joinGraphSummaries.length > 0 && (
                                         <>
                                           <Divider my="md" />
-                                          <Stack gap="sm">
-                                            <Group justify="space-between" align="center">
-                                              <Text fw={600} fz="sm">
-                                                Join graph overview
-                                              </Text>
-                                              <Badge
-                                                variant="light"
-                                                color={joinGraph.disconnected.length === 0 ? "teal" : "red"}
-                                              >
-                                                {joinGraph.disconnected.length === 0
-                                                  ? "Fully connected"
-                                                  : `${joinGraph.disconnected.length} disconnected`}
-                                              </Badge>
-                                            </Group>
-                                            <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
-                                              <Stack gap={6}>
-                                                <Text fz="xs" fw={600} c="dimmed">
-                                                  Model coverage
-                                                </Text>
-                                                {joinGraphNodeStats.length === 0 ? (
-                                                  <Text fz="xs" c="dimmed">No models selected.</Text>
-                                                ) : (
-                                                  joinGraphNodeStats.map((node) => (
-                                                    <Group key={`join-node-${node.id}`} justify="space-between">
-                                                      <Text fz="sm">{node.label}</Text>
-                                                      <Badge size="xs" variant="light">
-                                                        {node.connections} link{node.connections === 1 ? "" : "s"}
-                                                      </Badge>
-                                                    </Group>
-                                                  ))
-                                                )}
-                                              </Stack>
-                                              <Stack gap={6}>
-                                                <Text fz="xs" fw={600} c="dimmed">
-                                                  Connectivity
-                                                </Text>
-                                                {joinGraphComponentSummaries.length <= 1 ? (
-                                                  <Text fz="xs" c="dimmed">All selected models are reachable.</Text>
-                                                ) : (
-                                                  joinGraphComponentSummaries.map((component) => (
-                                                    <Stack key={component.id} gap={2}>
-                                                      <Text fz="xs" fw={600}>
-                                                        {component.title}
-                                                      </Text>
-                                                      <Text fz="xs" c="dimmed">
-                                                        {component.members.join(", ")}
-                                                      </Text>
+                                          <Stack gap="md">
+                                            <Text fw={600} fz="sm">
+                                              Join graph overview
+                                            </Text>
+                                            {joinGraphSummaries.map((summary, summaryIndex) => {
+                                              const unionMode = unionModeByGroupId[summary.groupId] ?? "all";
+                                              return (
+                                                <Fragment key={`join-graph-${summary.groupId}`}>
+                                                  <Paper withBorder radius="md" p="sm">
+                                                    <Stack gap="sm">
+                                                      <Group justify="space-between" align="center" wrap="wrap">
+                                                        <Stack gap={2}>
+                                                          <Text fw={600} fz="sm">
+                                                            {draft.queryGroups.length > 1 ? summary.groupName : "Current group"}
+                                                          </Text>
+                                                          <Text fz="xs" c="dimmed">
+                                                            {summary.nodeStats.length} models · {summary.joins.length} joins
+                                                          </Text>
+                                                        </Stack>
+                                                        <Group gap="xs">
+                                                          <Badge
+                                                            variant="light"
+                                                            color={summary.graph.disconnected.length === 0 ? "teal" : "red"}
+                                                          >
+                                                            {summary.graph.disconnected.length === 0
+                                                              ? "Fully connected"
+                                                              : `${summary.graph.disconnected.length} disconnected`}
+                                                          </Badge>
+                                                        </Group>
+                                                      </Group>
+                                                      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
+                                                        <Stack gap={6}>
+                                                          <Text fz="xs" fw={600} c="dimmed">
+                                                            Model coverage
+                                                          </Text>
+                                                          {summary.nodeStats.length === 0 ? (
+                                                            <Text fz="xs" c="dimmed">No models selected.</Text>
+                                                          ) : (
+                                                            summary.nodeStats.map((node) => (
+                                                              <Group
+                                                                key={`join-node-${summary.groupId}-${node.id}`}
+                                                                justify="space-between"
+                                                              >
+                                                                <Text fz="sm">{node.label}</Text>
+                                                                <Badge size="xs" variant="light">
+                                                                  {node.connections} link{node.connections === 1 ? "" : "s"}
+                                                                </Badge>
+                                                              </Group>
+                                                            ))
+                                                          )}
+                                                        </Stack>
+                                                        <Stack gap={6}>
+                                                          <Text fz="xs" fw={600} c="dimmed">
+                                                            Connectivity
+                                                          </Text>
+                                                          {summary.joins.length === 0 ? (
+                                                            <Text fz="xs" c="dimmed">
+                                                              No join connections added yet.
+                                                            </Text>
+                                                          ) : (
+                                                            <Stack gap={4}>
+                                                              {summary.joins.map((join) => {
+                                                                const leftLabel =
+                                                                  modelMap.get(join.leftModel)?.name ?? join.leftModel;
+                                                                const rightLabel =
+                                                                  modelMap.get(join.rightModel)?.name ?? join.rightModel;
+                                                                const joinTypeLabel =
+                                                                  join.joinType === "left"
+                                                                    ? "Left"
+                                                                    : join.joinType === "right"
+                                                                    ? "Right"
+                                                                    : join.joinType === "full"
+                                                                    ? "Full"
+                                                                    : "Inner";
+                                                                return (
+                                                                  <Group
+                                                                    key={`join-link-${summary.groupId}-${join.id}`}
+                                                                    justify="space-between"
+                                                                    align="flex-start"
+                                                                    wrap="nowrap"
+                                                                  >
+                                                                    <Text fz="xs" c="dimmed">
+                                                                      {joinTypeLabel} Join Connection: {leftLabel}.{join.leftField} -{" "}
+                                                                      {rightLabel}.{join.rightField}
+                                                                    </Text>
+                                                                    <ActionIcon
+                                                                      size="xs"
+                                                                      variant="subtle"
+                                                                      color="red"
+                                                                      onClick={() =>
+                                                                        handleRemoveJoinForGroup(summary.groupId, join.id)
+                                                                      }
+                                                                      aria-label="Remove join"
+                                                                    >
+                                                                      <IconX size={12} />
+                                                                    </ActionIcon>
+                                                                  </Group>
+                                                                );
+                                                              })}
+                                                            </Stack>
+                                                          )}
+                                                        </Stack>
+                                                      </SimpleGrid>
+                                                      {summary.graph.disconnected.length > 0 && (
+                                                        <Alert color="red" variant="light" title="Disconnected models">
+                                                          {summary.graph.disconnected.map((node) => node.label).join(", ")} are not connected
+                                                          to the join graph. Add joins to include them in the analytics pipeline.
+                                                        </Alert>
+                                                      )}
                                                     </Stack>
-                                                  ))
-                                                )}
-                                              </Stack>
-                                            </SimpleGrid>
-                                            {joinGraph.disconnected.length > 0 && (
-                                              <Alert color="red" variant="light" title="Disconnected models">
-                                                {joinGraph.disconnected.map((node) => node.label).join(", ")} are not connected
-                                                to the join graph. Add joins to include them in the analytics pipeline.
-                                              </Alert>
-                                            )}
+                                                  </Paper>
+                                                  {summaryIndex < joinGraphSummaries.length - 1 && (
+                                                    <Group justify="center" mt="xs">
+                                                      <SegmentedControl
+                                                        size="xs"
+                                                        radius="xl"
+                                                        value={unionMode}
+                                                        onChange={(value) =>
+                                                          setUnionModeByGroupId((current) => ({
+                                                            ...current,
+                                                            [summary.groupId]: value as "all" | "distinct",
+                                                          }))
+                                                        }
+                                                        data={[
+                                                          { value: "all", label: "UNION ALL" },
+                                                          { value: "distinct", label: "UNION" },
+                                                        ]}
+                                                      />
+                                                    </Group>
+                                                  )}
+                                                </Fragment>
+                                              );
+                                            })}
                                           </Stack>
                                         </>
                                       )}
@@ -9540,29 +10687,18 @@ const getColumnLabel = useCallback(
                                     <Stack gap="md">
                                       <Group justify="space-between" align="flex-start" wrap="wrap">
                                         <Stack gap={4}>
-                                          <Text fw={700}>Field inventory</Text>
+                                          <Group gap="xs" align="center">
+                                            <ThemeIcon variant="light" color="blue">
+                                              <IconLayoutGrid size={16} />
+                                            </ThemeIcon>
+                                            <Text fw={700}>Field inventory</Text>
+                                            <Badge variant="light">{totalFieldInventoryCount} fields</Badge>
+                                          </Group>
                                           <Text size="sm" c="dimmed">
                                             Pick fields for the active group. Align aliases across groups for UNION ALL.
                                           </Text>
                                         </Stack>
                                         <Group gap="xs" align="center" wrap="wrap">
-                                          <Select
-                                            size="xs"
-                                            data={groupOptions}
-                                            value={draft.activeGroupId}
-                                            onChange={handleSelectQueryGroup}
-                                            placeholder="Select group"
-                                          />
-                                          <Badge variant="light">{totalFieldInventoryCount} fields</Badge>
-                                          <Button
-                                            size="xs"
-                                            variant="light"
-                                            leftSection={<IconDeviceFloppy size={12} />}
-                                            onClick={handleSaveTemplate}
-                                            loading={saveTemplateMutation.isPending}
-                                          >
-                                            Save
-                                          </Button>
                                           <ActionIcon
                                             size="sm"
                                             variant="subtle"
@@ -9582,185 +10718,1006 @@ const getColumnLabel = useCallback(
                                         </Group>
                                       </Group>
                                       <Collapse in={sectionOpen.fields}>
-                                        <Group gap="xs" align="center" wrap="wrap">
-                                        <TextInput
-                                          size="sm"
-                                          placeholder="Search fields"
-                                          leftSection={<IconSearch size={14} />}
-                                          value={fieldInventoryQuery}
-                                          onChange={(event) => setFieldInventoryQuery(event.currentTarget.value)}
-                                          style={{ minWidth: 220 }}
-                                        />
-                                        <Switch
-                                          size="sm"
-                                          checked={showSelectedOnly}
-                                          onChange={(event) => setShowSelectedOnly(event.currentTarget.checked)}
-                                          label="Selected only"
-                                        />
-                                      </Group>
-                                      <Divider />
-                                    {selectedModels.length === 0 ? (
-                                      <Stack gap="md">
-                                        <Text c="dimmed">
-                                          Select at least one data model to begin adding fields to your report.
-                                        </Text>
-                                        {renderDerivedFieldInventory()}
-                                      </Stack>
-                                    ) : (
-                                      <Stack gap="md">
-                                        {selectedModels.map((model) => {
-                                          const selections =
-                                            draft.fields.find((entry) => entry.modelId === model.id)?.fieldIds ?? [];
-                                          const query = fieldInventoryQuery.trim().toLowerCase();
-                                          const filteredFields = model.fields.filter((field) => {
-                                            const matchesQuery =
-                                              query.length === 0 ||
-                                              field.label.toLowerCase().includes(query) ||
-                                              field.id.toLowerCase().includes(query);
-                                            const isSelected = selections.includes(field.id);
-                                            return matchesQuery && (!showSelectedOnly || isSelected);
-                                          });
-                                          return (
-                                            <Stack key={model.id} gap="xs">
-                                              <Group justify="space-between" align="center" wrap="wrap">
-                                                <Group gap="xs" align="center">
-                                                  <Text fw={600} fz="sm">
-                                                    {model.name}
-                                                  </Text>
-                                                  <Badge size="xs" variant="light">
-                                                    {selections.length} selected
-                                                  </Badge>
-                                                </Group>
-                                                {filteredFields.length !== model.fields.length && (
-                                                  <Badge size="xs" variant="outline" color="gray">
-                                                    {filteredFields.length} shown
-                                                  </Badge>
-                                                )}
-                                              </Group>
-                                              <ScrollArea h={160} offsetScrollbars type="always">
-                                                {filteredFields.length === 0 ? (
-                                                  <Alert color="gray" variant="light">
-                                                    No fields match this filter.
-                                                  </Alert>
-                                                ) : (
-                                                  <Table verticalSpacing="xs" highlightOnHover>
-                                                    <Table.Thead>
-                                                      <Table.Tr>
-                                                        <Table.Th>Field</Table.Th>
-                                                        <Table.Th>Alias</Table.Th>
-                                                        <Table.Th>Type</Table.Th>
-                                                        <Table.Th>Column</Table.Th>
-                                                        <Table.Th align="right">Include</Table.Th>
-                                                      </Table.Tr>
-                                                    </Table.Thead>
-                                                    <Table.Tbody>
-                                                      {filteredFields.map((field) => {
-                                                        const checked = selections.includes(field.id);
-                                                        const aliasKey = toColumnAlias(model.id, field.id);
-                                                        const aliasValue = draft.columnAliases[aliasKey] ?? "";
-                                                        return (
-                                                          <Table.Tr key={field.id}>
-                                                            <Table.Td>
-                                                              <Text fw={500} fz="sm">
-                                                                {field.label}
+                                        <Stack gap="md">
+                                          <Group justify="flex-end">
+                                            <Button
+                                              size="xs"
+                                              variant="light"
+                                              leftSection={<IconDeviceFloppy size={12} />}
+                                              onClick={handleSaveTemplate}
+                                              loading={saveTemplateMutation.isPending}
+                                            >
+                                              Save
+                                            </Button>
+                                          </Group>
+                                          {joinGraphSummaries.length === 0 ? (
+                                            <Text c="dimmed">
+                                              Add at least one group and model to start selecting fields.
+                                            </Text>
+                                          ) : (
+                                            joinGraphSummaries.map((summary, summaryIndex) => {
+                                              const group = draft.queryGroups.find((entry) => entry.id === summary.groupId);
+                                              if (!group) {
+                                                return null;
+                                              }
+                                              const selectedValues = buildGroupSelectedValues(group);
+                                              const fieldOptions = buildGroupFieldOptions(group);
+                                              const selectedDetails = buildSelectedFieldDetailsForGroup(group);
+                                              return (
+                                                <Fragment key={`field-group-${group.id}`}>
+                                                  <Paper withBorder radius="md" p="sm">
+                                                    <Stack gap="sm">
+                                                      <Group justify="space-between" align="center" wrap="wrap">
+                                                        <Stack gap={2}>
+                                                          <Text fw={600} fz="sm">
+                                                            {group.name}
+                                                          </Text>
+                                                          <Text fz="xs" c="dimmed">
+                                                            {group.models.length} models · {selectedDetails.length} fields
+                                                          </Text>
+                                                        </Stack>
+                                                        <Badge size="xs" variant="light">
+                                                          {selectedDetails.length} selected
+                                                        </Badge>
+                                                      </Group>
+                                                      <MultiSelect
+                                                        data={fieldOptions}
+                                                        value={selectedValues}
+                                                        onChange={(values) => handleGroupFieldSelectionChange(group.id, values)}
+                                                        searchable
+                                                        clearable
+                                                        placeholder="Search fields in this group"
+                                                        nothingFoundMessage="No matching fields"
+                                                      />
+                                                      {selectedDetails.length === 0 ? (
+                                                        <Text fz="xs" c="dimmed">
+                                                          No fields selected for this group yet.
+                                                        </Text>
+                                                      ) : (
+                                                        <Stack gap="xs">
+                                                          {selectedDetails.map((detail, detailIndex) => {
+                                                            const aliasKey = toColumnAlias(detail.modelId, detail.id);
+                                                            const isFirst = detailIndex === 0;
+                                                            const isLast = detailIndex === selectedDetails.length - 1;
+                                                            const aliasValue = getAliasValueForGroup(
+                                                              group,
+                                                              detail.modelId,
+                                                              detail.id,
+                                                            );
+                                                            return (
+                                                              <Group
+                                                                key={`group-field-${group.id}-${detail.modelId}-${detail.id}`}
+                                                                justify="space-between"
+                                                                align="center"
+                                                                wrap="wrap"
+                                                              >
+                                                                <Stack gap={0}>
+                                                                  <Text fz="sm">
+                                                                    {detail.modelName} · {detail.label}
+                                                                  </Text>
+                                                                  <Text fz="xs" c="dimmed">
+                                                                    {detail.id}
+                                                                  </Text>
+                                                                </Stack>
+                                                                <Group gap="xs" align="center" wrap="nowrap">
+                                                                  <Group gap={4}>
+                                                                    <ActionIcon
+                                                                      size="xs"
+                                                                      variant="subtle"
+                                                                      onClick={() =>
+                                                                        moveGroupFieldOrder(group.id, aliasKey, "up")
+                                                                      }
+                                                                      disabled={isFirst}
+                                                                      aria-label="Move field up"
+                                                                    >
+                                                                      <IconArrowUp size={14} />
+                                                                    </ActionIcon>
+                                                                    <ActionIcon
+                                                                      size="xs"
+                                                                      variant="subtle"
+                                                                      onClick={() =>
+                                                                        moveGroupFieldOrder(group.id, aliasKey, "down")
+                                                                      }
+                                                                      disabled={isLast}
+                                                                      aria-label="Move field down"
+                                                                    >
+                                                                      <IconArrowDown size={14} />
+                                                                    </ActionIcon>
+                                                                  </Group>
+                                                                  <Badge size="xs" variant="light">
+                                                                    {detail.type}
+                                                                  </Badge>
+                                                                  <TextInput
+                                                                    size="xs"
+                                                                    placeholder="Alias"
+                                                                    value={aliasValue}
+                                                                    onChange={(event) =>
+                                                                      handleGroupAliasChange(
+                                                                        group.id,
+                                                                        detail.modelId,
+                                                                        detail.id,
+                                                                        event.currentTarget.value,
+                                                                      )
+                                                                    }
+                                                                  />
+                                                                </Group>
+                                                              </Group>
+                                                            );
+                                                          })}
+                                                        </Stack>
+                                                      )}
+                                                    </Stack>
+                                                  </Paper>
+                                                  {summaryIndex < joinGraphSummaries.length - 1 && (
+                                                    <Paper withBorder radius="md" p="xs">
+                                                      <Group justify="space-between" align="center" wrap="wrap">
+                                                        <Stack gap={2}>
+                                                          <Text fz="xs" fw={600} c="dimmed">
+                                                            UNION check
+                                                          </Text>
+                                                          {(() => {
+                                                            const nextSummary = joinGraphSummaries[summaryIndex + 1];
+                                                            const nextGroup = draft.queryGroups.find(
+                                                              (entry) => entry.id === nextSummary.groupId,
+                                                            );
+                                                            if (!nextGroup) {
+                                                              return null;
+                                                            }
+                                                            const check = buildUnionCheckSummary(group, nextGroup);
+                                                            if (
+                                                              check.missingInNext.length === 0 &&
+                                                              check.missingInBase.length === 0 &&
+                                                              check.typeMismatch.length === 0 &&
+                                                              !check.orderMismatch
+                                                            ) {
+                                                              return (
+                                                                <Text fz="xs" c="teal">
+                                                                  Fields match between groups.
+                                                                </Text>
+                                                              );
+                                                            }
+                                                            return (
+                                                              <Text fz="xs" c="red">
+                                                                {check.missingInNext.length > 0
+                                                                  ? `${check.missingInNext.length} missing in next`
+                                                                  : ""}{" "}
+                                                                {check.missingInBase.length > 0
+                                                                  ? `${check.missingInBase.length} missing in current`
+                                                                  : ""}{" "}
+                                                                {check.typeMismatch.length > 0
+                                                                  ? `${check.typeMismatch.length} type mismatches`
+                                                                  : ""}{" "}
+                                                                {check.orderMismatch ? "order mismatch" : ""}
                                                               </Text>
-                                                              <Text fz="xs" c="dimmed">
-                                                                {field.id}
-                                                              </Text>
-                                                            </Table.Td>
-                                                            <Table.Td>
-                                                              <TextInput
-                                                                size="xs"
-                                                                placeholder="Custom label"
-                                                                value={aliasValue}
-                                                                disabled={!checked}
-                                                                onChange={(event) =>
-                                                                  handleFieldAliasChange(model.id, field.id, event.currentTarget.value)
-                                                                }
-                                                              />
-                                                            </Table.Td>
-                                                            <Table.Td>
-                                                              <Badge size="xs" variant="light">
-                                                                {field.type}
-                                                              </Badge>
-                                                            </Table.Td>
-                                                            <Table.Td>
-                                                              <Text fz="xs" c="dimmed">
-                                                                {field.sourceColumn ?? "—"}
-                                                              </Text>
-                                                            </Table.Td>
-                                                            <Table.Td align="right">
-                                                              <Checkbox
-                                                                checked={checked}
-                                                                onChange={() => handleFieldToggle(model.id, field.id)}
-                                                              />
-                                                            </Table.Td>
-                                                          </Table.Tr>
-                                                        );
-                                                      })}
-                                                    </Table.Tbody>
-                                                  </Table>
-                                                )}
-                                              </ScrollArea>
-                                            </Stack>
-                                          );
-                                        })}
-                                        {renderDerivedFieldInventory()}
-                                      </Stack>
-                                    )}
+                                                            );
+                                                          })()}
+                                                        </Stack>
+                                                        <Badge size="xs" variant="light">
+                                                          {(unionModeByGroupId[group.id] ?? "all") === "all"
+                                                            ? "UNION ALL"
+                                                            : "UNION"}
+                                                        </Badge>
+                                                      </Group>
+                                                    </Paper>
+                                                  )}
+                                                </Fragment>
+                                              );
+                                            })
+                                          )}
+                                          {renderDerivedFieldInventory()}
+                                        </Stack>
                                       </Collapse>
                                     </Stack>
                                   </Paper>
-                  
+
                                   <Paper p="md" radius="lg" shadow="xs" withBorder>
                                     <Group justify="space-between" mb="md">
                                       <Group gap="xs">
-                                        <ThemeIcon variant="light" color="blue">
-                                          <IconChartHistogram size={18} />
+                                        <ThemeIcon variant="light" color="indigo">
+                                          <IconAdjustments size={18} />
                                         </ThemeIcon>
-                                        <Text fw={600}>Visuals & analytics</Text>
+                                        <Text fw={600}>Filters & distribution</Text>
+                                        <Badge variant="light">{filterSettingsCount} set</Badge>
                                       </Group>
-                                      <Group gap="xs" align="center" wrap="wrap">
-                                        <Button
-                                          size="xs"
-                                          variant="light"
-                                          leftSection={<IconLayoutGrid size={14} />}
-                                          onClick={handleAddVisualToDashboard}
-                                          disabled={
-                                            !isTemplatePersisted || !activeVisual.metric || !activeVisual.dimension
+                                      <Group gap="xs" align="center">
+                                        <ActionIcon
+                                          size="sm"
+                                          variant="subtle"
+                                          onClick={() => toggleSection("filters")}
+                                          aria-label={
+                                            sectionOpen.filters
+                                              ? "Collapse filters and distribution"
+                                              : "Expand filters and distribution"
                                           }
                                         >
-                                          Add to dashboard
-                                        </Button>
+                                          {sectionOpen.filters ? (
+                                            <IconChevronUp size={16} />
+                                          ) : (
+                                            <IconChevronDown size={16} />
+                                          )}
+                                        </ActionIcon>
+                                      </Group>
+                                    </Group>
+                                    <Collapse in={sectionOpen.filters}>
+                                      <Stack gap="sm">
+                                        <Group justify="flex-end">
                                           <Button
                                             size="xs"
-                                            variant={isVisualQueryOverrideActive ? "filled" : "light"}
-                                            color={isVisualQueryOverrideActive ? "orange" : "gray"}
-                                            leftSection={<IconAdjustments size={14} />}
-                                            onClick={handleApplyVisualQueryOverride}
-                                            disabled={!visualQueryDescriptor.config}
+                                            variant="light"
+                                            leftSection={<IconDeviceFloppy size={12} />}
+                                            onClick={handleSaveTemplate}
+                                            loading={saveTemplateMutation.isPending}
                                           >
-                                            {isVisualQueryOverrideActive ? "Update query override" : "Hard override query"}
+                                            Save
                                           </Button>
+                                        </Group>
+                                        <Group justify="space-between" align="center">
+                                          <Text fw={600} fz="sm">
+                                            Filtering
+                                            <Text span c="dimmed" fz="xs" ml="xs">
+                                              (
+                                              {draft.queryGroups.reduce(
+                                                (sum, group) => sum + (group.filters?.length ?? 0),
+                                                0,
+                                              )}{" "}
+                                              filters,{" "}
+                                              {draft.queryGroups.reduce(
+                                                (sum, group) => sum + (group.rawFilterSql?.length ?? 0),
+                                                0,
+                                              )}{" "}
+                                              SQL
+                                              )
+                                            </Text>
+                                          </Text>
+                                          <ActionIcon
+                                            size="sm"
+                                            variant="subtle"
+                                            onClick={() => toggleFiltersPanel("filtering")}
+                                            aria-label={
+                                              filtersPanelOpen.filtering ? "Collapse filtering" : "Expand filtering"
+                                            }
+                                          >
+                                            {filtersPanelOpen.filtering ? (
+                                              <IconChevronUp size={16} />
+                                            ) : (
+                                              <IconChevronDown size={16} />
+                                            )}
+                                          </ActionIcon>
+                                        </Group>
+                                        <Collapse in={filtersPanelOpen.filtering}>
+                                          <Stack gap="sm">
+                                            {draft.queryGroups.length === 0 ? (
+                                              <Text c="dimmed" fz="sm">
+                                                Add at least one group to configure filters and distribution.
+                                              </Text>
+                                            ) : (
+                                              draft.queryGroups.map((group) => {
+                                                const groupFilterOptions = buildFilterFieldOptionsForGroup(group);
+                                                const groupFilterFieldLookup = new Map<string, FilterFieldOption>();
+                                                groupFilterOptions.forEach((option) => {
+                                                  groupFilterFieldLookup.set(
+                                                    buildFilterOptionKey(option.modelId, option.fieldId),
+                                                    option,
+                                                  );
+                                                });
+                                                const groupFilterGroups = ensureRootFilterGroup(
+                                                  group.filterGroups ?? [],
+                                                );
+                                                const groupLookup = new Map<string, ReportFilterGroup>();
+                                                groupFilterGroups.forEach((entry) => {
+                                                  groupLookup.set(entry.id, entry);
+                                                });
+                                                const groupFilterLookup = new Map<string, ReportFilter>();
+                                                (group.filters ?? []).forEach((entry) => {
+                                                  groupFilterLookup.set(entry.id, entry);
+                                                });
+                                                const rootGroup = groupLookup.get(ROOT_FILTER_GROUP_ID);
+                                                const filterCount = group.filters?.length ?? 0;
+                                                const rawCount = group.rawFilterSql?.length ?? 0;
+                                                return (
+                                                  <Paper key={`filters-group-${group.id}`} withBorder radius="md" p="sm">
+                                                    <Group justify="space-between" align="center" wrap="wrap">
+                                                      <Stack gap={2}>
+                                                        <Text fw={600} fz="sm">
+                                                          {group.name}
+                                                        </Text>
+                                                        <Text fz="xs" c="dimmed">
+                                                          {group.models.length} models - {filterCount} filters -{" "}
+                                                          {rawCount} SQL
+                                                        </Text>
+                                                        {group.models.length > 0 && (
+                                                          <Group gap={6} wrap="wrap">
+                                                            {group.models.map((modelId) => (
+                                                              <Badge
+                                                                key={`filters-group-${group.id}-model-${modelId}`}
+                                                                variant="light"
+                                                                size="xs"
+                                                              >
+                                                                {modelMap.get(modelId)?.name ?? modelId}
+                                                              </Badge>
+                                                            ))}
+                                                          </Group>
+                                                        )}
+                                                      </Stack>
+                                                    </Group>
+                                                    <Stack gap="sm" mt="sm">
+                                                      {groupFilterOptions.length === 0 &&
+                                                      (!rootGroup || rootGroup.childOrder.length === 0) ? (
+                                                        <Text c="dimmed" fz="sm">
+                                                          Select at least one data model to start defining filter
+                                                          conditions.
+                                                        </Text>
+                                                      ) : rootGroup ? (
+                                                        renderFilterGroup(group.id, rootGroup, {
+                                                          filterFieldOptions: groupFilterOptions,
+                                                          filterFieldLookup: groupFilterFieldLookup,
+                                                          filterLookup: groupFilterLookup,
+                                                          groupLookup,
+                                                        })
+                                                      ) : (
+                                                        <Text c="dimmed" fz="sm">
+                                                          No filters applied. Add a condition to focus your preview.
+                                                        </Text>
+                                                      )}
+                                                      {group.rawFilterSql && group.rawFilterSql.length > 0 && (
+                                                        <Stack gap="xs">
+                                                          {group.rawFilterSql.map((entry, index) => (
+                                                            <Alert
+                                                              key={`raw-filter-${group.id}-${index}`}
+                                                              color="blue"
+                                                              variant="light"
+                                                              title="Custom SQL filter"
+                                                            >
+                                                              <Group justify="space-between" align="flex-start" gap="sm">
+                                                                <Text fz="xs" style={{ whiteSpace: "pre-wrap" }}>
+                                                                  {entry}
+                                                                </Text>
+                                                                <ActionIcon
+                                                                  variant="subtle"
+                                                                  color="red"
+                                                                  onClick={() => handleRemoveRawSql(group.id, index)}
+                                                                  aria-label="Remove SQL filter"
+                                                                >
+                                                                  <IconTrash size={16} />
+                                                                </ActionIcon>
+                                                              </Group>
+                                                            </Alert>
+                                                          ))}
+                                                        </Stack>
+                                                      )}
+                                                    </Stack>
+                                                  </Paper>
+                                                );
+                                              })
+                                            )}
+                                          </Stack>
+                                        </Collapse>
+                                        <Divider my="sm" />
+                                        <Stack gap="xs">
+                                          <Group justify="space-between" align="center">
+                                            <Text fw={600} fz="sm">
+                                              Grouping
+                                              <Text span c="dimmed" fz="xs" ml="xs">
+                                                ({draft.previewGrouping.length})
+                                              </Text>
+                                            </Text>
+                                            <Group gap="xs" align="center">
+                                              <Button
+                                                variant="subtle"
+                                                size="xs"
+                                                leftSection={<IconPlus size={12} />}
+                                                onClick={handleAddGroupingRule}
+                                                disabled={filterFieldOptions.length === 0}
+                                              >
+                                                Add group field
+                                              </Button>
+                                              <ActionIcon
+                                                size="sm"
+                                                variant="subtle"
+                                                onClick={() => toggleFiltersPanel("grouping")}
+                                                aria-label={
+                                                  filtersPanelOpen.grouping
+                                                    ? "Collapse grouping"
+                                                    : "Expand grouping"
+                                                }
+                                              >
+                                                {filtersPanelOpen.grouping ? (
+                                                  <IconChevronUp size={16} />
+                                                ) : (
+                                                  <IconChevronDown size={16} />
+                                                )}
+                                              </ActionIcon>
+                                            </Group>
+                                          </Group>
+                                          <Collapse in={filtersPanelOpen.grouping}>
+                                            <Stack gap="xs">
+                                              {draft.previewGrouping.length === 0 ? (
+                                                <Text c="dimmed" fz="sm">
+                                                  {filterFieldOptions.length === 0
+                                                    ? "Select data models to enable grouping."
+                                                    : "No grouping applied. Add a field to aggregate rows."}
+                                                </Text>
+                                              ) : (
+                                                draft.previewGrouping.map((group) => {
+                                                  const optionKey =
+                                                    group.source === "derived"
+                                                      ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, group.fieldId)
+                                                      : group.modelId
+                                                      ? buildFilterOptionKey(group.modelId, group.fieldId)
+                                                      : "";
+                                                  const option = optionKey
+                                                    ? filterFieldLookup.get(optionKey)
+                                                    : undefined;
+                                                  const supportsBucket = option?.field.type === "date";
+                                                  return (
+                                                    <Paper key={group.id} withBorder radius="md" p="sm">
+                                                      <Stack gap="xs">
+                                                        <Group align="flex-end" gap="sm" wrap="wrap">
+                                                          <Select
+                                                            label="Field"
+                                                            data={filterFieldOptions.map((candidate) => ({
+                                                              value: candidate.value,
+                                                              label: candidate.label,
+                                                            }))}
+                                                            value={option ? optionKey : null}
+                                                            onChange={(value) =>
+                                                              handleGroupingFieldChange(group.id, value)
+                                                            }
+                                                            searchable
+                                                            placeholder="Select field"
+                                                            style={{ flex: 1, minWidth: 220 }}
+                                                          />
+                                                          {supportsBucket && (
+                                                            <Select
+                                                              label="Bucket"
+                                                              data={bucketOptions}
+                                                              value={group.bucket ?? null}
+                                                              onChange={(value) =>
+                                                                handleGroupingBucketChange(
+                                                                  group.id,
+                                                                  (value as TimeBucket | null | undefined) ?? null,
+                                                                )
+                                                              }
+                                                              placeholder="No bucketing"
+                                                              clearable
+                                                              style={{ width: 180 }}
+                                                            />
+                                                          )}
+                                                          <ActionIcon
+                                                            variant="subtle"
+                                                            color="red"
+                                                            onClick={() => handleRemoveGroupingRule(group.id)}
+                                                            aria-label="Remove grouping"
+                                                          >
+                                                            <IconTrash size={16} />
+                                                          </ActionIcon>
+                                                        </Group>
+                                                      </Stack>
+                                                    </Paper>
+                                                  );
+                                                })
+                                              )}
+                                            </Stack>
+                                          </Collapse>
+                                        </Stack>
+                                      <Divider my="sm" />
+                                      <Stack gap="xs">
+                                        <Group justify="space-between" align="center">
+                                          <Text fw={600} fz="sm">
+                                            Aggregations
+                                            <Text span c="dimmed" fz="xs" ml="xs">
+                                              ({draft.previewAggregations.length})
+                                            </Text>
+                                          </Text>
+                                          <Group gap="xs" align="center">
+                                            <Button
+                                              variant="subtle"
+                                              size="xs"
+                                              leftSection={<IconPlus size={12} />}
+                                              onClick={handleAddAggregationRule}
+                                              disabled={numericFilterFieldOptions.length === 0}
+                                            >
+                                              Add aggregation
+                                            </Button>
+                                            <ActionIcon
+                                              size="sm"
+                                              variant="subtle"
+                                              onClick={() => toggleFiltersPanel("aggregations")}
+                                              aria-label={
+                                                filtersPanelOpen.aggregations
+                                                  ? "Collapse aggregations"
+                                                  : "Expand aggregations"
+                                              }
+                                            >
+                                              {filtersPanelOpen.aggregations ? (
+                                                <IconChevronUp size={16} />
+                                              ) : (
+                                                <IconChevronDown size={16} />
+                                              )}
+                                            </ActionIcon>
+                                          </Group>
+                                        </Group>
+                                        <Collapse in={filtersPanelOpen.aggregations}>
+                                          <Stack gap="xs">
+                                            {draft.previewAggregations.length === 0 ? (
+                                              <Text c="dimmed" fz="sm">
+                                                {numericFilterFieldOptions.length === 0
+                                                  ? "Select numeric fields in the preview to enable aggregations."
+                                                  : "No aggregated metrics defined."}
+                                              </Text>
+                                            ) : (
+                                              draft.previewAggregations.map((aggregation) => {
+                                                const optionKey =
+                                                  aggregation.source === "derived"
+                                                    ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, aggregation.fieldId)
+                                                    : aggregation.modelId
+                                                    ? buildFilterOptionKey(aggregation.modelId, aggregation.fieldId)
+                                                    : "";
+                                                const option = optionKey
+                                                  ? filterFieldLookup.get(optionKey)
+                                                  : undefined;
+                                                return (
+                                                  <Paper key={aggregation.id} withBorder radius="md" p="sm">
+                                                    <Stack gap="xs">
+                                                      <Group align="flex-end" gap="sm" wrap="wrap">
+                                                        <Select
+                                                          label="Field"
+                                                          data={numericFilterFieldOptions.map((candidate) => ({
+                                                            value: candidate.value,
+                                                            label: candidate.label,
+                                                          }))}
+                                                          value={option ? optionKey : null}
+                                                          onChange={(value) =>
+                                                            handleAggregationFieldChange(aggregation.id, value)
+                                                          }
+                                                          searchable
+                                                          placeholder="Select field"
+                                                          style={{ flex: 1, minWidth: 220 }}
+                                                        />
+                                                        <Select
+                                                          label="Aggregation"
+                                                          data={METRIC_AGGREGATIONS.map((value) => ({
+                                                            value,
+                                                            label: AGGREGATION_LABELS[value],
+                                                          }))}
+                                                          value={aggregation.aggregation}
+                                                          onChange={(value) =>
+                                                            handleAggregationTypeChange(
+                                                              aggregation.id,
+                                                              (value as PreviewAggregationRule["aggregation"]) ?? "sum",
+                                                            )
+                                                          }
+                                                          style={{ width: 180 }}
+                                                        />
+                                                        <TextInput
+                                                          label="Alias"
+                                                          value={aggregation.alias ?? ""}
+                                                          onChange={(event) =>
+                                                            handleAggregationAliasChange(
+                                                              aggregation.id,
+                                                              event.currentTarget.value,
+                                                            )
+                                                          }
+                                                          placeholder="Optional label"
+                                                          style={{ flex: 1, minWidth: 160 }}
+                                                        />
+                                                        <ActionIcon
+                                                          variant="subtle"
+                                                          color="red"
+                                                          onClick={() => handleRemoveAggregationRule(aggregation.id)}
+                                                          aria-label="Remove aggregation"
+                                                        >
+                                                          <IconTrash size={16} />
+                                                        </ActionIcon>
+                                                      </Group>
+                                                    </Stack>
+                                                  </Paper>
+                                                );
+                                              })
+                                            )}
+                                          </Stack>
+                                        </Collapse>
+                                      </Stack>
+                                      <Divider my="sm" />
+                                      <Stack gap="xs">
+                                        <Group justify="space-between" align="center">
+                                          <Text fw={600} fz="sm">
+                                            Group filters (HAVING)
+                                            <Text span c="dimmed" fz="xs" ml="xs">
+                                              ({draft.previewHaving.length})
+                                            </Text>
+                                          </Text>
+                                          <Group gap="xs" align="center">
+                                            <Button
+                                              variant="subtle"
+                                              size="xs"
+                                              leftSection={<IconPlus size={12} />}
+                                              onClick={handleAddHavingRule}
+                                              disabled={draft.previewAggregations.length === 0}
+                                            >
+                                              Add group filter
+                                            </Button>
+                                            <ActionIcon
+                                              size="sm"
+                                              variant="subtle"
+                                              onClick={() => toggleFiltersPanel("having")}
+                                              aria-label={
+                                                filtersPanelOpen.having
+                                                  ? "Collapse group filters"
+                                                  : "Expand group filters"
+                                              }
+                                            >
+                                              {filtersPanelOpen.having ? (
+                                                <IconChevronUp size={16} />
+                                              ) : (
+                                                <IconChevronDown size={16} />
+                                              )}
+                                            </ActionIcon>
+                                          </Group>
+                                        </Group>
+                                        <Collapse in={filtersPanelOpen.having}>
+                                          <Stack gap="xs">
+                                            {draft.previewHaving.length === 0 ? (
+                                              <Text c="dimmed" fz="sm">
+                                                {draft.previewAggregations.length === 0
+                                                  ? "Add an aggregation to enable HAVING filters."
+                                                  : "No HAVING filters applied."}
+                                              </Text>
+                                            ) : (
+                                              draft.previewHaving.map((clause) => {
+                                                const aggregationOptions = draft.previewAggregations.map(
+                                                  (aggregation) => {
+                                                    const optionKey =
+                                                      aggregation.source === "derived"
+                                                        ? buildFilterOptionKey(
+                                                            DERIVED_FIELD_SENTINEL,
+                                                            aggregation.fieldId,
+                                                          )
+                                                        : aggregation.modelId
+                                                        ? buildFilterOptionKey(
+                                                            aggregation.modelId,
+                                                            aggregation.fieldId,
+                                                          )
+                                                        : "";
+                                                    const option = optionKey
+                                                      ? filterFieldLookup.get(optionKey)
+                                                      : undefined;
+                                                    const baseLabel = option?.label ?? aggregation.fieldId;
+                                                    const label =
+                                                      aggregation.alias && aggregation.alias.trim().length > 0
+                                                        ? `${aggregation.alias} (${
+                                                            AGGREGATION_LABELS[aggregation.aggregation]
+                                                          })`
+                                                        : `${baseLabel} (${AGGREGATION_LABELS[aggregation.aggregation]})`;
+                                                    return {
+                                                      value: aggregation.id,
+                                                      label,
+                                                    };
+                                                  },
+                                                );
+                                                const numericValue =
+                                                  clause.value !== undefined && clause.value !== ""
+                                                    ? Number(clause.value)
+                                                    : undefined;
+                                                return (
+                                                  <Paper key={clause.id} withBorder radius="md" p="sm">
+                                                    <Stack gap="xs">
+                                                      <Group align="flex-end" gap="sm" wrap="wrap">
+                                                        <Select
+                                                          label="Aggregation"
+                                                          data={aggregationOptions}
+                                                          value={clause.aggregationId}
+                                                          onChange={(value) =>
+                                                            value && handleHavingAggregationChange(clause.id, value)
+                                                          }
+                                                          placeholder="Select aggregation"
+                                                          style={{ flex: 1, minWidth: 220 }}
+                                                        />
+                                                        <Select
+                                                          label="Operator"
+                                                          data={HAVING_OPERATOR_OPTIONS}
+                                                          value={clause.operator}
+                                                          onChange={(value) =>
+                                                            handleHavingOperatorChange(
+                                                              clause.id,
+                                                              (value as PreviewHavingRule["operator"]) ?? "gt",
+                                                            )
+                                                          }
+                                                          style={{ width: 140 }}
+                                                        />
+                                                        <NumberInput
+                                                          label="Value"
+                                                          value={
+                                                            typeof numericValue === "number" &&
+                                                            Number.isFinite(numericValue)
+                                                              ? numericValue
+                                                              : undefined
+                                                          }
+                                                          onChange={(value) =>
+                                                            handleHavingValueChange(
+                                                              clause.id,
+                                                              value === null || value === undefined
+                                                                ? ""
+                                                                : String(value),
+                                                            )
+                                                          }
+                                                          allowDecimal
+                                                          w={160}
+                                                        />
+                                                        <ActionIcon
+                                                          variant="subtle"
+                                                          color="red"
+                                                          onClick={() => handleRemoveHavingRule(clause.id)}
+                                                          aria-label="Remove group filter"
+                                                        >
+                                                          <IconTrash size={16} />
+                                                        </ActionIcon>
+                                                      </Group>
+                                                    </Stack>
+                                                  </Paper>
+                                                );
+                                              })
+                                            )}
+                                          </Stack>
+                                        </Collapse>
+                                      </Stack>
+                                      <Divider my="sm" />
+                                      <Stack gap="xs">
+                                        <Group justify="space-between" align="center">
+                                          <Text fw={600} fz="sm">
+                                            Preview order
+                                            <Text span c="dimmed" fz="xs" ml="xs">
+                                              ({draft.previewOrder.length})
+                                            </Text>
+                                          </Text>
+                                          <Group gap="xs" align="center">
+                                            <Button
+                                              variant="subtle"
+                                              size="xs"
+                                              leftSection={<IconPlus size={12} />}
+                                              onClick={handleAddPreviewOrderRule}
+                                              disabled={filterFieldOptions.length === 0}
+                                            >
+                                              Add sort rule
+                                            </Button>
+                                            <ActionIcon
+                                              size="sm"
+                                              variant="subtle"
+                                              onClick={() => toggleFiltersPanel("previewOrder")}
+                                              aria-label={
+                                                filtersPanelOpen.previewOrder
+                                                  ? "Collapse preview order"
+                                                  : "Expand preview order"
+                                              }
+                                            >
+                                              {filtersPanelOpen.previewOrder ? (
+                                                <IconChevronUp size={16} />
+                                              ) : (
+                                                <IconChevronDown size={16} />
+                                              )}
+                                            </ActionIcon>
+                                          </Group>
+                                        </Group>
+                                        <Collapse in={filtersPanelOpen.previewOrder}>
+                                          <Stack gap="xs">
+                                            {draft.previewOrder.length === 0 ? (
+                                              <Text c="dimmed" fz="sm">
+                                                No ordering applied. Rows will follow the default database ordering.
+                                              </Text>
+                                            ) : (
+                                              draft.previewOrder.map((rule) => {
+                                                const optionKey =
+                                                  rule.source === "derived"
+                                                    ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, rule.fieldId)
+                                                    : rule.modelId
+                                                    ? buildFilterOptionKey(rule.modelId, rule.fieldId)
+                                                    : "";
+                                                const optionMissing = !optionKey || !filterFieldLookup.has(optionKey);
+                                                return (
+                                                  <Paper key={rule.id} withBorder radius="md" p="sm">
+                                                    <Stack gap="xs">
+                                                      <Group align="flex-end" gap="sm" wrap="wrap">
+                                                        <Select
+                                                          label="Field"
+                                                          data={filterFieldOptions.map((option) => ({
+                                                            value: option.value,
+                                                            label: option.label,
+                                                          }))}
+                                                          value={optionMissing ? null : optionKey}
+                                                          onChange={(value) =>
+                                                            handlePreviewOrderFieldChange(rule.id, value)
+                                                          }
+                                                          placeholder="Select field"
+                                                          searchable
+                                                          style={{ flex: 1, minWidth: 220 }}
+                                                        />
+                                                        <SegmentedControl
+                                                          value={rule.direction}
+                                                          onChange={(value) =>
+                                                            handlePreviewOrderDirectionChange(
+                                                              rule.id,
+                                                              (value as "asc" | "desc") ?? "asc",
+                                                            )
+                                                          }
+                                                          data={[
+                                                            { value: "asc", label: "Asc" },
+                                                            { value: "desc", label: "Desc" },
+                                                          ]}
+                                                        />
+                                                        <ActionIcon
+                                                          variant="subtle"
+                                                          color="red"
+                                                          onClick={() => handleRemovePreviewOrderRule(rule.id)}
+                                                          aria-label="Remove sort rule"
+                                                        >
+                                                          <IconTrash size={16} />
+                                                        </ActionIcon>
+                                                      </Group>
+                                                      {optionMissing && (
+                                                        <Text fz="xs" c="red">
+                                                          Field is no longer available. Select another column to keep this
+                                                          rule.
+                                                        </Text>
+                                                      )}
+                                                    </Stack>
+                                                  </Paper>
+                                                );
+                                              })
+                                            )}
+                                          </Stack>
+                                        </Collapse>
+                                      </Stack>
+                                      <Divider my="sm" />
+                                      <Checkbox
+                                        label="Auto-publish PDF package to leadership workspace"
+                                        checked={draft.autoDistribution}
+                                        onChange={(event) =>
+                                          setDraft((current) => ({
+                                            ...current,
+                                            autoDistribution: event.currentTarget.checked,
+                                          }))
+                                        }
+                                      />
+                                      <Checkbox
+                                        label="Send digest to #revenue-ops Slack channel on refresh"
+                                        checked={draft.notifyTeam}
+                                        onChange={(event) =>
+                                          setDraft((current) => ({
+                                            ...current,
+                                            notifyTeam: event.currentTarget.checked,
+                                          }))
+                                        }
+                                      />
+                                    
+                                    
+                                      </Stack>
+                                  </Collapse>
+                                  </Paper>
+
+<Paper p="md" radius="lg" shadow="xs" withBorder>
+                                    <Stack gap="md">
+                                      <Group justify="space-between" align="center">
+                                        <Group gap="xs" align="center">
+                                          <ThemeIcon variant="light" color="gray">
+                                            <IconAdjustments size={16} />
+                                          </ThemeIcon>
+                                          <Text fw={600}>Query inspector</Text>
+                                          <Badge variant="light">{queryInspectorCount} generated</Badge>
+                                        </Group>
+                                        <Group gap="xs" align="center">
+                                          <ActionIcon
+                                            size="sm"
+                                            variant="subtle"
+                                            onClick={() => toggleSection("queryInspector")}
+                                            aria-label={
+                                              sectionOpen.queryInspector
+                                                ? "Collapse query inspector"
+                                                : "Expand query inspector"
+                                            }
+                                          >
+                                            {sectionOpen.queryInspector ? (
+                                              <IconChevronUp size={16} />
+                                            ) : (
+                                              <IconChevronDown size={16} />
+                                            )}
+                                          </ActionIcon>
+                                        </Group>
+                                      </Group>
+                                      <Collapse in={sectionOpen.queryInspector}>
+                                      <Stack gap="xs">
+                                        <Group justify="flex-end">
+                                          <Button
+                                            size="xs"
+                                            variant="light"
+                                            leftSection={<IconDeviceFloppy size={12} />}
+                                            onClick={handleSaveTemplate}
+                                            loading={saveTemplateMutation.isPending}
+                                          >
+                                            Save
+                                          </Button>
+                                        </Group>
+                                        <Group justify="space-between" align="center">
+                                          <Text fw={500} fz="sm">
+                                            Preview query
+                                          </Text>
                                           <Button
                                             size="xs"
                                             variant="subtle"
-                                            color="gray"
-                                            onClick={() => setIsUnionBuilderOpen((current) => !current)}
+                                            leftSection={<IconPlayerPlay size={12} />}
+                                            onClick={handleRunPreviewOnly}
+                                            loading={isPreviewLoading}
                                           >
-                                            {isUnionBuilderOpen ? "Hide union builder" : "Union builder"}
+                                            Generate
                                           </Button>
-                                          {isVisualQueryOverrideActive && (
-                                            <Button
-                                              size="xs"
-                                              variant="subtle"
-                                              color="gray"
-                                            onClick={handleClearVisualQueryOverride}
+                                        </Group>
+                                        <Textarea
+                                          value={
+                                            previewSql ?? "Run data preview to capture the SQL backing the table."
+                                          }
+                                          readOnly
+                                          autosize
+                                          minRows={3}
+                                          styles={{ input: { fontFamily: "monospace" } }}
+                                        />
+                                      </Stack>
+                                      <Stack gap="xs">
+                                        <Group justify="space-between" align="center">
+                                          <Text fw={500} fz="sm">
+                                            Visuals & analytics query
+                                          </Text>
+                                          <Button
+                                            size="xs"
+                                            variant="subtle"
+                                            leftSection={<IconPlayerPlay size={12} />}
+                                            onClick={runVisualAnalytics}
+                                            loading={isVisualQueryRunning}
                                           >
-                                            Clear override
+                                            Generate
                                           </Button>
-                                        )}
-                                        <Badge variant="light">{chartData.length} points</Badge>
+                                        </Group>
+                                        <Textarea
+                                          value={
+                                            visualSql ?? "Run analytics to capture the SQL powering the chart."
+                                          }
+                                          readOnly
+                                          autosize
+                                          minRows={3}
+                                          styles={{ input: { fontFamily: "monospace" } }}
+                                        />
+                                      </Stack>
+                                      </Collapse>
+                                    </Stack>
+                                  </Paper>
+
+                  
+                                  <Paper p="md" radius="lg" shadow="xs" withBorder>
+                                    <Group justify="space-between" mb="md" align="center">
+                                      <Group gap="xs" align="center">
+                                        <ThemeIcon variant="light" color="cyan">
+                                          <IconLayoutGrid size={16} />
+                                        </ThemeIcon>
+                                        <Text fw={600}>Data preview</Text>
+                                        <Badge variant="light">{previewRows.length} rows</Badge>
+                                      </Group>
+                                      <Group gap="xs" align="center">
+                                        <ActionIcon
+                                          size="sm"
+                                          variant="subtle"
+                                          onClick={() => toggleSection("preview")}
+                                          aria-label={
+                                            sectionOpen.preview ? "Collapse data preview" : "Expand data preview"
+                                          }
+                                        >
+                                          {sectionOpen.preview ? (
+                                            <IconChevronUp size={16} />
+                                          ) : (
+                                            <IconChevronDown size={16} />
+                                          )}
+                                        </ActionIcon>
+                                      </Group>
+                                    </Group>
+                                    <Collapse in={sectionOpen.preview}>
+                                      <Group justify="flex-end" mb="sm">
                                         <Button
                                           size="xs"
                                           variant="light"
@@ -9770,6 +11727,176 @@ const getColumnLabel = useCallback(
                                         >
                                           Save
                                         </Button>
+                                      </Group>
+                                      <Text fz="xs" c="dimmed" mb="sm">
+                                        {lastRunAt === "Not run yet"
+                                          ? "Preview not run yet"
+                                          : `Last run: ${lastRunAt}`}
+                                      </Text>
+                                      <Group justify="flex-start" mb="sm">
+                                        <Button
+                                          variant="subtle"
+                                          size="xs"
+                                          leftSection={<IconLayoutGrid size={14} />}
+                                          onClick={handleAddPreviewToDashboard}
+                                          disabled={previewColumns.length === 0}
+                                        >
+                                          Add to dashboard
+                                        </Button>
+                                      </Group>
+                                      {previewError && (
+                                        <Box mb="sm">
+                                          <Text fz="sm" c="red">
+                                            {previewError}
+                                          </Text>
+                                        </Box>
+                                      )}
+                                      {isPreviewLoading ? (
+                                        <Text c="dimmed" fz="sm">
+                                          Running preview&hellip;
+                                        </Text>
+                                      ) : previewRows.length === 0 || previewColumns.length === 0 ? (
+                                        <Text c="dimmed" fz="sm">
+                                          Configure your models, fields, and filters, then run the analysis to see
+                                          sample rows.
+                                        </Text>
+                    ) : (
+                      <>
+                        <ScrollArea>
+                          <Table
+                            highlightOnHover
+                            striped
+                            verticalSpacing="xs"
+                            style={{ fontSize: "0.85rem" }}
+                          >
+                            <Table.Thead>
+                              <Table.Tr>
+                                {previewColumns.map((column, columnIndex) => {
+                                  const metadata = previewColumnMetadata.get(column);
+                                  const tableDescriptor =
+                                    metadata?.modelName ?? metadata?.tableName ?? metadata?.modelId;
+                                  const technicalDescriptor =
+                                    metadata?.modelId && metadata?.fieldId
+                                      ? `${metadata.modelId}.${metadata.fieldId}`
+                                      : metadata?.fieldId ?? metadata?.sourceColumn;
+                                  const baseLabel = metadata?.fieldLabel ?? humanizeAlias(column);
+                                  const customLabel =
+                                    metadata?.customLabel && metadata.customLabel.length > 0
+                                      ? metadata.customLabel
+                                      : undefined;
+                                  const displayLabel = customLabel ?? baseLabel;
+                                  const secondarySegments: string[] = [];
+                                  if (customLabel && customLabel !== baseLabel) {
+                                    secondarySegments.push(baseLabel);
+                                  }
+                                  if (tableDescriptor) {
+                                    secondarySegments.push(tableDescriptor);
+                                  }
+                                  if (technicalDescriptor) {
+                                    secondarySegments.push(technicalDescriptor);
+                                  }
+                                  const subtitle = secondarySegments.join(" / ");
+                                  const isFirst = columnIndex === 0;
+                                  const isLast = columnIndex === previewColumns.length - 1;
+                                  const showReorder = previewColumns.length > 1;
+                                  return (
+                                    <Table.Th key={column}>
+                                      <Group gap="xs" justify="space-between" align="flex-start">
+                                        <Box>
+                                          <Text fw={600} fz="sm">
+                                            {displayLabel}
+                                          </Text>
+                                          {subtitle && (
+                                            <Text fz="xs" c="dimmed">
+                                              {subtitle}
+                                            </Text>
+                                          )}
+                                        </Box>
+                                        {showReorder && (
+                                          <Group gap={4}>
+                                            <ActionIcon
+                                              size="sm"
+                                              variant="subtle"
+                                              aria-label={`Move ${displayLabel} left`}
+                                              onClick={() => movePreviewColumn(column, "left")}
+                                              disabled={isFirst}
+                                            >
+                                              <IconArrowLeft size={14} />
+                                            </ActionIcon>
+                                            <ActionIcon
+                                              size="sm"
+                                              variant="subtle"
+                                              aria-label={`Move ${displayLabel} right`}
+                                              onClick={() => movePreviewColumn(column, "right")}
+                                              disabled={isLast}
+                                            >
+                                              <IconArrowRight size={14} />
+                                            </ActionIcon>
+                                          </Group>
+                                        )}
+                                      </Group>
+                                    </Table.Th>
+                                  );
+                                })}
+                              </Table.Tr>
+                            </Table.Thead>
+                            <Table.Tbody>
+                              {previewPageRows.map((row, rowIndex) => {
+                                const rowData = row as Record<string, unknown>;
+                                const absoluteIndex = (previewPage - 1) * previewPageSize + rowIndex;
+                                return (
+                                  <Table.Tr key={`preview-row-${absoluteIndex}`}>
+                                    {previewColumns.map((column) => (
+                                      <Table.Td key={`${absoluteIndex}-${column}`}>
+                                        {formatPreviewValue(rowData[column])}
+                                      </Table.Td>
+                                    ))}
+                                  </Table.Tr>
+                                );
+                              })}
+                            </Table.Tbody>
+                          </Table>
+                        </ScrollArea>
+                        <Group justify="space-between" align="center" mt="sm" wrap="wrap">
+                          <Select
+                            size="xs"
+                            label="Rows per page"
+                            data={[
+                              { value: "25", label: "25" },
+                              { value: "50", label: "50" },
+                              { value: "100", label: "100" },
+                            ]}
+                            value={String(previewPageSize)}
+                            onChange={(value) => {
+                              const nextSize = Number(value ?? "25");
+                              setPreviewPageSize(nextSize);
+                              setPreviewPage(1);
+                            }}
+                            style={{ width: 140 }}
+                          />
+                          <Pagination
+                            size="sm"
+                            total={previewTotalPages}
+                            value={previewPage}
+                            onChange={setPreviewPage}
+                            withEdges
+                          />
+                        </Group>
+                      </>
+                    )}
+                                    </Collapse>
+                                  </Paper>
+                  
+                                  <Paper p="md" radius="lg" shadow="xs" withBorder>
+                                    <Group justify="space-between" mb="md">
+                                      <Group gap="xs">
+                                        <ThemeIcon variant="light" color="blue">
+                                          <IconChartHistogram size={18} />
+                                        </ThemeIcon>
+                                        <Text fw={600}>Visuals & analytics</Text>
+                                        <Badge variant="light">{visualsCount} visuals</Badge>
+                                      </Group>
+                                      <Group gap="xs" align="center" wrap="wrap">
                                         <ActionIcon
                                           size="sm"
                                           variant="subtle"
@@ -9804,14 +11931,67 @@ const getColumnLabel = useCallback(
                                             {visualJobStatusLabel}
                                           </Badge>
                                         )}
-                                          {analyticsRunLabel && (
-                                            <Badge variant="outline" color="gray">
-                                              Updated {analyticsRunLabel}
-                                            </Badge>
-                                          )}
+                                        {analyticsRunLabel && (
+                                          <Badge variant="outline" color="gray">
+                                            Updated {analyticsRunLabel}
+                                          </Badge>
+                                        )}
                                       </Group>
                                     </Group>
                                     <Collapse in={sectionOpen.visuals}>
+                                      <Group justify="flex-end" mb="sm">
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          leftSection={<IconDeviceFloppy size={12} />}
+                                          onClick={handleSaveTemplate}
+                                          loading={saveTemplateMutation.isPending}
+                                        >
+                                          Save
+                                        </Button>
+                                      </Group>
+                                      <Group gap="xs" align="center" wrap="wrap" mb="sm">
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          leftSection={<IconLayoutGrid size={14} />}
+                                          onClick={handleAddVisualToDashboard}
+                                          disabled={
+                                            !isTemplatePersisted || !activeVisual.metric || !activeVisual.dimension
+                                          }
+                                        >
+                                          Add to dashboard
+                                        </Button>
+                                        <Button
+                                          size="xs"
+                                          variant={isVisualQueryOverrideActive ? "filled" : "light"}
+                                          color={isVisualQueryOverrideActive ? "orange" : "gray"}
+                                          leftSection={<IconAdjustments size={14} />}
+                                          onClick={handleApplyVisualQueryOverride}
+                                          disabled={!visualQueryDescriptor.config}
+                                        >
+                                          {isVisualQueryOverrideActive ? "Update query override" : "Hard override query"}
+                                        </Button>
+                                        <Button
+                                          size="xs"
+                                          variant="subtle"
+                                          color="gray"
+                                          onClick={() => setIsUnionBuilderOpen((current) => !current)}
+                                        >
+                                          {isUnionBuilderOpen ? "Hide union builder" : "Union builder"}
+                                        </Button>
+                                        {isVisualQueryOverrideActive && (
+                                          <Button
+                                            size="xs"
+                                            variant="subtle"
+                                            color="gray"
+                                            onClick={handleClearVisualQueryOverride}
+                                          >
+                                            Clear override
+                                          </Button>
+                                        )}
+                                        <Badge variant="light">{chartData.length} points</Badge>
+                                      </Group>
                                       {isUnionBuilderOpen && (
                                         <Card withBorder radius="md" padding="sm">
                                           <Stack gap="xs">
@@ -9957,28 +12137,13 @@ const getColumnLabel = useCallback(
                                             }
                                           />
                                         )}
-                                        <NumberInput
-                                          label="Row limit"
-                                          value={activeVisual.limit ?? 100}
-                                          onChange={(value) =>
-                                            handleVisualChange({
-                                              limit:
-                                                typeof value === "number" && Number.isFinite(value) && value > 0
-                                                  ? Math.round(value)
-                                                  : null,
-                                            })
-                                          }
-                                          min={10}
-                                          max={10000}
-                                          step={10}
-                                        />
                                         <Button
                                           variant="light"
                                           leftSection={<IconPlayerPlay size={14} />}
                                           onClick={runVisualAnalytics}
                                           loading={isVisualQueryRunning || isAnalyticsMutationPending}
                                         >
-                                          Re-run analytics
+                                          Run analytics
                                         </Button>
                                         {visualWarnings.length > 0 && (
                                           <Stack gap={4}>
@@ -10085,17 +12250,9 @@ const getColumnLabel = useCallback(
                                           <IconMessage2 size={18} />
                                         </ThemeIcon>
                                         <Text fw={600}>Metrics spotlight</Text>
+                                        <Badge variant="light">{draft.metricsSpotlight.length} cards</Badge>
                                       </Group>
                                       <Group gap="xs" align="center">
-                                        <Button
-                                          size="xs"
-                                          variant="light"
-                                          leftSection={<IconDeviceFloppy size={12} />}
-                                          onClick={handleSaveTemplate}
-                                          loading={saveTemplateMutation.isPending}
-                                        >
-                                          Save
-                                        </Button>
                                         <ActionIcon
                                           size="sm"
                                           variant="subtle"
@@ -10112,6 +12269,22 @@ const getColumnLabel = useCallback(
                                             <IconChevronDown size={16} />
                                           )}
                                         </ActionIcon>
+                                      </Group>
+                                    </Group>
+                                    <Collapse in={sectionOpen.spotlight}>
+                                    <Stack gap="sm">
+                                      <Group justify="flex-end">
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          leftSection={<IconDeviceFloppy size={12} />}
+                                          onClick={handleSaveTemplate}
+                                          loading={saveTemplateMutation.isPending}
+                                        >
+                                          Save
+                                        </Button>
+                                      </Group>
+                                      <Group justify="flex-start">
                                         <Button
                                           variant="light"
                                           size="sm"
@@ -10122,9 +12295,6 @@ const getColumnLabel = useCallback(
                                           Add card
                                         </Button>
                                       </Group>
-                                    </Group>
-                                    <Collapse in={sectionOpen.spotlight}>
-                                    <Stack gap="sm">
                                       {metricAliasOptions.length === 0 && (
                                         <Text c="dimmed" fz="sm">
                                           Select numeric fields in the data preview to enable spotlight cards.
@@ -10152,7 +12322,7 @@ const getColumnLabel = useCallback(
                                                   variant="subtle"
                                                   color="red"
                                                   aria-label="Remove spotlight"
-                                                  onClick={() => handleRemoveSpotlight(index)}
+                                                  onClick={() => handleRequestRemoveSpotlight(index)}
                                                 >
                                                   <IconTrash size={16} />
                                                 </ActionIcon>
@@ -10169,6 +12339,17 @@ const getColumnLabel = useCallback(
                                                   }}
                                                   searchable
                                                   required
+                                                />
+                                                <Select
+                                                  label="Aggregation"
+                                                  data={SPOTLIGHT_AGGREGATION_OPTIONS}
+                                                  value={spotlight.aggregation ?? "sum"}
+                                                  onChange={(value) =>
+                                                    handleSpotlightChange(index, {
+                                                      aggregation:
+                                                        (value ?? "sum") as MetricSpotlightDefinitionDto["aggregation"],
+                                                    })
+                                                  }
                                                 />
                                                 <TextInput
                                                   label="Display label"
@@ -10244,704 +12425,16 @@ const getColumnLabel = useCallback(
                                     </Stack>
                                     </Collapse>
                                   </Paper>
-                  
                                   <Paper p="md" radius="lg" shadow="xs" withBorder>
-                                    <Stack gap="md">
-                                      <Group justify="space-between" align="center">
+                                      <Group justify="space-between" mb="md">
                                         <Group gap="xs" align="center">
-                                          <ThemeIcon variant="light" color="gray">
-                                            <IconAdjustments size={16} />
+                                          <ThemeIcon variant="light" color="teal">
+                                            <IconMessage2 size={18} />
                                           </ThemeIcon>
-                                          <Text fw={600}>Query inspector</Text>
+                                          <Text fw={600}>Metrics spotlight</Text>
+                                          <Badge variant="light">{metricsSummary.length} cards</Badge>
                                         </Group>
-                                        <Group gap="xs" align="center">
-                                          <Badge variant="light">Diagnostics</Badge>
-                                          <Button
-                                            size="xs"
-                                            variant="light"
-                                            leftSection={<IconDeviceFloppy size={12} />}
-                                            onClick={handleSaveTemplate}
-                                            loading={saveTemplateMutation.isPending}
-                                          >
-                                            Save
-                                          </Button>
-                                          <ActionIcon
-                                            size="sm"
-                                            variant="subtle"
-                                            onClick={() => toggleSection("queryInspector")}
-                                            aria-label={
-                                              sectionOpen.queryInspector
-                                                ? "Collapse query inspector"
-                                                : "Expand query inspector"
-                                            }
-                                          >
-                                            {sectionOpen.queryInspector ? (
-                                              <IconChevronUp size={16} />
-                                            ) : (
-                                              <IconChevronDown size={16} />
-                                            )}
-                                          </ActionIcon>
-                                        </Group>
-                                      </Group>
-                                      <Collapse in={sectionOpen.queryInspector}>
-                                      <Stack gap="xs">
-                                        <Text fw={500} fz="sm">
-                                          Preview query
-                                        </Text>
-                                        <Textarea
-                                          value={
-                                            previewSql ?? "Run data preview to capture the SQL backing the table."
-                                          }
-                                          readOnly
-                                          autosize
-                                          minRows={3}
-                                          styles={{ input: { fontFamily: "monospace" } }}
-                                        />
-                                      </Stack>
-                                      <Stack gap="xs">
-                                        <Text fw={500} fz="sm">
-                                          Visuals & analytics query
-                                        </Text>
-                                        <Textarea
-                                          value={
-                                            visualSql ?? "Run analytics to capture the SQL powering the chart."
-                                          }
-                                          readOnly
-                                          autosize
-                                          minRows={3}
-                                          styles={{ input: { fontFamily: "monospace" } }}
-                                        />
-                                      </Stack>
-                                      </Collapse>
-                                    </Stack>
-                                  </Paper>
-                  
-                                  <Paper p="md" radius="lg" shadow="xs" withBorder>
-                                    <Group justify="space-between" mb="md">
-                                      <Group gap="xs">
-                                        <ThemeIcon variant="light" color="indigo">
-                                          <IconAdjustments size={18} />
-                                        </ThemeIcon>
-                                        <Text fw={600}>Filters & distribution</Text>
-                                      </Group>
                                       <Group gap="xs" align="center">
-                                        <Button
-                                          size="xs"
-                                          variant="light"
-                                          leftSection={<IconDeviceFloppy size={12} />}
-                                          onClick={handleSaveTemplate}
-                                          loading={saveTemplateMutation.isPending}
-                                        >
-                                          Save
-                                        </Button>
-                                        <ActionIcon
-                                          size="sm"
-                                          variant="subtle"
-                                          onClick={() => toggleSection("filters")}
-                                          aria-label={
-                                            sectionOpen.filters
-                                              ? "Collapse filters and distribution"
-                                              : "Expand filters and distribution"
-                                          }
-                                        >
-                                          {sectionOpen.filters ? (
-                                            <IconChevronUp size={16} />
-                                          ) : (
-                                            <IconChevronDown size={16} />
-                                          )}
-                                        </ActionIcon>
-                                      </Group>
-                                    </Group>
-                                    <Collapse in={sectionOpen.filters}>
-                                    <Stack gap="sm">
-                                      {filterFieldOptions.length === 0 &&
-                                      (!rootFilterGroup || rootFilterGroup.childOrder.length === 0) ? (
-                                        <Text c="dimmed" fz="sm">
-                                          Select at least one data model to start defining filter conditions.
-                                        </Text>
-                                      ) : rootFilterGroup ? (
-                                        renderFilterGroup(rootFilterGroup)
-                                      ) : (
-                                        <Text c="dimmed" fz="sm">
-                                          No filters applied. Add a condition to focus your preview.
-                                        </Text>
-                                      )}
-                                      {draft.rawFilterSql.length > 0 && (
-                                        <Stack gap="xs">
-                                          {draft.rawFilterSql.map((entry, index) => (
-                                            <Alert
-                                              key={`raw-filter-${index}`}
-                                              color="blue"
-                                              variant="light"
-                                              title="Custom SQL filter"
-                                            >
-                                              <Group justify="space-between" align="flex-start" gap="sm">
-                                                <Text fz="xs" style={{ whiteSpace: "pre-wrap" }}>
-                                                  {entry}
-                                                </Text>
-                                                <ActionIcon
-                                                  variant="subtle"
-                                                  color="red"
-                                                  onClick={() => handleRemoveRawSql(index)}
-                                                  aria-label="Remove SQL filter"
-                                                >
-                                                  <IconTrash size={16} />
-                                                </ActionIcon>
-                                              </Group>
-                                            </Alert>
-                                          ))}
-                                        </Stack>
-                                      )}
-                                      <Divider my="sm" />
-                                      <Stack gap="xs">
-                                        <Group justify="space-between" align="center">
-                                          <Text fw={600} fz="sm">
-                                            Grouping
-                                          </Text>
-                                          <Button
-                                            variant="subtle"
-                                            size="xs"
-                                            leftSection={<IconPlus size={12} />}
-                                            onClick={handleAddGroupingRule}
-                                            disabled={filterFieldOptions.length === 0}
-                                          >
-                                            Add group field
-                                          </Button>
-                                        </Group>
-                                        {draft.previewGrouping.length === 0 ? (
-                                          <Text c="dimmed" fz="sm">
-                                            {filterFieldOptions.length === 0
-                                              ? "Select data models to enable grouping."
-                                              : "No grouping applied. Add a field to aggregate rows."}
-                                          </Text>
-                                        ) : (
-                                          draft.previewGrouping.map((group) => {
-                                            const optionKey =
-                                              group.source === "derived"
-                                                ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, group.fieldId)
-                                                : group.modelId
-                                                ? buildFilterOptionKey(group.modelId, group.fieldId)
-                                                : "";
-                                            const option = optionKey ? filterFieldLookup.get(optionKey) : undefined;
-                                            const supportsBucket = option?.field.type === "date";
-                                            return (
-                                              <Paper key={group.id} withBorder radius="md" p="sm">
-                                                <Stack gap="xs">
-                                                  <Group align="flex-end" gap="sm" wrap="wrap">
-                                                    <Select
-                                                      label="Field"
-                                                      data={filterFieldOptions.map((candidate) => ({
-                                                        value: candidate.value,
-                                                        label: candidate.label,
-                                                      }))}
-                                                      value={option ? optionKey : null}
-                                                      onChange={(value) => handleGroupingFieldChange(group.id, value)}
-                                                      searchable
-                                                      placeholder="Select field"
-                                                      style={{ flex: 1, minWidth: 220 }}
-                                                    />
-                                                    {supportsBucket && (
-                                                      <Select
-                                                        label="Bucket"
-                                                        data={bucketOptions}
-                                                        value={group.bucket ?? null}
-                                                        onChange={(value) =>
-                                                          handleGroupingBucketChange(
-                                                            group.id,
-                                                            (value as TimeBucket | null | undefined) ?? null,
-                                                          )
-                                                        }
-                                                        placeholder="No bucketing"
-                                                        clearable
-                                                        style={{ width: 180 }}
-                                                      />
-                                                    )}
-                                                    <ActionIcon
-                                                      variant="subtle"
-                                                      color="red"
-                                                      onClick={() => handleRemoveGroupingRule(group.id)}
-                                                      aria-label="Remove grouping"
-                                                    >
-                                                      <IconTrash size={16} />
-                                                    </ActionIcon>
-                                                  </Group>
-                                                </Stack>
-                                              </Paper>
-                                            );
-                                          })
-                                        )}
-                                      </Stack>
-                                      <Divider my="sm" />
-                                      <Stack gap="xs">
-                                        <Group justify="space-between" align="center">
-                                          <Text fw={600} fz="sm">
-                                            Aggregations
-                                          </Text>
-                                          <Button
-                                            variant="subtle"
-                                            size="xs"
-                                            leftSection={<IconPlus size={12} />}
-                                            onClick={handleAddAggregationRule}
-                                            disabled={numericFilterFieldOptions.length === 0}
-                                          >
-                                            Add aggregation
-                                          </Button>
-                                        </Group>
-                                        {draft.previewAggregations.length === 0 ? (
-                                          <Text c="dimmed" fz="sm">
-                                            {numericFilterFieldOptions.length === 0
-                                              ? "Select numeric fields in the preview to enable aggregations."
-                                              : "No aggregated metrics defined."}
-                                          </Text>
-                                        ) : (
-                                          draft.previewAggregations.map((aggregation) => {
-                                            const optionKey =
-                                              aggregation.source === "derived"
-                                                ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, aggregation.fieldId)
-                                                : aggregation.modelId
-                                                ? buildFilterOptionKey(aggregation.modelId, aggregation.fieldId)
-                                                : "";
-                                            const option = optionKey ? filterFieldLookup.get(optionKey) : undefined;
-                                            return (
-                                              <Paper key={aggregation.id} withBorder radius="md" p="sm">
-                                                <Stack gap="xs">
-                                                  <Group align="flex-end" gap="sm" wrap="wrap">
-                                                    <Select
-                                                      label="Field"
-                                                      data={numericFilterFieldOptions.map((candidate) => ({
-                                                        value: candidate.value,
-                                                        label: candidate.label,
-                                                      }))}
-                                                      value={option ? optionKey : null}
-                                                      onChange={(value) =>
-                                                        handleAggregationFieldChange(aggregation.id, value)
-                                                      }
-                                                      searchable
-                                                      placeholder="Select field"
-                                                      style={{ flex: 1, minWidth: 220 }}
-                                                    />
-                                                    <Select
-                                                      label="Aggregation"
-                                                      data={METRIC_AGGREGATIONS.map((value) => ({
-                                                        value,
-                                                        label: AGGREGATION_LABELS[value],
-                                                      }))}
-                                                      value={aggregation.aggregation}
-                                                      onChange={(value) =>
-                                                        handleAggregationTypeChange(
-                                                          aggregation.id,
-                                                          (value as PreviewAggregationRule["aggregation"]) ?? "sum",
-                                                        )
-                                                      }
-                                                      style={{ width: 180 }}
-                                                    />
-                                                    <TextInput
-                                                      label="Alias"
-                                                      value={aggregation.alias ?? ""}
-                                                      onChange={(event) =>
-                                                        handleAggregationAliasChange(
-                                                          aggregation.id,
-                                                          event.currentTarget.value,
-                                                        )
-                                                      }
-                                                      placeholder="Optional label"
-                                                      style={{ flex: 1, minWidth: 160 }}
-                                                    />
-                                                    <ActionIcon
-                                                      variant="subtle"
-                                                      color="red"
-                                                      onClick={() => handleRemoveAggregationRule(aggregation.id)}
-                                                      aria-label="Remove aggregation"
-                                                    >
-                                                      <IconTrash size={16} />
-                                                    </ActionIcon>
-                                                  </Group>
-                                                </Stack>
-                                              </Paper>
-                                            );
-                                          })
-                                        )}
-                                      </Stack>
-                                      <Divider my="sm" />
-                                      <Stack gap="xs">
-                                        <Group justify="space-between" align="center">
-                                          <Text fw={600} fz="sm">
-                                            Group filters (HAVING)
-                                          </Text>
-                                          <Button
-                                            variant="subtle"
-                                            size="xs"
-                                            leftSection={<IconPlus size={12} />}
-                                            onClick={handleAddHavingRule}
-                                            disabled={draft.previewAggregations.length === 0}
-                                          >
-                                            Add group filter
-                                          </Button>
-                                        </Group>
-                                        {draft.previewHaving.length === 0 ? (
-                                          <Text c="dimmed" fz="sm">
-                                            {draft.previewAggregations.length === 0
-                                              ? "Add an aggregation to enable HAVING filters."
-                                              : "No HAVING filters applied."}
-                                          </Text>
-                                        ) : (
-                                          draft.previewHaving.map((clause) => {
-                                            const aggregationOptions = draft.previewAggregations.map((aggregation) => {
-                                              const optionKey =
-                                                aggregation.source === "derived"
-                                                  ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, aggregation.fieldId)
-                                                  : aggregation.modelId
-                                                  ? buildFilterOptionKey(aggregation.modelId, aggregation.fieldId)
-                                                  : "";
-                                              const option = optionKey ? filterFieldLookup.get(optionKey) : undefined;
-                                              const baseLabel = option?.label ?? aggregation.fieldId;
-                                              const label = aggregation.alias && aggregation.alias.trim().length > 0
-                                                ? `${aggregation.alias} (${AGGREGATION_LABELS[aggregation.aggregation]})`
-                                                : `${baseLabel} (${AGGREGATION_LABELS[aggregation.aggregation]})`;
-                                              return {
-                                                value: aggregation.id,
-                                                label,
-                                              };
-                                            });
-                                            const numericValue =
-                                              clause.value !== undefined && clause.value !== ""
-                                                ? Number(clause.value)
-                                                : undefined;
-                                            return (
-                                              <Paper key={clause.id} withBorder radius="md" p="sm">
-                                                <Stack gap="xs">
-                                                  <Group align="flex-end" gap="sm" wrap="wrap">
-                                                    <Select
-                                                      label="Aggregation"
-                                                      data={aggregationOptions}
-                                                      value={clause.aggregationId}
-                                                      onChange={(value) =>
-                                                        value && handleHavingAggregationChange(clause.id, value)
-                                                      }
-                                                      placeholder="Select aggregation"
-                                                      style={{ flex: 1, minWidth: 220 }}
-                                                    />
-                                                    <Select
-                                                      label="Operator"
-                                                      data={HAVING_OPERATOR_OPTIONS}
-                                                      value={clause.operator}
-                                                      onChange={(value) =>
-                                                        handleHavingOperatorChange(
-                                                          clause.id,
-                                                          (value as PreviewHavingRule["operator"]) ?? "gt",
-                                                        )
-                                                      }
-                                                      style={{ width: 140 }}
-                                                    />
-                                                    <NumberInput
-                                                      label="Value"
-                                                      value={
-                                                        typeof numericValue === "number" && Number.isFinite(numericValue)
-                                                          ? numericValue
-                                                          : undefined
-                                                      }
-                                                      onChange={(value) =>
-                                                        handleHavingValueChange(
-                                                          clause.id,
-                                                          value === null || value === undefined
-                                                            ? ""
-                                                            : String(value),
-                                                        )
-                                                      }
-                                                      allowDecimal
-                                                      w={160}
-                                                    />
-                                                    <ActionIcon
-                                                      variant="subtle"
-                                                      color="red"
-                                                      onClick={() => handleRemoveHavingRule(clause.id)}
-                                                      aria-label="Remove group filter"
-                                                    >
-                                                      <IconTrash size={16} />
-                                                    </ActionIcon>
-                                                  </Group>
-                                                </Stack>
-                                              </Paper>
-                                            );
-                                          })
-                                        )}
-                                      </Stack>
-                                      <Divider my="sm" />
-                                      <Stack gap="xs">
-                                        <Group justify="space-between" align="center">
-                                          <Text fw={600} fz="sm">
-                                            Preview order
-                                          </Text>
-                                          <Button
-                                            variant="subtle"
-                                            size="xs"
-                                            leftSection={<IconPlus size={12} />}
-                                            onClick={handleAddPreviewOrderRule}
-                                            disabled={filterFieldOptions.length === 0}
-                                          >
-                                            Add sort rule
-                                          </Button>
-                                        </Group>
-                                        {draft.previewOrder.length === 0 ? (
-                                          <Text c="dimmed" fz="sm">
-                                            No ordering applied. Rows will follow the default database ordering.
-                                          </Text>
-                                        ) : (
-                                          draft.previewOrder.map((rule) => {
-                                            const optionKey =
-                                              rule.source === "derived"
-                                                ? buildFilterOptionKey(DERIVED_FIELD_SENTINEL, rule.fieldId)
-                                                : rule.modelId
-                                                ? buildFilterOptionKey(rule.modelId, rule.fieldId)
-                                                : "";
-                                            const optionMissing = !optionKey || !filterFieldLookup.has(optionKey);
-                                            return (
-                                              <Paper key={rule.id} withBorder radius="md" p="sm">
-                                                <Stack gap="xs">
-                                                  <Group align="flex-end" gap="sm" wrap="wrap">
-                                                    <Select
-                                                      label="Field"
-                                                      data={filterFieldOptions.map((option) => ({
-                                                        value: option.value,
-                                                        label: option.label,
-                                                      }))}
-                                                      value={optionMissing ? null : optionKey}
-                                                      onChange={(value) => handlePreviewOrderFieldChange(rule.id, value)}
-                                                      placeholder="Select field"
-                                                      searchable
-                                                      style={{ flex: 1, minWidth: 220 }}
-                                                    />
-                                                    <SegmentedControl
-                                                      value={rule.direction}
-                                                      onChange={(value) =>
-                                                        handlePreviewOrderDirectionChange(
-                                                          rule.id,
-                                                          (value as "asc" | "desc") ?? "asc",
-                                                        )
-                                                      }
-                                                      data={[
-                                                        { value: "asc", label: "Asc" },
-                                                        { value: "desc", label: "Desc" },
-                                                      ]}
-                                                    />
-                                                    <ActionIcon
-                                                      variant="subtle"
-                                                      color="red"
-                                                      onClick={() => handleRemovePreviewOrderRule(rule.id)}
-                                                      aria-label="Remove sort rule"
-                                                    >
-                                                      <IconTrash size={16} />
-                                                    </ActionIcon>
-                                                  </Group>
-                                                  {optionMissing && (
-                                                    <Text fz="xs" c="red">
-                                                      Field is no longer available. Select another column to keep this rule.
-                                                    </Text>
-                                                  )}
-                                                </Stack>
-                                              </Paper>
-                                            );
-                                          })
-                                        )}
-                                      </Stack>
-                                      <Divider my="sm" />
-                                      <Checkbox
-                                        label="Auto-publish PDF package to leadership workspace"
-                                        checked={draft.autoDistribution}
-                                        onChange={(event) =>
-                                          setDraft((current) => ({
-                                            ...current,
-                                            autoDistribution: event.currentTarget.checked,
-                                          }))
-                                        }
-                                      />
-                                      <Checkbox
-                                        label="Send digest to #revenue-ops Slack channel on refresh"
-                                        checked={draft.notifyTeam}
-                                        onChange={(event) =>
-                                          setDraft((current) => ({
-                                            ...current,
-                                            notifyTeam: event.currentTarget.checked,
-                                          }))
-                                        }
-                                      />
-                                    </Stack>
-                                    </Collapse>
-                                  </Paper>
-                  
-                                  <Paper p="md" radius="lg" shadow="xs" withBorder>
-                  <Group justify="space-between" mb="md" align="center">
-                    <Group gap="xs" align="center">
-                      <Group gap="xs" align="center">
-                        <Text fw={600}>Data preview</Text>
-                        <Badge variant="light">{previewRows.length} rows</Badge>
-                      </Group>
-                      <Button
-                        variant="subtle"
-                        size="xs"
-                        leftSection={<IconLayoutGrid size={14} />}
-                        onClick={handleAddPreviewToDashboard}
-                        disabled={previewColumns.length === 0}
-                      >
-                        Add to dashboard
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="light"
-                        leftSection={<IconDeviceFloppy size={12} />}
-                        onClick={handleSaveTemplate}
-                        loading={saveTemplateMutation.isPending}
-                      >
-                        Save
-                      </Button>
-                      <ActionIcon
-                        size="sm"
-                        variant="subtle"
-                        onClick={() => toggleSection("preview")}
-                        aria-label={
-                          sectionOpen.preview ? "Collapse data preview" : "Expand data preview"
-                        }
-                      >
-                        {sectionOpen.preview ? (
-                          <IconChevronUp size={16} />
-                        ) : (
-                          <IconChevronDown size={16} />
-                        )}
-                      </ActionIcon>
-                    </Group>
-                    <Text fz="xs" c="dimmed">
-                      {lastRunAt === "Not run yet" ? "Preview not run yet" : `Last run: ${lastRunAt}`}
-                    </Text>
-                  </Group>
-                  <Collapse in={sectionOpen.preview}>
-                    {previewError && (
-                      <Box mb="sm">
-                        <Text fz="sm" c="red">
-                          {previewError}
-                        </Text>
-                      </Box>
-                    )}
-                    {isPreviewLoading ? (
-                      <Text c="dimmed" fz="sm">
-                        Running preview&hellip;
-                      </Text>
-                    ) : previewRows.length === 0 || previewColumns.length === 0 ? (
-                      <Text c="dimmed" fz="sm">
-                        Configure your models, fields, and filters, then run the analysis to see sample rows.
-                      </Text>
-                    ) : (
-                      <ScrollArea>
-                        <Table
-                          highlightOnHover
-                          striped
-                          verticalSpacing="xs"
-                          style={{ fontSize: "0.85rem" }}
-                        >
-                          <Table.Thead>
-                            <Table.Tr>
-                              {previewColumns.map((column, columnIndex) => {
-                                const metadata = previewColumnMetadata.get(column);
-                                const tableDescriptor =
-                                  metadata?.modelName ?? metadata?.tableName ?? metadata?.modelId;
-                                const technicalDescriptor =
-                                  metadata?.modelId && metadata?.fieldId
-                                    ? `${metadata.modelId}.${metadata.fieldId}`
-                                    : metadata?.fieldId ?? metadata?.sourceColumn;
-                                const baseLabel = metadata?.fieldLabel ?? humanizeAlias(column);
-                                const customLabel =
-                                  metadata?.customLabel && metadata.customLabel.length > 0
-                                    ? metadata.customLabel
-                                    : undefined;
-                                const displayLabel = customLabel ?? baseLabel;
-                                const secondarySegments: string[] = [];
-                                if (customLabel && customLabel !== baseLabel) {
-                                  secondarySegments.push(baseLabel);
-                                }
-                                if (tableDescriptor) {
-                                  secondarySegments.push(tableDescriptor);
-                                }
-                                if (technicalDescriptor) {
-                                  secondarySegments.push(technicalDescriptor);
-                                }
-                                const subtitle = secondarySegments.join(" / ");
-                                const isFirst = columnIndex === 0;
-                                const isLast = columnIndex === previewColumns.length - 1;
-                                const showReorder = previewColumns.length > 1;
-                                return (
-                                  <Table.Th key={column}>
-                                    <Group gap="xs" justify="space-between" align="flex-start">
-                                      <Box>
-                                        <Text fw={600} fz="sm">
-                                          {displayLabel}
-                                        </Text>
-                                        {subtitle && (
-                                          <Text fz="xs" c="dimmed">
-                                            {subtitle}
-                                          </Text>
-                                        )}
-                                      </Box>
-                                      {showReorder && (
-                                        <Group gap={4}>
-                                          <ActionIcon
-                                            size="sm"
-                                            variant="subtle"
-                                            aria-label={`Move ${displayLabel} left`}
-                                            onClick={() => movePreviewColumn(column, "left")}
-                                            disabled={isFirst}
-                                          >
-                                            <IconArrowLeft size={14} />
-                                          </ActionIcon>
-                                          <ActionIcon
-                                            size="sm"
-                                            variant="subtle"
-                                            aria-label={`Move ${displayLabel} right`}
-                                            onClick={() => movePreviewColumn(column, "right")}
-                                            disabled={isLast}
-                                          >
-                                            <IconArrowRight size={14} />
-                                          </ActionIcon>
-                                        </Group>
-                                      )}
-                                    </Group>
-                                  </Table.Th>
-                                );
-                              })}
-                            </Table.Tr>
-                          </Table.Thead>
-                          <Table.Tbody>
-                            {previewRows.map((row, rowIndex) => {
-                              const rowData = row as Record<string, unknown>;
-                              return (
-                                <Table.Tr key={`preview-row-${rowIndex}`}>
-                                  {previewColumns.map((column) => (
-                                    <Table.Td key={`${rowIndex}-${column}`}>
-                                      {formatPreviewValue(rowData[column])}
-                                    </Table.Td>
-                                  ))}
-                                </Table.Tr>
-                              );
-                            })}
-                          </Table.Tbody>
-                        </Table>
-                      </ScrollArea>
-                    )}
-                  </Collapse>
-                </Paper>
-                  
-                                  <Paper p="md" radius="lg" shadow="xs" withBorder>
-                                    <Group justify="space-between" mb="md">
-                                      <Text fw={600}>Metrics spotlight</Text>
-                                      <Group gap="xs" align="center">
-                                        <Badge variant="light">{metricsSummary.length} cards</Badge>
-                                        <Button
-                                          size="xs"
-                                          variant="light"
-                                          leftSection={<IconDeviceFloppy size={12} />}
-                                          onClick={handleSaveTemplate}
-                                          loading={saveTemplateMutation.isPending}
-                                        >
-                                          Save
-                                        </Button>
                                         <ActionIcon
                                           size="sm"
                                           variant="subtle"
@@ -10961,7 +12454,19 @@ const getColumnLabel = useCallback(
                                       </Group>
                                     </Group>
                                     <Collapse in={sectionOpen.metricsSummary}>
-                                    <Flex gap="md" wrap="wrap">
+                                    <Stack gap="sm">
+                                      <Group justify="flex-end">
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          leftSection={<IconDeviceFloppy size={12} />}
+                                          onClick={handleSaveTemplate}
+                                          loading={saveTemplateMutation.isPending}
+                                        >
+                                          Save
+                                        </Button>
+                                      </Group>
+                                      <Flex gap="md" wrap="wrap">
                                       {metricsSummary.map((summary) => (
                                         <Card
                                           key={summary.id}
@@ -10989,13 +12494,14 @@ const getColumnLabel = useCallback(
                                             <Text fz="xl" fw={700}>
                                               {summary.value}
                                             </Text>
-                                            <Text fz="xs" c="dimmed">
-                                              {summary.context}
-                                            </Text>
-                                          </Stack>
-                                        </Card>
-                                      ))}
-                                    </Flex>
+                                          <Text fz="xs" c="dimmed">
+                                            {summary.context}
+                                          </Text>
+                                        </Stack>
+                                      </Card>
+                                    ))}
+                                      </Flex>
+                                    </Stack>
                                     </Collapse>
                                   </Paper>
                 
@@ -11008,15 +12514,6 @@ const getColumnLabel = useCallback(
                                       Template library
                                     </Text>
                                     <Group gap="xs" align="center">
-                                      <Button
-                                        size="xs"
-                                        variant="light"
-                                        leftSection={<IconDeviceFloppy size={12} />}
-                                        onClick={handleSaveTemplate}
-                                        loading={saveTemplateMutation.isPending}
-                                      >
-                                        Save
-                                      </Button>
                                       <ActionIcon
                                         size="sm"
                                         variant="subtle"
@@ -11045,6 +12542,17 @@ const getColumnLabel = useCallback(
                                     </Group>
                                   </Group>
                                   <Collapse in={sectionOpen.templateLibrary}>
+                                    <Group justify="flex-end" mb="sm">
+                                      <Button
+                                        size="xs"
+                                        variant="light"
+                                        leftSection={<IconDeviceFloppy size={12} />}
+                                        onClick={handleSaveTemplate}
+                                        loading={saveTemplateMutation.isPending}
+                                      >
+                                        Save
+                                      </Button>
+                                    </Group>
                                   <Divider mb="sm" />
                                                   <Stack gap="xs" mb="sm">
                                                     <TextInput
@@ -12018,6 +13526,36 @@ const getColumnLabel = useCallback(
             Select a visual or spotlight to send it to a dashboard.
           </Text>
         )}
+      </Modal>
+      <Modal
+        opened={Boolean(pendingSpotlightRemoval)}
+        onClose={() => setPendingSpotlightRemoval(null)}
+        title="Remove spotlight"
+        size="md"
+        centered
+      >
+        <Stack gap="sm">
+          <Text fz="sm">
+            This spotlight is already used on{" "}
+            {pendingSpotlightRemoval?.linkedCards.length === 1 ? "a dashboard" : "dashboards"}. Removing
+            it will also remove those cards.
+          </Text>
+          <Stack gap={4}>
+            {(pendingSpotlightRemoval?.linkedCards ?? []).map((card) => (
+              <Text key={`${card.dashboardId}-${card.cardId}`} fz="sm">
+                {card.dashboardName} — {card.cardTitle}
+              </Text>
+            ))}
+          </Stack>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setPendingSpotlightRemoval(null)}>
+              Cancel
+            </Button>
+            <Button color="red" onClick={handleConfirmSpotlightRemoval}>
+              Remove spotlight
+            </Button>
+          </Group>
+        </Stack>
       </Modal>
       </>
     </PageAccessGuard>

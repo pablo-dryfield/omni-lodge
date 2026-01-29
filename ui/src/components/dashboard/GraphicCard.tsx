@@ -435,6 +435,8 @@ export const GraphicCard = ({
     setInfoAnchorEl((current) => (current ? null : event.currentTarget));
   };
   const handleInfoClose = () => setInfoAnchorEl(null);
+  const pieInnerRadius = isCompact ? "38%" : 44;
+  const pieOuterRadius = isCompact ? "78%" : 86;
 
   const renderChart = () => {
     if (config.visual.type === "pie") {
@@ -442,12 +444,20 @@ export const GraphicCard = ({
         <Stack
           ref={pieContainerRef}
           direction={isCompact ? "column" : "row"}
-          spacing={2}
+          spacing={isCompact ? 1 : 2}
           alignItems="center"
           justifyContent="center"
           sx={{ height: "100%", width: "100%" }}
         >
-          <Box sx={{ flex: "1 1 auto", minWidth: isCompact ? 0 : 220, height: isCompact ? 200 : "100%" }}>
+          <Box
+            sx={{
+              flex: "1 1 auto",
+              minWidth: isCompact ? 0 : 220,
+              width: "100%",
+              minHeight: isCompact ? 170 : 220,
+              height: isCompact ? 170 : "100%",
+            }}
+          >
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <ChartTooltip
@@ -460,8 +470,8 @@ export const GraphicCard = ({
                   data={chartData}
                   dataKey="metric"
                   nameKey="dimension"
-                  innerRadius={44}
-                  outerRadius={86}
+                  innerRadius={pieInnerRadius}
+                  outerRadius={pieOuterRadius}
                   paddingAngle={2}
                   onClick={(data) => {
                     const dimension = data?.payload?.dimension ?? data?.name;
@@ -494,37 +504,56 @@ export const GraphicCard = ({
               marginLeft: isCompact ? 0 : "auto",
               display: "flex",
               flexDirection: "column",
-              alignItems: "flex-start",
-              textAlign: "left",
+              flexWrap: "nowrap",
+              alignItems: isCompact ? "center" : "flex-start",
+              textAlign: isCompact ? "center" : "left",
               gap: 0.5,
               paddingRight: isCompact ? 0 : 10,
+              maxHeight: isCompact ? 96 : "none",
+              overflowY: isCompact ? "auto" : "visible",
             }}
           >
-            {chartData.map((entry, index) => (
-              <Box
-                key={`legend-${entry.dimension}-${index}`}
-                sx={{
-                  width: "100%",
-                  display: "grid",
-                  gridTemplateColumns: "10px auto",
-                  columnGap: 2,
-                  alignItems: "center",
-                }}
-              >
+            <Box
+              sx={{
+                width: "100%",
+                display: "grid",
+                gridTemplateColumns: isCompact ? "1fr 1fr" : "1fr",
+                columnGap: 1.5,
+                rowGap: 0.5,
+                justifyItems: isCompact ? "center" : "start",
+              }}
+            >
+              {chartData.map((entry, index) => (
                 <Box
+                  key={`legend-${entry.dimension}-${index}`}
                   sx={{
-                    width: 10,
-                    height: 10,
-                    borderRadius: "50%",
-                    bgcolor: pieSegmentColors[index % pieSegmentColors.length],
-                    flexShrink: 0,
+                    display: "grid",
+                    gridTemplateColumns: "10px auto",
+                    columnGap: 2,
+                    alignItems: "center",
+                    minWidth: 0,
+                    justifyContent: isCompact ? "center" : "start",
                   }}
-                />
-                <Typography variant="caption" color="text.secondary">
-                  {entry.dimension}
-                </Typography>
-              </Box>
-            ))}
+                >
+                  <Box
+                    sx={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: "50%",
+                      bgcolor: pieSegmentColors[index % pieSegmentColors.length],
+                      flexShrink: 0,
+                    }}
+                  />
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                  >
+                    {entry.dimension}
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
           </Box>
         </Stack>
       );

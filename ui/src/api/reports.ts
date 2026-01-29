@@ -560,6 +560,7 @@ export type DerivedFieldDefinitionDto = {
 export type MetricSpotlightDefinitionDto = {
   metric: string;
   label: string;
+  aggregation?: "sum" | "avg" | "min" | "max" | "count" | "count_distinct";
   target?: number;
   comparison?: "previous" | "wow" | "mom" | "yoy" | "custom";
   comparisonRange?: {
@@ -914,6 +915,8 @@ export type ReportTemplateOptionsDto = {
   previewAggregations: PreviewAggregationRuleDto[];
   previewHaving: PreviewHavingRuleDto[];
   autoRunOnOpen: boolean;
+  previewSql?: string | null;
+  visualSql?: string | null;
 };
 
 export type ReportTemplateQueryGroupDto = {
@@ -925,6 +928,8 @@ export type ReportTemplateQueryGroupDto = {
   filters: unknown[];
   filterGroups?: unknown[];
   rawFilterSql?: unknown[];
+  columnAliases?: Record<string, string>;
+  columnOrder?: string[];
 };
 
 export type ReportTemplateDto = {

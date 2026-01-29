@@ -20,7 +20,7 @@ const AlertShell = ({
 }) => (
   <Paper withBorder radius="md" p="md" shadow="xs" style={{ borderColor: tone === "red" ? "#f03e3e" : "#f59f00" }}>
     <Stack gap={4}>
-      <Text fw={600} c={tone} size="sm">
+      <Text fw={600} c={tone} size="sm" component="div">
         {title}
       </Text>
       {children}
@@ -30,13 +30,15 @@ const AlertShell = ({
 
 const defaultUnavailable = (message?: string) => (
   <AlertShell title="Permissions unavailable" tone="red">
-    <Text size="sm">We could not confirm your access rights.</Text>
+    <Text size="sm" component="div">
+      We could not confirm your access rights.
+    </Text>
     {message && (
-      <Text size="sm" c="dimmed">
+      <Text size="sm" c="dimmed" component="div">
         {message}
       </Text>
     )}
-    <Text size="sm" c="dimmed">
+    <Text size="sm" c="dimmed" component="div">
       Please retry syncing permissions or refresh the page.
     </Text>
   </AlertShell>
@@ -44,7 +46,9 @@ const defaultUnavailable = (message?: string) => (
 
 const defaultDenied = (
   <AlertShell title="No access" tone="yellow">
-    <Text size="sm">You do not have permission to view this page. Contact the Manager to get access.</Text>
+    <Text size="sm" component="div">
+      You do not have permission to view this page. Contact the Manager to get access.
+    </Text>
   </AlertShell>
 );
 

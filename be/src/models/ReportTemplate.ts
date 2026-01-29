@@ -61,6 +61,8 @@ export type ReportTemplateOptions = {
   previewAggregations: PreviewAggregationRule[];
   previewHaving: PreviewHavingRule[];
   autoRunOnOpen: boolean;
+  previewSql?: string | null;
+  visualSql?: string | null;
 };
 
 export type ReportTemplateDerivedField = {
@@ -82,6 +84,7 @@ export type ReportTemplateDerivedField = {
 export type ReportTemplateMetricSpotlight = {
   metric: string;
   label: string;
+  aggregation?: "sum" | "avg" | "min" | "max" | "count" | "count_distinct";
   target?: number;
   comparison?: "previous" | "wow" | "mom" | "yoy" | "custom";
   comparisonRange?: {
@@ -101,6 +104,8 @@ export type ReportTemplateQueryGroup = {
   filters: unknown[];
   filterGroups?: unknown[];
   rawFilterSql?: unknown[];
+  columnAliases?: Record<string, string>;
+  columnOrder?: string[];
 };
 
 @Table({
