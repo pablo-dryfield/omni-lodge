@@ -471,28 +471,45 @@ const applyPeriodOverrideToQueryConfig = (
   if (!range) {
     return queryConfig;
   }
-  if (queryConfig.time && queryConfig.time.field) {
-    queryConfig.time = {
-      ...queryConfig.time,
-      range,
-    };
-  }
-  if (metadata) {
-    const filters = Array.isArray(queryConfig.filters) ? [...queryConfig.filters] : [];
-    const nextFilters = filters.filter(
-      (filter) => !(filter.modelId === metadata.modelId && filter.fieldId === metadata.fieldId),
-    );
-    const operator: QueryConfigFilter["operator"] = "between";
-    const value = { from: range.from, to: range.to };
-    nextFilters.push({
-      modelId: metadata.modelId,
-      fieldId: metadata.fieldId,
-      operator: operator as QueryConfigFilter["operator"],
-      value,
-    });
-    queryConfig.filters = nextFilters;
-  }
-  return queryConfig;
+  const applyToConfig = (config: QueryConfig): QueryConfig => {
+    if (config.union?.queries && Array.isArray(config.union.queries)) {
+      config.union = {
+        ...config.union,
+        queries: config.union.queries.map((entry) => applyToConfig(entry)),
+      };
+      return config;
+    }
+    if (config.time && config.time.field) {
+      config.time = {
+        ...config.time,
+        range,
+      };
+    }
+    if (metadata) {
+      const filters = Array.isArray(config.filters) ? [...config.filters] : [];
+      const hasMatchingFilter = filters.some(
+        (filter) => filter.modelId === metadata.modelId && filter.fieldId === metadata.fieldId,
+      );
+      const hasModel = Array.isArray(config.models) ? config.models.includes(metadata.modelId) : false;
+      if (!hasMatchingFilter && !hasModel) {
+        return config;
+      }
+      const nextFilters = filters.filter(
+        (filter) => !(filter.modelId === metadata.modelId && filter.fieldId === metadata.fieldId),
+      );
+      const operator: QueryConfigFilter["operator"] = "between";
+      const value = { from: range.from, to: range.to };
+      nextFilters.push({
+        modelId: metadata.modelId,
+        fieldId: metadata.fieldId,
+        operator: operator as QueryConfigFilter["operator"],
+        value,
+      });
+      config.filters = nextFilters;
+    }
+    return config;
+  };
+  return applyToConfig(queryConfig);
 };
 
 const cardSupportsPeriodOverride = (viewConfig: DashboardCardViewConfig | null | undefined): boolean => {
@@ -1799,6 +1816,34 @@ const Home = (props: GenericPageProps) => {
       return next;
     });
   }, [orderedActiveCards]);
+  const [refreshMode, setRefreshMode] = useState<"manual" | "auto">("manual");
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
+  const bulkResultsCacheRef = useRef(new Map<string, ReportBulkQueryResultEntry>());
+  const [bulkCacheVersion, setBulkCacheVersion] = useState(0);
+  const [refreshTargetIds, setRefreshTargetIds] = useState<string[]>([]);
+  const refreshTargetsSet = useMemo(() => new Set(refreshTargetIds), [refreshTargetIds]);
+  const bulkEligibleCardIdsRef = useRef<string[]>([]);
+  const pendingInitialBulkRef = useRef(false);
+  const triggerRefresh = useCallback(() => {
+    setRefreshNonce((current) => current + 1);
+    setLastRefreshedAt(new Date().toISOString());
+    setRefreshTargetIds((current) => {
+      const next = new Set(current);
+      bulkEligibleCardIdsRef.current.forEach((id) => next.add(id));
+      return Array.from(next);
+    });
+  }, []);
+  const queueRefreshTargets = useCallback((cardIds: string[]) => {
+    if (cardIds.length === 0) {
+      return;
+    }
+    setRefreshTargetIds((current) => {
+      const next = new Set(current);
+      cardIds.forEach((id) => next.add(id));
+      return Array.from(next);
+    });
+  }, []);
   const handleToggleCardLink = useCallback((cardId: string) => {
     setLinkedCardStates((current) => ({
       ...current,
@@ -2030,8 +2075,9 @@ const Home = (props: GenericPageProps) => {
           return next;
         });
       }
+      queueRefreshTargets([...visualIds, ...spotlightIds]);
     },
-    [getLinkedDateFilterTargets, spotlightDateFilterOptionsById, visualDateFilterOptionsById],
+    [getLinkedDateFilterTargets, queueRefreshTargets, spotlightDateFilterOptionsById, visualDateFilterOptionsById],
   );
   const handleToggleSpotlightDateFilter = useCallback(
     (cardId: string, dateFilterId: string) => {
@@ -2070,8 +2116,9 @@ const Home = (props: GenericPageProps) => {
           return next;
         });
       }
+      queueRefreshTargets([...visualIds, ...spotlightIds]);
     },
-    [getLinkedDateFilterTargets, spotlightDateFilterOptionsById, visualDateFilterOptionsById],
+    [getLinkedDateFilterTargets, queueRefreshTargets, spotlightDateFilterOptionsById, visualDateFilterOptionsById],
   );
   const visualPeriodConfigById = useMemo(() => {
     const map = new Map<
@@ -2290,30 +2337,31 @@ const Home = (props: GenericPageProps) => {
     });
   }, [spotlightPeriodConfigById]);
   const handleVisualPeriodChange = useCallback(
-    (cardId: string, preset: VisualPeriodSelection, dateFieldId?: string) => {
-      if (!dateFieldId) {
-        const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
-        setVisualPeriodSelections((current) => {
-          const next = { ...current };
-          visualIds.forEach((id) => {
-            next[id] = preset;
-          });
-          return next;
-        });
-        if (spotlightIds.length > 0) {
-          setSpotlightPeriodSelections((current) => {
+      (cardId: string, preset: VisualPeriodSelection, dateFieldId?: string) => {
+        if (!dateFieldId) {
+          const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
+          setVisualPeriodSelections((current) => {
             const next = { ...current };
-            spotlightIds.forEach((id) => {
+            visualIds.forEach((id) => {
               next[id] = preset;
             });
             return next;
           });
+          if (spotlightIds.length > 0) {
+            setSpotlightPeriodSelections((current) => {
+              const next = { ...current };
+              spotlightIds.forEach((id) => {
+                next[id] = preset;
+              });
+              return next;
+            });
+          }
+          queueRefreshTargets([...visualIds, ...spotlightIds]);
+          return;
         }
-        return;
-      }
-      const { visualIds, spotlightIds } = getLinkedDateFilterTargets(cardId);
-      const sourceSignature = resolveDateFilterSignature(
-        visualDateFilterOptionsById.get(cardId),
+        const { visualIds, spotlightIds } = getLinkedDateFilterTargets(cardId);
+        const sourceSignature = resolveDateFilterSignature(
+          visualDateFilterOptionsById.get(cardId),
         dateFieldId,
       );
       setVisualPeriodSelectionsByField((current) => {
@@ -2330,30 +2378,32 @@ const Home = (props: GenericPageProps) => {
         });
         return next;
       });
-      if (spotlightIds.length > 0) {
-        setSpotlightPeriodSelectionsByField((current) => {
-          const next = { ...current };
-          spotlightIds.forEach((id) => {
-            const options = spotlightDateFilterOptionsById.get(id);
-            const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
-            if (!toggleId) {
-              return;
-            }
-            const cardSelections = { ...(next[id] ?? {}) };
-            cardSelections[toggleId] = preset as SpotlightPeriodSelection;
-            next[id] = cardSelections;
+        if (spotlightIds.length > 0) {
+          setSpotlightPeriodSelectionsByField((current) => {
+            const next = { ...current };
+            spotlightIds.forEach((id) => {
+              const options = spotlightDateFilterOptionsById.get(id);
+              const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+              if (!toggleId) {
+                return;
+              }
+              const cardSelections = { ...(next[id] ?? {}) };
+              cardSelections[toggleId] = preset as SpotlightPeriodSelection;
+              next[id] = cardSelections;
+            });
+            return next;
           });
-          return next;
-        });
-      }
-    },
-    [
-      getLinkedCardTargets,
-      getLinkedDateFilterTargets,
-      spotlightDateFilterOptionsById,
-      visualDateFilterOptionsById,
-    ],
-  );
+        }
+        queueRefreshTargets([...visualIds, ...spotlightIds]);
+      },
+      [
+        getLinkedCardTargets,
+        getLinkedDateFilterTargets,
+        queueRefreshTargets,
+        spotlightDateFilterOptionsById,
+        visualDateFilterOptionsById,
+      ],
+    );
   const handleVisualCustomInputChange = useCallback(
     (cardId: string, key: "from" | "to", value: string, dateFieldId?: string) => {
       if (!dateFieldId) {
@@ -2470,6 +2520,7 @@ const Home = (props: GenericPageProps) => {
             return next;
           });
         }
+        queueRefreshTargets([...visualIds, ...spotlightIds]);
         return;
       }
       const inputs = visualCustomInputsByField[cardId]?.[dateFieldId];
@@ -2575,10 +2626,12 @@ const Home = (props: GenericPageProps) => {
           return next;
         });
       }
+      queueRefreshTargets([...visualIds, ...spotlightIds]);
     },
     [
       getLinkedCardTargets,
       getLinkedDateFilterTargets,
+      queueRefreshTargets,
       spotlightDateFilterOptionsById,
       visualCustomInputs,
       visualCustomInputsByField,
@@ -2633,30 +2686,31 @@ const Home = (props: GenericPageProps) => {
     ],
   );
   const handleSpotlightPeriodChange = useCallback(
-    (cardId: string, preset: SpotlightPeriodSelection, dateFieldId?: string) => {
-      if (!dateFieldId) {
-        const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
-        setSpotlightPeriodSelections((current) => {
-          const next = { ...current };
-          spotlightIds.forEach((id) => {
-            next[id] = preset;
-          });
-          return next;
-        });
-        if (visualIds.length > 0) {
-          setVisualPeriodSelections((current) => {
+      (cardId: string, preset: SpotlightPeriodSelection, dateFieldId?: string) => {
+        if (!dateFieldId) {
+          const { visualIds, spotlightIds } = getLinkedCardTargets(cardId);
+          setSpotlightPeriodSelections((current) => {
             const next = { ...current };
-            visualIds.forEach((id) => {
-              next[id] = preset as VisualPeriodSelection;
+            spotlightIds.forEach((id) => {
+              next[id] = preset;
             });
             return next;
           });
+          if (visualIds.length > 0) {
+            setVisualPeriodSelections((current) => {
+              const next = { ...current };
+              visualIds.forEach((id) => {
+                next[id] = preset as VisualPeriodSelection;
+              });
+              return next;
+            });
+          }
+          queueRefreshTargets([...visualIds, ...spotlightIds]);
+          return;
         }
-        return;
-      }
-      const { visualIds, spotlightIds } = getLinkedDateFilterTargets(cardId);
-      const sourceSignature = resolveDateFilterSignature(
-        spotlightDateFilterOptionsById.get(cardId),
+        const { visualIds, spotlightIds } = getLinkedDateFilterTargets(cardId);
+        const sourceSignature = resolveDateFilterSignature(
+          spotlightDateFilterOptionsById.get(cardId),
         dateFieldId,
       );
       setSpotlightPeriodSelectionsByField((current) => {
@@ -2673,30 +2727,32 @@ const Home = (props: GenericPageProps) => {
         });
         return next;
       });
-      if (visualIds.length > 0) {
-        setVisualPeriodSelectionsByField((current) => {
-          const next = { ...current };
-          visualIds.forEach((id) => {
-            const options = visualDateFilterOptionsById.get(id);
-            const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
-            if (!toggleId) {
-              return;
-            }
-            const cardSelections = { ...(next[id] ?? {}) };
-            cardSelections[toggleId] = preset as VisualPeriodSelection;
-            next[id] = cardSelections;
+        if (visualIds.length > 0) {
+          setVisualPeriodSelectionsByField((current) => {
+            const next = { ...current };
+            visualIds.forEach((id) => {
+              const options = visualDateFilterOptionsById.get(id);
+              const toggleId = resolveToggleIdForOptions(options, sourceSignature, dateFieldId);
+              if (!toggleId) {
+                return;
+              }
+              const cardSelections = { ...(next[id] ?? {}) };
+              cardSelections[toggleId] = preset as VisualPeriodSelection;
+              next[id] = cardSelections;
+            });
+            return next;
           });
-          return next;
-        });
-      }
-    },
-    [
-      getLinkedCardTargets,
-      getLinkedDateFilterTargets,
-      spotlightDateFilterOptionsById,
-      visualDateFilterOptionsById,
-    ],
-  );
+        }
+        queueRefreshTargets([...visualIds, ...spotlightIds]);
+      },
+      [
+        getLinkedCardTargets,
+        getLinkedDateFilterTargets,
+        queueRefreshTargets,
+        spotlightDateFilterOptionsById,
+        visualDateFilterOptionsById,
+      ],
+    );
   const handleSpotlightCustomInputChange = useCallback(
     (cardId: string, key: "from" | "to", value: string, dateFieldId?: string) => {
       if (!dateFieldId) {
@@ -2813,6 +2869,7 @@ const Home = (props: GenericPageProps) => {
             return next;
           });
         }
+        queueRefreshTargets([...visualIds, ...spotlightIds]);
         return;
       }
       const inputs = spotlightCustomInputsByField[cardId]?.[dateFieldId];
@@ -2918,10 +2975,12 @@ const Home = (props: GenericPageProps) => {
           return next;
         });
       }
+      queueRefreshTargets([...visualIds, ...spotlightIds]);
     },
     [
       getLinkedCardTargets,
       getLinkedDateFilterTargets,
+      queueRefreshTargets,
       spotlightCustomInputs,
       spotlightCustomInputsByField,
       spotlightDateFilterOptionsById,
@@ -3025,20 +3084,12 @@ const Home = (props: GenericPageProps) => {
     }
     return null;
   }, [globalPeriodOverride]);
-  const [refreshMode, setRefreshMode] = useState<"manual" | "auto">("manual");
-  const [refreshNonce, setRefreshNonce] = useState(0);
-  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
-  const triggerRefresh = useCallback(() => {
-    setRefreshNonce((current) => current + 1);
-    setLastRefreshedAt(new Date().toISOString());
-  }, []);
-
   useEffect(() => {
     if (!shouldHydrateLiveData || !activeDashboardId) {
       return;
     }
-    triggerRefresh();
-  }, [activeDashboardId, shouldHydrateLiveData, triggerRefresh]);
+    setLastRefreshedAt(null);
+  }, [activeDashboardId, shouldHydrateLiveData]);
 
   useEffect(() => {
     if (!shouldHydrateLiveData || refreshMode !== "auto") {
@@ -3228,53 +3279,95 @@ const Home = (props: GenericPageProps) => {
     visualDateFilterSelectionSets,
   ]);
 
+  const bulkEligibleCardIds = useMemo(
+    () =>
+      cardHydrationDescriptors
+        .filter((descriptor) => descriptor.mode === "visual" || descriptor.mode === "spotlight")
+        .map((descriptor) => descriptor.card.id),
+    [cardHydrationDescriptors],
+  );
+  useEffect(() => {
+    bulkEligibleCardIdsRef.current = bulkEligibleCardIds;
+    if (pendingInitialBulkRef.current && bulkEligibleCardIds.length > 0) {
+      pendingInitialBulkRef.current = false;
+      setRefreshTargetIds(bulkEligibleCardIds);
+    }
+  }, [bulkEligibleCardIds]);
+  useEffect(() => {
+    bulkResultsCacheRef.current = new Map();
+    setBulkCacheVersion((current) => current + 1);
+    setRefreshTargetIds([]);
+    pendingInitialBulkRef.current = true;
+  }, [activeDashboardId]);
+
   const buildBulkRequestId = useCallback(
     (cardId: string, kind: "primary" | "comparison") => `${cardId}:${kind}`,
     [],
   );
   const reportBulkRequest = useMemo(() => {
+    const cacheVersion = bulkCacheVersion;
     const requests: ReportBulkQueryRequest[] = [];
     const descriptorByRequestId = new Map<
       string,
       { cardId: string; kind: "visual" | "spotlight"; isComparison: boolean; descriptor: CardHydrationDescriptor }
     >();
+    const requestedCardIds = new Set<string>();
     cardHydrationDescriptors.forEach((descriptor) => {
       if (descriptor.mode === "visual" && descriptor.queryConfig) {
         const id = buildBulkRequestId(descriptor.card.id, "primary");
-        requests.push({ id, config: descriptor.queryConfig });
-        descriptorByRequestId.set(id, {
-          cardId: descriptor.card.id,
-          kind: "visual",
-          isComparison: false,
-          descriptor,
-        });
-      } else if (descriptor.mode === "spotlight" && descriptor.queryConfig) {
-        const id = buildBulkRequestId(descriptor.card.id, "primary");
-        requests.push({ id, config: descriptor.queryConfig });
-        descriptorByRequestId.set(id, {
-          cardId: descriptor.card.id,
-          kind: "spotlight",
-          isComparison: false,
-          descriptor,
-        });
-        if (descriptor.comparisonQueryConfig) {
-          const comparisonId = buildBulkRequestId(descriptor.card.id, "comparison");
-          requests.push({ id: comparisonId, config: descriptor.comparisonQueryConfig });
-          descriptorByRequestId.set(comparisonId, {
+        const shouldRefresh =
+          refreshTargetsSet.has(descriptor.card.id) || !bulkResultsCacheRef.current.has(id);
+        if (shouldRefresh) {
+          requests.push({ id, config: descriptor.queryConfig });
+          descriptorByRequestId.set(id, {
             cardId: descriptor.card.id,
-            kind: "spotlight",
-            isComparison: true,
+            kind: "visual",
+            isComparison: false,
             descriptor,
           });
+          requestedCardIds.add(descriptor.card.id);
+        }
+      } else if (descriptor.mode === "spotlight" && descriptor.queryConfig) {
+        const id = buildBulkRequestId(descriptor.card.id, "primary");
+        const shouldRefresh =
+          refreshTargetsSet.has(descriptor.card.id) || !bulkResultsCacheRef.current.has(id);
+        if (shouldRefresh) {
+          requests.push({ id, config: descriptor.queryConfig });
+          descriptorByRequestId.set(id, {
+            cardId: descriptor.card.id,
+            kind: "spotlight",
+            isComparison: false,
+            descriptor,
+          });
+          requestedCardIds.add(descriptor.card.id);
+        }
+        if (descriptor.comparisonQueryConfig) {
+          const comparisonId = buildBulkRequestId(descriptor.card.id, "comparison");
+          const shouldRefreshComparison =
+            shouldRefresh || !bulkResultsCacheRef.current.has(comparisonId);
+          if (shouldRefreshComparison) {
+            requests.push({ id: comparisonId, config: descriptor.comparisonQueryConfig });
+            descriptorByRequestId.set(comparisonId, {
+              cardId: descriptor.card.id,
+              kind: "spotlight",
+              isComparison: true,
+              descriptor,
+            });
+            requestedCardIds.add(descriptor.card.id);
+          }
         }
       }
     });
     const cacheKey = JSON.stringify({
       refreshNonce,
+      targets: Array.from(refreshTargetsSet),
       requests: requests.map((entry) => ({ id: entry.id, config: entry.config })),
     });
-    return { requests, descriptorByRequestId, cacheKey };
-  }, [buildBulkRequestId, cardHydrationDescriptors, refreshNonce]);
+    if (cacheVersion < 0) {
+      return { requests: [], descriptorByRequestId, cacheKey: "noop", requestedCardIds: [] };
+    }
+    return { requests, descriptorByRequestId, cacheKey, requestedCardIds: Array.from(requestedCardIds) };
+  }, [buildBulkRequestId, bulkCacheVersion, cardHydrationDescriptors, refreshNonce, refreshTargetsSet]);
 
   const previewTableDescriptors = useMemo(
     () => cardHydrationDescriptors.filter((descriptor) => descriptor.mode === "preview_table"),
@@ -3312,13 +3405,37 @@ const Home = (props: GenericPageProps) => {
   });
 
   const bulkResultsById = useMemo(() => {
-    const map = new Map<string, ReportBulkQueryResultEntry>();
-    const results = bulkReportQuery.data?.results ?? [];
+    const cacheVersion = bulkCacheVersion;
+    if (cacheVersion < 0) {
+      return new Map<string, ReportBulkQueryResultEntry>();
+    }
+    return new Map<string, ReportBulkQueryResultEntry>(bulkResultsCacheRef.current);
+  }, [bulkCacheVersion]);
+
+  useEffect(() => {
+    const results = bulkReportQuery.data?.results;
+    if (!results || results.length === 0) {
+      return;
+    }
+    let didUpdate = false;
     results.forEach((entry) => {
-      map.set(entry.id, entry);
+      bulkResultsCacheRef.current.set(entry.id, entry);
+      didUpdate = true;
     });
-    return map;
-  }, [bulkReportQuery.data]);
+    if (didUpdate) {
+      setBulkCacheVersion((current) => current + 1);
+    }
+    if (reportBulkRequest.requestedCardIds.length > 0) {
+      setRefreshTargetIds((current) =>
+        current.filter((id) => !reportBulkRequest.requestedCardIds.includes(id)),
+      );
+    }
+  }, [bulkReportQuery.data, reportBulkRequest.requestedCardIds]);
+
+  const bulkRequestedCardIds = useMemo(
+    () => new Set(reportBulkRequest.requestedCardIds),
+    [reportBulkRequest.requestedCardIds],
+  );
 
   const liveCardSamples = useMemo(() => {
     if (!shouldHydrateLiveData) {
@@ -3377,20 +3494,18 @@ const Home = (props: GenericPageProps) => {
           map.set(descriptor.card.id, { status: "idle", warning });
           return;
         }
-        if (bulkReportQuery.isLoading || bulkReportQuery.isFetching) {
-          map.set(descriptor.card.id, { status: "loading" });
-          return;
-        }
-        if (bulkReportQuery.error) {
+        const primaryEntry = bulkResultsById.get(buildBulkRequestId(descriptor.card.id, "primary"));
+        if (!primaryEntry && bulkReportQuery.error && bulkRequestedCardIds.has(descriptor.card.id)) {
           map.set(descriptor.card.id, {
             status: "error",
             error: getErrorMessage(bulkReportQuery.error, "Failed to refresh spotlight data."),
           });
           return;
         }
-        const primaryEntry = bulkResultsById.get(buildBulkRequestId(descriptor.card.id, "primary"));
         if (!primaryEntry) {
-          map.set(descriptor.card.id, { status: "idle" });
+          map.set(descriptor.card.id, {
+            status: bulkRequestedCardIds.has(descriptor.card.id) && bulkReportQuery.isFetching ? "loading" : "idle",
+          });
           return;
         }
         if (primaryEntry.status === "error") {
@@ -3426,20 +3541,18 @@ const Home = (props: GenericPageProps) => {
         map.set(descriptor.card.id, { status: "idle", warning });
         return;
       }
-      if (bulkReportQuery.isLoading || bulkReportQuery.isFetching) {
-        map.set(descriptor.card.id, { status: "loading" });
-        return;
-      }
-      if (bulkReportQuery.error) {
+      const primaryEntry = bulkResultsById.get(buildBulkRequestId(descriptor.card.id, "primary"));
+      if (!primaryEntry && bulkReportQuery.error && bulkRequestedCardIds.has(descriptor.card.id)) {
         map.set(descriptor.card.id, {
           status: "error",
           error: getErrorMessage(bulkReportQuery.error, "Failed to refresh dashboard data."),
         });
         return;
       }
-      const primaryEntry = bulkResultsById.get(buildBulkRequestId(descriptor.card.id, "primary"));
       if (!primaryEntry) {
-        map.set(descriptor.card.id, { status: "idle" });
+        map.set(descriptor.card.id, {
+          status: bulkRequestedCardIds.has(descriptor.card.id) && bulkReportQuery.isFetching ? "loading" : "idle",
+        });
         return;
       }
       if (primaryEntry.status === "error") {
@@ -3460,9 +3573,9 @@ const Home = (props: GenericPageProps) => {
     return map;
   }, [
     buildBulkRequestId,
+    bulkRequestedCardIds,
     bulkReportQuery.error,
     bulkReportQuery.isFetching,
-    bulkReportQuery.isLoading,
     bulkResultsById,
     cardHydrationDescriptors,
     effectiveViewMode,
