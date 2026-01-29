@@ -715,6 +715,8 @@ type TemplateOptionsInput = {
   previewAggregations?: unknown;
   previewHaving?: unknown;
   autoRunOnOpen?: unknown;
+  previewSql?: unknown;
+  visualSql?: unknown;
 };
 
 type TemplatePayloadInput = {
@@ -783,6 +785,8 @@ const DEFAULT_TEMPLATE_OPTIONS: ReportTemplateOptions = {
   previewAggregations: [],
   previewHaving: [],
   autoRunOnOpen: false,
+  previewSql: null,
+  visualSql: null,
 };
 
 const modelDescriptorCache = new Map<string, ReportModelDescriptor>();
@@ -1255,6 +1259,7 @@ const toMetricsSpotlightArray = (value: unknown): ReportTemplateMetricSpotlight[
   }
   const allowedComparisons = new Set(["previous", "wow", "mom", "yoy", "custom"]);
   const allowedFormats = new Set(["number", "currency", "percentage"]);
+  const allowedAggregations = new Set(["sum", "avg", "min", "max", "count", "count_distinct"]);
   return value
     .map((entry): ReportTemplateMetricSpotlight | null => {
       if (!entry || typeof entry !== "object") {
@@ -1295,6 +1300,12 @@ const toMetricsSpotlightArray = (value: unknown): ReportTemplateMetricSpotlight[
         typeof candidate.currency === "string" ? candidate.currency.trim().toUpperCase() : undefined;
       const currency =
         currencyRaw && currencyRaw.length === 3 ? currencyRaw : undefined;
+      const aggregationRaw =
+        typeof candidate.aggregation === "string" ? candidate.aggregation.trim().toLowerCase() : undefined;
+      const aggregation =
+        aggregationRaw && allowedAggregations.has(aggregationRaw)
+          ? (aggregationRaw as "sum" | "avg" | "min" | "max" | "count" | "count_distinct")
+          : undefined;
       let comparisonRange: { from: string; to: string } | undefined;
       if (comparison === "custom" && candidate.comparisonRange && typeof candidate.comparisonRange === "object") {
         const rangeCandidate = candidate.comparisonRange as Record<string, unknown>;
@@ -1307,6 +1318,7 @@ const toMetricsSpotlightArray = (value: unknown): ReportTemplateMetricSpotlight[
       return {
         metric,
         label,
+        ...(aggregation ? { aggregation } : {}),
         target,
         comparison,
         ...(comparisonRange ? { comparisonRange } : {}),
@@ -1341,6 +1353,8 @@ const normalizeQueryGroups = (value: unknown): ReportTemplateQueryGroup[] => {
       const filters = toUnknownArray(candidate.filters);
       const filterGroups = toUnknownArray(candidate.filterGroups);
       const rawFilterSql = toUnknownArray(candidate.rawFilterSql);
+      const columnAliases = toColumnAliasMap(candidate.columnAliases);
+      const columnOrder = toColumnOrder(candidate.columnOrder);
       return {
         id,
         name,
@@ -1348,6 +1362,8 @@ const normalizeQueryGroups = (value: unknown): ReportTemplateQueryGroup[] => {
         fields,
         joins,
         filters,
+        ...(Object.keys(columnAliases).length > 0 ? { columnAliases } : {}),
+        ...(columnOrder.length > 0 ? { columnOrder } : {}),
         ...(filterGroups.length > 0 ? { filterGroups } : {}),
         ...(rawFilterSql.length > 0 ? { rawFilterSql } : {}),
       } satisfies ReportTemplateQueryGroup;
@@ -1384,6 +1400,8 @@ const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
     typeof optionsCandidate?.autoRunOnOpen === "boolean"
       ? optionsCandidate.autoRunOnOpen
       : DEFAULT_TEMPLATE_OPTIONS.autoRunOnOpen;
+  const previewSql = toNullableString(optionsCandidate?.previewSql);
+  const visualSql = toNullableString(optionsCandidate?.visualSql);
 
   const options: ReportTemplateOptions = {
     autoDistribution:
@@ -1401,6 +1419,8 @@ const normalizeTemplatePayload = (input: TemplatePayloadInput) => {
     previewAggregations,
     previewHaving,
     autoRunOnOpen,
+    previewSql,
+    visualSql,
   };
 
   const models = toStringArray(input.models);
@@ -1483,6 +1503,8 @@ const serializeReportTemplate = (
       typeof rawOptions.autoRunOnOpen === "boolean"
         ? rawOptions.autoRunOnOpen
         : DEFAULT_TEMPLATE_OPTIONS.autoRunOnOpen,
+    previewSql: typeof rawOptions.previewSql === "string" ? rawOptions.previewSql : null,
+    visualSql: typeof rawOptions.visualSql === "string" ? rawOptions.visualSql : null,
   };
 
   const serializedPreviewOrder =
@@ -2736,8 +2758,6 @@ export const executePreviewQuery = async (
   const orderByClauses = buildOrderByClauses(payload.orderBy ?? [], aliasMap, derivedFieldLookup);
   const havingClauses = buildHavingClauses(previewHaving, aggregationAliasLookup);
 
-  const limitValue = Math.min(Math.max(Number(payload.limit ?? 200) || 200, 1), 1000);
-
   const sqlParts = [
     `SELECT ${selectClauses.join(", ")}`,
     `FROM ${fromClause}`,
@@ -2746,13 +2766,11 @@ export const executePreviewQuery = async (
     groupByClauses.length > 0 ? `GROUP BY ${groupByClauses.join(", ")}` : "",
     havingClauses.length > 0 ? `HAVING ${havingClauses.join(" AND ")}` : "",
     orderByClauses.length > 0 ? `ORDER BY ${orderByClauses.join(", ")}` : "",
-    `LIMIT :limit`,
   ].filter(Boolean);
 
   const sql = sqlParts.join(" ");
 
   const rows = await sequelize.query<Record<string, unknown>>(sql, {
-    replacements: { limit: limitValue },
     type: QueryTypes.SELECT,
   });
 
@@ -3002,10 +3020,6 @@ const buildSelectQuerySql = (config: QueryConfig, paramPrefix = ""): BuiltQueryC
     }
   });
 
-  const limitValue = Math.min(Math.max(Number(config.limit ?? 500) || 500, 1), 10000);
-  const limitKey = `${paramPrefix}limit`;
-  replacements[limitKey] = limitValue;
-
   const sqlParts = [
     `SELECT ${selectClauses.join(", ")}`,
     `FROM ${fromClause}`,
@@ -3029,8 +3043,6 @@ const buildSelectQuerySql = (config: QueryConfig, paramPrefix = ""): BuiltQueryC
     sqlParts.push(`ORDER BY ${orderByParts.join(", ")}`);
   }
 
-  sqlParts.push(`LIMIT :${limitKey}`);
-
   const sql = sqlParts.filter(Boolean).join(" ");
 
   return {
@@ -3041,7 +3053,7 @@ const buildSelectQuerySql = (config: QueryConfig, paramPrefix = ""): BuiltQueryC
       models: resolvedModels,
       metrics: [],
       dimensions: selectedAliases,
-      limit: config.limit ?? null,
+      limit: null,
     },
     columnTypes: selectedTypes,
   };
@@ -3341,10 +3353,6 @@ const buildAggregatedQuerySql = (config: QueryConfig, paramPrefix = ""): BuiltQu
     }
   });
 
-  const limitValue = Math.min(Math.max(Number(config.limit ?? 500) || 500, 1), 10000);
-  const limitKey = `${paramPrefix}limit`;
-  replacements[limitKey] = limitValue;
-
   const sqlParts = [
     `SELECT ${selectClauses.join(", ")}`,
     `FROM ${fromClause}`,
@@ -3369,8 +3377,6 @@ const buildAggregatedQuerySql = (config: QueryConfig, paramPrefix = ""): BuiltQu
     sqlParts.push(`ORDER BY ${orderByParts.join(", ")}`);
   }
 
-  sqlParts.push(`LIMIT :${limitKey}`);
-
   const sql = sqlParts.filter(Boolean).join(" ");
   const columns = [...resolvedDimensions, ...resolvedMetrics];
   const columnTypes = [...resolvedDimensionTypes, ...resolvedMetricTypes];
@@ -3384,7 +3390,7 @@ const buildAggregatedQuerySql = (config: QueryConfig, paramPrefix = ""): BuiltQu
       metrics: resolvedMetrics,
       dimensions: resolvedDimensions,
       filters: config.filters ?? [],
-      limit: config.limit ?? null,
+      limit: null,
     },
     columnTypes,
   };
@@ -3441,6 +3447,7 @@ const buildQueryConfigSql = (config: QueryConfig, paramPrefix = ""): BuiltQueryC
 
 const executeUnionQuery = async (
   unionConfig: QueryConfigUnion,
+  options: { disableLimit?: boolean } = {},
 ): Promise<{ result: ReportPreviewResponse; sql: string; meta: Record<string, unknown> }> => {
   if (!unionConfig || !Array.isArray(unionConfig.queries) || unionConfig.queries.length === 0) {
     throw new PreviewQueryError("Union queries must include at least one subquery.");
@@ -3512,11 +3519,7 @@ const executeUnionQuery = async (
     sqlParts.push(`ORDER BY ${orderByParts.join(", ")}`);
   }
 
-  if (unionConfig.limit !== undefined && unionConfig.limit !== null) {
-    const limitValue = Math.min(Math.max(Number(unionConfig.limit) || 1, 1), 10000);
-    replacements.union_limit = limitValue;
-    sqlParts.push("LIMIT :union_limit");
-  }
+  // Limits are disabled for union queries to return full result sets.
 
   if (unionConfig.offset !== undefined && unionConfig.offset !== null) {
     const offsetValue = Math.max(Number(unionConfig.offset) || 0, 0);
@@ -3560,7 +3563,7 @@ export const runReportPreview = async (
     ensureReportingAccess(req);
     const unionPayload = (req.body as QueryConfig)?.union;
     if (unionPayload && Array.isArray(unionPayload.queries) && unionPayload.queries.length > 0) {
-      const { result, sql, meta } = await executeUnionQuery(unionPayload);
+      const { result, sql, meta } = await executeUnionQuery(unionPayload, { disableLimit: true });
       lastSql = sql;
       res.status(200).json({
         ...result,

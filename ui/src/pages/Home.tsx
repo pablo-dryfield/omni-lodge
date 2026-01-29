@@ -1492,13 +1492,49 @@ const buildSpotlightSampleFromResult = (
   if (!metricAlias) {
     return undefined;
   }
+  const effectiveAlias = (() => {
+    if (metricAlias in result.rows[0]) {
+      return metricAlias;
+    }
+    const aggregation = config.spotlight.aggregation ?? "sum";
+    const aggregatedAlias = `${metricAlias}_${aggregation}`;
+    return aggregatedAlias in result.rows[0] ? aggregatedAlias : metricAlias;
+  })();
+
+  const aggregateValues = (
+    values: number[],
+    aggregation: MetricSpotlightDefinitionDto["aggregation"] | undefined,
+  ): number | null => {
+    if (values.length === 0) {
+      return null;
+    }
+    switch (aggregation) {
+      case "avg":
+        return values.reduce((total, value) => total + value, 0) / values.length;
+      case "min":
+        return Math.min(...values);
+      case "max":
+        return Math.max(...values);
+      case "count":
+        return values.length;
+      case "count_distinct":
+        return new Set(values).size;
+      case "sum":
+      default:
+        return values.reduce((total, value) => total + value, 0);
+    }
+  };
+
   const values = result.rows
-    .map((row) => coerceNumber(row[metricAlias]))
+    .map((row) => coerceNumber(row[effectiveAlias]))
     .filter((value): value is number => value !== null);
   if (values.length === 0) {
     return undefined;
   }
-  const aggregatedValue = values.reduce((total, value) => total + value, 0);
+  const aggregatedValue = aggregateValues(values, config.spotlight.aggregation);
+  if (aggregatedValue === null) {
+    return undefined;
+  }
   const formattedValue = formatMetricValue(
     aggregatedValue,
     config.spotlight.format,
@@ -1510,10 +1546,11 @@ const buildSpotlightSampleFromResult = (
   let comparisonValue: number | null = null;
   if (comparisonResult && Array.isArray(comparisonResult.rows)) {
     const comparisonValues = comparisonResult.rows
-      .map((row) => coerceNumber(row[metricAlias]))
+      .map((row) => coerceNumber(row[effectiveAlias]))
       .filter((value): value is number => value !== null);
     if (comparisonValues.length > 0) {
-      comparisonValue = comparisonValues.reduce((total, value) => total + value, 0);
+      const aggregatedComparison = aggregateValues(comparisonValues, config.spotlight.aggregation);
+      comparisonValue = aggregatedComparison;
     }
   }
   let comparisonApplied = false;
