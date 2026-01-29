@@ -116,13 +116,20 @@ const DEFAULT_MOBILE_LAYOUT: DashboardCardLayout = {
 };
 const LAYOUT_EDITOR_GRID_SIZE = Math.max(12, Math.floor(LAYOUT_EDITOR_CELL_HEIGHT / 8));
 
-const buildGridStackColumnStyles = (columns: number): string => {
+const buildGridStackColumnStyles = (columns: number, prefix = ""): string => {
   const columnWidth = 100 / columns;
-  const rules = [`.gs-${columns} > .grid-stack-item { width: ${columnWidth.toFixed(6)}%; }`];
+  const selectorPrefix = prefix ? `${prefix} ` : "";
+  const rules = [
+    `${selectorPrefix}.gs-${columns} > .grid-stack-item { width: ${columnWidth.toFixed(6)}%; }`,
+  ];
   for (let i = 0; i <= columns; i += 1) {
     const width = (columnWidth * i).toFixed(6);
-    rules.push(`.gs-${columns} > .grid-stack-item[gs-w="${i}"] { width: ${width}%; }`);
-    rules.push(`.gs-${columns} > .grid-stack-item[gs-x="${i}"] { left: ${width}%; }`);
+    rules.push(
+      `${selectorPrefix}.gs-${columns} > .grid-stack-item[gs-w="${i}"] { width: ${width}%; }`,
+    );
+    rules.push(
+      `${selectorPrefix}.gs-${columns} > .grid-stack-item[gs-x="${i}"] { left: ${width}%; }`,
+    );
   }
   return rules.join("\n");
 };
@@ -150,6 +157,8 @@ const scaleLayoutForColumns = (
 const DASHBOARD_EDITOR_GRID_CSS = `
 ${buildGridStackColumnStyles(LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP)}
 ${buildGridStackColumnStyles(LAYOUT_EDITOR_COLUMN_COUNT_MOBILE)}
+${buildGridStackColumnStyles(LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP, ".dashboard-layout-grid.layout-mode-desktop")}
+${buildGridStackColumnStyles(LAYOUT_EDITOR_COLUMN_COUNT_MOBILE, ".dashboard-layout-grid.layout-mode-mobile")}
 .dashboard-layout-grid .grid-stack-item-content {
   display: flex;
   align-items: stretch;
@@ -844,7 +853,7 @@ const DashboardLayoutEditor = ({
   const isSyncingRef = useRef(false);
   const ignoreChangeRef = useRef(true);
   const userInteractedRef = useRef(false);
-  const lastMinRowRef = useRef<number | null>(null);
+  const lastMinRowByModeRef = useRef<Partial<Record<LayoutMode, number>>>({});
   const columnCount = LAYOUT_EDITOR_COLUMN_COUNT_BY_MODE[layoutMode];
   const layoutEntries = useMemo(
     () =>
@@ -962,19 +971,20 @@ const DashboardLayoutEditor = ({
     const nextMinRow = Math.max(1, Math.floor(safeHeight / cellHeight));
     const layoutRows =
       grid.engine?.nodes?.reduce((max, node) => Math.max(max, (node.y ?? 0) + (node.h ?? 1)), 0) ?? 0;
-    const resolvedMinRow = Math.max(nextMinRow, layoutRows, lastMinRowRef.current ?? 0);
-    if (lastMinRowRef.current === resolvedMinRow) {
+    const lastMinRow = lastMinRowByModeRef.current[layoutMode] ?? 0;
+    const resolvedMinRow = Math.max(nextMinRow, layoutRows, lastMinRow);
+    if (lastMinRowByModeRef.current[layoutMode] === resolvedMinRow) {
       return;
     }
-    lastMinRowRef.current = resolvedMinRow;
+    lastMinRowByModeRef.current[layoutMode] = resolvedMinRow;
     grid.opts.minRow = resolvedMinRow;
-    grid.opts.maxRow = resolvedMinRow;
+    grid.opts.maxRow = undefined;
     if (grid.engine) {
-      grid.engine.maxRow = resolvedMinRow;
+      grid.engine.maxRow = undefined;
     }
     const gridWithUpdate = grid as GridStack & { _updateContainerHeight?: () => void };
     gridWithUpdate._updateContainerHeight?.();
-  }, []);
+  }, [layoutMode]);
 
   useEffect(() => {
     layoutCommitRef.current = onLayoutCommit;
@@ -990,6 +1000,9 @@ const DashboardLayoutEditor = ({
       grid.destroy(false);
       gridInstanceRef.current = null;
     }
+    [LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP, LAYOUT_EDITOR_COLUMN_COUNT_MOBILE].forEach((count) => {
+      container.classList.remove(`gs-${count}`);
+    });
     grid = GridStack.init(
       {
         column: columnCount,
@@ -1007,6 +1020,12 @@ const DashboardLayoutEditor = ({
       },
       container,
     );
+    lastMinRowByModeRef.current[layoutMode] = undefined;
+    [LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP, LAYOUT_EDITOR_COLUMN_COUNT_MOBILE].forEach((count) => {
+      container.classList.remove(`gs-${count}`);
+    });
+    container.classList.add(`gs-${columnCount}`);
+    const gridWithResize = grid as GridStack & { resize?: () => void };
     const handleChange = () => {
       if (isSyncingRef.current || ignoreChangeRef.current || !userInteractedRef.current) {
         return;
@@ -1033,6 +1052,7 @@ const DashboardLayoutEditor = ({
       userInteractedRef.current = true;
     });
     gridInstanceRef.current = grid;
+    gridWithResize.resize?.();
     updateGridMinRows();
     requestAnimationFrame(() => updateGridMinRows());
     ignoreChangeRef.current = true;
@@ -1114,7 +1134,7 @@ const DashboardLayoutEditor = ({
   return (
     <Box
       ref={gridRef}
-      className="dashboard-layout-grid grid-stack"
+      className={`dashboard-layout-grid grid-stack layout-mode-${layoutMode}`}
       style={{
         width: "100%",
         height: "100%",
