@@ -1,5 +1,7 @@
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 import type {
   BookingEmailParser,
   BookingFieldPatch,
@@ -23,6 +25,11 @@ import { getConfigValue } from '../../configService.js';
 import logger from '../../../utils/logger.js';
 
 dayjs.extend(customParseFormat);
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const DYNAMIC_RULE_TIMEZONE =
+  (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ?? 'Europe/Warsaw';
 
 const DATE_ONLY_FORMATS = [
   'YYYY-MM-DD',
@@ -286,7 +293,7 @@ const normalizeDateOnly = (value: string): string | null => {
   }
 
   for (const format of DATE_ONLY_FORMATS) {
-    const parsed = dayjs(token, format, true);
+    const parsed = dayjs.tz(token, format, DYNAMIC_RULE_TIMEZONE);
     if (parsed.isValid()) {
       return parsed.format('YYYY-MM-DD');
     }
@@ -309,10 +316,15 @@ const normalizeDateTime = (value: string): Date | null => {
   }
 
   for (const format of DATE_TIME_FORMATS) {
-    const parsed = dayjs(token, format, true);
+    const parsed = dayjs.tz(token, format, DYNAMIC_RULE_TIMEZONE);
     if (parsed.isValid()) {
       return parsed.toDate();
     }
+  }
+
+  const zonedFallback = dayjs.tz(token, DYNAMIC_RULE_TIMEZONE);
+  if (zonedFallback.isValid()) {
+    return zonedFallback.toDate();
   }
 
   const fallback = dayjs(token);
