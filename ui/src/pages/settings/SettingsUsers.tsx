@@ -1,6 +1,5 @@
-import React from "react";
-import { Stack, Title, Text } from "@mantine/core";
-import UsersList from "../../components/users/UsersList";
+import { Stack } from "@mantine/core";
+import SettingsUsersPanel from "../../components/users/SettingsUsersPanel";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
 
@@ -10,13 +9,7 @@ const SettingsUsers = () => {
   return (
     <PageAccessGuard pageSlug={PAGE_SLUG}>
       <Stack gap="md">
-        <div>
-          <Title order={3}>Users</Title>
-          <Text size="sm" c="dimmed">
-            Manage individual user records and login access.
-          </Text>
-        </div>
-        <UsersList pageTitle="Users" />
+        <SettingsUsersPanel />
       </Stack>
     </PageAccessGuard>
   );

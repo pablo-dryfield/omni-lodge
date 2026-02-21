@@ -10,7 +10,8 @@ export const BOOKING_PLATFORMS = [
   'unknown',
 ] as const;
 
-export type BookingPlatform = typeof BOOKING_PLATFORMS[number];
+export type KnownBookingPlatform = typeof BOOKING_PLATFORMS[number];
+export type BookingPlatform = KnownBookingPlatform | (string & {});
 
 export const BOOKING_STATUSES = [
   'pending',

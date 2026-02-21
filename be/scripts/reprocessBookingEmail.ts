@@ -11,6 +11,7 @@ dotenv.config({ path: path.resolve(__dirname, '..', envFile) });
 
 await import('../src/models/defineAssociations.js');
 await import('../src/config/database.js');
+const { initializeConfigRegistry } = await import('../src/services/configService.js');
 const { processBookingEmail } = await import('../src/services/bookings/bookingIngestionService.js');
 
 async function main() {
@@ -21,6 +22,7 @@ async function main() {
   }
 
   try {
+    await initializeConfigRegistry();
     const result = await processBookingEmail(messageId, { force: true });
     console.log(`Reprocessed message ${messageId} with result=${result}`);
   } catch (error) {

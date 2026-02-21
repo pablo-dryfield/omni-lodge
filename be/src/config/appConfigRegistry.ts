@@ -98,6 +98,16 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     validation: { min: 1, max: 200 },
   },
   {
+    key: 'BOOKING_PLATFORM_CHANNEL_MAP',
+    label: 'Booking platform-channel map',
+    description: 'JSON object mapping booking platform slug to Channel name for auto-assignment.',
+    category: 'Booking Email Ingestion',
+    valueType: 'json',
+    defaultValue:
+      '{"fareharbor":"Fareharbor","viator":"Viator","getyourguide":"GetYourGuide","freetour":"FreeTour","ecwid":"Ecwid","airbnb":"Airbnb","xperiencepoland":"XperiencePoland"}',
+    impact: 'medium',
+  },
+  {
     key: 'BOOKING_EMAIL_POLL_CRON',
     label: 'Booking email poll cron',
     description: 'Cron schedule for Gmail polling.',
