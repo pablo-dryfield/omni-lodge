@@ -56,6 +56,8 @@ const DATE_TIME_FORMATS = [
   'D MMM YYYY H:mm',
 ] as const;
 
+const TIME_ONLY_FORMATS = ['H:mm', 'HH:mm', 'h:mm A'] as const;
+
 const DYNAMIC_SOURCE_FIELDS = [
   'from',
   'to',
@@ -286,6 +288,18 @@ const statusToEventType = (status: BookingStatus): BookingEventType => {
   }
 };
 
+const tryParseInTimezone = (value: string, format?: string): dayjs.Dayjs | null => {
+  try {
+    const parsed = format ? dayjs.tz(value, format, DYNAMIC_RULE_TIMEZONE) : dayjs.tz(value, DYNAMIC_RULE_TIMEZONE);
+    return parsed.isValid() ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const normalizeMeridiemToken = (value: string): string =>
+  value.replace(/\b(am|pm)\b/gi, (match) => match.toUpperCase());
+
 const normalizeDateOnly = (value: string): string | null => {
   const token = value.trim();
   if (!token) {
@@ -293,10 +307,15 @@ const normalizeDateOnly = (value: string): string | null => {
   }
 
   for (const format of DATE_ONLY_FORMATS) {
-    const parsed = dayjs.tz(token, format, DYNAMIC_RULE_TIMEZONE);
-    if (parsed.isValid()) {
+    const parsed = tryParseInTimezone(token, format);
+    if (parsed) {
       return parsed.format('YYYY-MM-DD');
     }
+  }
+
+  const zonedFallback = tryParseInTimezone(token);
+  if (zonedFallback) {
+    return zonedFallback.format('YYYY-MM-DD');
   }
 
   const fallback = dayjs(token);
@@ -306,32 +325,48 @@ const normalizeDateOnly = (value: string): string | null => {
   return fallback.format('YYYY-MM-DD');
 };
 
-const normalizeDateTime = (value: string): Date | null => {
-  const token = value
+const normalizeDateTime = (value: string, fallbackDate?: string | null): Date | null => {
+  const token = normalizeMeridiemToken(
+    value
     .replace(/\b(?:date|hour|time)\s*:\s*/gi, ' ')
+    .replace(/\([^)]*\)/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim(),
+  );
   if (!token) {
     return null;
   }
+  const normalizedFallbackDate = normalizeDateOnly(fallbackDate ?? '');
 
   for (const format of DATE_TIME_FORMATS) {
-    const parsed = dayjs.tz(token, format, DYNAMIC_RULE_TIMEZONE);
-    if (parsed.isValid()) {
+    const parsed = tryParseInTimezone(token, format);
+    if (parsed) {
       return parsed.toDate();
     }
   }
 
-  const zonedFallback = dayjs.tz(token, DYNAMIC_RULE_TIMEZONE);
-  if (zonedFallback.isValid()) {
+  const zonedFallback = tryParseInTimezone(token);
+  if (zonedFallback) {
     return zonedFallback.toDate();
   }
 
-  const fallback = dayjs(token);
-  if (!fallback.isValid()) {
-    return null;
+  const timeOnlyToken = token.match(/^(\d{1,2}:\d{2}(?:\s*[AP]M)?)$/i)?.[1] ?? null;
+  if (normalizedFallbackDate && timeOnlyToken) {
+    const normalizedTime = normalizeMeridiemToken(timeOnlyToken).replace(/\s+/g, ' ').trim();
+    for (const timeFormat of TIME_ONLY_FORMATS) {
+      const combined = `${normalizedFallbackDate} ${normalizedTime}`;
+      const parsed = tryParseInTimezone(combined, `YYYY-MM-DD ${timeFormat}`);
+      if (parsed) {
+        return parsed.toDate();
+      }
+    }
   }
-  return fallback.toDate();
+
+  const fallback = dayjs(token);
+  if (fallback.isValid()) {
+    return fallback.toDate();
+  }
+  return null;
 };
 
 const normalizeInteger = (value: string): number | null => {
@@ -659,7 +694,8 @@ class DynamicRuleBookingParser implements BookingEmailParser {
 
     const experienceStartAt = extractClauseValue(context, extract.experienceStartAt).value;
     if (experienceStartAt) {
-      const normalized = normalizeDateTime(experienceStartAt);
+      const fallbackDate = typeof fields.experienceDate === 'string' ? fields.experienceDate : null;
+      const normalized = normalizeDateTime(experienceStartAt, fallbackDate);
       if (normalized) {
         fields.experienceStartAt = normalized;
       }
