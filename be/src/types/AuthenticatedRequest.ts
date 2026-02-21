@@ -5,6 +5,8 @@ export interface AuthorizationContext {
   id: number;
   userTypeId: number | null;
   roleSlug: string | null;
+  userTypeSlug?: string | null;
+  shiftRoleSlugs?: string[];
 }
 
 export interface AuthenticatedRequest extends Request {

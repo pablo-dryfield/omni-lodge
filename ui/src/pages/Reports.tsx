@@ -252,6 +252,7 @@ type VisualDefinition = {
   name: string;
   type: "line" | "area" | "bar" | "stackedArea" | "stackedBar" | "scatter" | "pie";
   metric: string;
+  metricFormat?: "number" | "currency" | "percentage";
   metricAggregation?: QueryConfigMetric["aggregation"];
   dimension: string;
   dimensionBucket?: QueryConfigDimension["bucket"];
@@ -2671,6 +2672,8 @@ const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitio
           const nameCandidate = typeof candidate.name === "string" ? candidate.name.trim() : "";
           const metricCandidate =
             typeof candidate.metric === "string" ? candidate.metric.trim() : "";
+          const metricFormatCandidate =
+            typeof candidate.metricFormat === "string" ? candidate.metricFormat.trim() : "";
           const dimensionCandidate =
             typeof candidate.dimension === "string" ? candidate.dimension.trim() : "";
           const comparisonCandidate =
@@ -2704,6 +2707,12 @@ const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitio
           )
             ? (metricAggregationCandidate ?? "sum")
             : "sum";
+          const metricFormat =
+            metricFormatCandidate === "currency" ||
+            metricFormatCandidate === "percentage" ||
+            metricFormatCandidate === "number"
+              ? (metricFormatCandidate as VisualDefinition["metricFormat"])
+              : undefined;
           const dimensionBucket =
             dimensionBucketCandidate && DIMENSION_BUCKETS.includes(dimensionBucketCandidate)
               ? dimensionBucketCandidate
@@ -2724,6 +2733,7 @@ const normalizeMetricSpotlights = (candidate: unknown): MetricSpotlightDefinitio
             name: nameCandidate.length > 0 ? nameCandidate : `Visual ${index + 1}`,
             type: typeCandidate,
             metric: metricCandidate,
+            ...(metricFormat ? { metricFormat } : {}),
             dimension: dimensionCandidate,
             metricAggregation,
             dimensionBucket,
@@ -3779,47 +3789,96 @@ const Reports = (props: GenericPageProps) => {
     return lookup;
   }, [filterFieldOptions]);
 
-  const spotlightDateFilterMetadata = useMemo(() => {
+  const buildDateFilterLabelBase = useCallback(
+    (modelId: string, fieldId: string): string => {
+      if (modelId === DERIVED_FIELD_SENTINEL) {
+        const derived = draft.derivedFields.find((field) => field.id === fieldId);
+        return derived ? `Derived â€˘ ${derived.name}` : `Derived â€˘ ${fieldId}`;
+      }
+      const model = modelMap.get(modelId);
+      const field = model?.fields.find((candidate) => candidate.id === fieldId);
+      if (model && field) {
+        return `${model.name} â€˘ ${field.label}`;
+      }
+      return `${modelId}.${fieldId}`;
+    },
+    [draft.derivedFields, modelMap],
+  );
+
+  const hasUnionGroups = useMemo(() => syncQueryGroups(draft).length > 1, [draft, syncQueryGroups]);
+
+  const dateFilterEntries = useMemo(() => {
+    const groups = syncQueryGroups(draft);
+    const hasMultipleGroups = groups.length > 1;
+    const entries: Array<{
+      id: string;
+      modelId: string;
+      fieldId: string;
+      operator: FilterOperator;
+      label: string;
+      filterIndex?: number;
+    }> = [];
+    const seen = new Set<string>();
+    groups.forEach((group, groupIndex) => {
+      const groupLabel =
+        group.name && group.name.trim().length > 0 ? group.name.trim() : `Group ${groupIndex + 1}`;
+      group.filters.forEach((filter, filterIndex) => {
+        if (filter.valueKind !== "date") {
+          return;
+        }
+        if (!filter.leftModelId || !filter.leftFieldId) {
+          return;
+        }
+        if (seen.has(filter.id)) {
+          return;
+        }
+        const labelBase = buildDateFilterLabelBase(filter.leftModelId, filter.leftFieldId);
+        const operatorLabel = FILTER_OPERATOR_LOOKUP.get(filter.operator)?.label ?? filter.operator;
+        const label = hasMultipleGroups
+          ? `${groupLabel} â€˘ ${labelBase} (${operatorLabel})`
+          : `${labelBase} (${operatorLabel})`;
+        entries.push({
+          id: filter.id,
+          modelId: filter.leftModelId,
+          fieldId: filter.leftFieldId,
+          operator: filter.operator,
+          label,
+          filterIndex,
+        });
+        seen.add(filter.id);
+      });
+    });
+    return entries;
+  }, [buildDateFilterLabelBase, draft, syncQueryGroups]);
+
+  const dateFilterMetadataById = useMemo(() => {
     const metadata = new Map<
       string,
       { modelId: string; fieldId: string; operator: FilterOperator; filterIndex?: number }
     >();
-    draft.filters.forEach((filter, index) => {
-      if (filter.valueKind !== "date") {
-        return;
-      }
-      metadata.set(filter.id, {
-        modelId: filter.leftModelId,
-        fieldId: filter.leftFieldId,
-        operator: filter.operator,
-        filterIndex: index,
+    dateFilterEntries.forEach((entry) => {
+      metadata.set(entry.id, {
+        modelId: entry.modelId,
+        fieldId: entry.fieldId,
+        operator: entry.operator,
+        ...(entry.filterIndex !== undefined ? { filterIndex: entry.filterIndex } : {}),
       });
     });
     return metadata;
-  }, [draft.filters]);
+  }, [dateFilterEntries]);
 
-  const spotlightDateFilterOptions = useMemo(
-    () =>
-      draft.filters
-        .filter((filter) => filter.valueKind === "date")
-        .map((filter) => {
-          const fieldOption = filterFieldLookup.get(
-            buildFilterOptionKey(filter.leftModelId, filter.leftFieldId),
-          );
-          const operatorLabel = FILTER_OPERATOR_LOOKUP.get(filter.operator)?.label ?? filter.operator;
-          const labelBase = fieldOption?.label ?? `${filter.leftModelId}.${filter.leftFieldId}`;
-          return {
-            value: filter.id,
-            label: `${labelBase} (${operatorLabel})`,
-          };
-        }),
-    [draft.filters, filterFieldLookup],
+  const dateFilterOptionChoices = useMemo(
+    () => dateFilterEntries.map((entry) => ({ value: entry.id, label: entry.label })),
+    [dateFilterEntries],
   );
-  const visualDateFilterMetadata = spotlightDateFilterMetadata;
-  const visualDateFilterOptions = spotlightDateFilterOptions;
+
+  const visualDateFilterMetadata = dateFilterMetadataById;
+  const visualDateFilterOptions = dateFilterOptionChoices;
+  const spotlightDateFilterMetadata = dateFilterMetadataById;
+  const spotlightDateFilterOptions = dateFilterOptionChoices;
   const dateFilterLabelById = useMemo(
-    () => new Map(spotlightDateFilterOptions.map((option) => [option.value, option.label])),
-    [spotlightDateFilterOptions],
+    () => new Map(dateFilterEntries.map((entry) => [entry.id, entry.label])),
+    [dateFilterEntries],
   );
 
   const previewColumnsFromSelection = useMemo(() => {
@@ -4052,6 +4111,19 @@ const getColumnLabel = useCallback(
       return field?.type ?? null;
     },
     [modelMap, previewColumnMetadata],
+  );
+  const resolveMetricFormatForAlias = useCallback(
+    (alias: string): VisualDefinition["metricFormat"] | undefined => {
+      if (!alias) {
+        return undefined;
+      }
+      const type = getColumnType(alias);
+      if (type === "currency" || type === "percentage" || type === "number") {
+        return type as VisualDefinition["metricFormat"];
+      }
+      return inferMetricFormat(getColumnLabel(alias), alias) as VisualDefinition["metricFormat"];
+    },
+    [getColumnLabel, getColumnType, inferMetricFormat],
   );
 
   const previewColumnSets = useMemo(() => {
@@ -4845,6 +4917,22 @@ const getColumnLabel = useCallback(
     metricLabel,
     visualQueryDescriptor.metricLabel,
   ]);
+  const metricFormatLabel = useMemo(() => {
+    if (!activeVisual.metric) {
+      return null;
+    }
+    const type = activeVisual.metricFormat ?? getColumnType(activeVisual.metric);
+    if (type === "currency") {
+      return "Currency (2 decimals)";
+    }
+    if (type === "percentage") {
+      return "Percentage";
+    }
+    if (type === "number") {
+      return "Number";
+    }
+    return null;
+  }, [activeVisual.metric, activeVisual.metricFormat, getColumnType]);
 
   const comparisonDisplayLabel = useMemo(() => {
     if (!activeVisual.comparison) {
@@ -6408,6 +6496,7 @@ const getColumnLabel = useCallback(
         dateFilterMetadata?: ReturnType<typeof findDateFilterMetadata> | null;
         periodConfig?: DashboardVisualCardViewConfig["periodConfig"];
         dateFilterOptions?: DashboardVisualCardViewConfig["dateFilterOptions"];
+        dateFilterSelections?: DashboardVisualCardViewConfig["dateFilterSelections"];
       },
     ): DashboardVisualCardViewConfig | null => {
       if (!visual.metric || !visual.dimension) {
@@ -6448,6 +6537,7 @@ const getColumnLabel = useCallback(
       );
       const metricType = getColumnType(visual.metric);
       const metricFormat =
+        visual.metricFormat ??
         spotlightFormatMatch?.format ??
         (metricType === "currency"
           ? "currency"
@@ -6506,6 +6596,9 @@ const getColumnLabel = useCallback(
         ...(options?.dateFilterMetadata ? { dateFilter: { ...options.dateFilterMetadata } } : {}),
         ...(options?.dateFilterOptions && options.dateFilterOptions.length > 0
           ? { dateFilterOptions: options.dateFilterOptions.map((option) => ({ ...option })) }
+          : {}),
+        ...(options?.dateFilterSelections && options.dateFilterSelections.length > 0
+          ? { dateFilterSelections: [...options.dateFilterSelections] }
           : {}),
         ...(normalizedPeriodConfig ? { periodConfig: normalizedPeriodConfig } : {}),
         visual: {
@@ -6582,10 +6675,13 @@ const getColumnLabel = useCallback(
       visualDateFilterMetadata,
       dateFilterLabelById,
     );
+    const dateFilterSelections =
+      hasUnionGroups && dateFilterOptionIds.length > 1 ? dateFilterOptionIds : undefined;
     const viewConfig = buildVisualCardViewConfig(activeVisual, {
       sample,
       dateFilterMetadata,
       dateFilterOptions,
+      dateFilterSelections,
     });
     if (!viewConfig) {
       setTemplateError("Unable to build the visual configuration for this dashboard card.");
@@ -6626,11 +6722,114 @@ const getColumnLabel = useCallback(
     [buildPreviewRequestPayload, draft.columnAliases, findDateFilterMetadata, previewColumns],
   );
 
+  type DateFilterOptionDraft = NonNullable<DashboardVisualCardViewConfig["dateFilterOptions"]>[number];
+
+  const buildDateFilterOptionId = useCallback(
+    (entry: { id?: string; modelId: string; fieldId: string; operator: FilterOperator }) =>
+      entry.id ?? `${entry.modelId}.${entry.fieldId}.${entry.operator}`,
+    [],
+  );
+
+  const buildDateFilterOptionOverrides = useCallback(
+    (options?: DateFilterOptionDraft[] | null) => {
+      const map = new Map<string, DateFilterOptionDraft>();
+      if (!Array.isArray(options)) {
+        return map;
+      }
+      options.forEach((option) => {
+        if (!option) {
+          return;
+        }
+        const id = buildDateFilterOptionId(option);
+        map.set(id, { ...option, id });
+      });
+      return map;
+    },
+    [buildDateFilterOptionId],
+  );
+
   const buildDateFilterOptionsFromIds = useCallback(
     (
       ids: string[],
       metadata: Map<string, { modelId: string; fieldId: string; operator: FilterOperator; filterIndex?: number }>,
       labels: Map<string, string>,
+      overrides?: Map<string, DateFilterOptionDraft>,
+    ) =>
+      ids
+        .map((id) => {
+          const override = overrides?.get(id);
+          const entry = metadata.get(id);
+          const modelId = override?.modelId ?? entry?.modelId;
+          const fieldId = override?.fieldId ?? entry?.fieldId;
+          const operator = override?.operator ?? entry?.operator;
+          if (!modelId || !fieldId || !operator) {
+            return null;
+          }
+          const label = override?.label ?? labels.get(id);
+          return {
+            id,
+            modelId,
+            fieldId,
+            operator,
+            ...(override?.filterIndex !== undefined
+              ? { filterIndex: override.filterIndex }
+              : entry?.filterIndex !== undefined
+              ? { filterIndex: entry.filterIndex }
+              : {}),
+            ...(override?.clauseSql ? { clauseSql: override.clauseSql } : {}),
+            ...(override?.filterPath ? { filterPath: [...override.filterPath] } : {}),
+            ...(label ? { label } : {}),
+            ...(override?.targets
+              ? { targets: override.targets.map((target) => ({ ...target })) }
+              : {}),
+          };
+        })
+        .filter((entry): entry is DateFilterOptionDraft => Boolean(entry)),
+    [],
+  );
+
+  const resolveDateFilterMetadataForOption = useCallback(
+    (
+      id: string,
+      metadata: Map<string, { modelId: string; fieldId: string; operator: FilterOperator; filterIndex?: number }>,
+      overrides: Map<string, DateFilterOptionDraft>,
+    ): {
+      modelId: string;
+      fieldId: string;
+      operator: FilterOperator;
+      filterIndex?: number;
+      filterPath?: number[];
+    } | null => {
+      const override = overrides.get(id);
+      if (override?.targets && override.targets.length > 0) {
+        const target = override.targets[0];
+        return {
+          modelId: target.modelId,
+          fieldId: target.fieldId,
+          operator: target.operator,
+          ...(target.filterIndex !== undefined ? { filterIndex: target.filterIndex } : {}),
+          ...(target.filterPath ? { filterPath: [...target.filterPath] } : {}),
+        };
+      }
+      if (override) {
+        return {
+          modelId: override.modelId,
+          fieldId: override.fieldId,
+          operator: override.operator,
+          ...(override.filterIndex !== undefined ? { filterIndex: override.filterIndex } : {}),
+          ...(override.filterPath ? { filterPath: [...override.filterPath] } : {}),
+        };
+      }
+      const entry = metadata.get(id);
+      return entry ? { ...entry } : null;
+    },
+    [],
+  );
+
+  const buildDateFilterTargetsFromIds = useCallback(
+    (
+      ids: string[],
+      metadata: Map<string, { modelId: string; fieldId: string; operator: FilterOperator; filterIndex?: number }>,
     ) =>
       ids
         .map((id) => {
@@ -6638,14 +6837,12 @@ const getColumnLabel = useCallback(
           if (!entry) {
             return null;
           }
-          const label = labels.get(id);
           return {
             id,
             modelId: entry.modelId,
             fieldId: entry.fieldId,
             operator: entry.operator,
             ...(entry.filterIndex !== undefined ? { filterIndex: entry.filterIndex } : {}),
-            ...(label ? { label } : {}),
           };
         })
         .filter(
@@ -6654,10 +6851,46 @@ const getColumnLabel = useCallback(
             modelId: string;
             fieldId: string;
             operator: FilterOperator;
-            label?: string;
             filterIndex?: number;
-          } => Boolean(entry),
+          } => entry !== null,
         ),
+    [],
+  );
+
+  const resolveDateFilterTargetIds = useCallback(
+    (
+      targets:
+        | Array<{
+            id?: string;
+            modelId: string;
+            fieldId: string;
+            operator: FilterOperator;
+          }>
+        | undefined,
+      metadata: Map<string, { modelId: string; fieldId: string; operator: FilterOperator }>,
+    ) => {
+      if (!targets || targets.length === 0) {
+        return [];
+      }
+      const ids: string[] = [];
+      targets.forEach((target) => {
+        if (target.id && metadata.has(target.id)) {
+          ids.push(target.id);
+          return;
+        }
+        for (const [id, entry] of metadata.entries()) {
+          if (
+            entry.modelId === target.modelId &&
+            entry.fieldId === target.fieldId &&
+            entry.operator === target.operator
+          ) {
+            ids.push(id);
+            return;
+          }
+        }
+      });
+      return ids;
+    },
     [],
   );
 
@@ -6730,6 +6963,7 @@ const getColumnLabel = useCallback(
                 dateFilterMetadata: dateFilterMetadata ?? viewConfig.dateFilter ?? null,
                 periodConfig: viewConfig.periodConfig,
                 dateFilterOptions: resolvedDateFilterOptions,
+                dateFilterSelections: viewConfig.dateFilterSelections,
               });
               if (updatedConfig) {
                 enqueueUpdate(dashboard.id, card, updatedConfig);
@@ -6759,6 +6993,9 @@ const getColumnLabel = useCallback(
                 dateFilter: { ...dateFilterMetadata },
                 ...(resolvedDateFilterOptions.length > 0
                   ? { dateFilterOptions: resolvedDateFilterOptions }
+                  : {}),
+                ...(Array.isArray(viewConfig.dateFilterSelections) && viewConfig.dateFilterSelections.length > 0
+                  ? { dateFilterSelections: viewConfig.dateFilterSelections }
                   : {}),
               });
             }
@@ -6793,6 +7030,9 @@ const getColumnLabel = useCallback(
                 ...(resolvedDateFilterOptions.length > 0
                   ? { dateFilterOptions: resolvedDateFilterOptions }
                   : {}),
+                ...(Array.isArray(viewConfig.dateFilterSelections) && viewConfig.dateFilterSelections.length > 0
+                  ? { dateFilterSelections: viewConfig.dateFilterSelections }
+                  : {}),
               };
               enqueueUpdate(dashboard.id, card, updatedConfig);
               return;
@@ -6820,6 +7060,9 @@ const getColumnLabel = useCallback(
                 dateFilter: { ...dateFilterMetadata },
                 ...(resolvedDateFilterOptions.length > 0
                   ? { dateFilterOptions: resolvedDateFilterOptions }
+                  : {}),
+                ...(Array.isArray(viewConfig.dateFilterSelections) && viewConfig.dateFilterSelections.length > 0
+                  ? { dateFilterSelections: viewConfig.dateFilterSelections }
                   : {}),
               });
             }
@@ -6913,6 +7156,8 @@ const getColumnLabel = useCallback(
       spotlightDateFilterMetadata,
       dateFilterLabelById,
     );
+    const dateFilterSelections =
+      hasUnionGroups && dateFilterOptionIds.length > 1 ? dateFilterOptionIds : undefined;
     const periodPresets = DEFAULT_SPOTLIGHT_PERIOD_PRESETS.filter(
       (preset) => preset && SPOTLIGHT_PERIOD_PRESET_OPTIONS.some((option) => option.value === preset),
     );
@@ -6933,6 +7178,7 @@ const getColumnLabel = useCallback(
       },
       ...(dateFilterMetadata ? { dateFilter: dateFilterMetadata } : {}),
       ...(dateFilterOptions.length > 0 ? { dateFilterOptions } : {}),
+      ...(dateFilterSelections ? { dateFilterSelections } : {}),
       ...(dateFilterMetadata && periodPresets.length > 0 && periodDefault
         ? {
             periodConfig: {
@@ -7008,7 +7254,7 @@ const getColumnLabel = useCallback(
     ): string[] => {
       if (Array.isArray(config.dateFilterOptions)) {
         const optionIds = config.dateFilterOptions
-          .map((option) => option.id)
+          .map((option) => buildDateFilterOptionId(option))
           .filter((id): id is string => typeof id === "string" && id.length > 0);
         if (optionIds.length > 0) {
           return optionIds;
@@ -7019,52 +7265,8 @@ const getColumnLabel = useCallback(
       }
       return allIds;
     },
-    [],
+    [buildDateFilterOptionId],
   );
-
-  const selectedVisualDateFilterId = useMemo(() => {
-    if (!dashboardCardDraft || !isVisualCardViewConfig(dashboardCardDraft.viewConfig)) {
-      return null;
-    }
-    const dateFilter = dashboardCardDraft.viewConfig.dateFilter;
-    if (!dateFilter) {
-      return null;
-    }
-    for (const option of visualDateFilterOptions) {
-      const metadata = visualDateFilterMetadata.get(option.value);
-      if (
-        metadata &&
-        metadata.modelId === dateFilter.modelId &&
-        metadata.fieldId === dateFilter.fieldId &&
-        metadata.operator === dateFilter.operator
-      ) {
-        return option.value;
-      }
-    }
-    return null;
-  }, [dashboardCardDraft, visualDateFilterMetadata, visualDateFilterOptions]);
-
-  const selectedSpotlightDateFilterId = useMemo(() => {
-    if (!dashboardCardDraft || !isSpotlightCardViewConfig(dashboardCardDraft.viewConfig)) {
-      return null;
-    }
-    const dateFilter = dashboardCardDraft.viewConfig.dateFilter;
-    if (!dateFilter) {
-      return null;
-    }
-    for (const option of spotlightDateFilterOptions) {
-      const metadata = spotlightDateFilterMetadata.get(option.value);
-      if (
-        metadata &&
-        metadata.modelId === dateFilter.modelId &&
-        metadata.fieldId === dateFilter.fieldId &&
-        metadata.operator === dateFilter.operator
-      ) {
-        return option.value;
-      }
-    }
-    return null;
-  }, [dashboardCardDraft, spotlightDateFilterMetadata, spotlightDateFilterOptions]);
 
   const visualDashboardConfig = useMemo(() => {
     if (!dashboardCardDraft || !isVisualCardViewConfig(dashboardCardDraft.viewConfig)) {
@@ -7080,36 +7282,293 @@ const getColumnLabel = useCallback(
     return dashboardCardDraft.viewConfig;
   }, [dashboardCardDraft]);
 
+  const visualDateFilterOptionOverrides = useMemo(
+    () => buildDateFilterOptionOverrides(visualDashboardConfig?.dateFilterOptions ?? null),
+    [buildDateFilterOptionOverrides, visualDashboardConfig],
+  );
+
+  const spotlightDateFilterOptionOverrides = useMemo(
+    () => buildDateFilterOptionOverrides(spotlightDashboardConfig?.dateFilterOptions ?? null),
+    [buildDateFilterOptionOverrides, spotlightDashboardConfig],
+  );
+
+  const visualAllowedDateFilterIds = useMemo(() => {
+    if (!visualDashboardConfig) {
+      return [];
+    }
+    const explicitIds = Array.isArray(visualDashboardConfig.dateFilterOptions)
+      ? visualDashboardConfig.dateFilterOptions
+          .map((option) => buildDateFilterOptionId(option))
+          .filter((id): id is string => typeof id === "string" && id.length > 0)
+      : [];
+    if (explicitIds.length > 0) {
+      return explicitIds;
+    }
+    return visualDateFilterOptions.map((option) => option.value);
+  }, [buildDateFilterOptionId, visualDashboardConfig, visualDateFilterOptions]);
+
+  const spotlightAllowedDateFilterIds = useMemo(() => {
+    if (!spotlightDashboardConfig) {
+      return [];
+    }
+    const explicitIds = Array.isArray(spotlightDashboardConfig.dateFilterOptions)
+      ? spotlightDashboardConfig.dateFilterOptions
+          .map((option) => buildDateFilterOptionId(option))
+          .filter((id): id is string => typeof id === "string" && id.length > 0)
+      : [];
+    if (explicitIds.length > 0) {
+      return explicitIds;
+    }
+    return spotlightDateFilterOptions.map((option) => option.value);
+  }, [buildDateFilterOptionId, spotlightDashboardConfig, spotlightDateFilterOptions]);
+
+  const baseDateFilterIdSet = useMemo(
+    () => new Set(visualDateFilterOptions.map((option) => option.value)),
+    [visualDateFilterOptions],
+  );
+
+  const visualDateFilterOptionDetails = useMemo(() => {
+    if (!visualDashboardConfig) {
+      return [];
+    }
+    return buildDateFilterOptionsFromIds(
+      visualAllowedDateFilterIds,
+      visualDateFilterMetadata,
+      dateFilterLabelById,
+      visualDateFilterOptionOverrides,
+    );
+  }, [
+    buildDateFilterOptionsFromIds,
+    dateFilterLabelById,
+    visualAllowedDateFilterIds,
+    visualDateFilterMetadata,
+    visualDateFilterOptionOverrides,
+    visualDashboardConfig,
+  ]);
+
+  const spotlightDateFilterOptionDetails = useMemo(() => {
+    if (!spotlightDashboardConfig) {
+      return [];
+    }
+    return buildDateFilterOptionsFromIds(
+      spotlightAllowedDateFilterIds,
+      spotlightDateFilterMetadata,
+      dateFilterLabelById,
+      spotlightDateFilterOptionOverrides,
+    );
+  }, [
+    buildDateFilterOptionsFromIds,
+    dateFilterLabelById,
+    spotlightAllowedDateFilterIds,
+    spotlightDateFilterMetadata,
+    spotlightDateFilterOptionOverrides,
+    spotlightDashboardConfig,
+  ]);
+
+  const visualDateFilterSelectOptions = useMemo(
+    () =>
+      visualDateFilterOptionDetails.map((option) => ({
+        value: option.id,
+        label: option.label ?? dateFilterLabelById.get(option.id) ?? option.id,
+      })),
+    [dateFilterLabelById, visualDateFilterOptionDetails],
+  );
+
+  const spotlightDateFilterSelectOptions = useMemo(
+    () =>
+      spotlightDateFilterOptionDetails.map((option) => ({
+        value: option.id,
+        label: option.label ?? dateFilterLabelById.get(option.id) ?? option.id,
+      })),
+    [dateFilterLabelById, spotlightDateFilterOptionDetails],
+  );
+
+  const visualDateFilterGroupOptions = useMemo(
+    () =>
+      visualDateFilterOptionDetails.filter(
+        (option) => Array.isArray(option.targets) && option.targets.length > 0,
+      ),
+    [visualDateFilterOptionDetails],
+  );
+
+  const spotlightDateFilterGroupOptions = useMemo(
+    () =>
+      spotlightDateFilterOptionDetails.filter(
+        (option) => Array.isArray(option.targets) && option.targets.length > 0,
+      ),
+    [spotlightDateFilterOptionDetails],
+  );
+
+  const selectedVisualDateFilterId = useMemo(() => {
+    if (!visualDashboardConfig) {
+      return null;
+    }
+    const allowedSet = new Set(visualAllowedDateFilterIds);
+    const selections = Array.isArray(visualDashboardConfig.dateFilterSelections)
+      ? visualDashboardConfig.dateFilterSelections
+      : [];
+    const selectedFromSelections = selections.find((id) => allowedSet.has(id));
+    if (selectedFromSelections) {
+      return selectedFromSelections;
+    }
+    const dateFilter = visualDashboardConfig.dateFilter;
+    if (dateFilter) {
+      for (const option of visualDateFilterOptions) {
+        const metadata = visualDateFilterMetadata.get(option.value);
+        if (
+          metadata &&
+          metadata.modelId === dateFilter.modelId &&
+          metadata.fieldId === dateFilter.fieldId &&
+          metadata.operator === dateFilter.operator &&
+          allowedSet.has(option.value)
+        ) {
+          return option.value;
+        }
+      }
+    }
+    return visualAllowedDateFilterIds[0] ?? null;
+  }, [
+    visualAllowedDateFilterIds,
+    visualDashboardConfig,
+    visualDateFilterMetadata,
+    visualDateFilterOptions,
+  ]);
+
+  const selectedSpotlightDateFilterId = useMemo(() => {
+    if (!spotlightDashboardConfig) {
+      return null;
+    }
+    const allowedSet = new Set(spotlightAllowedDateFilterIds);
+    const selections = Array.isArray(spotlightDashboardConfig.dateFilterSelections)
+      ? spotlightDashboardConfig.dateFilterSelections
+      : [];
+    const selectedFromSelections = selections.find((id) => allowedSet.has(id));
+    if (selectedFromSelections) {
+      return selectedFromSelections;
+    }
+    const dateFilter = spotlightDashboardConfig.dateFilter;
+    if (dateFilter) {
+      for (const option of spotlightDateFilterOptions) {
+        const metadata = spotlightDateFilterMetadata.get(option.value);
+        if (
+          metadata &&
+          metadata.modelId === dateFilter.modelId &&
+          metadata.fieldId === dateFilter.fieldId &&
+          metadata.operator === dateFilter.operator &&
+          allowedSet.has(option.value)
+        ) {
+          return option.value;
+        }
+      }
+    }
+    return spotlightAllowedDateFilterIds[0] ?? null;
+  }, [
+    spotlightAllowedDateFilterIds,
+    spotlightDashboardConfig,
+    spotlightDateFilterMetadata,
+    spotlightDateFilterOptions,
+  ]);
+
   const selectedVisualExtraDateFilterIds = useMemo(() => {
     if (!visualDashboardConfig) {
       return [];
     }
-    const allIds = visualDateFilterOptions.map((option) => option.value);
-    const allowedIds = resolveAllowedDateFilterIds(
-      visualDashboardConfig,
-      allIds,
-      selectedVisualDateFilterId,
+    return visualAllowedDateFilterIds.filter(
+      (id) => id !== selectedVisualDateFilterId && baseDateFilterIdSet.has(id),
     );
-    return allowedIds.filter((id) => id !== selectedVisualDateFilterId);
-  }, [resolveAllowedDateFilterIds, selectedVisualDateFilterId, visualDashboardConfig, visualDateFilterOptions]);
+  }, [baseDateFilterIdSet, selectedVisualDateFilterId, visualAllowedDateFilterIds, visualDashboardConfig]);
 
   const selectedSpotlightExtraDateFilterIds = useMemo(() => {
     if (!spotlightDashboardConfig) {
       return [];
     }
-    const allIds = spotlightDateFilterOptions.map((option) => option.value);
-    const allowedIds = resolveAllowedDateFilterIds(
-      spotlightDashboardConfig,
-      allIds,
-      selectedSpotlightDateFilterId,
+    return spotlightAllowedDateFilterIds.filter(
+      (id) => id !== selectedSpotlightDateFilterId && baseDateFilterIdSet.has(id),
     );
-    return allowedIds.filter((id) => id !== selectedSpotlightDateFilterId);
   }, [
-    resolveAllowedDateFilterIds,
+    baseDateFilterIdSet,
     selectedSpotlightDateFilterId,
+    spotlightAllowedDateFilterIds,
     spotlightDashboardConfig,
-    spotlightDateFilterOptions,
   ]);
+
+  const visualDefaultDateFilterSelections = useMemo(() => {
+    if (!visualDashboardConfig) {
+      return [];
+    }
+    const allowedSet = new Set(visualAllowedDateFilterIds);
+    const configured = Array.isArray(visualDashboardConfig.dateFilterSelections)
+      ? visualDashboardConfig.dateFilterSelections
+      : [];
+    const normalized = configured.filter((id) => allowedSet.has(id));
+    if (normalized.length > 0) {
+      return normalized;
+    }
+    if (selectedVisualDateFilterId && allowedSet.has(selectedVisualDateFilterId)) {
+      return [selectedVisualDateFilterId];
+    }
+    return visualAllowedDateFilterIds.length > 0 ? [visualAllowedDateFilterIds[0]] : [];
+  }, [selectedVisualDateFilterId, visualAllowedDateFilterIds, visualDashboardConfig]);
+
+  const spotlightDefaultDateFilterSelections = useMemo(() => {
+    if (!spotlightDashboardConfig) {
+      return [];
+    }
+    const allowedSet = new Set(spotlightAllowedDateFilterIds);
+    const configured = Array.isArray(spotlightDashboardConfig.dateFilterSelections)
+      ? spotlightDashboardConfig.dateFilterSelections
+      : [];
+    const normalized = configured.filter((id) => allowedSet.has(id));
+    if (normalized.length > 0) {
+      return normalized;
+    }
+    if (selectedSpotlightDateFilterId && allowedSet.has(selectedSpotlightDateFilterId)) {
+      return [selectedSpotlightDateFilterId];
+    }
+    return spotlightAllowedDateFilterIds.length > 0 ? [spotlightAllowedDateFilterIds[0]] : [];
+  }, [selectedSpotlightDateFilterId, spotlightAllowedDateFilterIds, spotlightDashboardConfig]);
+
+  const visualEditableBaseDateFilterIds = useMemo(() => {
+    const ids: string[] = [];
+    if (selectedVisualDateFilterId && baseDateFilterIdSet.has(selectedVisualDateFilterId)) {
+      ids.push(selectedVisualDateFilterId);
+    }
+    selectedVisualExtraDateFilterIds.forEach((id) => {
+      if (!ids.includes(id)) {
+        ids.push(id);
+      }
+    });
+    return ids;
+  }, [baseDateFilterIdSet, selectedVisualDateFilterId, selectedVisualExtraDateFilterIds]);
+
+  const spotlightEditableBaseDateFilterIds = useMemo(() => {
+    const ids: string[] = [];
+    if (selectedSpotlightDateFilterId && baseDateFilterIdSet.has(selectedSpotlightDateFilterId)) {
+      ids.push(selectedSpotlightDateFilterId);
+    }
+    selectedSpotlightExtraDateFilterIds.forEach((id) => {
+      if (!ids.includes(id)) {
+        ids.push(id);
+      }
+    });
+    return ids;
+  }, [baseDateFilterIdSet, selectedSpotlightDateFilterId, selectedSpotlightExtraDateFilterIds]);
+
+  const visualDateFilterDetailById = useMemo(() => {
+    const map = new Map<string, DateFilterOptionDraft>();
+    visualDateFilterOptionDetails.forEach((option) => {
+      map.set(option.id, option);
+    });
+    return map;
+  }, [visualDateFilterOptionDetails]);
+
+  const spotlightDateFilterDetailById = useMemo(() => {
+    const map = new Map<string, DateFilterOptionDraft>();
+    spotlightDateFilterOptionDetails.forEach((option) => {
+      map.set(option.id, option);
+    });
+    return map;
+  }, [spotlightDateFilterOptionDetails]);
 
   const handleConfirmDashboardCard = async () => {
     if (!dashboardCardDraft) {
@@ -7138,6 +7597,7 @@ const getColumnLabel = useCallback(
             dateFilterOptionIds,
             visualDateFilterMetadata,
             dateFilterLabelById,
+            buildDateFilterOptionOverrides(payloadViewConfig.dateFilterOptions ?? null),
           );
           if (dateFilterOptions.length > 0) {
             payloadViewConfig = {
@@ -7156,6 +7616,7 @@ const getColumnLabel = useCallback(
             dateFilterOptionIds,
             spotlightDateFilterMetadata,
             dateFilterLabelById,
+            buildDateFilterOptionOverrides(payloadViewConfig.dateFilterOptions ?? null),
           );
           if (dateFilterOptions.length > 0) {
             payloadViewConfig = {
@@ -7512,6 +7973,16 @@ const getColumnLabel = useCallback(
   const handleVisualChange = (patch: Partial<VisualDefinition>) => {
     setDraft((current) => {
       const nextVisual = { ...current.visuals[0], ...patch };
+      if (Object.prototype.hasOwnProperty.call(patch, "metric")) {
+        const nextMetric = patch.metric ?? "";
+        if (nextMetric) {
+          if (!patch.metricFormat) {
+            nextVisual.metricFormat = resolveMetricFormatForAlias(nextMetric);
+          }
+        } else {
+          nextVisual.metricFormat = undefined;
+        }
+      }
       if (patch.type === "pie") {
         nextVisual.comparison = undefined;
         nextVisual.comparisonAggregation = undefined;
@@ -12074,6 +12545,11 @@ const getColumnLabel = useCallback(
                                           }
                                           disabled={metricOptions.length === 0}
                                         />
+                                        {metricFormatLabel && (
+                                          <Text size="xs" c="dimmed">
+                                            Format: {metricFormatLabel}
+                                          </Text>
+                                        )}
                                         <Select
                                           label="Dimension"
                                           data={dimensionOptions}
@@ -13116,16 +13592,21 @@ const getColumnLabel = useCallback(
                     <>
                       <Select
                         label="Date field"
-                        data={visualDateFilterOptions}
+                        data={visualDateFilterSelectOptions}
                         value={selectedVisualDateFilterId}
                         placeholder="Select date field"
                         onChange={(value) => {
                           updateVisualCardDraft((current) => {
                             if (!value) {
-                              const { dateFilter, dateFilterOptions, ...rest } = current;
+                              const { dateFilter, dateFilterOptions, dateFilterSelections, ...rest } = current;
                               return rest;
                             }
-                            const metadata = visualDateFilterMetadata.get(value);
+                            const overrides = buildDateFilterOptionOverrides(current.dateFilterOptions ?? null);
+                            const metadata = resolveDateFilterMetadataForOption(
+                              value,
+                              visualDateFilterMetadata,
+                              overrides,
+                            );
                             if (!metadata) {
                               return current;
                             }
@@ -13135,16 +13616,32 @@ const getColumnLabel = useCallback(
                               allIds,
                               selectedVisualDateFilterId,
                             );
-                            const nextIds = [value, ...allowedIds.filter((id) => id !== value)];
+                            const groupIds = Array.from(overrides.values())
+                              .filter((option) => Array.isArray(option.targets) && option.targets.length > 0)
+                              .map((option) => option.id);
+                            const nextIds = Array.from(
+                              new Set([value, ...allowedIds.filter((id) => id !== value), ...groupIds]),
+                            );
                             const nextOptions = buildDateFilterOptionsFromIds(
                               nextIds,
                               visualDateFilterMetadata,
                               dateFilterLabelById,
+                              overrides,
                             );
+                            const configured = Array.isArray(current.dateFilterSelections)
+                              ? current.dateFilterSelections
+                              : [];
+                            const nextSelections = configured.filter((id) => nextIds.includes(id));
+                            if (nextSelections.length === 0) {
+                              nextSelections.push(value);
+                            } else if (!nextSelections.includes(value)) {
+                              nextSelections.unshift(value);
+                            }
                             return {
                               ...current,
                               dateFilter: { ...metadata },
                               ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
+                              ...(nextSelections.length > 0 ? { dateFilterSelections: nextSelections } : {}),
                             };
                           });
                         }}
@@ -13161,27 +13658,371 @@ const getColumnLabel = useCallback(
                               visualDateFilterOptions.some((option) => option.value === entry),
                             );
                             const defaultId = selectedVisualDateFilterId;
-                            const nextIds = defaultId
+                            const overrides = buildDateFilterOptionOverrides(current.dateFilterOptions ?? null);
+                            const groupIds = Array.from(overrides.values())
+                              .filter((option) => Array.isArray(option.targets) && option.targets.length > 0)
+                              .map((option) => option.id);
+                            const nextBaseIds = defaultId
                               ? [defaultId, ...normalized.filter((id) => id !== defaultId)]
                               : normalized;
+                            const nextIds = Array.from(new Set([...nextBaseIds, ...groupIds]));
                             if (nextIds.length === 0) {
-                              const { dateFilterOptions, ...rest } = current;
+                              const { dateFilterOptions, dateFilterSelections, ...rest } = current;
                               return rest;
                             }
                             const nextOptions = buildDateFilterOptionsFromIds(
                               nextIds,
                               visualDateFilterMetadata,
                               dateFilterLabelById,
+                              overrides,
                             );
+                            const configured = Array.isArray(current.dateFilterSelections)
+                              ? current.dateFilterSelections
+                              : [];
+                            const nextSelections = configured.filter((id) => nextIds.includes(id));
+                            if (nextSelections.length === 0 && defaultId) {
+                              nextSelections.push(defaultId);
+                            }
                             return {
                               ...current,
                               ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
+                              ...(nextSelections.length > 0 ? { dateFilterSelections: nextSelections } : {}),
                             };
                           });
                         }}
                         searchable
                         disabled={!selectedVisualDateFilterId}
                       />
+                      <MultiSelect
+                        label="Default date fields"
+                        data={visualDateFilterSelectOptions}
+                        value={visualDefaultDateFilterSelections}
+                        onChange={(value) => {
+                          updateVisualCardDraft((current) => {
+                            const allowedIds = visualDateFilterSelectOptions.map((option) => option.value);
+                            const normalized = value.filter((entry) => allowedIds.includes(entry));
+                            if (normalized.length === 0) {
+                              const { dateFilterSelections, ...rest } = current;
+                              return rest;
+                            }
+                            return {
+                              ...current,
+                              dateFilterSelections: normalized,
+                            };
+                          });
+                        }}
+                        searchable
+                        disabled={visualDateFilterSelectOptions.length === 0}
+                      />
+                      {visualEditableBaseDateFilterIds.length > 0 && (
+                        <Stack gap="xs">
+                          <Text fw={500} fz="sm">
+                            Date field labels
+                          </Text>
+                          {visualEditableBaseDateFilterIds.map((optionId) => {
+                            const option = visualDateFilterDetailById.get(optionId);
+                            const baseLabel = dateFilterLabelById.get(optionId) ?? optionId;
+                            return (
+                              <TextInput
+                                key={`visual-date-label-${optionId}`}
+                                label={baseLabel}
+                                value={option?.label ?? ""}
+                                placeholder="Custom label (optional)"
+                                onChange={(event) => {
+                                  const nextValue = event.currentTarget.value;
+                                  updateVisualCardDraft((current) => {
+                                    const overrides = buildDateFilterOptionOverrides(
+                                      current.dateFilterOptions ?? null,
+                                    );
+                                    const allIds = resolveAllowedDateFilterIds(
+                                      current,
+                                      visualDateFilterOptions.map((entry) => entry.value),
+                                      selectedVisualDateFilterId,
+                                    );
+                                    const groupIds = Array.from(overrides.values())
+                                      .filter(
+                                        (entry) => Array.isArray(entry.targets) && entry.targets.length > 0,
+                                      )
+                                      .map((entry) => entry.id);
+                                    const nextIds = Array.from(new Set([...allIds, ...groupIds]));
+                                    const nextOptions = buildDateFilterOptionsFromIds(
+                                      nextIds,
+                                      visualDateFilterMetadata,
+                                      dateFilterLabelById,
+                                      overrides,
+                                    );
+                                    const trimmed = nextValue.trim();
+                                    const normalizedLabel =
+                                      trimmed.length > 0 && trimmed !== baseLabel ? trimmed : null;
+                                    const updatedOptions = nextOptions.map((entry) => {
+                                      if (entry.id !== optionId) {
+                                        return entry;
+                                      }
+                                      if (normalizedLabel) {
+                                        return { ...entry, label: normalizedLabel };
+                                      }
+                                      const { label, ...rest } = entry;
+                                      return rest;
+                                    });
+                                    return {
+                                      ...current,
+                                      dateFilterOptions: updatedOptions,
+                                    };
+                                  });
+                                }}
+                              />
+                            );
+                          })}
+                        </Stack>
+                      )}
+                      <Stack gap="xs">
+                        <Group justify="space-between" align="center">
+                          <Text fw={500} fz="sm">
+                            Date field groups
+                          </Text>
+                          <Button
+                            size="xs"
+                            variant="light"
+                            onClick={() => {
+                              updateVisualCardDraft((current) => {
+                                const allIds = visualDateFilterOptions.map((option) => option.value);
+                                const allowedIds = resolveAllowedDateFilterIds(
+                                  current,
+                                  allIds,
+                                  selectedVisualDateFilterId,
+                                );
+                                const overrides = buildDateFilterOptionOverrides(
+                                  current.dateFilterOptions ?? null,
+                                );
+                                const groupIds = Array.from(overrides.values())
+                                  .filter(
+                                    (entry) => Array.isArray(entry.targets) && entry.targets.length > 0,
+                                  )
+                                  .map((entry) => entry.id);
+                                const nextIds = Array.from(new Set([...allowedIds, ...groupIds]));
+                                const nextOptions = buildDateFilterOptionsFromIds(
+                                  nextIds,
+                                  visualDateFilterMetadata,
+                                  dateFilterLabelById,
+                                  overrides,
+                                );
+                                const seedId =
+                                  selectedVisualDateFilterId &&
+                                  baseDateFilterIdSet.has(selectedVisualDateFilterId)
+                                    ? selectedVisualDateFilterId
+                                    : visualDateFilterOptions[0]?.value;
+                                if (!seedId) {
+                                  return current;
+                                }
+                                const targets = buildDateFilterTargetsFromIds(
+                                  [seedId],
+                                  visualDateFilterMetadata,
+                                );
+                                if (targets.length === 0) {
+                                  return current;
+                                }
+                                const primary = targets[0];
+                                const groupOption: DateFilterOptionDraft = {
+                                  id: generateId("date-group"),
+                                  modelId: primary.modelId,
+                                  fieldId: primary.fieldId,
+                                  operator: primary.operator,
+                                  label: "Date field group",
+                                  targets,
+                                };
+                                return {
+                                  ...current,
+                                  dateFilterOptions: [...nextOptions, groupOption],
+                                };
+                              });
+                            }}
+                            disabled={visualDateFilterOptions.length === 0}
+                          >
+                            Add group
+                          </Button>
+                        </Group>
+                        {visualDateFilterGroupOptions.length === 0 ? (
+                          <Text fz="xs" c="dimmed">
+                            No grouped date fields yet.
+                          </Text>
+                        ) : (
+                          <Stack gap="sm">
+                            {visualDateFilterGroupOptions.map((groupOption) => {
+                              const groupMemberIds = resolveDateFilterTargetIds(
+                                groupOption.targets,
+                                visualDateFilterMetadata,
+                              );
+                              return (
+                                <Paper key={groupOption.id} withBorder radius="sm" p="xs">
+                                  <Stack gap="xs">
+                                    <Group justify="space-between" align="flex-end">
+                                      <TextInput
+                                        label="Group label"
+                                        value={groupOption.label ?? ""}
+                                        placeholder="Group name"
+                                        onChange={(event) => {
+                                          const nextLabel = event.currentTarget.value;
+                                          updateVisualCardDraft((current) => {
+                                            const overrides = buildDateFilterOptionOverrides(
+                                              current.dateFilterOptions ?? null,
+                                            );
+                                            const allIds = visualDateFilterOptions.map((option) => option.value);
+                                            const allowedIds = resolveAllowedDateFilterIds(
+                                              current,
+                                              allIds,
+                                              selectedVisualDateFilterId,
+                                            );
+                                            const groupIds = Array.from(overrides.values())
+                                              .filter(
+                                                (entry) =>
+                                                  Array.isArray(entry.targets) && entry.targets.length > 0,
+                                              )
+                                              .map((entry) => entry.id);
+                                            const nextIds = Array.from(new Set([...allowedIds, ...groupIds]));
+                                            const nextOptions = buildDateFilterOptionsFromIds(
+                                              nextIds,
+                                              visualDateFilterMetadata,
+                                              dateFilterLabelById,
+                                              overrides,
+                                            );
+                                            const trimmed = nextLabel.trim();
+                                            const normalizedLabel =
+                                              trimmed.length > 0 ? trimmed : "Date field group";
+                                            const updatedOptions = nextOptions.map((entry) =>
+                                              entry.id === groupOption.id
+                                                ? { ...entry, label: normalizedLabel }
+                                                : entry,
+                                            );
+                                            return {
+                                              ...current,
+                                              dateFilterOptions: updatedOptions,
+                                            };
+                                          });
+                                        }}
+                                      />
+                                      <Button
+                                        size="xs"
+                                        variant="subtle"
+                                        color="red"
+                                        onClick={() => {
+                                          updateVisualCardDraft((current) => {
+                                            const remaining = (current.dateFilterOptions ?? []).filter(
+                                              (entry) => buildDateFilterOptionId(entry) !== groupOption.id,
+                                            );
+                                            const nextSelections = Array.isArray(current.dateFilterSelections)
+                                              ? current.dateFilterSelections.filter(
+                                                  (id) => id !== groupOption.id,
+                                                )
+                                              : [];
+                                            if (remaining.length === 0 && nextSelections.length === 0) {
+                                              const { dateFilterOptions, dateFilterSelections, ...rest } = current;
+                                              return rest;
+                                            }
+                                            if (remaining.length === 0) {
+                                              const { dateFilterOptions, ...rest } = current;
+                                              return {
+                                                ...rest,
+                                                ...(nextSelections.length > 0
+                                                  ? { dateFilterSelections: nextSelections }
+                                                  : {}),
+                                              };
+                                            }
+                                            if (nextSelections.length === 0) {
+                                              const { dateFilterSelections, ...rest } = current;
+                                              return {
+                                                ...rest,
+                                                dateFilterOptions: remaining,
+                                              };
+                                            }
+                                            return {
+                                              ...current,
+                                              dateFilterOptions: remaining,
+                                              dateFilterSelections: nextSelections,
+                                            };
+                                          });
+                                        }}
+                                      >
+                                        Remove
+                                      </Button>
+                                    </Group>
+                                    <MultiSelect
+                                      label="Group fields"
+                                      data={visualDateFilterOptions}
+                                      value={groupMemberIds}
+                                      onChange={(value) => {
+                                        updateVisualCardDraft((current) => {
+                                          const normalized = value.filter((entry) =>
+                                            visualDateFilterOptions.some((option) => option.value === entry),
+                                          );
+                                          if (normalized.length === 0) {
+                                            const remaining = (current.dateFilterOptions ?? []).filter(
+                                              (entry) => buildDateFilterOptionId(entry) !== groupOption.id,
+                                            );
+                                            const nextSelections = Array.isArray(current.dateFilterSelections)
+                                              ? current.dateFilterSelections.filter(
+                                                  (id) => id !== groupOption.id,
+                                                )
+                                              : [];
+                                            if (remaining.length === 0 && nextSelections.length === 0) {
+                                              const { dateFilterOptions, dateFilterSelections, ...rest } = current;
+                                              return rest;
+                                            }
+                                            if (remaining.length === 0) {
+                                              const { dateFilterOptions, ...rest } = current;
+                                              return {
+                                                ...rest,
+                                                ...(nextSelections.length > 0
+                                                  ? { dateFilterSelections: nextSelections }
+                                                  : {}),
+                                              };
+                                            }
+                                            if (nextSelections.length === 0) {
+                                              const { dateFilterSelections, ...rest } = current;
+                                              return {
+                                                ...rest,
+                                                dateFilterOptions: remaining,
+                                              };
+                                            }
+                                            return {
+                                              ...current,
+                                              dateFilterOptions: remaining,
+                                              dateFilterSelections: nextSelections,
+                                            };
+                                          }
+                                          const targets = buildDateFilterTargetsFromIds(
+                                            normalized,
+                                            visualDateFilterMetadata,
+                                          );
+                                          if (targets.length === 0) {
+                                            return current;
+                                          }
+                                          const primary = targets[0];
+                                          const updatedOptions = (current.dateFilterOptions ?? []).map((entry) =>
+                                            buildDateFilterOptionId(entry) === groupOption.id
+                                              ? {
+                                                  ...entry,
+                                                  modelId: primary.modelId,
+                                                  fieldId: primary.fieldId,
+                                                  operator: primary.operator,
+                                                  targets,
+                                                }
+                                              : entry,
+                                          );
+                                          return {
+                                            ...current,
+                                            dateFilterOptions: updatedOptions,
+                                          };
+                                        });
+                                      }}
+                                      searchable
+                                    />
+                                  </Stack>
+                                </Paper>
+                              );
+                            })}
+                          </Stack>
+                        )}
+                      </Stack>
                       <MultiSelect
                         label="Quick filter buttons"
                         data={SPOTLIGHT_PERIOD_PRESET_OPTIONS}
@@ -13280,16 +14121,21 @@ const getColumnLabel = useCallback(
                     <>
                       <Select
                         label="Date field"
-                        data={spotlightDateFilterOptions}
+                        data={spotlightDateFilterSelectOptions}
                         value={selectedSpotlightDateFilterId}
                         placeholder="Select date field"
                         onChange={(value) => {
                           updateSpotlightCardDraft((current) => {
                             if (!value) {
-                              const { dateFilter, dateFilterOptions, ...rest } = current;
+                              const { dateFilter, dateFilterOptions, dateFilterSelections, ...rest } = current;
                               return rest;
                             }
-                            const metadata = spotlightDateFilterMetadata.get(value);
+                            const overrides = buildDateFilterOptionOverrides(current.dateFilterOptions ?? null);
+                            const metadata = resolveDateFilterMetadataForOption(
+                              value,
+                              spotlightDateFilterMetadata,
+                              overrides,
+                            );
                             if (!metadata) {
                               return current;
                             }
@@ -13299,16 +14145,32 @@ const getColumnLabel = useCallback(
                               allIds,
                               selectedSpotlightDateFilterId,
                             );
-                            const nextIds = [value, ...allowedIds.filter((id) => id !== value)];
+                            const groupIds = Array.from(overrides.values())
+                              .filter((option) => Array.isArray(option.targets) && option.targets.length > 0)
+                              .map((option) => option.id);
+                            const nextIds = Array.from(
+                              new Set([value, ...allowedIds.filter((id) => id !== value), ...groupIds]),
+                            );
                             const nextOptions = buildDateFilterOptionsFromIds(
                               nextIds,
                               spotlightDateFilterMetadata,
                               dateFilterLabelById,
+                              overrides,
                             );
+                            const configured = Array.isArray(current.dateFilterSelections)
+                              ? current.dateFilterSelections
+                              : [];
+                            const nextSelections = configured.filter((id) => nextIds.includes(id));
+                            if (nextSelections.length === 0) {
+                              nextSelections.push(value);
+                            } else if (!nextSelections.includes(value)) {
+                              nextSelections.unshift(value);
+                            }
                             return {
                               ...current,
                               dateFilter: { ...metadata },
                               ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
+                              ...(nextSelections.length > 0 ? { dateFilterSelections: nextSelections } : {}),
                             };
                           });
                         }}
@@ -13325,27 +14187,371 @@ const getColumnLabel = useCallback(
                               spotlightDateFilterOptions.some((option) => option.value === entry),
                             );
                             const defaultId = selectedSpotlightDateFilterId;
-                            const nextIds = defaultId
+                            const overrides = buildDateFilterOptionOverrides(current.dateFilterOptions ?? null);
+                            const groupIds = Array.from(overrides.values())
+                              .filter((option) => Array.isArray(option.targets) && option.targets.length > 0)
+                              .map((option) => option.id);
+                            const nextBaseIds = defaultId
                               ? [defaultId, ...normalized.filter((id) => id !== defaultId)]
                               : normalized;
+                            const nextIds = Array.from(new Set([...nextBaseIds, ...groupIds]));
                             if (nextIds.length === 0) {
-                              const { dateFilterOptions, ...rest } = current;
+                              const { dateFilterOptions, dateFilterSelections, ...rest } = current;
                               return rest;
                             }
                             const nextOptions = buildDateFilterOptionsFromIds(
                               nextIds,
                               spotlightDateFilterMetadata,
                               dateFilterLabelById,
+                              overrides,
                             );
+                            const configured = Array.isArray(current.dateFilterSelections)
+                              ? current.dateFilterSelections
+                              : [];
+                            const nextSelections = configured.filter((id) => nextIds.includes(id));
+                            if (nextSelections.length === 0 && defaultId) {
+                              nextSelections.push(defaultId);
+                            }
                             return {
                               ...current,
                               ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
+                              ...(nextSelections.length > 0 ? { dateFilterSelections: nextSelections } : {}),
                             };
                           });
                         }}
                         searchable
                         disabled={!selectedSpotlightDateFilterId}
                       />
+                      <MultiSelect
+                        label="Default date fields"
+                        data={spotlightDateFilterSelectOptions}
+                        value={spotlightDefaultDateFilterSelections}
+                        onChange={(value) => {
+                          updateSpotlightCardDraft((current) => {
+                            const allowedIds = spotlightDateFilterSelectOptions.map((option) => option.value);
+                            const normalized = value.filter((entry) => allowedIds.includes(entry));
+                            if (normalized.length === 0) {
+                              const { dateFilterSelections, ...rest } = current;
+                              return rest;
+                            }
+                            return {
+                              ...current,
+                              dateFilterSelections: normalized,
+                            };
+                          });
+                        }}
+                        searchable
+                        disabled={spotlightDateFilterSelectOptions.length === 0}
+                      />
+                      {spotlightEditableBaseDateFilterIds.length > 0 && (
+                        <Stack gap="xs">
+                          <Text fw={500} fz="sm">
+                            Date field labels
+                          </Text>
+                          {spotlightEditableBaseDateFilterIds.map((optionId) => {
+                            const option = spotlightDateFilterDetailById.get(optionId);
+                            const baseLabel = dateFilterLabelById.get(optionId) ?? optionId;
+                            return (
+                              <TextInput
+                                key={`spotlight-date-label-${optionId}`}
+                                label={baseLabel}
+                                value={option?.label ?? ""}
+                                placeholder="Custom label (optional)"
+                                onChange={(event) => {
+                                  const nextValue = event.currentTarget.value;
+                                  updateSpotlightCardDraft((current) => {
+                                    const overrides = buildDateFilterOptionOverrides(
+                                      current.dateFilterOptions ?? null,
+                                    );
+                                    const allIds = resolveAllowedDateFilterIds(
+                                      current,
+                                      spotlightDateFilterOptions.map((entry) => entry.value),
+                                      selectedSpotlightDateFilterId,
+                                    );
+                                    const groupIds = Array.from(overrides.values())
+                                      .filter(
+                                        (entry) => Array.isArray(entry.targets) && entry.targets.length > 0,
+                                      )
+                                      .map((entry) => entry.id);
+                                    const nextIds = Array.from(new Set([...allIds, ...groupIds]));
+                                    const nextOptions = buildDateFilterOptionsFromIds(
+                                      nextIds,
+                                      spotlightDateFilterMetadata,
+                                      dateFilterLabelById,
+                                      overrides,
+                                    );
+                                    const trimmed = nextValue.trim();
+                                    const normalizedLabel =
+                                      trimmed.length > 0 && trimmed !== baseLabel ? trimmed : null;
+                                    const updatedOptions = nextOptions.map((entry) => {
+                                      if (entry.id !== optionId) {
+                                        return entry;
+                                      }
+                                      if (normalizedLabel) {
+                                        return { ...entry, label: normalizedLabel };
+                                      }
+                                      const { label, ...rest } = entry;
+                                      return rest;
+                                    });
+                                    return {
+                                      ...current,
+                                      dateFilterOptions: updatedOptions,
+                                    };
+                                  });
+                                }}
+                              />
+                            );
+                          })}
+                        </Stack>
+                      )}
+                      <Stack gap="xs">
+                        <Group justify="space-between" align="center">
+                          <Text fw={500} fz="sm">
+                            Date field groups
+                          </Text>
+                          <Button
+                            size="xs"
+                            variant="light"
+                            onClick={() => {
+                              updateSpotlightCardDraft((current) => {
+                                const allIds = spotlightDateFilterOptions.map((option) => option.value);
+                                const allowedIds = resolveAllowedDateFilterIds(
+                                  current,
+                                  allIds,
+                                  selectedSpotlightDateFilterId,
+                                );
+                                const overrides = buildDateFilterOptionOverrides(
+                                  current.dateFilterOptions ?? null,
+                                );
+                                const groupIds = Array.from(overrides.values())
+                                  .filter(
+                                    (entry) => Array.isArray(entry.targets) && entry.targets.length > 0,
+                                  )
+                                  .map((entry) => entry.id);
+                                const nextIds = Array.from(new Set([...allowedIds, ...groupIds]));
+                                const nextOptions = buildDateFilterOptionsFromIds(
+                                  nextIds,
+                                  spotlightDateFilterMetadata,
+                                  dateFilterLabelById,
+                                  overrides,
+                                );
+                                const seedId =
+                                  selectedSpotlightDateFilterId &&
+                                  baseDateFilterIdSet.has(selectedSpotlightDateFilterId)
+                                    ? selectedSpotlightDateFilterId
+                                    : spotlightDateFilterOptions[0]?.value;
+                                if (!seedId) {
+                                  return current;
+                                }
+                                const targets = buildDateFilterTargetsFromIds(
+                                  [seedId],
+                                  spotlightDateFilterMetadata,
+                                );
+                                if (targets.length === 0) {
+                                  return current;
+                                }
+                                const primary = targets[0];
+                                const groupOption: DateFilterOptionDraft = {
+                                  id: generateId("date-group"),
+                                  modelId: primary.modelId,
+                                  fieldId: primary.fieldId,
+                                  operator: primary.operator,
+                                  label: "Date field group",
+                                  targets,
+                                };
+                                return {
+                                  ...current,
+                                  dateFilterOptions: [...nextOptions, groupOption],
+                                };
+                              });
+                            }}
+                            disabled={spotlightDateFilterOptions.length === 0}
+                          >
+                            Add group
+                          </Button>
+                        </Group>
+                        {spotlightDateFilterGroupOptions.length === 0 ? (
+                          <Text fz="xs" c="dimmed">
+                            No grouped date fields yet.
+                          </Text>
+                        ) : (
+                          <Stack gap="sm">
+                            {spotlightDateFilterGroupOptions.map((groupOption) => {
+                              const groupMemberIds = resolveDateFilterTargetIds(
+                                groupOption.targets,
+                                spotlightDateFilterMetadata,
+                              );
+                              return (
+                                <Paper key={groupOption.id} withBorder radius="sm" p="xs">
+                                  <Stack gap="xs">
+                                    <Group justify="space-between" align="flex-end">
+                                      <TextInput
+                                        label="Group label"
+                                        value={groupOption.label ?? ""}
+                                        placeholder="Group name"
+                                        onChange={(event) => {
+                                          const nextLabel = event.currentTarget.value;
+                                          updateSpotlightCardDraft((current) => {
+                                            const overrides = buildDateFilterOptionOverrides(
+                                              current.dateFilterOptions ?? null,
+                                            );
+                                            const allIds = spotlightDateFilterOptions.map((option) => option.value);
+                                            const allowedIds = resolveAllowedDateFilterIds(
+                                              current,
+                                              allIds,
+                                              selectedSpotlightDateFilterId,
+                                            );
+                                            const groupIds = Array.from(overrides.values())
+                                              .filter(
+                                                (entry) =>
+                                                  Array.isArray(entry.targets) && entry.targets.length > 0,
+                                              )
+                                              .map((entry) => entry.id);
+                                            const nextIds = Array.from(new Set([...allowedIds, ...groupIds]));
+                                            const nextOptions = buildDateFilterOptionsFromIds(
+                                              nextIds,
+                                              spotlightDateFilterMetadata,
+                                              dateFilterLabelById,
+                                              overrides,
+                                            );
+                                            const trimmed = nextLabel.trim();
+                                            const normalizedLabel =
+                                              trimmed.length > 0 ? trimmed : "Date field group";
+                                            const updatedOptions = nextOptions.map((entry) =>
+                                              entry.id === groupOption.id
+                                                ? { ...entry, label: normalizedLabel }
+                                                : entry,
+                                            );
+                                            return {
+                                              ...current,
+                                              dateFilterOptions: updatedOptions,
+                                            };
+                                          });
+                                        }}
+                                      />
+                                      <Button
+                                        size="xs"
+                                        variant="subtle"
+                                        color="red"
+                                        onClick={() => {
+                                          updateSpotlightCardDraft((current) => {
+                                            const remaining = (current.dateFilterOptions ?? []).filter(
+                                              (entry) => buildDateFilterOptionId(entry) !== groupOption.id,
+                                            );
+                                            const nextSelections = Array.isArray(current.dateFilterSelections)
+                                              ? current.dateFilterSelections.filter(
+                                                  (id) => id !== groupOption.id,
+                                                )
+                                              : [];
+                                            if (remaining.length === 0 && nextSelections.length === 0) {
+                                              const { dateFilterOptions, dateFilterSelections, ...rest } = current;
+                                              return rest;
+                                            }
+                                            if (remaining.length === 0) {
+                                              const { dateFilterOptions, ...rest } = current;
+                                              return {
+                                                ...rest,
+                                                ...(nextSelections.length > 0
+                                                  ? { dateFilterSelections: nextSelections }
+                                                  : {}),
+                                              };
+                                            }
+                                            if (nextSelections.length === 0) {
+                                              const { dateFilterSelections, ...rest } = current;
+                                              return {
+                                                ...rest,
+                                                dateFilterOptions: remaining,
+                                              };
+                                            }
+                                            return {
+                                              ...current,
+                                              dateFilterOptions: remaining,
+                                              dateFilterSelections: nextSelections,
+                                            };
+                                          });
+                                        }}
+                                      >
+                                        Remove
+                                      </Button>
+                                    </Group>
+                                    <MultiSelect
+                                      label="Group fields"
+                                      data={spotlightDateFilterOptions}
+                                      value={groupMemberIds}
+                                      onChange={(value) => {
+                                        updateSpotlightCardDraft((current) => {
+                                          const normalized = value.filter((entry) =>
+                                            spotlightDateFilterOptions.some((option) => option.value === entry),
+                                          );
+                                          if (normalized.length === 0) {
+                                            const remaining = (current.dateFilterOptions ?? []).filter(
+                                              (entry) => buildDateFilterOptionId(entry) !== groupOption.id,
+                                            );
+                                            const nextSelections = Array.isArray(current.dateFilterSelections)
+                                              ? current.dateFilterSelections.filter(
+                                                  (id) => id !== groupOption.id,
+                                                )
+                                              : [];
+                                            if (remaining.length === 0 && nextSelections.length === 0) {
+                                              const { dateFilterOptions, dateFilterSelections, ...rest } = current;
+                                              return rest;
+                                            }
+                                            if (remaining.length === 0) {
+                                              const { dateFilterOptions, ...rest } = current;
+                                              return {
+                                                ...rest,
+                                                ...(nextSelections.length > 0
+                                                  ? { dateFilterSelections: nextSelections }
+                                                  : {}),
+                                              };
+                                            }
+                                            if (nextSelections.length === 0) {
+                                              const { dateFilterSelections, ...rest } = current;
+                                              return {
+                                                ...rest,
+                                                dateFilterOptions: remaining,
+                                              };
+                                            }
+                                            return {
+                                              ...current,
+                                              dateFilterOptions: remaining,
+                                              dateFilterSelections: nextSelections,
+                                            };
+                                          }
+                                          const targets = buildDateFilterTargetsFromIds(
+                                            normalized,
+                                            spotlightDateFilterMetadata,
+                                          );
+                                          if (targets.length === 0) {
+                                            return current;
+                                          }
+                                          const primary = targets[0];
+                                          const updatedOptions = (current.dateFilterOptions ?? []).map((entry) =>
+                                            buildDateFilterOptionId(entry) === groupOption.id
+                                              ? {
+                                                  ...entry,
+                                                  modelId: primary.modelId,
+                                                  fieldId: primary.fieldId,
+                                                  operator: primary.operator,
+                                                  targets,
+                                                }
+                                              : entry,
+                                          );
+                                          return {
+                                            ...current,
+                                            dateFilterOptions: updatedOptions,
+                                          };
+                                        });
+                                      }}
+                                      searchable
+                                    />
+                                  </Stack>
+                                </Paper>
+                              );
+                            })}
+                          </Stack>
+                        )}
+                      </Stack>
                       <MultiSelect
                         label="Quick filter buttons"
                         data={SPOTLIGHT_PERIOD_PRESET_OPTIONS}

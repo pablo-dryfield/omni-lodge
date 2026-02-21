@@ -74,6 +74,14 @@ import CompensationComponentAssignment from './CompensationComponentAssignment.j
 import AssistantManagerTaskTemplate from './AssistantManagerTaskTemplate.js';
 import AssistantManagerTaskAssignment from './AssistantManagerTaskAssignment.js';
 import AssistantManagerTaskLog from './AssistantManagerTaskLog.js';
+import OpenBarIngredient from './OpenBarIngredient.js';
+import OpenBarRecipe from './OpenBarRecipe.js';
+import OpenBarRecipeIngredient from './OpenBarRecipeIngredient.js';
+import OpenBarSession from './OpenBarSession.js';
+import OpenBarDrinkIssue from './OpenBarDrinkIssue.js';
+import OpenBarDelivery from './OpenBarDelivery.js';
+import OpenBarDeliveryItem from './OpenBarDeliveryItem.js';
+import OpenBarInventoryMovement from './OpenBarInventoryMovement.js';
 
 export function defineAssociations() {
   // User Associations

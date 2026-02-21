@@ -39,9 +39,13 @@ export const listVenues = async (req: Request, res: Response): Promise<void> => 
   try {
     const format = (req.query.format ?? '').toString().toLowerCase();
     const where: Record<string, unknown> = {};
+    const openBarFilter = (req.query.openBar ?? req.query.allowsOpenBar ?? '').toString().toLowerCase();
 
     if ((req.query.active ?? '').toString().toLowerCase() === 'true') {
       where.isActive = true;
+    }
+    if (['true', '1', 'yes', 'y'].includes(openBarFilter)) {
+      where.allowsOpenBar = true;
     }
 
     const venues = await Venue.findAll({

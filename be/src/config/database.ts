@@ -75,6 +75,19 @@ import CompensationComponentAssignment from "../models/CompensationComponentAssi
 import AssistantManagerTaskTemplate from "../models/AssistantManagerTaskTemplate.js";
 import AssistantManagerTaskAssignment from "../models/AssistantManagerTaskAssignment.js";
 import AssistantManagerTaskLog from "../models/AssistantManagerTaskLog.js";
+import OpenBarIngredient from "../models/OpenBarIngredient.js";
+import OpenBarIngredientCategory from "../models/OpenBarIngredientCategory.js";
+import OpenBarIngredientVariant from "../models/OpenBarIngredientVariant.js";
+import OpenBarRecipe from "../models/OpenBarRecipe.js";
+import OpenBarRecipeIngredient from "../models/OpenBarRecipeIngredient.js";
+import OpenBarDrinkLabelSetting from "../models/OpenBarDrinkLabelSetting.js";
+import OpenBarSessionType from "../models/OpenBarSessionType.js";
+import OpenBarSession from "../models/OpenBarSession.js";
+import OpenBarSessionMembership from "../models/OpenBarSessionMembership.js";
+import OpenBarDrinkIssue from "../models/OpenBarDrinkIssue.js";
+import OpenBarDelivery from "../models/OpenBarDelivery.js";
+import OpenBarDeliveryItem from "../models/OpenBarDeliveryItem.js";
+import OpenBarInventoryMovement from "../models/OpenBarInventoryMovement.js";
 import {
   FinanceAccount,
   FinanceAuditLog,
@@ -137,6 +150,19 @@ const sequelize = new Sequelize({
     AssistantManagerTaskTemplate,
     AssistantManagerTaskAssignment,
     AssistantManagerTaskLog,
+    OpenBarIngredient,
+    OpenBarIngredientCategory,
+    OpenBarIngredientVariant,
+    OpenBarRecipe,
+    OpenBarRecipeIngredient,
+    OpenBarDrinkLabelSetting,
+    OpenBarSessionType,
+    OpenBarSession,
+    OpenBarSessionMembership,
+    OpenBarDrinkIssue,
+    OpenBarDelivery,
+    OpenBarDeliveryItem,
+    OpenBarInventoryMovement,
     Counter,
     CounterProduct,
     CounterUser,

@@ -13,6 +13,7 @@ export const PAGE_SLUGS = {
   productAddons: "settings-product-addons",
   pays: "pays",
   reports: "reports",
+  openBarControl: "open-bar-control",
   users: "users",
   userTypes: "user-types",
   venueNumbers: "venue-numbers",
