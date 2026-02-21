@@ -12,7 +12,6 @@ import {
 } from 'sequelize-typescript';
 import {
   BOOKING_EVENT_TYPES,
-  BOOKING_PLATFORMS,
   BOOKING_STATUSES,
   type BookingEventType,
   type BookingPlatform,
@@ -63,7 +62,7 @@ export default class BookingEvent extends Model<BookingEvent> {
 
   @AllowNull(false)
   @Column({
-    type: DataType.ENUM(...BOOKING_PLATFORMS),
+    type: DataType.STRING(64),
   })
   declare platform: BookingPlatform;
 

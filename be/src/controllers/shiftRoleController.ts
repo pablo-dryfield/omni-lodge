@@ -36,6 +36,11 @@ const buildAssignmentColumns = () => [
   { header: 'First Name', accessorKey: 'firstName', type: 'text' },
   { header: 'Last Name', accessorKey: 'lastName', type: 'text' },
   { header: 'Role IDs', accessorKey: 'roleIds', type: 'json' },
+  { header: 'User Status', accessorKey: 'userStatus', type: 'boolean' },
+  { header: 'Staff Profile Active', accessorKey: 'staffProfileActive', type: 'boolean' },
+  { header: 'Staff Type', accessorKey: 'staffType', type: 'text' },
+  { header: 'Arrival Date', accessorKey: 'arrivalDate', type: 'date' },
+  { header: 'Departure Date', accessorKey: 'departureDate', type: 'date' },
 ];
 
 export const listShiftRoles = async (_req: Request, res: Response): Promise<void> => {
@@ -114,10 +119,10 @@ export const listUserShiftRoleAssignments = async (_req: Request, res: Response)
         ['firstName', 'ASC'],
         ['lastName', 'ASC'],
       ],
-      attributes: ['id', 'firstName', 'lastName'],
+      attributes: ['id', 'firstName', 'lastName', 'status', 'arrivalDate', 'departureDate'],
       include: [
         { model: ShiftRole, as: 'shiftRoles', through: { attributes: [] } },
-        { model: StaffProfile, as: 'staffProfile', attributes: ['livesInAccom', 'active'] },
+        { model: StaffProfile, as: 'staffProfile', attributes: ['livesInAccom', 'active', 'staffType'] },
       ],
     });
 
@@ -130,8 +135,12 @@ export const listUserShiftRoleAssignments = async (_req: Request, res: Response)
         firstName: userRecord.firstName,
         lastName: userRecord.lastName,
         roleIds: relatedRoles.map((role) => role.id),
+        userStatus: Boolean(userRecord.status),
         livesInAccom: Boolean(profile?.livesInAccom),
         staffProfileActive: hasActiveProfile,
+        staffType: profile?.staffType ?? null,
+        arrivalDate: userRecord.arrivalDate ?? null,
+        departureDate: userRecord.departureDate ?? null,
       };
     });
 

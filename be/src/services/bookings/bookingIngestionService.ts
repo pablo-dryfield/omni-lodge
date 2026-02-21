@@ -18,7 +18,7 @@ import type {
   ParsedBookingEvent,
 } from './types.js';
 import type { GmailMessagePayload } from './gmailClient.js';
-import type { BookingPlatform } from '../../constants/bookings.js';
+import type { BookingPlatform, KnownBookingPlatform } from '../../constants/bookings.js';
 import { canonicalizeProductLabel, sanitizeProductSource } from '../../utils/productName.js';
 import { getConfigValue } from '../configService.js';
 
@@ -33,7 +33,7 @@ const resolveDefaultBatch = (): number => {
   return Number.isFinite(value) ? value : 20;
 };
 
-const PLATFORM_CHANNEL_NAMES: Partial<Record<BookingPlatform, string>> = {
+const DEFAULT_PLATFORM_CHANNEL_NAMES: Record<KnownBookingPlatform, string> = {
   fareharbor: 'Fareharbor',
   viator: 'Viator',
   getyourguide: 'GetYourGuide',
@@ -41,6 +41,8 @@ const PLATFORM_CHANNEL_NAMES: Partial<Record<BookingPlatform, string>> = {
   ecwid: 'Ecwid',
   airbnb: 'Airbnb',
   xperiencepoland: 'XperiencePoland',
+  manual: 'Manual',
+  unknown: 'Unknown',
 };
 
 const channelIdCache = new Map<string, number | null>();
@@ -177,6 +179,7 @@ const decimalKeys = new Set([
   'baseAmount',
   'addonsAmount',
   'discountAmount',
+  'refundedAmount',
   'priceGross',
   'priceNet',
   'commissionAmount',
@@ -195,12 +198,57 @@ const bookingStringLimits: Partial<Record<keyof BookingFieldPatch, number>> = {
   guestPhone: 64,
   hotelName: 255,
   currency: 3,
+  refundedCurrency: 3,
   paymentMethod: 128,
   rawPayloadLocation: 512,
 };
 
+const normalizePlatformKey = (platform: string): string =>
+  platform
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-')
+    .replace(/[^a-z0-9-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+const resolvePlatformChannelNames = (): Record<string, string> => {
+  const configured = getConfigValue('BOOKING_PLATFORM_CHANNEL_MAP');
+  const mapping: Record<string, string> = {};
+
+  for (const [platform, channelName] of Object.entries(DEFAULT_PLATFORM_CHANNEL_NAMES)) {
+    const key = normalizePlatformKey(platform);
+    const value = channelName.trim();
+    if (key && value) {
+      mapping[key] = value;
+    }
+  }
+
+  if (!configured || typeof configured !== 'object' || Array.isArray(configured)) {
+    return mapping;
+  }
+
+  for (const [platform, channelNameRaw] of Object.entries(configured as Record<string, unknown>)) {
+    if (typeof channelNameRaw !== 'string') {
+      continue;
+    }
+    const key = normalizePlatformKey(platform);
+    const channelName = channelNameRaw.trim();
+    if (!key || !channelName) {
+      continue;
+    }
+    mapping[key] = channelName;
+  }
+
+  return mapping;
+};
+
 const resolveChannelIdForPlatform = async (platform: BookingPlatform): Promise<number | null> => {
-  const channelName = PLATFORM_CHANNEL_NAMES[platform];
+  const platformKey = normalizePlatformKey(platform);
+  if (!platformKey) {
+    return null;
+  }
+  const channelName = resolvePlatformChannelNames()[platformKey];
   if (!channelName) {
     return null;
   }
@@ -651,6 +699,13 @@ const applyParsedEvent = async (
 ): Promise<void> => {
   await sequelize.transaction(async (transaction) => {
     const eventOccurredAt = event.occurredAt ?? event.sourceReceivedAt ?? email.receivedAt ?? new Date();
+    const priorEvent =
+      options.isReprocess && email.messageId
+        ? await BookingEvent.findOne({
+            where: { emailMessageId: email.messageId },
+            transaction,
+          })
+        : null;
 
     let booking = await Booking.findOne({
       where: {
@@ -659,6 +714,10 @@ const applyParsedEvent = async (
       },
       transaction,
     });
+
+    if (!booking && priorEvent?.bookingId) {
+      booking = await Booking.findByPk(priorEvent.bookingId, { transaction });
+    }
 
     if (!booking) {
       booking = Booking.build({
@@ -675,6 +734,10 @@ const applyParsedEvent = async (
     const bookingRecord = booking;
     if (!bookingRecord) {
       throw new Error('Unable to initialize booking record');
+    }
+
+    if (bookingRecord.platform === 'unknown' && event.platform !== 'unknown') {
+      bookingRecord.platform = event.platform;
     }
 
     const lastMutationAt = bookingRecord.statusChangedAt ?? bookingRecord.createdAt ?? null;
@@ -835,6 +898,14 @@ const applyParsedEvent = async (
     }
 
     await bookingRecord.save({ transaction });
+
+    if (priorEvent) {
+      await BookingAddon.destroy({
+        where: { sourceEventId: priorEvent.id },
+        transaction,
+      });
+      await priorEvent.destroy({ transaction });
+    }
 
     const basePayload: Record<string, unknown> =
       event.rawPayload && typeof event.rawPayload === 'object'

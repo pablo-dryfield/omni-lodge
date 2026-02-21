@@ -412,6 +412,62 @@ function rangesOverlap(a: ShiftRange, b: ShiftRange): boolean {
   return a.start.isBefore(b.end) && b.start.isBefore(a.end);
 }
 
+function parseDateOnly(value: string | Date | null | undefined): dayjs.Dayjs | null {
+  if (!value) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    const strictDate = dayjs(value, 'YYYY-MM-DD', true);
+    if (strictDate.isValid()) {
+      return strictDate.startOf('day');
+    }
+    const parsed = dayjs(value);
+    return parsed.isValid() ? parsed.startOf('day') : null;
+  }
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed.startOf('day') : null;
+}
+
+function isShiftWithinVolunteerDateWindow(
+  shiftDate: string,
+  arrivalDate: string | Date | null | undefined,
+  departureDate: string | Date | null | undefined,
+): boolean {
+  const shiftDay = parseDateOnly(shiftDate);
+  if (!shiftDay) {
+    return true;
+  }
+  const arrival = parseDateOnly(arrivalDate);
+  if (arrival && shiftDay.isBefore(arrival, 'day')) {
+    return false;
+  }
+  const departure = parseDateOnly(departureDate);
+  if (departure && shiftDay.isAfter(departure, 'day')) {
+    return false;
+  }
+  return true;
+}
+
+function getVolunteerDateWindowViolationMessage(
+  shiftDate: string,
+  arrivalDate: string | Date | null | undefined,
+  departureDate: string | Date | null | undefined,
+): string | null {
+  const shiftDay = parseDateOnly(shiftDate);
+  if (!shiftDay) {
+    return null;
+  }
+  const arrival = parseDateOnly(arrivalDate);
+  if (arrival && shiftDay.isBefore(arrival, 'day')) {
+    return `Volunteer cannot be assigned before arrival date (${arrival.format('YYYY-MM-DD')}).`;
+  }
+  const departure = parseDateOnly(departureDate);
+  if (departure && shiftDay.isAfter(departure, 'day')) {
+    return `Volunteer cannot be assigned after departure date (${departure.format('YYYY-MM-DD')}).`;
+  }
+  return null;
+}
+
 const createRoleKey = (roleId: number | null, roleName: string) =>
   roleId != null ? `id:${roleId}` : `name:${roleName.trim().toLowerCase()}`;
 
@@ -1468,6 +1524,24 @@ export async function createShiftAssignmentsBulk(assignments: AssignmentInput[],
       }
       userRoleIdsByUserId.set(link.userId, set);
     });
+    const usersById = new Map<number, User>();
+    if (uniqueUserIds.length > 0) {
+      const users = await User.findAll({
+        where: { id: uniqueUserIds },
+        attributes: ['id', 'status', 'arrivalDate', 'departureDate'],
+        include: [
+          {
+            model: StaffProfile,
+            as: 'staffProfile',
+            attributes: ['active', 'staffType', 'livesInAccom'],
+          },
+        ],
+        transaction,
+      });
+      users.forEach((user) => {
+        usersById.set(user.id, user);
+      });
+    }
     const shiftRoleNameById = new Map<number, string>();
     if (referencedRoleIds.size > 0) {
       const roles = await ShiftRole.findAll({
@@ -1519,6 +1593,29 @@ export async function createShiftAssignmentsBulk(assignments: AssignmentInput[],
         throw new HttpError(400, 'User already assigned to this shift with that role.');
       }
 
+      const userRecord = usersById.get(input.userId);
+      if (!userRecord || !userRecord.status) {
+        throw new HttpError(400, 'Only active users can be assigned to shifts.');
+      }
+      const profile = (userRecord as User & { staffProfile?: StaffProfile | null }).staffProfile;
+      if (!profile || !profile.active) {
+        throw new HttpError(400, 'Only users with an active staff profile can be assigned.');
+      }
+      const userRoleIds = userRoleIdsByUserId.get(input.userId);
+      if (!userRoleIds || userRoleIds.size === 0) {
+        throw new HttpError(400, 'User must have at least one shift role before being assigned.');
+      }
+      if (profile.staffType === 'volunteer') {
+        const dateWindowError = getVolunteerDateWindowViolationMessage(
+          instance.date,
+          userRecord.arrivalDate,
+          userRecord.departureDate,
+        );
+        if (dateWindowError) {
+          throw new HttpError(400, dateWindowError);
+        }
+      }
+
       const weekAssignments = await ShiftAssignment.findAll({
         where: { userId: input.userId },
         include: [{
@@ -1526,11 +1623,6 @@ export async function createShiftAssignmentsBulk(assignments: AssignmentInput[],
           as: 'shiftInstance',
           where: { scheduleWeekId: instance.scheduleWeekId },
         }],
-        transaction,
-      });
-
-      const profile = await StaffProfile.findOne({
-        where: { userId: input.userId },
         transaction,
       });
 
@@ -1665,7 +1757,13 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
         livesInAccom: true,
         active: true,
       },
-      include: [{ model: User, as: 'user' }],
+      include: [{
+        model: User,
+        as: 'user',
+        required: true,
+        where: { status: true },
+        attributes: ['id', 'firstName', 'lastName', 'arrivalDate', 'departureDate'],
+      }],
       transaction,
     });
 
@@ -1680,12 +1778,35 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
     }
 
     const volunteerIds = volunteerProfiles.map((profile) => profile.userId);
-    const volunteerSet = new Set(volunteerIds);
+    const volunteerRoleAssignments = volunteerIds.length
+      ? await UserShiftRole.findAll({
+          where: { userId: volunteerIds },
+          transaction,
+        })
+      : [];
+    const volunteerRoleMap = new Map<number, Set<number>>();
+    volunteerRoleAssignments.forEach((assignment) => {
+      const set = volunteerRoleMap.get(assignment.userId) ?? new Set<number>();
+      set.add(assignment.shiftRoleId);
+      volunteerRoleMap.set(assignment.userId, set);
+    });
+    const eligibleVolunteerIds = volunteerIds.filter((volunteerId) => {
+      const roleSet = volunteerRoleMap.get(volunteerId);
+      return Boolean(roleSet && roleSet.size > 0);
+    });
+    const volunteerSet = new Set(eligibleVolunteerIds);
+    const volunteerProfileByUserId = new Map<number, StaffProfile>();
+    volunteerProfiles.forEach((profile) => {
+      if (volunteerSet.has(profile.userId)) {
+        volunteerProfileByUserId.set(profile.userId, profile);
+      }
+    });
+    const eligibleVolunteerProfiles = volunteerProfiles.filter((profile) => volunteerSet.has(profile.userId));
 
     const availabilities = await Availability.findAll({
       where: {
         scheduleWeekId: weekId,
-        userId: { [Op.in]: volunteerIds },
+        userId: { [Op.in]: eligibleVolunteerIds },
         status: 'available',
       },
       transaction,
@@ -1712,7 +1833,7 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
     });
 
     if (shiftInstances.length === 0) {
-      const volunteerAssignments = volunteerProfiles.map((profile) => {
+      const volunteerAssignments = eligibleVolunteerProfiles.map((profile) => {
         const user = profile.user as User | undefined;
         const fullName = user ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || null : null;
         return { userId: profile.userId, fullName, assigned: 0 };
@@ -1720,7 +1841,7 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
       return {
         created: 0,
         removed: 0,
-        volunteerCount: volunteerProfiles.length,
+        volunteerCount: eligibleVolunteerProfiles.length,
         unfilled: [],
         volunteerAssignments,
       };
@@ -1737,22 +1858,9 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
 
     const assignmentCounts = new Map<number, number>();
     const assignmentSlotsByVolunteer = new Map<number, ShiftRange[]>();
-    volunteerIds.forEach((volunteerId) => {
+    eligibleVolunteerIds.forEach((volunteerId) => {
       assignmentCounts.set(volunteerId, 0);
       assignmentSlotsByVolunteer.set(volunteerId, []);
-    });
-
-    const volunteerRoleAssignments = volunteerIds.length
-      ? await UserShiftRole.findAll({
-          where: { userId: volunteerIds },
-          transaction,
-        })
-      : [];
-    const volunteerRoleMap = new Map<number, Set<number>>();
-    volunteerRoleAssignments.forEach((assignment) => {
-      const set = volunteerRoleMap.get(assignment.userId) ?? new Set<number>();
-      set.add(assignment.shiftRoleId);
-      volunteerRoleMap.set(assignment.userId, set);
     });
 
     const plannedAssignments: Array<{ shiftInstanceId: number; userId: number; roleInShift: string; shiftRoleId: number | null }> = [];
@@ -1776,7 +1884,7 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
         const slotRoleId = slot.roleId;
         const roleName = slot.roleName;
         const roleKey = normalizeRoleName(roleName);
-        const sortedVolunteers = [...volunteerIds].sort((a, b) => {
+        const sortedVolunteers = [...eligibleVolunteerIds].sort((a, b) => {
           const aCount = assignmentCounts.get(a) ?? 0;
           const bCount = assignmentCounts.get(b) ?? 0;
           if (aCount !== bCount) {
@@ -1789,6 +1897,14 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
 
         for (const volunteerId of sortedVolunteers) {
           if (!volunteerSet.has(volunteerId)) {
+            continue;
+          }
+          const profile = volunteerProfileByUserId.get(volunteerId);
+          const volunteerUser = profile?.user as User | undefined;
+          if (
+            profile?.staffType === 'volunteer' &&
+            !isShiftWithinVolunteerDateWindow(instance.date, volunteerUser?.arrivalDate, volunteerUser?.departureDate)
+          ) {
             continue;
           }
 
@@ -1884,7 +2000,7 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
       created += 1;
     }
 
-    const volunteerAssignments = volunteerProfiles.map((profile) => {
+    const volunteerAssignments = eligibleVolunteerProfiles.map((profile) => {
       const user = profile.user as User | undefined;
       const fullName = user ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || null : null;
       return {
@@ -1910,7 +2026,7 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
     return {
       created,
       removed,
-      volunteerCount: volunteerProfiles.length,
+      volunteerCount: eligibleVolunteerProfiles.length,
       unfilled: unfilledSlots,
       volunteerAssignments,
     };

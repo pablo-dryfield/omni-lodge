@@ -10,7 +10,13 @@ import {
   ForeignKey,
   BelongsTo,
 } from 'sequelize-typescript';
-import { BOOKING_PAYMENT_STATUSES, BOOKING_PLATFORMS, BOOKING_STATUSES, type BookingPaymentStatus, type BookingPlatform, type BookingStatus } from '../constants/bookings.js';
+import {
+  BOOKING_PAYMENT_STATUSES,
+  BOOKING_STATUSES,
+  type BookingPaymentStatus,
+  type BookingPlatform,
+  type BookingStatus,
+} from '../constants/bookings.js';
 import Channel from './Channel.js';
 import Guest from './Guest.js';
 import Product from './Product.js';
@@ -29,7 +35,7 @@ export default class Booking extends Model<Booking> {
 
   @AllowNull(false)
   @Column({
-    type: DataType.ENUM(...BOOKING_PLATFORMS),
+    type: DataType.STRING(64),
   })
   declare platform: BookingPlatform;
 
@@ -216,6 +222,13 @@ export default class Booking extends Model<Booking> {
 
   @AllowNull(true)
   @Column({
+    field: 'attended_total',
+    type: DataType.INTEGER,
+  })
+  declare attendedTotal: number | null;
+
+  @AllowNull(true)
+  @Column({
     field: 'currency',
     type: DataType.STRING(3),
   })
@@ -241,6 +254,20 @@ export default class Booking extends Model<Booking> {
     type: DataType.DECIMAL(12, 2),
   })
   declare discountAmount: string | null;
+
+  @AllowNull(true)
+  @Column({
+    field: 'refunded_amount',
+    type: DataType.DECIMAL(12, 2),
+  })
+  declare refundedAmount: string | null;
+
+  @AllowNull(true)
+  @Column({
+    field: 'refunded_currency',
+    type: DataType.STRING(3),
+  })
+  declare refundedCurrency: string | null;
 
   @AllowNull(true)
   @Column({

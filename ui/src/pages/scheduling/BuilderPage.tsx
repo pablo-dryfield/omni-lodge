@@ -111,6 +111,52 @@ const parseTimeToMinutes = (time: string | null | undefined): number | null => {
   return hours * 60 + minutes;
 };
 
+const parseDateOnly = (value: string | null | undefined): Dayjs | null => {
+  if (!value) {
+    return null;
+  }
+  const parsed = dayjs(value, "YYYY-MM-DD", true);
+  return parsed.isValid() ? parsed.startOf("day") : null;
+};
+
+const isShiftWithinVolunteerDates = (
+  shiftDate: string,
+  arrivalDate?: string | null,
+  departureDate?: string | null,
+): boolean => {
+  const shiftDay = parseDateOnly(shiftDate);
+  if (!shiftDay) {
+    return true;
+  }
+  const arrival = parseDateOnly(arrivalDate);
+  if (arrival && shiftDay.isBefore(arrival, "day")) {
+    return false;
+  }
+  const departure = parseDateOnly(departureDate);
+  if (departure && shiftDay.isAfter(departure, "day")) {
+    return false;
+  }
+  return true;
+};
+
+const doesVolunteerOverlapWeek = (
+  weekStart: Dayjs,
+  arrivalDate?: string | null,
+  departureDate?: string | null,
+): boolean => {
+  const weekStartDay = weekStart.startOf("day");
+  const weekEndDay = weekStartDay.add(6, "day");
+  const arrival = parseDateOnly(arrivalDate);
+  const departure = parseDateOnly(departureDate);
+  if (arrival && arrival.isAfter(weekEndDay, "day")) {
+    return false;
+  }
+  if (departure && departure.isBefore(weekStartDay, "day")) {
+    return false;
+  }
+  return true;
+};
+
 type RoleOption = {
   value: string;
   label: string;
@@ -361,26 +407,29 @@ const createUserCardStyles = (background: string) => {
 
 type UserSwatch = { background: string; text: string };
 
-const USER_COLOR_PALETTE: UserSwatch[] = [
-  { background: "#FF6B6B", text: "#FFFFFF" },
-  { background: "#4ECDC4", text: "#0B1F28" },
-  { background: "#FFD166", text: "#272320" },
-  { background: "#1A8FE3", text: "#FFFFFF" },
-  { background: "#9554FF", text: "#FFFFFF" },
-  { background: "#2EC4B6", text: "#023436" },
-  { background: "#FF9F1C", text: "#2B1A00" },
-  { background: "#EF476F", text: "#FFFFFF" },
-  { background: "#06D6A0", text: "#01352C" },
-  { background: "#118AB2", text: "#F4FBFF" },
-  { background: "#C77DFF", text: "#1C0433" },
-  { background: "#9CFF2E", text: "#112200" },
-  { background: "#FF5D8F", text: "#330010" },
-  { background: "#2BCAFF", text: "#071725" },
-  { background: "#FFC857", text: "#2A1B00" },
-  { background: "#845EC2", text: "#F7F4FF" },
-];
-
 const DEFAULT_USER_COLOR: UserSwatch = { background: "#ECEFF4", text: palette.slate };
+const GOLDEN_ANGLE_DEGREES = 137.508;
+
+const createDistinctUserSwatch = (index: number): UserSwatch => {
+  const hue = Math.round((Math.abs(index) * GOLDEN_ANGLE_DEGREES) % 360);
+  const lightness = index % 2 === 0 ? 44 : 52;
+  const background = `hsl(${hue} 78% ${lightness}%)`;
+  const useDarkText = (hue >= 42 && hue <= 86) || lightness >= 58;
+  return { background, text: useDarkText ? "#111827" : "#FFFFFF" };
+};
+
+const buildUserColorMap = (userIds: Array<number | null | undefined>): Map<number, UserSwatch> => {
+  const uniqueIds = Array.from(
+    new Set(
+      userIds.filter((id): id is number => typeof id === "number" && Number.isFinite(id)),
+    ),
+  ).sort((a, b) => a - b);
+  const map = new Map<number, UserSwatch>();
+  uniqueIds.forEach((userId, index) => {
+    map.set(userId, createDistinctUserSwatch(index));
+  });
+  return map;
+};
 
 const PANEL_SCROLL_HEIGHT = "70vh";
 const ROSTER_PANEL_WIDTH = 320;
@@ -528,12 +577,17 @@ const filterAssignmentsForRole = (roleLabel: string, assignments: ShiftAssignmen
   }
 };
 
-const getUserColor = (userId: number | null | undefined): UserSwatch => {
-  if (!userId) {
+const getUserColor = (
+  userId: number | null | undefined,
+  userColorMap?: Map<number, UserSwatch>,
+): UserSwatch => {
+  if (userId == null || !Number.isFinite(userId)) {
     return DEFAULT_USER_COLOR;
   }
-  const index = Math.abs(userId) % USER_COLOR_PALETTE.length;
-  return USER_COLOR_PALETTE[index] ?? DEFAULT_USER_COLOR;
+  if (userColorMap?.has(userId)) {
+    return userColorMap.get(userId) ?? DEFAULT_USER_COLOR;
+  }
+  return createDistinctUserSwatch(Math.abs(Math.trunc(userId)));
 };
 
 const ISO_WEEK_VALUE_REGEX = /^(\d{4})-W(\d{1,2})$/;
@@ -915,6 +969,27 @@ const BuilderPage = () => {
     });
     return map;
   }, [shiftRoleAssignments]);
+  const userStaffTypeByUserId = useMemo(() => {
+    const map = new Map<number, string | null>();
+    shiftRoleAssignments.forEach((assignment) => {
+      map.set(assignment.userId, assignment.staffType ?? null);
+    });
+    return map;
+  }, [shiftRoleAssignments]);
+  const userArrivalDateByUserId = useMemo(() => {
+    const map = new Map<number, string | null>();
+    shiftRoleAssignments.forEach((assignment) => {
+      map.set(assignment.userId, assignment.arrivalDate ?? null);
+    });
+    return map;
+  }, [shiftRoleAssignments]);
+  const userDepartureDateByUserId = useMemo(() => {
+    const map = new Map<number, string | null>();
+    shiftRoleAssignments.forEach((assignment) => {
+      map.set(assignment.userId, assignment.departureDate ?? null);
+    });
+    return map;
+  }, [shiftRoleAssignments]);
   const userRoleIdSetByUserId = useMemo(() => {
     const map = new Map<number, Set<number>>();
     userRoleIdsByUserId.forEach((ids, userId) => {
@@ -922,16 +997,78 @@ const BuilderPage = () => {
     });
     return map;
   }, [userRoleIdsByUserId]);
+  const isVolunteerUser = useCallback(
+    (userId: number | null | undefined): boolean => {
+      if (userId == null) {
+        return false;
+      }
+      return (userStaffTypeByUserId.get(userId) ?? "").toLowerCase() === "volunteer";
+    },
+    [userStaffTypeByUserId],
+  );
+  const isUserWithinVolunteerDateWindow = useCallback(
+    (userId: number | null | undefined, shiftDate: string): boolean => {
+      if (userId == null || !isVolunteerUser(userId)) {
+        return true;
+      }
+      return isShiftWithinVolunteerDates(
+        shiftDate,
+        userArrivalDateByUserId.get(userId) ?? null,
+        userDepartureDateByUserId.get(userId) ?? null,
+      );
+    },
+    [isVolunteerUser, userArrivalDateByUserId, userDepartureDateByUserId],
+  );
+  const getVolunteerDateWindowError = useCallback(
+    (userId: number | null | undefined, shiftDate: string): string | null => {
+      if (userId == null || !isVolunteerUser(userId)) {
+        return null;
+      }
+      if (isUserWithinVolunteerDateWindow(userId, shiftDate)) {
+        return null;
+      }
+      const shiftDay = parseDateOnly(shiftDate);
+      const arrivalDate = userArrivalDateByUserId.get(userId) ?? null;
+      const arrivalDay = parseDateOnly(arrivalDate);
+      const departureDate = userDepartureDateByUserId.get(userId) ?? null;
+      const departureDay = parseDateOnly(departureDate);
+      if (arrivalDate && shiftDay && arrivalDay && shiftDay.isBefore(arrivalDay, "day")) {
+        return `Volunteer cannot be assigned before arrival date (${arrivalDate}).`;
+      }
+      if (departureDate && shiftDay && departureDay && shiftDay.isAfter(departureDay, "day")) {
+        return `Volunteer cannot be assigned after departure date (${departureDate}).`;
+      }
+      return "Volunteer cannot be assigned outside arrival/departure dates.";
+    },
+    [isVolunteerUser, isUserWithinVolunteerDateWindow, userArrivalDateByUserId, userDepartureDateByUserId],
+  );
   const rosterEligibleUserIds = useMemo(() => {
     const set = new Set<number>();
     shiftRoleAssignments.forEach((assignment) => {
       const roleIds = userRoleIdsByUserId.get(assignment.userId) ?? [];
-      if (roleIds.length > 0 && assignment.staffProfileActive) {
-        set.add(assignment.userId);
+      if (roleIds.length === 0) {
+        return;
       }
+      if (!assignment.staffProfileActive) {
+        return;
+      }
+      if (assignment.userStatus === false) {
+        return;
+      }
+      if ((assignment.staffType ?? "").toLowerCase() === "volunteer") {
+        const visibleThisWeek = doesVolunteerOverlapWeek(
+          weekStart,
+          assignment.arrivalDate ?? null,
+          assignment.departureDate ?? null,
+        );
+        if (!visibleThisWeek) {
+          return;
+        }
+      }
+      set.add(assignment.userId);
     });
     return set;
-  }, [shiftRoleAssignments, userRoleIdsByUserId]);
+  }, [shiftRoleAssignments, userRoleIdsByUserId, weekStart]);
   const getDefaultAvailability = useCallback(
     (userId: number | null | undefined) => {
       if (userId == null) {
@@ -1155,11 +1292,23 @@ const BuilderPage = () => {
   );
 
   const rosterStaff = useMemo(() => {
-    if (!shiftRoleAssignmentsQuery.isSuccess || rosterEligibleUserIds.size === 0) {
-      return staff;
+    if (!shiftRoleAssignmentsQuery.isSuccess) {
+      return [] as StaffOption[];
+    }
+    if (rosterEligibleUserIds.size === 0) {
+      return [] as StaffOption[];
     }
     return staff.filter((option) => rosterEligibleUserIds.has(Number(option.value)));
   }, [staff, rosterEligibleUserIds, shiftRoleAssignmentsQuery.isSuccess]);
+  const userColorMap = useMemo(() => {
+    const userIds: Array<number | null | undefined> = rosterStaff.map((option) => Number(option.value));
+    shiftInstances.forEach((instance) => {
+      instance.assignments?.forEach((assignment) => {
+        userIds.push(assignment.userId);
+      });
+    });
+    return buildUserColorMap(userIds);
+  }, [rosterStaff, shiftInstances]);
   const staffCards = useMemo(
     () =>
       rosterStaff
@@ -1183,7 +1332,7 @@ const BuilderPage = () => {
             name: option.label,
             totalAssignments: summary?.total ?? 0,
             shiftCounts,
-            color: getUserColor(normalizedUserId),
+            color: getUserColor(normalizedUserId, userColorMap),
           };
         })
         .sort((a, b) => {
@@ -1192,7 +1341,7 @@ const BuilderPage = () => {
           }
           return a.name.localeCompare(b.name);
         }),
-    [rosterStaff, staffAssignmentSummary],
+    [rosterStaff, staffAssignmentSummary, userColorMap],
   );
   const templateOptions = useMemo(
     () =>
@@ -1758,6 +1907,12 @@ const BuilderPage = () => {
       if (!comparisonWindow) {
         return true;
       }
+      if (!rosterEligibleUserIds.has(userId)) {
+        return false;
+      }
+      if (!isUserWithinVolunteerDateWindow(userId, comparisonWindow.date)) {
+        return false;
+      }
       if (!userCanTakeInstance(userId, shiftOverride ?? assignmentModal.shift ?? ({} as ShiftInstance))) {
         return false;
       }
@@ -1798,6 +1953,8 @@ const BuilderPage = () => {
       availabilityByUserId,
       buildShiftWindow,
       getDefaultAvailability,
+      isUserWithinVolunteerDateWindow,
+      rosterEligibleUserIds,
       userCanTakeInstance,
       assignmentModal.shift,
     ],
@@ -1935,7 +2092,7 @@ const BuilderPage = () => {
   const staffOptionsByAvailability = useMemo(() => {
     if (!assignmentModal.opened || !activeShiftWindow) {
       return {
-        available: staff,
+        available: rosterStaff,
         unavailable: [] as StaffOption[],
       };
     }
@@ -1943,7 +2100,7 @@ const BuilderPage = () => {
     const availableOptions: StaffOption[] = [];
     const unavailableOptions: StaffOption[] = [];
 
-    staff.forEach((option) => {
+    rosterStaff.forEach((option) => {
       const userId = Number(option.value);
       if (Number.isNaN(userId)) {
         availableOptions.push(option);
@@ -1960,7 +2117,7 @@ const BuilderPage = () => {
       available: availableOptions,
       unavailable: unavailableOptions,
     };
-  }, [activeShiftWindow, assignmentModal.opened, isUserAvailableForShift, staff]);
+  }, [activeShiftWindow, assignmentModal.opened, isUserAvailableForShift, rosterStaff]);
 
   const availableStaffOptions = staffOptionsByAvailability.available;
   const unavailableStaffOptions = staffOptionsByAvailability.unavailable;
@@ -1987,7 +2144,7 @@ const BuilderPage = () => {
 
   const staffSelectOptions = useMemo<StaffSelectData>(() => {
     if (!assignmentModal.opened) {
-      return staff;
+      return rosterStaff;
     }
 
     const availableItems: StaffOption[] = availableStaffOptions.map((option) => ({
@@ -2011,7 +2168,7 @@ const BuilderPage = () => {
   }, [
     assignmentModal.opened,
     assignmentShowUnavailable,
-    staff,
+    rosterStaff,
     availableStaffOptions,
     unavailableStaffOptions,
     unavailableOptionCount,
@@ -2249,8 +2406,20 @@ const BuilderPage = () => {
       return;
     }
     const numericUserId = Number(assignmentUserId);
+    if (!Number.isFinite(numericUserId)) {
+      setAssignmentError("Select a valid team member.");
+      return;
+    }
+    if (!rosterEligibleUserIds.has(numericUserId)) {
+      setAssignmentError("Only active staff with an active profile and assigned shift roles can be scheduled.");
+      return;
+    }
+    const volunteerDateWindowError = getVolunteerDateWindowError(numericUserId, assignmentModal.shift.date);
+    if (volunteerDateWindowError) {
+      setAssignmentError(volunteerDateWindowError);
+      return;
+    }
     if (
-      Number.isFinite(numericUserId) &&
       !assignmentRoleOption.isCustomEntry &&
       !doesUserMatchRoleOption(numericUserId, assignmentRoleOption)
     ) {
@@ -2260,7 +2429,7 @@ const BuilderPage = () => {
 
     if (selectedOption.isCustomEntry) {
       const normalizedRoleName = normalizeRoleName(roleName);
-      const normalizedUserId = Number.isFinite(numericUserId) ? numericUserId : null;
+      const normalizedUserId = numericUserId;
       const matchedRoleId =
         normalizedRoleName && normalizedShiftRoleIdByName.has(normalizedRoleName)
           ? normalizedShiftRoleIdByName.get(normalizedRoleName) ?? null
@@ -2418,7 +2587,7 @@ const BuilderPage = () => {
     }
     const assignmentIds = groupAssignments.map((assignment) => assignment.id);
 
-    const { background, text } = getUserColor(primary.userId ?? null);
+    const { background, text } = getUserColor(primary.userId ?? null, userColorMap);
     const name = getUserDisplayName(primary);
     const styles = createUserCardStyles(background);
     const secondaryColor =

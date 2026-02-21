@@ -10,7 +10,7 @@ import type {
   BookingFieldPatch,
   ParsedBookingEvent,
 } from '../types.js';
-import type { BookingEventType, BookingStatus } from '../../../constants/bookings.js';
+import type { BookingEventType, BookingPaymentStatus, BookingStatus } from '../../../constants/bookings.js';
 import { getConfigValue } from '../../configService.js';
 
 dayjs.extend(customParseFormat);
@@ -35,8 +35,8 @@ const DATE_FORMATS = [
   'DD MMMM YYYY',
 ];
 
-const MONEY_PATTERN = /([A-Z]{3})\s*([\d.,]+)/i;
 const TIME_PATTERN = /(\d{1,2}:\d{2}\s*(?:a\.m\.|p\.m\.|am|pm)?)\b/i;
+const MONEY_COMPARE_EPSILON = 0.01;
 
 const COCKTAIL_GRADE_CODES = new Set(['TG2', 'TG2~21:00', 'TG2-21:00', 'TG2=21:00']);
 const COCKTAIL_KEYWORDS = [
@@ -78,15 +78,65 @@ const parseMoney = (input: string | null): { currency: string | null; amount: nu
   if (!input) {
     return { currency: null, amount: null };
   }
-  const match = input.match(MONEY_PATTERN);
-  if (!match) {
+  const currencyMatch = input.match(/\b([A-Z]{3})\b/i);
+  if (!currencyMatch?.[1]) {
     return { currency: null, amount: null };
   }
-  const amount = Number.parseFloat(match[2].replace(/,/g, ''));
-  return {
-    currency: match[1]?.toUpperCase() ?? null,
-    amount: Number.isNaN(amount) ? null : amount,
+  const parseLocalizedAmount = (raw: string): number | null => {
+    const numericMatch = raw.match(/[-+]?\d[\d.,]*/);
+    if (!numericMatch?.[0]) {
+      return null;
+    }
+
+    let token = numericMatch[0];
+    const hasComma = token.includes(',');
+    const hasDot = token.includes('.');
+
+    if (hasComma && hasDot) {
+      if (token.lastIndexOf(',') > token.lastIndexOf('.')) {
+        token = token.replace(/\./g, '').replace(/,/g, '.');
+      } else {
+        token = token.replace(/,/g, '');
+      }
+    } else if (hasComma) {
+      const trailing = token.split(',').pop() ?? '';
+      token = trailing.length <= 2 ? token.replace(/\./g, '').replace(/,/g, '.') : token.replace(/,/g, '');
+    } else if (hasDot) {
+      const trailing = token.split('.').pop() ?? '';
+      if (trailing.length > 2) {
+        token = token.replace(/\./g, '');
+      }
+    }
+
+    const parsed = Number.parseFloat(token);
+    return Number.isFinite(parsed) ? parsed : null;
   };
+
+  const afterCurrency = input.slice((currencyMatch.index ?? 0) + currencyMatch[0].length);
+  const amount = parseLocalizedAmount(afterCurrency) ?? parseLocalizedAmount(input);
+  return {
+    currency: currencyMatch[1].toUpperCase(),
+    amount,
+  };
+};
+
+const amountsAreEqual = (left: number, right: number): boolean =>
+  Math.abs(left - right) <= MONEY_COMPARE_EPSILON;
+
+const looksLikeFullRefund = (
+  bookingMoney: { currency: string | null; amount: number | null },
+  refundMoney: { currency: string | null; amount: number | null },
+): boolean => {
+  if (bookingMoney.amount === null || refundMoney.amount === null) {
+    return false;
+  }
+  if (!bookingMoney.currency || !refundMoney.currency) {
+    return false;
+  }
+  if (bookingMoney.currency !== refundMoney.currency) {
+    return false;
+  }
+  return amountsAreEqual(bookingMoney.amount, refundMoney.amount);
 };
 
 const sanitizeLeadTraveler = (value: string | null): string | null => {
@@ -310,17 +360,21 @@ const mergeCocktailExtras = (
   return next;
 };
 
-const deriveStatusFromContext = (context: BookingParserContext, textBody: string): BookingStatus => {
+const deriveStatusFromContext = (
+  context: BookingParserContext,
+  textBody: string,
+  options?: { refundProcessed?: boolean; fullRefund?: boolean },
+): BookingStatus => {
   const haystack = `${context.subject ?? ''}\n${textBody ?? ''}`.toLowerCase();
   const fromCustomerCare = /customer\.care@viator\.com/i.test(context.from ?? '');
-  const refundProcessed =
-    /refund (?:was )?processed|refund confirmation|request to refund/i.test(haystack);
+  const refundProcessed = options?.refundProcessed ?? false;
+  const fullRefund = options?.fullRefund ?? false;
 
   if (/(?:canceled|cancelled|cancellation)/i.test(haystack)) {
     return 'cancelled';
   }
   if (refundProcessed || (fromCustomerCare && /refund/i.test(haystack))) {
-    return 'cancelled';
+    return fullRefund ? 'cancelled' : 'amended';
   }
   if (/(?:amended|amendment|changed|change|modified|updated|rebooked|rebook)/i.test(haystack)) {
     return 'amended';
@@ -393,14 +447,31 @@ export class ViatorBookingParser implements BookingEmailParser {
     }
 
     const tourName =
-      extractField(normalizedText, 'Tour Name:', ['Travel Date:']) ?? extractFallbackTourName(normalizedText);
-    const travelDate = extractField(normalizedText, 'Travel Date:', [
-      'Lead Traveler Name:',
-      'Mobile Phone No:',
-      'Mobile Phone Number:',
-      'Booking Net Price:',
-      'Traveler Names:',
-    ]);
+      extractField(normalizedText, 'Tour Name:', [
+        'Travel Date:',
+        'Date of trip:',
+        'Booking Net Price:',
+        'Booking Net Rate:',
+        'Refund amount:',
+        'Lead Traveler Name:',
+      ]) ?? extractFallbackTourName(normalizedText);
+    const travelDate =
+      extractField(normalizedText, 'Travel Date:', [
+        'Lead Traveler Name:',
+        'Mobile Phone No:',
+        'Mobile Phone Number:',
+        'Booking Net Price:',
+        'Traveler Names:',
+        'Refund amount:',
+      ]) ??
+      extractField(normalizedText, 'Date of trip:', [
+        'Lead Traveler Name:',
+        'Mobile Phone No:',
+        'Mobile Phone Number:',
+        'Booking Net Price:',
+        'Traveler Names:',
+        'Refund amount:',
+      ]);
     const leadTravelerRaw = extractField(normalizedText, 'Lead Traveler Name:', [
       'Traveler Names:',
       'Travelers:',
@@ -410,6 +481,7 @@ export class ViatorBookingParser implements BookingEmailParser {
       'Tour Grade Description:',
       'Tour Language:',
       'Location:',
+      'Refund amount:',
       'Special Requirements:',
     ]);
     const travelerNames = extractField(normalizedText, 'Traveler Names:', ['Travelers:']);
@@ -429,7 +501,28 @@ export class ViatorBookingParser implements BookingEmailParser {
       'Optional:',
       'Have questions',
     ]);
-    const netRate = extractField(normalizedText, 'Net Rate:', ['Meeting Point:', 'Special Requirements:', 'Phone:', 'Optional:']);
+    const netRate =
+      extractField(normalizedText, 'Net Rate:', ['Meeting Point:', 'Special Requirements:', 'Phone:', 'Optional:']) ??
+      extractField(normalizedText, 'Booking Net Price:', [
+        'Lead Traveler Name:',
+        'Tour Name:',
+        'Travel Date:',
+        'Date of trip:',
+        'Refund amount:',
+      ]) ??
+      extractField(normalizedText, 'Booking Net Rate:', [
+        'Lead Traveler Name:',
+        'Tour Name:',
+        'Travel Date:',
+        'Date of trip:',
+        'Refund amount:',
+      ]);
+    const refundAmountRaw = extractField(normalizedText, 'Refund amount:', [
+      'Refund Initiator:',
+      'Management Center',
+      'Privacy Policy',
+      'Help Center',
+    ]);
     const meetingPoint = extractField(normalizedText, 'Meeting Point:', ['Special Requirements:', 'Phone:', 'Optional:']);
     const specialRequirements = extractField(normalizedText, 'Special Requirements:', ['Phone:', 'Optional:', 'Have questions']);
     const phone = extractField(normalizedText, 'Phone:', ['Optional:', 'Have questions', 'Management Center', 'Send the customer a message.']);
@@ -440,6 +533,12 @@ export class ViatorBookingParser implements BookingEmailParser {
     const leadTraveler = sanitizeLeadTraveler(leadTravelerRaw);
     const nameParts = parseName(leadTraveler);
     const money = parseMoney(netRate);
+    const refundMoney = parseMoney(refundAmountRaw);
+    const refundProcessed =
+      /refund (?:was )?processed|refund confirmation|request to refund/i.test(
+        `${context.subject ?? ''}\n${normalizedText}`.toLowerCase(),
+      ) || refundMoney.amount !== null;
+    const fullRefund = looksLikeFullRefund(money, refundMoney);
     const guestPhone = parsePhone(phone);
 
     const bookingFields: BookingFieldPatch = {};
@@ -458,9 +557,11 @@ export class ViatorBookingParser implements BookingEmailParser {
     assignField('partySizeAdults', counts.adults);
     assignField('experienceDate', schedule.experienceDate);
     assignField('currency', money.currency);
+    assignField('refundedCurrency', refundMoney.currency);
     assignField('priceGross', money.amount ?? null);
     assignField('priceNet', money.amount ?? null);
     assignField('baseAmount', money.amount ?? null);
+    assignField('refundedAmount', refundMoney.amount ?? null);
     assignField('pickupLocation', meetingPoint ?? location ?? null);
 
     if (schedule.experienceStartAt) {
@@ -480,7 +581,10 @@ export class ViatorBookingParser implements BookingEmailParser {
       }
     }
 
-    const status = deriveStatusFromContext(context, normalizedText);
+    const status = deriveStatusFromContext(context, normalizedText, {
+      refundProcessed,
+      fullRefund,
+    });
     const eventType = statusToEventType(status);
     if (requiresCocktailAddon(tourGrade, tourGradeCode, gradeDescription)) {
       const cocktailQuantity = counts.total ?? counts.adults ?? null;
@@ -511,6 +615,17 @@ export class ViatorBookingParser implements BookingEmailParser {
     if (specialRequirements) {
       noteParts.push(`Special requirements: ${specialRequirements}`);
     }
+    if (refundMoney.amount !== null) {
+      const refundAmount = Number.isFinite(refundMoney.amount)
+        ? refundMoney.amount.toFixed(2)
+        : `${refundMoney.amount}`;
+      noteParts.push(`Refund amount: ${refundMoney.currency ?? ''} ${refundAmount}`.trim());
+      if (fullRefund) {
+        noteParts.push('Refund appears to be full; booking marked cancelled.');
+      } else {
+        noteParts.push('Refund appears partial or non-final; booking kept active.');
+      }
+    }
     if (status === 'cancelled') {
       noteParts.push('Email indicates booking was cancelled.');
     } else if (status === 'amended') {
@@ -520,7 +635,12 @@ export class ViatorBookingParser implements BookingEmailParser {
       bookingFields.notes = noteParts.join(' | ');
     }
 
-    const paymentStatus = money.amount !== null ? 'paid' : 'unknown';
+    let paymentStatus: BookingPaymentStatus = 'unknown';
+    if (refundProcessed) {
+      paymentStatus = fullRefund ? 'refunded' : 'partial';
+    } else if (money.amount !== null) {
+      paymentStatus = 'paid';
+    }
 
     return {
       platform: 'viator',

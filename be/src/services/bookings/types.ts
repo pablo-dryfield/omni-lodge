@@ -21,15 +21,18 @@ export type BookingFieldPatch = Partial<{
   partySizeTotal: number | null;
   partySizeAdults: number | null;
   partySizeChildren: number | null;
+  attendedTotal: number | null;
   partySizeTotalDelta: number | null;
   partySizeAdultsDelta: number | null;
   experienceDate: string | null;
   experienceStartAt: Date | null;
   experienceEndAt: Date | null;
   currency: string | null;
+  refundedCurrency: string | null;
   baseAmount: number | string | null;
   addonsAmount: number | string | null;
   discountAmount: number | string | null;
+  refundedAmount: number | string | null;
   priceGross: number | string | null;
   priceNet: number | string | null;
   commissionAmount: number | string | null;

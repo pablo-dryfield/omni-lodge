@@ -17,6 +17,7 @@ import {
   Title,
 } from "@mantine/core";
 import { IconAlertCircle, IconDeviceFloppy, IconEye, IconRefresh, IconSettings } from "@tabler/icons-react";
+import { useMediaQuery } from "@mantine/hooks";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
 import {
@@ -95,6 +96,7 @@ const resolveInitialValue = (entry: ConfigEntry): string | number | boolean | nu
 };
 
 const SettingsControlPanel = () => {
+  const isMobile = useMediaQuery("(max-width: 48em)");
   const { data, isLoading, isError, error, refetch, isFetching } = useConfigEntries();
   const updateConfig = useUpdateConfigEntry();
   const [search, setSearch] = useState("");
@@ -308,7 +310,7 @@ const SettingsControlPanel = () => {
 
   return (
     <PageAccessGuard pageSlug={PAGE_SLUG}>
-      <Stack gap="xl">
+      <Stack gap={isMobile ? "md" : "xl"}>
         <Stack gap={6}>
           <Title order={3}>Control Panel</Title>
           <Text size="sm" c="dimmed">
@@ -316,15 +318,21 @@ const SettingsControlPanel = () => {
           </Text>
         </Stack>
 
-        <Card withBorder padding="lg" radius="md">
+        <Card withBorder padding={isMobile ? "md" : "lg"} radius="md">
           <Stack gap="md">
-            <Group justify="space-between" align="flex-start">
-              <Group gap="sm" align="flex-end">
+            <Group justify="space-between" align="flex-start" wrap="wrap">
+              <Group
+                gap="sm"
+                align="flex-end"
+                wrap="wrap"
+                style={{ width: isMobile ? "100%" : undefined }}
+              >
                 <TextInput
                   label="Search"
                   placeholder="Search keys or labels"
                   value={search}
                   onChange={(event) => setSearch(event.currentTarget.value)}
+                  w={isMobile ? "100%" : 260}
                 />
                 <Select
                   label="Category"
@@ -333,14 +341,16 @@ const SettingsControlPanel = () => {
                   value={selectedCategory}
                   onChange={setSelectedCategory}
                   clearable
+                  w={isMobile ? "100%" : 260}
                 />
               </Group>
-              <Group gap="sm">
+              <Group gap="sm" wrap="wrap" style={{ width: isMobile ? "100%" : undefined }}>
                 <Button
                   variant="default"
                   leftSection={<IconRefresh size={16} />}
                   onClick={() => refetch()}
                   loading={isFetching}
+                  fullWidth={isMobile}
                 >
                   Refresh
                 </Button>
@@ -352,6 +362,7 @@ const SettingsControlPanel = () => {
                     setRestoreError(null);
                     setRestoreOpen(true);
                   }}
+                  fullWidth={isMobile}
                 >
                   Restore missing defaults
                 </Button>
@@ -381,72 +392,101 @@ const SettingsControlPanel = () => {
               </Alert>
             ) : null}
 
-            <Table striped highlightOnHover withTableBorder withColumnBorders>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Setting</Table.Th>
-                  <Table.Th>Category</Table.Th>
-                  <Table.Th>Value</Table.Th>
-                  <Table.Th ta="right">Actions</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {isLoading ? (
-                  <Table.Tr>
-                    <Table.Td colSpan={4}>
-                      <Text size="sm" c="dimmed">
-                        Loading configuration...
-                      </Text>
-                    </Table.Td>
-                  </Table.Tr>
-                ) : filteredEntries.length === 0 ? (
-                  <Table.Tr>
-                    <Table.Td colSpan={4}>
-                      <Text size="sm" c="dimmed">
-                        No configuration entries match your filters.
-                      </Text>
-                    </Table.Td>
-                  </Table.Tr>
-                ) : (
-                  filteredEntries.map((entry) => (
-                    <Table.Tr key={entry.key}>
-                      <Table.Td>
-                        <Stack gap={4}>
+            {isLoading ? (
+              <Text size="sm" c="dimmed">
+                Loading configuration...
+              </Text>
+            ) : filteredEntries.length === 0 ? (
+              <Text size="sm" c="dimmed">
+                No configuration entries match your filters.
+              </Text>
+            ) : isMobile ? (
+              <Stack gap="sm">
+                {filteredEntries.map((entry) => (
+                  <Card key={entry.key} withBorder padding="sm" radius="md">
+                    <Stack gap="xs">
+                      <Group justify="space-between" align="flex-start" wrap="nowrap">
+                        <Stack gap={2} style={{ minWidth: 0 }}>
                           <Text fw={600}>{entry.label}</Text>
                           <Text size="xs" c="dimmed">
                             {entry.key}
                           </Text>
-                          {entry.description ? (
-                            <Text size="xs" c="dimmed">
-                              {entry.description}
-                            </Text>
-                          ) : null}
                         </Stack>
-                      </Table.Td>
-                      <Table.Td>
                         <Badge variant="light">{entry.category}</Badge>
-                      </Table.Td>
-                      <Table.Td>
-                        <Text size="sm">{formatValue(entry)}</Text>
-                      </Table.Td>
-                      <Table.Td>
-                        <Group justify="flex-end">
-                          <Button
-                            size="xs"
-                            variant="light"
-                            leftSection={<IconSettings size={14} />}
-                            onClick={() => openEditor(entry)}
-                            disabled={!entry.isEditable}
-                          >
-                            Edit
-                          </Button>
-                        </Group>
-                      </Table.Td>
+                      </Group>
+                      {entry.description ? (
+                        <Text size="xs" c="dimmed">
+                          {entry.description}
+                        </Text>
+                      ) : null}
+                      <Text size="sm">{formatValue(entry)}</Text>
+                      <Group justify="flex-end">
+                        <Button
+                          size="xs"
+                          variant="light"
+                          leftSection={<IconSettings size={14} />}
+                          onClick={() => openEditor(entry)}
+                          disabled={!entry.isEditable}
+                        >
+                          Edit
+                        </Button>
+                      </Group>
+                    </Stack>
+                  </Card>
+                ))}
+              </Stack>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <Table striped highlightOnHover withTableBorder withColumnBorders style={{ minWidth: 900 }}>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Setting</Table.Th>
+                      <Table.Th>Category</Table.Th>
+                      <Table.Th>Value</Table.Th>
+                      <Table.Th ta="right">Actions</Table.Th>
                     </Table.Tr>
-                  ))
-                )}
-              </Table.Tbody>
-            </Table>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {filteredEntries.map((entry) => (
+                      <Table.Tr key={entry.key}>
+                        <Table.Td>
+                          <Stack gap={4}>
+                            <Text fw={600}>{entry.label}</Text>
+                            <Text size="xs" c="dimmed">
+                              {entry.key}
+                            </Text>
+                            {entry.description ? (
+                              <Text size="xs" c="dimmed">
+                                {entry.description}
+                              </Text>
+                            ) : null}
+                          </Stack>
+                        </Table.Td>
+                        <Table.Td>
+                          <Badge variant="light">{entry.category}</Badge>
+                        </Table.Td>
+                        <Table.Td>
+                          <Text size="sm">{formatValue(entry)}</Text>
+                        </Table.Td>
+                        <Table.Td>
+                          <Group justify="flex-end">
+                            <Button
+                              size="xs"
+                              variant="light"
+                              leftSection={<IconSettings size={14} />}
+                              onClick={() => openEditor(entry)}
+                              disabled={!entry.isEditable}
+                            >
+                              Edit
+                            </Button>
+                          </Group>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </div>
+            )}
           </Stack>
         </Card>
       </Stack>
@@ -464,6 +504,7 @@ const SettingsControlPanel = () => {
         title="Restore missing defaults"
         centered
         size="md"
+        fullScreen={isMobile}
       >
         <Stack gap="md">
           <Text size="sm" c="dimmed">
@@ -513,6 +554,7 @@ const SettingsControlPanel = () => {
         title={activeEntry ? `Edit ${activeEntry.label}` : "Edit config"}
         centered
         size="lg"
+        fullScreen={isMobile}
       >
         {activeEntry ? (
           <Stack gap="md">
@@ -556,8 +598,8 @@ const SettingsControlPanel = () => {
               </Alert>
             ) : null}
 
-            <Group justify="space-between">
-              <Group gap="xs">
+            <Group justify="space-between" wrap="wrap">
+              <Group gap="xs" wrap="wrap">
                 <Button variant="default" onClick={closeEditor} disabled={updateConfig.isPending}>
                   Cancel
                 </Button>
@@ -577,6 +619,7 @@ const SettingsControlPanel = () => {
                 leftSection={<IconDeviceFloppy size={16} />}
                 onClick={handleSave}
                 loading={updateConfig.isPending}
+                fullWidth={isMobile}
               >
                 Save changes
               </Button>

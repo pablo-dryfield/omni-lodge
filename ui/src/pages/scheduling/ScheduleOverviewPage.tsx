@@ -194,26 +194,29 @@ const createUserCardStyles = (background: string) => {
 
 type UserSwatch = { background: string; text: string };
 
-const USER_COLOR_PALETTE: UserSwatch[] = [
-  { background: "#FF6B6B", text: "#FFFFFF" },
-  { background: "#4ECDC4", text: "#0B1F28" },
-  { background: "#FFD166", text: "#272320" },
-  { background: "#1A8FE3", text: "#FFFFFF" },
-  { background: "#9554FF", text: "#FFFFFF" },
-  { background: "#2EC4B6", text: "#023436" },
-  { background: "#FF9F1C", text: "#2B1A00" },
-  { background: "#EF476F", text: "#FFFFFF" },
-  { background: "#06D6A0", text: "#01352C" },
-  { background: "#118AB2", text: "#F4FBFF" },
-  { background: "#C77DFF", text: "#1C0433" },
-  { background: "#9CFF2E", text: "#112200" },
-  { background: "#FF5D8F", text: "#330010" },
-  { background: "#2BCAFF", text: "#071725" },
-  { background: "#FFC857", text: "#2A1B00" },
-  { background: "#845EC2", text: "#F7F4FF" },
-];
-
 const DEFAULT_USER_COLOR: UserSwatch = { background: "#ECEFF4", text: palette.slate };
+const GOLDEN_ANGLE_DEGREES = 137.508;
+
+const createDistinctUserSwatch = (index: number): UserSwatch => {
+  const hue = Math.round((Math.abs(index) * GOLDEN_ANGLE_DEGREES) % 360);
+  const lightness = index % 2 === 0 ? 44 : 52;
+  const background = `hsl(${hue} 78% ${lightness}%)`;
+  const useDarkText = (hue >= 42 && hue <= 86) || lightness >= 58;
+  return { background, text: useDarkText ? "#111827" : "#FFFFFF" };
+};
+
+const buildUserColorMap = (userIds: Array<number | null | undefined>): Map<number, UserSwatch> => {
+  const uniqueIds = Array.from(
+    new Set(
+      userIds.filter((id): id is number => typeof id === "number" && Number.isFinite(id)),
+    ),
+  ).sort((a, b) => a - b);
+  const map = new Map<number, UserSwatch>();
+  uniqueIds.forEach((userId, index) => {
+    map.set(userId, createDistinctUserSwatch(index));
+  });
+  return map;
+};
 
 const formatShiftTimeRange = (start?: string | null, end?: string | null) => {
   const first = (start ?? "").trim().replace(/^(\d{1,2}:\d{2}).*$/, "$1");
@@ -350,12 +353,17 @@ const filterAssignmentsForRole = (roleLabel: string, assignments: ShiftAssignmen
   }
 };
 
-const getUserColor = (userId: number | null | undefined): UserSwatch => {
-  if (!userId) {
+const getUserColor = (
+  userId: number | null | undefined,
+  userColorMap?: Map<number, UserSwatch>,
+): UserSwatch => {
+  if (userId == null || !Number.isFinite(userId)) {
     return DEFAULT_USER_COLOR;
   }
-  const index = Math.abs(userId) % USER_COLOR_PALETTE.length;
-  return USER_COLOR_PALETTE[index] ?? DEFAULT_USER_COLOR;
+  if (userColorMap?.has(userId)) {
+    return userColorMap.get(userId) ?? DEFAULT_USER_COLOR;
+  }
+  return createDistinctUserSwatch(Math.abs(Math.trunc(userId)));
 };
 
 const ISO_WEEK_VALUE_REGEX = /^(\d{4})-W(\d{1,2})$/;
@@ -632,6 +640,15 @@ const ScheduleOverviewPage = () => {
     const suffix = timeLabels.size === 1 ? Array.from(timeLabels)[0] : null;
     return suffix ? `PUB CRAWL - ${suffix}` : "PUB CRAWL";
   }, [pubCrawlInstances]);
+  const userColorMap = useMemo(() => {
+    const userIds: Array<number | null | undefined> = [];
+    shiftInstances.forEach((instance) => {
+      instance.assignments?.forEach((assignment) => {
+        userIds.push(assignment.userId);
+      });
+    });
+    return buildUserColorMap(userIds);
+  }, [shiftInstances]);
 
   const loading = ensureWeekQuery.isLoading || shiftInstancesQuery.isLoading;
   const error = ensureWeekQuery.isError ? ensureWeekQuery.error : shiftInstancesQuery.error;
@@ -642,7 +659,7 @@ const ScheduleOverviewPage = () => {
     options?: { showRoles?: boolean },
   ) => {
     const primary = groupAssignments[0];
-    const { background, text } = getUserColor(primary?.userId ?? null);
+    const { background, text } = getUserColor(primary?.userId ?? null, userColorMap);
     const name = getUserDisplayName(primary);
     const styles = createUserCardStyles(background);
     const secondaryColor =

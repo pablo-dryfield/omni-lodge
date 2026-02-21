@@ -802,6 +802,8 @@ type BookingDetailsState = {
   previewMessageId: string | null;
   previewLoading: boolean;
   previewError: string | null;
+  reprocessMessageId: string | null;
+  reprocessError: string | null;
   previewData: BookingEmailPreview | null;
   previewOpen: boolean;
 };
@@ -962,6 +964,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     previewMessageId: null,
     previewLoading: false,
     previewError: null,
+    reprocessMessageId: null,
+    reprocessError: null,
     previewData: null,
     previewOpen: false,
   });
@@ -1224,13 +1228,20 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const openDetailsModal = (order: UnifiedOrder) => {
     const bookingId = getBookingIdFromOrder(order);
     if (!bookingId) {
-      setDetailsState((prev) => ({
-        ...prev,
+      setDetailsState({
         opened: true,
         loading: false,
         error: "Unable to locate OmniLodge booking reference for this order.",
         data: null,
-      }));
+        activeTab: "emails",
+        previewMessageId: null,
+        previewLoading: false,
+        previewError: null,
+        reprocessMessageId: null,
+        reprocessError: null,
+        previewData: null,
+        previewOpen: false,
+      });
       return;
     }
     setDetailsState({
@@ -1242,6 +1253,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       previewMessageId: null,
       previewLoading: false,
       previewError: null,
+      reprocessMessageId: null,
+      reprocessError: null,
       previewData: null,
       previewOpen: false,
     });
@@ -1274,6 +1287,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       previewMessageId: null,
       previewLoading: false,
       previewError: null,
+      reprocessMessageId: null,
+      reprocessError: null,
       previewData: null,
       previewOpen: false,
     });
@@ -1301,6 +1316,40 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         ...prev,
         previewLoading: false,
         previewError: extractErrorMessage(error),
+      }));
+    }
+  };
+
+  const handleDetailsReprocess = async (messageId: string) => {
+    if (!messageId || detailsState.reprocessMessageId) {
+      return;
+    }
+    const bookingId = detailsState.data?.booking?.id ?? null;
+    setDetailsState((prev) => ({
+      ...prev,
+      reprocessMessageId: messageId,
+      reprocessError: null,
+    }));
+    try {
+      await axiosInstance.post(`/bookings/emails/${encodeURIComponent(messageId)}/reprocess`, {}, { withCredentials: true });
+      setReloadToken((token) => token + 1);
+      if (bookingId) {
+        const response = await axiosInstance.get<BookingDetailsResponse>(`/bookings/${bookingId}/details`);
+        setDetailsState((prev) => ({
+          ...prev,
+          data: response.data,
+          error: null,
+        }));
+      }
+    } catch (error) {
+      setDetailsState((prev) => ({
+        ...prev,
+        reprocessError: extractErrorMessage(error),
+      }));
+    } finally {
+      setDetailsState((prev) => ({
+        ...prev,
+        reprocessMessageId: null,
       }));
     }
   };
@@ -3015,24 +3064,46 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                           </Table.Tr>
                         </Table.Thead>
                         <Table.Tbody>
-                          {detailsState.data.emails.map((email) => (
-                            <Table.Tr key={email.messageId}>
-                              <Table.Td>{email.subject ?? email.messageId}</Table.Td>
-                              <Table.Td>{formatDateTime(email.receivedAt ?? email.internalDate ?? null)}</Table.Td>
-                              <Table.Td>{email.ingestionStatus ?? "-"}</Table.Td>
-                              <Table.Td>
-                                <Button
-                                  size="xs"
-                                  variant="light"
-                                  onClick={() => handleDetailsPreview(email.messageId)}
-                                >
-                                  Preview
-                                </Button>
-                              </Table.Td>
-                            </Table.Tr>
-                          ))}
+                          {detailsState.data.emails.map((email) => {
+                            const reprocessLoading = detailsState.reprocessMessageId === email.messageId;
+                            const reprocessDisabled =
+                              detailsState.reprocessMessageId !== null && !reprocessLoading;
+                            return (
+                              <Table.Tr key={email.messageId}>
+                                <Table.Td>{email.subject ?? email.messageId}</Table.Td>
+                                <Table.Td>{formatDateTime(email.receivedAt ?? email.internalDate ?? null)}</Table.Td>
+                                <Table.Td>{email.ingestionStatus ?? "-"}</Table.Td>
+                                <Table.Td>
+                                  <Group gap="xs">
+                                    <Button
+                                      size="xs"
+                                      variant="light"
+                                      onClick={() => handleDetailsPreview(email.messageId)}
+                                    >
+                                      Preview
+                                    </Button>
+                                    <Button
+                                      size="xs"
+                                      color="orange"
+                                      variant="light"
+                                      loading={reprocessLoading}
+                                      disabled={reprocessDisabled}
+                                      onClick={() => handleDetailsReprocess(email.messageId)}
+                                    >
+                                      Reprocess
+                                    </Button>
+                                  </Group>
+                                </Table.Td>
+                              </Table.Tr>
+                            );
+                          })}
                         </Table.Tbody>
                       </Table>
+                      {detailsState.reprocessError && (
+                        <Alert color="red" title="Unable to reprocess email">
+                          {detailsState.reprocessError}
+                        </Alert>
+                      )}
                       {detailsState.previewError && (
                         <Alert color="red" title="Unable to load email preview">
                           {detailsState.previewError}

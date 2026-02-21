@@ -14,6 +14,7 @@ import {
   BOOKING_PLATFORMS,
   BOOKING_STATUSES,
   type BookingEventType,
+  type KnownBookingPlatform,
   type BookingPaymentStatus,
   type BookingPlatform,
   type BookingStatus,
@@ -71,6 +72,7 @@ type DynamicClause = {
 type DynamicParserExtractConfig = {
   platformBookingId: DynamicClause;
   platformOrderId?: DynamicClause;
+  rawPayloadLocation?: DynamicClause;
   productName?: DynamicClause;
   productVariant?: DynamicClause;
   guestEmail?: DynamicClause;
@@ -298,7 +300,10 @@ const normalizeDateOnly = (value: string): string | null => {
 };
 
 const normalizeDateTime = (value: string): Date | null => {
-  const token = value.trim();
+  const token = value
+    .replace(/\b(?:date|hour|time)\s*:\s*/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (!token) {
     return null;
   }
@@ -376,12 +381,29 @@ const normalizePaymentStatus = (value: unknown): BookingPaymentStatus | undefine
   return BOOKING_PAYMENT_STATUS_SET.has(normalized) ? (normalized as BookingPaymentStatus) : undefined;
 };
 
+const sanitizePlatformSlug = (value: string): string => {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-')
+    .replace(/[^a-z0-9-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return normalized;
+};
+
 const normalizePlatform = (value: unknown): BookingPlatform => {
   if (typeof value !== 'string') {
     return 'unknown';
   }
-  const normalized = value.trim();
-  return BOOKING_PLATFORM_SET.has(normalized) ? (normalized as BookingPlatform) : 'unknown';
+  const slug = sanitizePlatformSlug(value);
+  if (!slug) {
+    return 'unknown';
+  }
+  if (BOOKING_PLATFORM_SET.has(slug)) {
+    return slug as KnownBookingPlatform;
+  }
+  return slug;
 };
 
 const normalizeExtractConfig = (input: unknown): DynamicParserExtractConfig | null => {
@@ -397,6 +419,7 @@ const normalizeExtractConfig = (input: unknown): DynamicParserExtractConfig | nu
   return {
     platformBookingId,
     platformOrderId: normalizeClause(input.platformOrderId, 'textBody') ?? undefined,
+    rawPayloadLocation: normalizeClause(input.rawPayloadLocation, 'textBody') ?? undefined,
     productName: normalizeClause(input.productName, 'textBody') ?? undefined,
     productVariant: normalizeClause(input.productVariant, 'textBody') ?? undefined,
     guestEmail: normalizeClause(input.guestEmail, 'textBody') ?? undefined,
@@ -615,6 +638,7 @@ class DynamicRuleBookingParser implements BookingEmailParser {
     assignStringField('guestLastName', extract.guestLastName);
     assignStringField('paymentMethod', extract.paymentMethod);
     assignStringField('notes', extract.notes);
+    assignStringField('rawPayloadLocation', extract.rawPayloadLocation);
 
     const experienceDate = extractClauseValue(context, extract.experienceDate).value;
     if (experienceDate) {
