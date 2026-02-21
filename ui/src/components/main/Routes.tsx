@@ -1,4 +1,4 @@
-import { Route, Routes as ReactRoutes } from "react-router-dom";
+import { Navigate, Route, Routes as ReactRoutes } from "react-router-dom";
 
 import Home from "../../pages/Home";
 import Guests from "../../pages/Guests";
@@ -11,6 +11,7 @@ import ChannelNumbers from "../../pages/ChannelNumbers";
 import Pays from "../../pages/Pays";
 import ReviewCounters from "../../pages/ReviewCounters";
 import Reports from "../../pages/Reports";
+import OpenBarControl from "../../pages/OpenBarControl";
 import DerivedFieldsManager from "../../pages/DerivedFieldsManager";
 import ReportDashboards from "../../pages/ReportDashboards";
 import MyAccount from "../../pages/MyAccount";
@@ -85,6 +86,8 @@ const Routes = () => {
       <Route path="/pays" element={<Pays />} />
       <Route path="/assistant-manager-tasks" element={<AssistantManagerTasks />} />
       <Route path="/reports" element={<Reports title={"Reports"} />} />
+      <Route path="/open-bar" element={<OpenBarControl title="Open Bar Control" />} />
+      <Route path="/reports/open-bar" element={<Navigate to="/open-bar" replace />} />
       <Route path="/reports/derived-fields" element={<DerivedFieldsManager title="Derived fields" />} />
       <Route path="/reports/dashboards" element={<ReportDashboards title="Dashboards" />} />
       <Route path="/account" element={<MyAccount />} />

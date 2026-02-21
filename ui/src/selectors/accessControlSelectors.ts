@@ -10,8 +10,20 @@ const MODULE_SLUG_TO_PAGE_SLUG: Record<string, string> = {
   "am-task-management": PAGE_SLUGS.assistantManagerTasks,
 };
 
+const PAGE_SLUG_ALIASES: Record<string, string[]> = {
+  [PAGE_SLUGS.reports]: [PAGE_SLUGS.openBarControl],
+};
+
 export const selectAllowedPageSlugs = createSelector(selectAccessControlState, ({ pages, modules }) => {
   const allowedSlugs = new Set(pages);
+
+  pages.forEach((pageSlug) => {
+    const aliases = PAGE_SLUG_ALIASES[pageSlug];
+    if (!aliases) {
+      return;
+    }
+    aliases.forEach((alias) => allowedSlugs.add(alias));
+  });
 
   Object.keys(modules).forEach((moduleSlug) => {
     const mappedPageSlug = MODULE_SLUG_TO_PAGE_SLUG[moduleSlug];

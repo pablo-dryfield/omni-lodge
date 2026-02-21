@@ -288,6 +288,15 @@ export type DashboardVisualCardViewConfig = {
     filterIndex?: number;
     clauseSql?: string;
     filterPath?: number[];
+    targets?: Array<{
+      id?: string;
+      modelId: string;
+      fieldId: string;
+      operator: FilterOperator;
+      filterIndex?: number;
+      clauseSql?: string;
+      filterPath?: number[];
+    }>;
   }>;
   dateFilterSelections?: string[];
   visual: {
@@ -356,6 +365,15 @@ export type DashboardSpotlightCardViewConfig = {
     filterIndex?: number;
     clauseSql?: string;
     filterPath?: number[];
+    targets?: Array<{
+      id?: string;
+      modelId: string;
+      fieldId: string;
+      operator: FilterOperator;
+      filterIndex?: number;
+      clauseSql?: string;
+      filterPath?: number[];
+    }>;
   }>;
   dateFilterSelections?: string[];
   periodConfig?: {
@@ -409,6 +427,15 @@ export type DashboardPreviewTableCardViewConfig = {
     filterIndex?: number;
     clauseSql?: string;
     filterPath?: number[];
+    targets?: Array<{
+      id?: string;
+      modelId: string;
+      fieldId: string;
+      operator: FilterOperator;
+      filterIndex?: number;
+      clauseSql?: string;
+      filterPath?: number[];
+    }>;
   }>;
 };
 

@@ -462,7 +462,7 @@ const computeComparisonRange = (
 const applyPeriodOverrideToQueryConfig = (
   queryConfig: QueryConfig | null,
   override: DashboardPreviewPeriodOverride | DashboardPreviewPeriodPreset | null,
-  metadata?: { modelId: string; fieldId: string; operator: FilterOperator } | null,
+  metadata?: DashboardDateFilterOption | null,
 ): QueryConfig | null => {
   if (!queryConfig || !override) {
     return queryConfig;
@@ -486,26 +486,42 @@ const applyPeriodOverrideToQueryConfig = (
       };
     }
     if (metadata) {
-      const filters = Array.isArray(config.filters) ? [...config.filters] : [];
-      const hasMatchingFilter = filters.some(
-        (filter) => filter.modelId === metadata.modelId && filter.fieldId === metadata.fieldId,
-      );
-      const hasModel = Array.isArray(config.models) ? config.models.includes(metadata.modelId) : false;
-      if (!hasMatchingFilter && !hasModel) {
-        return config;
-      }
-      const nextFilters = filters.filter(
-        (filter) => !(filter.modelId === metadata.modelId && filter.fieldId === metadata.fieldId),
-      );
-      const operator: QueryConfigFilter["operator"] = "between";
-      const value = { from: range.from, to: range.to };
-      nextFilters.push({
-        modelId: metadata.modelId,
-        fieldId: metadata.fieldId,
-        operator: operator as QueryConfigFilter["operator"],
-        value,
+      const targets =
+        Array.isArray(metadata.targets) && metadata.targets.length > 0
+          ? metadata.targets
+          : [
+              {
+                modelId: metadata.modelId,
+                fieldId: metadata.fieldId,
+                operator: metadata.operator,
+              },
+            ];
+      let nextFilters = Array.isArray(config.filters) ? [...config.filters] : [];
+      let updated = false;
+      targets.forEach((target) => {
+        const hasMatchingFilter = nextFilters.some(
+          (filter) => filter.modelId === target.modelId && filter.fieldId === target.fieldId,
+        );
+        const hasModel = Array.isArray(config.models) ? config.models.includes(target.modelId) : false;
+        if (!hasMatchingFilter && !hasModel) {
+          return;
+        }
+        nextFilters = nextFilters.filter(
+          (filter) => !(filter.modelId === target.modelId && filter.fieldId === target.fieldId),
+        );
+        const operator: QueryConfigFilter["operator"] = "between";
+        const value = { from: range.from, to: range.to };
+        nextFilters.push({
+          modelId: target.modelId,
+          fieldId: target.fieldId,
+          operator: operator as QueryConfigFilter["operator"],
+          value,
+        });
+        updated = true;
       });
-      config.filters = nextFilters;
+      if (updated) {
+        config.filters = nextFilters;
+      }
     }
     return config;
   };
@@ -687,6 +703,15 @@ type DashboardDateFilterOption = {
   filterIndex?: number;
   clauseSql?: string;
   filterPath?: number[];
+  targets?: Array<{
+    id?: string;
+    modelId: string;
+    fieldId: string;
+    operator: FilterOperator;
+    filterIndex?: number;
+    clauseSql?: string;
+    filterPath?: number[];
+  }>;
 };
 
 const buildDateFilterOptionId = (entry: { id?: string; modelId: string; fieldId: string; operator: FilterOperator }) =>
@@ -812,7 +837,24 @@ const resolveNextSelectedDateFilterIds = (
   return ordered.length > 0 ? ordered : [optionIds[0]];
 };
 
-type DateFilterSignature = { modelId: string; fieldId: string; operator: FilterOperator };
+type DateFilterSignature = string;
+
+const buildDateFilterSignatureKey = (option: DashboardDateFilterOption): string => {
+  const targets =
+    Array.isArray(option.targets) && option.targets.length > 0
+      ? option.targets
+      : [
+          {
+            modelId: option.modelId,
+            fieldId: option.fieldId,
+            operator: option.operator,
+          },
+        ];
+  return targets
+    .map((target) => `${target.modelId}.${target.fieldId}.${target.operator}`)
+    .sort()
+    .join("|");
+};
 
 const resolveDateFilterSignature = (
   options: DashboardDateFilterOption[] | undefined,
@@ -822,7 +864,7 @@ const resolveDateFilterSignature = (
     return null;
   }
   const match = options.find((option) => option.id === dateFilterId);
-  return match ? { modelId: match.modelId, fieldId: match.fieldId, operator: match.operator } : null;
+  return match ? buildDateFilterSignatureKey(match) : null;
 };
 
 const findOptionIdBySignature = (
@@ -832,12 +874,7 @@ const findOptionIdBySignature = (
   if (!options || options.length === 0 || !signature) {
     return null;
   }
-  const match = options.find(
-    (option) =>
-      option.modelId === signature.modelId &&
-      option.fieldId === signature.fieldId &&
-      option.operator === signature.operator,
-  );
+  const match = options.find((option) => buildDateFilterSignatureKey(option) === signature);
   return match?.id ?? null;
 };
 

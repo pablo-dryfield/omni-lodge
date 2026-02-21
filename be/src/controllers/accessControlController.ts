@@ -26,11 +26,31 @@ const normalizeRole = (value?: string | null): string | null => {
   return withHyphens;
 };
 
+const OPEN_BAR_PRIVILEGED_USER_TYPE_SLUGS = new Set(["admin", "administrator", "owner", "manager", "assistant-manager"]);
+
 export const getCurrentUserAccess = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const userTypeId = req.authContext?.userTypeId;
+  const userTypeSlug = normalizeRole(req.authContext?.userTypeSlug ?? req.authContext?.roleSlug ?? null);
+  const shiftRoleSlugs = Array.from(
+    new Set((req.authContext?.shiftRoleSlugs ?? []).map((value) => normalizeRole(value)).filter((value): value is string => Boolean(value))),
+  );
+
+  const hasBartenderShiftRole = shiftRoleSlugs.includes("bartender");
+  const hasManagerShiftRole = shiftRoleSlugs.includes("manager");
+  const hasPrivilegedUserType = userTypeSlug != null && OPEN_BAR_PRIVILEGED_USER_TYPE_SLUGS.has(userTypeSlug);
+
+  const canUseBartenderMode = hasBartenderShiftRole || hasManagerShiftRole || hasPrivilegedUserType || userTypeSlug === "bartender";
+  const canUseManagerMode = hasManagerShiftRole || hasPrivilegedUserType;
+
+  const openBarModeAccess = {
+    canUseBartenderMode,
+    canUseManagerMode,
+    shiftRoleSlugs,
+    userTypeSlug,
+  };
 
   if (!userTypeId) {
-    res.status(200).json({ pages: [], modules: {} });
+    res.status(200).json({ pages: [], modules: {}, openBarModeAccess });
     return;
   }
 
@@ -99,5 +119,6 @@ export const getCurrentUserAccess = async (req: AuthenticatedRequest, res: Respo
   res.status(200).json({
     pages: Array.from(allowedPageSlugs),
     modules: modulePermissionsBySlug,
+    openBarModeAccess,
   });
 };

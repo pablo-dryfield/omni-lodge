@@ -4,4 +4,10 @@ export type AccessControlState = {
   error: string | null;
   pages: string[];
   modules: Record<string, string[]>;
+  openBarModeAccess: {
+    canUseBartenderMode: boolean;
+    canUseManagerMode: boolean;
+    shiftRoleSlugs: string[];
+    userTypeSlug: string | null;
+  } | null;
 };

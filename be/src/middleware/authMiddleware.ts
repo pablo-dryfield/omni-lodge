@@ -3,6 +3,7 @@ import jwt, { JwtPayload } from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import User from '../models/User.js';
 import UserType from '../models/UserType.js';
+import ShiftRole from '../models/ShiftRole.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest';
 
 dotenv.config();
@@ -49,7 +50,10 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
     }
 
     const user = await User.findByPk(decoded.id, {
-      include: [{ model: UserType, as: 'role', attributes: ['id', 'slug', 'name'] }],
+      include: [
+        { model: UserType, as: 'role', attributes: ['id', 'slug', 'name'] },
+        { model: ShiftRole, as: 'shiftRoles', through: { attributes: [] }, attributes: ['slug'] },
+      ],
     });
 
     if (!user) {
@@ -58,14 +62,24 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
     }
 
     const role = (user as unknown as { role?: UserType | null }).role ?? null;
+    const shiftRoles = (user as unknown as { shiftRoles?: Array<Pick<ShiftRole, 'slug'>> }).shiftRoles ?? [];
     const explicitRole = (user as unknown as { roleKey?: string | null }).roleKey ?? null;
     const roleSlug = normalizeRoleSlug(role?.slug ?? explicitRole ?? null);
+    const shiftRoleSlugs = Array.from(
+      new Set(
+        shiftRoles
+          .map((roleRecord) => normalizeRoleSlug(roleRecord.slug))
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
 
     req.user = decoded;
     req.authContext = {
       id: user.id,
       userTypeId: user.userTypeId ?? null,
       roleSlug,
+      userTypeSlug: role?.slug ?? null,
+      shiftRoleSlugs,
     };
     req.permissionCache = new Map();
 

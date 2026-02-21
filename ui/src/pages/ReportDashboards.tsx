@@ -354,6 +354,18 @@ type DashboardDateFilterOption = {
   fieldId: string;
   operator: FilterOperator;
   label: string;
+  filterIndex?: number;
+  clauseSql?: string;
+  filterPath?: number[];
+  targets?: Array<{
+    id?: string;
+    modelId: string;
+    fieldId: string;
+    operator: FilterOperator;
+    filterIndex?: number;
+    clauseSql?: string;
+    filterPath?: number[];
+  }>;
 };
 
 const buildDateFilterOptionId = (entry: { id?: string; modelId: string; fieldId: string; operator: FilterOperator }) =>
@@ -364,6 +376,33 @@ const sanitizeDateFilterLabel = (value: string): string => value.replace(/\s*\([
 const buildDateFilterOptionLabel = (entry: { label?: string; modelId: string; fieldId: string }) => {
   const base = entry.label ?? `${entry.modelId}.${entry.fieldId}`;
   return sanitizeDateFilterLabel(base);
+};
+
+const buildDateFilterOptionOverrides = (
+  options?: Array<{
+    id?: string;
+    modelId: string;
+    fieldId: string;
+    operator: FilterOperator;
+    label?: string;
+    filterIndex?: number;
+    clauseSql?: string;
+    filterPath?: number[];
+    targets?: DashboardDateFilterOption["targets"];
+  }> | null,
+) => {
+  const map = new Map<string, DashboardDateFilterOption>();
+  if (!Array.isArray(options)) {
+    return map;
+  }
+  options.forEach((option) => {
+    if (!option) {
+      return;
+    }
+    const id = buildDateFilterOptionId(option);
+    map.set(id, { ...option, id, label: buildDateFilterOptionLabel(option) });
+  });
+  return map;
 };
 
 const resolveDashboardDateFilterOptions = (
@@ -430,13 +469,18 @@ const resolveSelectedDateFilterIds = (
 };
 
 const getTemplateDateFilters = (template: ReportTemplateDto | null): TemplateDateFilter[] => {
-  if (!template || !Array.isArray(template.filters)) {
+  if (!template) {
     return [];
   }
-  return template.filters
-    .map((entry, index) => {
+  const collected: TemplateDateFilter[] = [];
+  const seen = new Set<string>();
+  const appendFilters = (filters: unknown[] | undefined, prefix: string) => {
+    if (!Array.isArray(filters)) {
+      return;
+    }
+    filters.forEach((entry, index) => {
       if (!entry || typeof entry !== "object") {
-        return null;
+        return;
       }
       const record = entry as {
         id?: unknown;
@@ -446,21 +490,33 @@ const getTemplateDateFilters = (template: ReportTemplateDto | null): TemplateDat
         valueKind?: unknown;
       };
       if (record.valueKind !== "date") {
-        return null;
+        return;
       }
       const modelId = typeof record.leftModelId === "string" ? record.leftModelId : null;
       const fieldId = typeof record.leftFieldId === "string" ? record.leftFieldId : null;
       const operator = isFilterOperator(record.operator) ? record.operator : null;
       if (!modelId || !fieldId || !operator) {
-        return null;
+        return;
       }
       const id =
         typeof record.id === "string" && record.id.trim().length > 0
           ? record.id
-          : `${modelId}.${fieldId}.${index}`;
-      return { id, modelId, fieldId, operator };
-    })
-    .filter((entry): entry is TemplateDateFilter => Boolean(entry));
+          : `${prefix}.${modelId}.${fieldId}.${index}`;
+      if (seen.has(id)) {
+        return;
+      }
+      seen.add(id);
+      collected.push({ id, modelId, fieldId, operator });
+    });
+  };
+  appendFilters(Array.isArray(template.filters) ? template.filters : [], "template");
+  if (Array.isArray(template.queryGroups)) {
+    template.queryGroups.forEach((group, index) => {
+      const groupId = typeof group?.id === "string" && group.id.length > 0 ? group.id : `group-${index + 1}`;
+      appendFilters(Array.isArray(group?.filters) ? group.filters : [], groupId);
+    });
+  }
+  return collected;
 };
 
 const findMatchingDateFilterId = (
@@ -980,7 +1036,8 @@ const DashboardLayoutEditor = ({
     grid.opts.minRow = resolvedMinRow;
     grid.opts.maxRow = undefined;
     if (grid.engine) {
-      grid.engine.maxRow = undefined;
+      const engine = grid.engine as { maxRow?: number };
+      engine.maxRow = undefined;
     }
     const gridWithUpdate = grid as GridStack & { _updateContainerHeight?: () => void };
     gridWithUpdate._updateContainerHeight?.();
@@ -1020,7 +1077,7 @@ const DashboardLayoutEditor = ({
       },
       container,
     );
-    lastMinRowByModeRef.current[layoutMode] = undefined;
+    delete lastMinRowByModeRef.current[layoutMode];
     [LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP, LAYOUT_EDITOR_COLUMN_COUNT_MOBILE].forEach((count) => {
       container.classList.remove(`gs-${count}`);
     });
@@ -1473,18 +1530,185 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     const viewConfig = cardDraft.viewConfig as DashboardCardViewConfig;
     return isSpotlightCardViewConfig(viewConfig) ? viewConfig : null;
   }, [cardDraft]);
-  const selectedVisualDateFilterId = useMemo(
-    () =>
-      visualDashboardConfig ? findMatchingDateFilterId(visualDashboardConfig.dateFilter, templateDateFilterMetadata) : null,
-    [templateDateFilterMetadata, visualDashboardConfig],
+
+  const visualDateFilterOptionOverrides = useMemo(
+    () => buildDateFilterOptionOverrides(visualDashboardConfig?.dateFilterOptions ?? null),
+    [visualDashboardConfig],
   );
-  const selectedSpotlightDateFilterId = useMemo(
-    () =>
-      spotlightDashboardConfig
-        ? findMatchingDateFilterId(spotlightDashboardConfig.dateFilter, templateDateFilterMetadata)
-        : null,
-    [spotlightDashboardConfig, templateDateFilterMetadata],
+
+  const spotlightDateFilterOptionOverrides = useMemo(
+    () => buildDateFilterOptionOverrides(spotlightDashboardConfig?.dateFilterOptions ?? null),
+    [spotlightDashboardConfig],
   );
+
+  const visualAllowedDateFilterIds = useMemo(() => {
+    if (!visualDashboardConfig) {
+      return [];
+    }
+    const explicitIds = Array.isArray(visualDashboardConfig.dateFilterOptions)
+      ? visualDashboardConfig.dateFilterOptions
+          .map((option) => buildDateFilterOptionId(option))
+          .filter((id): id is string => typeof id === "string" && id.length > 0)
+      : [];
+    if (explicitIds.length > 0) {
+      return explicitIds;
+    }
+    return templateDateFilterOptions.map((option) => option.value);
+  }, [templateDateFilterOptions, visualDashboardConfig]);
+
+  const spotlightAllowedDateFilterIds = useMemo(() => {
+    if (!spotlightDashboardConfig) {
+      return [];
+    }
+    const explicitIds = Array.isArray(spotlightDashboardConfig.dateFilterOptions)
+      ? spotlightDashboardConfig.dateFilterOptions
+          .map((option) => buildDateFilterOptionId(option))
+          .filter((id): id is string => typeof id === "string" && id.length > 0)
+      : [];
+    if (explicitIds.length > 0) {
+      return explicitIds;
+    }
+    return templateDateFilterOptions.map((option) => option.value);
+  }, [spotlightDashboardConfig, templateDateFilterOptions]);
+
+  const baseDateFilterIdSet = useMemo(
+    () => new Set(templateDateFilterOptions.map((option) => option.value)),
+    [templateDateFilterOptions],
+  );
+
+  const buildDateFilterOptionsFromIds = useCallback(
+    (
+      ids: string[],
+      metadata: Map<string, { modelId: string; fieldId: string; operator: FilterOperator }>,
+      labels: Map<string, string>,
+      overrides?: Map<string, DashboardDateFilterOption>,
+    ) =>
+      ids
+        .map((id) => {
+          const override = overrides?.get(id);
+          const entry = metadata.get(id);
+          const modelId = override?.modelId ?? entry?.modelId;
+          const fieldId = override?.fieldId ?? entry?.fieldId;
+          const operator = override?.operator ?? entry?.operator;
+          if (!modelId || !fieldId || !operator) {
+            return null;
+          }
+          const label = override?.label ?? labels.get(id) ?? `${modelId}.${fieldId}`;
+          return {
+            id,
+            modelId,
+            fieldId,
+            operator,
+            ...(override?.filterIndex !== undefined ? { filterIndex: override.filterIndex } : {}),
+            ...(override?.clauseSql ? { clauseSql: override.clauseSql } : {}),
+            ...(override?.filterPath ? { filterPath: [...override.filterPath] } : {}),
+            label,
+            ...(override?.targets
+              ? { targets: override.targets.map((target) => ({ ...target })) }
+              : {}),
+          };
+        })
+        .filter((entry): entry is DashboardDateFilterOption => Boolean(entry)),
+    [],
+  );
+
+  const visualDateFilterOptionDetails = useMemo(() => {
+    if (!visualDashboardConfig) {
+      return [];
+    }
+    return buildDateFilterOptionsFromIds(
+      visualAllowedDateFilterIds,
+      templateDateFilterMetadata,
+      templateDateFilterLabelById,
+      visualDateFilterOptionOverrides,
+    );
+  }, [
+    buildDateFilterOptionsFromIds,
+    templateDateFilterLabelById,
+    templateDateFilterMetadata,
+    visualAllowedDateFilterIds,
+    visualDashboardConfig,
+    visualDateFilterOptionOverrides,
+  ]);
+
+  const spotlightDateFilterOptionDetails = useMemo(() => {
+    if (!spotlightDashboardConfig) {
+      return [];
+    }
+    return buildDateFilterOptionsFromIds(
+      spotlightAllowedDateFilterIds,
+      templateDateFilterMetadata,
+      templateDateFilterLabelById,
+      spotlightDateFilterOptionOverrides,
+    );
+  }, [
+    buildDateFilterOptionsFromIds,
+    spotlightAllowedDateFilterIds,
+    spotlightDashboardConfig,
+    spotlightDateFilterOptionOverrides,
+    templateDateFilterLabelById,
+    templateDateFilterMetadata,
+  ]);
+
+  const visualDateFilterSelectOptions = useMemo(
+    () =>
+      visualDateFilterOptionDetails.map((option) => ({
+        value: option.id,
+        label: option.label ?? templateDateFilterLabelById.get(option.id) ?? option.id,
+      })),
+    [templateDateFilterLabelById, visualDateFilterOptionDetails],
+  );
+
+  const spotlightDateFilterSelectOptions = useMemo(
+    () =>
+      spotlightDateFilterOptionDetails.map((option) => ({
+        value: option.id,
+        label: option.label ?? templateDateFilterLabelById.get(option.id) ?? option.id,
+      })),
+    [spotlightDateFilterOptionDetails, templateDateFilterLabelById],
+  );
+  const selectedVisualDateFilterId = useMemo(() => {
+    if (!visualDashboardConfig) {
+      return null;
+    }
+    const allowedSet = new Set(visualAllowedDateFilterIds);
+    const selections = Array.isArray(visualDashboardConfig.dateFilterSelections)
+      ? visualDashboardConfig.dateFilterSelections
+      : [];
+    const selectedFromSelections = selections.find((id) => allowedSet.has(id));
+    if (selectedFromSelections) {
+      return selectedFromSelections;
+    }
+    const fallbackId = findMatchingDateFilterId(
+      visualDashboardConfig.dateFilter,
+      templateDateFilterMetadata,
+    );
+    if (fallbackId && allowedSet.has(fallbackId)) {
+      return fallbackId;
+    }
+    return visualAllowedDateFilterIds[0] ?? null;
+  }, [templateDateFilterMetadata, visualAllowedDateFilterIds, visualDashboardConfig]);
+  const selectedSpotlightDateFilterId = useMemo(() => {
+    if (!spotlightDashboardConfig) {
+      return null;
+    }
+    const allowedSet = new Set(spotlightAllowedDateFilterIds);
+    const selections = Array.isArray(spotlightDashboardConfig.dateFilterSelections)
+      ? spotlightDashboardConfig.dateFilterSelections
+      : [];
+    const selectedFromSelections = selections.find((id) => allowedSet.has(id));
+    if (selectedFromSelections) {
+      return selectedFromSelections;
+    }
+    const fallbackId = findMatchingDateFilterId(
+      spotlightDashboardConfig.dateFilter,
+      templateDateFilterMetadata,
+    );
+    if (fallbackId && allowedSet.has(fallbackId)) {
+      return fallbackId;
+    }
+    return spotlightAllowedDateFilterIds[0] ?? null;
+  }, [spotlightAllowedDateFilterIds, spotlightDashboardConfig, templateDateFilterMetadata]);
 
   const updateVisualCardDraft = useCallback(
     (updater: (current: DashboardVisualCardViewConfig) => DashboardVisualCardViewConfig) => {
@@ -1532,7 +1756,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     ): string[] => {
       if (Array.isArray(config.dateFilterOptions)) {
         const optionIds = config.dateFilterOptions
-          .map((option) => option.id)
+          .map((option) => buildDateFilterOptionId(option))
           .filter((id): id is string => typeof id === "string" && id.length > 0);
         if (optionIds.length > 0) {
           return optionIds;
@@ -1546,36 +1770,31 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     [],
   );
 
-  const buildDateFilterOptionsFromIds = useCallback(
+  const resolveDateFilterMetadataForOption = useCallback(
     (
-      ids: string[],
+      id: string,
       metadata: Map<string, { modelId: string; fieldId: string; operator: FilterOperator }>,
-      labels: Map<string, string>,
-    ) =>
-      ids
-        .map((id) => {
-          const entry = metadata.get(id);
-          if (!entry) {
-            return null;
-          }
-          const label = labels.get(id);
-          return {
-            id,
-            modelId: entry.modelId,
-            fieldId: entry.fieldId,
-            operator: entry.operator,
-            ...(label ? { label } : {}),
-          };
-        })
-        .filter(
-          (entry): entry is {
-            id: string;
-            modelId: string;
-            fieldId: string;
-            operator: FilterOperator;
-            label?: string;
-          } => Boolean(entry),
-        ),
+      overrides: Map<string, DashboardDateFilterOption>,
+    ): { modelId: string; fieldId: string; operator: FilterOperator } | null => {
+      const override = overrides.get(id);
+      if (override?.targets && override.targets.length > 0) {
+        const target = override.targets[0];
+        return {
+          modelId: target.modelId,
+          fieldId: target.fieldId,
+          operator: target.operator,
+        };
+      }
+      if (override) {
+        return {
+          modelId: override.modelId,
+          fieldId: override.fieldId,
+          operator: override.operator,
+        };
+      }
+      const entry = metadata.get(id);
+      return entry ? { ...entry } : null;
+    },
     [],
   );
 
@@ -1583,17 +1802,13 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     if (!visualDashboardConfig) {
       return [];
     }
-    const allIds = templateDateFilterOptions.map((option) => option.value);
-    const allowedIds = resolveAllowedDateFilterIds(
-      visualDashboardConfig,
-      allIds,
-      selectedVisualDateFilterId,
+    return visualAllowedDateFilterIds.filter(
+      (id) => id !== selectedVisualDateFilterId && baseDateFilterIdSet.has(id),
     );
-    return allowedIds.filter((id) => id !== selectedVisualDateFilterId);
   }, [
-    resolveAllowedDateFilterIds,
+    baseDateFilterIdSet,
     selectedVisualDateFilterId,
-    templateDateFilterOptions,
+    visualAllowedDateFilterIds,
     visualDashboardConfig,
   ]);
 
@@ -1601,18 +1816,14 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     if (!spotlightDashboardConfig) {
       return [];
     }
-    const allIds = templateDateFilterOptions.map((option) => option.value);
-    const allowedIds = resolveAllowedDateFilterIds(
-      spotlightDashboardConfig,
-      allIds,
-      selectedSpotlightDateFilterId,
+    return spotlightAllowedDateFilterIds.filter(
+      (id) => id !== selectedSpotlightDateFilterId && baseDateFilterIdSet.has(id),
     );
-    return allowedIds.filter((id) => id !== selectedSpotlightDateFilterId);
   }, [
-    resolveAllowedDateFilterIds,
+    baseDateFilterIdSet,
     selectedSpotlightDateFilterId,
     spotlightDashboardConfig,
-    templateDateFilterOptions,
+    spotlightAllowedDateFilterIds,
   ]);
 
   useEffect(() => {
@@ -1909,6 +2120,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
           allIds,
           templateDateFilterMetadata,
           templateDateFilterLabelById,
+          buildDateFilterOptionOverrides(viewConfig.dateFilterOptions ?? null),
         );
         if (resolvedOptions.length > 0) {
           viewConfig = {
@@ -1924,6 +2136,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
           allIds,
           templateDateFilterMetadata,
           templateDateFilterLabelById,
+          buildDateFilterOptionOverrides(viewConfig.dateFilterOptions ?? null),
         );
         if (resolvedOptions.length > 0) {
           viewConfig = {
@@ -2273,16 +2486,21 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                     <>
                       <Select
                         label="Date field"
-                        data={templateDateFilterOptions}
+                        data={visualDateFilterSelectOptions}
                         value={selectedVisualDateFilterId}
                         placeholder="Select date field"
                         onChange={(value) => {
                           updateVisualCardDraft((current) => {
                             if (!value) {
-                              const { dateFilter, dateFilterOptions, ...rest } = current;
+                              const { dateFilter, dateFilterOptions, dateFilterSelections, ...rest } = current;
                               return rest;
                             }
-                            const metadata = templateDateFilterMetadata.get(value);
+                            const overrides = buildDateFilterOptionOverrides(current.dateFilterOptions ?? null);
+                            const metadata = resolveDateFilterMetadataForOption(
+                              value,
+                              templateDateFilterMetadata,
+                              overrides,
+                            );
                             if (!metadata) {
                               return current;
                             }
@@ -2292,16 +2510,32 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                               allIds,
                               selectedVisualDateFilterId,
                             );
-                            const nextIds = [value, ...allowedIds.filter((id) => id !== value)];
+                            const groupIds = Array.from(overrides.values())
+                              .filter((option) => Array.isArray(option.targets) && option.targets.length > 0)
+                              .map((option) => option.id);
+                            const nextIds = Array.from(
+                              new Set([value, ...allowedIds.filter((id) => id !== value), ...groupIds]),
+                            );
                             const nextOptions = buildDateFilterOptionsFromIds(
                               nextIds,
                               templateDateFilterMetadata,
                               templateDateFilterLabelById,
+                              overrides,
                             );
+                            const configured = Array.isArray(current.dateFilterSelections)
+                              ? current.dateFilterSelections
+                              : [];
+                            const nextSelections = configured.filter((id) => nextIds.includes(id));
+                            if (nextSelections.length === 0) {
+                              nextSelections.push(value);
+                            } else if (!nextSelections.includes(value)) {
+                              nextSelections.unshift(value);
+                            }
                             return {
                               ...current,
                               dateFilter: { ...metadata },
                               ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
+                              ...(nextSelections.length > 0 ? { dateFilterSelections: nextSelections } : {}),
                             };
                           });
                         }}
@@ -2318,21 +2552,35 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                               templateDateFilterOptions.some((option) => option.value === entry),
                             );
                             const defaultId = selectedVisualDateFilterId;
-                            const nextIds = defaultId
+                            const overrides = buildDateFilterOptionOverrides(current.dateFilterOptions ?? null);
+                            const groupIds = Array.from(overrides.values())
+                              .filter((option) => Array.isArray(option.targets) && option.targets.length > 0)
+                              .map((option) => option.id);
+                            const nextBaseIds = defaultId
                               ? [defaultId, ...normalized.filter((id) => id !== defaultId)]
                               : normalized;
+                            const nextIds = Array.from(new Set([...nextBaseIds, ...groupIds]));
                             if (nextIds.length === 0) {
-                              const { dateFilterOptions, ...rest } = current;
+                              const { dateFilterOptions, dateFilterSelections, ...rest } = current;
                               return rest;
                             }
                             const nextOptions = buildDateFilterOptionsFromIds(
                               nextIds,
                               templateDateFilterMetadata,
                               templateDateFilterLabelById,
+                              overrides,
                             );
+                            const configured = Array.isArray(current.dateFilterSelections)
+                              ? current.dateFilterSelections
+                              : [];
+                            const nextSelections = configured.filter((id) => nextIds.includes(id));
+                            if (nextSelections.length === 0 && defaultId) {
+                              nextSelections.push(defaultId);
+                            }
                             return {
                               ...current,
                               ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
+                              ...(nextSelections.length > 0 ? { dateFilterSelections: nextSelections } : {}),
                             };
                           });
                         }}
@@ -2437,16 +2685,21 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                     <>
                       <Select
                         label="Date field"
-                        data={templateDateFilterOptions}
+                        data={spotlightDateFilterSelectOptions}
                         value={selectedSpotlightDateFilterId}
                         placeholder="Select date field"
                         onChange={(value) => {
                           updateSpotlightCardDraft((current) => {
                             if (!value) {
-                              const { dateFilter, dateFilterOptions, ...rest } = current;
+                              const { dateFilter, dateFilterOptions, dateFilterSelections, ...rest } = current;
                               return rest;
                             }
-                            const metadata = templateDateFilterMetadata.get(value);
+                            const overrides = buildDateFilterOptionOverrides(current.dateFilterOptions ?? null);
+                            const metadata = resolveDateFilterMetadataForOption(
+                              value,
+                              templateDateFilterMetadata,
+                              overrides,
+                            );
                             if (!metadata) {
                               return current;
                             }
@@ -2456,16 +2709,32 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                               allIds,
                               selectedSpotlightDateFilterId,
                             );
-                            const nextIds = [value, ...allowedIds.filter((id) => id !== value)];
+                            const groupIds = Array.from(overrides.values())
+                              .filter((option) => Array.isArray(option.targets) && option.targets.length > 0)
+                              .map((option) => option.id);
+                            const nextIds = Array.from(
+                              new Set([value, ...allowedIds.filter((id) => id !== value), ...groupIds]),
+                            );
                             const nextOptions = buildDateFilterOptionsFromIds(
                               nextIds,
                               templateDateFilterMetadata,
                               templateDateFilterLabelById,
+                              overrides,
                             );
+                            const configured = Array.isArray(current.dateFilterSelections)
+                              ? current.dateFilterSelections
+                              : [];
+                            const nextSelections = configured.filter((id) => nextIds.includes(id));
+                            if (nextSelections.length === 0) {
+                              nextSelections.push(value);
+                            } else if (!nextSelections.includes(value)) {
+                              nextSelections.unshift(value);
+                            }
                             return {
                               ...current,
                               dateFilter: { ...metadata },
                               ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
+                              ...(nextSelections.length > 0 ? { dateFilterSelections: nextSelections } : {}),
                             };
                           });
                         }}
@@ -2482,21 +2751,35 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                               templateDateFilterOptions.some((option) => option.value === entry),
                             );
                             const defaultId = selectedSpotlightDateFilterId;
-                            const nextIds = defaultId
+                            const overrides = buildDateFilterOptionOverrides(current.dateFilterOptions ?? null);
+                            const groupIds = Array.from(overrides.values())
+                              .filter((option) => Array.isArray(option.targets) && option.targets.length > 0)
+                              .map((option) => option.id);
+                            const nextBaseIds = defaultId
                               ? [defaultId, ...normalized.filter((id) => id !== defaultId)]
                               : normalized;
+                            const nextIds = Array.from(new Set([...nextBaseIds, ...groupIds]));
                             if (nextIds.length === 0) {
-                              const { dateFilterOptions, ...rest } = current;
+                              const { dateFilterOptions, dateFilterSelections, ...rest } = current;
                               return rest;
                             }
                             const nextOptions = buildDateFilterOptionsFromIds(
                               nextIds,
                               templateDateFilterMetadata,
                               templateDateFilterLabelById,
+                              overrides,
                             );
+                            const configured = Array.isArray(current.dateFilterSelections)
+                              ? current.dateFilterSelections
+                              : [];
+                            const nextSelections = configured.filter((id) => nextIds.includes(id));
+                            if (nextSelections.length === 0 && defaultId) {
+                              nextSelections.push(defaultId);
+                            }
                             return {
                               ...current,
                               ...(nextOptions.length > 0 ? { dateFilterOptions: nextOptions } : {}),
+                              ...(nextSelections.length > 0 ? { dateFilterSelections: nextSelections } : {}),
                             };
                           });
                         }}

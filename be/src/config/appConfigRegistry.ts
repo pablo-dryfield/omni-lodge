@@ -125,6 +125,16 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     validation: { format: 'timezone' },
   },
   {
+    key: 'BOOKING_DYNAMIC_PARSERS',
+    label: 'Dynamic booking parsers',
+    description:
+      'JSON array of rule-based parser definitions for new booking partners. These run before built-in parsers.',
+    category: 'Booking Parsers',
+    valueType: 'json',
+    defaultValue: '[]',
+    impact: 'medium',
+  },
+  {
     key: 'AIRBNB_TIMEZONE',
     label: 'Airbnb parser timezone',
     description: 'Override timezone for Airbnb booking emails.',
