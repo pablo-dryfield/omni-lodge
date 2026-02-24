@@ -3515,6 +3515,7 @@ const loadCounterById = useCallback(
           configuredLabels.add(label);
         }
       });
+      configuredLabels.add(CUSTOM_TICKET_LABEL);
       optionsByChannel[channelId] = Array.from(configuredLabels).sort(
         (left, right) =>
           (displayOrder.get(left) ?? Number.MAX_SAFE_INTEGER) -
