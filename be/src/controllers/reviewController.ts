@@ -1,9 +1,5 @@
 import { Request, Response } from 'express';
-import { DataType } from 'sequelize-typescript';
-import Review from '../models/Review.js';
-import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { fetchTripAdvisorRaw, TRIP_ADVISOR_PAGE_SIZE } from '../scrapers/tripAdvisorScraper.js';
-import { scrapeGetYourGuideReviews } from '../scrapers/getYourGuideScraper.js';
 import axios from 'axios';
 import dotenv from 'dotenv';
 import { getConfigValue } from '../services/configService.js';
@@ -14,9 +10,14 @@ dotenv.config({ path: envFile });
 
 const ACCOUNT_ID = '113350814099227260053';
 const LOCATION_ID = '13077434667897843628';
-const resolveGetYourGuideTtl = (): number => Number(getConfigValue('GYG_CACHE_TTL_MS') ?? 5 * 60 * 1000);
-const resolveGetYourGuideMax = (): number => Number(getConfigValue('GYG_MAX_LIMIT') ?? 150);
-const resolveGetYourGuideMin = (): number => Number(getConfigValue('GYG_MIN_LIMIT') ?? 20);
+const DEFAULT_GYG_ACTIVITY_URL =
+  'https://www.getyourguide.com/en-gb/krakow-l40/krakow-pub-crawl-1h-open-bar-vip-entry-welcome-shots-t443425/?ranking_uuid=6bad85ec-f460-4e0a-9bb0-160af6978600';
+const DEFAULT_AIRBNB_OPERATION_NAME = 'ReviewsModalContentQuery';
+const DEFAULT_AIRBNB_PERSISTED_HASH = '04698412017b60fca29eb960d89ed9a84a5ea612800a3ea6964ec42c39aa4323';
+const DEFAULT_AIRBNB_ACTIVITY_LISTING_ID = 'QWN0aXZpdHlMaXN0aW5nOjY4MDk5OTI=';
+const DEFAULT_AIRBNB_API_KEY = 'd306zoyjsyarp7ifhu67rjxn52tv0t20';
+const DEFAULT_AIRBNB_LOCALE = 'en';
+const DEFAULT_AIRBNB_CURRENCY = 'PLN';
 
 export const getAllGoogleReviews = async (req: Request, res: Response) => {
   try {
@@ -114,6 +115,24 @@ const mapScoreToStarRating = (score?: number): "ONE" | "TWO" | "THREE" | "FOUR" 
   return "FIVE";
 };
 
+const parseLocalizedAirbnbDate = (value?: string | null): string => {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized) return new Date().toISOString();
+  const parsed = new Date(`${normalized} 1, 00:00:00 UTC`);
+  if (Number.isNaN(parsed.getTime())) {
+    return new Date().toISOString();
+  }
+  return parsed.toISOString();
+};
+
+const resolveStringConfig = (key: string, fallback: string): string => {
+  const configuredValue = getConfigValue(key);
+  if (typeof configuredValue === 'string' && configuredValue.trim().length > 0) {
+    return configuredValue.trim();
+  }
+  return fallback;
+};
+
 export const getTripAdvisorReviews = async (req: Request, res: Response) => {
   try {
     const offsetParam =
@@ -151,43 +170,138 @@ export const getTripAdvisorReviews = async (req: Request, res: Response) => {
   }
 };
 
-export const getGetYourGuideReviews = async (req: Request, res: Response) => {
+export const getAirbnbReviews = async (req: Request, res: Response) => {
   try {
-    const forceRefresh = typeof req.query.forceRefresh === 'string' && req.query.forceRefresh === 'true';
-    const requestedLimit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : undefined;
-    const { reviews: scrapedReviews, fetchedAt, fromCache, limit } = await scrapeGetYourGuideReviews({
-      forceRefresh,
-      limit: requestedLimit,
-    });
-    const normalized = scrapedReviews.map((review, index) => ({
-      reviewId: review.reviewId ?? `getyourguide-${index}-${review.date ?? Date.now()}`,
-      comment: review.comment ?? '',
-      createTime: review.date ?? new Date().toISOString(),
-      updateTime: review.date ?? new Date().toISOString(),
-      starRating: mapScoreToStarRating(review.rating),
-      reviewer: {
-        displayName: review.location ? `${review.name} (${review.location})` : review.name,
-        profilePhotoUrl: review.avatarUrl ?? '',
+    const cursor = typeof req.query.cursor === 'string' && req.query.cursor.trim().length > 0
+      ? req.query.cursor.trim()
+      : undefined;
+    const operationName = resolveStringConfig('AIRBNB_REVIEWS_OPERATION_NAME', DEFAULT_AIRBNB_OPERATION_NAME);
+    const persistedHash = resolveStringConfig('AIRBNB_REVIEWS_PERSISTED_HASH', DEFAULT_AIRBNB_PERSISTED_HASH);
+    const activityListingId = resolveStringConfig('AIRBNB_REVIEWS_ACTIVITY_LISTING_ID', DEFAULT_AIRBNB_ACTIVITY_LISTING_ID);
+    const locale = resolveStringConfig('AIRBNB_REVIEWS_LOCALE', DEFAULT_AIRBNB_LOCALE);
+    const currency = resolveStringConfig('AIRBNB_REVIEWS_CURRENCY', DEFAULT_AIRBNB_CURRENCY);
+    const apiKey = resolveStringConfig('AIRBNB_REVIEWS_API_KEY', DEFAULT_AIRBNB_API_KEY);
+    const reviewsEndpoint = `https://www.airbnb.com/api/v3/${operationName}/${persistedHash}`;
+
+    const variables: Record<string, unknown> = {
+      id: activityListingId,
+      sort: {
+        recency: 'DESCENDING',
       },
-    }));
+    };
+    if (cursor) {
+      variables.after = cursor;
+    }
+
+    const response = await axios.get(reviewsEndpoint, {
+      params: {
+        operationName,
+        locale,
+        currency,
+        variables: JSON.stringify(variables),
+        extensions: JSON.stringify({
+          persistedQuery: {
+            version: 1,
+            sha256Hash: persistedHash,
+          },
+        }),
+      },
+      headers: {
+        accept: 'application/json',
+        'x-airbnb-api-key': apiKey,
+        'x-airbnb-graphql-platform': 'web',
+        'user-agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      },
+    });
+
+    const apiErrors = Array.isArray(response.data?.errors) ? response.data.errors : [];
+    if (apiErrors.length > 0) {
+      const firstError = apiErrors[0];
+      const topMessage =
+        typeof firstError?.message === 'string' ? firstError.message : 'unknown Airbnb API error';
+      const nestedMessage =
+        typeof firstError?.extensions?.response?.body?.error_message === 'string'
+          ? firstError.extensions.response.body.error_message
+          : null;
+      throw new Error(`Airbnb API error: ${nestedMessage ?? topMessage}`);
+    }
+
+    const reviewsSearch = response.data?.data?.node?.reviewsSearch;
+    const pageInfo = reviewsSearch?.pageInfo;
+    const edges = Array.isArray(reviewsSearch?.edges) ? reviewsSearch.edges : [];
+
+    const normalized = edges.map((edge: any, index: number) => {
+      const review = edge?.node?.review ?? {};
+      const reviewer = review?.reviewer ?? {};
+      const contextualReviewer = review?.contextualReviewer ?? {};
+
+      const displayName =
+        contextualReviewer?.displayFirstName ??
+        reviewer?.displayFirstName ??
+        'Airbnb guest';
+      const profilePhotoUrl =
+        contextualReviewer?.profilePictureUrl ??
+        reviewer?.presentation?.avatar?.avatarImage?.baseUrl ??
+        '';
+
+      const comment =
+        review?.commentV2 ??
+        review?.localizedCommentV2?.localizedStringWithTranslationPreference ??
+        edge?.node?.highlightedComment ??
+        '';
+
+      const createdAt = parseLocalizedAirbnbDate(review?.localizedCreatedAtDate);
+
+      return {
+        reviewId: review?.id ?? `airbnb-${cursor ?? 'first'}-${index}-${createdAt}`,
+        comment,
+        createTime: createdAt,
+        updateTime: createdAt,
+        starRating: mapScoreToStarRating(Number(review?.rating ?? 0)),
+        reviewer: {
+          displayName,
+          profilePhotoUrl,
+        },
+      };
+    });
+
     res.status(200).json([
       {
         data: normalized,
         columns: [
           {
-            lastFetched: fetchedAt,
-            fromCache,
-            cacheTtlMs: resolveGetYourGuideTtl(),
-            limit,
-            requestedLimit: requestedLimit ?? null,
-            maxLimit: resolveGetYourGuideMax(),
-            minLimit: resolveGetYourGuideMin(),
+            cursorUsed: cursor ?? null,
+            endCursor: pageInfo?.endCursor ?? null,
+            hasMore: Boolean(pageInfo?.hasNextPage),
+            totalCount:
+              typeof pageInfo?.totalCount === 'number'
+                ? pageInfo.totalCount
+                : normalized.length,
           },
         ],
       },
     ]);
+  } catch (error: any) {
+    const details = error?.response?.data || error?.message || error;
+    console.error('Error fetching Airbnb reviews:', details);
+    const detailMessage = typeof error?.message === 'string' ? error.message : undefined;
+    res.status(500).json({
+      error: 'Failed to fetch reviews from Airbnb',
+      ...(detailMessage ? { details: detailMessage } : {}),
+    });
+  }
+};
+
+export const getGetYourGuideReviewLink = async (_req: Request, res: Response) => {
+  try {
+    const configuredUrl = (getConfigValue('GYG_ACTIVITY_URL') as string | null) ?? DEFAULT_GYG_ACTIVITY_URL;
+    const url = typeof configuredUrl === 'string' && configuredUrl.trim().length > 0
+      ? configuredUrl.trim()
+      : DEFAULT_GYG_ACTIVITY_URL;
+    res.status(200).json({ url });
   } catch (error) {
-    console.error('Error scraping GetYourGuide:', error);
-    res.status(500).json({ error: 'Failed to fetch reviews from GetYourGuide' });
+    console.error('Error resolving GetYourGuide review link:', error);
+    res.status(200).json({ url: DEFAULT_GYG_ACTIVITY_URL });
   }
 };

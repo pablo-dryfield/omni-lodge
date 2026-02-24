@@ -5,6 +5,11 @@ import Channel from '../models/Channel.js';
 import Product from '../models/Product.js';
 import User from '../models/User.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
+import {
+  normalizeCurrencyCode,
+  normalizeWalkInTicketType,
+  WALK_IN_TICKET_TYPE_LABELS,
+} from '../constants/walkInTicketTypes.js';
 
 const buildColumns = () => {
   const attributes = ChannelProductPrice.getAttributes();
@@ -22,7 +27,31 @@ const buildColumns = () => {
   ]);
 };
 
-const normalizePayload = (payload: Partial<ChannelProductPrice>) => {
+const toResponseRecord = (record: ChannelProductPrice): Record<string, unknown> => {
+  const plain = record.get({ plain: true }) as Record<string, unknown>;
+  const ticketType = normalizeWalkInTicketType(record.ticketType);
+  const currencyCode = normalizeCurrencyCode(record.currencyCode);
+  return {
+    ...plain,
+    ticketType,
+    ticketTypeLabel: WALK_IN_TICKET_TYPE_LABELS[ticketType],
+    currencyCode,
+    channelName: record.channel?.name ?? null,
+    productName: record.product?.name ?? null,
+    createdByName: record.createdByUser
+      ? `${record.createdByUser.firstName ?? ''} ${record.createdByUser.lastName ?? ''}`.trim()
+      : null,
+    updatedByName: record.updatedByUser
+      ? `${record.updatedByUser.firstName ?? ''} ${record.updatedByUser.lastName ?? ''}`.trim()
+      : null,
+  };
+};
+
+const normalizePayload = (
+  payload: Partial<ChannelProductPrice>,
+  options?: { applyDefaults?: boolean },
+) => {
+  const applyDefaults = options?.applyDefaults ?? false;
   const next: Record<string, unknown> = {};
 
   if (payload.channelId != null) {
@@ -34,11 +63,23 @@ const normalizePayload = (payload: Partial<ChannelProductPrice>) => {
   if (payload.price != null) {
     next.price = Number(payload.price);
   }
+  if (payload.ticketType != null) {
+    next.ticketType = normalizeWalkInTicketType(String(payload.ticketType));
+  }
+  if (payload.currencyCode != null && payload.currencyCode !== '') {
+    next.currencyCode = normalizeCurrencyCode(String(payload.currencyCode));
+  }
   if (payload.validFrom != null && payload.validFrom !== '') {
     next.validFrom = payload.validFrom;
   }
   if (payload.validTo !== undefined) {
     next.validTo = payload.validTo === null || payload.validTo === '' ? null : payload.validTo;
+  }
+  if (applyDefaults && !Object.prototype.hasOwnProperty.call(next, 'ticketType')) {
+    next.ticketType = 'normal';
+  }
+  if (applyDefaults && !Object.prototype.hasOwnProperty.call(next, 'currencyCode')) {
+    next.currencyCode = 'PLN';
   }
 
   return next;
@@ -53,6 +94,12 @@ export const listChannelProductPrices = async (req: Request, res: Response): Pro
     if (req.query.productId != null && req.query.productId !== '') {
       where.productId = Number(req.query.productId);
     }
+    if (req.query.ticketType != null && req.query.ticketType !== '') {
+      where.ticketType = normalizeWalkInTicketType(String(req.query.ticketType));
+    }
+    if (req.query.currencyCode != null && req.query.currencyCode !== '') {
+      where.currencyCode = normalizeCurrencyCode(String(req.query.currencyCode));
+    }
 
     const records = await ChannelProductPrice.findAll({
       where,
@@ -65,25 +112,14 @@ export const listChannelProductPrices = async (req: Request, res: Response): Pro
       order: [
         ['channelId', 'ASC'],
         ['productId', 'ASC'],
+        ['ticketType', 'ASC'],
+        ['currencyCode', 'ASC'],
         ['validFrom', 'DESC'],
         ['id', 'DESC'],
       ],
     });
 
-    const data = records.map((record) => {
-      const plain = record.get({ plain: true }) as Record<string, unknown>;
-      return {
-        ...plain,
-        channelName: record.channel?.name ?? null,
-        productName: record.product?.name ?? null,
-        createdByName: record.createdByUser
-          ? `${record.createdByUser.firstName ?? ''} ${record.createdByUser.lastName ?? ''}`.trim()
-          : null,
-        updatedByName: record.updatedByUser
-          ? `${record.updatedByUser.firstName ?? ''} ${record.updatedByUser.lastName ?? ''}`.trim()
-          : null,
-      };
-    });
+    const data = records.map((record) => toResponseRecord(record));
 
     res.status(200).json([{ data, columns: buildColumns() }]);
   } catch (error) {
@@ -94,7 +130,7 @@ export const listChannelProductPrices = async (req: Request, res: Response): Pro
 
 export const createChannelProductPrice = async (req: Request, res: Response): Promise<void> => {
   try {
-    const payload = normalizePayload(req.body);
+    const payload = normalizePayload(req.body, { applyDefaults: true });
     const created = await ChannelProductPrice.create(payload);
     const record = await ChannelProductPrice.findByPk(created.id, {
       include: [
@@ -105,7 +141,12 @@ export const createChannelProductPrice = async (req: Request, res: Response): Pr
       ],
     });
 
-    res.status(201).json([record]);
+    if (!record) {
+      res.status(404).json([{ message: 'Channel product price not found after creation' }]);
+      return;
+    }
+
+    res.status(201).json([toResponseRecord(record)]);
   } catch (error) {
     const message = (error as ErrorWithMessage).message;
     res.status(500).json([{ message }]);
@@ -130,7 +171,11 @@ export const updateChannelProductPrice = async (req: Request, res: Response): Pr
         { model: User, as: 'updatedByUser', attributes: ['id', 'firstName', 'lastName'] },
       ],
     });
-    res.status(200).json([record]);
+    if (!record) {
+      res.status(404).json([{ message: 'Channel product price not found after update' }]);
+      return;
+    }
+    res.status(200).json([toResponseRecord(record)]);
   } catch (error) {
     const message = (error as ErrorWithMessage).message;
     res.status(500).json([{ message }]);

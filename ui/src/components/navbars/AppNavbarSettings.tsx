@@ -4,10 +4,7 @@ import {
   IconGauge,
   IconUsers,
   IconIdBadge,
-  IconLayoutSidebar,
-  IconComponents,
   IconShieldLock,
-  IconLayoutSidebarLeftExpand,
   IconTools,
   IconPackage,
   IconCategory2,
@@ -103,13 +100,6 @@ const settingsNav: SettingsNavSection[] = [
     ],
   },
   {
-    title: "Navigation",
-    links: [
-      { label: "Pages", to: "/settings/pages", slug: PAGE_SLUGS.settingsPages, icon: <IconLayoutSidebar size={20} /> },
-      { label: "Modules", to: "/settings/modules", slug: PAGE_SLUGS.settingsModules, icon: <IconComponents size={20} /> },
-    ],
-  },
-  {
     title: "Catalog",
     links: [
       {
@@ -199,19 +189,7 @@ const settingsNav: SettingsNavSection[] = [
   {
     title: "Permissions",
     links: [
-      { label: "Overview", to: "/settings/permissions", slug: PAGE_SLUGS.settingsPermissions, icon: <IconShieldLock size={20} /> },
-      {
-        label: "Page Permissions",
-        to: "/settings/permissions/pages",
-        slug: PAGE_SLUGS.settingsPagePermissions,
-        icon: <IconLayoutSidebarLeftExpand size={20} />,
-      },
-      {
-        label: "Module Permissions",
-        to: "/settings/permissions/modules",
-        slug: PAGE_SLUGS.settingsModulePermissions,
-        icon: <IconTools size={20} />,
-      },
+      { label: "Access Control", to: "/settings/permissions", slug: PAGE_SLUGS.settingsPermissions, icon: <IconShieldLock size={20} /> },
     ],
   },
   {

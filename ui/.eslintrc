@@ -2,6 +2,21 @@
     "plugins": [
         "react-hooks"
     ],
+    "overrides": [
+        {
+            "files": [
+                "*.cjs"
+            ],
+            "env": {
+                "node": true,
+                "es2021": true
+            },
+            "parserOptions": {
+                "ecmaVersion": "latest",
+                "sourceType": "script"
+            }
+        }
+    ],
     "ignorePatterns": [
         "node_modules/",
         "*.css"

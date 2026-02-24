@@ -12,6 +12,16 @@ const MODULE_SLUG_TO_PAGE_SLUG: Record<string, string> = {
 
 const PAGE_SLUG_ALIASES: Record<string, string[]> = {
   [PAGE_SLUGS.reports]: [PAGE_SLUGS.openBarControl],
+  [PAGE_SLUGS.settingsPermissions]: [
+    PAGE_SLUGS.settingsPages,
+    PAGE_SLUGS.settingsModules,
+    PAGE_SLUGS.settingsPagePermissions,
+    PAGE_SLUGS.settingsModulePermissions,
+  ],
+  [PAGE_SLUGS.settingsPages]: [PAGE_SLUGS.settingsPermissions],
+  [PAGE_SLUGS.settingsModules]: [PAGE_SLUGS.settingsPermissions],
+  [PAGE_SLUGS.settingsPagePermissions]: [PAGE_SLUGS.settingsPermissions],
+  [PAGE_SLUGS.settingsModulePermissions]: [PAGE_SLUGS.settingsPermissions],
 };
 
 export const selectAllowedPageSlugs = createSelector(selectAccessControlState, ({ pages, modules }) => {

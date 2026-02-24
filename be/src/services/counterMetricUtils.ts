@@ -15,6 +15,12 @@ export type MetricCell = {
   qty: number;
 };
 
+export type WalkInTicketPriceConfig = {
+  ticketType: string;
+  currencyCode: string;
+  price: number;
+};
+
 export type ChannelConfig = {
   id: number;
   name: string;
@@ -23,6 +29,7 @@ export type ChannelConfig = {
   paymentMethodName: string | null;
   cashPrice: number | null;
   cashPaymentEligible: boolean;
+  walkInTicketPrices: WalkInTicketPriceConfig[];
 };
 
 export type AddonConfig = {

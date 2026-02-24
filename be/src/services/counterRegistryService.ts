@@ -22,6 +22,10 @@ import HttpError from '../errors/HttpError.js';
 import NightReport from '../models/NightReport.js';
 import { DID_NOT_OPERATE_NOTE } from '../constants/nightReports.js';
 import {
+  normalizeCurrencyCode,
+  normalizeWalkInTicketType,
+} from '../constants/walkInTicketTypes.js';
+import {
   buildMetricKey,
   computeSummary,
   createMetricGrid,
@@ -32,6 +36,7 @@ import {
   type MetricKind,
   type MetricPeriod,
   type MetricTallyType,
+  type WalkInTicketPriceConfig,
   toAddonConfig,
 } from './counterMetricUtils.js';
 
@@ -126,9 +131,14 @@ function buildFullName(firstName?: string | null, lastName?: string | null): str
   return [firstName ?? '', lastName ?? ''].join(' ').trim();
 }
 
+function normalizeChannelSlug(name: string | null | undefined): string {
+  return (name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 function buildChannelConfigs(
   channels: Array<Channel & { paymentMethod?: PaymentMethod | null }>,
   priceByChannel: Map<number, number | null>,
+  walkInTicketPricesByChannel: Map<number, WalkInTicketPriceConfig[]>,
 ): ChannelConfig[] {
   const orderMap = new Map<string, number>();
   DEFAULT_CHANNEL_ORDER.forEach((name, index) => orderMap.set(name.toLowerCase(), index));
@@ -149,6 +159,7 @@ function buildChannelConfigs(
         paymentMethodName,
         cashPrice: isCashPaymentMethod ? (cashPrice ?? null) : null,
         cashPaymentEligible: isCashPaymentMethod,
+        walkInTicketPrices: walkInTicketPricesByChannel.get(channel.id) ?? [],
       };
     })
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
@@ -863,20 +874,30 @@ export default class CounterRegistryService {
 
     const targetProductId = product?.id ?? counter.productId ?? null;
     const priceByChannel = new Map<number, number | null>();
+    const walkInTicketPricesByChannel = new Map<number, WalkInTicketPriceConfig[]>();
 
     if (targetProductId != null && channels.length > 0) {
       const channelIds = channels.map((channel) => channel.id);
       const priceRecords = await ChannelProductPrice.findAll({
         where: { productId: targetProductId, channelId: channelIds },
-        order: [['validFrom', 'DESC']],
+        order: [
+          ['channelId', 'ASC'],
+          ['ticketType', 'ASC'],
+          ['currencyCode', 'ASC'],
+          ['validFrom', 'DESC'],
+          ['id', 'DESC'],
+        ],
       });
 
       const counterDate = dayjs(counter.date);
+      const walkInChannelIds = new Set(
+        channels
+          .filter((channel) => normalizeChannelSlug(channel.name) === 'walkin')
+          .map((channel) => channel.id),
+      );
+      const walkInPriceMapByChannel = new Map<number, Map<string, WalkInTicketPriceConfig>>();
 
       for (const record of priceRecords) {
-        if (priceByChannel.has(record.channelId)) {
-          continue;
-        }
         const validFrom = dayjs(record.validFrom);
         if (validFrom.isAfter(counterDate, 'day')) {
           continue;
@@ -889,13 +910,45 @@ export default class CounterRegistryService {
         if (!Number.isFinite(numericPrice)) {
           continue;
         }
-        priceByChannel.set(record.channelId, numericPrice);
+
+        const ticketType = normalizeWalkInTicketType(record.ticketType);
+        const currencyCode = normalizeCurrencyCode(record.currencyCode);
+
+        if (ticketType === 'normal' && currencyCode === 'PLN' && !priceByChannel.has(record.channelId)) {
+          priceByChannel.set(record.channelId, numericPrice);
+        }
+
+        if (!walkInChannelIds.has(record.channelId)) {
+          continue;
+        }
+        const byKey = walkInPriceMapByChannel.get(record.channelId) ?? new Map<string, WalkInTicketPriceConfig>();
+        const key = `${ticketType}|${currencyCode}`;
+        if (byKey.has(key)) {
+          continue;
+        }
+        byKey.set(key, {
+          ticketType,
+          currencyCode,
+          price: numericPrice,
+        });
+        walkInPriceMapByChannel.set(record.channelId, byKey);
       }
+
+      walkInPriceMapByChannel.forEach((priceMap, channelId) => {
+        const rows = Array.from(priceMap.values()).sort((left, right) => {
+          return (
+            left.ticketType.localeCompare(right.ticketType) ||
+            left.currencyCode.localeCompare(right.currencyCode)
+          );
+        });
+        walkInTicketPricesByChannel.set(channelId, rows);
+      });
     }
 
     const channelConfigs = buildChannelConfigs(
       channels as Array<Channel & { paymentMethod?: PaymentMethod | null }>,
       priceByChannel,
+      walkInTicketPricesByChannel,
     );
 
     let addonConfigs = addons.map((addon, index) =>

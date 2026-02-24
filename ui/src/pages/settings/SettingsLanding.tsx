@@ -16,8 +16,6 @@ import {
 import {
   IconUsers,
   IconIdBadge,
-  IconLayoutSidebar,
-  IconComponents,
   IconShieldLock,
   IconAddressBook,
   IconHierarchy3,
@@ -133,22 +131,8 @@ const sections: SettingsSection[] = [
     pageSlug: PAGE_SLUGS.settingsUserTypes,
   },
   {
-    label: "Pages",
-    description: "Control the high-level navigation structure shown to users.",
-    icon: IconLayoutSidebar,
-    to: "/settings/pages",
-    pageSlug: PAGE_SLUGS.settingsPages,
-  },
-  {
-    label: "Modules",
-    description: "Organise reusable modules and the widgets they render.",
-    icon: IconComponents,
-    to: "/settings/modules",
-    pageSlug: PAGE_SLUGS.settingsModules,
-  },
-  {
-    label: "Permissions",
-    description: "Map user types to their page and module capabilities.",
+    label: "Access Control",
+    description: "Manage pages, modules, and role permissions from one workspace.",
     icon: IconShieldLock,
     to: "/settings/permissions",
     pageSlug: PAGE_SLUGS.settingsPermissions,
