@@ -40,6 +40,11 @@ export type ChannelConfig = {
   paymentMethodName: string | null;
   cashPrice: number | null;
   cashPaymentEligible: boolean;
+  walkInTicketPrices: {
+    ticketType: string;
+    currencyCode: string;
+    price: number;
+  }[];
 };
 
 export type MetricCell = {

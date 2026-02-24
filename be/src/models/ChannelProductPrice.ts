@@ -8,11 +8,11 @@ import {
   Model,
   PrimaryKey,
   Table,
-  Unique,
 } from 'sequelize-typescript';
 import Channel from './Channel.js';
 import Product from './Product.js';
 import User from './User.js';
+import type { WalkInTicketType } from '../constants/walkInTicketTypes.js';
 
 @Table({
   timestamps: true,
@@ -44,6 +44,14 @@ export default class ChannelProductPrice extends Model {
   @AllowNull(false)
   @Column(DataType.DECIMAL(10, 2))
   declare price: number;
+
+  @AllowNull(false)
+  @Column({ field: 'ticket_type', type: DataType.STRING(64), defaultValue: 'normal' })
+  declare ticketType: WalkInTicketType;
+
+  @AllowNull(false)
+  @Column({ field: 'currency_code', type: DataType.STRING(3), defaultValue: 'PLN' })
+  declare currencyCode: string;
 
   @AllowNull(false)
   @Column({ field: 'valid_from', type: DataType.DATEONLY })

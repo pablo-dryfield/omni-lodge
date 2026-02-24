@@ -1,4 +1,4 @@
-import express, { Request, Response, NextFunction, Router } from 'express';
+import express, { Router } from 'express';
 import * as reviewController from '../controllers/reviewController.js'; // Adjust import path as necessary
 import authMiddleware from '../middleware/authMiddleware.js';
 
@@ -14,9 +14,10 @@ const router: Router = express.Router();
 // router.post('/', reviewController.createReview);
 
 router.get('/tripadvisorReviews', authMiddleware, reviewController.getTripAdvisorReviews);
+router.get('/airbnbReviews', authMiddleware, reviewController.getAirbnbReviews);
 
 // Google revies
 router.get('/googleReviews', authMiddleware, reviewController.getAllGoogleReviews);
-router.get('/getyourguideReviews', authMiddleware, reviewController.getGetYourGuideReviews);
+router.get('/getyourguideLink', authMiddleware, reviewController.getGetYourGuideReviewLink);
 
 export default router;

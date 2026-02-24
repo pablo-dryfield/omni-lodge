@@ -852,6 +852,7 @@ function buildChannelConfigs(
         paymentMethodName,
         cashPrice: null,
         cashPaymentEligible: normalizedPayment === 'cash',
+        walkInTicketPrices: [],
       };
     })
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));

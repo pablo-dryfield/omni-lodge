@@ -44,6 +44,8 @@ import { Add, Check, Close, Delete, Edit, Visibility, Map as MapIcon, KeyboardAr
 import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { Link } from 'react-router-dom';
+import type { BrowserMultiFormatReader, IScannerControls } from '@zxing/browser';
+import type { Exception as ZXingException, Result as ZXingResult } from '@zxing/library';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { deleteCounter, fetchCounters } from '../actions/counterActions';
 import { createNightReport, fetchNightReports, submitNightReport, updateNightReport } from '../actions/nightReportActions';
@@ -91,6 +93,7 @@ import type {
   OrderExtras,
   UnifiedOrder,
 } from '../store/bookingPlatformsTypes';
+import { WALK_IN_TICKET_LABEL_TO_KEY, WALK_IN_TICKET_TYPE_LABELS } from '../constants/walkInTicketTypes';
 
 const COUNTER_DATE_FORMAT = 'YYYY-MM-DD';
 const WALK_IN_CHANNEL_SLUG = 'walk-in';
@@ -127,6 +130,40 @@ type PlatformManifestTotals = {
   extras: OrderExtras;
 };
 
+type ScannerResultKind = 'qr' | 'barcode' | 'text';
+type ScannerSource = 'live' | 'ocr';
+
+type ScannerResultRecord = {
+  kind: ScannerResultKind;
+  source: ScannerSource;
+  rawValue: string;
+  bookingId: string | null;
+  format?: string;
+  confidence?: number;
+  scannedAt: string;
+};
+
+type ScannerBookingMatch = {
+  order: UnifiedOrder;
+  shouldLetIn: number;
+  matchedCount: number;
+  searchedValue: string;
+};
+
+type NativeDetectedBarcode = {
+  rawValue?: string;
+  format?: string;
+};
+
+type NativeBarcodeDetectorInstance = {
+  detect: (source: HTMLVideoElement | HTMLCanvasElement | ImageBitmap) => Promise<NativeDetectedBarcode[]>;
+};
+
+type NativeBarcodeDetectorCtor = {
+  new (options?: { formats?: string[] }): NativeBarcodeDetectorInstance;
+  getSupportedFormats?: () => Promise<string[]>;
+};
+
 const MANIFEST_ACTIVE_STATUSES = new Set<BookingStatus>([
   'pending',
   'confirmed',
@@ -134,6 +171,357 @@ const MANIFEST_ACTIVE_STATUSES = new Set<BookingStatus>([
   'completed',
 ]);
 const MANIFEST_INCLUDED_STATUSES = new Set<BookingStatus>([...MANIFEST_ACTIVE_STATUSES, 'amended']);
+const NATIVE_BARCODE_FORMATS = [
+  'qr_code',
+  'code_128',
+  'code_39',
+  'code_93',
+  'codabar',
+  'ean_13',
+  'ean_8',
+  'itf',
+  'upc_a',
+  'upc_e',
+  'pdf417',
+  'data_matrix',
+  'aztec',
+];
+const SCANNER_RESULT_COOLDOWN_MS = 2_500;
+const BOOKING_ID_QUERY_KEYS = [
+  'bookingid',
+  'booking_id',
+  'reservationid',
+  'reservation_id',
+  'orderid',
+  'order_id',
+  'platformbookingid',
+  'platform_booking_id',
+  'reference',
+  'ref',
+  'id',
+];
+const BOOKING_ID_HINT_REGEX =
+  /\b(?:booking|reservation|platform)\s*(?:id|number|no\.?|#)?\s*[:#-]?\s*([a-z0-9-]{4,})\b/i;
+const BOOKING_ID_GENERIC_REGEX = /\b([a-z0-9][a-z0-9-]{5,})\b/gi;
+const ECWID_ORDER_PREFIX_REGEX = /^order[-_\s:]*([a-z0-9-]+)$/i;
+const ECWID_ORDER_EMBEDDED_REGEX = /\border[-_\s:]*([a-z0-9-]{3,})\b/i;
+const ECWID_ORDER_WORD_BLACKLIST = new Set([
+  'confirmation',
+  'confirmed',
+  'number',
+  'booking',
+  'reservation',
+  'platform',
+]);
+
+const normalizeScannerText = (value: string): string => value.replace(/\s+/g, ' ').trim();
+
+const isLikelyToken = (value: string): boolean => {
+  if (!value || value.length < 4) {
+    return false;
+  }
+  if (/^(https?|www)$/i.test(value)) {
+    return false;
+  }
+  return /[a-z]/i.test(value) || /\d/.test(value);
+};
+
+const extractBookingIdFromUrl = (rawValue: string): string | null => {
+  const input = rawValue.trim();
+  const hasProtocol = /^https?:\/\//i.test(input);
+  if (!hasProtocol) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(input);
+    for (const key of BOOKING_ID_QUERY_KEYS) {
+      const candidate = parsed.searchParams.get(key);
+      if (candidate) {
+        const normalized = normalizeScannerText(candidate);
+        if (isLikelyToken(normalized)) {
+          return normalized;
+        }
+      }
+    }
+
+    const pathSegments = parsed.pathname
+      .split('/')
+      .map((segment) => normalizeScannerText(segment))
+      .filter((segment) => segment.length > 0);
+    for (let index = pathSegments.length - 1; index >= 0; index -= 1) {
+      const candidate = pathSegments[index];
+      if (isLikelyToken(candidate)) {
+        return candidate;
+      }
+    }
+  } catch (_error) {
+    return null;
+  }
+
+  return null;
+};
+
+const extractEcwidOrderCandidate = (rawValue: string): string | null => {
+  const normalized = normalizeScannerText(rawValue);
+  if (!normalized) {
+    return null;
+  }
+
+  const directMatch = normalized.match(ECWID_ORDER_PREFIX_REGEX);
+  if (directMatch?.[1]) {
+    return `ORDER-${directMatch[1].toUpperCase()}`;
+  }
+
+  const embeddedMatches = Array.from(
+    normalized.matchAll(new RegExp(ECWID_ORDER_EMBEDDED_REGEX.source, 'gi')),
+  )
+    .map((entry) => normalizeScannerText(entry[1] ?? '').replace(/[^a-z0-9-]/gi, ''))
+    .filter((entry) => entry.length >= 3);
+  if (embeddedMatches.length === 0) {
+    return null;
+  }
+
+  const ranked = embeddedMatches
+    .map((entry) => {
+      const lowered = entry.toLowerCase();
+      let score = 0;
+      if (/\d/.test(entry)) {
+        score += 4;
+      }
+      if (/[a-z]/i.test(entry)) {
+        score += 2;
+      }
+      if (entry.includes('-')) {
+        score += 1;
+      }
+      if (entry.length >= 6) {
+        score += 1;
+      }
+      if (ECWID_ORDER_WORD_BLACKLIST.has(lowered)) {
+        score -= 6;
+      }
+      return { entry, score };
+    })
+    .sort((left, right) => right.score - left.score || right.entry.length - left.entry.length);
+
+  const best = ranked[0];
+  if (!best || best.score <= 0) {
+    return null;
+  }
+  return `ORDER-${best.entry.toUpperCase()}`;
+};
+
+const extractBookingId = (rawValue: string): string | null => {
+  const normalized = normalizeScannerText(rawValue);
+  if (!normalized) {
+    return null;
+  }
+
+  const urlValue = extractBookingIdFromUrl(normalized);
+  if (urlValue) {
+    return urlValue;
+  }
+
+  const hinted = normalized.match(BOOKING_ID_HINT_REGEX);
+  if (hinted?.[1]) {
+    return hinted[1];
+  }
+
+  const ecwidOrder = extractEcwidOrderCandidate(normalized);
+  if (ecwidOrder) {
+    return ecwidOrder;
+  }
+
+  const genericCandidates = Array.from(normalized.matchAll(BOOKING_ID_GENERIC_REGEX))
+    .map((entry) => entry[1] ?? '')
+    .filter((entry) => isLikelyToken(entry));
+  if (genericCandidates.length === 0) {
+    return null;
+  }
+
+  genericCandidates.sort((left, right) => right.length - left.length);
+  return genericCandidates[0];
+};
+
+const buildScannerOcrCandidates = (rawText: string): string[] => {
+  const normalized = normalizeScannerText(rawText);
+  if (!normalized) {
+    return [];
+  }
+
+  const byKey = new Map<string, string>();
+  const pushCandidate = (value: string | null | undefined) => {
+    if (!value) {
+      return;
+    }
+    const candidate = normalizeScannerText(value);
+    if (candidate.length < 3) {
+      return;
+    }
+    const key = candidate.toLowerCase();
+    if (!byKey.has(key)) {
+      byKey.set(key, candidate);
+    }
+  };
+
+  pushCandidate(extractBookingId(normalized));
+  pushCandidate(extractEcwidOrderCandidate(normalized));
+  const hyphenated = normalized.replace(/\s+/g, '-');
+  pushCandidate(extractBookingId(hyphenated));
+  pushCandidate(extractEcwidOrderCandidate(hyphenated));
+
+  const embeddedOrderMatches = Array.from(
+    normalized.matchAll(new RegExp(ECWID_ORDER_EMBEDDED_REGEX.source, 'gi')),
+  )
+    .map((entry) => normalizeScannerText(entry[1] ?? '').replace(/[^a-z0-9-]/gi, ''))
+    .filter((entry) => entry.length >= 3);
+  embeddedOrderMatches.forEach((entry) => {
+    const upper = entry.toUpperCase();
+    pushCandidate(`ORDER-${upper}`);
+    if (upper.includes('O')) {
+      pushCandidate(`ORDER-${upper.replace(/O/g, '0')}`);
+    }
+    if (upper.includes('0')) {
+      pushCandidate(`ORDER-${upper.replace(/0/g, 'O')}`);
+    }
+  });
+
+  pushCandidate(normalized);
+  pushCandidate(hyphenated);
+
+  return Array.from(byKey.values());
+};
+
+const buildScannerSearchCandidates = (result: ScannerResultRecord): string[] => {
+  const byKey = new Map<string, string>();
+
+  const pushCandidate = (value: string | null | undefined) => {
+    if (!value) {
+      return;
+    }
+    const normalized = normalizeScannerText(value);
+    if (normalized.length < 3) {
+      return;
+    }
+    const key = normalized.toLowerCase();
+    if (!byKey.has(key)) {
+      byKey.set(key, normalized);
+    }
+  };
+
+  const rawCandidates = [result.bookingId, result.rawValue].filter((value): value is string => Boolean(value));
+  rawCandidates.forEach((candidate) => {
+    pushCandidate(candidate);
+    const ecwidMatch = candidate.match(ECWID_ORDER_PREFIX_REGEX);
+    if (!ecwidMatch?.[1]) {
+      return;
+    }
+    const orderNumber = ecwidMatch[1];
+    pushCandidate(orderNumber);
+    if (/^\d+$/.test(orderNumber)) {
+      const trimmedLeadingZeros = orderNumber.replace(/^0+(?=\d)/, '');
+      pushCandidate(trimmedLeadingZeros);
+    }
+  });
+
+  return Array.from(byKey.values());
+};
+
+const normalizeScannerBookingKey = (value: string): string =>
+  value.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const formatBookingStatusLabel = (status: string): string =>
+  status
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+
+const resolveScannerStatusColor = (
+  status: BookingStatus,
+): 'default' | 'success' | 'warning' | 'error' | 'info' => {
+  if (MANIFEST_INCLUDED_STATUSES.has(status)) {
+    return 'success';
+  }
+  if (status === 'unknown') {
+    return 'warning';
+  }
+  return 'error';
+};
+
+const getOrderEntryAllowance = (order: UnifiedOrder): number => {
+  const qty = Math.max(0, Math.round(Number(order.quantity) || 0));
+  if (!MANIFEST_INCLUDED_STATUSES.has(order.status)) {
+    return 0;
+  }
+  return qty;
+};
+
+const pickBestScannerOrderMatch = (
+  orders: UnifiedOrder[],
+  scannedValue: string,
+  targetDate: string,
+  targetProductId: number | null,
+): { order: UnifiedOrder | null; matchedCount: number } => {
+  const normalizedScanned = normalizeScannerBookingKey(scannedValue);
+  const valueLower = scannedValue.toLowerCase();
+  if (!normalizedScanned && !valueLower) {
+    return { order: null, matchedCount: 0 };
+  }
+
+  const matched = orders.filter((order) => {
+    const bookingIdRaw = (order.platformBookingId ?? '').toString();
+    if (!bookingIdRaw) {
+      return false;
+    }
+    const normalizedOrderId = normalizeScannerBookingKey(bookingIdRaw);
+    const orderLower = bookingIdRaw.toLowerCase();
+    if (normalizedScanned && normalizedOrderId) {
+      if (normalizedOrderId.includes(normalizedScanned) || normalizedScanned.includes(normalizedOrderId)) {
+        return true;
+      }
+    }
+    return valueLower.length > 0 && orderLower.includes(valueLower);
+  });
+
+  if (matched.length === 0) {
+    return { order: null, matchedCount: 0 };
+  }
+
+  const sorted = [...matched].sort((left, right) => {
+    const leftId = normalizeScannerBookingKey(left.platformBookingId ?? '');
+    const rightId = normalizeScannerBookingKey(right.platformBookingId ?? '');
+    const leftExact = leftId === normalizedScanned ? 1 : 0;
+    const rightExact = rightId === normalizedScanned ? 1 : 0;
+    if (leftExact !== rightExact) {
+      return rightExact - leftExact;
+    }
+
+    const leftDate = left.date === targetDate ? 1 : 0;
+    const rightDate = right.date === targetDate ? 1 : 0;
+    if (leftDate !== rightDate) {
+      return rightDate - leftDate;
+    }
+
+    const leftProduct = targetProductId != null && String(left.productId) === String(targetProductId) ? 1 : 0;
+    const rightProduct = targetProductId != null && String(right.productId) === String(targetProductId) ? 1 : 0;
+    if (leftProduct !== rightProduct) {
+      return rightProduct - leftProduct;
+    }
+
+    const leftStatus = MANIFEST_INCLUDED_STATUSES.has(left.status) ? 1 : 0;
+    const rightStatus = MANIFEST_INCLUDED_STATUSES.has(right.status) ? 1 : 0;
+    if (leftStatus !== rightStatus) {
+      return rightStatus - leftStatus;
+    }
+
+    const leftPickup = left.pickupDateTime ? dayjs(left.pickupDateTime).valueOf() : 0;
+    const rightPickup = right.pickupDateTime ? dayjs(right.pickupDateTime).valueOf() : 0;
+    return rightPickup - leftPickup;
+  });
+
+  return { order: sorted[0] ?? null, matchedCount: matched.length };
+};
 
 const normalizePlatformLookupKey = (value?: string | null): string => {
   if (!value) {
@@ -209,6 +597,19 @@ const FREE_SNAPSHOT_START = '-- FREE-SNAPSHOT START --';
 const FREE_SNAPSHOT_END = '-- FREE-SNAPSHOT END --';
 const FREE_SNAPSHOT_VERSION = 1;
 const CUSTOM_TICKET_LABEL = 'Custom';
+const WALK_IN_TICKET_TYPE_LABELS_BY_KEY: Record<string, string> = Object.entries(
+  WALK_IN_TICKET_TYPE_LABELS,
+).reduce<Record<string, string>>((acc, [ticketType, label]) => {
+  acc[ticketType.toLowerCase()] = label;
+  return acc;
+}, {});
+const resolveWalkInTicketLabelFromType = (ticketTypeRaw: string | null | undefined): string | null => {
+  const key = (ticketTypeRaw ?? '').toString().trim().toLowerCase();
+  if (!key) {
+    return null;
+  }
+  return WALK_IN_TICKET_TYPE_LABELS_BY_KEY[key] ?? null;
+};
 const WALK_IN_TICKET_UNIT_PRICES: Record<string, Partial<Record<CashCurrency, number>>> = {
   Normal: { EUR: 25 },
   'Second Timers': { PLN: 85, EUR: 20 },
@@ -445,6 +846,20 @@ const getWalkInTicketUnitPrice = (
 ): number | null => {
   if (ticketLabel === CUSTOM_TICKET_LABEL) {
     return null;
+  }
+  const mappedTicketType = WALK_IN_TICKET_LABEL_TO_KEY[ticketLabel];
+  if (mappedTicketType && channel?.walkInTicketPrices?.length) {
+    const configured = channel.walkInTicketPrices.find(
+      (entry) =>
+        String(entry.ticketType).toLowerCase() === mappedTicketType &&
+        String(entry.currencyCode).toUpperCase() === currency,
+    );
+    if (configured) {
+      const configuredPrice = Number(configured.price);
+      if (Number.isFinite(configuredPrice)) {
+        return Math.max(0, Math.round(configuredPrice * 100) / 100);
+      }
+    }
   }
   if (ticketLabel === 'Normal' && currency === 'PLN') {
     return channel ? getCashPriceForChannel(channel, 'PLN') : null;
@@ -1453,6 +1868,29 @@ const Counters = (props: GenericPageProps) => {
   const [summaryPreviewLoading, setSummaryPreviewLoading] = useState(false);
   const [summaryPreviewTitle, setSummaryPreviewTitle] = useState<string>('');
   const [scheduledStaffLoading, setScheduledStaffLoading] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerReady, setScannerReady] = useState(false);
+  const [scannerTextLoading, setScannerTextLoading] = useState(false);
+  const [scannerCaptureLoading, setScannerCaptureLoading] = useState(false);
+  const [scannerError, setScannerError] = useState<string | null>(null);
+  const [scannerResult, setScannerResult] = useState<ScannerResultRecord | null>(null);
+  const [scannerLookupLoading, setScannerLookupLoading] = useState(false);
+  const [scannerLookupError, setScannerLookupError] = useState<string | null>(null);
+  const [scannerBookingMatch, setScannerBookingMatch] = useState<ScannerBookingMatch | null>(null);
+  const [scannerCheckInNotice, setScannerCheckInNotice] = useState<string | null>(null);
+  const scannerVideoRef = useRef<HTMLVideoElement | null>(null);
+  const scannerStreamRef = useRef<MediaStream | null>(null);
+  const scannerControlsRef = useRef<IScannerControls | null>(null);
+  const scannerReaderRef = useRef<BrowserMultiFormatReader | null>(null);
+  const scannerCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const scannerLastSignatureRef = useRef<string>('');
+  const scannerLastScanAtRef = useRef<number>(0);
+  const scannerLookupRequestRef = useRef<string | null>(null);
+  const scannerFallbackTimerRef = useRef<number | null>(null);
+  const scannerFallbackBusyRef = useRef(false);
+  const scannerNativeDetectorRef = useRef<NativeBarcodeDetectorInstance | null>(null);
+  const scannerNativeTimerRef = useRef<number | null>(null);
+  const scannerNativeBusyRef = useRef(false);
   const blurActiveElement = useCallback(() => {
     if (typeof document === 'undefined') {
       return;
@@ -1462,6 +1900,496 @@ const Counters = (props: GenericPageProps) => {
       active.blur();
     }
   }, []);
+  const stopScannerDecoding = useCallback(() => {
+    if (scannerNativeTimerRef.current != null && typeof window !== 'undefined') {
+      window.clearInterval(scannerNativeTimerRef.current);
+      scannerNativeTimerRef.current = null;
+    }
+    scannerNativeBusyRef.current = false;
+    scannerNativeDetectorRef.current = null;
+    if (scannerFallbackTimerRef.current != null && typeof window !== 'undefined') {
+      window.clearInterval(scannerFallbackTimerRef.current);
+      scannerFallbackTimerRef.current = null;
+    }
+    scannerFallbackBusyRef.current = false;
+    if (scannerControlsRef.current) {
+      scannerControlsRef.current.stop();
+      scannerControlsRef.current = null;
+    }
+    if (scannerReaderRef.current) {
+      scannerReaderRef.current = null;
+    }
+  }, []);
+  const registerScannerResult = useCallback(
+    (
+      rawValue: string,
+      options: {
+        source: ScannerSource;
+        format?: string;
+        confidence?: number;
+      },
+    ) => {
+      const normalized = normalizeScannerText(rawValue);
+      if (!normalized) {
+        return;
+      }
+
+      const now = Date.now();
+      const signature = `${options.source}|${(options.format ?? '').toLowerCase()}|${normalized.toLowerCase()}`;
+      if (
+        scannerLastSignatureRef.current === signature &&
+        now - scannerLastScanAtRef.current < SCANNER_RESULT_COOLDOWN_MS
+      ) {
+        return;
+      }
+
+      scannerLastSignatureRef.current = signature;
+      scannerLastScanAtRef.current = now;
+
+      const formatLower = (options.format ?? '').toLowerCase();
+      const isQrFormat = formatLower.includes('qr');
+      const kind: ScannerResultKind =
+        options.source === 'ocr' ? 'text' : isQrFormat || /^https?:\/\//i.test(normalized) ? 'qr' : 'barcode';
+
+      setScannerCheckInNotice(null);
+      setScannerLookupError(null);
+      setScannerBookingMatch(null);
+      setScannerResult({
+        kind,
+        source: options.source,
+        rawValue: normalized,
+        bookingId: extractBookingId(normalized),
+        format: options.format,
+        confidence: options.confidence,
+        scannedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+      });
+    },
+    [],
+  );
+  const stopScannerStream = useCallback(() => {
+    stopScannerDecoding();
+    const currentStream = scannerStreamRef.current;
+    if (currentStream) {
+      currentStream.getTracks().forEach((track) => track.stop());
+      scannerStreamRef.current = null;
+    }
+    if (scannerVideoRef.current) {
+      scannerVideoRef.current.srcObject = null;
+    }
+    setScannerReady(false);
+  }, [stopScannerDecoding]);
+  const handleScanTextCapture = useCallback(async () => {
+    if (scannerTextLoading) {
+      return;
+    }
+
+    const videoElement = scannerVideoRef.current;
+    if (!videoElement || videoElement.videoWidth <= 0 || videoElement.videoHeight <= 0) {
+      setScannerError('Camera frame is not ready yet.');
+      return;
+    }
+
+    let captureCanvas = scannerCanvasRef.current;
+    if (!captureCanvas) {
+      captureCanvas = document.createElement('canvas');
+      scannerCanvasRef.current = captureCanvas;
+    }
+    const maxWidth = 1400;
+    const scale = videoElement.videoWidth > maxWidth ? maxWidth / videoElement.videoWidth : 1;
+    const targetWidth = Math.max(1, Math.round(videoElement.videoWidth * scale));
+    const targetHeight = Math.max(1, Math.round(videoElement.videoHeight * scale));
+    captureCanvas.width = targetWidth;
+    captureCanvas.height = targetHeight;
+    const context = captureCanvas.getContext('2d');
+    if (!context) {
+      setScannerError('Unable to capture a frame for OCR.');
+      return;
+    }
+    context.drawImage(videoElement, 0, 0, targetWidth, targetHeight);
+
+    setScannerError(null);
+    setScannerTextLoading(true);
+    try {
+      const tesseractModule = await import('tesseract.js');
+      const recognizeFn =
+        (tesseractModule as unknown as { recognize?: (image: unknown, lang?: string) => Promise<unknown> })
+          .recognize ??
+        (
+          tesseractModule as unknown as {
+            default?: { recognize?: (image: unknown, lang?: string) => Promise<unknown> };
+          }
+        ).default?.recognize;
+      if (!recognizeFn) {
+        throw new Error('Text recognizer is unavailable.');
+      }
+
+      const recognition = (await recognizeFn(captureCanvas, 'eng')) as {
+        data?: { text?: string; confidence?: number };
+      };
+      const ocrText = normalizeScannerText(recognition?.data?.text ?? '');
+      if (!ocrText) {
+        setScannerError('No readable text detected. Try moving closer and improving lighting.');
+        return;
+      }
+      registerScannerResult(ocrText, {
+        source: 'ocr',
+        confidence: recognition?.data?.confidence,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Text scan failed. Check camera focus and try again.';
+      setScannerError(message);
+    } finally {
+      setScannerTextLoading(false);
+    }
+  }, [registerScannerResult, scannerTextLoading]);
+  const handleCaptureFrameScan = useCallback(async () => {
+    if (scannerCaptureLoading || scannerTextLoading) {
+      return;
+    }
+
+    const videoElement = scannerVideoRef.current;
+    if (!videoElement || videoElement.videoWidth <= 0 || videoElement.videoHeight <= 0) {
+      setScannerError('Camera frame is not ready yet.');
+      return;
+    }
+
+    const createCanvas = (width: number, height: number): HTMLCanvasElement => {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(width));
+      canvas.height = Math.max(1, Math.round(height));
+      return canvas;
+    };
+
+    setScannerCaptureLoading(true);
+    setScannerError(null);
+    setScannerLookupError(null);
+    setScannerCheckInNotice(null);
+
+    try {
+      // Yield one frame so loading UI renders before heavy decode work starts.
+      await new Promise<void>((resolve) => {
+        if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+          window.requestAnimationFrame(() => resolve());
+          return;
+        }
+        setTimeout(() => resolve(), 0);
+      });
+
+      const [{ BrowserMultiFormatReader }, zxingLibrary] = await Promise.all([
+        import('@zxing/browser'),
+        import('@zxing/library'),
+      ]);
+      const {
+        BarcodeFormat,
+        ChecksumException,
+        DecodeHintType,
+        FormatException,
+        NotFoundException,
+      } = zxingLibrary;
+
+      const targetMaxWidth = 1920;
+      const scale = videoElement.videoWidth > targetMaxWidth ? targetMaxWidth / videoElement.videoWidth : 1;
+      const sourceWidth = Math.max(1, Math.round(videoElement.videoWidth * scale));
+      const sourceHeight = Math.max(1, Math.round(videoElement.videoHeight * scale));
+      const sourceCanvas = createCanvas(sourceWidth, sourceHeight);
+      const sourceContext = sourceCanvas.getContext('2d');
+      if (!sourceContext) {
+        setScannerError('Unable to capture frame.');
+        return;
+      }
+      sourceContext.drawImage(videoElement, 0, 0, sourceWidth, sourceHeight);
+
+      const buildGrayVariant = (base: HTMLCanvasElement, thresholdMode: boolean): HTMLCanvasElement => {
+        const variant = createCanvas(base.width, base.height);
+        const variantContext = variant.getContext('2d');
+        if (!variantContext) {
+          return base;
+        }
+        variantContext.drawImage(base, 0, 0);
+        const image = variantContext.getImageData(0, 0, variant.width, variant.height);
+        const data = image.data;
+        const threshold = 145;
+        for (let index = 0; index < data.length; index += 4) {
+          const gray = 0.299 * data[index] + 0.587 * data[index + 1] + 0.114 * data[index + 2];
+          const contrast = Math.max(0, Math.min(255, (gray - 128) * 2.25 + 128));
+          const finalValue = thresholdMode ? (contrast > threshold ? 255 : 0) : contrast;
+          data[index] = finalValue;
+          data[index + 1] = finalValue;
+          data[index + 2] = finalValue;
+        }
+        variantContext.putImageData(image, 0, 0);
+        return variant;
+      };
+
+      const variants: HTMLCanvasElement[] = [
+        sourceCanvas,
+        buildGrayVariant(sourceCanvas, false),
+        buildGrayVariant(sourceCanvas, true),
+      ];
+
+      const cropFactorList = [1, 0.85, 0.65];
+      const cropRects = cropFactorList.map((factor) => {
+        const width = Math.max(1, Math.round(sourceWidth * factor));
+        const height = Math.max(1, Math.round(sourceHeight * factor));
+        return {
+          x: Math.max(0, Math.round((sourceWidth - width) / 2)),
+          y: Math.max(0, Math.round((sourceHeight - height) / 2)),
+          width,
+          height,
+        };
+      });
+
+      const hints = new Map();
+      hints.set(DecodeHintType.TRY_HARDER, true);
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+        BarcodeFormat.QR_CODE,
+        BarcodeFormat.CODE_128,
+        BarcodeFormat.CODE_39,
+        BarcodeFormat.CODE_93,
+        BarcodeFormat.CODABAR,
+        BarcodeFormat.EAN_13,
+        BarcodeFormat.EAN_8,
+        BarcodeFormat.ITF,
+        BarcodeFormat.UPC_A,
+        BarcodeFormat.UPC_E,
+        BarcodeFormat.PDF_417,
+        BarcodeFormat.DATA_MATRIX,
+        BarcodeFormat.AZTEC,
+      ]);
+      const manualReader = new BrowserMultiFormatReader(hints, {
+        delayBetweenScanAttempts: 0,
+        delayBetweenScanSuccess: 0,
+      });
+
+      const nativeBarcodeDetectorCtor = (
+        globalThis as unknown as {
+          BarcodeDetector?: NativeBarcodeDetectorCtor;
+        }
+      ).BarcodeDetector;
+      let nativeDetector = scannerNativeDetectorRef.current;
+      if (!nativeDetector && nativeBarcodeDetectorCtor) {
+        try {
+          let candidateFormats = NATIVE_BARCODE_FORMATS;
+          if (typeof nativeBarcodeDetectorCtor.getSupportedFormats === 'function') {
+            const supported = await nativeBarcodeDetectorCtor.getSupportedFormats();
+            if (Array.isArray(supported) && supported.length > 0) {
+              const supportedSet = new Set(supported.map((entry) => entry.toLowerCase()));
+              const filtered = NATIVE_BARCODE_FORMATS.filter((format) => supportedSet.has(format));
+              candidateFormats = filtered.length > 0 ? filtered : supported;
+            }
+          }
+          nativeDetector = new nativeBarcodeDetectorCtor({ formats: candidateFormats });
+          scannerNativeDetectorRef.current = nativeDetector;
+        } catch {
+          nativeDetector = null;
+        }
+      }
+
+      const isExpectedDecodeError = (error: unknown): boolean =>
+        error instanceof NotFoundException ||
+        error instanceof ChecksumException ||
+        error instanceof FormatException;
+
+      const workCanvas = createCanvas(sourceWidth, sourceHeight);
+      const workContext = workCanvas.getContext('2d');
+      if (!workContext) {
+        setScannerError('Unable to prepare frame processing.');
+        return;
+      }
+
+      const tryRegister = (
+        rawValue: string,
+        format?: string,
+        source: ScannerSource = 'live',
+        confidence?: number,
+      ): boolean => {
+        const normalized = normalizeScannerText(rawValue);
+        if (!normalized) {
+          return false;
+        }
+        registerScannerResult(normalized, { source, format, confidence });
+        return true;
+      };
+
+      const rotations = [0, 90, 180, 270];
+      let iterationCounter = 0;
+      for (const variant of variants) {
+        for (const crop of cropRects) {
+          for (const angle of rotations) {
+            iterationCounter += 1;
+            if (iterationCounter % 4 === 0) {
+              // Periodically yield so spinner/progress can repaint.
+              await new Promise<void>((resolve) => setTimeout(() => resolve(), 0));
+            }
+            const targetWidth = angle % 180 === 0 ? crop.width : crop.height;
+            const targetHeight = angle % 180 === 0 ? crop.height : crop.width;
+            workCanvas.width = targetWidth;
+            workCanvas.height = targetHeight;
+            workContext.save();
+            workContext.clearRect(0, 0, targetWidth, targetHeight);
+            workContext.translate(targetWidth / 2, targetHeight / 2);
+            workContext.rotate((angle * Math.PI) / 180);
+            workContext.drawImage(
+              variant,
+              crop.x,
+              crop.y,
+              crop.width,
+              crop.height,
+              -crop.width / 2,
+              -crop.height / 2,
+              crop.width,
+              crop.height,
+            );
+            workContext.restore();
+
+            if (nativeDetector) {
+              try {
+                const detected = await nativeDetector.detect(workCanvas);
+                const nativeHit = detected.find(
+                  (entry) => typeof entry?.rawValue === 'string' && entry.rawValue.trim().length > 0,
+                );
+                if (nativeHit?.rawValue && tryRegister(nativeHit.rawValue, nativeHit.format ?? 'native-capture')) {
+                  return;
+                }
+              } catch {
+                // Continue with ZXing fallback path.
+              }
+            }
+
+            try {
+              const result = manualReader.decodeFromCanvas(workCanvas);
+              if (result && tryRegister(result.getText(), result.getBarcodeFormat().toString())) {
+                return;
+              }
+            } catch (decodeError) {
+              if (!isExpectedDecodeError(decodeError)) {
+                const message =
+                  decodeError instanceof Error
+                    ? decodeError.message
+                    : 'Capture frame decode failed.';
+                setScannerError(message);
+              }
+            }
+          }
+        }
+      }
+
+      const runOcrFallback = async (): Promise<boolean> => {
+        const tesseractModule = await import('tesseract.js');
+        const recognizeFn =
+          (tesseractModule as unknown as { recognize?: (image: unknown, lang?: string) => Promise<unknown> })
+            .recognize ??
+          (
+            tesseractModule as unknown as {
+              default?: { recognize?: (image: unknown, lang?: string) => Promise<unknown> };
+            }
+          ).default?.recognize;
+        if (!recognizeFn) {
+          return false;
+        }
+
+        const labelRects = [
+          {
+            x: Math.max(0, Math.round(sourceWidth * 0.05)),
+            y: Math.max(0, Math.round(sourceHeight * 0.50)),
+            width: Math.max(1, Math.round(sourceWidth * 0.90)),
+            height: Math.max(1, Math.round(sourceHeight * 0.45)),
+          },
+          {
+            x: 0,
+            y: Math.max(0, Math.round(sourceHeight * 0.58)),
+            width: sourceWidth,
+            height: Math.max(1, Math.round(sourceHeight * 0.40)),
+          },
+          {
+            x: 0,
+            y: 0,
+            width: sourceWidth,
+            height: sourceHeight,
+          },
+        ];
+
+        let ocrIteration = 0;
+        for (const rect of labelRects) {
+          const cropped = createCanvas(rect.width, rect.height);
+          const croppedContext = cropped.getContext('2d');
+          if (!croppedContext) {
+            continue;
+          }
+          croppedContext.drawImage(
+            sourceCanvas,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            0,
+            0,
+            rect.width,
+            rect.height,
+          );
+
+          const ocrVariants = [cropped, buildGrayVariant(cropped, false), buildGrayVariant(cropped, true)];
+          for (const ocrVariant of ocrVariants) {
+            ocrIteration += 1;
+            if (ocrIteration % 2 === 0) {
+              await new Promise<void>((resolve) => setTimeout(() => resolve(), 0));
+            }
+            const recognition = (await recognizeFn(ocrVariant, 'eng')) as {
+              data?: { text?: string; confidence?: number };
+            };
+            const ocrText = normalizeScannerText(recognition?.data?.text ?? '');
+            if (!ocrText) {
+              continue;
+            }
+            const candidates = buildScannerOcrCandidates(ocrText);
+            for (const candidate of candidates) {
+              if (tryRegister(candidate, 'ocr-capture', 'ocr', recognition?.data?.confidence)) {
+                return true;
+              }
+            }
+          }
+        }
+
+        return false;
+      };
+
+      try {
+        const matchedByOcr = await runOcrFallback();
+        if (matchedByOcr) {
+          return;
+        }
+      } catch {
+        // OCR fallback is best-effort; keep final decode error message if it also fails.
+      }
+
+      setScannerError(
+        'Could not decode this frame. Try moving closer, improving light, and tapping Capture Frame again.',
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Unable to run capture frame scanner.';
+      setScannerError(message);
+    } finally {
+      setScannerCaptureLoading(false);
+    }
+  }, [registerScannerResult, scannerCaptureLoading, scannerTextLoading]);
+  const handleScannerCheckIn = useCallback(() => {
+    if (!scannerBookingMatch) {
+      return;
+    }
+    setScannerCheckInNotice(
+      `Checked in ${scannerBookingMatch.order.customerName} (${scannerBookingMatch.order.platformBookingId}).`,
+    );
+    setScannerLookupError(null);
+    setScannerBookingMatch(null);
+    setScannerResult(null);
+    scannerLookupRequestRef.current = null;
+  }, [scannerBookingMatch]);
   const computeReservationHoldActive = useCallback(() => {
     const now = dayjs();
     const holdStart = now.set('hour', 21).set('minute', 0).set('second', 0).set('millisecond', 0);
@@ -1956,6 +2884,528 @@ const Counters = (props: GenericPageProps) => {
     }
   }, [isModalOpen]);
 
+  useEffect(() => {
+    if (!isModalOpen || activeRegistryStep !== 'reservations') {
+      setScannerOpen(false);
+    }
+  }, [activeRegistryStep, isModalOpen]);
+
+  useEffect(() => {
+    if (!scannerOpen) {
+      setScannerError(null);
+      setScannerTextLoading(false);
+      setScannerCaptureLoading(false);
+      setScannerLookupLoading(false);
+      setScannerLookupError(null);
+      setScannerBookingMatch(null);
+      setScannerCheckInNotice(null);
+      scannerLookupRequestRef.current = null;
+      stopScannerStream();
+      return;
+    }
+
+    if (scannerBookingMatch) {
+      stopScannerStream();
+      return;
+    }
+
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      setScannerError('Camera access is not supported in this browser.');
+      return;
+    }
+
+    let isActive = true;
+    const initializeScanner = async () => {
+      setScannerError(null);
+      setScannerResult(null);
+      setScannerLookupError(null);
+      setScannerBookingMatch(null);
+      scannerLookupRequestRef.current = null;
+      scannerLastSignatureRef.current = '';
+      scannerLastScanAtRef.current = 0;
+      const enhanceVideoTrack = async (stream: MediaStream) => {
+        const track = stream.getVideoTracks()[0];
+        if (!track || typeof track.applyConstraints !== 'function') {
+          return;
+        }
+        const capabilities = (
+          track as MediaStreamTrack & {
+            getCapabilities?: () => Record<string, unknown>;
+          }
+        ).getCapabilities?.();
+        if (!capabilities) {
+          return;
+        }
+        const rawCapabilities = capabilities as unknown as Record<string, unknown>;
+
+        const advancedConstraints: Record<string, unknown>[] = [];
+        const focusModes = Array.isArray(rawCapabilities.focusMode)
+          ? (rawCapabilities.focusMode as string[])
+          : [];
+        if (focusModes.includes('continuous')) {
+          advancedConstraints.push({ focusMode: 'continuous' });
+        }
+
+        const exposureModes = Array.isArray(rawCapabilities.exposureMode)
+          ? (rawCapabilities.exposureMode as string[])
+          : [];
+        if (exposureModes.includes('continuous')) {
+          advancedConstraints.push({ exposureMode: 'continuous' });
+        }
+
+        const zoomCapabilities = rawCapabilities.zoom as { min?: number; max?: number } | undefined;
+        if (
+          zoomCapabilities &&
+          typeof zoomCapabilities.max === 'number' &&
+          Number.isFinite(zoomCapabilities.max) &&
+          zoomCapabilities.max > 1
+        ) {
+          const zoomTarget = Math.min(zoomCapabilities.max, 2);
+          advancedConstraints.push({ zoom: zoomTarget });
+        }
+
+        if (advancedConstraints.length === 0) {
+          return;
+        }
+        try {
+          await track.applyConstraints({ advanced: advancedConstraints as MediaTrackConstraintSet[] });
+        } catch {
+          // Ignore capabilities that are not fully supported by the current browser/device.
+        }
+      };
+      try {
+        const preferredStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 60, min: 24 },
+          },
+          audio: false,
+        });
+        if (!isActive) {
+          preferredStream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        await enhanceVideoTrack(preferredStream);
+        scannerStreamRef.current = preferredStream;
+      } catch (_error) {
+        try {
+          const fallbackStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              frameRate: { ideal: 30, min: 20 },
+            },
+            audio: false,
+          });
+          if (!isActive) {
+            fallbackStream.getTracks().forEach((track) => track.stop());
+            return;
+          }
+          await enhanceVideoTrack(fallbackStream);
+          scannerStreamRef.current = fallbackStream;
+        } catch (innerError) {
+          setScannerError(
+            innerError instanceof Error
+              ? innerError.message
+              : 'Unable to access the camera. Check permissions and try again.',
+          );
+          return;
+        }
+      }
+
+      if (!scannerVideoRef.current || !scannerStreamRef.current) {
+        return;
+      }
+
+      scannerVideoRef.current.srcObject = scannerStreamRef.current;
+      try {
+        await scannerVideoRef.current.play();
+      } catch (_error) {
+        // Some browsers defer playback until user interaction.
+      }
+      setScannerReady(true);
+    };
+
+    void initializeScanner();
+
+    return () => {
+      isActive = false;
+      stopScannerStream();
+    };
+  }, [scannerBookingMatch, scannerOpen, stopScannerStream]);
+
+  useEffect(() => {
+    if (!scannerOpen || scannerBookingMatch != null || !scannerReady || !scannerVideoRef.current) {
+      stopScannerDecoding();
+      return;
+    }
+
+    let cancelled = false;
+
+    const startBarcodeDecode = async () => {
+      try {
+        const [{ BrowserMultiFormatReader }, zxingLibrary] = await Promise.all([
+          import('@zxing/browser'),
+          import('@zxing/library'),
+        ]);
+        if (cancelled || !scannerVideoRef.current) {
+          return;
+        }
+
+        const {
+          BarcodeFormat,
+          ChecksumException,
+          DecodeHintType,
+          FormatException,
+          NotFoundException,
+        } = zxingLibrary;
+        const hints = new Map();
+        hints.set(DecodeHintType.TRY_HARDER, true);
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+          BarcodeFormat.QR_CODE,
+          BarcodeFormat.CODE_128,
+          BarcodeFormat.CODE_39,
+          BarcodeFormat.CODE_93,
+          BarcodeFormat.CODABAR,
+          BarcodeFormat.EAN_13,
+          BarcodeFormat.EAN_8,
+          BarcodeFormat.ITF,
+          BarcodeFormat.UPC_A,
+          BarcodeFormat.UPC_E,
+          BarcodeFormat.PDF_417,
+          BarcodeFormat.DATA_MATRIX,
+          BarcodeFormat.AZTEC,
+        ]);
+        const reader = new BrowserMultiFormatReader(hints, {
+          delayBetweenScanAttempts: 30,
+          delayBetweenScanSuccess: 180,
+        });
+        scannerReaderRef.current = reader;
+
+        const isExpectedDecodeError = (error: unknown): boolean =>
+          error instanceof NotFoundException ||
+          error instanceof ChecksumException ||
+          error instanceof FormatException;
+
+        const controls = await reader.decodeFromVideoElement(
+          scannerVideoRef.current,
+          (result: ZXingResult | undefined, error: ZXingException | undefined) => {
+            if (cancelled) {
+              return;
+            }
+            if (result) {
+              const formatName = result.getBarcodeFormat().toString();
+              registerScannerResult(result.getText(), {
+                source: 'live',
+                format: formatName,
+              });
+              return;
+            }
+            if (!error) {
+              return;
+            }
+            if (isExpectedDecodeError(error)) {
+              return;
+            }
+            const message = error instanceof Error ? error.message : 'Scanner decode failed.';
+            setScannerError(message);
+          },
+        );
+
+        if (cancelled) {
+          controls.stop();
+          return;
+        }
+        scannerControlsRef.current = controls;
+
+        const nativeBarcodeDetectorCtor = (
+          globalThis as unknown as {
+            BarcodeDetector?: NativeBarcodeDetectorCtor;
+          }
+        ).BarcodeDetector;
+
+        if (typeof window !== 'undefined' && nativeBarcodeDetectorCtor) {
+          try {
+            let candidateFormats = NATIVE_BARCODE_FORMATS;
+            if (typeof nativeBarcodeDetectorCtor.getSupportedFormats === 'function') {
+              const supported = await nativeBarcodeDetectorCtor.getSupportedFormats();
+              if (Array.isArray(supported) && supported.length > 0) {
+                const supportedSet = new Set(supported.map((entry) => entry.toLowerCase()));
+                const filtered = NATIVE_BARCODE_FORMATS.filter((format) => supportedSet.has(format));
+                candidateFormats = filtered.length > 0 ? filtered : supported;
+              }
+            }
+
+            const nativeDetector = new nativeBarcodeDetectorCtor({ formats: candidateFormats });
+            scannerNativeDetectorRef.current = nativeDetector;
+
+            scannerNativeTimerRef.current = window.setInterval(async () => {
+              if (
+                scannerNativeBusyRef.current ||
+                cancelled ||
+                scannerBookingMatch != null ||
+                scannerTextLoading ||
+                scannerCaptureLoading
+              ) {
+                return;
+              }
+              const videoElement = scannerVideoRef.current;
+              if (!videoElement || videoElement.videoWidth <= 0 || videoElement.videoHeight <= 0) {
+                return;
+              }
+              scannerNativeBusyRef.current = true;
+              try {
+                const detected = await nativeDetector.detect(videoElement);
+                if (!detected || detected.length === 0) {
+                  return;
+                }
+                const firstValid = detected.find(
+                  (entry) => typeof entry?.rawValue === 'string' && entry.rawValue.trim().length > 0,
+                );
+                if (!firstValid?.rawValue) {
+                  return;
+                }
+                registerScannerResult(firstValid.rawValue, {
+                  source: 'live',
+                  format: firstValid.format ?? 'native',
+                });
+              } catch {
+                // Ignore detector-level errors and keep ZXing/fallback active.
+              } finally {
+                scannerNativeBusyRef.current = false;
+              }
+            }, 90);
+          } catch {
+            scannerNativeDetectorRef.current = null;
+          }
+        }
+
+        if (typeof window !== 'undefined') {
+          scannerFallbackTimerRef.current = window.setInterval(() => {
+            if (
+              scannerFallbackBusyRef.current ||
+              cancelled ||
+              scannerBookingMatch != null ||
+              scannerTextLoading ||
+              scannerCaptureLoading
+            ) {
+              return;
+            }
+            const videoElement = scannerVideoRef.current;
+            if (!videoElement || videoElement.videoWidth <= 0 || videoElement.videoHeight <= 0) {
+              return;
+            }
+            scannerFallbackBusyRef.current = true;
+            try {
+              const sourceCanvas = document.createElement('canvas');
+              const targetMaxWidth = 1280;
+              const scale = videoElement.videoWidth > targetMaxWidth ? targetMaxWidth / videoElement.videoWidth : 1;
+              const sourceWidth = Math.max(1, Math.round(videoElement.videoWidth * scale));
+              const sourceHeight = Math.max(1, Math.round(videoElement.videoHeight * scale));
+              sourceCanvas.width = sourceWidth;
+              sourceCanvas.height = sourceHeight;
+              const sourceContext = sourceCanvas.getContext('2d');
+              if (!sourceContext) {
+                return;
+              }
+              sourceContext.drawImage(videoElement, 0, 0, sourceWidth, sourceHeight);
+
+              let workCanvas = scannerCanvasRef.current;
+              if (!workCanvas) {
+                workCanvas = document.createElement('canvas');
+                scannerCanvasRef.current = workCanvas;
+              }
+              if (!workCanvas) {
+                return;
+              }
+
+              const attempts: Array<{
+                angle: number;
+                width: number;
+                height: number;
+              }> = [
+                { angle: 0, width: sourceWidth, height: sourceHeight },
+                { angle: 90, width: sourceHeight, height: sourceWidth },
+                { angle: 180, width: sourceWidth, height: sourceHeight },
+                { angle: 270, width: sourceHeight, height: sourceWidth },
+              ];
+
+              for (const attempt of attempts) {
+                if (cancelled) {
+                  return;
+                }
+                workCanvas.width = attempt.width;
+                workCanvas.height = attempt.height;
+                const workContext = workCanvas.getContext('2d');
+                if (!workContext) {
+                  continue;
+                }
+                workContext.save();
+                workContext.clearRect(0, 0, attempt.width, attempt.height);
+                workContext.translate(attempt.width / 2, attempt.height / 2);
+                workContext.rotate((attempt.angle * Math.PI) / 180);
+                workContext.drawImage(sourceCanvas, -sourceWidth / 2, -sourceHeight / 2, sourceWidth, sourceHeight);
+                workContext.restore();
+
+                try {
+                  const fallbackResult = reader.decodeFromCanvas(workCanvas);
+                  if (fallbackResult) {
+                    registerScannerResult(fallbackResult.getText(), {
+                      source: 'live',
+                      format: fallbackResult.getBarcodeFormat().toString(),
+                    });
+                    return;
+                  }
+                } catch (decodeError) {
+                  if (!isExpectedDecodeError(decodeError)) {
+                    const message =
+                      decodeError instanceof Error
+                        ? decodeError.message
+                        : 'Scanner fallback decode failed.';
+                    setScannerError(message);
+                  }
+                }
+              }
+            } finally {
+              scannerFallbackBusyRef.current = false;
+            }
+          }, 140);
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Unable to start QR/barcode scanner.';
+        setScannerError(message);
+      }
+    };
+
+    void startBarcodeDecode();
+
+    return () => {
+      cancelled = true;
+      stopScannerDecoding();
+    };
+  }, [
+    registerScannerResult,
+    scannerBookingMatch,
+    scannerCaptureLoading,
+    scannerOpen,
+    scannerReady,
+    scannerTextLoading,
+    stopScannerDecoding,
+  ]);
+
+  useEffect(() => {
+    if (!scannerOpen) {
+      return;
+    }
+    if (scannerBookingMatch) {
+      setScannerLookupLoading(false);
+      return;
+    }
+    if (!scannerResult) {
+      setScannerLookupLoading(false);
+      setScannerLookupError(null);
+      setScannerBookingMatch(null);
+      scannerLookupRequestRef.current = null;
+      return;
+    }
+
+    const searchCandidates = buildScannerSearchCandidates(scannerResult);
+    if (searchCandidates.length === 0) {
+      setScannerLookupLoading(false);
+      setScannerLookupError('Scanned value is too short to search booking records.');
+      setScannerBookingMatch(null);
+      scannerLookupRequestRef.current = null;
+      return;
+    }
+
+    const requestKey = `${selectedDateString}|${currentProductId ?? 'any'}|${searchCandidates
+      .map((candidate) => candidate.toLowerCase())
+      .join('|')}`;
+    if (scannerLookupRequestRef.current === requestKey) {
+      return;
+    }
+
+    scannerLookupRequestRef.current = requestKey;
+    setScannerLookupLoading(true);
+    setScannerLookupError(null);
+
+    let cancelled = false;
+    const lookupBooking = async () => {
+      try {
+        let resolvedMatch: ScannerBookingMatch | null = null;
+
+        for (const searchCandidate of searchCandidates) {
+          const response = await axiosInstance.get<ManifestResponse>('/bookings/manifest', {
+            params: { search: searchCandidate },
+            withCredentials: true,
+          });
+          if (cancelled) {
+            return;
+          }
+          const orders = Array.isArray(response.data?.orders) ? response.data.orders : [];
+          const { order, matchedCount } = pickBestScannerOrderMatch(
+            orders,
+            searchCandidate,
+            selectedDateString,
+            currentProductId,
+          );
+          if (!order) {
+            continue;
+          }
+
+          resolvedMatch = {
+            order,
+            shouldLetIn: getOrderEntryAllowance(order),
+            matchedCount,
+            searchedValue: searchCandidate,
+          };
+          break;
+        }
+
+        if (!resolvedMatch) {
+          setScannerBookingMatch(null);
+          setScannerLookupError(`No booking found for "${searchCandidates[0]}".`);
+          return;
+        }
+
+        setScannerBookingMatch(resolvedMatch);
+        setScannerLookupError(null);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Failed to fetch booking details for this scan.';
+        setScannerBookingMatch(null);
+        setScannerLookupError(message);
+      } finally {
+        if (cancelled) {
+          return;
+        }
+        setScannerLookupLoading(false);
+        if (scannerLookupRequestRef.current === requestKey) {
+          scannerLookupRequestRef.current = null;
+        }
+      }
+    };
+
+    void lookupBooking();
+
+    return () => {
+      cancelled = true;
+      if (scannerLookupRequestRef.current === requestKey) {
+        scannerLookupRequestRef.current = null;
+      }
+    };
+  }, [currentProductId, scannerBookingMatch, scannerOpen, scannerResult, selectedDateString]);
+
 const loadCounterForDate = useCallback(
   async (formattedDate: string, productId: number | null | undefined) => {
     if (!formattedDate) {
@@ -2049,6 +3499,32 @@ const loadCounterById = useCallback(
         .map((channel) => channel.id),
     [registry.channels],
   );
+  const walkInConfiguredTicketOptionsByChannel = useMemo(() => {
+    const displayOrder = new Map<string, number>();
+    WALK_IN_DISCOUNT_OPTIONS.forEach((label, index) => {
+      displayOrder.set(label, index);
+    });
+
+    const optionsByChannel: Record<number, string[]> = {};
+    walkInChannelIds.forEach((channelId) => {
+      const channel = registry.channels.find((entry) => entry.id === channelId);
+      const configuredLabels = new Set<string>();
+      (channel?.walkInTicketPrices ?? []).forEach((priceEntry) => {
+        const label = resolveWalkInTicketLabelFromType(priceEntry.ticketType);
+        if (label) {
+          configuredLabels.add(label);
+        }
+      });
+      optionsByChannel[channelId] = Array.from(configuredLabels).sort(
+        (left, right) =>
+          (displayOrder.get(left) ?? Number.MAX_SAFE_INTEGER) -
+            (displayOrder.get(right) ?? Number.MAX_SAFE_INTEGER) ||
+          left.localeCompare(right),
+      );
+    });
+
+    return optionsByChannel;
+  }, [registry.channels, walkInChannelIds]);
 
   const cashEligibleChannelIds = useMemo(
     () =>
@@ -2292,12 +3768,16 @@ const loadCounterById = useCallback(
 
     const counterRecord = registry.counter.counter;
     const note = counterRecord.notes ?? null;
+    const configuredWalkInOptionsKey = walkInChannelIds
+      .map((channelId) => `${channelId}:${(walkInConfiguredTicketOptionsByChannel[channelId] ?? []).join(',')}`)
+      .join('|');
     const initKey = [
       counterRecord.id,
       counterRecord.updatedAt,
       note ?? '',
       walkInChannelIds.join(','),
       cashEligibleChannelIds.join(','),
+      configuredWalkInOptionsKey,
     ].join('|');
 
     if (lastWalkInInitRef.current === initKey) {
@@ -2389,6 +3869,8 @@ const loadCounterById = useCallback(
     });
 
     walkInChannelIds.forEach((channelId) => {
+      const configuredTicketOptions = walkInConfiguredTicketOptionsByChannel[channelId] ?? [];
+      const configuredTicketOptionSet = new Set<string>(configuredTicketOptions);
       const snapshotEntry = cashSnapshotEntries.get(channelId);
       const snapshotTickets = snapshotEntry?.tickets ?? [];
       const ticketOrder: string[] = [];
@@ -2400,6 +3882,9 @@ const loadCounterById = useCallback(
         }
         const ticketName = ticketSnapshot.name;
         if (!ticketName) {
+          return;
+        }
+        if (!configuredTicketOptionSet.has(ticketName)) {
           return;
         }
         if (!ticketOrder.includes(ticketName)) {
@@ -2440,7 +3925,9 @@ const loadCounterById = useCallback(
         };
       });
 
-      const initialSelection = new Set<string>(parsedDiscounts);
+      const initialSelection = new Set<string>(
+        parsedDiscounts.filter((ticketLabel) => configuredTicketOptionSet.has(ticketLabel)),
+      );
       ticketOrder.forEach((ticketName) => initialSelection.add(ticketName));
       const orderedSelection: string[] = [];
       ticketOrder.forEach((ticketName) => {
@@ -2450,6 +3937,9 @@ const loadCounterById = useCallback(
         }
       });
       initialSelection.forEach((ticketName) => {
+        if (!configuredTicketOptionSet.has(ticketName)) {
+          return;
+        }
         orderedSelection.push(ticketName);
         if (!ticketOrder.includes(ticketName)) {
           ticketOrder.push(ticketName);
@@ -2496,28 +3986,30 @@ const loadCounterById = useCallback(
           }
         });
         if (afterCutoffPeople > 0 || Object.keys(addonMap).length > 0) {
-          const defaultTicketLabel = WALK_IN_DISCOUNT_OPTIONS[0] ?? 'Normal';
-          const existingCashValue = Number(nextWalkInCash[channelId] ?? 0);
-          const normalizedCashValue =
-            Number.isFinite(existingCashValue) && existingCashValue > 0
-              ? String(Math.max(0, Math.round(existingCashValue)))
-              : '';
-          finalTicketOrder = [defaultTicketLabel];
-          finalTicketEntries = {
-            ...finalTicketEntries,
-            [defaultTicketLabel]: {
-              name: defaultTicketLabel,
-              currencyOrder: ['PLN'],
-              currencies: {
-                PLN: {
-                  people: afterCutoffPeople,
-                  cash: normalizedCashValue,
-                  addons: addonMap,
+          const defaultTicketLabel = configuredTicketOptions[0] ?? null;
+          if (defaultTicketLabel) {
+            const existingCashValue = Number(nextWalkInCash[channelId] ?? 0);
+            const normalizedCashValue =
+              Number.isFinite(existingCashValue) && existingCashValue > 0
+                ? String(Math.max(0, Math.round(existingCashValue)))
+                : '';
+            finalTicketOrder = [defaultTicketLabel];
+            finalTicketEntries = {
+              ...finalTicketEntries,
+              [defaultTicketLabel]: {
+                name: defaultTicketLabel,
+                currencyOrder: ['PLN'],
+                currencies: {
+                  PLN: {
+                    people: afterCutoffPeople,
+                    cash: normalizedCashValue,
+                    addons: addonMap,
+                  },
                 },
               },
-            },
-          };
-          finalSelection = [defaultTicketLabel];
+            };
+            finalSelection = [defaultTicketLabel];
+          }
         }
       }
 
@@ -2529,8 +4021,8 @@ const loadCounterById = useCallback(
 
       if (!(channelId in nextWalkInCash)) {
         let aggregatedCash = 0;
-        ticketOrder.forEach((ticketName) => {
-          const ticketEntry = ticketEntries[ticketName];
+        finalTicketOrder.forEach((ticketName) => {
+          const ticketEntry = finalTicketEntries[ticketName];
           if (!ticketEntry) {
             return;
           }
@@ -2607,8 +4099,9 @@ const loadCounterById = useCallback(
     recalcWalkInTicketDataMap,
     registry.channels,
     registry.counter,
-  walkInChannelIds,
-]);
+    walkInChannelIds,
+    walkInConfiguredTicketOptionsByChannel,
+  ]);
 
   const appliedPlatformSelectionRef = useRef<number | null>(null);
   const appliedAfterCutoffSelectionRef = useRef<number | null>(null);
@@ -5561,7 +7054,10 @@ useEffect(() => {
     const isWalkInChannel = normalizedChannelName === WALK_IN_CHANNEL_SLUG;
     const isWalkInAfterCutoff = isWalkInChannel && bucket.period === 'after_cutoff';
     const isWalkInAttended = isWalkInChannel && bucket.tallyType === 'attended' && bucket.period === null;
-    const walkInDiscountSelection = walkInDiscountsByChannel[channel.id] ?? [];
+    const walkInConfiguredTicketOptions = walkInConfiguredTicketOptionsByChannel[channel.id] ?? [];
+    const walkInDiscountSelection = (walkInDiscountsByChannel[channel.id] ?? []).filter((ticketLabel) =>
+      walkInConfiguredTicketOptions.includes(ticketLabel),
+    );
     const walkInTicketState =
       walkInTicketDataByChannel[channel.id] ?? ({ ticketOrder: [], tickets: {} } as WalkInChannelTicketState);
     const walkInCashValue = walkInCashByChannel[channel.id] ?? '';
@@ -5592,7 +7088,7 @@ useEffect(() => {
 
     const renderTicketChips = (extra?: JSX.Element | JSX.Element[]) => (
       <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
-        {WALK_IN_DISCOUNT_OPTIONS.map((option) => {
+        {walkInConfiguredTicketOptions.map((option) => {
           const selected = walkInDiscountSelection.includes(option);
           return (
             <Chip
@@ -5722,13 +7218,26 @@ useEffect(() => {
       if (disableInputs) {
         return;
       }
-    if (freePeopleActive) {
-      setFreePeopleQty(channel.id, 0);
-      setFreePeopleNote(channel.id, '');
-    } else {
-      ensureFreePeopleEntry(channel.id);
-    }
-  };
+      if (freePeopleActive) {
+        setFreePeopleByChannel((prev) => {
+          if (!(channel.id in prev)) {
+            return prev;
+          }
+          const { [channel.id]: _removed, ...rest } = prev;
+          return rest;
+        });
+        setFreeAddonsByChannel((prev) => {
+          if (!(channel.id in prev)) {
+            return prev;
+          }
+          const { [channel.id]: _removed, ...rest } = prev;
+          return rest;
+        });
+        setWalkInNoteDirty(true);
+      } else {
+        ensureFreePeopleEntry(channel.id);
+      }
+    };
 
   const freePeopleChip = (
     <Chip
@@ -5778,13 +7287,17 @@ useEffect(() => {
                 <Stack spacing={0.75}>
                   <Typography variant="subtitle2">Tickets Type</Typography>
                   {renderTicketChips(freePeopleChip)}
-                  {walkInDiscountSelection.length === 0 && (
+                  {walkInConfiguredTicketOptions.length === 0 ? (
+                    <Typography variant="caption" color="text.secondary">
+                      No walk-in ticket types configured in Channel Product Prices.
+                    </Typography>
+                  ) : walkInDiscountSelection.length === 0 && !freePeopleActive && (
                     <Typography variant="caption" color="text.secondary">
                       Select a ticket type to start recording.
                     </Typography>
                   )}
                 </Stack>
-                {walkInDiscountSelection.length > 0 && (
+                {(walkInDiscountSelection.length > 0 || freePeopleActive) && (
                   <Box
                     sx={{
                       display: 'grid',
@@ -6524,6 +8037,18 @@ useEffect(() => {
 
     return (
       <Stack spacing={3}>
+        {(modalMode === 'create' || modalMode === 'update') && (
+          <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="flex-end">
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => setScannerOpen(true)}
+              disabled={registry.savingMetrics || confirmingMetrics}
+            >
+              Scanner
+            </Button>
+          </Stack>
+        )}
         {effectiveSelectedChannelIds.length === 0 ? (
           <Alert severity="info">Select channels during the platform check to enter reservations.</Alert>
         ) : (
@@ -7679,6 +9204,212 @@ type SummaryRowOptions = {
             </Stack>
           ) : (
             renderSummaryStep()
+          )}
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        fullScreen
+        aria-labelledby="counter-scanner-title"
+      >
+        <DialogTitle
+          id="counter-scanner-title"
+          sx={{ m: 0, p: 2, pb: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+        >
+          <Typography variant="h6" component="span">
+            {scannerBookingMatch ? 'Booking Check-In' : 'Scanner'}
+          </Typography>
+          <IconButton onClick={() => setScannerOpen(false)} aria-label="close scanner">
+            <Close />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent
+          dividers
+          sx={scannerBookingMatch ? { p: 0, display: 'flex', flexDirection: 'column' } : { p: { xs: 2, sm: 3 } }}
+        >
+          {scannerBookingMatch ? (
+            <Box
+              sx={{
+                p: { xs: 2, sm: 3 },
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+                minHeight: 'calc(100vh - 104px)',
+              }}
+            >
+              <Stack spacing={1.5}>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'flex-start', sm: 'center' }}>
+                  <Typography variant="h6">Booking Match</Typography>
+                  <Chip
+                    size="small"
+                    color={resolveScannerStatusColor(scannerBookingMatch.order.status)}
+                    label={formatBookingStatusLabel(scannerBookingMatch.order.status)}
+                  />
+                </Stack>
+                {scannerBookingMatch.matchedCount > 1 && (
+                  <Typography variant="body2" color="text.secondary">
+                    {`Found ${scannerBookingMatch.matchedCount} matches. Showing the best match for the current counter date/product.`}
+                  </Typography>
+                )}
+                <Typography variant="h3" sx={{ lineHeight: 1.1 }}>
+                  {scannerBookingMatch.shouldLetIn}
+                </Typography>
+                <Typography variant="subtitle1" color="text.secondary">
+                  Should Let In
+                </Typography>
+                <Divider />
+                <Typography variant="body1">
+                  Platform Booking ID: {scannerBookingMatch.order.platformBookingId}
+                </Typography>
+                <Typography variant="body1">
+                  Product: {scannerBookingMatch.order.productName}
+                </Typography>
+                <Typography variant="body1">
+                  Experience: {scannerBookingMatch.order.date} {scannerBookingMatch.order.timeslot}
+                </Typography>
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  <Chip
+                    size="medium"
+                    label={`Cocktails: ${Math.max(0, Number(scannerBookingMatch.order.extras?.cocktails) || 0)}`}
+                    color="info"
+                    variant="outlined"
+                  />
+                  <Chip
+                    size="medium"
+                    label={`T-Shirts: ${Math.max(0, Number(scannerBookingMatch.order.extras?.tshirts) || 0)}`}
+                    color="primary"
+                    variant="outlined"
+                  />
+                  <Chip
+                    size="medium"
+                    label={`Instant Pictures: ${Math.max(0, Number(scannerBookingMatch.order.extras?.photos) || 0)}`}
+                    color="secondary"
+                    variant="outlined"
+                  />
+                </Stack>
+              </Stack>
+              <Box sx={{ mt: 'auto' }}>
+                <Button variant="contained" size="large" fullWidth onClick={handleScannerCheckIn}>
+                  Check-In
+                </Button>
+              </Box>
+            </Box>
+          ) : (
+            <Stack spacing={2}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
+                <Chip
+                  size="small"
+                  color={scannerReady ? 'success' : 'default'}
+                  label={scannerReady ? 'Live QR/Barcode scan active' : 'Starting camera...'}
+                />
+                <Box sx={{ flexGrow: 1 }} />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    void handleCaptureFrameScan();
+                  }}
+                  disabled={!scannerReady || scannerTextLoading || scannerCaptureLoading}
+                >
+                  {scannerCaptureLoading ? 'Capturing...' : 'Capture Frame'}
+                </Button>
+                <Button
+                  size="small"
+                  variant="contained"
+                  onClick={() => {
+                    void handleScanTextCapture();
+                  }}
+                  disabled={!scannerReady || scannerTextLoading || scannerCaptureLoading}
+                >
+                  {scannerTextLoading ? 'Reading Text...' : 'Read Text'}
+                </Button>
+              </Stack>
+              <Box sx={{ bgcolor: 'black', borderRadius: 1, overflow: 'hidden', position: 'relative' }}>
+                <video
+                  ref={scannerVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  style={{ display: 'block', width: '100%', maxHeight: '70vh', objectFit: 'cover' }}
+                />
+                {scannerCaptureLoading && (
+                  <Box
+                    sx={{
+                      position: 'absolute',
+                      inset: 0,
+                      bgcolor: 'rgba(0, 0, 0, 0.58)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 1.25,
+                      zIndex: 2,
+                    }}
+                  >
+                    <CircularProgress size={34} />
+                    <Typography variant="body2" sx={{ color: 'common.white', textAlign: 'center', px: 2 }}>
+                      Capturing frame and scanning...
+                    </Typography>
+                  </Box>
+                )}
+              </Box>
+              {scannerResult && (
+                <Alert severity="success">
+                  <Stack spacing={0.5}>
+                    <Typography variant="body2">
+                      {`Detected ${scannerResult.kind.toUpperCase()} from ${scannerResult.source === 'ocr' ? 'text OCR' : 'live camera'} at ${scannerResult.scannedAt}`}
+                    </Typography>
+                    {scannerResult.format && (
+                      <Typography variant="caption" color="text.secondary">
+                        Format: {scannerResult.format}
+                      </Typography>
+                    )}
+                    <Typography variant="body2">
+                      Booking ID: {scannerResult.bookingId ?? 'Not parsed yet'}
+                    </Typography>
+                    <TextField
+                      size="small"
+                      label="Raw Value"
+                      value={scannerResult.rawValue}
+                      multiline
+                      minRows={2}
+                      InputProps={{ readOnly: true }}
+                    />
+                    {typeof scannerResult.confidence === 'number' && (
+                      <Typography variant="caption" color="text.secondary">
+                        OCR confidence: {scannerResult.confidence.toFixed(1)}%
+                      </Typography>
+                    )}
+                  </Stack>
+                </Alert>
+              )}
+              {scannerLookupLoading && (
+                <Stack spacing={0.75}>
+                  <LinearProgress />
+                  <Typography variant="caption" color="text.secondary">
+                    Searching booking by platform booking ID...
+                  </Typography>
+                </Stack>
+              )}
+              {scannerCaptureLoading && (
+                <Stack spacing={0.75}>
+                  <LinearProgress />
+                  <Typography variant="caption" color="text.secondary">
+                    Running aggressive barcode recognition and OCR fallback on captured frame...
+                  </Typography>
+                </Stack>
+              )}
+              {scannerCheckInNotice && <Alert severity="success">{scannerCheckInNotice}</Alert>}
+              {scannerLookupError && <Alert severity="warning">{scannerLookupError}</Alert>}
+              {scannerError ? (
+                <Alert severity="error">{scannerError}</Alert>
+              ) : (
+                <Alert severity="info">
+                  QR/barcode is scanned automatically. Use "Read Text" for printed or handwritten booking IDs.
+                </Alert>
+              )}
+            </Stack>
           )}
         </DialogContent>
       </Dialog>

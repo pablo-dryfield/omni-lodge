@@ -2,6 +2,7 @@ import dayjs from "dayjs";
 import { ResponseModifications } from "../../types/general/ResponseModifications";
 import { ChannelProductPrice } from "../../types/channels/ChannelProductPrice";
 import CustomEditSelect, { EditSelectOption } from "../../utils/CustomEditSelect";
+import { WALK_IN_TICKET_TYPE_LABELS, WALK_IN_TICKET_TYPE_OPTIONS } from "../../constants/walkInTicketTypes";
 
 export type ChannelProductPriceColumnParams = {
   channelOptions: EditSelectOption[];
@@ -63,6 +64,50 @@ export const channelProductPriceColumnDef = ({
           table={table}
           options={productOptions}
           placeholder="Select product"
+        />
+      ),
+    },
+  },
+  {
+    accessorKey: "ticketType",
+    modifications: {
+      id: "ticketType",
+      header: "Ticket Type",
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Cell: ({ row }) => {
+        const key = String(row.original.ticketType ?? "").toLowerCase();
+        const normalizedLabel =
+          WALK_IN_TICKET_TYPE_LABELS[key as keyof typeof WALK_IN_TICKET_TYPE_LABELS];
+        return row.original.ticketTypeLabel ?? normalizedLabel ?? key;
+      },
+      Edit: ({ cell, row, table }) => (
+        <CustomEditSelect
+          cell={cell}
+          row={row}
+          table={table}
+          options={WALK_IN_TICKET_TYPE_OPTIONS}
+          placeholder="Select ticket type"
+        />
+      ),
+    },
+  },
+  {
+    accessorKey: "currencyCode",
+    modifications: {
+      id: "currencyCode",
+      header: "Currency",
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Cell: ({ cell }) => String(cell.getValue<string>() ?? "").toUpperCase(),
+      Edit: ({ cell, row, table }) => (
+        <CustomEditSelect
+          cell={cell}
+          row={row}
+          table={table}
+          options={[
+            { value: "PLN", label: "PLN" },
+            { value: "EUR", label: "EUR" },
+          ]}
+          placeholder="Select currency"
         />
       ),
     },

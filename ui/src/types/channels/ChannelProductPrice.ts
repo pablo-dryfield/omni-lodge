@@ -3,6 +3,9 @@ export type ChannelProductPrice = {
   channelId: number;
   productId: number;
   price: number;
+  ticketType: string;
+  ticketTypeLabel?: string | null;
+  currencyCode: string;
   validFrom: string;
   validTo: string | null;
   createdBy: number | null;
