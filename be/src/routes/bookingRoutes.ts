@@ -18,6 +18,8 @@ import {
   cancelEcwidBooking,
   getEcwidRefundPreview,
   importEcwidBooking,
+  updateBulkBookingAttendance,
+  updateBookingAttendance,
 } from '../controllers/bookingController.js';
 
 const router = Router();
@@ -31,6 +33,8 @@ router.post('/emails/backfill', authMiddleware, backfillBookingEmails);
 router.get(['/manifest', 'manifest'], authMiddleware, getManifest);
 router.post('/ingest-emails', authMiddleware, ingestBookingEmails);
 router.post('/import-ecwid', authMiddleware, importEcwidBooking);
+router.patch('/attendance/bulk', authMiddleware, updateBulkBookingAttendance);
+router.patch('/:bookingId/attendance', authMiddleware, updateBookingAttendance);
 router.get('/:bookingId/details', authMiddleware, getBookingDetails);
 router.get('/:bookingId/amend-ecwid-preview', authMiddleware, getEcwidAmendPreview);
 router.post('/:bookingId/reconcile-ecwid', authMiddleware, reconcileEcwidBooking);

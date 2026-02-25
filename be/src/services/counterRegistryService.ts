@@ -20,7 +20,9 @@ import ShiftRole from '../models/ShiftRole.js';
 import UserShiftRole from '../models/UserShiftRole.js';
 import HttpError from '../errors/HttpError.js';
 import NightReport from '../models/NightReport.js';
+import Booking from '../models/Booking.js';
 import { DID_NOT_OPERATE_NOTE } from '../constants/nightReports.js';
+import { type BookingAttendanceStatus, type BookingStatus } from '../constants/bookings.js';
 import {
   normalizeCurrencyCode,
   normalizeWalkInTicketType,
@@ -42,6 +44,7 @@ import {
 
 const COUNTER_DATE_FORMAT = 'YYYY-MM-DD';
 const DEFAULT_PRODUCT_NAME = 'Pub Crawl';
+const COUNTER_SUMMARY_ATTENDANCE_NOSHOW_FROM_DATE = '2026-02-20';
 
 const DEFAULT_CHANNEL_ORDER = [
   'Fareharbor',
@@ -55,6 +58,16 @@ const DEFAULT_CHANNEL_ORDER = [
   'XperiencePoland',
   'TopDeck',
 ];
+const CHECKIN_ALLOWED_BOOKING_STATUSES = new Set<BookingStatus>(['pending', 'confirmed', 'amended', 'completed']);
+const SUMMARY_NOSHOW_BOOKING_STATUSES = new Set<BookingStatus>([
+  'pending',
+  'confirmed',
+  'amended',
+  'completed',
+  'rebooked',
+  'no_show',
+]);
+const DEFAULT_BOOKING_ATTENDANCE_STATUS: BookingAttendanceStatus = 'pending';
 
 
 export type MetricInput = {
@@ -163,6 +176,84 @@ function buildChannelConfigs(
       };
     })
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+}
+
+function deriveBookingPartySize(booking: Booking): number {
+  const fromTotal = Number(booking.partySizeTotal);
+  if (Number.isFinite(fromTotal) && fromTotal > 0) {
+    return Math.max(0, Math.round(fromTotal));
+  }
+  const fromBreakdown = Number(booking.partySizeAdults ?? 0) + Number(booking.partySizeChildren ?? 0);
+  if (Number.isFinite(fromBreakdown) && fromBreakdown > 0) {
+    return Math.max(0, Math.round(fromBreakdown));
+  }
+  return 0;
+}
+
+function resolveCheckInAllowanceForBooking(booking: Booking): number {
+  if (!CHECKIN_ALLOWED_BOOKING_STATUSES.has(booking.status)) {
+    return 0;
+  }
+  return deriveBookingPartySize(booking);
+}
+
+function normalizeAttendedExtrasSnapshot(snapshot: unknown): { tshirts: number; cocktails: number; photos: number } {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return { tshirts: 0, cocktails: 0, photos: 0 };
+  }
+  return {
+    tshirts: Math.max(0, Math.round(Number((snapshot as Record<string, unknown>).tshirts) || 0)),
+    cocktails: Math.max(0, Math.round(Number((snapshot as Record<string, unknown>).cocktails) || 0)),
+    photos: Math.max(0, Math.round(Number((snapshot as Record<string, unknown>).photos) || 0)),
+  };
+}
+
+function resolveBookingAttendanceStatusForFinalization(booking: Booking): BookingAttendanceStatus {
+  const allowance = resolveCheckInAllowanceForBooking(booking);
+  if (allowance <= 0) {
+    return DEFAULT_BOOKING_ATTENDANCE_STATUS;
+  }
+  const rawAttendedTotal = Number(booking.attendedTotal ?? 0);
+  const normalizedAttendedTotal = Number.isFinite(rawAttendedTotal)
+    ? Math.max(0, Math.round(rawAttendedTotal))
+    : 0;
+  const attendedTotal = Math.min(normalizedAttendedTotal, allowance);
+  if (attendedTotal >= allowance) {
+    return 'checked_in_full';
+  }
+  if (attendedTotal > 0) {
+    return 'checked_in_partial';
+  }
+  const attendedExtras = normalizeAttendedExtrasSnapshot(booking.attendedAddonsSnapshot ?? undefined);
+  if (attendedExtras.tshirts > 0 || attendedExtras.cocktails > 0 || attendedExtras.photos > 0) {
+    return 'checked_in_partial';
+  }
+  return 'no_show';
+}
+
+function resolveBookingNoShowPeopleByAttendance(booking: Booking): number {
+  const allowance = deriveBookingPartySize(booking);
+  if (allowance <= 0) {
+    return 0;
+  }
+  const status = booking.status as BookingStatus;
+  if (status === 'no_show') {
+    return allowance;
+  }
+  if (!CHECKIN_ALLOWED_BOOKING_STATUSES.has(status)) {
+    return 0;
+  }
+  const attendanceStatus = String(booking.attendanceStatus ?? DEFAULT_BOOKING_ATTENDANCE_STATUS)
+    .trim()
+    .toLowerCase();
+  if (attendanceStatus === 'checked_in_full' || attendanceStatus === 'checked_in_partial') {
+    return 0;
+  }
+  if (attendanceStatus === 'no_show') {
+    return allowance;
+  }
+  const attended = Math.max(0, Math.round(Number(booking.attendedTotal ?? 0) || 0));
+  return Math.max(allowance - attended, 0);
 }
 
 export default class CounterRegistryService {
@@ -423,14 +514,22 @@ export default class CounterRegistryService {
       }
     }
 
+    const shouldFinalizeBookingAttendance = delta.status === 'final' && counter.status !== 'final';
+
     if (Object.keys(delta).length === 0) {
       const context = await this.buildContext(counter);
       return this.buildPayload(context);
     }
 
-    delta.updatedBy = actorUserId;
-    counter.set(delta);
-    await counter.save();
+    await sequelize.transaction(async (transaction) => {
+      delta.updatedBy = actorUserId;
+      counter.set(delta);
+      await counter.save({ transaction });
+
+      if (shouldFinalizeBookingAttendance) {
+        await this.finalizeBookingAttendanceForCounter(counter, actorUserId, transaction);
+      }
+    });
 
     const refreshed = await this.loadCounterById(counterId);
     if (!refreshed) {
@@ -439,6 +538,40 @@ export default class CounterRegistryService {
 
     const context = await this.buildContext(refreshed);
     return this.buildPayload(context);
+  }
+
+  static async finalizeBookingAttendanceForCounter(
+    counter: Counter,
+    actorUserId: number,
+    transaction: Transaction,
+  ): Promise<void> {
+    const where: WhereOptions = {
+      experienceDate: counter.date,
+      productId: counter.productId ?? null,
+    };
+    const bookings = await Booking.findAll({ where, transaction });
+    for (const booking of bookings) {
+      const nextAttendanceStatus = resolveBookingAttendanceStatusForFinalization(booking);
+      let shouldSave = false;
+      if (booking.attendanceStatus !== nextAttendanceStatus) {
+        booking.attendanceStatus = nextAttendanceStatus;
+        shouldSave = true;
+      }
+      if (nextAttendanceStatus === 'no_show' || nextAttendanceStatus === DEFAULT_BOOKING_ATTENDANCE_STATUS) {
+        if (booking.checkedInAt !== null) {
+          booking.checkedInAt = null;
+          shouldSave = true;
+        }
+        if (booking.checkedInBy !== null) {
+          booking.checkedInBy = null;
+          shouldSave = true;
+        }
+      }
+      if (shouldSave) {
+        booking.updatedBy = actorUserId;
+        await booking.save({ transaction });
+      }
+    }
   }
 
   static async updateCounterStaff(
@@ -615,92 +748,6 @@ export default class CounterRegistryService {
 
         incomingByKey.set(key, { ...row, period: normalizedPeriod });
       }
-
-      type Aggregate = {
-        channelId: number;
-        kind: MetricKind;
-        addonId: number | null;
-        beforeQty: number;
-        attendedQty: number;
-        afterQty: number | null;
-      };
-
-      const aggregateByKey = new Map<string, Aggregate>();
-
-      const applyToAggregate = (metric: NormalizedMetric) => {
-        if (metric.kind === 'cash_payment') {
-          return;
-        }
-        const aggregateKey = [metric.channelId, metric.kind, metric.addonId ?? 'null'].join('|');
-        let aggregate = aggregateByKey.get(aggregateKey);
-        if (!aggregate) {
-          aggregate = {
-            channelId: metric.channelId,
-            kind: metric.kind,
-            addonId: metric.addonId ?? null,
-            beforeQty: 0,
-            attendedQty: 0,
-            afterQty: null,
-          };
-          aggregateByKey.set(aggregateKey, aggregate);
-        }
-
-        const numericQty = Number(metric.qty) || 0;
-        if (metric.tallyType === 'booked') {
-          if (metric.period === 'before_cutoff') {
-            aggregate.beforeQty = numericQty;
-          } else if (metric.period === 'after_cutoff') {
-            aggregate.afterQty = numericQty;
-          }
-        } else if (metric.tallyType === 'attended') {
-          aggregate.attendedQty = numericQty;
-        }
-      };
-
-      existingMetrics.forEach((metric: CounterChannelMetric) => {
-        const normalizedPeriod: MetricPeriod =
-          metric.tallyType === 'booked'
-            ? (metric.period ?? 'before_cutoff')
-            : metric.tallyType === 'attended'
-            ? null
-            : metric.period ?? null;
-
-        applyToAggregate({
-          channelId: metric.channelId,
-          kind: metric.kind as MetricKind,
-          addonId: metric.addonId ?? null,
-          tallyType: metric.tallyType as MetricTallyType,
-          period: normalizedPeriod,
-          qty: Number(metric.qty),
-        });
-      });
-
-      incomingByKey.forEach((metric: NormalizedMetric) => {
-        applyToAggregate(metric);
-      });
-
-      aggregateByKey.forEach((aggregate) => {
-        const beforeQty = aggregate.beforeQty ?? 0;
-        const attendedQty = aggregate.attendedQty ?? 0;
-        const diff = Math.max(attendedQty - beforeQty, 0);
-        const afterKey = buildMetricKey({
-          channelId: aggregate.channelId,
-          kind: aggregate.kind,
-          addonId: aggregate.addonId,
-          tallyType: 'booked',
-          period: 'after_cutoff',
-        });
-        if (diff > 0 || aggregate.afterQty !== null) {
-          incomingByKey.set(afterKey, {
-            channelId: aggregate.channelId,
-            kind: aggregate.kind,
-            addonId: aggregate.addonId,
-            tallyType: 'booked',
-            period: 'after_cutoff',
-            qty: diff,
-          });
-        }
-      });
 
       const rowsToCreate: NormalizedMetric[] = [];
       const rowsToUpdate: Array<{ metric: CounterChannelMetric; row: NormalizedMetric }> = [];
@@ -1022,7 +1069,9 @@ export default class CounterRegistryService {
       })),
     });
 
-    const summary = computeSummary({ metrics: grid, channels, addons });
+    const baseSummary = computeSummary({ metrics: grid, channels, addons });
+    const attendanceAdjustedSummary = await this.applyAttendanceNoShowSummary(baseSummary, counter, channels);
+    const summary = this.applyWalkInAfterCutoffSummary(attendanceAdjustedSummary, channels);
 
     const staff = staffRows.map((record) => {
       const user = record.counterUser;
@@ -1075,6 +1124,230 @@ export default class CounterRegistryService {
     await CounterRegistryService.ensureNightReportForCounter(counter, summary);
 
     return payload;
+  }
+
+  private static async applyAttendanceNoShowSummary(
+    summary: CounterSummary,
+    counter: Counter,
+    channels: ChannelConfig[],
+  ): Promise<CounterSummary> {
+    if (!counter.productId) {
+      return summary;
+    }
+    if (counter.date < COUNTER_SUMMARY_ATTENDANCE_NOSHOW_FROM_DATE) {
+      return summary;
+    }
+
+    const onlineChannels = channels.filter((channel) => {
+      const slug = normalizeChannelSlug(channel.name);
+      if (slug === 'walkin') {
+        return false;
+      }
+      return !channel.cashPaymentEligible;
+    });
+    if (onlineChannels.length === 0) {
+      return summary;
+    }
+
+    const channelIdByPlatform = new Map<string, number>();
+    onlineChannels.forEach((channel) => {
+      const key = normalizeChannelSlug(channel.name);
+      if (key) {
+        channelIdByPlatform.set(key, channel.id);
+      }
+    });
+
+    const bookings = await Booking.findAll({
+      where: {
+        experienceDate: counter.date,
+        productId: counter.productId,
+        status: { [Op.in]: Array.from(SUMMARY_NOSHOW_BOOKING_STATUSES) },
+      },
+      attributes: [
+        'id',
+        'platform',
+        'status',
+        'attendanceStatus',
+        'attendedTotal',
+        'partySizeTotal',
+        'partySizeAdults',
+        'partySizeChildren',
+      ],
+    });
+
+    const noShowByChannelId = new Map<number, number>();
+    bookings.forEach((booking) => {
+      const platformKey = normalizeChannelSlug(booking.platform);
+      const channelId = channelIdByPlatform.get(platformKey);
+      if (!channelId) {
+        return;
+      }
+      const noShowPeople = resolveBookingNoShowPeopleByAttendance(booking);
+      if (noShowPeople <= 0) {
+        return;
+      }
+      noShowByChannelId.set(channelId, (noShowByChannelId.get(channelId) ?? 0) + noShowPeople);
+    });
+
+    if (noShowByChannelId.size === 0) {
+      return summary;
+    }
+
+    const onlineChannelIdSet = new Set<number>(onlineChannels.map((channel) => channel.id));
+    const byChannel = summary.byChannel.map((channelSummary) => {
+      if (!onlineChannelIdSet.has(channelSummary.channelId)) {
+        return channelSummary;
+      }
+      const nextNoShow = Math.max(
+        0,
+        Math.round(Number(noShowByChannelId.get(channelSummary.channelId) ?? 0) || 0),
+      );
+      if (nextNoShow === channelSummary.people.nonShow) {
+        return channelSummary;
+      }
+      return {
+        ...channelSummary,
+        people: {
+          ...channelSummary.people,
+          nonShow: nextNoShow,
+        },
+      };
+    });
+
+    const totalPeopleNoShow = byChannel.reduce(
+      (sum, channelSummary) => sum + Math.max(0, Math.round(Number(channelSummary.people.nonShow) || 0)),
+      0,
+    );
+
+    return {
+      ...summary,
+      byChannel,
+      totals: {
+        ...summary.totals,
+        people: {
+          ...summary.totals.people,
+          nonShow: totalPeopleNoShow,
+        },
+      },
+    };
+  }
+
+  private static applyWalkInAfterCutoffSummary(
+    summary: CounterSummary,
+    channels: ChannelConfig[],
+  ): CounterSummary {
+    const walkInChannelIdSet = new Set<number>(
+      channels
+        .filter((channel) => normalizeChannelSlug(channel.name) === 'walkin')
+        .map((channel) => channel.id),
+    );
+    if (walkInChannelIdSet.size === 0) {
+      return summary;
+    }
+
+    let changed = false;
+    const byChannel = summary.byChannel.map((channelSummary) => {
+      if (!walkInChannelIdSet.has(channelSummary.channelId)) {
+        return channelSummary;
+      }
+
+      const nextPeopleBookedAfter = Math.max(channelSummary.people.attended - channelSummary.people.bookedBefore, 0);
+      const nextPeopleNonShow = Math.max(
+        channelSummary.people.bookedBefore + nextPeopleBookedAfter - channelSummary.people.attended,
+        0,
+      );
+
+      let addonChanged = false;
+      const nextAddons = Object.fromEntries(
+        Object.entries(channelSummary.addons).map(([key, addonBucket]) => {
+          const nextBookedAfter = Math.max(addonBucket.attended - addonBucket.bookedBefore, 0);
+          const nextNonShow = Math.max(addonBucket.bookedBefore + nextBookedAfter - addonBucket.attended, 0);
+          if (nextBookedAfter !== addonBucket.bookedAfter || nextNonShow !== addonBucket.nonShow) {
+            addonChanged = true;
+          }
+          return [
+            key,
+            {
+              ...addonBucket,
+              bookedAfter: nextBookedAfter,
+              nonShow: nextNonShow,
+            },
+          ];
+        }),
+      );
+
+      const peopleChanged =
+        nextPeopleBookedAfter !== channelSummary.people.bookedAfter ||
+        nextPeopleNonShow !== channelSummary.people.nonShow;
+
+      if (!peopleChanged && !addonChanged) {
+        return channelSummary;
+      }
+
+      changed = true;
+      return {
+        ...channelSummary,
+        people: {
+          ...channelSummary.people,
+          bookedAfter: nextPeopleBookedAfter,
+          nonShow: nextPeopleNonShow,
+        },
+        addons: nextAddons,
+      };
+    });
+
+    if (!changed) {
+      return summary;
+    }
+
+    const totalsPeople = {
+      bookedBefore: 0,
+      bookedAfter: 0,
+      attended: 0,
+      nonShow: 0,
+    };
+    const totalsAddons: CounterSummary['totals']['addons'] = {};
+
+    Object.entries(summary.totals.addons).forEach(([key, bucket]) => {
+      totalsAddons[key] = {
+        ...bucket,
+        bookedBefore: 0,
+        bookedAfter: 0,
+        attended: 0,
+        nonShow: 0,
+      };
+    });
+
+    byChannel.forEach((channelSummary) => {
+      totalsPeople.bookedBefore += Math.max(0, Math.round(Number(channelSummary.people.bookedBefore) || 0));
+      totalsPeople.bookedAfter += Math.max(0, Math.round(Number(channelSummary.people.bookedAfter) || 0));
+      totalsPeople.attended += Math.max(0, Math.round(Number(channelSummary.people.attended) || 0));
+      totalsPeople.nonShow += Math.max(0, Math.round(Number(channelSummary.people.nonShow) || 0));
+
+      Object.entries(channelSummary.addons).forEach(([key, addonBucket]) => {
+        const existing = totalsAddons[key] ?? {
+          ...addonBucket,
+          bookedBefore: 0,
+          bookedAfter: 0,
+          attended: 0,
+          nonShow: 0,
+        };
+        existing.bookedBefore += Math.max(0, Math.round(Number(addonBucket.bookedBefore) || 0));
+        existing.bookedAfter += Math.max(0, Math.round(Number(addonBucket.bookedAfter) || 0));
+        existing.attended += Math.max(0, Math.round(Number(addonBucket.attended) || 0));
+        existing.nonShow += Math.max(0, Math.round(Number(addonBucket.nonShow) || 0));
+        totalsAddons[key] = existing;
+      });
+    });
+
+    return {
+      ...summary,
+      byChannel,
+      totals: {
+        people: totalsPeople,
+        addons: totalsAddons,
+      },
+    };
   }
 
   private static async ensureNightReportForCounter(

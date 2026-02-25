@@ -26,6 +26,15 @@ export const BOOKING_STATUSES = [
 
 export type BookingStatus = typeof BOOKING_STATUSES[number];
 
+export const BOOKING_ATTENDANCE_STATUSES = [
+  'pending',
+  'checked_in_partial',
+  'checked_in_full',
+  'no_show',
+] as const;
+
+export type BookingAttendanceStatus = typeof BOOKING_ATTENDANCE_STATUSES[number];
+
 export const BOOKING_PAYMENT_STATUSES = [
   'unknown',
   'unpaid',

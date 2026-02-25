@@ -40,7 +40,25 @@ import {
   Typography,
   Tooltip,
 } from '@mui/material';
-import { Add, Check, Close, Delete, Edit, Visibility, Map as MapIcon, KeyboardArrowRight, Remove } from '@mui/icons-material';
+import {
+  Add,
+  Check,
+  Checkroom,
+  Close,
+  Delete,
+  Edit,
+  LocalBar,
+  PhotoCamera,
+  Refresh,
+  Visibility,
+  Map as MapIcon,
+  KeyboardArrowRight,
+  Remove,
+  Person,
+  MailOutline,
+  Phone,
+  WhatsApp,
+} from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { Link } from 'react-router-dom';
@@ -56,9 +74,9 @@ import { fetchScheduledStaffForProduct } from '../api/scheduling';
 import {
   clearDirtyMetrics,
   clearCounter,
-  fetchCounterByDate,
   fetchCounterById,
   commitCounterRegistry,
+  finalizeCounterReservations,
   selectCounterRegistry,
   setMetric,
   submitCounterSetup,
@@ -96,11 +114,11 @@ import type {
 import { WALK_IN_TICKET_LABEL_TO_KEY, WALK_IN_TICKET_TYPE_LABELS } from '../constants/walkInTicketTypes';
 
 const COUNTER_DATE_FORMAT = 'YYYY-MM-DD';
+const COUNTER_SUMMARY_ATTENDANCE_NOSHOW_FROM_DATE = '2026-02-20';
 const WALK_IN_CHANNEL_SLUG = 'walk-in';
-const AFTER_CUTOFF_ALLOWED = new Set(['ecwid', WALK_IN_CHANNEL_SLUG]);
 const DEFAULT_PRODUCT_NAME = 'Pub Crawl';
 const bucketLabels: Record<string, string> = {
-  attended: 'Attended (Tonight)',
+  attended: 'Cash Payments',
   before_cutoff: 'Booked BEFORE cut-off',
   after_cutoff: 'Booked AFTER cut-off',
 };
@@ -125,9 +143,14 @@ type ManifestResponse = {
   summary?: ManifestSummary;
 };
 
-type PlatformManifestTotals = {
-  people: number;
-  extras: OrderExtras;
+type BookingAttendancePatchPayload = {
+  attendedTotal?: number;
+  attendedExtras?: Partial<OrderExtras>;
+};
+
+type StagedBookingAttendance = {
+  attendedTotal: number;
+  attendedExtras: OrderExtras;
 };
 
 type ScannerResultKind = 'qr' | 'barcode' | 'text';
@@ -168,9 +191,10 @@ const MANIFEST_ACTIVE_STATUSES = new Set<BookingStatus>([
   'pending',
   'confirmed',
   'rebooked',
+  'amended',
   'completed',
 ]);
-const MANIFEST_INCLUDED_STATUSES = new Set<BookingStatus>([...MANIFEST_ACTIVE_STATUSES, 'amended']);
+const MANIFEST_INCLUDED_STATUSES = new Set<BookingStatus>([...MANIFEST_ACTIVE_STATUSES]);
 const NATIVE_BARCODE_FORMATS = [
   'qr_code',
   'code_128',
@@ -454,7 +478,127 @@ const getOrderEntryAllowance = (order: UnifiedOrder): number => {
   if (!MANIFEST_INCLUDED_STATUSES.has(order.status)) {
     return 0;
   }
-  return qty;
+  const attended = Math.max(0, Math.round(Number(order.attendedTotal ?? 0) || 0));
+  return Math.max(qty - attended, 0);
+};
+
+const getOrderAttendedTotal = (order: UnifiedOrder): number =>
+  Math.max(0, Math.round(Number(order.attendedTotal ?? 0) || 0));
+
+const isSummaryEligibleStatus = (status: BookingStatus): boolean =>
+  MANIFEST_INCLUDED_STATUSES.has(status) || status === 'no_show';
+
+const getOrderNoShowPeopleByAttendance = (order: UnifiedOrder): number => {
+  if (order.status === 'no_show') {
+    const quantity = Math.max(0, Math.round(Number(order.quantity) || 0));
+    return quantity;
+  }
+  if (!MANIFEST_INCLUDED_STATUSES.has(order.status)) {
+    return 0;
+  }
+  const attendanceStatus = String(order.attendanceStatus ?? '')
+    .trim()
+    .toLowerCase();
+  if (attendanceStatus === 'checked_in_full' || attendanceStatus === 'checked_in_partial') {
+    return 0;
+  }
+  if (attendanceStatus === 'no_show') {
+    const quantity = Math.max(0, Math.round(Number(order.quantity) || 0));
+    return quantity;
+  }
+  return getOrderEntryAllowance(order);
+};
+
+const normalizePhoneForTel = (value?: string | null): string | null => {
+  const raw = String(value ?? '').trim();
+  if (!raw) {
+    return null;
+  }
+  const normalized = raw.replace(/[^\d+]/g, '');
+  if (!normalized) {
+    return null;
+  }
+  return normalized.startsWith('+') ? normalized : `+${normalized}`;
+};
+
+const normalizePhoneForWhatsApp = (value?: string | null): string | null => {
+  const raw = String(value ?? '').trim();
+  if (!raw) {
+    return null;
+  }
+  const normalized = raw.replace(/[^\d]/g, '');
+  return normalized.length > 0 ? normalized : null;
+};
+
+const normalizeEmailForContact = (value?: string | null): string | null => {
+  const raw = String(value ?? '').trim();
+  if (!raw || !raw.includes('@')) {
+    return null;
+  }
+  return raw;
+};
+
+const getOrderAttendedExtras = (order: UnifiedOrder): OrderExtras => ({
+  cocktails: Math.max(0, Math.round(Number(order.attendedExtras?.cocktails ?? 0) || 0)),
+  tshirts: Math.max(0, Math.round(Number(order.attendedExtras?.tshirts ?? 0) || 0)),
+  photos: Math.max(0, Math.round(Number(order.attendedExtras?.photos ?? 0) || 0)),
+});
+
+const getOrderPurchasedExtraQty = (order: UnifiedOrder, key: keyof OrderExtras): number =>
+  Math.max(0, Math.round(Number(order.extras?.[key] ?? 0) || 0));
+
+const getOrderAttendedExtraQty = (order: UnifiedOrder, key: keyof OrderExtras): number =>
+  Math.max(0, Math.round(Number(order.attendedExtras?.[key] ?? 0) || 0));
+
+const ORDER_EXTRA_KEYS: Array<keyof OrderExtras> = ['cocktails', 'tshirts', 'photos'];
+
+const applyAttendanceToOrder = (
+  order: UnifiedOrder,
+  payload: BookingAttendancePatchPayload,
+): UnifiedOrder => {
+  const quantity = Math.max(0, Math.round(Number(order.quantity) || 0));
+  const currentAttended = getOrderAttendedTotal(order);
+  const nextAttended =
+    payload.attendedTotal == null
+      ? currentAttended
+      : Math.min(Math.max(Math.round(Number(payload.attendedTotal) || 0), 0), quantity);
+
+  const purchasedExtras = order.extras ?? { cocktails: 0, tshirts: 0, photos: 0 };
+  const nextAttendedExtras = getOrderAttendedExtras(order);
+  if (payload.attendedExtras) {
+    ORDER_EXTRA_KEYS.forEach((key) => {
+      if (!Object.prototype.hasOwnProperty.call(payload.attendedExtras as object, key)) {
+        return;
+      }
+      const purchased = Math.max(0, Math.round(Number(purchasedExtras[key] ?? 0) || 0));
+      const raw = Number(payload.attendedExtras?.[key] ?? 0);
+      const normalized = Number.isFinite(raw) ? Math.round(raw) : 0;
+      nextAttendedExtras[key] = Math.min(Math.max(normalized, 0), purchased);
+    });
+  }
+
+  const remainingTotal = MANIFEST_INCLUDED_STATUSES.has(order.status)
+    ? Math.max(quantity - nextAttended, 0)
+    : 0;
+
+  return {
+    ...order,
+    attendedTotal: nextAttended,
+    attendedExtras: nextAttendedExtras,
+    remainingTotal,
+  };
+};
+
+const getOrderBookingId = (order: UnifiedOrder): number | null => {
+  const candidate = order?.rawData?.bookingId;
+  if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+    return candidate;
+  }
+  if (typeof candidate === 'string' && candidate.trim().length > 0) {
+    const parsed = Number.parseInt(candidate.trim(), 10);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
 };
 
 const pickBestScannerOrderMatch = (
@@ -530,33 +674,90 @@ const normalizePlatformLookupKey = (value?: string | null): string => {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
 };
 
-const buildPlatformTotalsFromOrders = (orders: UnifiedOrder[]): Map<string, PlatformManifestTotals> => {
-  const totals = new Map<string, PlatformManifestTotals>();
-  orders.forEach((order) => {
-    const status = order.status ?? 'unknown';
-    if (!MANIFEST_INCLUDED_STATUSES.has(status)) {
-      return;
-    }
-    const platformKey = normalizePlatformLookupKey(order.platform);
-    if (!platformKey) {
-      return;
-    }
-    const people = Number(order.quantity) || 0;
-    if (people <= 0 && !order.extras) {
-      return;
-    }
-    const entry = totals.get(platformKey) ?? {
-      people: 0,
-      extras: { cocktails: 0, tshirts: 0, photos: 0 },
-    };
-    entry.people += Math.max(0, people);
-    const extras = order.extras ?? { cocktails: 0, tshirts: 0, photos: 0 };
-    entry.extras.cocktails += Math.max(0, Number(extras.cocktails) || 0);
-    entry.extras.tshirts += Math.max(0, Number(extras.tshirts) || 0);
-    entry.extras.photos += Math.max(0, Number(extras.photos) || 0);
-    totals.set(platformKey, entry);
-  });
-  return totals;
+type PlatformChipStyle = {
+  backgroundColor: string;
+  color: string;
+  border: string;
+};
+
+const DEFAULT_PLATFORM_CHIP_STYLE: PlatformChipStyle = {
+  backgroundColor: 'rgba(96, 125, 139, 0.14)',
+  color: '#37474f',
+  border: '1px solid rgba(55, 71, 79, 0.3)',
+};
+
+const PLATFORM_CHIP_STYLE_BY_KEY: Record<string, PlatformChipStyle> = {
+  viator: {
+    backgroundColor: 'rgba(25, 118, 210, 0.14)',
+    color: '#0d47a1',
+    border: '1px solid rgba(13, 71, 161, 0.25)',
+  },
+  getyourguide: {
+    backgroundColor: 'rgba(244, 81, 30, 0.16)',
+    color: '#bf360c',
+    border: '1px solid rgba(191, 54, 12, 0.25)',
+  },
+  fareharbor: {
+    backgroundColor: 'rgba(2, 136, 209, 0.14)',
+    color: '#01579b',
+    border: '1px solid rgba(1, 87, 155, 0.25)',
+  },
+  freetour: {
+    backgroundColor: 'rgba(94, 53, 177, 0.14)',
+    color: '#4527a0',
+    border: '1px solid rgba(69, 39, 160, 0.25)',
+  },
+  ecwid: {
+    backgroundColor: 'rgba(76, 175, 80, 0.18)',
+    color: '#1b5e20',
+    border: '1px solid rgba(27, 94, 32, 0.25)',
+  },
+  email: {
+    backgroundColor: 'rgba(121, 85, 72, 0.14)',
+    color: '#4e342e',
+    border: '1px solid rgba(78, 52, 46, 0.25)',
+  },
+  xperiencepoland: {
+    backgroundColor: 'rgba(0, 121, 107, 0.14)',
+    color: '#004d40',
+    border: '1px solid rgba(0, 77, 64, 0.25)',
+  },
+  airbnb: {
+    backgroundColor: 'rgba(233, 30, 99, 0.14)',
+    color: '#ad1457',
+    border: '1px solid rgba(173, 20, 87, 0.25)',
+  },
+  civitatis: {
+    backgroundColor: 'rgba(255, 193, 7, 0.2)',
+    color: '#8d6e00',
+    border: '1px solid rgba(141, 110, 0, 0.3)',
+  },
+};
+
+const PLATFORM_CHIP_LABEL_BY_KEY: Record<string, string> = {
+  viator: 'Viator',
+  getyourguide: 'GetYourGuide',
+  fareharbor: 'FareHarbor',
+  freetour: 'FreeTour',
+  ecwid: 'Ecwid',
+  email: 'Email',
+  xperiencepoland: 'XperiencePoland',
+  airbnb: 'Airbnb',
+  civitatis: 'Civitatis',
+};
+
+const resolvePlatformChipStyle = (platform?: string | null): PlatformChipStyle => {
+  const key = normalizePlatformLookupKey(platform);
+  return PLATFORM_CHIP_STYLE_BY_KEY[key] ?? DEFAULT_PLATFORM_CHIP_STYLE;
+};
+
+const resolvePlatformChipLabel = (platform?: string | null): string => {
+  const raw = String(platform ?? '').trim();
+  if (!raw) {
+    return '';
+  }
+  const key = normalizePlatformLookupKey(raw);
+  return PLATFORM_CHIP_LABEL_BY_KEY[key] ?? `${raw.charAt(0).toUpperCase()}${raw.slice(1)}`;
 };
 
 const resolveAddonExtraKey = (addon: AddonConfig): keyof OrderExtras | null => {
@@ -793,9 +994,12 @@ const valuesAreClose = (a: number | null, b: number | null, epsilon = 0.01): boo
 
 const isCashPaymentChannel = (channel: ChannelConfig): boolean => {
   const explicitFlag = channel.cashPaymentEligible ?? false;
-  const paymentName = channel.paymentMethodName?.toLowerCase() ?? '';
-  return explicitFlag || paymentName === 'cash';
+  const paymentName = (channel.paymentMethodName ?? '').toLowerCase();
+  return explicitFlag || paymentName.includes('cash');
 };
+
+const isAfterCutoffEligibleChannel = (channel: ChannelConfig | null | undefined): boolean =>
+  Boolean(channel && (channel.name?.trim().toLowerCase() ?? '') === WALK_IN_CHANNEL_SLUG);
 
 const normalizeDiscountSelection = (values: string[]): string[] => {
   const normalized = new Set<string>();
@@ -1364,7 +1568,7 @@ const formatCounterNotePreview = (
   }
   return summary || manual;
 };
-type RegistryStep = 'details' | 'platforms' | 'reservations' | 'summary';
+type RegistryStep = 'details' | 'reservations' | 'summary';
 
 const STEP_CONFIGS: Array<{ key: RegistryStep; label: string; description: string }> = [
   {
@@ -1373,29 +1577,18 @@ const STEP_CONFIGS: Array<{ key: RegistryStep; label: string; description: strin
     description: 'Choose the date, manager, product, and staff for this counter.',
   },
   {
-    key: 'platforms',
-    label: 'Platform Check',
-    description: '',
-  },
-  {
     key: 'reservations',
     label: 'Reservations Check',
-    description: "",
+    description: '',
   },
   {
     key: 'summary',
     label: 'Summary',
-    description: 'Review totals and save your counter metrics.',
+    description: '',
   },
 ];
 
-const PLATFORM_BUCKETS = BUCKETS.filter(
-  (bucket) => bucket.tallyType === 'booked' && bucket.period === 'before_cutoff',
-);
 const RESERVATION_BUCKETS = BUCKETS.filter((bucket) => bucket.tallyType === 'attended');
-const AFTER_CUTOFF_BUCKET = BUCKETS.find(
-  (bucket) => bucket.tallyType === 'booked' && bucket.period === 'after_cutoff',
-) as BucketDescriptor;
 
 const normalizeMetric = (metric: MetricCell): MetricCell => {
   const numericQty = Number(metric.qty);
@@ -1451,7 +1644,7 @@ const idListsEqual = (a: number[], b: number[]): boolean => {
 const mapStatusToStep = (status: CounterStatus | null | undefined): RegistryStep => {
   switch (status) {
     case 'platforms':
-      return 'platforms';
+      return 'reservations';
     case 'reservations':
       return 'reservations';
     case 'final':
@@ -1481,7 +1674,7 @@ type CounterListRowProps = {
   onSelect: (counter: Partial<Counter>) => void;
   onToggleExpand: (counterId: number | null) => void;
   onViewSummary: (counter: Partial<Counter>) => void;
-  onOpenModal: (mode: 'create' | 'update') => void;
+  onOpenModal: (mode: 'create' | 'update', targetCounter?: Partial<Counter>) => void;
   onDeleteCounter: () => void;
   venueStatusForCounter: (counterId: number | null) => {
     label: string;
@@ -1700,7 +1893,10 @@ const CounterListRow = memo((props: CounterListRowProps) => {
               variant="outlined"
               size="small"
               startIcon={<Edit />}
-              onClick={() => onOpenModal('update')}
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenModal('update', counter);
+              }}
               disabled={!canModifyCounter}
             >
               Edit
@@ -1878,6 +2074,31 @@ const Counters = (props: GenericPageProps) => {
   const [scannerLookupError, setScannerLookupError] = useState<string | null>(null);
   const [scannerBookingMatch, setScannerBookingMatch] = useState<ScannerBookingMatch | null>(null);
   const [scannerCheckInNotice, setScannerCheckInNotice] = useState<string | null>(null);
+  const [onlineReservationOrders, setOnlineReservationOrders] = useState<UnifiedOrder[]>([]);
+  const [onlineReservationsLoading, setOnlineReservationsLoading] = useState(false);
+  const [onlineReservationsError, setOnlineReservationsError] = useState<string | null>(null);
+  const [onlineReservationsNotice, setOnlineReservationsNotice] = useState<string | null>(null);
+  const [onlineReservationsSearch, setOnlineReservationsSearch] = useState('');
+  const [onlineReservationsView, setOnlineReservationsView] = useState<'remaining' | 'checked_in'>('remaining');
+  const [onlineReservationsRefreshToken, setOnlineReservationsRefreshToken] = useState(0);
+  const [onlineReservationsSyncing, setOnlineReservationsSyncing] = useState(false);
+  const [advancingToSummary, setAdvancingToSummary] = useState(false);
+  const [summaryAttendedDialogOpen, setSummaryAttendedDialogOpen] = useState(false);
+  const [summaryNoShowDialogOpen, setSummaryNoShowDialogOpen] = useState(false);
+  const [summaryAddonDialogState, setSummaryAddonDialogState] = useState<{
+    title: string;
+    orders: UnifiedOrder[];
+    extraKey: keyof OrderExtras;
+    addonLabel: string;
+    bucketLabel: string;
+  } | null>(null);
+  const [syncingPendingAttendance, setSyncingPendingAttendance] = useState(false);
+  const [partialCheckInEditorOrder, setPartialCheckInEditorOrder] = useState<UnifiedOrder | null>(null);
+  const [partialCheckInEditorDraft, setPartialCheckInEditorDraft] = useState<StagedBookingAttendance | null>(null);
+  const [pendingBookingAttendanceById, setPendingBookingAttendanceById] = useState<
+    Record<number, StagedBookingAttendance>
+  >({});
+  const pendingBookingAttendanceRef = useRef<Record<number, StagedBookingAttendance>>({});
   const scannerVideoRef = useRef<HTMLVideoElement | null>(null);
   const scannerStreamRef = useRef<MediaStream | null>(null);
   const scannerControlsRef = useRef<IScannerControls | null>(null);
@@ -2378,18 +2599,72 @@ const Counters = (props: GenericPageProps) => {
       setScannerCaptureLoading(false);
     }
   }, [registerScannerResult, scannerCaptureLoading, scannerTextLoading]);
+  const applyBookingAttendanceLocally = useCallback(
+    (order: UnifiedOrder, payload: BookingAttendancePatchPayload): UnifiedOrder | null => {
+      const bookingId = getOrderBookingId(order);
+      if (!bookingId) {
+        setOnlineReservationsError('Booking ID is missing for this reservation.');
+        return null;
+      }
+
+      const nextOrder = applyAttendanceToOrder(order, payload);
+      const stagedAttendance: StagedBookingAttendance = {
+        attendedTotal: getOrderAttendedTotal(nextOrder),
+        attendedExtras: getOrderAttendedExtras(nextOrder),
+      };
+
+      setOnlineReservationOrders((prev) =>
+        prev.map((entry) => {
+          const entryBookingId = getOrderBookingId(entry);
+          return entryBookingId === bookingId ? { ...entry, ...nextOrder } : entry;
+        }),
+      );
+      setScannerBookingMatch((prev) => {
+        if (!prev) {
+          return prev;
+        }
+        const prevBookingId = getOrderBookingId(prev.order);
+        if (prevBookingId !== bookingId) {
+          return prev;
+        }
+        return {
+          ...prev,
+          order: { ...prev.order, ...nextOrder },
+          shouldLetIn: getOrderEntryAllowance({ ...prev.order, ...nextOrder }),
+        };
+      });
+      setPendingBookingAttendanceById((prev) => ({
+        ...prev,
+        [bookingId]: stagedAttendance,
+      }));
+      setOnlineReservationsNotice(null);
+      setOnlineReservationsError(null);
+      return nextOrder;
+    },
+    [],
+  );
+
   const handleScannerCheckIn = useCallback(() => {
     if (!scannerBookingMatch) {
       return;
     }
+    const booking = scannerBookingMatch.order;
+    const current = getOrderAttendedTotal(booking);
+    const allowance = getOrderEntryAllowance(booking);
+    const target = current + allowance;
+    const updated = applyBookingAttendanceLocally(booking, { attendedTotal: target });
+    if (!updated) {
+      return;
+    }
+    const nextAllowance = getOrderEntryAllowance(updated);
     setScannerCheckInNotice(
-      `Checked in ${scannerBookingMatch.order.customerName} (${scannerBookingMatch.order.platformBookingId}).`,
+      `Checked in ${booking.customerName} (${booking.platformBookingId}) locally. Remaining: ${nextAllowance}.`,
     );
     setScannerLookupError(null);
     setScannerBookingMatch(null);
     setScannerResult(null);
     scannerLookupRequestRef.current = null;
-  }, [scannerBookingMatch]);
+  }, [applyBookingAttendanceLocally, scannerBookingMatch]);
   const computeReservationHoldActive = useCallback(() => {
     const now = dayjs();
     const holdStart = now.set('hour', 21).set('minute', 0).set('second', 0).set('millisecond', 0);
@@ -2878,16 +3153,37 @@ const Counters = (props: GenericPageProps) => {
   }, [isModalOpen]);
 
   useEffect(() => {
-    if (!isModalOpen) {
-      manifestAppliedRef.current = null;
-      manifestRequestRef.current = null;
+    pendingBookingAttendanceRef.current = pendingBookingAttendanceById;
+  }, [pendingBookingAttendanceById]);
+
+  useEffect(() => {
+    if (isModalOpen) {
+      return;
     }
+    setOnlineReservationOrders([]);
+    setOnlineReservationsError(null);
+    setOnlineReservationsNotice(null);
+    setOnlineReservationsSearch('');
+    setOnlineReservationsView('remaining');
+    setOnlineReservationsSyncing(false);
+    setSyncingPendingAttendance(false);
+    setPartialCheckInEditorOrder(null);
+    setPartialCheckInEditorDraft(null);
+    setPendingBookingAttendanceById({});
   }, [isModalOpen]);
 
   useEffect(() => {
     if (!isModalOpen || activeRegistryStep !== 'reservations') {
       setScannerOpen(false);
     }
+  }, [activeRegistryStep, isModalOpen]);
+
+  useEffect(() => {
+    if (isModalOpen && activeRegistryStep === 'reservations') {
+      return;
+    }
+    setPartialCheckInEditorOrder(null);
+    setPartialCheckInEditorDraft(null);
   }, [activeRegistryStep, isModalOpen]);
 
   useEffect(() => {
@@ -3406,42 +3702,6 @@ const Counters = (props: GenericPageProps) => {
     };
   }, [currentProductId, scannerBookingMatch, scannerOpen, scannerResult, selectedDateString]);
 
-const loadCounterForDate = useCallback(
-  async (formattedDate: string, productId: number | null | undefined) => {
-    if (!formattedDate) {
-      return;
-    }
-    const resolvedProductId = productId ?? null;
-    const requestKey = `date:${formattedDate}|${resolvedProductId ?? 'null'}`;
-    if (fetchCounterRequestRef.current === requestKey) {
-      return;
-    }
-    fetchCounterRequestRef.current = requestKey;
-    try {
-      await dispatch(fetchCounterByDate({ date: formattedDate, productId: resolvedProductId })).unwrap();
-    } catch (error) {
-      const notFound =
-        error != null &&
-        typeof error === 'object' &&
-        'notFound' in error &&
-        Boolean((error as { notFound?: boolean }).notFound);
-      if (!notFound) {
-        const message =
-          typeof error === 'string'
-            ? error
-            : error instanceof Error
-              ? error.message
-              : 'Failed to load counter';
-        setCounterListError(message);
-      } else {
-        setCounterListError(null);
-      }
-      fetchCounterRequestRef.current = null;
-    }
-  },
-  [dispatch],
-);
-
 const loadCounterById = useCallback(
   async (counterId: number | null | undefined) => {
     if (!counterId) {
@@ -3560,22 +3820,32 @@ const loadCounterById = useCallback(
     (channelId: number, currency: CashCurrency) => {
       let didChange = false;
       setCashCurrencyByChannel((prev) => {
-        const current = prev[channelId] ?? 'PLN';
+        const current = prev[channelId] ?? null;
         if (current === currency) {
           return prev;
         }
         didChange = true;
-        const next = { ...prev, [channelId]: currency };
-        if (currency === 'PLN') {
-          delete next[channelId];
-        }
-        return next;
+        return { ...prev, [channelId]: currency };
       });
       if (didChange) {
         setWalkInNoteDirty(true);
       }
     },
     [setWalkInNoteDirty],
+  );
+  const resolveCashCurrencyForChannel = useCallback(
+    (channelId: number): CashCurrency => {
+      const selected = cashCurrencyByChannel[channelId];
+      if (isCashCurrency(selected)) {
+        return selected;
+      }
+      const snapshotCurrency = cashSnapshotEntries.get(channelId)?.currency;
+      if (isCashCurrency(snapshotCurrency)) {
+        return snapshotCurrency;
+      }
+      return 'PLN';
+    },
+    [cashCurrencyByChannel, cashSnapshotEntries],
   );
 
   const setFreePeopleQty = useCallback(
@@ -3793,7 +4063,6 @@ const loadCounterById = useCallback(
     const nextWalkInDiscounts: Record<number, string[]> = {};
     const nextWalkInTickets: Record<number, WalkInChannelTicketState> = {};
     const nextOverrides: Record<number, string> = {};
-    const nextCurrencyByChannel: Record<number, CashCurrency> = {};
     const parsedDiscounts = parseDiscountsFromNote(note);
     const eligibleSet = new Set(cashEligibleChannelIds);
 
@@ -3826,9 +4095,6 @@ const loadCounterById = useCallback(
       }
       const snapshotEntry = cashSnapshotEntries.get(metric.channelId);
       const currency = (snapshotEntry?.currency ?? 'PLN') as CashCurrency;
-      if (currency !== 'PLN') {
-        nextCurrencyByChannel[metric.channelId] = currency;
-      }
       const peopleQty = attendedPeopleMetrics.get(metric.channelId) ?? 0;
       const price = getCashPriceForChannel(channelConfig, currency);
       const expectedAmount =
@@ -3849,9 +4115,6 @@ const loadCounterById = useCallback(
         return;
       }
       const currency = (entry.currency ?? 'PLN') as CashCurrency;
-      if (currency !== 'PLN') {
-        nextCurrencyByChannel[channelId] = currency;
-      }
       if (channelId in nextOverrides) {
         return;
       }
@@ -3959,18 +4222,33 @@ const loadCounterById = useCallback(
       let finalSelection = orderedSelection;
 
       if (finalTicketOrder.length === 0) {
-        const afterCutoffPeopleMetric = metricsList.find(
+        const attendedPeopleMetric = metricsList.find(
+          (metric) =>
+            metric.channelId === channelId &&
+            metric.kind === 'people' &&
+            metric.tallyType === 'attended' &&
+            metric.period == null,
+        );
+        const legacyAfterCutoffPeopleMetric = metricsList.find(
           (metric) =>
             metric.channelId === channelId &&
             metric.kind === 'people' &&
             metric.tallyType === 'booked' &&
             metric.period === 'after_cutoff',
         );
-        const afterCutoffPeople = Math.max(
+        const restoredPeople = Math.max(
           0,
-          Math.round(Number(afterCutoffPeopleMetric?.qty) || 0),
+          Math.round(Number(attendedPeopleMetric?.qty ?? legacyAfterCutoffPeopleMetric?.qty) || 0),
         );
-        const addonMetricsForChannel = metricsList.filter(
+        const attendedAddonMetricsForChannel = metricsList.filter(
+          (metric) =>
+            metric.channelId === channelId &&
+            metric.kind === 'addon' &&
+            metric.tallyType === 'attended' &&
+            metric.period == null &&
+            metric.addonId != null,
+        );
+        const legacyAfterCutoffAddonMetricsForChannel = metricsList.filter(
           (metric) =>
             metric.channelId === channelId &&
             metric.kind === 'addon' &&
@@ -3978,6 +4256,10 @@ const loadCounterById = useCallback(
             metric.period === 'after_cutoff' &&
             metric.addonId != null,
         );
+        const addonMetricsForChannel =
+          attendedAddonMetricsForChannel.length > 0
+            ? attendedAddonMetricsForChannel
+            : legacyAfterCutoffAddonMetricsForChannel;
         const addonMap: Record<number, number> = {};
         addonMetricsForChannel.forEach((metric) => {
           const addonId = Number(metric.addonId);
@@ -3986,7 +4268,7 @@ const loadCounterById = useCallback(
             addonMap[addonId] = qty;
           }
         });
-        if (afterCutoffPeople > 0 || Object.keys(addonMap).length > 0) {
+        if (restoredPeople > 0 || Object.keys(addonMap).length > 0) {
           const defaultTicketLabel = configuredTicketOptions[0] ?? null;
           if (defaultTicketLabel) {
             const existingCashValue = Number(nextWalkInCash[channelId] ?? 0);
@@ -4002,7 +4284,7 @@ const loadCounterById = useCallback(
                 currencyOrder: ['PLN'],
                 currencies: {
                   PLN: {
-                    people: afterCutoffPeople,
+                    people: restoredPeople,
                     cash: normalizedCashValue,
                     addons: addonMap,
                   },
@@ -4089,7 +4371,7 @@ const loadCounterById = useCallback(
     setWalkInDiscountsByChannel(nextWalkInDiscounts);
     setWalkInTicketDataByChannel(recalcWalkInTicketDataMap(nextWalkInTickets));
     setCashOverridesByChannel(nextOverrides);
-    setCashCurrencyByChannel(nextCurrencyByChannel);
+    setCashCurrencyByChannel({});
     setCashEditingChannelId(null);
     setCashEditingValue('');
     setWalkInNoteDirty(false);
@@ -4106,15 +4388,16 @@ const loadCounterById = useCallback(
 
   const appliedPlatformSelectionRef = useRef<number | null>(null);
   const appliedAfterCutoffSelectionRef = useRef<number | null>(null);
-  const manifestRequestRef = useRef<string | null>(null);
-  const manifestAppliedRef = useRef<string | null>(null);
-  const manifestTriggerRef = useRef<string | null>(null);
   const shouldPrefillManagerRef = useRef<boolean>(false);
-  const [manifestSearchRequested, setManifestSearchRequested] = useState(false);
   const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([]);
   const [selectedAfterCutoffChannelIds, setSelectedAfterCutoffChannelIds] = useState<number[]>([]);
+  const [selectedCashReservationChannelIds, setSelectedCashReservationChannelIds] = useState<number[]>([]);
 
-  const channelHasAnyQty = useCallback(
+  useEffect(() => {
+    setSelectedCashReservationChannelIds([]);
+  }, [counterId]);
+
+  const channelHasRecordedData = useCallback(
     (channelId: number) => {
       const hasMetricQty = mergedMetrics.some((metric) => metric.channelId === channelId && metric.qty > 0);
       if (hasMetricQty) {
@@ -4159,10 +4442,34 @@ const loadCounterById = useCallback(
         const hasFreeAddonQty = Object.values(freeAddonEntries).some(
           (entry) => entry && Math.max(0, Math.round(entry.qty ?? 0)) > 0,
         );
-      if (hasFreeAddonQty) {
+        if (hasFreeAddonQty) {
+          return true;
+        }
+      }
+
+      const overrideRaw = cashOverridesByChannel[channelId];
+      const overrideAmount = overrideRaw != null ? parseCashInput(overrideRaw) : null;
+      if (overrideAmount != null && Number.isFinite(overrideAmount) && overrideAmount > 0) {
         return true;
       }
-    }
+
+      return false;
+    },
+    [
+      cashOverridesByChannel,
+      freeAddonsByChannel,
+      freePeopleByChannel,
+      mergedMetrics,
+      walkInCashByChannel,
+      walkInTicketDataByChannel,
+    ],
+  );
+
+  const channelHasAnyQty = useCallback(
+    (channelId: number) => {
+      if (channelHasRecordedData(channelId)) {
+        return true;
+      }
 
       if (selectedChannelIds.includes(channelId) || selectedAfterCutoffChannelIds.includes(channelId)) {
         return true;
@@ -4171,13 +4478,9 @@ const loadCounterById = useCallback(
       return false;
     },
     [
-      freeAddonsByChannel,
-      freePeopleByChannel,
-      mergedMetrics,
+      channelHasRecordedData,
       selectedAfterCutoffChannelIds,
       selectedChannelIds,
-      walkInCashByChannel,
-      walkInTicketDataByChannel,
     ],
   );
 
@@ -4222,18 +4525,21 @@ const loadCounterById = useCallback(
     }
   }, [isModalOpen]);
 
+  useEffect(() => {
+    if (!isModalOpen) {
+      setSummaryAttendedDialogOpen(false);
+      setSummaryNoShowDialogOpen(false);
+      setSummaryAddonDialogState(null);
+    }
+  }, [isModalOpen]);
+
 
   const allowedAfterCutoffChannelIds = useMemo(
     () =>
       registry.channels
-        .filter((channel) => AFTER_CUTOFF_ALLOWED.has(channel.name?.toLowerCase() ?? ''))
+        .filter((channel) => isAfterCutoffEligibleChannel(channel))
         .map((channel) => channel.id),
     [registry.channels],
-  );
-
-  const afterCutoffChannels = useMemo(
-    () => registry.channels.filter((channel) => allowedAfterCutoffChannelIds.includes(channel.id)),
-    [allowedAfterCutoffChannelIds, registry.channels],
   );
 
   const savedPlatformChannelIds = useMemo(() => {
@@ -4302,11 +4608,17 @@ const loadCounterById = useCallback(
       appliedAfterCutoffSelectionRef.current = null;
       setSelectedChannelIds([]);
       setSelectedAfterCutoffChannelIds([]);
+      setSelectedCashReservationChannelIds([]);
       return;
     }
     if (appliedPlatformSelectionRef.current !== counterId) {
       appliedPlatformSelectionRef.current = counterId;
-      setSelectedChannelIds(savedPlatformChannelIds.length > 0 ? Array.from(new Set(savedPlatformChannelIds)) : []);
+      setSelectedChannelIds((prev) => {
+        if (prev.length > 0) {
+          return prev;
+        }
+        return savedPlatformChannelIds.length > 0 ? Array.from(new Set(savedPlatformChannelIds)) : [];
+      });
     }
 
     if (appliedAfterCutoffSelectionRef.current !== counterId) {
@@ -4335,6 +4647,7 @@ const loadCounterById = useCallback(
       return next;
     });
   }, [allowedAfterCutoffChannelIds, channelsWithAfterCutoffMetrics]);
+
   const getMetric = useCallback(
     (
       channelId: number,
@@ -4384,11 +4697,61 @@ const loadCounterById = useCallback(
     [counterId, metricsMap, registry.counter],
   );
 
+  useEffect(() => {
+    if (!counterId) {
+      return;
+    }
+
+    const cashChannels = registry.channels.filter(
+      (channel) =>
+        isCashPaymentChannel(channel) && (channel.name?.toLowerCase() ?? '') !== WALK_IN_CHANNEL_SLUG,
+    );
+    if (cashChannels.length === 0) {
+      return;
+    }
+
+    const migrateMetric = (channelId: number, kind: MetricKind, addonId: number | null) => {
+      const afterMetric = getMetric(channelId, 'booked', 'after_cutoff', kind, addonId);
+      if (!afterMetric || afterMetric.qty <= 0) {
+        return;
+      }
+
+      const beforeMetric = getMetric(channelId, 'booked', 'before_cutoff', kind, addonId);
+      const nextBeforeQty = Math.max(0, (beforeMetric?.qty ?? 0) + afterMetric.qty);
+
+      if (beforeMetric) {
+        if (beforeMetric.qty !== nextBeforeQty) {
+          dispatch(setMetric({ ...beforeMetric, qty: nextBeforeQty }));
+        }
+      } else {
+        dispatch(
+          setMetric({
+            counterId,
+            channelId,
+            kind,
+            addonId,
+            tallyType: 'booked',
+            period: 'before_cutoff',
+            qty: nextBeforeQty,
+          }),
+        );
+      }
+
+      dispatch(setMetric({ ...afterMetric, qty: 0 }));
+    };
+
+    cashChannels.forEach((channel) => {
+      migrateMetric(channel.id, 'people', null);
+      registry.addons.forEach((addon) => {
+        migrateMetric(channel.id, 'addon', addon.addonId);
+      });
+    });
+  }, [counterId, dispatch, getMetric, registry.addons, registry.channels]);
+
   const syncAfterCutoffAttendance = useCallback(
     (channelId: number) => {
       const channel = registry.channels.find((item) => item.id === channelId);
-      const normalizedChannelName = channel?.name?.toLowerCase() ?? '';
-      if (!AFTER_CUTOFF_ALLOWED.has(normalizedChannelName)) {
+      if (!isAfterCutoffEligibleChannel(channel)) {
         return;
       }
 
@@ -4498,7 +4861,7 @@ const loadCounterById = useCallback(
         ) {
           const overrideRaw = cashOverridesByChannel[channelId];
           const overrideAmount = overrideRaw != null ? parseCashInput(overrideRaw) : null;
-          const currency = cashCurrencyByChannel[channelId] ?? 'PLN';
+          const currency = resolveCashCurrencyForChannel(channelId);
           const price = getCashPriceForChannel(channel, currency);
           const defaultAmount =
             price != null ? Math.max(0, Math.round(price * nextQty * 100) / 100) : 0;
@@ -4520,11 +4883,10 @@ const loadCounterById = useCallback(
           return;
         }
 
-        const normalizedChannelName = channel?.name?.toLowerCase() ?? '';
-        const isAfterCutoffChannel = AFTER_CUTOFF_ALLOWED.has(normalizedChannelName);
+        const eligibleForAfterCutoff = isAfterCutoffEligibleChannel(channel);
 
         if (
-          isAfterCutoffChannel &&
+          eligibleForAfterCutoff &&
           (kind === 'people' || kind === 'addon') &&
           ((tallyType === 'attended' && normalizedPeriod === null) ||
             (tallyType === 'booked' && normalizedPeriod === 'before_cutoff'))
@@ -4581,7 +4943,6 @@ const loadCounterById = useCallback(
       });
     },
     [
-      cashCurrencyByChannel,
       cashOverridesByChannel,
       catalog.addons,
       counterId,
@@ -4589,6 +4950,7 @@ const loadCounterById = useCallback(
       getMetric,
       registry.addons,
       registry.channels,
+      resolveCashCurrencyForChannel,
       syncAfterCutoffAttendance,
     ],
   );
@@ -4612,7 +4974,7 @@ const loadCounterById = useCallback(
         return;
       }
 
-      const currency = cashCurrencyByChannel[channel.id] ?? 'PLN';
+      const currency = resolveCashCurrencyForChannel(channel.id);
       const price = getCashPriceForChannel(channel, currency);
       const peopleMetric = getMetric(channel.id, 'attended', null, 'people', null);
       const peopleQty = peopleMetric?.qty ?? 0;
@@ -4640,7 +5002,7 @@ const loadCounterById = useCallback(
     });
 
     return details;
-  }, [cashCurrencyByChannel, cashOverridesByChannel, getMetric, registry.channels]);
+  }, [cashOverridesByChannel, getMetric, registry.channels, resolveCashCurrencyForChannel]);
 
   const cashCollectionSummary = useMemo(() => {
     type CashSummaryEntry = { amount: number; currency: CashCurrency; formatted: string };
@@ -4727,9 +5089,8 @@ const loadCounterById = useCallback(
         preferredAmount != null && Number.isFinite(preferredAmount) && preferredAmount > 0
           ? preferredAmount
           : snapshotEntry?.amount ?? preferredAmount;
-      const currency =
-        cashCurrencyByChannel[channel.id] ?? snapshotEntry?.currency ?? 'PLN';
-      registerAmount(channel.id, amountToUse, currency as CashCurrency);
+      const currency = resolveCashCurrencyForChannel(channel.id);
+      registerAmount(channel.id, amountToUse, currency);
     });
 
     const formattedTotals = Array.from(totalsByCurrency.entries()).map(([currency, amount]) => ({
@@ -4745,10 +5106,10 @@ const loadCounterById = useCallback(
       formattedTotals,
     };
   }, [
-    cashCurrencyByChannel,
     cashDetailsByChannel,
     cashSnapshotEntries,
     registry.channels,
+    resolveCashCurrencyForChannel,
     walkInCashByChannel,
     walkInChannelIds,
     walkInTicketDataByChannel,
@@ -5107,6 +5468,9 @@ const loadCounterById = useCallback(
   );
 
   useEffect(() => {
+    if (!walkInNoteDirty) {
+      return;
+    }
     if (walkInChannelIds.length === 0) {
       return;
     }
@@ -5149,9 +5513,9 @@ const loadCounterById = useCallback(
         });
       }
 
-      const peopleMetric = getMetric(channelId, 'booked', 'after_cutoff', 'people', null);
+      const peopleMetric = getMetric(channelId, 'attended', null, 'people', null);
       if (peopleMetric || totalPeople > 0) {
-        handleMetricChange(channelId, 'booked', 'after_cutoff', 'people', null, totalPeople);
+        handleMetricChange(channelId, 'attended', null, 'people', null, totalPeople);
       }
 
       registry.addons.forEach((addon) => {
@@ -5161,9 +5525,9 @@ const loadCounterById = useCallback(
           return;
         }
         const addonTotal = Math.max(0, addonTotals.get(numericAddonId) ?? 0);
-        const addonMetric = getMetric(channelId, 'booked', 'after_cutoff', 'addon', numericAddonId);
+        const addonMetric = getMetric(channelId, 'attended', null, 'addon', numericAddonId);
         if (addonMetric || addonTotal > 0) {
-          handleMetricChange(channelId, 'booked', 'after_cutoff', 'addon', numericAddonId, addonTotal);
+          handleMetricChange(channelId, 'attended', null, 'addon', numericAddonId, addonTotal);
         }
       });
 
@@ -5197,6 +5561,7 @@ const loadCounterById = useCallback(
     getMetric,
     handleMetricChange,
     registry.addons,
+    walkInNoteDirty,
     walkInChannelIds,
     walkInTicketDataByChannel,
   ]);
@@ -5400,8 +5765,10 @@ const loadCounterById = useCallback(
   }, [loadCountersList]);
 
   const handleOpenModal = useCallback(
-    (mode: 'create' | 'update') => {
-      if (mode === 'update' && selectedCounterId == null) {
+    (mode: 'create' | 'update', targetCounter?: Partial<Counter>) => {
+      const targetCounterId =
+        mode === 'update' ? targetCounter?.id ?? selectedCounterId : null;
+      if (mode === 'update' && targetCounterId == null) {
         return;
       }
       blurActiveElement();
@@ -5409,11 +5776,22 @@ const loadCounterById = useCallback(
       if (mode === 'create') {
         setActiveRegistryStep('details');
       } else if (mode === 'update') {
-        if (selectedCounterId != null) {
+        if (targetCounter) {
+          setSelectedCounterId(targetCounterId ?? null);
+          const parsed = targetCounter.date ? dayjs(targetCounter.date) : null;
+          if (parsed?.isValid()) {
+            setSelectedDate(parsed);
+          }
+          const managerId = targetCounter.userId ?? null;
+          if (managerId != null) {
+            setSelectedManagerId(managerId);
+          }
+        }
+        if (targetCounterId != null) {
           const currentCounterId = registry.counter?.counter.id ?? null;
-          if (currentCounterId !== selectedCounterId) {
+          if (currentCounterId !== targetCounterId) {
             fetchCounterRequestRef.current = null;
-            void loadCounterById(selectedCounterId);
+            void loadCounterById(targetCounterId);
           }
         }
       }
@@ -5457,6 +5835,16 @@ const handleCounterListSelect = useCallback(
     const nextCounterId = counterSummary.id ?? null;
     startTransition(() => {
       setCounterListError(null);
+      const nextUserId = counterSummary.userId ?? null;
+      if (nextUserId != null) {
+        setSelectedManagerId(nextUserId);
+      }
+      if (counterSummary.date) {
+        const parsed = dayjs(counterSummary.date);
+        if (parsed.isValid()) {
+          setSelectedDate(parsed);
+        }
+      }
       setSelectedCounterId(nextCounterId);
       setActiveRegistryStep('details');
     });
@@ -5501,25 +5889,36 @@ const handleCounterSelect = useCallback(
     async (counterSummary: Partial<Counter>) => {
       const counterIdValue = counterSummary.id ?? null;
       const counterDateValue = counterSummary.date ? dayjs(counterSummary.date) : null;
-      if (!counterIdValue || !counterDateValue || !counterDateValue.isValid()) {
+      if (!counterIdValue) {
         return;
       }
       blurActiveElement();
-      handleCounterSelect(counterSummary);
-      setSummaryPreviewTitle(counterDateValue.format('MMM D, YYYY'));
+      setCounterListError(null);
+      fetchCounterRequestRef.current = null;
+      const nextUserId = counterSummary.userId ?? null;
+      if (nextUserId) {
+        setSelectedManagerId(nextUserId);
+      }
+      if (counterDateValue?.isValid()) {
+        setSelectedDate(counterDateValue);
+        setSummaryPreviewTitle(counterDateValue.format('MMM D, YYYY'));
+      } else {
+        setSummaryPreviewTitle('');
+      }
+      setSelectedCounterId(counterIdValue);
+      setActiveRegistryStep('details');
       setSummaryPreviewOpen(true);
       setSummaryPreviewLoading(true);
-    try {
-      const productIdForSummary = counterSummary.product?.id ?? counterProductId ?? null;
-      await loadCounterForDate(counterDateValue.format(COUNTER_DATE_FORMAT), productIdForSummary);
-    } catch (error) {
-      console.warn('Failed to load counter summary', error);
-    } finally {
-      setSummaryPreviewLoading(false);
-    }
-  },
-  [blurActiveElement, counterProductId, handleCounterSelect, loadCounterForDate],
-);
+      try {
+        await loadCounterById(counterIdValue);
+      } catch (error) {
+        console.warn('Failed to load counter summary', error);
+      } finally {
+        setSummaryPreviewLoading(false);
+      }
+    },
+    [blurActiveElement, loadCounterById, setActiveRegistryStep],
+  );
 
 useEffect(() => {
   if (nightReportsRequestedRef.current) {
@@ -5580,6 +5979,7 @@ useEffect(() => {
     setPendingProductId(null);
     setPendingStaffIds([]);
     setSelectedChannelIds([]);
+    setSelectedCashReservationChannelIds([]);
     fetchCounterRequestRef.current = null;
     setSelectedCounterId(null);
 
@@ -5594,24 +5994,6 @@ useEffect(() => {
     dispatch,
     handleOpenModal,
   ]);
-
-  const handleChannelSelection = useCallback((_event: MouseEvent<HTMLElement>, values: number[]) => {
-    const next = Array.isArray(values) ? values.map((value) => Number(value)).filter(Number.isFinite) : [];
-    setSelectedChannelIds(Array.from(new Set(next)));
-  }, []);
-
-  const handleAfterCutoffChannelSelection = useCallback(
-    (_event: MouseEvent<HTMLElement>, values: number[]) => {
-      const next = Array.isArray(values)
-        ? values
-            .map((value) => Number(value))
-            .filter((value) => Number.isFinite(value) && allowedAfterCutoffChannelIds.includes(value))
-        : [];
-      setSelectedAfterCutoffChannelIds(Array.from(new Set(next)));
-    },
-    [allowedAfterCutoffChannelIds],
-  );
-
 
   const dirtyMetricCount = registry.dirtyMetricKeys.length;
   const hasDirtyMetrics = dirtyMetricCount > 0;
@@ -5628,13 +6010,6 @@ useEffect(() => {
     });
     return Array.from(combined);
   }, [channelIdsWithAnyData, savedPlatformChannelIds, selectedChannelIds, walkInChannelIdSet]);
-
-  useEffect(() => {
-    setSelectedChannelIds((prev) => {
-      const filtered = prev.filter((id) => channelHasAnyQty(id) || editingChannelIds.has(id));
-      return filtered.length === prev.length ? prev : filtered;
-    });
-  }, [channelHasAnyQty, editingChannelIds]);
 
   const effectiveAfterCutoffIds = useMemo<number[]>(() => {
     const base =
@@ -5670,14 +6045,6 @@ useEffect(() => {
     });
     return autoIds;
   }, [channelsWithAfterCutoffMetrics, effectiveSelectedChannelIds]);
-  const ecwidChannelId = useMemo(() => {
-    const ecwid = registry.channels.find((channel) => channel.name?.toLowerCase() === 'ecwid');
-    return ecwid ? ecwid.id : null;
-  }, [registry.channels]);
-  const isEcwidSelected = useMemo(
-    () => (ecwidChannelId != null ? effectiveSelectedChannelIds.includes(ecwidChannelId) : false),
-    [effectiveSelectedChannelIds, ecwidChannelId],
-  );
   useEffect(() => {
     if (autoAfterCutoffChannelIds.size === 0) {
       return;
@@ -5695,29 +6062,144 @@ useEffect(() => {
     });
   }, [autoAfterCutoffChannelIds]);
 
+  const onlineChannelIdByPlatform = useMemo(() => {
+    const map = new Map<string, number>();
+    registry.channels.forEach((channel) => {
+      const key = normalizePlatformLookupKey(channel.name);
+      const normalizedName = (channel.name ?? '').trim().toLowerCase();
+      const isWalkInChannel = normalizedName === WALK_IN_CHANNEL_SLUG;
+      if (!key || isWalkInChannel || isCashPaymentChannel(channel)) {
+        return;
+      }
+      map.set(key, channel.id);
+    });
+    return map;
+  }, [registry.channels]);
+
+  const onlineManagedChannelIdSet = useMemo(
+    () => new Set<number>(Array.from(onlineChannelIdByPlatform.values())),
+    [onlineChannelIdByPlatform],
+  );
+
+  const onlineSelectedChannelIds = useMemo(
+    () => effectiveSelectedChannelIds.filter((channelId) => onlineManagedChannelIdSet.has(channelId)),
+    [effectiveSelectedChannelIds, onlineManagedChannelIdSet],
+  );
+
+  const onlineSelectedChannelIdSet = useMemo(
+    () => new Set<number>(onlineSelectedChannelIds),
+    [onlineSelectedChannelIds],
+  );
+
+  const isSummaryContext = activeRegistryStep === 'summary' || summaryPreviewOpen;
+
+  const summaryOnlineChannelIds = useMemo(() => {
+    if (!isSummaryContext || !registry.summary) {
+      return [] as number[];
+    }
+    return registry.summary.byChannel
+      .filter((channel) => onlineManagedChannelIdSet.has(channel.channelId))
+      .filter((channel) => {
+        const people = channel.people;
+        const hasPeopleActivity =
+          people.bookedBefore > 0 || people.bookedAfter > 0 || people.attended > 0 || people.nonShow > 0;
+        if (hasPeopleActivity) {
+          return true;
+        }
+        return Object.values(channel.addons).some(
+          (addon) =>
+            addon.bookedBefore > 0 || addon.bookedAfter > 0 || addon.attended > 0 || addon.nonShow > 0,
+        );
+      })
+      .map((channel) => channel.channelId);
+  }, [isSummaryContext, onlineManagedChannelIdSet, registry.summary]);
+
+  const onlineScopedChannelIdSet = useMemo(() => {
+    if (onlineSelectedChannelIds.length > 0) {
+      return new Set<number>(onlineSelectedChannelIds);
+    }
+    return new Set<number>(summaryOnlineChannelIds);
+  }, [onlineSelectedChannelIds, summaryOnlineChannelIds]);
+
+  const availableCashReservationChannelIds = useMemo(
+    () =>
+      registry.channels
+        .filter((channel) => {
+          const normalizedName = (channel.name ?? '').trim().toLowerCase();
+          return normalizedName === WALK_IN_CHANNEL_SLUG || isCashPaymentChannel(channel);
+        })
+        .map((channel) => channel.id),
+    [registry.channels],
+  );
+
   useEffect(() => {
-    if (!manifestSearchRequested) {
+    setSelectedCashReservationChannelIds((prev) => {
+      const validPrev = prev.filter((id) => availableCashReservationChannelIds.includes(id));
+      return idListsEqual(validPrev, prev) ? prev : validPrev;
+    });
+  }, [availableCashReservationChannelIds]);
+
+  useEffect(() => {
+    setSelectedCashReservationChannelIds((prev) => {
+      const next = availableCashReservationChannelIds.filter(
+        (channelId) => prev.includes(channelId) || channelHasRecordedData(channelId),
+      );
+      return idListsEqual(next, prev) ? prev : next;
+    });
+  }, [availableCashReservationChannelIds, channelHasRecordedData]);
+
+  const handleCashReservationChannelSelection = useCallback(
+    (_event: MouseEvent<HTMLElement>, values: number[]) => {
+      const next = Array.isArray(values)
+        ? values
+            .map((value) => Number(value))
+            .filter((value) => Number.isFinite(value) && availableCashReservationChannelIds.includes(value))
+        : [];
+      const deduped = Array.from(new Set(next));
+      const newlySelected = deduped.filter((id) => !selectedCashReservationChannelIds.includes(id));
+      if (newlySelected.length > 0) {
+        setCashCurrencyByChannel((prev) => {
+          let changed = false;
+          const nextMap = { ...prev };
+          newlySelected.forEach((channelId) => {
+            if (channelId in nextMap) {
+              delete nextMap[channelId];
+              changed = true;
+            }
+          });
+          return changed ? nextMap : prev;
+        });
+      }
+      setSelectedCashReservationChannelIds(deduped);
+    },
+    [availableCashReservationChannelIds, selectedCashReservationChannelIds],
+  );
+
+  useEffect(() => {
+    if (
+      (!isModalOpen && !summaryPreviewOpen) ||
+      (activeRegistryStep !== 'reservations' && !isSummaryContext)
+    ) {
       return;
     }
-    if (!isModalOpen || activeRegistryStep !== 'platforms') {
+    if (advancingToSummary) {
       return;
     }
-    if (!counterId || !currentProductId) {
-      setManifestSearchRequested(false);
+    if (!currentProductId || onlineScopedChannelIdSet.size === 0) {
+      setOnlineReservationOrders([]);
+      setOnlineReservationsError(null);
+      setOnlineReservationsLoading(false);
+      setOnlineReservationsView('remaining');
+      setPartialCheckInEditorOrder(null);
+      setPartialCheckInEditorDraft(null);
       return;
     }
-    if (registry.channels.length === 0) {
-      return;
-    }
-    const requestKey = `${counterId}|${selectedDateString}|${currentProductId}`;
-    if (manifestRequestRef.current === requestKey || manifestTriggerRef.current === requestKey) {
-      setManifestSearchRequested(false);
-      return;
-    }
-    manifestTriggerRef.current = requestKey;
-    setManifestSearchRequested(false);
-    manifestRequestRef.current = requestKey;
-    const fetchManifest = async () => {
+
+    let cancelled = false;
+    setOnlineReservationsLoading(true);
+    setOnlineReservationsError(null);
+
+    const loadOnlineReservations = async () => {
       try {
         const response = await axiosInstance.get<ManifestResponse>('/bookings/manifest', {
           params: {
@@ -5726,132 +6208,404 @@ useEffect(() => {
           },
           withCredentials: true,
         });
-        const payload = response.data;
-        const orders = Array.isArray(payload?.orders) ? payload.orders : [];
-        const totalsByPlatform = buildPlatformTotalsFromOrders(orders);
-
-        const channelIdByPlatform = new Map<string, number>();
-        registry.channels.forEach((channel) => {
-          const key = normalizePlatformLookupKey(channel.name);
-          if (!key || key === WALK_IN_CHANNEL_SLUG) {
-            return;
+        if (cancelled) {
+          return;
+        }
+        const orders = Array.isArray(response.data?.orders) ? response.data.orders : [];
+        const stagedAttendance = pendingBookingAttendanceRef.current;
+        const mergedOrders = orders.map((order) => {
+          const bookingId = getOrderBookingId(order);
+          if (!bookingId) {
+            return order;
           }
-          channelIdByPlatform.set(key, channel.id);
-        });
-
-        const addonByExtraKey = new Map<keyof OrderExtras, AddonConfig[]>();
-        registry.addons.forEach((addon) => {
-          const extraKey = resolveAddonExtraKey(addon);
-          if (!extraKey) {
-            return;
+          const staged = stagedAttendance[bookingId];
+          if (!staged) {
+            return order;
           }
-          const list = addonByExtraKey.get(extraKey) ?? [];
-          list.push(addon);
-          addonByExtraKey.set(extraKey, list);
-        });
-
-        const metricsToApply: MetricCell[] = [];
-        totalsByPlatform.forEach((totals, platformKey) => {
-          const channelId = channelIdByPlatform.get(platformKey);
-          if (!channelId) {
-            return;
-          }
-          if (totals.people > 0) {
-            metricsToApply.push({
-              counterId,
-              channelId,
-              kind: 'people',
-              addonId: null,
-              tallyType: 'booked',
-              period: 'before_cutoff',
-              qty: Math.round(totals.people),
-            });
-          }
-
-          (Object.keys(totals.extras) as Array<keyof OrderExtras>).forEach((extraKey) => {
-            const extraQty = Math.max(0, Math.round(Number(totals.extras[extraKey]) || 0));
-            if (extraQty <= 0) {
-              return;
-            }
-            const addonsForKey = addonByExtraKey.get(extraKey) ?? [];
-            addonsForKey.forEach((addon) => {
-              metricsToApply.push({
-                counterId,
-                channelId,
-                kind: 'addon',
-                addonId: addon.addonId,
-                tallyType: 'booked',
-                period: 'before_cutoff',
-                qty: extraQty,
-              });
-            });
+          return applyAttendanceToOrder(order, {
+            attendedTotal: staged.attendedTotal,
+            attendedExtras: staged.attendedExtras,
           });
         });
-
-        metricsToApply.forEach((metric) => {
-          const existing = getMetric(
-            metric.channelId,
-            metric.tallyType,
-            metric.period,
-            metric.kind,
-            metric.addonId,
-          );
-          if (existing && (existing.qty ?? 0) > 0) {
-            return;
-          }
-          dispatch(setMetric(metric));
-        });
+        setOnlineReservationOrders(mergedOrders);
       } catch (error) {
-        const isCanceled =
-          typeof error === 'object' &&
-          error !== null &&
-          ('code' in error || 'name' in error) &&
-          (String((error as { code?: string }).code) === 'ERR_CANCELED' ||
-            String((error as { name?: string }).name) === 'CanceledError');
-        if (!isCanceled) {
-          // eslint-disable-next-line no-console
-          console.error('Failed to fetch manifest data', error);
+        if (cancelled) {
+          return;
         }
+        const message =
+          typeof error === 'string'
+            ? error
+            : error instanceof Error
+              ? error.message
+              : 'Failed to load online reservations';
+        setOnlineReservationsError(message);
       } finally {
-        if (manifestRequestRef.current === requestKey) {
-          manifestRequestRef.current = null;
+        if (!cancelled) {
+          setOnlineReservationsLoading(false);
         }
-        if (manifestTriggerRef.current === requestKey) {
-          manifestTriggerRef.current = null;
-        }
-        setManifestSearchRequested(false);
       }
     };
 
-    fetchManifest();
+    void loadOnlineReservations();
+    return () => {
+      cancelled = true;
+    };
   }, [
     activeRegistryStep,
-    counterId,
+    advancingToSummary,
     currentProductId,
-    dispatch,
-    getMetric,
+    isSummaryContext,
     isModalOpen,
-    manifestSearchRequested,
-    registry.addons,
-    registry.channels,
+    onlineReservationsRefreshToken,
+    onlineScopedChannelIdSet.size,
+    summaryPreviewOpen,
     selectedDateString,
   ]);
-  const shouldHideAfterCutoffChannel = useCallback(
-    (channel: ChannelConfig | undefined) => {
-      if (!channel) {
-        return false;
+
+  const refreshOnlineReservations = useCallback(async () => {
+    if (onlineReservationsSyncing || onlineReservationsLoading || syncingPendingAttendance) {
+      return;
+    }
+    setOnlineReservationsSyncing(true);
+    setOnlineReservationsError(null);
+    try {
+      await axiosInstance.post('/bookings/ingest-emails', {}, { withCredentials: true });
+      setOnlineReservationsRefreshToken((prev) => prev + 1);
+    } catch (error) {
+      const message =
+        typeof error === 'string'
+          ? error
+          : error instanceof Error
+            ? error.message
+            : 'Failed to sync latest bookings from email.';
+      setOnlineReservationsError(message);
+    } finally {
+      setOnlineReservationsSyncing(false);
+    }
+  }, [onlineReservationsLoading, onlineReservationsSyncing, syncingPendingAttendance]);
+
+  const onlineReservationsScoped = useMemo(() => {
+    const scoped = onlineReservationOrders.filter((order) => {
+      const platformKey = normalizePlatformLookupKey(order.platform);
+      const channelId = onlineChannelIdByPlatform.get(platformKey);
+      return channelId != null && onlineScopedChannelIdSet.has(channelId);
+    });
+    return scoped.slice().sort((left, right) => {
+      const leftName = String(left.customerName ?? '').trim();
+      const rightName = String(right.customerName ?? '').trim();
+      const byName = leftName.localeCompare(rightName, undefined, { sensitivity: 'base' });
+      if (byName !== 0) {
+        return byName;
       }
-      const normalizedName = channel.name?.toLowerCase() ?? '';
-      if (normalizedName === 'ecwid') {
-        return isEcwidSelected;
+      if (left.date !== right.date) {
+        return String(left.date ?? '').localeCompare(String(right.date ?? ''));
       }
-      return false;
+      if (left.timeslot !== right.timeslot) {
+        return String(left.timeslot ?? '').localeCompare(String(right.timeslot ?? ''));
+      }
+      return String(left.platformBookingId ?? '').localeCompare(String(right.platformBookingId ?? ''));
+    });
+  }, [onlineChannelIdByPlatform, onlineReservationOrders, onlineScopedChannelIdSet]);
+
+  const onlineReservationsByAttendanceView = useMemo(() => {
+    if (onlineReservationsView === 'checked_in') {
+      return onlineReservationsScoped.filter(
+        (order) => getOrderAttendedTotal(order) > 0 && getOrderEntryAllowance(order) <= 0,
+      );
+    }
+    return onlineReservationsScoped.filter((order) => getOrderEntryAllowance(order) > 0);
+  }, [onlineReservationsScoped, onlineReservationsView]);
+
+  const onlineReservationsFiltered = useMemo(() => {
+    const searchNeedle = onlineReservationsSearch.trim().toLowerCase();
+    if (!searchNeedle) {
+      return onlineReservationsByAttendanceView;
+    }
+    return onlineReservationsByAttendanceView.filter((order) => {
+      const haystack = [
+        order.customerName,
+        order.platformBookingId,
+        order.customerPhone,
+        order.platform,
+        order.date,
+        order.timeslot,
+      ]
+        .map((value) => String(value ?? '').toLowerCase())
+        .join(' ');
+      return haystack.includes(searchNeedle);
+    });
+  }, [onlineReservationsByAttendanceView, onlineReservationsSearch]);
+
+  const handleBookingFullCheckIn = useCallback(
+    (order: UnifiedOrder) => {
+      const current = getOrderAttendedTotal(order);
+      const allowance = getOrderEntryAllowance(order);
+      const target = current + allowance;
+      const purchasedExtras: OrderExtras = {
+        cocktails: Math.max(0, Math.round(Number(order.extras?.cocktails ?? 0) || 0)),
+        tshirts: Math.max(0, Math.round(Number(order.extras?.tshirts ?? 0) || 0)),
+        photos: Math.max(0, Math.round(Number(order.extras?.photos ?? 0) || 0)),
+      };
+      const currentExtras = getOrderAttendedExtras(order);
+      const extrasAlreadyFull =
+        currentExtras.cocktails >= purchasedExtras.cocktails &&
+        currentExtras.tshirts >= purchasedExtras.tshirts &&
+        currentExtras.photos >= purchasedExtras.photos;
+      if (target === current && extrasAlreadyFull) {
+        return;
+      }
+      applyBookingAttendanceLocally(order, {
+        attendedTotal: target,
+        attendedExtras: purchasedExtras,
+      });
     },
-    [isEcwidSelected],
+    [applyBookingAttendanceLocally],
   );
 
+  const closePartialCheckInEditor = useCallback(() => {
+    setPartialCheckInEditorOrder(null);
+    setPartialCheckInEditorDraft(null);
+  }, []);
+
+  const openPartialCheckInEditor = useCallback(
+    (order: UnifiedOrder) => {
+      const bookingId = getOrderBookingId(order);
+      if (!bookingId) {
+        setOnlineReservationsError('Booking ID is missing for this reservation.');
+        return;
+      }
+      const peopleMax = Math.max(0, getOrderAttendedTotal(order) + getOrderEntryAllowance(order));
+      const purchasedExtras: OrderExtras = {
+        cocktails: Math.max(0, Math.round(Number(order.extras?.cocktails ?? 0) || 0)),
+        tshirts: Math.max(0, Math.round(Number(order.extras?.tshirts ?? 0) || 0)),
+        photos: Math.max(0, Math.round(Number(order.extras?.photos ?? 0) || 0)),
+      };
+      const currentAttendedTotal = Math.max(0, getOrderAttendedTotal(order));
+      const currentAttendedExtras = getOrderAttendedExtras(order);
+      const hasExistingDraft = Boolean(pendingBookingAttendanceById[bookingId]);
+      const hasExistingAttendance =
+        hasExistingDraft ||
+        currentAttendedTotal > 0 ||
+        currentAttendedExtras.cocktails > 0 ||
+        currentAttendedExtras.tshirts > 0 ||
+        currentAttendedExtras.photos > 0;
+      setPartialCheckInEditorOrder(order);
+      setPartialCheckInEditorDraft({
+        attendedTotal: hasExistingAttendance ? Math.min(currentAttendedTotal, peopleMax) : peopleMax,
+        attendedExtras: hasExistingAttendance
+          ? {
+              cocktails: Math.min(
+                Math.max(0, Math.round(Number(currentAttendedExtras.cocktails) || 0)),
+                purchasedExtras.cocktails,
+              ),
+              tshirts: Math.min(
+                Math.max(0, Math.round(Number(currentAttendedExtras.tshirts) || 0)),
+                purchasedExtras.tshirts,
+              ),
+              photos: Math.min(
+                Math.max(0, Math.round(Number(currentAttendedExtras.photos) || 0)),
+                purchasedExtras.photos,
+              ),
+            }
+          : purchasedExtras,
+      });
+      setOnlineReservationsError(null);
+    },
+    [pendingBookingAttendanceById],
+  );
+
+  const handlePartialEditorPeopleAdjust = useCallback(
+    (delta: number) => {
+      setPartialCheckInEditorDraft((prev) => {
+        if (!prev || !partialCheckInEditorOrder) {
+          return prev;
+        }
+        const peopleMax = Math.max(
+          0,
+          getOrderAttendedTotal(partialCheckInEditorOrder) + getOrderEntryAllowance(partialCheckInEditorOrder),
+        );
+        const nextValue = Math.min(Math.max(prev.attendedTotal + delta, 0), peopleMax);
+        if (nextValue === prev.attendedTotal) {
+          return prev;
+        }
+        return {
+          ...prev,
+          attendedTotal: nextValue,
+        };
+      });
+    },
+    [partialCheckInEditorOrder],
+  );
+
+  const handlePartialEditorAddonAdjust = useCallback(
+    (addonKey: keyof OrderExtras, delta: number) => {
+      setPartialCheckInEditorDraft((prev) => {
+        if (!prev || !partialCheckInEditorOrder) {
+          return prev;
+        }
+        const purchasedMax = Math.max(
+          0,
+          Math.round(Number(partialCheckInEditorOrder.extras?.[addonKey] ?? 0) || 0),
+        );
+        const current = Math.max(0, Math.round(Number(prev.attendedExtras?.[addonKey] ?? 0) || 0));
+        const nextValue = Math.min(Math.max(current + delta, 0), purchasedMax);
+        if (nextValue === current) {
+          return prev;
+        }
+        return {
+          ...prev,
+          attendedExtras: {
+            ...prev.attendedExtras,
+            [addonKey]: nextValue,
+          },
+        };
+      });
+    },
+    [partialCheckInEditorOrder],
+  );
+
+  const handlePartialEditorApply = useCallback(() => {
+    if (!partialCheckInEditorOrder || !partialCheckInEditorDraft) {
+      return;
+    }
+    const bookingId = getOrderBookingId(partialCheckInEditorOrder);
+    const sourceOrder =
+      bookingId != null
+        ? onlineReservationOrders.find((entry) => getOrderBookingId(entry) === bookingId) ?? partialCheckInEditorOrder
+        : partialCheckInEditorOrder;
+    const applied = applyBookingAttendanceLocally(sourceOrder, {
+      attendedTotal: partialCheckInEditorDraft.attendedTotal,
+      attendedExtras: partialCheckInEditorDraft.attendedExtras,
+    });
+    if (applied) {
+      closePartialCheckInEditor();
+    }
+  }, [
+    applyBookingAttendanceLocally,
+    closePartialCheckInEditor,
+    onlineReservationOrders,
+    partialCheckInEditorDraft,
+    partialCheckInEditorOrder,
+  ]);
+
+  const partialEditorPeopleMax = useMemo(() => {
+    if (!partialCheckInEditorOrder) {
+      return 0;
+    }
+    return Math.max(0, getOrderAttendedTotal(partialCheckInEditorOrder) + getOrderEntryAllowance(partialCheckInEditorOrder));
+  }, [partialCheckInEditorOrder]);
+
+  const partialEditorAddonMax = useMemo<OrderExtras>(
+    () => ({
+      cocktails: Math.max(0, Math.round(Number(partialCheckInEditorOrder?.extras?.cocktails ?? 0) || 0)),
+      tshirts: Math.max(0, Math.round(Number(partialCheckInEditorOrder?.extras?.tshirts ?? 0) || 0)),
+      photos: Math.max(0, Math.round(Number(partialCheckInEditorOrder?.extras?.photos ?? 0) || 0)),
+    }),
+    [partialCheckInEditorOrder],
+  );
+  const partialEditorPlatformLabel = useMemo(
+    () => String(partialCheckInEditorOrder?.platform ?? '').trim(),
+    [partialCheckInEditorOrder],
+  );
+  const partialEditorPlatformChipLabel = useMemo(
+    () => resolvePlatformChipLabel(partialEditorPlatformLabel),
+    [partialEditorPlatformLabel],
+  );
+  const partialEditorPlatformChipStyle = useMemo(
+    () => resolvePlatformChipStyle(partialEditorPlatformLabel),
+    [partialEditorPlatformLabel],
+  );
+
+  useEffect(() => {
+    if (
+      !isModalOpen ||
+      activeRegistryStep !== 'reservations' ||
+      onlineReservationsError ||
+      onlineSelectedChannelIds.length === 0
+    ) {
+      return;
+    }
+
+    const addonByExtraKey = new Map<keyof OrderExtras, AddonConfig[]>();
+    registry.addons.forEach((addon) => {
+      const extraKey = resolveAddonExtraKey(addon);
+      if (!extraKey) {
+        return;
+      }
+      const list = addonByExtraKey.get(extraKey) ?? [];
+      list.push(addon);
+      addonByExtraKey.set(extraKey, list);
+    });
+
+    const totalsByChannel = new Map<
+      number,
+      { people: number; extras: Record<keyof OrderExtras, number> }
+    >();
+
+    onlineReservationsScoped.forEach((order) => {
+      if (!MANIFEST_INCLUDED_STATUSES.has(order.status)) {
+        return;
+      }
+      const platformKey = normalizePlatformLookupKey(order.platform);
+      const channelId = onlineChannelIdByPlatform.get(platformKey);
+      if (!channelId || !onlineSelectedChannelIdSet.has(channelId)) {
+        return;
+      }
+      const entry = totalsByChannel.get(channelId) ?? {
+        people: 0,
+        extras: { cocktails: 0, tshirts: 0, photos: 0 },
+      };
+      entry.people += getOrderAttendedTotal(order);
+      const attendedExtras = getOrderAttendedExtras(order);
+      entry.extras.cocktails += attendedExtras.cocktails;
+      entry.extras.tshirts += attendedExtras.tshirts;
+      entry.extras.photos += attendedExtras.photos;
+      totalsByChannel.set(channelId, entry);
+    });
+
+    onlineSelectedChannelIds.forEach((channelId) => {
+      const totals = totalsByChannel.get(channelId) ?? {
+        people: 0,
+        extras: { cocktails: 0, tshirts: 0, photos: 0 },
+      };
+      (Object.keys(totals.extras) as Array<keyof OrderExtras>).forEach((extraKey) => {
+        const qty = Math.max(0, Math.round(Number(totals.extras[extraKey]) || 0));
+        const addonsForKey = addonByExtraKey.get(extraKey) ?? [];
+        addonsForKey.forEach((addon) => {
+          handleMetricChange(channelId, 'attended', null, 'addon', addon.addonId, qty);
+        });
+      });
+      handleMetricChange(channelId, 'attended', null, 'people', null, Math.max(0, Math.round(totals.people)));
+    });
+  }, [
+    activeRegistryStep,
+    handleMetricChange,
+    isModalOpen,
+    onlineChannelIdByPlatform,
+    onlineReservationsError,
+    onlineReservationsScoped,
+    onlineSelectedChannelIdSet,
+    onlineSelectedChannelIds,
+    registry.addons,
+  ]);
 
   const summaryChannelOrder = useMemo<number[]>(() => {
+    if (!hasDirtyMetrics && registry.summary) {
+      return registry.summary.byChannel
+        .filter((channel) => {
+          const people = channel.people;
+          const hasPeopleActivity =
+            people.bookedBefore > 0 || people.bookedAfter > 0 || people.attended > 0 || people.nonShow > 0;
+          if (hasPeopleActivity) {
+            return true;
+          }
+          return Object.values(channel.addons).some(
+            (addon) =>
+              addon.bookedBefore > 0 || addon.bookedAfter > 0 || addon.attended > 0 || addon.nonShow > 0,
+          );
+        })
+        .map((channel) => channel.channelId);
+    }
     const order: number[] = [];
     effectiveSelectedChannelIds.forEach((id) => {
       if (!order.includes(id)) {
@@ -5864,7 +6618,7 @@ useEffect(() => {
       }
     });
     return order;
-  }, [effectiveAfterCutoffIds, effectiveSelectedChannelIds]);
+  }, [effectiveAfterCutoffIds, effectiveSelectedChannelIds, hasDirtyMetrics, registry.summary]);
 
   const summaryChannelIds = useMemo(() => new Set(summaryChannelOrder), [summaryChannelOrder]);
 
@@ -6000,7 +6754,7 @@ useEffect(() => {
         };
         return;
       }
-      const currency = cashCurrencyByChannel[channel.id] ?? 'PLN';
+      const currency = resolveCashCurrencyForChannel(channel.id);
       const details = cashDetailsByChannel.get(channel.id);
       const rawAmount = details?.displayAmount ?? null;
       const normalizedAmount =
@@ -6075,10 +6829,10 @@ useEffect(() => {
 
     return sections.join('\n');
   }, [
-    cashCurrencyByChannel,
     cashDetailsByChannel,
     counterNotes,
     registry.channels,
+    resolveCashCurrencyForChannel,
     summaryChannelIds,
     walkInCashByChannel,
     walkInChannelIds,
@@ -6271,7 +7025,16 @@ useEffect(() => {
   }, [freeAddonsByChannel, freePeopleByChannel]);
 
   const flushMetrics = useCallback(
-    async (options: { status?: CounterStatus } = {}): Promise<boolean> => {
+    async (
+      options: {
+        status?: CounterStatus;
+        attendanceUpdates?: Array<{
+          bookingId: number;
+          attendedTotal: number;
+          attendedExtras: OrderExtras;
+        }>;
+      } = {},
+    ): Promise<boolean> => {
       const activeCounterId = counterId;
       const noteUpdateNeeded = noteNeedsUpdate || walkInNoteDirty;
       if (!activeCounterId) {
@@ -6288,6 +7051,10 @@ useEffect(() => {
           : undefined;
       const statusToCommit =
         statusCandidate && statusCandidate !== counterStatus ? statusCandidate : undefined;
+      const attendanceUpdates =
+        options.attendanceUpdates?.filter(
+          (row) => Number.isFinite(row.bookingId) && row.bookingId > 0,
+        ) ?? [];
 
       const dirtyMetrics = hasDirtyMetrics
         ? registry.dirtyMetricKeys
@@ -6317,7 +7084,11 @@ useEffect(() => {
         : [];
 
       const shouldSendNotes = noteUpdateNeeded && computedCounterNotes !== currentCounterNotes;
-      const shouldCommit = dirtyMetrics.length > 0 || shouldSendNotes || Boolean(statusToCommit);
+      const shouldCommit =
+        dirtyMetrics.length > 0 ||
+        shouldSendNotes ||
+        Boolean(statusToCommit) ||
+        attendanceUpdates.length > 0;
       if (!shouldCommit) {
         if (noteUpdateNeeded) {
           setWalkInNoteDirty(false);
@@ -6325,7 +7096,11 @@ useEffect(() => {
         return true;
       }
 
+      const syncingAttendanceInFinalize = attendanceUpdates.length > 0;
       setConfirmingMetrics(true);
+      if (syncingAttendanceInFinalize) {
+        setSyncingPendingAttendance(true);
+      }
       try {
         const dirtyCashMetric =
           hasDirtyMetrics &&
@@ -6334,14 +7109,35 @@ useEffect(() => {
             return parts.length > 1 && parts[1] === 'cash_payment';
           });
 
-        await dispatch(
-          commitCounterRegistry({
-            counterId: activeCounterId,
-            metrics: dirtyMetrics.length > 0 ? dirtyMetrics : undefined,
-            status: statusToCommit,
-            notes: shouldSendNotes ? computedCounterNotes : undefined,
-          }),
-        ).unwrap();
+        if (attendanceUpdates.length > 0) {
+          await dispatch(
+            finalizeCounterReservations({
+              counterId: activeCounterId,
+              attendanceUpdates: attendanceUpdates.map((row) => ({
+                bookingId: row.bookingId,
+                attendedTotal: row.attendedTotal,
+                attendedExtras: row.attendedExtras,
+              })),
+              metrics: dirtyMetrics.length > 0 ? dirtyMetrics : undefined,
+              status: statusToCommit,
+              notes: shouldSendNotes ? computedCounterNotes : undefined,
+            }),
+          ).unwrap();
+          setPendingBookingAttendanceById({});
+          setOnlineReservationsNotice(
+            `Synced ${attendanceUpdates.length} reservation update${attendanceUpdates.length === 1 ? '' : 's'}.`,
+          );
+          setOnlineReservationsError(null);
+        } else {
+          await dispatch(
+            commitCounterRegistry({
+              counterId: activeCounterId,
+              metrics: dirtyMetrics.length > 0 ? dirtyMetrics : undefined,
+              status: statusToCommit,
+              notes: shouldSendNotes ? computedCounterNotes : undefined,
+            }),
+          ).unwrap();
+        }
 
         if (noteUpdateNeeded) {
           setWalkInNoteDirty(false);
@@ -6355,6 +7151,9 @@ useEffect(() => {
       } catch (_error) {
         return false;
       } finally {
+        if (syncingAttendanceInFinalize) {
+          setSyncingPendingAttendance(false);
+        }
         setConfirmingMetrics(false);
       }
     },
@@ -6766,7 +7565,7 @@ useEffect(() => {
   );
   const activeStepConfig = STEP_CONFIGS[stepIndex] ?? STEP_CONFIGS[0];
 
-  const handleProceedToPlatforms = useCallback(async () => {
+  const handleProceedToReservationsFromSetup = useCallback(async () => {
     if (catalog.loading || registry.loading || ensuringCounter) {
       return;
     }
@@ -6792,12 +7591,13 @@ useEffect(() => {
           userId: managerId,
           productId: currentProductId ?? null,
           staffIds: shouldSendStaff ? pendingStaffIds : undefined,
-          status: 'platforms',
+          status: 'reservations',
         }),
       ).unwrap();
 
       const ensuredProductId = payload.counter.productId ?? null;
       const ensuredStaffIds = normalizeIdList(payload.staff.map((member) => member.userId));
+      const ensuredChannels = Array.isArray(payload.channels) ? payload.channels : registry.channels;
       const requestKey = `${payloadDate}|${(ensuredProductId ?? null) ?? 'null'}`;
       fetchCounterRequestRef.current = requestKey;
 
@@ -6807,7 +7607,17 @@ useEffect(() => {
       }
       setPendingStaffDirty(false);
       setPendingProductId(null);
-      setActiveRegistryStep('platforms');
+
+      setSelectedChannelIds((prev) => {
+        if (prev.length > 0) {
+          return prev;
+        }
+        const defaultIds = ensuredChannels
+          .filter((channel) => normalizePlatformLookupKey(channel.name) !== WALK_IN_CHANNEL_SLUG)
+          .map((channel) => channel.id);
+        return defaultIds.length > 0 ? Array.from(new Set(defaultIds)) : prev;
+      });
+      setActiveRegistryStep('reservations');
     } catch (_error) {
       fetchCounterRequestRef.current = null;
     } finally {
@@ -6824,6 +7634,7 @@ useEffect(() => {
     pendingStaffDirty,
     pendingStaffIds,
     registry.counter,
+    registry.channels,
   ]);
 
   const handleProceedToReservations = useCallback(async () => {
@@ -6834,12 +7645,43 @@ useEffect(() => {
     setActiveRegistryStep('reservations');
   }, [flushMetrics]);
   const handleProceedToSummary = useCallback(async () => {
-    const saved = await flushMetrics({ status: 'final' });
-    if (!saved) {
-      return;
+    setAdvancingToSummary(true);
+    try {
+      const attendanceUpdates = Object.entries(pendingBookingAttendanceById)
+        .map(([bookingIdKey, staged]) => {
+          const bookingId = Number.parseInt(bookingIdKey, 10);
+          if (!Number.isFinite(bookingId) || bookingId <= 0 || !staged) {
+            return null;
+          }
+          return {
+            bookingId,
+            attendedTotal: Math.max(0, Math.round(Number(staged.attendedTotal) || 0)),
+            attendedExtras: {
+              tshirts: Math.max(0, Math.round(Number(staged.attendedExtras?.tshirts ?? 0) || 0)),
+              cocktails: Math.max(0, Math.round(Number(staged.attendedExtras?.cocktails ?? 0) || 0)),
+              photos: Math.max(0, Math.round(Number(staged.attendedExtras?.photos ?? 0) || 0)),
+            },
+          };
+        })
+        .filter(
+          (
+            row,
+          ): row is {
+            bookingId: number;
+            attendedTotal: number;
+            attendedExtras: OrderExtras;
+          } => Boolean(row),
+        );
+
+      const saved = await flushMetrics({ status: 'final', attendanceUpdates });
+      if (!saved) {
+        return;
+      }
+      setActiveRegistryStep('summary');
+    } finally {
+      setAdvancingToSummary(false);
     }
-    setActiveRegistryStep('summary');
-  }, [flushMetrics]);
+  }, [flushMetrics, pendingBookingAttendanceById]);
   const handleReturnToSetup = useCallback(async () => {
     const saved = await flushMetrics({ status: 'draft' });
     if (!saved) {
@@ -6847,13 +7689,6 @@ useEffect(() => {
     }
     setActiveRegistryStep('details');
   }, [flushMetrics]);
-  const handleReturnToPlatforms = useCallback(async () => {
-    const saved = await flushMetrics();
-    if (!saved) {
-      return;
-    }
-    setActiveRegistryStep('platforms');
-  }, [flushMetrics, setActiveRegistryStep]);
 
   const hasCounter = Boolean(registry.counter);
   const isLoading =
@@ -6872,7 +7707,8 @@ useEffect(() => {
       }
 
       void (async () => {
-        if (nextStep !== 'details') {
+        const isDetailsToReservations = activeRegistryStep === 'details' && nextStep === 'reservations';
+        if (nextStep !== 'details' && !isDetailsToReservations) {
           const setupOk = await ensureSetupPersisted();
           if (!setupOk) {
             return;
@@ -6880,6 +7716,10 @@ useEffect(() => {
         }
 
         if (nextStep === 'reservations') {
+          if (activeRegistryStep === 'details') {
+            await handleProceedToReservationsFromSetup();
+            return;
+          }
           await handleProceedToReservations();
           return;
         }
@@ -6895,6 +7735,7 @@ useEffect(() => {
     [
       activeRegistryStep,
       ensureSetupPersisted,
+      handleProceedToReservationsFromSetup,
       handleProceedToReservations,
       handleProceedToSummary,
       hasCounter,
@@ -7035,8 +7876,7 @@ useEffect(() => {
       if (!channel) {
         return;
       }
-      const normalizedName = channel.name.toLowerCase();
-      if (!AFTER_CUTOFF_ALLOWED.has(normalizedName)) {
+      if (!isAfterCutoffEligibleChannel(channel)) {
         warnings.add(metric.channelId);
       }
     });
@@ -7047,13 +7887,39 @@ useEffect(() => {
     bucket: BucketDescriptor,
     addons: AddonConfig[],
   ) => {
-    const peopleMetric = getMetric(channel.id, bucket.tallyType, bucket.period, 'people', null);
+    const metricPeriodForBucket: MetricPeriod =
+      bucket.tallyType === 'booked' ? bucket.period ?? 'before_cutoff' : null;
+    const ensureEditableMetric = (
+      kind: MetricKind,
+      addonId: number | null,
+      metric: MetricCell | null,
+    ): MetricCell | null => {
+      if (metric) {
+        return metric;
+      }
+      if (!counterId) {
+        return null;
+      }
+      return {
+        counterId,
+        channelId: channel.id,
+        kind,
+        addonId,
+        tallyType: bucket.tallyType,
+        period: metricPeriodForBucket,
+        qty: 0,
+      };
+    };
+    const peopleMetric = ensureEditableMetric(
+      'people',
+      null,
+      getMetric(channel.id, bucket.tallyType, bucket.period, 'people', null),
+    );
     const attendedPeople = getMetric(channel.id, 'attended', null, 'people', null)?.qty ?? 0;
     const disableInputs = registry.savingMetrics || confirmingMetrics;
     const warningActive = bucket.period === 'after_cutoff' && afterCutoffWarnings.has(channel.id);
     const normalizedChannelName = channel.name?.toLowerCase() ?? '';
     const isWalkInChannel = normalizedChannelName === WALK_IN_CHANNEL_SLUG;
-    const isWalkInAfterCutoff = isWalkInChannel && bucket.period === 'after_cutoff';
     const isWalkInAttended = isWalkInChannel && bucket.tallyType === 'attended' && bucket.period === null;
     const walkInConfiguredTicketOptions = walkInConfiguredTicketOptionsByChannel[channel.id] ?? [];
     const walkInDiscountSelection = (walkInDiscountsByChannel[channel.id] ?? []).filter((ticketLabel) =>
@@ -7062,6 +7928,13 @@ useEffect(() => {
     const walkInTicketState =
       walkInTicketDataByChannel[channel.id] ?? ({ ticketOrder: [], tickets: {} } as WalkInChannelTicketState);
     const walkInCashValue = walkInCashByChannel[channel.id] ?? '';
+    const freePeopleEntry = freePeopleByChannel[channel.id];
+    const freePeopleActive = freePeopleEntry != null;
+    const freePeopleQty = Math.max(0, Math.round(freePeopleEntry?.qty ?? 0));
+    const freePeopleNote = freePeopleEntry?.note ?? '';
+    const freePeopleNoteError =
+      freePeopleActive && freePeopleQty > 0 && freePeopleNote.trim().length === 0;
+    const freeAddonEntries = freeAddonsByChannel[channel.id] ?? {};
     const isCashChannel = isCashPaymentChannel(channel);
     const cashDetails = cashDetailsByChannel.get(channel.id);
     const hasCashOverride = cashDetails?.hasManualOverride ?? false;
@@ -7076,9 +7949,21 @@ useEffect(() => {
       cashDetails?.price != null && Number.isFinite(cashDetails.price)
         ? formatCashAmount(cashDetails.price)
         : null;
-    const cashCurrency = (cashCurrencyByChannel[channel.id] ?? 'PLN') as CashCurrency;
+    const hasRecordedData = channelHasRecordedData(channel.id);
+    const selectedCashCurrencyRaw = cashCurrencyByChannel[channel.id];
+    const selectedCashCurrency = isCashCurrency(selectedCashCurrencyRaw)
+      ? selectedCashCurrencyRaw
+      : undefined;
     const showCurrencyToggle =
-      isCashChannel && bucket.tallyType === 'attended' && bucket.period === null;
+      isCashChannel && !isWalkInChannel && bucket.tallyType === 'attended' && bucket.period === null;
+    const activeCashCurrency: CashCurrency | undefined = showCurrencyToggle
+      ? selectedCashCurrency ?? (hasRecordedData ? resolveCashCurrencyForChannel(channel.id) : undefined)
+      : undefined;
+    const cashCurrency = (activeCashCurrency ?? 'PLN') as CashCurrency;
+    const requiresCurrencySelection = showCurrencyToggle && !hasRecordedData;
+    const canRenderCashCounters = !requiresCurrencySelection || Boolean(activeCashCurrency);
+    const canRenderWalkInAttendedCounters =
+      !isWalkInAttended || walkInDiscountSelection.length > 0 || freePeopleActive;
     const handleCurrencySelect = (_event: MouseEvent<HTMLElement>, value: CashCurrency | null) => {
       if (!value) {
         return;
@@ -7207,14 +8092,6 @@ useEffect(() => {
       );
     };
 
-    const freePeopleEntry = freePeopleByChannel[channel.id];
-    const freePeopleActive = freePeopleEntry != null;
-    const freePeopleQty = Math.max(0, Math.round(freePeopleEntry?.qty ?? 0));
-    const freePeopleNote = freePeopleEntry?.note ?? '';
-    const freePeopleNoteError =
-      freePeopleActive && freePeopleQty > 0 && freePeopleNote.trim().length === 0;
-    const freeAddonEntries = freeAddonsByChannel[channel.id] ?? {};
-
     const handleFreePeopleToggle = () => {
       if (disableInputs) {
         return;
@@ -7271,7 +8148,7 @@ useEffect(() => {
                   <ToggleButtonGroup
                     size="small"
                     exclusive
-                    value={cashCurrency}
+                    value={activeCashCurrency ?? null}
                     onChange={handleCurrencySelect}
                     aria-label={`${channel.name} cash currency`}
                     disabled={disableInputs}
@@ -7283,7 +8160,7 @@ useEffect(() => {
               </Stack>
               {warningActive && <Chip label="After cut-off" color="warning" size="small" />}
             </Stack>
-            {isWalkInAfterCutoff ? (
+            {isWalkInAttended ? (
               <Stack spacing={1.5}>
                 <Stack spacing={0.75}>
                   <Typography variant="subtitle2">Tickets Type</Typography>
@@ -7658,214 +8535,237 @@ useEffect(() => {
               </Stack>
             ) : (
               <>
-                {isWalkInAttended && (
-                  <Stack spacing={0.75}>
-                    <Typography variant="subtitle2">Tickets Type</Typography>
-                    {renderTicketChips(freePeopleChip)}
-                  </Stack>
-                )}
-                {renderStepper('People', peopleMetric, disableInputs)}
-                {isWalkInAttended && freePeopleActive && (
-                  <Stack spacing={0.75}>
-                    <Typography variant="subtitle2">Free Guests</Typography>
-                    {renderLocalStepper(
-                      `${channel.id}-free-people`,
-                      'Free guests',
-                      freePeopleQty,
-                      (nextValue) => setFreePeopleQty(channel.id, nextValue),
-                      disableInputs,
-                      0,
-                    )}
-                    <TextField
-                      value={freePeopleNote}
-                      onChange={(event) => setFreePeopleNote(channel.id, event.target.value)}
-                      size="small"
-                      disabled={disableInputs}
-                      required={freePeopleQty > 0}
-                      error={freePeopleNoteError}
-                      helperText={freePeopleNoteError ? 'Add a short reason for the free entry' : ' '}
-                      label="Free guest reason"
-                      placeholder="e.g., Birthday guest"
-                      multiline
-                      minRows={1}
-                    />
-                  </Stack>
-                )}
-                {isWalkInAttended && (
-                  <Stack spacing={0.5}>
-                    <Typography variant="subtitle2">Total Collected</Typography>
-                    <TextField
-                      value={walkInCashValue}
-                      onChange={(event) => handleWalkInCashChange(channel.id, event.target.value)}
-                      size="small"
-                      disabled={disableInputs}
-                      type="number"
-                      placeholder="0"
-                      InputProps={{
-                        startAdornment: <InputAdornment position="start">PLN</InputAdornment>,
-                      }}
-                      inputProps={{ inputMode: 'numeric', min: 0 }}
-                    />
-                  </Stack>
-                )}
-                {showCashSummary && (
-                  <Stack spacing={0.75}>
-                    <Typography variant="subtitle2">Cash To Be Collected</Typography>
-                    {cashEditingChannelId === channel.id ? (
-                      <Stack direction="row" spacing={1} alignItems="center">
-                        <TextField
-                          value={cashEditingValue}
-                          onChange={(event) => handleCashOverrideChange(event.target.value)}
-                          size="small"
-                          disabled={disableInputs}
-                          placeholder={defaultCashText ?? '0.00'}
-                          InputProps={{
-                            startAdornment: <InputAdornment position="start">{cashCurrency}</InputAdornment>,
-                            inputMode: 'decimal',
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') {
-                              event.preventDefault();
-                              if (!disableInputs) {
-                                handleCashOverrideSave();
-                              }
-                            }
-                            if (event.key === 'Escape') {
-                              event.preventDefault();
-                              handleCashOverrideCancel();
-                            }
-                          }}
-                        />
-                        <IconButton
-                          size="small"
-                          color="success"
-                          aria-label="Save cash override"
-                          onClick={handleCashOverrideSave}
-                          disabled={disableInputs}
-                        >
-                          <Check fontSize="small" />
-                        </IconButton>
-                        <IconButton
-                          size="small"
-                          aria-label="Cancel cash override"
-                          onClick={handleCashOverrideCancel}
-                          disabled={disableInputs}
-                        >
-                          <Close fontSize="small" />
-                        </IconButton>
-                      </Stack>
-                    ) : (
-                      <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap">
-                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                          {cashDisplayText ? `${cashCurrency} ${cashDisplayText}` : 'No price configured'}
-                        </Typography>
-                        <IconButton
-                          size="small"
-                          aria-label="Adjust cash collected"
-                          onClick={() => handleCashOverrideEdit(channel.id)}
-                          disabled={disableInputs}
-                        >
-                          <Edit fontSize="small" />
-                        </IconButton>
-                        {hasCashOverride && <Chip label="Override" size="small" color="info" variant="outlined" />}
-                        {!hasCashOverride && defaultCashPriceText && (
-                          <Typography variant="caption" color="text.secondary">{`Default: ${cashCurrency} ${defaultCashPriceText}`}</Typography>
-                        )}
-                      </Stack>
-                    )}
-                  </Stack>
-                )}
-                <Divider flexItem sx={{ mt: 1 }} />
-                <Stack spacing={1}>
-                  {addons.map((addon) => {
-                    const numericAddonId =
-                      typeof addon.addonId === 'number' ? addon.addonId : Number(addon.addonId);
-                    if (!Number.isFinite(numericAddonId)) {
-                      return null;
-                    }
-                    const normalizedAddonId = numericAddonId;
-                    const metric = getMetric(channel.id, bucket.tallyType, bucket.period, 'addon', normalizedAddonId);
-                    const isCocktail =
-                      addon.key?.toLowerCase() === 'cocktails' || addon.name?.toLowerCase() === 'cocktails';
-                    const availableForAddons =
-                      bucket.tallyType === 'booked' ? (peopleMetric?.qty ?? attendedPeople) : attendedPeople;
-                    const calculatedMax =
-                      addon.maxPerAttendee != null && availableForAddons > 0
-                        ? addon.maxPerAttendee * availableForAddons
-                        : undefined;
-                    const stepperMax = isCocktail ? undefined : calculatedMax;
-                    const addonKey = `${channel.id}-${bucket.label}-addon-${normalizedAddonId}`;
-                    const freeAddonEntry = freeAddonEntries[normalizedAddonId] ?? { qty: 0, note: '' };
-                    const freeAddonQty = Math.max(0, Math.round(freeAddonEntry.qty ?? 0));
-                    const freeAddonNote = freeAddonEntry.note ?? '';
-                    const freeAddonActive = freeAddonQty > 0 || freeAddonNote.length > 0;
-                    const freeAddonNoteError = freeAddonQty > 0 && freeAddonNote.trim().length === 0;
-                    const handleFreeAddonToggle = () => {
-                      if (disableInputs) {
-                        return;
-                      }
-                      if (freeAddonActive) {
-                        setFreeAddonQty(channel.id, normalizedAddonId, 0);
-                        setFreeAddonNote(channel.id, normalizedAddonId, '');
-                      } else {
-                        ensureFreeAddonEntry(channel.id, normalizedAddonId);
-                      }
-                    };
-                    return (
-                      <Stack key={addonKey} spacing={0.75}>
-                        <Stack direction="row" spacing={0.75} alignItems="flex-start">
-                          <Box sx={{ flexGrow: 1 }}>
-                            {renderStepper(addon.name, metric, disableInputs, 0, stepperMax, 1)}
-                          </Box>
-                          {isWalkInAttended && (
-                            <Chip
-                              label="Free"
-                              size="small"
-                              color={freeAddonActive ? 'info' : 'default'}
-                              variant={freeAddonActive ? 'filled' : 'outlined'}
-                              onClick={handleFreeAddonToggle}
-                              disabled={disableInputs}
-                            />
-                          )}
-                        </Stack>
-                        {addon.maxPerAttendee != null && !isCocktail && (
+                {canRenderCashCounters ? (
+                  <>
+                    {isWalkInAttended && (
+                      <Stack spacing={0.75}>
+                        <Typography variant="subtitle2">Tickets Type</Typography>
+                        {renderTicketChips(freePeopleChip)}
+                        {walkInConfiguredTicketOptions.length === 0 ? (
                           <Typography variant="caption" color="text.secondary">
-                            Max {addon.maxPerAttendee} per attendee (cap {calculatedMax ?? 0})
+                            No walk-in ticket types configured in Channel Product Prices.
                           </Typography>
-                        )}
-                        {isWalkInAttended && freeAddonActive && (
-                          <Stack spacing={0.5}>
+                        ) : walkInDiscountSelection.length === 0 && !freePeopleActive ? (
+                          <Typography variant="caption" color="text.secondary">
+                            Select a ticket type to enable counters.
+                          </Typography>
+                        ) : null}
+                      </Stack>
+                    )}
+                    {canRenderWalkInAttendedCounters ? (
+                      <>
+                        {renderStepper('People', peopleMetric, disableInputs)}
+                        {isWalkInAttended && freePeopleActive && (
+                          <Stack spacing={0.75}>
+                            <Typography variant="subtitle2">Free Guests</Typography>
                             {renderLocalStepper(
-                              `${channel.id}-${normalizedAddonId}-free`,
-                              `Free ${addon.name}`,
-                              freeAddonQty,
-                              (nextValue) => setFreeAddonQty(channel.id, normalizedAddonId, nextValue),
+                              `${channel.id}-free-people`,
+                              'Free guests',
+                              freePeopleQty,
+                              (nextValue) => setFreePeopleQty(channel.id, nextValue),
                               disableInputs,
                               0,
                             )}
                             <TextField
-                              value={freeAddonNote}
-                              onChange={(event) =>
-                                setFreeAddonNote(channel.id, normalizedAddonId, event.target.value)
-                              }
+                              value={freePeopleNote}
+                              onChange={(event) => setFreePeopleNote(channel.id, event.target.value)}
                               size="small"
                               disabled={disableInputs}
-                              required={freeAddonQty > 0}
-                              error={freeAddonNoteError}
-                              helperText={
-                                freeAddonNoteError ? `Add a reason for the free ${addon.name.toLowerCase()}` : ' '
-                              }
-                              label={`Free ${addon.name} reason`}
-                              placeholder="e.g., Staff friend"
+                              required={freePeopleQty > 0}
+                              error={freePeopleNoteError}
+                              helperText={freePeopleNoteError ? 'Add a short reason for the free entry' : ' '}
+                              label="Free guest reason"
+                              placeholder="e.g., Birthday guest"
                               multiline
                               minRows={1}
                             />
                           </Stack>
                         )}
-                      </Stack>
-                    );
-                  })}
-                </Stack>
+                        {isWalkInAttended && (
+                          <Stack spacing={0.5}>
+                            <Typography variant="subtitle2">Total Collected</Typography>
+                            <TextField
+                              value={walkInCashValue}
+                              onChange={(event) => handleWalkInCashChange(channel.id, event.target.value)}
+                              size="small"
+                              disabled={disableInputs}
+                              type="number"
+                              placeholder="0"
+                              InputProps={{
+                                startAdornment: <InputAdornment position="start">PLN</InputAdornment>,
+                              }}
+                              inputProps={{ inputMode: 'numeric', min: 0 }}
+                            />
+                          </Stack>
+                        )}
+                        {showCashSummary && (
+                          <Stack spacing={0.75}>
+                            <Typography variant="subtitle2">Cash To Be Collected</Typography>
+                            {cashEditingChannelId === channel.id ? (
+                              <Stack direction="row" spacing={1} alignItems="center">
+                                <TextField
+                                  value={cashEditingValue}
+                                  onChange={(event) => handleCashOverrideChange(event.target.value)}
+                                  size="small"
+                                  disabled={disableInputs}
+                                  placeholder={defaultCashText ?? '0.00'}
+                                  InputProps={{
+                                    startAdornment: <InputAdornment position="start">{cashCurrency}</InputAdornment>,
+                                    inputMode: 'decimal',
+                                  }}
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Enter') {
+                                      event.preventDefault();
+                                      if (!disableInputs) {
+                                        handleCashOverrideSave();
+                                      }
+                                    }
+                                    if (event.key === 'Escape') {
+                                      event.preventDefault();
+                                      handleCashOverrideCancel();
+                                    }
+                                  }}
+                                />
+                                <IconButton
+                                  size="small"
+                                  color="success"
+                                  aria-label="Save cash override"
+                                  onClick={handleCashOverrideSave}
+                                  disabled={disableInputs}
+                                >
+                                  <Check fontSize="small" />
+                                </IconButton>
+                                <IconButton
+                                  size="small"
+                                  aria-label="Cancel cash override"
+                                  onClick={handleCashOverrideCancel}
+                                  disabled={disableInputs}
+                                >
+                                  <Close fontSize="small" />
+                                </IconButton>
+                              </Stack>
+                            ) : (
+                              <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap">
+                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                  {cashDisplayText ? `${cashCurrency} ${cashDisplayText}` : 'No price configured'}
+                                </Typography>
+                                <IconButton
+                                  size="small"
+                                  aria-label="Adjust cash collected"
+                                  onClick={() => handleCashOverrideEdit(channel.id)}
+                                  disabled={disableInputs}
+                                >
+                                  <Edit fontSize="small" />
+                                </IconButton>
+                                {hasCashOverride && <Chip label="Override" size="small" color="info" variant="outlined" />}
+                                {!hasCashOverride && defaultCashPriceText && (
+                                  <Typography variant="caption" color="text.secondary">{`Default: ${cashCurrency} ${defaultCashPriceText}`}</Typography>
+                                )}
+                              </Stack>
+                            )}
+                          </Stack>
+                        )}
+                        <Divider flexItem sx={{ mt: 1 }} />
+                        <Stack spacing={1}>
+                          {addons.map((addon) => {
+                            const numericAddonId =
+                              typeof addon.addonId === 'number' ? addon.addonId : Number(addon.addonId);
+                            if (!Number.isFinite(numericAddonId)) {
+                              return null;
+                            }
+                            const normalizedAddonId = numericAddonId;
+                            const metric = ensureEditableMetric(
+                              'addon',
+                              normalizedAddonId,
+                              getMetric(channel.id, bucket.tallyType, bucket.period, 'addon', normalizedAddonId),
+                            );
+                            const isCocktail =
+                              addon.key?.toLowerCase() === 'cocktails' || addon.name?.toLowerCase() === 'cocktails';
+                            const availableForAddons =
+                              bucket.tallyType === 'booked' ? (peopleMetric?.qty ?? attendedPeople) : attendedPeople;
+                            const calculatedMax =
+                              addon.maxPerAttendee != null && availableForAddons > 0
+                                ? addon.maxPerAttendee * availableForAddons
+                                : undefined;
+                            const stepperMax = isCocktail ? undefined : calculatedMax;
+                            const addonKey = `${channel.id}-${bucket.label}-addon-${normalizedAddonId}`;
+                            const freeAddonEntry = freeAddonEntries[normalizedAddonId] ?? { qty: 0, note: '' };
+                            const freeAddonQty = Math.max(0, Math.round(freeAddonEntry.qty ?? 0));
+                            const freeAddonNote = freeAddonEntry.note ?? '';
+                            const freeAddonActive = freeAddonQty > 0 || freeAddonNote.length > 0;
+                            const freeAddonNoteError = freeAddonQty > 0 && freeAddonNote.trim().length === 0;
+                            const handleFreeAddonToggle = () => {
+                              if (disableInputs) {
+                                return;
+                              }
+                              if (freeAddonActive) {
+                                setFreeAddonQty(channel.id, normalizedAddonId, 0);
+                                setFreeAddonNote(channel.id, normalizedAddonId, '');
+                              } else {
+                                ensureFreeAddonEntry(channel.id, normalizedAddonId);
+                              }
+                            };
+                            return (
+                              <Stack key={addonKey} spacing={0.75}>
+                                <Stack direction="row" spacing={0.75} alignItems="flex-start">
+                                  <Box sx={{ flexGrow: 1 }}>
+                                    {renderStepper(addon.name, metric, disableInputs, 0, stepperMax, 1)}
+                                  </Box>
+                                  {isWalkInAttended && (
+                                    <Chip
+                                      label="Free"
+                                      size="small"
+                                      color={freeAddonActive ? 'info' : 'default'}
+                                      variant={freeAddonActive ? 'filled' : 'outlined'}
+                                      onClick={handleFreeAddonToggle}
+                                      disabled={disableInputs}
+                                    />
+                                  )}
+                                </Stack>
+                                {addon.maxPerAttendee != null && !isCocktail && (
+                                  <Typography variant="caption" color="text.secondary">
+                                    Max {addon.maxPerAttendee} per attendee (cap {calculatedMax ?? 0})
+                                  </Typography>
+                                )}
+                                {isWalkInAttended && freeAddonActive && (
+                                  <Stack spacing={0.5}>
+                                    {renderLocalStepper(
+                                      `${channel.id}-${normalizedAddonId}-free`,
+                                      `Free ${addon.name}`,
+                                      freeAddonQty,
+                                      (nextValue) => setFreeAddonQty(channel.id, normalizedAddonId, nextValue),
+                                      disableInputs,
+                                      0,
+                                    )}
+                                    <TextField
+                                      value={freeAddonNote}
+                                      onChange={(event) =>
+                                        setFreeAddonNote(channel.id, normalizedAddonId, event.target.value)
+                                      }
+                                      size="small"
+                                      disabled={disableInputs}
+                                      required={freeAddonQty > 0}
+                                      error={freeAddonNoteError}
+                                      helperText={
+                                        freeAddonNoteError
+                                          ? `Add a reason for the free ${addon.name.toLowerCase()}`
+                                          : ' '
+                                      }
+                                      label={`Free ${addon.name} reason`}
+                                      placeholder="e.g., Staff friend"
+                                      multiline
+                                      minRows={1}
+                                    />
+                                  </Stack>
+                                )}
+                              </Stack>
+                            );
+                          })}
+                        </Stack>
+                      </>
+                    ) : null}
+                  </>
+                ) : null}
               </>
             )}
           </Stack>
@@ -7937,7 +8837,7 @@ useEffect(() => {
       >
         <Button
           variant="contained"
-          onClick={handleProceedToPlatforms}
+          onClick={handleProceedToReservationsFromSetup}
           disabled={
             catalog.loading ||
             registry.loading ||
@@ -7947,159 +8847,364 @@ useEffect(() => {
             effectiveStaffIds.length === 0
           }
         >
-          Proceed with Platform Check
+          Proceed to Reservation Check
         </Button>
       </Stack>
     </Stack>
   );
 
-  const renderPlatformStep = () => {
-    const platformBucket = PLATFORM_BUCKETS[0];
-    if (!platformBucket) {
-      return <Alert severity="info">No platform buckets are configured.</Alert>;
-    }
-    return (
-      <Stack spacing={3}>
-        <Stack spacing={2}>
-          <Typography variant="subtitle1">Select the platforms to include in this counter.</Typography>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => setManifestSearchRequested(true)}
-              disabled={registry.loading || registry.savingMetrics || confirmingMetrics || !currentProductId}
-            >
-              Automatic Search
-            </Button>
-            <Typography variant="caption" color="text.secondary">
-              Pulls bookings manifest data to prefill platform quantities.
-            </Typography>
-          </Stack>
-          <ToggleButtonGroup
-            value={effectiveSelectedChannelIds}
-            onChange={handleChannelSelection}
-            aria-label="Selected channels"
-            size="small"
-            sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 1, rowGap: 1 }}
-          >
-            {registry.channels
-              .filter((channel) => (channel.name ?? '').toLowerCase() !== 'walk-in')
-              .map((channel) => (
-                <ToggleButton key={channel.id} value={channel.id} sx={{ flex: '0 0 auto' }}>
-                  {channel.name}
-                </ToggleButton>
-              ))}
-          </ToggleButtonGroup>
-          {effectiveSelectedChannelIds.length === 0 ? (
-            <Alert severity="info">
-              Select platforms to enter the metrics or skip if not operating the experience.
-            </Alert>
-          ) : (
-            <Box
-              sx={{
-                display: 'grid',
-                gap: 2,
-                gridTemplateColumns: {
-                  xs: '1fr',
-                  md: 'repeat(2, minmax(0, 1fr))',
-                  lg: 'repeat(3, minmax(0, 1fr))',
-                },
-              }}
-            >
-              {effectiveSelectedChannelIds.map((channelId: number) => {
-                const channel = registry.channels.find((item) => item.id === channelId);
-                if (!channel) {
-                  return null;
-                }
-                return (
-                  <Box key={`${channel.id}-${platformBucket.label}`} sx={{ height: '100%' }}>
-                    {renderChannelCard(channel, platformBucket, registry.addons)}
-                  </Box>
-                );
-              })}
-            </Box>
-          )}
-        </Stack>
-      </Stack>
-    );
-  };
-
   const renderReservationsStep = () => {
-    const selectedAfterCutoffChannels = effectiveAfterCutoffIds
-      .map((channelId: number) => {
-        const channel =
-          afterCutoffChannels.find((item) => item.id === channelId) ??
-          registry.channels.find((item) => item.id === channelId);
-        return channel;
-      })
-      .filter(
-        (channel): channel is ChannelConfig => Boolean(channel) && !shouldHideAfterCutoffChannel(channel),
-      );
+    const availableManualChannels = availableCashReservationChannelIds
+      .map((channelId) => registry.channels.find((channel) => channel.id === channelId))
+      .filter((channel): channel is ChannelConfig => Boolean(channel));
+    const displayedManualChannelIds = availableCashReservationChannelIds.filter(
+      (channelId) =>
+        selectedCashReservationChannelIds.includes(channelId) || channelHasRecordedData(channelId),
+    );
+    const selectedOnlineChannels = onlineSelectedChannelIds
+      .map((channelId) => registry.channels.find((channel) => channel.id === channelId))
+      .filter((channel): channel is ChannelConfig => Boolean(channel));
+    const onlineTotalAttended = onlineReservationsScoped.reduce(
+      (sum, order) => sum + getOrderAttendedTotal(order),
+      0,
+    );
+    const onlineTotalRemaining = onlineReservationsScoped.reduce(
+      (sum, order) => sum + getOrderEntryAllowance(order),
+      0,
+    );
+    const onlineTotalBooked = onlineTotalAttended + onlineTotalRemaining;
 
     return (
       <Stack spacing={3}>
-        {(modalMode === 'create' || modalMode === 'update') && (
-          <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="flex-end">
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => setScannerOpen(true)}
-              disabled={registry.savingMetrics || confirmingMetrics}
-            >
-              Scanner
-            </Button>
-          </Stack>
-        )}
-        {effectiveSelectedChannelIds.length === 0 ? (
-          <Alert severity="info">Select channels during the platform check to enter reservations.</Alert>
-        ) : (
-          RESERVATION_BUCKETS.map((bucket) => (
-            <Box key={bucket.label} sx={{ width: '100%' }}>
-              <Typography variant="h6" gutterBottom>
-                {bucket.label}
-              </Typography>
-              <Box
+        {selectedOnlineChannels.length > 0 && (
+          <Box sx={{ width: '100%' }}>
+            <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="center" sx={{ mb: 1 }}>
+              <Typography variant="h6">Online Reservations</Typography>
+              <Tooltip title="Refresh reservations">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      void refreshOnlineReservations();
+                    }}
+                    disabled={onlineReservationsLoading || onlineReservationsSyncing || syncingPendingAttendance}
+                    aria-label="refresh reservations"
+                  >
+                    {onlineReservationsSyncing ? <CircularProgress size={16} /> : <Refresh fontSize="small" />}
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Stack>
+            <Card variant="outlined">
+              <CardContent
                 sx={{
-                  display: 'grid',
-                  gap: 2,
-                  gridTemplateColumns: {
-                    xs: '1fr',
-                    md: 'repeat(2, minmax(0, 1fr))',
-                    lg: 'repeat(3, minmax(0, 1fr))',
-                  },
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 1.5,
+                  px: { xs: 1, sm: 2 },
+                  py: { xs: 1.25, sm: 2 },
                 }}
               >
-                {effectiveSelectedChannelIds.map((channelId: number) => {
-                  const channel = registry.channels.find((item) => item.id === channelId);
-                  if (!channel) {
-                    return null;
-                  }
-                  return (
-                    <Box key={`${channel.id}-${bucket.label}`} sx={{ height: '100%' }}>
-                      {renderChannelCard(channel, bucket, registry.addons)}
-                    </Box>
-                  );
-                })}
-              </Box>
-            </Box>
-          ))
+                <Stack
+                  direction={{ xs: 'column', md: 'row' }}
+                  spacing={1}
+                  alignItems={{ xs: 'stretch', md: 'center' }}
+                >
+                  <TextField
+                    size="small"
+                    value={onlineReservationsSearch}
+                    onChange={(event) => setOnlineReservationsSearch(event.target.value)}
+                    placeholder="Search booking, customer, phone..."
+                    fullWidth
+                    disabled={onlineReservationsLoading || onlineReservationsSyncing || syncingPendingAttendance}
+                  />
+                </Stack>
+                <Box
+                  sx={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                    gap: 0.75,
+                  }}
+                >
+                  <Chip
+                    size="small"
+                    label={`Booked: ${onlineTotalBooked}`}
+                    sx={{ width: '100%', '& .MuiChip-label': { px: 0.75, textAlign: 'center' } }}
+                  />
+                  <Chip
+                    size="small"
+                    color="success"
+                    label={`Checked-in: ${onlineTotalAttended}`}
+                    variant={onlineReservationsView === 'checked_in' ? 'filled' : 'outlined'}
+                    onClick={() => setOnlineReservationsView('checked_in')}
+                    sx={{
+                      width: '100%',
+                      cursor: 'pointer',
+                      '& .MuiChip-label': { px: 0.75, textAlign: 'center' },
+                    }}
+                  />
+                  <Chip
+                    size="small"
+                    color="warning"
+                    label={`Remaining: ${onlineTotalRemaining}`}
+                    variant={onlineReservationsView === 'remaining' ? 'filled' : 'outlined'}
+                    onClick={() => setOnlineReservationsView('remaining')}
+                    sx={{
+                      width: '100%',
+                      cursor: 'pointer',
+                      '& .MuiChip-label': { px: 0.75, textAlign: 'center' },
+                    }}
+                  />
+                </Box>
+                {onlineReservationsNotice && <Alert severity="success">{onlineReservationsNotice}</Alert>}
+                {onlineReservationsError && (
+                  <Alert severity="warning">
+                    {onlineReservationsError}. Manual reservation cards are enabled as fallback.
+                  </Alert>
+                )}
+                {onlineReservationsLoading ? (
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <CircularProgress size={18} />
+                    <Typography variant="body2">Loading online reservations...</Typography>
+                  </Stack>
+                ) : onlineReservationsByAttendanceView.length === 0 ? (
+                  <Alert severity="info">
+                    {onlineReservationsScoped.length === 0
+                      ? 'No online reservations found for the selected date/product and selected channels.'
+                      : onlineReservationsView === 'remaining'
+                        ? 'No remaining reservations for the selected channels.'
+                        : 'No checked-in reservations yet for the selected channels.'}
+                  </Alert>
+                ) : (
+                  <Box
+                    sx={{
+                      border: '1px solid',
+                      borderColor: 'divider',
+                      borderRadius: 1,
+                      maxHeight: 420,
+                      overflowY: 'auto',
+                      p: { xs: 0.5, sm: 1 },
+                      scrollbarWidth: 'thin',
+                      scrollbarColor: `${theme.palette.grey[500]} ${theme.palette.grey[200]}`,
+                      '&::-webkit-scrollbar': {
+                        width: 6,
+                      },
+                      '&::-webkit-scrollbar-track': {
+                        backgroundColor: theme.palette.grey[200],
+                        borderRadius: 8,
+                      },
+                      '&::-webkit-scrollbar-thumb': {
+                        backgroundColor: theme.palette.grey[500],
+                        borderRadius: 8,
+                      },
+                    }}
+                  >
+                    <Stack spacing={1.1}>
+                      {onlineReservationsFiltered.map((order) => {
+                        const bookingId = getOrderBookingId(order);
+                        const currentAttended = getOrderAttendedTotal(order);
+                        const remaining = getOrderEntryAllowance(order);
+                        const maxAttended = currentAttended + remaining;
+                        const attendedExtras = getOrderAttendedExtras(order);
+                        const purchasedExtras = order.extras ?? { cocktails: 0, tshirts: 0, photos: 0 };
+                        const purchasedCocktails = Math.max(0, Math.round(Number(purchasedExtras.cocktails) || 0));
+                        const purchasedTshirts = Math.max(0, Math.round(Number(purchasedExtras.tshirts) || 0));
+                        const purchasedPhotos = Math.max(0, Math.round(Number(purchasedExtras.photos) || 0));
+                        const attendedCocktails = Math.max(0, Math.round(Number(attendedExtras.cocktails) || 0));
+                        const attendedTshirts = Math.max(0, Math.round(Number(attendedExtras.tshirts) || 0));
+                        const attendedPhotos = Math.max(0, Math.round(Number(attendedExtras.photos) || 0));
+                        const platformLabel = String(order.platform ?? '').trim();
+                        const platformChipLabel = resolvePlatformChipLabel(platformLabel);
+                        const platformChipStyle = resolvePlatformChipStyle(platformLabel);
+                        const isSaving = syncingPendingAttendance;
+                        const hasAddonCounters = (Object.keys(purchasedExtras) as Array<keyof OrderExtras>).some(
+                          (key) => Math.max(0, Number(purchasedExtras[key]) || 0) > 0,
+                        );
+                        return (
+                          <Stack
+                            key={`${order.id}-${order.platformBookingId}`}
+                            spacing={1}
+                            sx={{
+                              py: 0.75,
+                              px: 1,
+                              border: '2px solid',
+                              borderColor: 'divider',
+                              borderRadius: 1.25,
+                              backgroundColor: (theme) =>
+                                theme.palette.mode === 'light' ? 'rgba(0, 0, 0, 0.02)' : 'rgba(255, 255, 255, 0.04)',
+                              boxShadow: (theme) =>
+                                theme.palette.mode === 'light'
+                                  ? '0 1px 2px rgba(0, 0, 0, 0.08)'
+                                  : '0 1px 2px rgba(0, 0, 0, 0.35)',
+                            }}
+                          >
+                            <Stack
+                              direction={{ xs: 'column', sm: 'row' }}
+                              spacing={1}
+                              alignItems={{ xs: 'stretch', sm: 'flex-start' }}
+                              justifyContent="space-between"
+                            >
+                              <Stack spacing={0.75} sx={{ flex: 1, minWidth: 0 }}>
+                                <Box
+                                  sx={{
+                                    display: 'grid',
+                                    gridTemplateColumns: platformLabel ? 'minmax(0, 1fr) 112px auto' : 'minmax(0, 1fr) auto',
+                                    columnGap: 0.75,
+                                    alignItems: 'start',
+                                    width: '100%',
+                                  }}
+                                >
+                                  <Typography
+                                    variant="subtitle2"
+                                    fontWeight={700}
+                                    sx={{ minWidth: 0, whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.2 }}
+                                  >
+                                    {order.customerName || 'Guest'}
+                                  </Typography>
+                                  {platformLabel && (
+                                    <Box sx={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
+                                      <Chip
+                                        size="small"
+                                        variant="filled"
+                                        label={platformChipLabel}
+                                        sx={{ ...platformChipStyle, fontWeight: 600, alignSelf: 'start' }}
+                                      />
+                                    </Box>
+                                  )}
+                                  <Stack direction="row" spacing={0.5} alignItems="center" sx={{ justifySelf: 'end' }}>
+                                    <Person fontSize="small" sx={{ color: 'text.secondary' }} />
+                                    <Chip size="small" label={`${currentAttended}/${maxAttended}`} />
+                                  </Stack>
+                                </Box>
+                                {hasAddonCounters && (
+                                  <Stack
+                                    direction="row"
+                                    spacing={2}
+                                    alignItems="center"
+                                    sx={{
+                                      width: '100%',
+                                      justifyContent: 'center',
+                                      border: '1px dashed',
+                                      borderColor: 'divider',
+                                      borderRadius: 1,
+                                      px: 0.75,
+                                      py: 0.4,
+                                      flexWrap: 'wrap',
+                                      rowGap: 0.6,
+                                    }}
+                                  >
+                                    {purchasedCocktails > 0 && (
+                                      <Stack direction="row" spacing={0.5} alignItems="center">
+                                        <LocalBar fontSize="small" sx={{ color: 'text.secondary' }} />
+                                        <Typography
+                                          variant="caption"
+                                          color="text.primary"
+                                          sx={{ fontWeight: 700, fontSize: '0.82rem', lineHeight: 1.1 }}
+                                        >
+                                          {`${attendedCocktails}/${purchasedCocktails}`}
+                                        </Typography>
+                                      </Stack>
+                                    )}
+                                    {purchasedTshirts > 0 && (
+                                      <Stack direction="row" spacing={0.5} alignItems="center">
+                                        <Checkroom fontSize="small" sx={{ color: 'text.secondary' }} />
+                                        <Typography
+                                          variant="caption"
+                                          color="text.primary"
+                                          sx={{ fontWeight: 700, fontSize: '0.82rem', lineHeight: 1.1 }}
+                                        >
+                                          {`${attendedTshirts}/${purchasedTshirts}`}
+                                        </Typography>
+                                      </Stack>
+                                    )}
+                                    {purchasedPhotos > 0 && (
+                                      <Stack direction="row" spacing={0.5} alignItems="center">
+                                        <PhotoCamera fontSize="small" sx={{ color: 'text.secondary' }} />
+                                        <Typography
+                                          variant="caption"
+                                          color="text.primary"
+                                          sx={{ fontWeight: 700, fontSize: '0.82rem', lineHeight: 1.1 }}
+                                        >
+                                          {`${attendedPhotos}/${purchasedPhotos}`}
+                                        </Typography>
+                                      </Stack>
+                                    )}
+                                  </Stack>
+                                )}
+                              </Stack>
+                              <Stack
+                                spacing={0.5}
+                                alignItems="center"
+                                sx={{ width: { xs: '100%', sm: 220 }, alignSelf: { xs: 'stretch', sm: 'flex-start' } }}
+                              >
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ width: '100%', fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase', textAlign: 'center' }}
+                                >
+                                  Check-In
+                                </Typography>
+                                <Stack direction="row" spacing={0.5} alignItems="center" sx={{ width: '100%', justifyContent: 'center' }}>
+                                  <Button
+                                    size="small"
+                                    variant="outlined"
+                                    onClick={() => {
+                                      void openPartialCheckInEditor(order);
+                                    }}
+                                    disabled={isSaving || bookingId == null}
+                                    sx={{
+                                      flex: 1,
+                                      borderColor: 'success.main',
+                                      color: 'success.dark',
+                                      bgcolor: 'rgba(46, 125, 50, 0.12)',
+                                      '&:hover': {
+                                        borderColor: 'success.dark',
+                                        bgcolor: 'rgba(46, 125, 50, 0.2)',
+                                      },
+                                    }}
+                                  >
+                                    Partial
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    variant="contained"
+                                    onClick={() => {
+                                      void handleBookingFullCheckIn(order);
+                                    }}
+                                    disabled={isSaving || remaining <= 0 || bookingId == null}
+                                    sx={{ flex: 1 }}
+                                  >
+                                    Full
+                                  </Button>
+                                </Stack>
+                                {isSaving && <CircularProgress size={16} />}
+                              </Stack>
+                            </Stack>
+                          </Stack>
+                        );
+                      })}
+                    </Stack>
+                  </Box>
+                )}
+              </CardContent>
+            </Card>
+          </Box>
         )}
-        {afterCutoffChannels.length > 0 && (
-          <Box sx={{ width: '100%' }}>
-            <Typography variant="h6" gutterBottom>
-              Booked After Cut-Off
+        {RESERVATION_BUCKETS.map((bucket) => (
+          <Box key={bucket.label} sx={{ width: '100%' }}>
+            <Typography variant="h6" gutterBottom sx={{ textAlign: 'center' }}>
+              {bucket.label}
             </Typography>
-            <Stack spacing={2}>
-              <ToggleButtonGroup
-                value={effectiveAfterCutoffIds}
-                onChange={handleAfterCutoffChannelSelection}
-                size="small"
-                aria-label="Channels allowing after cut-off bookings"
-                sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 1, rowGap: 1 }}
-              >
-                {afterCutoffChannels
-                  .filter((channel) => !shouldHideAfterCutoffChannel(channel))
-                  .map((channel: ChannelConfig) => (
+            {availableManualChannels.length > 0 ? (
+              <Stack spacing={1.5}>
+                <ToggleButtonGroup
+                  value={displayedManualChannelIds}
+                  onChange={handleCashReservationChannelSelection}
+                  size="small"
+                  aria-label="Cash payment channels"
+                  sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 1, rowGap: 1 }}
+                >
+                  {availableManualChannels.map((channel) => (
                     <ToggleButton
                       key={channel.id}
                       value={channel.id}
@@ -8109,101 +9214,42 @@ useEffect(() => {
                       {channel.name}
                     </ToggleButton>
                   ))}
-              </ToggleButtonGroup>
-              {selectedAfterCutoffChannels.length === 0 ? (
-                <Alert severity="info">Select a channel to record bookings after the cut-off.</Alert>
-              ) : (
-                <Box
-                  sx={{
-                    display: 'grid',
-                    gap: 2,
-                    gridTemplateColumns: {
-                      xs: '1fr',
-                      md: 'repeat(2, minmax(0, 1fr))',
-                      lg: 'repeat(3, minmax(0, 1fr))',
-                    },
-                  }}
-                >
-                  {selectedAfterCutoffChannels.map((channel: ChannelConfig) => (
-                    <Box key={channel.id + '-after-cutoff'} sx={{ height: '100%' }}>
-                      {renderChannelCard(channel, AFTER_CUTOFF_BUCKET, registry.addons)}
-                    </Box>
-                  ))}
-                </Box>
-              )}
-            </Stack>
+                </ToggleButtonGroup>
+                {displayedManualChannelIds.length > 0 ? (
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gap: 2,
+                      gridTemplateColumns: {
+                        xs: '1fr',
+                        md: 'repeat(2, minmax(0, 1fr))',
+                        lg: 'repeat(3, minmax(0, 1fr))',
+                      },
+                    }}
+                  >
+                    {displayedManualChannelIds.map((channelId: number) => {
+                      const channel = registry.channels.find((item) => item.id === channelId);
+                      if (!channel) {
+                        return null;
+                      }
+                      return (
+                        <Box key={`${channel.id}-${bucket.label}`} sx={{ height: '100%' }}>
+                          {renderChannelCard(channel, bucket, registry.addons)}
+                        </Box>
+                      );
+                    })}
+                  </Box>
+                ) : null}
+              </Stack>
+            ) : null}
           </Box>
-        )}
+        ))}
       </Stack>
     );
   };
 
   const renderModalNavigation = () => {
-    const disableNav = registry.savingMetrics || confirmingMetrics;
-
-    if (activeRegistryStep === 'platforms') {
-      if (isMobileScreen) {
-        return (
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => {
-                void handleReturnToSetup();
-              }}
-              disabled={disableNav}
-              sx={{
-                textTransform: 'none',
-                minWidth: 'auto',
-                px: 1,
-              }}
-            >
-              &lt; Back
-            </Button>
-            <Button
-              variant="contained"
-              size="small"
-              onClick={() => {
-                void handleProceedToReservations();
-              }}
-              disabled={disableNav}
-              sx={{
-                textTransform: 'none',
-                minWidth: 'auto',
-                px: 1,
-              }}
-            >
-              Next &gt;
-            </Button>
-          </Stack>
-        );
-      }
-
-      return (
-        <Stack direction="row" spacing={1}>
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={() => {
-              void handleReturnToSetup();
-            }}
-            disabled={disableNav}
-          >
-            Go to Setup
-          </Button>
-          <Button
-            variant="contained"
-            size="small"
-            onClick={() => {
-              void handleProceedToReservations();
-            }}
-            disabled={disableNav}
-          >
-            Go to Reservations Check
-          </Button>
-        </Stack>
-      );
-    }
+    const disableNav = registry.savingMetrics || confirmingMetrics || syncingPendingAttendance;
 
     if (activeRegistryStep === 'reservations') {
       const summaryStepBlocked = reservationHoldActive && activeRegistryStep === 'reservations';
@@ -8218,7 +9264,7 @@ useEffect(() => {
               variant="outlined"
               size="small"
               onClick={() => {
-                void handleReturnToPlatforms();
+                void handleReturnToSetup();
               }}
               disabled={disableNav}
               sx={{
@@ -8255,11 +9301,11 @@ useEffect(() => {
             variant="outlined"
             size="small"
             onClick={() => {
-              void handleReturnToPlatforms();
+              void handleReturnToSetup();
             }}
             disabled={disableNav}
           >
-            Go to Platform Check
+            Go to Setup
           </Button>
           <Button
             variant="contained"
@@ -8348,8 +9394,6 @@ useEffect(() => {
       switch (stepKey) {
         case 'details':
           return activeRegistryStep !== 'details';
-        case 'platforms':
-          return activeRegistryStep === 'reservations' || activeRegistryStep === 'summary';
         case 'reservations':
           return activeRegistryStep === 'summary';
         case 'summary':
@@ -8364,9 +9408,6 @@ useEffect(() => {
     if (activeRegistryStep === 'details') {
       return renderDetailsStep();
     }
-    if (activeRegistryStep === 'platforms') {
-      return renderPlatformStep();
-    }
     if (activeRegistryStep === 'reservations') {
       return renderReservationsStep();
     }
@@ -8378,6 +9419,10 @@ type SummaryRowOptions = {
   showBefore?: boolean;
   showAfter?: boolean;
   showNonShow?: boolean;
+  onBeforeClick?: () => void;
+  onAfterClick?: () => void;
+  onAttendedClick?: () => void;
+  onNonShowClick?: () => void;
 };
 
   const summaryRow = (
@@ -8386,11 +9431,27 @@ type SummaryRowOptions = {
     options: SummaryRowOptions = {},
     extras: { freeQty?: number; freeKey?: string } = {},
   ) => {
-    const { showBefore = true, showAfter = true, showNonShow = true } = options;
+    const {
+      showBefore = true,
+      showAfter = true,
+      showNonShow = true,
+      onBeforeClick,
+      onAfterClick,
+      onAttendedClick,
+      onNonShowClick,
+    } = options;
 
     const chips: JSX.Element[] = [];
     if (showBefore && bucket.bookedBefore > 0) {
-      chips.push(<Chip key="before" label={'Booked: ' + bucket.bookedBefore} size="small" />);
+      chips.push(
+        <Chip
+          key="before"
+          label={'Booked: ' + bucket.bookedBefore}
+          size="small"
+          onClick={onBeforeClick}
+          sx={onBeforeClick ? { cursor: 'pointer' } : undefined}
+        />,
+      );
     }
     if (showAfter && bucket.bookedAfter > 0) {
       chips.push(
@@ -8399,14 +9460,34 @@ type SummaryRowOptions = {
           label={'After Cut-Off: ' + bucket.bookedAfter}
           size="small"
           color="info"
+          onClick={onAfterClick}
+          sx={onAfterClick ? { cursor: 'pointer' } : undefined}
         />,
       );
     }
     if (bucket.attended > 0) {
-      chips.push(<Chip key="attended" label={'Attended: ' + bucket.attended} size="small" color="success" />);
+      chips.push(
+        <Chip
+          key="attended"
+          label={'Attended: ' + bucket.attended}
+          size="small"
+          color="success"
+          onClick={onAttendedClick}
+          sx={onAttendedClick ? { cursor: 'pointer' } : undefined}
+        />,
+      );
     }
     if (showNonShow && bucket.nonShow > 0) {
-      chips.push(<Chip key="non-show" label={'No-show: ' + bucket.nonShow} size="small" color="warning" />);
+      chips.push(
+        <Chip
+          key="non-show"
+          label={'No-show: ' + bucket.nonShow}
+          size="small"
+          color="warning"
+          onClick={onNonShowClick}
+          sx={onNonShowClick ? { cursor: 'pointer' } : undefined}
+        />,
+      );
     }
 
     if (chips.length === 0) {
@@ -8453,6 +9534,312 @@ type SummaryRowOptions = {
     attended: 0,
     nonShow: 0,
   });
+
+  const useAttendanceNoShowSummary = useMemo(
+    () => selectedDateString >= COUNTER_SUMMARY_ATTENDANCE_NOSHOW_FROM_DATE,
+    [selectedDateString],
+  );
+
+  const isOrderNoShowForSummary = useCallback(
+    (order: UnifiedOrder): boolean => {
+      if (!isSummaryEligibleStatus(order.status)) {
+        return false;
+      }
+      if (useAttendanceNoShowSummary) {
+        return getOrderNoShowPeopleByAttendance(order) > 0;
+      }
+      return getOrderEntryAllowance(order) > 0;
+    },
+    [useAttendanceNoShowSummary],
+  );
+
+  const summaryNoShowOrders = useMemo(
+    () => onlineReservationsScoped.filter((order) => isOrderNoShowForSummary(order)),
+    [isOrderNoShowForSummary, onlineReservationsScoped],
+  );
+
+  const summaryAttendedOrders = useMemo(
+    () =>
+      onlineReservationsScoped.filter(
+        (order) => MANIFEST_INCLUDED_STATUSES.has(order.status) && getOrderAttendedTotal(order) > 0,
+      ),
+    [onlineReservationsScoped],
+  );
+
+  const openSummaryAddonBookingsDialog = useCallback(
+    (params: {
+      addonId: number;
+      channelId?: number;
+      bucket: 'booked_before' | 'booked_after' | 'attended' | 'no_show';
+    }) => {
+      const addonConfig =
+        registry.addons.find((addon) => addon.addonId === params.addonId) ??
+        catalog.addons.find((addon) => addon.addonId === params.addonId) ??
+        null;
+      if (!addonConfig) {
+        return;
+      }
+      const extraKey = resolveAddonExtraKey(addonConfig);
+      if (!extraKey) {
+        return;
+      }
+
+      const bucketLabelMap: Record<typeof params.bucket, string> = {
+        booked_before: 'Booked',
+        booked_after: 'After Cut-Off',
+        attended: 'Attended',
+        no_show: 'No-show',
+      };
+
+      const channelName =
+        params.channelId != null
+          ? registry.channels.find((channel) => channel.id === params.channelId)?.name ?? null
+          : null;
+
+      const orders = onlineReservationsScoped.filter((order) => {
+        if (!isSummaryEligibleStatus(order.status)) {
+          return false;
+        }
+        if (params.channelId != null) {
+          const platformKey = normalizePlatformLookupKey(order.platform);
+          const orderChannelId = onlineChannelIdByPlatform.get(platformKey);
+          if (orderChannelId !== params.channelId) {
+            return false;
+          }
+        }
+        const purchasedQty = getOrderPurchasedExtraQty(order, extraKey);
+        switch (params.bucket) {
+          case 'booked_before':
+            return purchasedQty > 0 && !Boolean(order.isAfterCutoff);
+          case 'booked_after':
+            return purchasedQty > 0 && Boolean(order.isAfterCutoff);
+          case 'attended':
+            return getOrderAttendedExtraQty(order, extraKey) > 0;
+          case 'no_show':
+            return purchasedQty > 0 && isOrderNoShowForSummary(order);
+          default:
+            return false;
+        }
+      });
+
+      const bucketLabel = bucketLabelMap[params.bucket];
+      const title = channelName
+        ? `${addonConfig.name} | ${channelName}`
+        : addonConfig.name;
+
+      setSummaryAddonDialogState({
+        title,
+        orders,
+        extraKey,
+        addonLabel: addonConfig.name,
+        bucketLabel,
+      });
+    },
+    [
+      catalog.addons,
+      isOrderNoShowForSummary,
+      onlineChannelIdByPlatform,
+      onlineReservationsScoped,
+      registry.addons,
+      registry.channels,
+    ],
+  );
+
+  const cashPaymentsTicketSummary = useMemo(() => {
+    type CashTicketSummaryRow = {
+      channelId: number;
+      channelName: string;
+      ticketLabel: string;
+      currency: CashCurrency;
+      qty: number;
+    };
+
+    const rows: CashTicketSummaryRow[] = [];
+    const channelNameById = new Map<number, string>();
+    registry.channels.forEach((channel) => {
+      channelNameById.set(channel.id, channel.name ?? `Channel ${channel.id}`);
+    });
+
+    walkInChannelIds.forEach((channelId) => {
+      const channelName = channelNameById.get(channelId) ?? 'Walk-In';
+      const ticketState = walkInTicketDataByChannel[channelId];
+      let hasTicketBreakdown = false;
+      if (ticketState) {
+        ticketState.ticketOrder.forEach((ticketKey) => {
+          const ticketEntry = ticketState.tickets[ticketKey];
+          if (!ticketEntry) {
+            return;
+          }
+          const ticketLabel =
+            ticketEntry.name && ticketEntry.name.trim().length > 0 ? ticketEntry.name.trim() : ticketKey;
+          ticketEntry.currencyOrder.forEach((currency) => {
+            const currencyEntry = ticketEntry.currencies[currency];
+            if (!currencyEntry) {
+              return;
+            }
+            const qty = Math.max(0, Math.round(Number(currencyEntry.people) || 0));
+            if (qty <= 0) {
+              return;
+            }
+            hasTicketBreakdown = true;
+            rows.push({
+              channelId,
+              channelName,
+              ticketLabel,
+              currency,
+              qty,
+            });
+          });
+        });
+      }
+
+      if (hasTicketBreakdown) {
+        return;
+      }
+
+      const peopleQty = Math.max(0, Math.round(Number(getMetric(channelId, 'attended', null, 'people', null)?.qty ?? 0)));
+      if (peopleQty <= 0) {
+        return;
+      }
+      rows.push({
+        channelId,
+        channelName,
+        ticketLabel: 'People',
+        currency: resolveCashCurrencyForChannel(channelId),
+        qty: peopleQty,
+      });
+    });
+
+    registry.channels.forEach((channel) => {
+      if (!isCashPaymentChannel(channel) || walkInChannelIds.includes(channel.id)) {
+        return;
+      }
+      const peopleQty = Math.max(0, Math.round(Number(getMetric(channel.id, 'attended', null, 'people', null)?.qty ?? 0)));
+      if (peopleQty <= 0) {
+        return;
+      }
+      rows.push({
+        channelId: channel.id,
+        channelName: channel.name,
+        ticketLabel: 'People',
+        currency: resolveCashCurrencyForChannel(channel.id),
+        qty: peopleQty,
+      });
+    });
+
+    const aggregate = new Map<string, CashTicketSummaryRow>();
+    rows.forEach((row) => {
+      const key = `${row.channelId}|${row.ticketLabel}|${row.currency}`;
+      const existing = aggregate.get(key);
+      if (existing) {
+        existing.qty += row.qty;
+        return;
+      }
+      aggregate.set(key, { ...row });
+    });
+
+    return Array.from(aggregate.values()).sort(
+      (left, right) =>
+        left.channelName.localeCompare(right.channelName) ||
+        left.currency.localeCompare(right.currency) ||
+        left.ticketLabel.localeCompare(right.ticketLabel),
+    );
+  }, [
+    getMetric,
+    registry.channels,
+    resolveCashCurrencyForChannel,
+    walkInChannelIds,
+    walkInTicketDataByChannel,
+  ]);
+
+  const onlineNoShowPeopleByChannel = useMemo(() => {
+    const map = new Map<number, number>();
+    if (!useAttendanceNoShowSummary) {
+      return map;
+    }
+    onlineReservationsScoped.forEach((order) => {
+      const platformKey = normalizePlatformLookupKey(order.platform);
+      const channelId = onlineChannelIdByPlatform.get(platformKey);
+      if (!channelId || !onlineScopedChannelIdSet.has(channelId)) {
+        return;
+      }
+      const current = map.get(channelId) ?? 0;
+      map.set(channelId, current + getOrderNoShowPeopleByAttendance(order));
+    });
+    return map;
+  }, [
+    onlineChannelIdByPlatform,
+    onlineReservationsScoped,
+    onlineScopedChannelIdSet,
+    useAttendanceNoShowSummary,
+  ]);
+
+  const shouldOverrideSummaryNoShow = useMemo(() => {
+    if (!useAttendanceNoShowSummary) {
+      return false;
+    }
+    if (!isModalOpen) {
+      return false;
+    }
+    if (activeRegistryStep !== 'reservations' && activeRegistryStep !== 'summary') {
+      return false;
+    }
+    if (onlineReservationsLoading) {
+      return false;
+    }
+    if (onlineReservationsScoped.length === 0) {
+      return false;
+    }
+    return true;
+  }, [
+    activeRegistryStep,
+    isModalOpen,
+    onlineReservationsLoading,
+    onlineReservationsScoped.length,
+    useAttendanceNoShowSummary,
+  ]);
+
+  const applySummaryNoShowStrategy = useCallback(
+    (summary: { byChannel: CounterSummaryChannel[]; totals: CounterSummary['totals'] }) => {
+      if (!shouldOverrideSummaryNoShow) {
+        return summary;
+      }
+
+      const adjustedByChannel = summary.byChannel.map((channel) => {
+        if (!onlineManagedChannelIdSet.has(channel.channelId)) {
+          return channel;
+        }
+        const nextNoShow = Math.max(0, Math.round(Number(onlineNoShowPeopleByChannel.get(channel.channelId) ?? 0)));
+        if (channel.people.nonShow === nextNoShow) {
+          return channel;
+        }
+        return {
+          ...channel,
+          people: {
+            ...channel.people,
+            nonShow: nextNoShow,
+          },
+        };
+      });
+
+      const totalPeopleNoShow = adjustedByChannel.reduce(
+        (sum, channel) => sum + Math.max(0, Math.round(Number(channel.people.nonShow) || 0)),
+        0,
+      );
+
+      return {
+        byChannel: adjustedByChannel,
+        totals: {
+          ...summary.totals,
+          people: {
+            ...summary.totals.people,
+            nonShow: totalPeopleNoShow,
+          },
+        },
+      };
+    },
+    [onlineManagedChannelIdSet, onlineNoShowPeopleByChannel, shouldOverrideSummaryNoShow],
+  );
 
   const summaryData = useMemo(() => {
     if (!hasDirtyMetrics && registry.summary) {
@@ -8538,9 +9925,9 @@ type SummaryRowOptions = {
 
     channelEntries.forEach((entry) => {
       const channel = channelsById.get(entry.channelId);
-      const isAfterCutoffChannel = AFTER_CUTOFF_ALLOWED.has(channel?.name?.toLowerCase() ?? '');
+      const channelIsAfterCutoff = isAfterCutoffEligibleChannel(channel);
 
-      if (isAfterCutoffChannel) {
+      if (channelIsAfterCutoff) {
         entry.people.bookedAfter = Math.max(entry.people.attended - entry.people.bookedBefore, 0);
       }
 
@@ -8583,17 +9970,28 @@ type SummaryRowOptions = {
       totalsAddons[key] = bucket;
     });
 
-    return {
+    return applySummaryNoShowStrategy({
       byChannel,
       totals: {
         people: totalsPeople,
         addons: totalsAddons,
       },
-    };
-  }, [hasDirtyMetrics, mergedMetrics, registry.addons, registry.channels, registry.summary, summaryChannelIds, summaryChannelOrder]);
+    });
+  }, [
+    applySummaryNoShowStrategy,
+    hasDirtyMetrics,
+    mergedMetrics,
+    registry.addons,
+    registry.channels,
+    registry.summary,
+    summaryChannelIds,
+    summaryChannelOrder,
+  ]);
 
   const renderSummaryStep = () => {
     const { byChannel: summaryChannels, totals: summaryTotals } = summaryData;
+    const hasSummaryActivity = (bucket: CounterSummaryBucket | CounterSummaryAddonBucket): boolean =>
+      bucket.bookedBefore > 0 || bucket.bookedAfter > 0 || bucket.attended > 0 || bucket.nonShow > 0;
     const snapshotDetails = formatCounterSnapshotDetails(counterNotes, registry.channels, combinedAddonList);
     const hasFreeTicketNotes = snapshotDetails.freeSections.length > 0;
     const multipleFreeTicketChannels = snapshotDetails.freeSections.length > 1;
@@ -8603,7 +10001,7 @@ type SummaryRowOptions = {
     if (summaryChannels.length === 0) {
       return (
         <Stack spacing={3} sx={{ mt: 4 }}>
-          <Alert severity="info">Select channels in Platform and Reservations to review the summary.</Alert>
+          <Alert severity="info">Select channels in Reservations to review the summary.</Alert>
         </Stack>
       );
     }
@@ -8611,14 +10009,83 @@ type SummaryRowOptions = {
     const addonTotalsToShow = Object.values(summaryTotals.addons).filter(
       (addon) => addon.bookedBefore > 0 || addon.bookedAfter > 0 || addon.attended > 0 || addon.nonShow > 0,
     );
+    const visibleSummaryChannels = summaryChannels.filter((item) => {
+      const freePeopleQty = freePeopleTotalsByChannel.get(item.channelId) ?? 0;
+      const hasPeopleActivity = hasSummaryActivity(item.people) || freePeopleQty > 0;
+      const hasAddonActivity = Object.values(item.addons).some((addon) => {
+        const freeAddonQty = freeAddonsTotalsByChannel.get(item.channelId)?.get(addon.addonId) ?? 0;
+        return hasSummaryActivity(addon) || freeAddonQty > 0;
+      });
+      const hasCashCollection = (cashCollectionSummary.perChannel.get(item.channelId)?.length ?? 0) > 0;
+      const hasCashTicketSummary = cashPaymentsTicketSummary.some(
+        (entry) => entry.channelId === item.channelId && entry.qty > 0,
+      );
+      return hasPeopleActivity || hasAddonActivity || hasCashCollection || hasCashTicketSummary;
+    });
 
     return (
       <Stack spacing={3}>
         <Box>
           <Grid container spacing={2}>
-            {summaryChannels.map((item) => {
-              const isAfterCutoffChannel = AFTER_CUTOFF_ALLOWED.has(item.channelName.toLowerCase());
+            <Grid size={{ xs: 12 }}>
+              <Card variant="outlined" sx={{ backgroundColor: theme.palette.action.hover }}>
+                <CardContent>
+                  <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+                    Totals
+                  </Typography>
+                  {summaryRow(
+                    'People',
+                    summaryTotals.people,
+                    {
+                      showBefore: false,
+                      showAfter: false,
+                      showNonShow: true,
+                      onAttendedClick: () => setSummaryAttendedDialogOpen(true),
+                      onNonShowClick: () => setSummaryNoShowDialogOpen(true),
+                    },
+                    { freeQty: totalFreePeople, freeKey: 'totals-people-free' },
+                  )}
+                  <Divider sx={{ my: 1 }} />
+                  {addonTotalsToShow.map((addon) => (
+                    <Box key={addon.key} sx={{ mb: 1 }}>
+                      {summaryRow(
+                        addon.name,
+                        addon,
+                        {
+                          showBefore: false,
+                          showAfter: false,
+                          showNonShow: true,
+                          onAttendedClick: () =>
+                            openSummaryAddonBookingsDialog({
+                              addonId: addon.addonId,
+                              bucket: 'attended',
+                            }),
+                          onNonShowClick: () =>
+                            openSummaryAddonBookingsDialog({
+                              addonId: addon.addonId,
+                              bucket: 'no_show',
+                            }),
+                        },
+                        {
+                          freeQty: freeAddonTotalsByKey.get(addon.key) ?? 0,
+                          freeKey: `totals-addon-${addon.key}-free`,
+                        },
+                      )}
+                    </Box>
+                  ))}
+                </CardContent>
+              </Card>
+            </Grid>
+            {visibleSummaryChannels.map((item) => {
+              const summaryChannelConfig =
+                registry.channels.find((channel) => channel.id === item.channelId) ?? null;
+              const isAfterCutoffChannel = isAfterCutoffEligibleChannel(summaryChannelConfig);
+              const isWalkInSummaryChannel = item.channelName.toLowerCase() === WALK_IN_CHANNEL_SLUG;
               const addonBuckets = Object.values(item.addons);
+              const visibleAddonBuckets = addonBuckets.filter((addon) => {
+                const freeAddonQty = freeAddonsTotalsByChannel.get(item.channelId)?.get(addon.addonId) ?? 0;
+                return hasSummaryActivity(addon) || freeAddonQty > 0;
+              });
               const showBeforeForChannel =
                 !isAfterCutoffChannel || effectiveSelectedChannelIds.includes(item.channelId);
               const channelCashEntries = cashCollectionSummary.perChannel.get(item.channelId) ?? null;
@@ -8635,7 +10102,7 @@ type SummaryRowOptions = {
                         {
                           showBefore: showBeforeForChannel,
                           showAfter: true,
-                          showNonShow: !isAfterCutoffChannel,
+                          showNonShow: !isWalkInSummaryChannel,
                         },
                         {
                           freeQty: freePeopleTotalsByChannel.get(item.channelId) ?? 0,
@@ -8654,8 +10121,8 @@ type SummaryRowOptions = {
                             .join(' | ')}
                         </Typography>
                       )}
-                      <Divider sx={{ my: 1 }} />
-                      {addonBuckets.map((addon) => (
+                      {visibleAddonBuckets.length > 0 && <Divider sx={{ my: 1 }} />}
+                      {visibleAddonBuckets.map((addon) => (
                         <Box key={addon.key} sx={{ mb: 1 }}>
                           {summaryRow(
                             addon.name,
@@ -8663,7 +10130,31 @@ type SummaryRowOptions = {
                             {
                               showBefore: showBeforeForChannel,
                               showAfter: true,
-                              showNonShow: !isAfterCutoffChannel,
+                              showNonShow: !isWalkInSummaryChannel,
+                              onBeforeClick: () =>
+                                openSummaryAddonBookingsDialog({
+                                  addonId: addon.addonId,
+                                  channelId: item.channelId,
+                                  bucket: 'booked_before',
+                                }),
+                              onAfterClick: () =>
+                                openSummaryAddonBookingsDialog({
+                                  addonId: addon.addonId,
+                                  channelId: item.channelId,
+                                  bucket: 'booked_after',
+                                }),
+                              onAttendedClick: () =>
+                                openSummaryAddonBookingsDialog({
+                                  addonId: addon.addonId,
+                                  channelId: item.channelId,
+                                  bucket: 'attended',
+                                }),
+                              onNonShowClick: () =>
+                                openSummaryAddonBookingsDialog({
+                                  addonId: addon.addonId,
+                                  channelId: item.channelId,
+                                  bucket: 'no_show',
+                                }),
                             },
                             {
                               freeQty:
@@ -8678,47 +10169,6 @@ type SummaryRowOptions = {
                 </Grid>
               );
             })}
-            <Grid size={{ xs: 12 }}>
-              <Card variant="outlined" sx={{ backgroundColor: theme.palette.action.hover }}>
-                <CardContent>
-                  <Typography variant="subtitle1" fontWeight={600} gutterBottom>
-                    Totals
-                  </Typography>
-                  {summaryRow(
-                    'People',
-                    summaryTotals.people,
-                    { showBefore: false, showAfter: false, showNonShow: true },
-                    { freeQty: totalFreePeople, freeKey: 'totals-people-free' },
-                  )}
-                  {cashCollectionSummary.formattedTotals.length > 0 && (
-                    <Typography
-                      variant="body2"
-                      sx={{ mt: 0.5, fontWeight: 500 }}
-                      color="text.secondary"
-                    >
-                      Cash collected:{' '}
-                      {cashCollectionSummary.formattedTotals
-                        .map((entry) => `${entry.currency} ${entry.formatted}`)
-                        .join(' | ')}
-                    </Typography>
-                  )}
-                  <Divider sx={{ my: 1 }} />
-                  {addonTotalsToShow.map((addon) => (
-                    <Box key={addon.key} sx={{ mb: 1 }}>
-                      {summaryRow(
-                        addon.name,
-                        addon,
-                        { showBefore: false, showAfter: false, showNonShow: true },
-                        {
-                          freeQty: freeAddonTotalsByKey.get(addon.key) ?? 0,
-                          freeKey: `totals-addon-${addon.key}-free`,
-                        },
-                      )}
-                    </Box>
-                  ))}
-                </CardContent>
-              </Card>
-            </Grid>
           </Grid>
         </Box>
         {hasNotes && (
@@ -8837,8 +10287,8 @@ type SummaryRowOptions = {
           minHeight: { xs: '100%', md: 'auto' },
           display: 'flex',
           flexDirection: 'column',
-          px: { xs: 2, sm: 0 },
-          py: { xs: 2, sm: 0 },
+          px: { xs: activeRegistryStep === 'reservations' ? 0.5 : 2, sm: 0 },
+          py: { xs: activeRegistryStep === 'reservations' ? 1 : 2, sm: 0 },
           boxSizing: 'border-box',
           overflowX: 'hidden',
         }}
@@ -8871,9 +10321,11 @@ type SummaryRowOptions = {
                 </Step>
               ))}
             </Stepper>
-            <Typography variant="body2" color="text.secondary">
-              {activeStepConfig.description}
-            </Typography>
+            {activeStepConfig.description ? (
+              <Typography variant="body2" color="text.secondary">
+                {activeStepConfig.description}
+              </Typography>
+            ) : null}
           </Stack>
 
           {renderStepContent()}
@@ -8892,8 +10344,10 @@ type SummaryRowOptions = {
     setPendingProductId(null);
     setPendingStaffIds([]);
     setPendingStaffDirty(false);
-    manifestAppliedRef.current = null;
-    manifestRequestRef.current = null;
+    setOnlineReservationsView('remaining');
+    setPartialCheckInEditorOrder(null);
+    setPartialCheckInEditorDraft(null);
+    setPendingBookingAttendanceById({});
     fetchCounterRequestRef.current = null;
     dispatch(clearDirtyMetrics());
   };
@@ -8923,8 +10377,10 @@ type SummaryRowOptions = {
       setSelectedManagerId(null);
       setPendingStaffIds([]);
       setPendingStaffDirty(false);
-      manifestAppliedRef.current = null;
-      manifestRequestRef.current = null;
+      setOnlineReservationsView('remaining');
+      setPartialCheckInEditorOrder(null);
+      setPartialCheckInEditorDraft(null);
+      setPendingBookingAttendanceById({});
     },
     [setPendingProductId],
   );
@@ -9181,10 +10637,511 @@ type SummaryRowOptions = {
         </DialogContent>
       </Dialog>
       <Dialog
+        open={Boolean(partialCheckInEditorOrder && partialCheckInEditorDraft)}
+        onClose={closePartialCheckInEditor}
+        fullWidth
+        maxWidth="xs"
+        aria-labelledby="partial-checkin-dialog-title"
+      >
+        <DialogTitle
+          id="partial-checkin-dialog-title"
+          sx={{ m: 0, p: 2, pb: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+        >
+          <Typography variant="h6" component="span">
+            Partial Check-In
+          </Typography>
+          <IconButton onClick={closePartialCheckInEditor} aria-label="close partial check-in">
+            <Close />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers sx={{ p: { xs: 2, sm: 2.5 } }}>
+          {partialCheckInEditorOrder && partialCheckInEditorDraft && (
+            <Stack spacing={1.5}>
+              <Stack spacing={0.4}>
+                <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+                  <Typography variant="subtitle1" fontWeight={700}>
+                    {partialCheckInEditorOrder.customerName || 'Guest'}
+                  </Typography>
+                  {partialEditorPlatformLabel ? (
+                    <Chip
+                      size="small"
+                      variant="filled"
+                      label={partialEditorPlatformChipLabel}
+                      sx={{ ...partialEditorPlatformChipStyle, fontWeight: 600 }}
+                    />
+                  ) : (
+                    <Typography variant="caption" color="text.secondary">
+                      Reservation
+                    </Typography>
+                  )}
+                </Stack>
+              </Stack>
+              <Divider />
+
+              <Stack direction="row" justifyContent="space-between" alignItems="center">
+                <Stack direction="row" spacing={0.75} alignItems="center">
+                  <Person fontSize="small" />
+                  <Typography variant="body2">People</Typography>
+                </Stack>
+                <Stack direction="row" spacing={0.5} alignItems="center">
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      handlePartialEditorPeopleAdjust(-1);
+                    }}
+                    disabled={partialCheckInEditorDraft.attendedTotal <= 0 || syncingPendingAttendance}
+                    sx={{ minWidth: 36, px: 1 }}
+                  >
+                    <Remove fontSize="small" />
+                  </Button>
+                  <Chip size="small" label={`${partialCheckInEditorDraft.attendedTotal}/${partialEditorPeopleMax}`} />
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      handlePartialEditorPeopleAdjust(1);
+                    }}
+                    disabled={partialCheckInEditorDraft.attendedTotal >= partialEditorPeopleMax || syncingPendingAttendance}
+                    sx={{ minWidth: 36, px: 1 }}
+                  >
+                    <Add fontSize="small" />
+                  </Button>
+                </Stack>
+              </Stack>
+
+              {partialEditorAddonMax.cocktails > 0 && (
+                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Stack direction="row" spacing={0.75} alignItems="center">
+                    <LocalBar fontSize="small" />
+                    <Typography variant="body2">Cocktails</Typography>
+                  </Stack>
+                  <Stack direction="row" spacing={0.5} alignItems="center">
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => {
+                        handlePartialEditorAddonAdjust('cocktails', -1);
+                      }}
+                      disabled={partialCheckInEditorDraft.attendedExtras.cocktails <= 0 || syncingPendingAttendance}
+                      sx={{ minWidth: 36, px: 1 }}
+                    >
+                      <Remove fontSize="small" />
+                    </Button>
+                    <Chip
+                      size="small"
+                      label={`${partialCheckInEditorDraft.attendedExtras.cocktails}/${partialEditorAddonMax.cocktails}`}
+                    />
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => {
+                        handlePartialEditorAddonAdjust('cocktails', 1);
+                      }}
+                      disabled={
+                        partialCheckInEditorDraft.attendedExtras.cocktails >= partialEditorAddonMax.cocktails ||
+                        syncingPendingAttendance
+                      }
+                      sx={{ minWidth: 36, px: 1 }}
+                    >
+                      <Add fontSize="small" />
+                    </Button>
+                  </Stack>
+                </Stack>
+              )}
+
+              {partialEditorAddonMax.tshirts > 0 && (
+                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Stack direction="row" spacing={0.75} alignItems="center">
+                    <Checkroom fontSize="small" />
+                    <Typography variant="body2">T-Shirts</Typography>
+                  </Stack>
+                  <Stack direction="row" spacing={0.5} alignItems="center">
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => {
+                        handlePartialEditorAddonAdjust('tshirts', -1);
+                      }}
+                      disabled={partialCheckInEditorDraft.attendedExtras.tshirts <= 0 || syncingPendingAttendance}
+                      sx={{ minWidth: 36, px: 1 }}
+                    >
+                      <Remove fontSize="small" />
+                    </Button>
+                    <Chip size="small" label={`${partialCheckInEditorDraft.attendedExtras.tshirts}/${partialEditorAddonMax.tshirts}`} />
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => {
+                        handlePartialEditorAddonAdjust('tshirts', 1);
+                      }}
+                      disabled={
+                        partialCheckInEditorDraft.attendedExtras.tshirts >= partialEditorAddonMax.tshirts ||
+                        syncingPendingAttendance
+                      }
+                      sx={{ minWidth: 36, px: 1 }}
+                    >
+                      <Add fontSize="small" />
+                    </Button>
+                  </Stack>
+                </Stack>
+              )}
+
+              {partialEditorAddonMax.photos > 0 && (
+                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Stack direction="row" spacing={0.75} alignItems="center">
+                    <PhotoCamera fontSize="small" />
+                    <Typography variant="body2">Instant Pictures</Typography>
+                  </Stack>
+                  <Stack direction="row" spacing={0.5} alignItems="center">
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => {
+                        handlePartialEditorAddonAdjust('photos', -1);
+                      }}
+                      disabled={partialCheckInEditorDraft.attendedExtras.photos <= 0 || syncingPendingAttendance}
+                      sx={{ minWidth: 36, px: 1 }}
+                    >
+                      <Remove fontSize="small" />
+                    </Button>
+                    <Chip size="small" label={`${partialCheckInEditorDraft.attendedExtras.photos}/${partialEditorAddonMax.photos}`} />
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => {
+                        handlePartialEditorAddonAdjust('photos', 1);
+                      }}
+                      disabled={
+                        partialCheckInEditorDraft.attendedExtras.photos >= partialEditorAddonMax.photos ||
+                        syncingPendingAttendance
+                      }
+                      sx={{ minWidth: 36, px: 1 }}
+                    >
+                      <Add fontSize="small" />
+                    </Button>
+                  </Stack>
+                </Stack>
+              )}
+
+              <Divider />
+              <Stack direction="row" spacing={1} justifyContent="flex-end">
+                <Button onClick={closePartialCheckInEditor}>Cancel</Button>
+                <Button
+                  variant="contained"
+                  onClick={handlePartialEditorApply}
+                  disabled={syncingPendingAttendance}
+                >
+                  Apply
+                </Button>
+              </Stack>
+            </Stack>
+          )}
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={summaryAttendedDialogOpen}
+        onClose={() => setSummaryAttendedDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+        aria-labelledby="summary-attended-dialog-title"
+      >
+        <DialogTitle
+          id="summary-attended-dialog-title"
+          sx={{ m: 0, p: 2, pb: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+        >
+          <Typography variant="h6" component="span">
+            Attended
+          </Typography>
+          <IconButton onClick={() => setSummaryAttendedDialogOpen(false)} aria-label="close attended list">
+            <Close />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers sx={{ p: { xs: 2, sm: 2.5 } }}>
+          <Stack spacing={1.25}>
+            {summaryAttendedOrders.length === 0 ? (
+              <Alert severity="info">No attended online bookings found for selected channels.</Alert>
+            ) : (
+              <Stack spacing={1}>
+                {summaryAttendedOrders.map((order) => {
+                  const attendedPeople = Math.max(0, getOrderAttendedTotal(order));
+                  const platformLabel = String(order.platform ?? '').trim();
+                  const platformChipLabel = resolvePlatformChipLabel(platformLabel);
+                  const platformChipStyle = resolvePlatformChipStyle(platformLabel);
+                  const telNumber = normalizePhoneForTel(order.customerPhone);
+                  const whatsappNumber = normalizePhoneForWhatsApp(order.customerPhone);
+                  const customerEmail = normalizeEmailForContact(order.customerEmail);
+
+                  return (
+                    <Stack
+                      key={`attended-${order.id}-${order.platformBookingId}`}
+                      spacing={0.75}
+                      sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.25 }}
+                    >
+                      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+                        <Typography variant="subtitle2" fontWeight={700}>
+                          {order.customerName || 'Guest'}
+                        </Typography>
+                        {platformLabel && (
+                          <Chip size="small" label={platformChipLabel} sx={{ ...platformChipStyle, fontWeight: 600 }} />
+                        )}
+                        <Chip size="small" color="success" label={`Attended: ${attendedPeople}`} />
+                      </Stack>
+                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={0.75}>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<Phone fontSize="small" />}
+                          component={telNumber ? 'a' : 'button'}
+                          href={telNumber ? `tel:${telNumber}` : undefined}
+                          disabled={!telNumber}
+                        >
+                          Call
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<WhatsApp fontSize="small" />}
+                          component={whatsappNumber ? 'a' : 'button'}
+                          href={whatsappNumber ? `https://wa.me/${whatsappNumber}` : undefined}
+                          target={whatsappNumber ? '_blank' : undefined}
+                          rel={whatsappNumber ? 'noreferrer' : undefined}
+                          disabled={!whatsappNumber}
+                        >
+                          WhatsApp
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<MailOutline fontSize="small" />}
+                          component={customerEmail ? 'a' : 'button'}
+                          href={customerEmail ? `mailto:${customerEmail}` : undefined}
+                          disabled={!customerEmail}
+                        >
+                          Email
+                        </Button>
+                      </Stack>
+                    </Stack>
+                  );
+                })}
+              </Stack>
+            )}
+            <Divider />
+            <Stack spacing={0.75}>
+              <Typography variant="subtitle2" fontWeight={700}>
+                Cash Payments Summary
+              </Typography>
+              {cashPaymentsTicketSummary.length === 0 ? (
+                <Alert severity="info">No cash payment tickets recorded.</Alert>
+              ) : (
+                <Stack direction="row" spacing={0.6} useFlexGap sx={{ flexWrap: 'wrap' }}>
+                  {cashPaymentsTicketSummary.map((entry) => (
+                    <Chip
+                      key={`attended-cash-${entry.channelId}-${entry.ticketLabel}-${entry.currency}`}
+                      size="small"
+                      variant="outlined"
+                      label={`${entry.channelName} | ${entry.ticketLabel} | ${entry.currency}: ${entry.qty}`}
+                    />
+                  ))}
+                </Stack>
+              )}
+            </Stack>
+          </Stack>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={summaryNoShowDialogOpen}
+        onClose={() => setSummaryNoShowDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+        aria-labelledby="summary-no-shows-dialog-title"
+      >
+        <DialogTitle
+          id="summary-no-shows-dialog-title"
+          sx={{ m: 0, p: 2, pb: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+        >
+          <Typography variant="h6" component="span">
+            No-shows
+          </Typography>
+          <IconButton onClick={() => setSummaryNoShowDialogOpen(false)} aria-label="close no-shows list">
+            <Close />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers sx={{ p: { xs: 2, sm: 2.5 } }}>
+          {summaryNoShowOrders.length === 0 ? (
+            <Alert severity="info">No no-show bookings found for selected channels.</Alert>
+          ) : (
+            <Stack spacing={1}>
+              {summaryNoShowOrders.map((order) => {
+                const pendingPeople = useAttendanceNoShowSummary
+                  ? getOrderNoShowPeopleByAttendance(order)
+                  : getOrderEntryAllowance(order);
+                const platformLabel = String(order.platform ?? '').trim();
+                const platformChipLabel = resolvePlatformChipLabel(platformLabel);
+                const platformChipStyle = resolvePlatformChipStyle(platformLabel);
+                const telNumber = normalizePhoneForTel(order.customerPhone);
+                const whatsappNumber = normalizePhoneForWhatsApp(order.customerPhone);
+                const customerEmail = normalizeEmailForContact(order.customerEmail);
+
+                return (
+                  <Stack
+                    key={`no-show-${order.id}-${order.platformBookingId}`}
+                    spacing={0.75}
+                    sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.25 }}
+                  >
+                    <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+                      <Typography variant="subtitle2" fontWeight={700}>
+                        {order.customerName || 'Guest'}
+                      </Typography>
+                      {platformLabel && (
+                        <Chip size="small" label={platformChipLabel} sx={{ ...platformChipStyle, fontWeight: 600 }} />
+                      )}
+                      <Chip size="small" color="warning" label={`No-show: ${pendingPeople}`} />
+                    </Stack>
+                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={0.75}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<Phone fontSize="small" />}
+                        component={telNumber ? 'a' : 'button'}
+                        href={telNumber ? `tel:${telNumber}` : undefined}
+                        disabled={!telNumber}
+                      >
+                        Call
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<WhatsApp fontSize="small" />}
+                        component={whatsappNumber ? 'a' : 'button'}
+                        href={whatsappNumber ? `https://wa.me/${whatsappNumber}` : undefined}
+                        target={whatsappNumber ? '_blank' : undefined}
+                        rel={whatsappNumber ? 'noreferrer' : undefined}
+                        disabled={!whatsappNumber}
+                      >
+                        WhatsApp
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<MailOutline fontSize="small" />}
+                        component={customerEmail ? 'a' : 'button'}
+                        href={customerEmail ? `mailto:${customerEmail}` : undefined}
+                        disabled={!customerEmail}
+                      >
+                        Email
+                      </Button>
+                    </Stack>
+                  </Stack>
+                );
+              })}
+            </Stack>
+          )}
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={Boolean(summaryAddonDialogState)}
+        onClose={() => setSummaryAddonDialogState(null)}
+        fullWidth
+        maxWidth="sm"
+        aria-labelledby="summary-addon-dialog-title"
+      >
+        <DialogTitle
+          id="summary-addon-dialog-title"
+          sx={{ m: 0, p: 2, pb: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+        >
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+            <Typography variant="h6" component="span">
+              {summaryAddonDialogState?.addonLabel ?? 'Addon Bookings'}
+            </Typography>
+            {summaryAddonDialogState?.bucketLabel && (
+              <Chip size="small" color="primary" variant="outlined" label={summaryAddonDialogState.bucketLabel} />
+            )}
+          </Stack>
+          <IconButton onClick={() => setSummaryAddonDialogState(null)} aria-label="close addon bookings list">
+            <Close />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers sx={{ p: { xs: 2, sm: 2.5 } }}>
+          {summaryAddonDialogState ? (
+            <Stack spacing={1}>
+              <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                {summaryAddonDialogState.title}
+              </Typography>
+              {summaryAddonDialogState.orders.length === 0 ? (
+                <Alert severity="info">No bookings found for this add-on and filter.</Alert>
+              ) : (
+                summaryAddonDialogState.orders.map((order) => {
+                  const platformLabel = String(order.platform ?? '').trim();
+                  const platformChipLabel = resolvePlatformChipLabel(platformLabel);
+                  const platformChipStyle = resolvePlatformChipStyle(platformLabel);
+                  const purchasedQty = getOrderPurchasedExtraQty(order, summaryAddonDialogState.extraKey);
+                  const attendedQty = getOrderAttendedExtraQty(order, summaryAddonDialogState.extraKey);
+                  const telNumber = normalizePhoneForTel(order.customerPhone);
+                  const whatsappNumber = normalizePhoneForWhatsApp(order.customerPhone);
+                  const customerEmail = normalizeEmailForContact(order.customerEmail);
+
+                  return (
+                    <Stack
+                      key={`addon-booking-${order.id}-${order.platformBookingId}`}
+                      spacing={0.75}
+                      sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.25 }}
+                    >
+                      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+                        <Typography variant="subtitle2" fontWeight={700}>
+                          {order.customerName || 'Guest'}
+                        </Typography>
+                        {platformLabel && (
+                          <Chip size="small" label={platformChipLabel} sx={{ ...platformChipStyle, fontWeight: 600 }} />
+                        )}
+                        <Chip size="small" label={`Addon ${attendedQty}/${purchasedQty}`} color="info" />
+                      </Stack>
+                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={0.75}>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<Phone fontSize="small" />}
+                          component={telNumber ? 'a' : 'button'}
+                          href={telNumber ? `tel:${telNumber}` : undefined}
+                          disabled={!telNumber}
+                        >
+                          Call
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<WhatsApp fontSize="small" />}
+                          component={whatsappNumber ? 'a' : 'button'}
+                          href={whatsappNumber ? `https://wa.me/${whatsappNumber}` : undefined}
+                          target={whatsappNumber ? '_blank' : undefined}
+                          rel={whatsappNumber ? 'noreferrer' : undefined}
+                          disabled={!whatsappNumber}
+                        >
+                          WhatsApp
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<MailOutline fontSize="small" />}
+                          component={customerEmail ? 'a' : 'button'}
+                          href={customerEmail ? `mailto:${customerEmail}` : undefined}
+                          disabled={!customerEmail}
+                        >
+                          Email
+                        </Button>
+                      </Stack>
+                    </Stack>
+                  );
+                })
+              )}
+            </Stack>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+      <Dialog
         open={summaryPreviewOpen}
         onClose={() => setSummaryPreviewOpen(false)}
-        fullWidth
-        maxWidth="lg"
+        fullScreen
         aria-labelledby="counter-summary-preview"
       >
         <DialogTitle
@@ -9291,7 +11248,15 @@ type SummaryRowOptions = {
                 </Stack>
               </Stack>
               <Box sx={{ mt: 'auto' }}>
-                <Button variant="contained" size="large" fullWidth onClick={handleScannerCheckIn}>
+                <Button
+                  variant="contained"
+                  size="large"
+                  fullWidth
+                  onClick={() => {
+                    void handleScannerCheckIn();
+                  }}
+                  disabled={scannerBookingMatch.shouldLetIn <= 0}
+                >
                   Check-In
                 </Button>
               </Box>

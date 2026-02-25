@@ -1,4 +1,4 @@
-import type { BookingStatus } from '../constants/bookings.js';
+import type { BookingAttendanceStatus, BookingStatus } from '../constants/bookings.js';
 
 export type UnifiedProduct = {
   id: string;
@@ -34,10 +34,17 @@ export type UnifiedOrder = {
   womenCount: number;
   customerName: string;
   customerPhone?: string;
+  customerEmail?: string;
   platform: 'ecwid' | 'fareharbor' | 'viator' | 'getyourguide' | 'freetour' | 'xperiencepoland' | 'airbnb' | string;
   pickupDateTime?: string;
   extras?: OrderExtras;
+  attendedTotal?: number | null;
+  attendedExtras?: OrderExtras;
+  remainingTotal?: number;
+  sourceReceivedAt?: string | null;
+  isAfterCutoff?: boolean;
   status: BookingStatus;
+  attendanceStatus?: BookingAttendanceStatus;
   rawData?: unknown;
 };
 
