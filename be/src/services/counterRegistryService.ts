@@ -324,7 +324,7 @@ function resolveBookingNoShowPeopleByAttendance(booking: Booking): number {
   const attendanceStatus = String(booking.attendanceStatus ?? DEFAULT_BOOKING_ATTENDANCE_STATUS)
     .trim()
     .toLowerCase();
-  if (attendanceStatus === 'checked_in_full' || attendanceStatus === 'checked_in_partial') {
+  if (attendanceStatus === 'checked_in_full') {
     return 0;
   }
   if (attendanceStatus === 'no_show') {

@@ -499,7 +499,7 @@ const getOrderNoShowPeopleByAttendance = (order: UnifiedOrder): number => {
   const attendanceStatus = String(order.attendanceStatus ?? '')
     .trim()
     .toLowerCase();
-  if (attendanceStatus === 'checked_in_full' || attendanceStatus === 'checked_in_partial') {
+  if (attendanceStatus === 'checked_in_full') {
     return 0;
   }
   if (attendanceStatus === 'no_show') {
@@ -507,6 +507,23 @@ const getOrderNoShowPeopleByAttendance = (order: UnifiedOrder): number => {
     return quantity;
   }
   return getOrderEntryAllowance(order);
+};
+
+const isOrderPartialNoShow = (order: UnifiedOrder): boolean => {
+  if (order.status === 'no_show') {
+    return false;
+  }
+  const attendanceStatus = String(order.attendanceStatus ?? '')
+    .trim()
+    .toLowerCase();
+  if (attendanceStatus === 'no_show') {
+    return false;
+  }
+  if (getOrderAttendedTotal(order) > 0) {
+    return true;
+  }
+  const attendedExtras = getOrderAttendedExtras(order);
+  return attendedExtras.cocktails > 0 || attendedExtras.tshirts > 0 || attendedExtras.photos > 0;
 };
 
 const normalizePhoneForTel = (value?: string | null): string | null => {
@@ -9616,7 +9633,7 @@ type SummaryRowOptions = {
           case 'attended':
             return getOrderAttendedExtraQty(order, extraKey) > 0;
           case 'no_show':
-            return purchasedQty > 0 && isOrderNoShowForSummary(order);
+            return purchasedQty > 0 && purchasedQty > getOrderAttendedExtraQty(order, extraKey);
           default:
             return false;
         }
@@ -9637,7 +9654,6 @@ type SummaryRowOptions = {
     },
     [
       catalog.addons,
-      isOrderNoShowForSummary,
       onlineChannelIdByPlatform,
       onlineReservationsScoped,
       registry.addons,
@@ -10976,6 +10992,7 @@ type SummaryRowOptions = {
                 const pendingPeople = useAttendanceNoShowSummary
                   ? getOrderNoShowPeopleByAttendance(order)
                   : getOrderEntryAllowance(order);
+                const isPartialNoShow = isOrderPartialNoShow(order);
                 const platformLabel = String(order.platform ?? '').trim();
                 const platformChipLabel = resolvePlatformChipLabel(platformLabel);
                 const platformChipStyle = resolvePlatformChipStyle(platformLabel);
@@ -10996,7 +11013,11 @@ type SummaryRowOptions = {
                       {platformLabel && (
                         <Chip size="small" label={platformChipLabel} sx={{ ...platformChipStyle, fontWeight: 600 }} />
                       )}
-                      <Chip size="small" color="warning" label={`No-show: ${pendingPeople}`} />
+                      <Chip
+                        size="small"
+                        color={isPartialNoShow ? 'info' : 'warning'}
+                        label={`${isPartialNoShow ? 'Partial No-show' : 'No-show'}: ${pendingPeople}`}
+                      />
                     </Stack>
                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={0.75}>
                       <Button
