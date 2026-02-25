@@ -1,4 +1,6 @@
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 import { Op, type Transaction, type WhereOptions } from 'sequelize';
 
 import sequelize from '../config/database.js';
@@ -42,9 +44,14 @@ import {
   toAddonConfig,
 } from './counterMetricUtils.js';
 
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
 const COUNTER_DATE_FORMAT = 'YYYY-MM-DD';
 const DEFAULT_PRODUCT_NAME = 'Pub Crawl';
 const COUNTER_SUMMARY_ATTENDANCE_NOSHOW_FROM_DATE = '2026-02-20';
+const STORE_TIMEZONE = 'Europe/Warsaw';
+const AFTER_CUTOFF_TIME = '21:00:00';
 
 const DEFAULT_CHANNEL_ORDER = [
   'Fareharbor',
@@ -60,6 +67,14 @@ const DEFAULT_CHANNEL_ORDER = [
 ];
 const CHECKIN_ALLOWED_BOOKING_STATUSES = new Set<BookingStatus>(['pending', 'confirmed', 'amended', 'completed']);
 const SUMMARY_NOSHOW_BOOKING_STATUSES = new Set<BookingStatus>([
+  'pending',
+  'confirmed',
+  'amended',
+  'completed',
+  'rebooked',
+  'no_show',
+]);
+const SUMMARY_BOOKED_METRIC_BOOKING_STATUSES = new Set<BookingStatus>([
   'pending',
   'confirmed',
   'amended',
@@ -188,6 +203,69 @@ function deriveBookingPartySize(booking: Booking): number {
     return Math.max(0, Math.round(fromBreakdown));
   }
   return 0;
+}
+
+type BookingExtras = { tshirts: number; cocktails: number; photos: number };
+
+function normalizeBookingExtrasSnapshot(snapshot: unknown): BookingExtras {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return { tshirts: 0, cocktails: 0, photos: 0 };
+  }
+  const extras = (snapshot as { extras?: Partial<BookingExtras> }).extras;
+  if (!extras || typeof extras !== 'object') {
+    return { tshirts: 0, cocktails: 0, photos: 0 };
+  }
+  return {
+    tshirts: Math.max(0, Math.round(Number(extras.tshirts) || 0)),
+    cocktails: Math.max(0, Math.round(Number(extras.cocktails) || 0)),
+    photos: Math.max(0, Math.round(Number(extras.photos) || 0)),
+  };
+}
+
+function isAfterCutoffBySourceReceivedAt(
+  experienceDate: string,
+  sourceReceivedAt: Date | null,
+): boolean {
+  if (!sourceReceivedAt) {
+    return false;
+  }
+  const sourceMoment = dayjs(sourceReceivedAt).tz(STORE_TIMEZONE);
+  if (!sourceMoment.isValid()) {
+    return false;
+  }
+  if (sourceMoment.format(COUNTER_DATE_FORMAT) !== experienceDate) {
+    return false;
+  }
+  const cutoffMoment = dayjs.tz(
+    `${experienceDate} ${AFTER_CUTOFF_TIME}`,
+    'YYYY-MM-DD HH:mm:ss',
+    STORE_TIMEZONE,
+  );
+  if (!cutoffMoment.isValid()) {
+    return false;
+  }
+  return sourceMoment.isAfter(cutoffMoment);
+}
+
+function resolveAddonIdFromConfig(
+  addons: AddonConfig[],
+  extraKey: keyof BookingExtras,
+): number | null {
+  const match = addons.find((addon) => {
+    const key = addon.key.toLowerCase();
+    const name = addon.name.toLowerCase();
+    if (extraKey === 'cocktails') {
+      return key.includes('cocktail') || name.includes('cocktail');
+    }
+    if (extraKey === 'tshirts') {
+      return key.includes('shirt') || key.includes('tshirt') || name.includes('shirt');
+    }
+    if (extraKey === 'photos') {
+      return key.includes('photo') || key.includes('picture') || name.includes('photo') || name.includes('picture');
+    }
+    return false;
+  });
+  return match?.addonId ?? null;
 }
 
 function resolveCheckInAllowanceForBooking(booking: Booking): number {
@@ -702,6 +780,102 @@ export default class CounterRegistryService {
       throw new HttpError(404, 'Counter not found');
     }
 
+    const [channelRecords, addonRecords] = await Promise.all([
+      Channel.findAll({
+        include: [{ model: PaymentMethod, as: 'paymentMethod' }],
+        attributes: ['id', 'name', 'paymentMethodId'],
+      }) as Promise<Array<Channel & { paymentMethod?: PaymentMethod | null }>>,
+      Addon.findAll({
+        where: { isActive: true },
+        attributes: ['id', 'name'],
+        order: [['name', 'ASC']],
+      }),
+    ]);
+
+    const walkInChannelIdSet = new Set<number>();
+    const onlineChannelIdByPlatform = new Map<string, number>();
+    channelRecords.forEach((channel) => {
+      const slug = normalizeChannelSlug(channel.name);
+      if (!slug) {
+        return;
+      }
+      if (slug === 'walkin') {
+        walkInChannelIdSet.add(channel.id);
+        return;
+      }
+      const paymentMethodName = (channel.paymentMethod?.name ?? '').toLowerCase();
+      const isCashChannel = paymentMethodName === 'cash';
+      if (!isCashChannel) {
+        onlineChannelIdByPlatform.set(slug, channel.id);
+      }
+    });
+    const onlineChannelIdSet = new Set<number>(Array.from(onlineChannelIdByPlatform.values()));
+
+    const addonConfigs = addonRecords.map((addon, index) =>
+      toAddonConfig({
+        addonId: addon.id,
+        name: addon.name,
+        maxPerAttendee: null,
+        sortOrder: index,
+      }),
+    );
+    const addonIdByExtraKey: Record<keyof BookingExtras, number | null> = {
+      cocktails: resolveAddonIdFromConfig(addonConfigs, 'cocktails'),
+      tshirts: resolveAddonIdFromConfig(addonConfigs, 'tshirts'),
+      photos: resolveAddonIdFromConfig(addonConfigs, 'photos'),
+    };
+
+    const bookedPeopleByChannelPeriod = new Map<string, number>();
+    const bookedAddonByChannelPeriod = new Map<string, number>();
+    if (counter.productId && onlineChannelIdSet.size > 0) {
+      const bookings = await Booking.findAll({
+        where: {
+          experienceDate: counter.date,
+          productId: counter.productId,
+          status: { [Op.in]: Array.from(SUMMARY_BOOKED_METRIC_BOOKING_STATUSES) },
+        },
+        attributes: [
+          'platform',
+          'sourceReceivedAt',
+          'partySizeTotal',
+          'partySizeAdults',
+          'partySizeChildren',
+          'addonsSnapshot',
+        ],
+      });
+
+      bookings.forEach((booking) => {
+        const platformKey = normalizeChannelSlug(booking.platform);
+        const channelId = onlineChannelIdByPlatform.get(platformKey);
+        if (!channelId) {
+          return;
+        }
+
+        const bookedPeriod: MetricPeriod = isAfterCutoffBySourceReceivedAt(counter.date, booking.sourceReceivedAt)
+          ? 'after_cutoff'
+          : 'before_cutoff';
+        const partySize = deriveBookingPartySize(booking);
+        if (partySize > 0) {
+          const peopleKey = `${channelId}|${bookedPeriod}`;
+          bookedPeopleByChannelPeriod.set(peopleKey, (bookedPeopleByChannelPeriod.get(peopleKey) ?? 0) + partySize);
+        }
+
+        const extras = normalizeBookingExtrasSnapshot(booking.addonsSnapshot ?? undefined);
+        (Object.keys(extras) as Array<keyof BookingExtras>).forEach((extraKey) => {
+          const addonId = addonIdByExtraKey[extraKey];
+          if (!addonId) {
+            return;
+          }
+          const qty = Math.max(0, Math.round(Number(extras[extraKey]) || 0));
+          if (qty <= 0) {
+            return;
+          }
+          const addonKey = `${channelId}|${bookedPeriod}|${addonId}`;
+          bookedAddonByChannelPeriod.set(addonKey, (bookedAddonByChannelPeriod.get(addonKey) ?? 0) + qty);
+        });
+      });
+    }
+
     const job = await sequelize.transaction(async (transaction) => {
       const existingMetrics = await CounterChannelMetric.findAll({
         where: { counterId },
@@ -749,6 +923,147 @@ export default class CounterRegistryService {
         incomingByKey.set(key, { ...row, period: normalizedPeriod });
       }
 
+      if (onlineChannelIdSet.size > 0) {
+        const setBookedMetricFromSource = (
+          channelId: number,
+          kind: MetricKind,
+          addonId: number | null,
+          period: Extract<MetricPeriod, 'before_cutoff' | 'after_cutoff'>,
+          qty: number,
+        ) => {
+          const normalizedQty = Math.max(0, Math.round(Number(qty) || 0));
+          const key = buildMetricKey({
+            channelId,
+            kind,
+            addonId,
+            tallyType: 'booked',
+            period,
+          });
+          const hasExisting = existingByKey.has(key);
+          const hasIncoming = incomingByKey.has(key);
+          if (normalizedQty <= 0 && !hasExisting && !hasIncoming) {
+            return;
+          }
+          incomingByKey.set(key, {
+            channelId,
+            kind,
+            addonId,
+            tallyType: 'booked',
+            period,
+            qty: normalizedQty,
+          });
+        };
+
+        onlineChannelIdSet.forEach((channelId) => {
+          const beforePeopleQty = bookedPeopleByChannelPeriod.get(`${channelId}|before_cutoff`) ?? 0;
+          const afterPeopleQty = bookedPeopleByChannelPeriod.get(`${channelId}|after_cutoff`) ?? 0;
+          setBookedMetricFromSource(channelId, 'people', null, 'before_cutoff', beforePeopleQty);
+          setBookedMetricFromSource(channelId, 'people', null, 'after_cutoff', afterPeopleQty);
+
+          const addonIds = new Set<number>();
+          (Object.values(addonIdByExtraKey) as Array<number | null>).forEach((addonId) => {
+            if (addonId != null) {
+              addonIds.add(addonId);
+            }
+          });
+          incomingByKey.forEach((incomingMetric) => {
+            if (
+              incomingMetric.channelId === channelId &&
+              incomingMetric.kind === 'addon' &&
+              incomingMetric.tallyType === 'booked' &&
+              incomingMetric.addonId != null
+            ) {
+              addonIds.add(incomingMetric.addonId);
+            }
+          });
+          existingByKey.forEach((existingMetric) => {
+            if (
+              existingMetric.channelId === channelId &&
+              existingMetric.kind === 'addon' &&
+              existingMetric.tallyType === 'booked' &&
+              existingMetric.addonId != null
+            ) {
+              addonIds.add(existingMetric.addonId);
+            }
+          });
+
+          addonIds.forEach((addonId) => {
+            const beforeAddonQty = bookedAddonByChannelPeriod.get(`${channelId}|before_cutoff|${addonId}`) ?? 0;
+            const afterAddonQty = bookedAddonByChannelPeriod.get(`${channelId}|after_cutoff|${addonId}`) ?? 0;
+            setBookedMetricFromSource(channelId, 'addon', addonId, 'before_cutoff', beforeAddonQty);
+            setBookedMetricFromSource(channelId, 'addon', addonId, 'after_cutoff', afterAddonQty);
+          });
+        });
+      }
+
+      if (walkInChannelIdSet.size > 0) {
+        const resolveMetricQty = (
+          channelId: number,
+          kind: MetricKind,
+          addonId: number | null,
+          tallyType: MetricTallyType,
+          period: MetricPeriod,
+        ): number => {
+          const key = buildMetricKey({ channelId, kind, addonId, tallyType, period });
+          const incoming = incomingByKey.get(key);
+          if (incoming) {
+            return Math.max(0, Number(incoming.qty) || 0);
+          }
+          const current = existingByKey.get(key);
+          return Math.max(0, Number(current?.qty) || 0);
+        };
+
+        const ensureAfterCutoffMetric = (
+          channelId: number,
+          kind: MetricKind,
+          addonId: number | null,
+        ) => {
+          const bookedBeforeQty = resolveMetricQty(channelId, kind, addonId, 'booked', 'before_cutoff');
+          const attendedQty = resolveMetricQty(channelId, kind, addonId, 'attended', null);
+          const desiredBookedAfterQty = Math.max(attendedQty - bookedBeforeQty, 0);
+          const afterKey = buildMetricKey({
+            channelId,
+            kind,
+            addonId,
+            tallyType: 'booked',
+            period: 'after_cutoff',
+          });
+
+          const hasExistingAfter = existingByKey.has(afterKey);
+          const existingIncomingAfter = incomingByKey.get(afterKey);
+          if (desiredBookedAfterQty <= 0 && !hasExistingAfter && !existingIncomingAfter) {
+            return;
+          }
+
+          incomingByKey.set(afterKey, {
+            channelId,
+            kind,
+            addonId,
+            tallyType: 'booked',
+            period: 'after_cutoff',
+            qty: desiredBookedAfterQty,
+          });
+        };
+
+        walkInChannelIdSet.forEach((channelId) => {
+          ensureAfterCutoffMetric(channelId, 'people', null);
+          const addonIds = new Set<number>();
+          incomingByKey.forEach((row) => {
+            if (row.channelId === channelId && row.kind === 'addon' && row.addonId != null) {
+              addonIds.add(row.addonId);
+            }
+          });
+          existingByKey.forEach((metric) => {
+            if (metric.channelId === channelId && metric.kind === 'addon' && metric.addonId != null) {
+              addonIds.add(metric.addonId);
+            }
+          });
+          addonIds.forEach((addonId) => {
+            ensureAfterCutoffMetric(channelId, 'addon', addonId);
+          });
+        });
+      }
+
       const rowsToCreate: NormalizedMetric[] = [];
       const rowsToUpdate: Array<{ metric: CounterChannelMetric; row: NormalizedMetric }> = [];
       const rowsToDelete: CounterChannelMetric[] = [];
@@ -756,7 +1071,10 @@ export default class CounterRegistryService {
       incomingByKey.forEach((row: NormalizedMetric, key) => {
         const current = existingByKey.get(key);
         if (!current) {
-          rowsToCreate.push(row);
+          const nextQty = Math.max(0, Number(row.qty) || 0);
+          if (nextQty > 0) {
+            rowsToCreate.push({ ...row, qty: nextQty });
+          }
           return;
         }
 
