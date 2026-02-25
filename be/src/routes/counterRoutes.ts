@@ -9,6 +9,7 @@ import {
   deleteCounter,
   updateCounterStaff,
   commitCounterRegistry,
+  finalizeCounterReservations,
   upsertCounterMetrics,
 } from '../controllers/counterController.js';
 
@@ -23,6 +24,7 @@ router.patch('/:id', authMiddleware, updateCounter);
 router.delete('/:id', authMiddleware, deleteCounter);
 router.patch('/:id/staff', authMiddleware, updateCounterStaff);
 router.post('/:id/commit', authMiddleware, commitCounterRegistry);
+router.post('/:id/finalize-reservations', authMiddleware, finalizeCounterReservations);
 router.put('/:id/metrics', authMiddleware, upsertCounterMetrics);
 
 export default router;

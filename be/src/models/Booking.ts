@@ -11,8 +11,10 @@ import {
   BelongsTo,
 } from 'sequelize-typescript';
 import {
+  BOOKING_ATTENDANCE_STATUSES,
   BOOKING_PAYMENT_STATUSES,
   BOOKING_STATUSES,
+  type BookingAttendanceStatus,
   type BookingPaymentStatus,
   type BookingPlatform,
   type BookingStatus,
@@ -227,6 +229,36 @@ export default class Booking extends Model<Booking> {
   })
   declare attendedTotal: number | null;
 
+  @AllowNull(false)
+  @Default('pending')
+  @Column({
+    field: 'attendance_status',
+    type: DataType.ENUM(...BOOKING_ATTENDANCE_STATUSES),
+  })
+  declare attendanceStatus: BookingAttendanceStatus;
+
+  @AllowNull(true)
+  @Column({
+    field: 'attended_addons_snapshot',
+    type: DataType.JSONB,
+  })
+  declare attendedAddonsSnapshot: Record<string, unknown> | null;
+
+  @AllowNull(true)
+  @Column({
+    field: 'checked_in_at',
+    type: DataType.DATE,
+  })
+  declare checkedInAt: Date | null;
+
+  @ForeignKey(() => User)
+  @AllowNull(true)
+  @Column({
+    field: 'checked_in_by',
+    type: DataType.INTEGER,
+  })
+  declare checkedInBy: number | null;
+
   @AllowNull(true)
   @Column({
     field: 'currency',
@@ -373,5 +405,8 @@ export default class Booking extends Model<Booking> {
 
   @BelongsTo(() => User, { foreignKey: 'updated_by', as: 'updatedByUser' })
   declare updatedByUser?: User;
+
+  @BelongsTo(() => User, { foreignKey: 'checked_in_by', as: 'checkedInByUser' })
+  declare checkedInByUser?: User;
 
 }

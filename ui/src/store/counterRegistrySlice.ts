@@ -82,6 +82,24 @@ type CommitCounterRegistryArgs = {
   notes?: string | null;
 };
 
+type AttendanceUpdateInput = {
+  bookingId: number;
+  attendedTotal?: number;
+  attendedExtras?: {
+    tshirts?: number;
+    cocktails?: number;
+    photos?: number;
+  };
+};
+
+type FinalizeCounterReservationsArgs = {
+  counterId: number;
+  attendanceUpdates?: AttendanceUpdateInput[];
+  metrics?: CommitMetricInput[];
+  status?: CounterStatus;
+  notes?: string | null;
+};
+
 type SubmitCounterSetupArgs = {
   date: string;
   userId: number;
@@ -343,6 +361,31 @@ export const commitCounterRegistry = createAsyncThunk<
   }
 });
 
+export const finalizeCounterReservations = createAsyncThunk<
+  CounterRegistryPayload,
+  FinalizeCounterReservationsArgs,
+  { rejectValue: CounterRegistryError }
+>(
+  'counterRegistry/finalizeReservations',
+  async ({ counterId, attendanceUpdates, metrics, status, notes }, { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.post<CounterRegistryPayload>(
+        `/counters/${counterId}/finalize-reservations?format=registry`,
+        {
+          ...(attendanceUpdates && attendanceUpdates.length > 0 ? { attendanceUpdates } : {}),
+          ...(metrics ? { metrics } : {}),
+          ...(status ? { status } : {}),
+          ...(notes !== undefined ? { notes } : {}),
+        },
+        withCredentialsConfig,
+      );
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(buildRejectValue(error, 'Failed to finalize reservations'));
+    }
+  },
+);
+
 export const flushDirtyMetrics = createAsyncThunk<
   FlushMetricsResult,
   void,
@@ -585,6 +628,18 @@ const counterRegistrySlice = createSlice({
       .addCase(commitCounterRegistry.rejected, (state, action) => {
         state.savingMetrics = false;
         state.error = action.payload?.message ?? action.error.message ?? 'Failed to save counter';
+      })
+      .addCase(finalizeCounterReservations.pending, (state) => {
+        state.savingMetrics = true;
+        state.error = null;
+      })
+      .addCase(finalizeCounterReservations.fulfilled, (state, action) => {
+        state.savingMetrics = false;
+        ingestPayload(state, action.payload);
+      })
+      .addCase(finalizeCounterReservations.rejected, (state, action) => {
+        state.savingMetrics = false;
+        state.error = action.payload?.message ?? action.error.message ?? 'Failed to finalize reservations';
       })
       .addCase(flushDirtyMetrics.pending, (state) => {
         state.savingMetrics = true;

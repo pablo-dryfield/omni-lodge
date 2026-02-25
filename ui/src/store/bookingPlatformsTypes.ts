@@ -30,6 +30,12 @@ export type BookingStatus =
   | 'no_show'
   | 'unknown';
 
+export type BookingAttendanceStatus =
+  | 'pending'
+  | 'checked_in_partial'
+  | 'checked_in_full'
+  | 'no_show';
+
 export interface UnifiedOrder {
   id: string;
   platformBookingId: string;
@@ -43,10 +49,17 @@ export interface UnifiedOrder {
   womenCount: number;
   customerName: string;
   customerPhone?: string;
+  customerEmail?: string;
   platform: 'ecwid' | 'viator' | 'getyourguide' | 'fareharbor' | 'freetour' | 'xperiencepoland' | 'airbnb' | string;
   pickupDateTime?: string;
   extras?: OrderExtras;
+  attendedTotal?: number | null;
+  attendedExtras?: OrderExtras;
+  remainingTotal?: number;
+  sourceReceivedAt?: string | null;
+  isAfterCutoff?: boolean;
   status: BookingStatus;
+  attendanceStatus?: BookingAttendanceStatus;
   rawData?: any;
 }
 

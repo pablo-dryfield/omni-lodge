@@ -38,7 +38,12 @@ import type {
   PlatformBreakdownEntry,
 } from '../types/booking.js';
 import { groupOrdersForManifest, transformEcwidOrders } from '../utils/ecwidAdapter.js';
-import { BOOKING_STATUSES } from '../constants/bookings.js';
+import {
+  BOOKING_ATTENDANCE_STATUSES,
+  BOOKING_STATUSES,
+  type BookingAttendanceStatus,
+  type BookingStatus,
+} from '../constants/bookings.js';
 import { getEcwidOrder, updateEcwidOrder, type EcwidExtraField, type EcwidOrder } from '../services/ecwidService.js';
 import { getConfigValue } from '../services/configService.js';
 
@@ -48,6 +53,9 @@ dayjs.extend(timezone);
 const DATE_FORMAT = 'YYYY-MM-DD';
 const DISPLAY_TIMEZONE = 'Europe/Warsaw';
 const STORE_TIMEZONE = 'Europe/Warsaw';
+const AFTER_CUTOFF_TIME = '21:00:00';
+const CHECKIN_ALLOWED_STATUSES = new Set<BookingStatus>(['pending', 'confirmed', 'amended', 'completed']);
+const DEFAULT_ATTENDANCE_STATUS: BookingAttendanceStatus = 'pending';
 
 type RangeBoundary = 'start' | 'end';
 
@@ -59,6 +67,36 @@ type QueryParams = {
   time?: string;
   search?: string;
 };
+
+type UpdateBookingAttendanceBody = {
+  attendedTotal?: unknown;
+  attendedExtras?: Partial<Record<keyof OrderExtras, unknown>>;
+};
+
+type UpdateBulkBookingAttendanceBody = {
+  updates?: Array<
+    {
+      bookingId?: unknown;
+    } & UpdateBookingAttendanceBody
+  >;
+};
+
+type BookingAttendanceUpdateResponse = {
+  bookingId: number;
+  allowance: number;
+  attendedTotal: number;
+  attendedExtras: OrderExtras;
+  attendanceStatus: BookingAttendanceStatus;
+  remainingTotal: number;
+  order: UnifiedOrder | null;
+};
+
+type BookingAttendanceBulkUpdateResult =
+  | BookingAttendanceUpdateResponse
+  | {
+      bookingId: number | null;
+      error: string;
+    };
 
 type AmendEcwidRequestBody = {
   pickupDate?: string;
@@ -640,6 +678,144 @@ const normalizeExtras = (snapshot: unknown): OrderExtras => {
   };
 };
 
+const normalizeAttendedExtras = (snapshot: unknown): OrderExtras => {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return { tshirts: 0, cocktails: 0, photos: 0 };
+  }
+  return {
+    tshirts: Math.max(0, Math.round(Number((snapshot as Record<string, unknown>).tshirts) || 0)),
+    cocktails: Math.max(0, Math.round(Number((snapshot as Record<string, unknown>).cocktails) || 0)),
+    photos: Math.max(0, Math.round(Number((snapshot as Record<string, unknown>).photos) || 0)),
+  };
+};
+
+const deriveBookingPartySize = (booking: Booking): number => {
+  const fromTotal = Number(booking.partySizeTotal);
+  if (Number.isFinite(fromTotal) && fromTotal > 0) {
+    return Math.max(0, Math.round(fromTotal));
+  }
+  const fromBreakdown = Number(booking.partySizeAdults ?? 0) + Number(booking.partySizeChildren ?? 0);
+  if (Number.isFinite(fromBreakdown) && fromBreakdown > 0) {
+    return Math.max(0, Math.round(fromBreakdown));
+  }
+  return 0;
+};
+
+const resolveCheckInAllowance = (booking: Booking): number =>
+  CHECKIN_ALLOWED_STATUSES.has(booking.status) ? deriveBookingPartySize(booking) : 0;
+
+const normalizeAttendanceStatus = (value: unknown): BookingAttendanceStatus => {
+  if (typeof value === 'string' && BOOKING_ATTENDANCE_STATUSES.includes(value as BookingAttendanceStatus)) {
+    return value as BookingAttendanceStatus;
+  }
+  return DEFAULT_ATTENDANCE_STATUS;
+};
+
+const resolveAttendanceStatus = (
+  booking: Booking,
+  attendedTotal: number,
+  hasAttendedExtrasValue: boolean,
+  options: { markNoShowWhenAbsent?: boolean } = {},
+): BookingAttendanceStatus => {
+  const allowance = resolveCheckInAllowance(booking);
+  if (allowance <= 0) {
+    return DEFAULT_ATTENDANCE_STATUS;
+  }
+  const normalizedAttendedTotal = clampInt(attendedTotal, 0, allowance);
+  if (normalizedAttendedTotal >= allowance) {
+    return 'checked_in_full';
+  }
+  if (normalizedAttendedTotal > 0 || hasAttendedExtrasValue) {
+    return 'checked_in_partial';
+  }
+  if (options.markNoShowWhenAbsent) {
+    return 'no_show';
+  }
+  return DEFAULT_ATTENDANCE_STATUS;
+};
+
+const clampInt = (value: number, min: number, max: number): number => {
+  const rounded = Math.round(value);
+  if (!Number.isFinite(rounded)) {
+    return min;
+  }
+  return Math.min(Math.max(rounded, min), max);
+};
+
+const applyBookingAttendanceUpdate = async (
+  booking: Booking,
+  payload: UpdateBookingAttendanceBody,
+  actorId: number | null | undefined,
+): Promise<BookingAttendanceUpdateResponse> => {
+  const hasAttendedTotal = Object.prototype.hasOwnProperty.call(payload, 'attendedTotal');
+  const hasAttendedExtras = Object.prototype.hasOwnProperty.call(payload, 'attendedExtras');
+
+  if (!hasAttendedTotal && !hasAttendedExtras) {
+    throw new HttpError(400, 'attendedTotal or attendedExtras must be provided');
+  }
+
+  const allowance = resolveCheckInAllowance(booking);
+
+  const currentAttended = Number(booking.attendedTotal ?? 0);
+  let nextAttendedTotal = Number.isFinite(currentAttended) ? Math.max(0, Math.round(currentAttended)) : 0;
+  if (hasAttendedTotal) {
+    const parsed = Number(payload.attendedTotal);
+    if (!Number.isFinite(parsed)) {
+      throw new HttpError(400, 'attendedTotal must be a number');
+    }
+    nextAttendedTotal = clampInt(parsed, 0, allowance);
+  } else {
+    nextAttendedTotal = clampInt(nextAttendedTotal, 0, allowance);
+  }
+
+  const purchasedExtras = normalizeExtras(booking.addonsSnapshot ?? undefined);
+  const nextAttendedExtras = normalizeAttendedExtras(booking.attendedAddonsSnapshot ?? undefined);
+  if (hasAttendedExtras) {
+    const rawExtras = payload.attendedExtras;
+    if (!rawExtras || typeof rawExtras !== 'object') {
+      throw new HttpError(400, 'attendedExtras must be an object');
+    }
+    const rawEntries = rawExtras as Record<string, unknown>;
+    for (const key of ['tshirts', 'cocktails', 'photos'] as const) {
+      if (!Object.prototype.hasOwnProperty.call(rawEntries, key)) {
+        continue;
+      }
+      const parsed = Number(rawEntries[key]);
+      if (!Number.isFinite(parsed)) {
+        throw new HttpError(400, `attendedExtras.${key} must be a number`);
+      }
+      const purchased = Math.max(0, Math.round(Number(purchasedExtras[key]) || 0));
+      nextAttendedExtras[key] = clampInt(parsed, 0, purchased);
+    }
+  }
+
+  booking.attendedTotal = nextAttendedTotal;
+  const hasAttendedExtrasValue =
+    nextAttendedExtras.tshirts > 0 ||
+    nextAttendedExtras.cocktails > 0 ||
+    nextAttendedExtras.photos > 0;
+  booking.attendedAddonsSnapshot = hasAttendedExtrasValue ? nextAttendedExtras : null;
+  const nextAttendanceStatus = resolveAttendanceStatus(booking, nextAttendedTotal, hasAttendedExtrasValue);
+  booking.attendanceStatus = nextAttendanceStatus;
+
+  const hasAttendance = nextAttendanceStatus === 'checked_in_full' || nextAttendanceStatus === 'checked_in_partial';
+  booking.checkedInAt = hasAttendance ? new Date() : null;
+  booking.checkedInBy = hasAttendance ? (actorId ?? booking.checkedInBy ?? null) : null;
+  booking.updatedBy = actorId ?? booking.updatedBy;
+
+  await booking.save();
+
+  return {
+    bookingId: booking.id,
+    allowance,
+    attendedTotal: nextAttendedTotal,
+    attendedExtras: nextAttendedExtras,
+    attendanceStatus: nextAttendanceStatus,
+    remainingTotal: Math.max(allowance - nextAttendedTotal, 0),
+    order: bookingToUnifiedOrder(booking),
+  };
+};
+
 const coerceCount = (value: unknown): number | null => {
   if (value === null || value === undefined) {
     return null;
@@ -668,6 +844,28 @@ const extractPartyBreakdown = (
     men: coerceCount(breakdown.men),
     women: coerceCount(breakdown.women),
   };
+};
+
+const isAfterCutoffBySourceReceivedAt = (experienceDate: string, sourceReceivedAt: Date | null): boolean => {
+  if (!sourceReceivedAt) {
+    return false;
+  }
+  const sourceMoment = dayjs(sourceReceivedAt).tz(STORE_TIMEZONE);
+  if (!sourceMoment.isValid()) {
+    return false;
+  }
+  if (sourceMoment.format(DATE_FORMAT) !== experienceDate) {
+    return false;
+  }
+  const cutoffMoment = dayjs.tz(
+    `${experienceDate} ${AFTER_CUTOFF_TIME}`,
+    'YYYY-MM-DD HH:mm:ss',
+    STORE_TIMEZONE,
+  );
+  if (!cutoffMoment.isValid()) {
+    return false;
+  }
+  return sourceMoment.isAfter(cutoffMoment);
 };
 
 const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
@@ -746,6 +944,16 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
     booking.status === 'rebooked'
       ? 0
       : fallbackTotal ?? (combinedCount > 0 ? combinedCount : (booking.partySizeAdults ?? 0));
+  const normalizedQuantity = Math.max(0, Math.round(Number(quantity) || 0));
+  const rawAttendedTotal = Number(booking.attendedTotal ?? 0);
+  const normalizedAttendedTotal = Number.isFinite(rawAttendedTotal)
+    ? Math.max(0, Math.round(rawAttendedTotal))
+    : 0;
+  const attendedTotal = Math.min(normalizedAttendedTotal, normalizedQuantity);
+  const remainingTotal = Math.max(resolveCheckInAllowance(booking) - attendedTotal, 0);
+  const attendedExtras = normalizeAttendedExtras(booking.attendedAddonsSnapshot ?? undefined);
+  const sourceReceivedAtIso = booking.sourceReceivedAt ? dayjs(booking.sourceReceivedAt).toISOString() : null;
+  const isAfterCutoff = isAfterCutoffBySourceReceivedAt(experienceDate, booking.sourceReceivedAt ?? null);
 
   return {
     id: String(booking.id),
@@ -755,15 +963,22 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
     productName: displayProductName,
     date: experienceDate,
     timeslot,
-    quantity,
+    quantity: normalizedQuantity,
     menCount,
     womenCount,
     customerName: buildCustomerName(booking),
     customerPhone: booking.guestPhone ?? undefined,
+    customerEmail: booking.guestEmail ?? undefined,
     platform: booking.platform,
     pickupDateTime: pickupMomentUtc?.isValid() ? pickupMomentUtc.toISOString() : undefined,
     extras,
+    attendedTotal,
+    attendedExtras,
+    remainingTotal,
+    sourceReceivedAt: sourceReceivedAtIso,
+    isAfterCutoff,
     status: booking.status,
+    attendanceStatus: normalizeAttendanceStatus(booking.attendanceStatus),
     rawData: {
       bookingId: booking.id,
       platform: booking.platform,
@@ -1269,6 +1484,7 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
       extras: OrderExtras;
       platformBreakdown: PlatformBreakdownEntry[];
       statusCounts: Record<string, number>;
+      attendanceStatusCounts: Record<string, number>;
     }>(
       (acc, group: ManifestGroup) => {
         acc.totalPeople += group.totalPeople;
@@ -1292,6 +1508,8 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
         });
         group.orders.forEach((order) => {
           acc.statusCounts[order.status] = (acc.statusCounts[order.status] ?? 0) + 1;
+          const attendanceStatus = normalizeAttendanceStatus(order.attendanceStatus);
+          acc.attendanceStatusCounts[attendanceStatus] = (acc.attendanceStatusCounts[attendanceStatus] ?? 0) + 1;
         });
         return acc;
       },
@@ -1303,6 +1521,7 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
         extras: { tshirts: 0, cocktails: 0, photos: 0 },
         platformBreakdown: [],
         statusCounts: {},
+        attendanceStatusCounts: {},
       },
     );
 
@@ -1310,6 +1529,11 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
     for (const status of BOOKING_STATUSES) {
       if (!(status in summary.statusCounts)) {
         summary.statusCounts[status] = 0;
+      }
+    }
+    for (const attendanceStatus of BOOKING_ATTENDANCE_STATUSES) {
+      if (!(attendanceStatus in summary.attendanceStatusCounts)) {
+        summary.attendanceStatusCounts[attendanceStatus] = 0;
       }
     }
 
@@ -1326,6 +1550,114 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to build manifest';
+    res.status(500).json({ message });
+  }
+};
+
+export const updateBookingAttendance = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const payload = (req.body ?? {}) as UpdateBookingAttendanceBody;
+
+    const booking = await Booking.findByPk(bookingIdParam, {
+      include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
+    });
+    if (!booking) {
+      res.status(404).json({ message: 'Booking not found' });
+      return;
+    }
+
+    const result = await applyBookingAttendanceUpdate(booking, payload, req.authContext?.id ?? null);
+    res.status(200).json(result);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json({ message: error.message });
+      return;
+    }
+    const message = error instanceof Error ? error.message : 'Failed to update booking attendance';
+    res.status(500).json({ message });
+  }
+};
+
+export const updateBulkBookingAttendance = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const body = (req.body ?? {}) as UpdateBulkBookingAttendanceBody;
+    const updates = Array.isArray(body.updates) ? body.updates : [];
+    if (updates.length === 0) {
+      res.status(400).json({ message: 'updates must be a non-empty array' });
+      return;
+    }
+
+    if (updates.length > 500) {
+      res.status(400).json({ message: 'updates must contain at most 500 rows' });
+      return;
+    }
+
+    const bookingIds = updates
+      .map((row) => Number.parseInt(String(row?.bookingId ?? ''), 10))
+      .filter((id) => Number.isInteger(id) && id > 0);
+    const uniqueBookingIds = Array.from(new Set<number>(bookingIds));
+
+    const bookings = uniqueBookingIds.length
+      ? await Booking.findAll({
+          where: { id: { [Op.in]: uniqueBookingIds } },
+          include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
+        })
+      : [];
+    const bookingById = new Map<number, Booking>();
+    bookings.forEach((booking) => bookingById.set(booking.id, booking));
+
+    const results: BookingAttendanceBulkUpdateResult[] = [];
+
+    for (const row of updates) {
+      const bookingId = Number.parseInt(String(row?.bookingId ?? ''), 10);
+      if (!Number.isInteger(bookingId) || bookingId <= 0) {
+        results.push({ bookingId: null, error: 'A valid booking ID must be provided' });
+        continue;
+      }
+
+      const booking = bookingById.get(bookingId);
+      if (!booking) {
+        results.push({ bookingId, error: 'Booking not found' });
+        continue;
+      }
+
+      try {
+        const result = await applyBookingAttendanceUpdate(
+          booking,
+          {
+            attendedTotal: row.attendedTotal,
+            attendedExtras: row.attendedExtras,
+          },
+          req.authContext?.id ?? null,
+        );
+        results.push(result);
+      } catch (error) {
+        const message =
+          error instanceof HttpError
+            ? error.message
+            : error instanceof Error
+              ? error.message
+              : 'Failed to update booking attendance';
+        results.push({ bookingId, error: message });
+      }
+    }
+
+    const failed = results.filter((result) => 'error' in result).length;
+    const updated = results.length - failed;
+
+    res.status(200).json({
+      updated,
+      failed,
+      results,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to update booking attendance';
     res.status(500).json({ message });
   }
 };

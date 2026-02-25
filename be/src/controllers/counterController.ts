@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { Op } from 'sequelize';
 import { DataType } from 'sequelize-typescript';
 import CounterRegistryService, {
   type CounterRegistryPayload,
@@ -13,12 +14,28 @@ import CounterUser from '../models/CounterUser.js';
 import User from '../models/User.js';
 import Product from '../models/Product.js';
 import CounterChannelMetric from '../models/CounterChannelMetric.js';
+import Booking from '../models/Booking.js';
 import NightReport from '../models/NightReport.js';
 import NightReportPhoto from '../models/NightReportPhoto.js';
 import NightReportVenue from '../models/NightReportVenue.js';
 import { deleteNightReportPhoto as removeNightReportFile } from '../services/nightReportStorageService.js';
+import { type BookingAttendanceStatus, type BookingStatus } from '../constants/bookings.js';
 
 const REGISTRY_FORMAT = 'registry';
+const DEFAULT_ATTENDANCE_STATUS: BookingAttendanceStatus = 'pending';
+const CHECKIN_ALLOWED_STATUSES = new Set<BookingStatus>(['pending', 'confirmed', 'amended', 'completed']);
+
+type BookingAttendanceExtras = {
+  tshirts: number;
+  cocktails: number;
+  photos: number;
+};
+
+type AttendanceUpdateInput = {
+  bookingId: number;
+  attendedTotal?: number;
+  attendedExtras?: Partial<BookingAttendanceExtras>;
+};
 
 function requireActorId(req: AuthenticatedRequest): number {
   const actorId = req.authContext?.id;
@@ -86,6 +103,191 @@ function parseBodyAsArray(payload: unknown): MetricInput[] {
       qty: Number(typed.qty),
     } satisfies MetricInput;
   });
+}
+
+function normalizeBookingExtras(snapshot: unknown): BookingAttendanceExtras {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return { tshirts: 0, cocktails: 0, photos: 0 };
+  }
+  const extras = (snapshot as { extras?: Partial<BookingAttendanceExtras> }).extras;
+  if (!extras) {
+    return { tshirts: 0, cocktails: 0, photos: 0 };
+  }
+  return {
+    tshirts: Number(extras.tshirts) || 0,
+    cocktails: Number(extras.cocktails) || 0,
+    photos: Number(extras.photos) || 0,
+  };
+}
+
+function normalizeAttendedExtras(snapshot: unknown): BookingAttendanceExtras {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return { tshirts: 0, cocktails: 0, photos: 0 };
+  }
+  return {
+    tshirts: Math.max(0, Math.round(Number((snapshot as Record<string, unknown>).tshirts) || 0)),
+    cocktails: Math.max(0, Math.round(Number((snapshot as Record<string, unknown>).cocktails) || 0)),
+    photos: Math.max(0, Math.round(Number((snapshot as Record<string, unknown>).photos) || 0)),
+  };
+}
+
+function clampInt(value: number, min: number, max: number): number {
+  const rounded = Math.round(value);
+  if (!Number.isFinite(rounded)) {
+    return min;
+  }
+  return Math.min(Math.max(rounded, min), max);
+}
+
+function deriveBookingPartySize(booking: Booking): number {
+  const fromTotal = Number(booking.partySizeTotal);
+  if (Number.isFinite(fromTotal) && fromTotal > 0) {
+    return Math.max(0, Math.round(fromTotal));
+  }
+  const fromBreakdown = Number(booking.partySizeAdults ?? 0) + Number(booking.partySizeChildren ?? 0);
+  if (Number.isFinite(fromBreakdown) && fromBreakdown > 0) {
+    return Math.max(0, Math.round(fromBreakdown));
+  }
+  return 0;
+}
+
+function resolveCheckInAllowance(booking: Booking): number {
+  return CHECKIN_ALLOWED_STATUSES.has(booking.status as BookingStatus) ? deriveBookingPartySize(booking) : 0;
+}
+
+function resolveAttendanceStatus(
+  booking: Booking,
+  attendedTotal: number,
+  hasAttendedExtrasValue: boolean,
+  options: { markNoShowWhenAbsent?: boolean } = {},
+): BookingAttendanceStatus {
+  const allowance = resolveCheckInAllowance(booking);
+  if (allowance <= 0) {
+    return DEFAULT_ATTENDANCE_STATUS;
+  }
+  const normalizedAttendedTotal = clampInt(attendedTotal, 0, allowance);
+  if (normalizedAttendedTotal >= allowance) {
+    return 'checked_in_full';
+  }
+  if (normalizedAttendedTotal > 0 || hasAttendedExtrasValue) {
+    return 'checked_in_partial';
+  }
+  if (options.markNoShowWhenAbsent) {
+    return 'no_show';
+  }
+  return DEFAULT_ATTENDANCE_STATUS;
+}
+
+function parseAttendanceUpdates(payload: unknown): AttendanceUpdateInput[] {
+  if (payload === undefined || payload === null) {
+    return [];
+  }
+  if (!Array.isArray(payload)) {
+    throw new HttpError(400, 'attendanceUpdates must be an array');
+  }
+  if (payload.length > 500) {
+    throw new HttpError(400, 'attendanceUpdates must contain at most 500 rows');
+  }
+
+  return payload.map((item) => {
+    const typed = (item ?? {}) as {
+      bookingId?: unknown;
+      attendedTotal?: unknown;
+      attendedExtras?: unknown;
+    };
+    const bookingId = Number(typed.bookingId);
+    if (!Number.isInteger(bookingId) || bookingId <= 0) {
+      throw new HttpError(400, 'attendanceUpdates[].bookingId must be a positive integer');
+    }
+
+    const hasAttendedTotal = Object.prototype.hasOwnProperty.call(typed, 'attendedTotal');
+    const hasAttendedExtras = Object.prototype.hasOwnProperty.call(typed, 'attendedExtras');
+    if (!hasAttendedTotal && !hasAttendedExtras) {
+      throw new HttpError(
+        400,
+        'Each attendance update must include attendedTotal or attendedExtras',
+      );
+    }
+
+    const update: AttendanceUpdateInput = { bookingId };
+
+    if (hasAttendedTotal) {
+      const parsed = Number(typed.attendedTotal);
+      if (!Number.isFinite(parsed)) {
+        throw new HttpError(400, 'attendanceUpdates[].attendedTotal must be a number');
+      }
+      update.attendedTotal = parsed;
+    }
+
+    if (hasAttendedExtras) {
+      if (!typed.attendedExtras || typeof typed.attendedExtras !== 'object') {
+        throw new HttpError(400, 'attendanceUpdates[].attendedExtras must be an object');
+      }
+      const extrasInput = typed.attendedExtras as Record<string, unknown>;
+      const nextExtras: Partial<BookingAttendanceExtras> = {};
+      (['tshirts', 'cocktails', 'photos'] as const).forEach((key) => {
+        if (!Object.prototype.hasOwnProperty.call(extrasInput, key)) {
+          return;
+        }
+        const parsed = Number(extrasInput[key]);
+        if (!Number.isFinite(parsed)) {
+          throw new HttpError(400, `attendanceUpdates[].attendedExtras.${key} must be a number`);
+        }
+        nextExtras[key] = parsed;
+      });
+      update.attendedExtras = nextExtras;
+    }
+
+    return update;
+  });
+}
+
+async function applyBookingAttendanceUpdate(
+  booking: Booking,
+  update: AttendanceUpdateInput,
+  actorId: number,
+): Promise<void> {
+  const allowance = resolveCheckInAllowance(booking);
+
+  const currentAttended = Number(booking.attendedTotal ?? 0);
+  let nextAttendedTotal = Number.isFinite(currentAttended) ? Math.max(0, Math.round(currentAttended)) : 0;
+  if (update.attendedTotal !== undefined) {
+    nextAttendedTotal = clampInt(Number(update.attendedTotal), 0, allowance);
+  } else {
+    nextAttendedTotal = clampInt(nextAttendedTotal, 0, allowance);
+  }
+
+  const purchasedExtras = normalizeBookingExtras(booking.addonsSnapshot ?? undefined);
+  const nextAttendedExtras = normalizeAttendedExtras(booking.attendedAddonsSnapshot ?? undefined);
+  if (update.attendedExtras) {
+    (['tshirts', 'cocktails', 'photos'] as const).forEach((key) => {
+      if (!Object.prototype.hasOwnProperty.call(update.attendedExtras as object, key)) {
+        return;
+      }
+      const parsed = Number(update.attendedExtras?.[key]);
+      if (!Number.isFinite(parsed)) {
+        throw new HttpError(400, `attendedExtras.${key} must be a number`);
+      }
+      const purchased = Math.max(0, Math.round(Number(purchasedExtras[key]) || 0));
+      nextAttendedExtras[key] = clampInt(parsed, 0, purchased);
+    });
+  }
+
+  booking.attendedTotal = nextAttendedTotal;
+  const hasAttendedExtrasValue =
+    nextAttendedExtras.tshirts > 0 ||
+    nextAttendedExtras.cocktails > 0 ||
+    nextAttendedExtras.photos > 0;
+  booking.attendedAddonsSnapshot = hasAttendedExtrasValue ? nextAttendedExtras : null;
+  const nextAttendanceStatus = resolveAttendanceStatus(booking, nextAttendedTotal, hasAttendedExtrasValue);
+  booking.attendanceStatus = nextAttendanceStatus;
+
+  const hasAttendance = nextAttendanceStatus === 'checked_in_full' || nextAttendanceStatus === 'checked_in_partial';
+  booking.checkedInAt = hasAttendance ? new Date() : null;
+  booking.checkedInBy = hasAttendance ? (actorId ?? booking.checkedInBy ?? null) : null;
+  booking.updatedBy = actorId;
+
+  await booking.save();
 }
 
 function handleError(res: Response, error: unknown): void {
@@ -278,6 +480,15 @@ export const deleteCounter = async (req: AuthenticatedRequest, res: Response): P
     if (!Number.isInteger(counterId) || counterId <= 0) {
       throw new HttpError(400, 'Invalid counter id');
     }
+    const actorId = req.authContext?.id ?? null;
+
+    const counter = await Counter.findByPk(counterId, {
+      attributes: ['id', 'date', 'productId'],
+    });
+    if (!counter) {
+      res.status(404).json([{ message: 'Counter not found' }]);
+      return;
+    }
 
     const sequelize = Counter.sequelize;
     if (!sequelize) {
@@ -295,6 +506,24 @@ export const deleteCounter = async (req: AuthenticatedRequest, res: Response): P
 
     let deleted = 0;
     await sequelize.transaction(async (transaction) => {
+      await Booking.update(
+        {
+          attendedTotal: null,
+          attendanceStatus: DEFAULT_ATTENDANCE_STATUS,
+          attendedAddonsSnapshot: null,
+          checkedInAt: null,
+          checkedInBy: null,
+          updatedBy: actorId,
+        },
+        {
+          where: {
+            experienceDate: counter.date,
+            productId: counter.productId ?? null,
+          },
+          transaction,
+        },
+      );
+
       if (reportIds.length > 0) {
         await NightReportVenue.destroy({ where: { reportId: reportIds }, transaction });
         await NightReportPhoto.destroy({ where: { reportId: reportIds }, transaction });
@@ -449,6 +678,67 @@ export const commitCounterRegistry = async (req: AuthenticatedRequest, res: Resp
     } else {
       payload = await CounterRegistryService.getCounterById(counterId);
     }
+
+    res.status(200).json(payload);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const finalizeCounterReservations = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (resolveFormat(req) !== REGISTRY_FORMAT) {
+      throw new HttpError(400, 'Counter finalization requires registry format');
+    }
+
+    const actorId = requireActorId(req);
+    const counterId = Number(req.params.id);
+    if (!Number.isInteger(counterId) || counterId <= 0) {
+      throw new HttpError(400, 'Invalid counter id');
+    }
+
+    const body = (req.body ?? {}) as {
+      attendanceUpdates?: unknown;
+      metrics?: unknown;
+      status?: string;
+      notes?: string | null;
+    };
+
+    const attendanceUpdates = parseAttendanceUpdates(body.attendanceUpdates);
+    if (attendanceUpdates.length > 0) {
+      const bookingIds = Array.from(new Set(attendanceUpdates.map((row) => row.bookingId)));
+      const bookings = await Booking.findAll({
+        where: { id: { [Op.in]: bookingIds } },
+      });
+      const bookingById = new Map<number, Booking>();
+      bookings.forEach((booking) => bookingById.set(booking.id, booking));
+
+      for (const update of attendanceUpdates) {
+        const booking = bookingById.get(update.bookingId);
+        if (!booking) {
+          throw new HttpError(404, `Booking ${update.bookingId} not found`);
+        }
+        await applyBookingAttendanceUpdate(booking, update, actorId);
+      }
+    }
+
+    if (body.metrics !== undefined) {
+      const rows = parseBodyAsArray(body.metrics);
+      await CounterRegistryService.upsertMetrics(counterId, rows, actorId);
+    }
+
+    const metadataUpdates: { status?: string; notes?: string | null } = {};
+    if (body.status) {
+      metadataUpdates.status = body.status;
+    }
+    if (body.notes !== undefined) {
+      metadataUpdates.notes = body.notes ?? null;
+    }
+
+    const payload =
+      Object.keys(metadataUpdates).length > 0
+        ? await CounterRegistryService.updateCounterMetadata(counterId, metadataUpdates, actorId)
+        : await CounterRegistryService.getCounterById(counterId);
 
     res.status(200).json(payload);
   } catch (error) {
