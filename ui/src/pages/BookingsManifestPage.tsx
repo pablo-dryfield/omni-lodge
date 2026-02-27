@@ -567,6 +567,10 @@ const isEcwidOrder = (order: UnifiedOrder): boolean => {
   return (order.platform ?? '').toLowerCase() === 'ecwid';
 };
 
+const isXperiencePolandOrder = (order: UnifiedOrder): boolean => {
+  return (order.platform ?? '').toLowerCase() === 'xperiencepoland';
+};
+
 const getBookingIdFromOrder = (order: UnifiedOrder): number | null => {
   if (!order || !order.rawData) {
     return null;
@@ -688,6 +692,7 @@ type AmendModalState = {
   opened: boolean;
   order: UnifiedOrder | null;
   bookingId: number | null;
+  mode: "ecwid" | "xperience" | null;
   formDate: Date | null;
   formTime: string;
   submitting: boolean;
@@ -859,6 +864,7 @@ const createDefaultAmendState = (): AmendModalState => ({
   opened: false,
   order: null,
   bookingId: null,
+  mode: null,
   formDate: null,
   formTime: '',
   submitting: false,
@@ -875,6 +881,7 @@ type CancelRefundState = {
   opened: boolean;
   order: UnifiedOrder | null;
   bookingId: number | null;
+  mode: "ecwid_refund" | "xperience_cancel" | null;
   loading: boolean;
   submitting: boolean;
   error: string | null;
@@ -885,6 +892,7 @@ const createDefaultCancelState = (): CancelRefundState => ({
   opened: false,
   order: null,
   bookingId: null,
+  mode: null,
   loading: false,
   submitting: false,
   error: null,
@@ -1083,18 +1091,23 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
   const openAmendModal = (order: UnifiedOrder) => {
     const baseState = createDefaultAmendState();
+    const ecwidOrder = isEcwidOrder(order);
+    const xperienceOrder = isXperiencePolandOrder(order);
     baseState.opened = true;
     baseState.order = order;
     baseState.bookingId = getBookingIdFromOrder(order);
+    baseState.mode = ecwidOrder ? "ecwid" : xperienceOrder ? "xperience" : null;
     baseState.formDate = order.date && dayjs(order.date, DATE_FORMAT, true).isValid()
       ? dayjs(order.date, DATE_FORMAT).toDate()
       : null;
     baseState.formTime = order.timeslot && /^\d{1,2}:\d{2}$/.test(order.timeslot) ? order.timeslot : '';
     if (!baseState.bookingId) {
       baseState.error = "Unable to locate OmniLodge booking reference for this order.";
+    } else if (!baseState.mode) {
+      baseState.error = "Amend is not supported for this platform from the manifest.";
     }
     setAmendState(baseState);
-    if (baseState.bookingId) {
+    if (baseState.bookingId && baseState.mode === "ecwid") {
       setAmendPreview({ status: "loading", data: null, error: null });
       setReconcileState((prev) => ({
         ...prev,
@@ -1169,6 +1182,10 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       setAmendState((prev) => ({ ...prev, error: "Pickup date and time are required." }));
       return;
     }
+    if (!amendState.mode) {
+      setAmendState((prev) => ({ ...prev, error: "Amend is not supported for this platform." }));
+      return;
+    }
     const normalizedTime = normalizeTimeInput(amendState.formTime);
     if (!normalizedTime) {
       setAmendState((prev) => ({ ...prev, error: "Please provide a valid pickup time (HH:mm)." }));
@@ -1176,7 +1193,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
     setAmendState((prev) => ({ ...prev, submitting: true, error: null }));
     try {
-      await axiosInstance.post(`/bookings/${amendState.bookingId}/amend-ecwid`, {
+      const endpoint =
+        amendState.mode === "ecwid"
+          ? `/bookings/${amendState.bookingId}/amend-ecwid`
+          : `/bookings/${amendState.bookingId}/amend-xperience`;
+      await axiosInstance.post(endpoint, {
         pickupDate: dayjs(amendState.formDate).format(DATE_FORMAT),
         pickupTime: normalizedTime,
       });
@@ -1501,17 +1522,23 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
   const openCancelModal = async (order: UnifiedOrder) => {
     const bookingId = getBookingIdFromOrder(order);
+    const ecwidOrder = isEcwidOrder(order);
+    const xperienceOrder = isXperiencePolandOrder(order);
     const baseState = createDefaultCancelState();
     baseState.opened = true;
     baseState.order = order;
     baseState.bookingId = bookingId;
-    baseState.loading = Boolean(bookingId);
+    baseState.mode = ecwidOrder ? "ecwid_refund" : xperienceOrder ? "xperience_cancel" : null;
+    baseState.loading = Boolean(bookingId && ecwidOrder);
     if (!bookingId) {
       baseState.error = "Unable to locate OmniLodge booking reference for this order.";
       baseState.loading = false;
+    } else if (!ecwidOrder && !xperienceOrder) {
+      baseState.error = "Cancellation is not supported for this platform from the manifest.";
+      baseState.loading = false;
     }
     setCancelState(baseState);
-    if (!bookingId) {
+    if (!bookingId || !ecwidOrder) {
       return;
     }
     try {
@@ -1547,7 +1574,13 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
     setCancelState((prev) => ({ ...prev, submitting: true, error: null }));
     try {
-      await axiosInstance.post(`/bookings/${cancelState.bookingId}/cancel-ecwid`);
+      if (cancelState.mode === "ecwid_refund") {
+        await axiosInstance.post(`/bookings/${cancelState.bookingId}/cancel-ecwid`);
+      } else if (cancelState.mode === "xperience_cancel") {
+        await axiosInstance.post(`/bookings/${cancelState.bookingId}/cancel-xperience`);
+      } else {
+        throw new Error("Cancellation mode is not supported.");
+      }
       setCancelState(createDefaultCancelState());
       setReloadToken((token) => token + 1);
     } catch (error) {
@@ -2158,9 +2191,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               const bookingLink =
                                 order.platformBookingUrl ?? getPlatformBookingLink(order.platform, normalizedBookingId ?? order.platformBookingId);
                               const bookingId = getBookingIdFromOrder(order);
-                              const canAmend = isEcwidOrder(order) && Boolean(bookingId);
-                              const canCancel = canAmend && order.status !== "cancelled";
-                              const canPartialRefund = canAmend && order.status !== "cancelled";
+                              const canAmend = (isEcwidOrder(order) || isXperiencePolandOrder(order)) && Boolean(bookingId);
+                              const canCancel = (isEcwidOrder(order) || isXperiencePolandOrder(order)) && Boolean(bookingId) && order.status !== "cancelled";
+                              const canPartialRefund = isEcwidOrder(order) && Boolean(bookingId) && order.status !== "cancelled";
                               const undefinedOrderCount = getUndefinedGenreCount(
                                 order.quantity,
                                 order.menCount,
@@ -2435,9 +2468,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                             const bookingLink =
                               order.platformBookingUrl ?? getPlatformBookingLink(order.platform, normalizedBookingId ?? order.platformBookingId);
                             const bookingId = getBookingIdFromOrder(order);
-                            const canAmend = isEcwidOrder(order) && Boolean(bookingId);
-                            const canCancel = canAmend && order.status !== "cancelled";
-                            const canPartialRefund = canAmend && order.status !== "cancelled";
+                            const canAmend = (isEcwidOrder(order) || isXperiencePolandOrder(order)) && Boolean(bookingId);
+                            const canCancel = (isEcwidOrder(order) || isXperiencePolandOrder(order)) && Boolean(bookingId) && order.status !== "cancelled";
+                            const canPartialRefund = isEcwidOrder(order) && Boolean(bookingId) && order.status !== "cancelled";
                             const undefinedOrderCount = getUndefinedGenreCount(
                               order.quantity,
                               order.menCount,
@@ -2551,27 +2584,35 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         title={
           amendState.order
             ? `Amend booking ${amendState.order.platformBookingId ?? amendState.order.id}`
-            : "Amend Ecwid booking"
+            : amendState.mode === "xperience"
+              ? "Amend XperiencePoland booking"
+              : amendState.mode === "ecwid"
+                ? "Amend Ecwid booking"
+                : "Amend booking"
         }
         size="md"
         centered
       >
         <Stack gap="md">
           <Text size="sm" c="dimmed">
-            Updating the pickup details will sync the change to Ecwid first and then to OmniLodge.
+            {amendState.mode === "ecwid"
+              ? "Updating the pickup details will sync the change to Ecwid first and then to OmniLodge."
+              : amendState.mode === "xperience"
+                ? "Updating the pickup details will update this XperiencePoland booking in OmniLodge."
+                : "Updating the pickup details will update this booking in OmniLodge."}
           </Text>
-          {amendPreview.status === "loading" && (
+          {amendState.mode === "ecwid" && amendPreview.status === "loading" && (
             <Group gap="sm">
               <Loader size="sm" />
               <Text size="sm">Loading Ecwid order details...</Text>
             </Group>
           )}
-          {amendPreview.status === "error" && (
+          {amendState.mode === "ecwid" && amendPreview.status === "error" && (
             <Alert color="red" title="Unable to load Ecwid details">
               {amendPreview.error || "Failed to load Ecwid details."}
             </Alert>
           )}
-          {amendPreview.data && amendPreview.status !== "loading" && amendPreview.status !== "error" && (
+          {amendState.mode === "ecwid" && amendPreview.data && amendPreview.status !== "loading" && amendPreview.status !== "error" && (
             <Stack gap="sm">
               {amendPreview.status === "order_missing" && (
                 <Alert color="red" title="Ecwid order not found">
@@ -2911,22 +2952,24 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         title={
           cancelState.order
             ? `Cancel booking ${cancelState.order.platformBookingId ?? cancelState.order.id}`
-            : "Cancel Ecwid booking"
+            : "Cancel booking"
         }
         size="md"
         centered
       >
         <Stack gap="md">
           <Text size="sm" c="dimmed">
-            We will verify the Stripe transaction before issuing the refund and cancelling the booking.
+            {cancelState.mode === "ecwid_refund"
+              ? "We will verify the Stripe transaction before issuing the refund and cancelling the booking."
+              : "This will cancel the booking in OmniLodge and record a cancellation event."}
           </Text>
-          {cancelState.loading && (
+          {cancelState.loading && cancelState.mode === "ecwid_refund" && (
             <Group gap="sm">
               <Loader size="sm" />
               <Text size="sm">Loading Stripe transaction details...</Text>
             </Group>
           )}
-          {cancelState.preview && (
+          {cancelState.preview && cancelState.mode === "ecwid_refund" && (
             <Stack gap="sm">
               <Table withColumnBorders>
                 <Table.Tbody>
@@ -2984,8 +3027,16 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               )}
             </Stack>
           )}
+          {cancelState.mode === "xperience_cancel" && (
+            <Alert color="blue" title="Direct cancellation">
+              No Stripe refund will be issued from this action.
+            </Alert>
+          )}
           {cancelState.error && (
-            <Alert color="red" title="Unable to load refund details">
+            <Alert
+              color="red"
+              title={cancelState.mode === "ecwid_refund" ? "Unable to load refund details" : "Unable to cancel booking"}
+            >
               {cancelState.error}
             </Alert>
           )}
@@ -2997,9 +3048,18 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               color="red"
               onClick={handleConfirmRefund}
               loading={cancelState.submitting}
-              disabled={cancelState.loading || !cancelState.preview || cancelState.submitting}
+              disabled={
+                cancelState.loading ||
+                cancelState.submitting ||
+                !cancelState.mode ||
+                (cancelState.mode === "ecwid_refund" && !cancelState.preview)
+              }
             >
-              {cancelState.preview?.stripe.fullyRefunded ? "Confirm Cancel" : "Confirm Refund"}
+              {cancelState.mode === "ecwid_refund"
+                ? cancelState.preview?.stripe.fullyRefunded
+                  ? "Confirm Cancel"
+                  : "Confirm Refund"
+                : "Confirm Cancel"}
             </Button>
           </Group>
         </Stack>

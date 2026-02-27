@@ -15,7 +15,9 @@ import {
   reconcileEcwidBooking,
   partialRefundEcwidBooking,
   amendEcwidBooking,
+  amendXperiencePolandBooking,
   cancelEcwidBooking,
+  cancelXperiencePolandBooking,
   getEcwidRefundPreview,
   importEcwidBooking,
   updateBulkBookingAttendance,
@@ -39,9 +41,11 @@ router.get('/:bookingId/details', authMiddleware, getBookingDetails);
 router.get('/:bookingId/amend-ecwid-preview', authMiddleware, getEcwidAmendPreview);
 router.post('/:bookingId/reconcile-ecwid', authMiddleware, reconcileEcwidBooking);
 router.post('/:bookingId/amend-ecwid', authMiddleware, amendEcwidBooking);
+router.post('/:bookingId/amend-xperience', authMiddleware, amendXperiencePolandBooking);
 router.get('/:bookingId/refund-preview', authMiddleware, getEcwidRefundPreview);
 router.get('/:bookingId/partial-refund-preview', authMiddleware, getPartialRefundPreview);
 router.post('/:bookingId/partial-refund', authMiddleware, partialRefundEcwidBooking);
 router.post('/:bookingId/cancel-ecwid', authMiddleware, cancelEcwidBooking);
+router.post('/:bookingId/cancel-xperience', authMiddleware, cancelXperiencePolandBooking);
 
 export default router;
