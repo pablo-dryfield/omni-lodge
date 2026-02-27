@@ -65,6 +65,7 @@ const productIdCache = new Map<string, number | null>();
 const productNameCache = new Map<number, string | null>();
 const PRODUCT_ALIAS_CACHE_TTL_MS = 60 * 1000;
 let productAliasCache: { fetchedAt: number; records: ProductAlias[] } | null = null;
+const AIRBNB_CANCELLATION_PLACEHOLDER_PREFIX = 'airbnb-cancel-';
 
 const normalizeAliasInput = (value: string): string => sanitizeProductSource(value).toLowerCase();
 
@@ -692,6 +693,137 @@ const syncAddons = async (
   }
 };
 
+const isValidDateValue = (value: unknown): value is Date =>
+  value instanceof Date && Number.isFinite(value.valueOf());
+
+const normalizeNameForMatch = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+  return normalized || null;
+};
+
+const isAirbnbCancellationPlaceholderId = (platform: BookingPlatform, platformBookingId: string): boolean =>
+  platform === 'airbnb' && platformBookingId.startsWith(AIRBNB_CANCELLATION_PLACEHOLDER_PREFIX);
+
+const findAirbnbCancellationMatch = async (
+  event: ParsedBookingEvent,
+  transaction: Transaction,
+): Promise<Booking | null> => {
+  if (event.platform !== 'airbnb' || event.status !== 'cancelled') {
+    return null;
+  }
+
+  const fields = event.bookingFields ?? {};
+  const targetFirst = normalizeNameForMatch(fields.guestFirstName ?? null);
+  const targetLast = normalizeNameForMatch(fields.guestLastName ?? null);
+  if (!targetFirst && !targetLast) {
+    return null;
+  }
+
+  const targetPartySize = typeof fields.partySizeTotal === 'number' && Number.isFinite(fields.partySizeTotal)
+    ? fields.partySizeTotal
+    : null;
+  const targetExperienceDate = typeof fields.experienceDate === 'string' && fields.experienceDate.trim().length > 0
+    ? fields.experienceDate.trim()
+    : null;
+  const targetStartAt = isValidDateValue(fields.experienceStartAt) ? fields.experienceStartAt : null;
+
+  if (!targetExperienceDate && !targetStartAt && targetPartySize == null) {
+    return null;
+  }
+
+  const where: Record<string, unknown> = {
+    platform: 'airbnb',
+    status: { [Op.ne]: 'cancelled' },
+  };
+
+  if (targetExperienceDate) {
+    where.experienceDate = targetExperienceDate;
+  }
+  if (targetPartySize != null) {
+    where.partySizeTotal = targetPartySize;
+  }
+  if (targetStartAt) {
+    const rangeMs = 6 * 60 * 60 * 1000;
+    where.experienceStartAt = {
+      [Op.between]: [new Date(targetStartAt.getTime() - rangeMs), new Date(targetStartAt.getTime() + rangeMs)],
+    };
+  }
+
+  const candidates = await Booking.findAll({
+    where,
+    order: [
+      ['statusChangedAt', 'DESC'],
+      ['createdAt', 'DESC'],
+    ],
+    limit: 30,
+    transaction,
+  });
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const scoreCandidate = (candidate: Booking): number => {
+    const candidateFirst = normalizeNameForMatch(candidate.guestFirstName ?? null);
+    const candidateLast = normalizeNameForMatch(candidate.guestLastName ?? null);
+    let score = 0;
+
+    if (targetFirst) {
+      if (candidateFirst === targetFirst) {
+        score += 4;
+      } else {
+        return -1;
+      }
+    }
+    if (targetLast) {
+      if (candidateLast === targetLast) {
+        score += 4;
+      } else {
+        return -1;
+      }
+    }
+
+    if (targetPartySize != null && candidate.partySizeTotal === targetPartySize) {
+      score += 2;
+    }
+    if (targetExperienceDate && candidate.experienceDate === targetExperienceDate) {
+      score += 2;
+    }
+    if (targetStartAt && isValidDateValue(candidate.experienceStartAt)) {
+      const minutesDiff = Math.abs(candidate.experienceStartAt.getTime() - targetStartAt.getTime()) / 60000;
+      if (minutesDiff <= 30) {
+        score += 3;
+      } else if (minutesDiff <= 180) {
+        score += 1;
+      }
+    }
+
+    return score;
+  };
+
+  const scored = candidates
+    .map((candidate) => ({ candidate, score: scoreCandidate(candidate) }))
+    .filter((entry) => entry.score >= 8)
+    .sort((left, right) => right.score - left.score);
+
+  if (scored.length === 0) {
+    return null;
+  }
+  if (scored.length > 1 && scored[0].score === scored[1].score) {
+    return null;
+  }
+
+  return scored[0].candidate;
+};
+
 const applyParsedEvent = async (
   email: BookingEmail,
   event: ParsedBookingEvent,
@@ -715,8 +847,16 @@ const applyParsedEvent = async (
       transaction,
     });
 
+    if (!booking) {
+      booking = await findAirbnbCancellationMatch(event, transaction);
+    }
+
     if (!booking && priorEvent?.bookingId) {
       booking = await Booking.findByPk(priorEvent.bookingId, { transaction });
+    }
+
+    if (!booking && isAirbnbCancellationPlaceholderId(event.platform, event.platformBookingId)) {
+      throw new Error('Unable to match Airbnb cancellation email to an existing booking');
     }
 
     if (!booking) {
@@ -745,7 +885,7 @@ const applyParsedEvent = async (
     if (isOlderEvent) {
       const canApplyOlderEvent = event.eventType === 'created' || event.eventType === 'amended';
       if (!canApplyOlderEvent) {
-        throw new StaleBookingEventError(event.platform, event.platformBookingId, email.messageId);
+        throw new StaleBookingEventError(event.platform, bookingRecord.platformBookingId, email.messageId);
       }
     }
 
@@ -900,11 +1040,33 @@ const applyParsedEvent = async (
     await bookingRecord.save({ transaction });
 
     if (priorEvent) {
+      const priorEventBookingId = priorEvent.bookingId ?? null;
       await BookingAddon.destroy({
         where: { sourceEventId: priorEvent.id },
         transaction,
       });
       await priorEvent.destroy({ transaction });
+
+      if (priorEventBookingId && priorEventBookingId !== bookingRecord.id) {
+        const remainingEvents = await BookingEvent.count({
+          where: { bookingId: priorEventBookingId },
+          transaction,
+        });
+        if (remainingEvents === 0) {
+          const orphanedBooking = await Booking.findByPk(priorEventBookingId, { transaction });
+          if (
+            orphanedBooking &&
+            orphanedBooking.platform === event.platform &&
+            orphanedBooking.lastEmailMessageId === email.messageId
+          ) {
+            await BookingAddon.destroy({
+              where: { bookingId: orphanedBooking.id },
+              transaction,
+            });
+            await orphanedBooking.destroy({ transaction });
+          }
+        }
+      }
     }
 
     const basePayload: Record<string, unknown> =

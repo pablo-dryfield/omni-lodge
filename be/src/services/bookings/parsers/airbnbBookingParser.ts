@@ -24,6 +24,21 @@ const AIRBNB_TIMEZONE =
 
 const normalizeWhitespace = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
+const AIRBNB_CANCELLATION_PLACEHOLDER_PREFIX = 'airbnb-cancel-';
+
+const BOOKING_ID_STOP_WORDS = new Set([
+  'THEY',
+  'THEIR',
+  'GUEST',
+  'HOST',
+  'RESERVATION',
+  'BOOKING',
+  'CANCELLED',
+  'CANCELED',
+  'CONFIRMED',
+  'UPDATED',
+]);
+
 const isReminderEmail = (context: BookingParserContext): boolean => {
   const haystack = [
     context.subject ?? '',
@@ -173,6 +188,12 @@ const extractGuestNameFromSubject = (subject?: string | null): string | null => 
   if (!subject) {
     return null;
   }
+  const cancelledSubjectMatch = subject.match(
+    /^([A-Za-z\u00C0-\u017F' -]+?)\s+(?:cancelled|canceled)\s+their\s+reservation\b/i,
+  );
+  if (cancelledSubjectMatch?.[1]) {
+    return cancelledSubjectMatch[1].trim();
+  }
   const confirmedMatch = subject.match(
     /^(?:confirmed|canceled|cancelled|updated|alteration|change|request|inquiry)\s*:\s*([A-Za-z\u00C0-\u017F' -]+?)\s+(?:booked|requested|cancelled|canceled|updated|changed|altered)\b/i,
   );
@@ -186,23 +207,46 @@ const extractGuestNameFromSubject = (subject?: string | null): string | null => 
   return null;
 };
 
+const normalizeBookingId = (value: string): string | null => {
+  const trimmed = value.trim().replace(/^[#:\-]+/, '').replace(/[^A-Za-z0-9]+$/, '');
+  if (!trimmed) {
+    return null;
+  }
+  const upper = trimmed.toUpperCase();
+  if (!/^[A-Z0-9]{6,32}$/.test(upper)) {
+    return null;
+  }
+  if (!/\d/.test(upper)) {
+    return null;
+  }
+  if (BOOKING_ID_STOP_WORDS.has(upper)) {
+    return null;
+  }
+  return upper;
+};
+
 const extractBookingId = (text: string, subject?: string | null): string | null => {
   const sources = [text, subject].filter(Boolean) as string[];
   const patterns: RegExp[] = [
-    /\b(?:reservation|confirmation|booking)\s*(?:code|id|number|#)?\s*[:#]?\s*([A-Z0-9]{4,})/i,
-    /\b(?:trip|reservation)\s*id\s*[:#]?\s*([A-Z0-9]{4,})/i,
+    /\b(?:confirmation\s*code|reservation\s*(?:code|id|number)|booking\s*(?:code|id|number)|trip\s*id)\s*[:#]?\s*([A-Z0-9]{6,32})\b/i,
   ];
 
   for (const source of sources) {
     for (const pattern of patterns) {
       const match = source.match(pattern);
       if (match?.[1]) {
-        return match[1];
+        const normalized = normalizeBookingId(match[1]);
+        if (normalized) {
+          return normalized;
+        }
       }
     }
-    const fallbackMatch = source.match(/#([A-Z0-9]{5,})/i);
+    const fallbackMatch = source.match(/#([A-Z0-9]{6,32})\b/i);
     if (fallbackMatch?.[1]) {
-      return fallbackMatch[1];
+      const normalized = normalizeBookingId(fallbackMatch[1]);
+      if (normalized) {
+        return normalized;
+      }
     }
   }
   return null;
@@ -213,10 +257,16 @@ const DATE_ONLY_FORMATS = [
   'ddd, MMMM D, YYYY',
   'dddd, MMM D, YYYY',
   'dddd, MMMM D, YYYY',
+  'ddd, MMM D',
+  'ddd, MMMM D',
+  'dddd, MMM D',
+  'dddd, MMMM D',
   'MMM D, YYYY',
   'MMMM D, YYYY',
   'MMM D YYYY',
   'MMMM D YYYY',
+  'MMM D',
+  'MMMM D',
   'YYYY-MM-DD',
 ];
 
@@ -322,7 +372,25 @@ const extractExperienceWindow = (
     /Date\s*(?:and|&)\s*time\s+([A-Za-z]{3,9},?\s+[A-Za-z]+\s+\d{1,2},\s+\d{4})\s*[\u00b7\u2022]?\s*(\d{1,2}:\d{2}\s*(?:AM|PM))\s*[-\u2013\u2014]\s*(\d{1,2}:\d{2}\s*(?:AM|PM))(?:\s*([A-Za-z]{2,5}))?/i,
   );
   if (!match) {
-    return { startAt: null, endAt: null };
+    const compactMatch = text.match(
+      /\b((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+[A-Za-z]+\s+\d{1,2}(?:,\s+\d{4})?)\s+(\d{1,2}:\d{2}\s*(?:AM|PM))(?:\s*[\u00b7\u2022]\s*\d{1,3}\s+guests?)?/i,
+    );
+    if (!compactMatch) {
+      return { startAt: null, endAt: null };
+    }
+    const datePart = parseDatePart(compactMatch[1], AIRBNB_TIMEZONE);
+    if (!datePart) {
+      return { startAt: null, endAt: null };
+    }
+    const start = dayjs.tz(
+      `${datePart.format('YYYY-MM-DD')} ${compactMatch[2]}`,
+      'YYYY-MM-DD h:mm A',
+      AIRBNB_TIMEZONE,
+    );
+    return {
+      startAt: start.isValid() ? start : null,
+      endAt: null,
+    };
   }
   const timezoneName = resolveTimezone(match[4] ?? null);
   const datePart = parseDatePart(match[1], timezoneName);
@@ -404,6 +472,10 @@ const extractGuestName = (text: string): string | null => {
   const fromMatch = text.match(/(?:new reservation|reservation request|request to book)\s+from\s+([A-Za-z\u00C0-\u017F' -]+)/i);
   if (fromMatch?.[1]) {
     return fromMatch[1].trim();
+  }
+  const cancelledMatch = text.match(/([A-Za-z\u00C0-\u017F' -]+?)\s+(?:canceled|cancelled)\s+their\s+reservation\b/i);
+  if (cancelledMatch?.[1]) {
+    return cancelledMatch[1].trim();
   }
   const arrivingMatch = text.match(/([A-Za-z\u00C0-\u017F' -]+)\s+is\s+arriving/i);
   if (arrivingMatch?.[1]) {
@@ -542,10 +614,13 @@ export class AirbnbBookingParser implements BookingEmailParser {
       return null;
     }
 
+    const status = deriveStatusFromContext(context, text);
+    const eventType = statusToEventType(status);
     const bookingId = extractBookingId(text, context.subject);
-    if (!bookingId) {
+    if (!bookingId && status !== 'cancelled') {
       return null;
     }
+    const platformBookingId = bookingId ?? `${AIRBNB_CANCELLATION_PLACEHOLDER_PREFIX}${context.messageId}`;
 
     const bookingFields: BookingFieldPatch = {};
     const listingName = extractListingName(text);
@@ -630,9 +705,6 @@ export class AirbnbBookingParser implements BookingEmailParser {
       bookingFields.partySizeTotal = (adults ?? 0) + (children ?? 0);
     }
 
-    const status = deriveStatusFromContext(context, text);
-    const eventType = statusToEventType(status);
-
     const notes: string[] = [];
     if (status === 'cancelled') {
       notes.push('Email indicates reservation was cancelled.');
@@ -662,8 +734,8 @@ export class AirbnbBookingParser implements BookingEmailParser {
 
     return {
       platform: 'airbnb',
-      platformBookingId: bookingId,
-      platformOrderId: bookingId,
+      platformBookingId,
+      platformOrderId: bookingId ?? null,
       eventType,
       status,
       paymentStatus: 'unknown',
