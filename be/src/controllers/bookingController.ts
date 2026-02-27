@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { isAxiosError } from 'axios';
-import { Op, type WhereOptions, fn, col, where as sequelizeWhere } from 'sequelize';
+import { Op, type WhereOptions, fn, col, where as sequelizeWhere, type Transaction } from 'sequelize';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
@@ -98,7 +98,7 @@ type BookingAttendanceBulkUpdateResult =
       error: string;
     };
 
-type AmendEcwidRequestBody = {
+type AmendPickupRequestBody = {
   pickupDate?: string;
   pickupTime?: string;
 };
@@ -2039,7 +2039,7 @@ export const amendEcwidBooking = async (req: AuthenticatedRequest, res: Response
       return;
     }
 
-    const { pickupDate, pickupTime } = req.body as AmendEcwidRequestBody;
+    const { pickupDate, pickupTime } = req.body as AmendPickupRequestBody;
     if (!pickupDate || !pickupTime) {
       res.status(400).json({ message: 'Both pickupDate and pickupTime are required' });
       return;
@@ -2109,6 +2109,59 @@ export const amendEcwidBooking = async (req: AuthenticatedRequest, res: Response
       message = error.message;
     }
     res.status(status).json({ message });
+  }
+};
+
+export const amendXperiencePolandBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const { pickupDate, pickupTime } = req.body as AmendPickupRequestBody;
+    if (!pickupDate || !pickupTime) {
+      res.status(400).json({ message: 'Both pickupDate and pickupTime are required' });
+      return;
+    }
+
+    const pickupMoment = parsePickupMoment(pickupDate, pickupTime);
+    if (!pickupMoment) {
+      res.status(400).json({ message: 'Invalid pickup date or time' });
+      return;
+    }
+
+    const booking = await Booking.findByPk(bookingIdParam);
+    if (!booking) {
+      res.status(404).json({ message: 'Booking not found' });
+      return;
+    }
+
+    if (booking.platform !== 'xperiencepoland') {
+      res.status(400).json({ message: 'Only XperiencePoland bookings can be amended through this endpoint' });
+      return;
+    }
+
+    const pickupUtc = pickupMoment.utc();
+    booking.experienceDate = pickupMoment.format(DATE_FORMAT);
+    booking.experienceStartAt = pickupUtc.toDate();
+    booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
+
+    await booking.save();
+
+    res.status(200).json({
+      message: 'Pickup time updated successfully',
+      booking: {
+        id: booking.id,
+        experienceDate: booking.experienceDate,
+        experienceStartAt: booking.experienceStartAt,
+        pickupTimeUtc: pickupUtc.toISOString(),
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to amend XperiencePoland booking';
+    res.status(500).json({ message });
   }
 };
 
@@ -2318,6 +2371,31 @@ const createStripeRefundFromSummary = async (
   return stripe.refunds.create({ ...basePayload, charge: summary.id });
 };
 
+const recordManualCancellationEvent = async (
+  booking: Booking,
+  occurredAt: Date,
+  actorId: number | null,
+  payload: Record<string, unknown>,
+  transaction?: Transaction,
+): Promise<void> => {
+  const cancellationEvent = BookingEvent.build();
+  cancellationEvent.bookingId = booking.id;
+  cancellationEvent.emailId = null;
+  cancellationEvent.eventType = 'cancelled';
+  cancellationEvent.platform = booking.platform;
+  cancellationEvent.statusAfter = 'cancelled';
+  cancellationEvent.emailMessageId = null;
+  cancellationEvent.eventPayload = {
+    source: 'manual',
+    actorId,
+    ...payload,
+  };
+  cancellationEvent.occurredAt = occurredAt;
+  cancellationEvent.ingestedAt = occurredAt;
+  cancellationEvent.processedAt = occurredAt;
+  await cancellationEvent.save(transaction ? { transaction } : undefined);
+};
+
 export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
@@ -2354,7 +2432,22 @@ export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Respons
     booking.cancelledAt = now;
     booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
 
-    await booking.save();
+    const sequelizeClient = Booking.sequelize;
+    if (!sequelizeClient) {
+      throw new Error('Database client is not initialized');
+    }
+
+    await sequelizeClient.transaction(async (transaction) => {
+      await booking.save({ transaction });
+      await recordManualCancellationEvent(booking, now, req.authContext?.id ?? null, {
+        action: 'cancel-ecwid',
+        refunded: Boolean(refund),
+        orderId: preview.orderId,
+        externalTransactionId: preview.externalTransactionId,
+        stripeTransactionId: preview.stripe.id,
+        stripeTransactionType: preview.stripe.type,
+      }, transaction);
+    });
 
     res.status(200).json({
       message: refund ? 'Booking cancelled and refund issued successfully' : 'Booking cancelled successfully',
@@ -2365,6 +2458,66 @@ export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Respons
       },
       refund,
       stripe: preview.stripe,
+    });
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json({ message: error.message, details: error.details });
+      return;
+    }
+    const message = error instanceof Error ? error.message : 'Failed to cancel booking';
+    res.status(500).json({ message });
+  }
+};
+
+export const cancelXperiencePolandBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const booking = await Booking.findByPk(bookingIdParam);
+    if (!booking) {
+      res.status(404).json({ message: 'Booking not found' });
+      return;
+    }
+
+    if (booking.platform !== 'xperiencepoland') {
+      res.status(400).json({ message: 'Only XperiencePoland bookings can be cancelled through this endpoint' });
+      return;
+    }
+
+    if (booking.status === 'cancelled') {
+      res.status(400).json({ message: 'Booking is already cancelled' });
+      return;
+    }
+
+    const now = new Date();
+    booking.status = 'cancelled';
+    booking.statusChangedAt = now;
+    booking.cancelledAt = now;
+    booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
+
+    const sequelizeClient = Booking.sequelize;
+    if (!sequelizeClient) {
+      throw new Error('Database client is not initialized');
+    }
+
+    await sequelizeClient.transaction(async (transaction) => {
+      await booking.save({ transaction });
+      await recordManualCancellationEvent(booking, now, req.authContext?.id ?? null, {
+        action: 'cancel-xperiencepoland',
+      }, transaction);
+    });
+
+    res.status(200).json({
+      message: 'Booking cancelled successfully',
+      booking: {
+        id: booking.id,
+        status: booking.status,
+        cancelledAt: booking.cancelledAt,
+      },
     });
   } catch (error) {
     if (error instanceof HttpError) {

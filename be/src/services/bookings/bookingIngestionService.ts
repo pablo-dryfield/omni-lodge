@@ -1041,13 +1041,15 @@ const applyParsedEvent = async (
 
     if (priorEvent) {
       const priorEventBookingId = priorEvent.bookingId ?? null;
+      const sameBookingAsPriorEvent =
+        priorEventBookingId != null && String(priorEventBookingId) === String(bookingRecord.id);
       await BookingAddon.destroy({
         where: { sourceEventId: priorEvent.id },
         transaction,
       });
       await priorEvent.destroy({ transaction });
 
-      if (priorEventBookingId && priorEventBookingId !== bookingRecord.id) {
+      if (priorEventBookingId && !sameBookingAsPriorEvent) {
         const remainingEvents = await BookingEvent.count({
           where: { bookingId: priorEventBookingId },
           transaction,

@@ -26,6 +26,10 @@ const DATE_TIME_FORMATS = [
   'MMMM D, YYYY H:mm',
   'MMMM D YYYY HH:mm',
   'MMMM D YYYY H:mm',
+  'YYYY-MM-DD HH:mm',
+  'YYYY-MM-DD H:mm',
+  'YYYY/MM/DD HH:mm',
+  'YYYY/MM/DD H:mm',
   'DD/MM/YYYY HH:mm',
   'DD.MM.YYYY HH:mm',
   'DD-MM-YYYY HH:mm',
@@ -123,22 +127,61 @@ const parsePartySize = (value?: string | null): number | null => {
   return Number.isNaN(parsed) ? null : parsed;
 };
 
+const ALLOWED_XPERIENCE_PRODUCTS = ['Private Pub Crawl', 'Regular Pub Crawl with Open Bar'] as const;
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const findBlockBoundary = (text: string, labels: string[]): number => {
+  const lower = text.toLowerCase();
+  let best = -1;
+  for (const label of labels) {
+    const idx = lower.indexOf(label.toLowerCase());
+    if (idx !== -1 && (best === -1 || idx < best)) {
+      best = idx;
+    }
+  }
+  return best;
+};
+
 const deriveProductName = (text: string): string | null => {
-  const servicesMatch =
-    text.match(/Basic services\s+([\s\S]+?)Total amount of all services/i) ??
-    text.match(/Usługi podstawowe\s+([\s\S]+?)Łączna kwota wszystkich usług/i);
-  if (!servicesMatch) {
+  const startLabels = [
+    'Basic services',
+    'Usługi podstawowe',
+    'Uslugi podstawowe',
+    'UsĹ‚ugi podstawowe',
+  ];
+  const endLabels = [
+    'Total amount of all services',
+    'Łączna kwota wszystkich usług',
+    'Laczna kwota wszystkich uslug',
+    'Lączna kwota wszystkich usług',
+    'ĹÄ…czna kwota wszystkich usĹ‚ug',
+  ];
+
+  const start = findLabelStart(text, startLabels);
+  if (!start) {
     return null;
   }
-  const lines = servicesMatch[1]
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (lines.length === 0) {
+
+  const afterStart = text.slice(start.start + start.length).trimStart().replace(/^[:\-]\s*/, '');
+  const endIndex = findBlockBoundary(afterStart, endLabels);
+  const block = (endIndex >= 0 ? afterStart.slice(0, endIndex) : afterStart).trim();
+  if (!block) {
     return null;
   }
-  const firstLine = lines[0];
-  return firstLine.replace(/\s+PLN.*$/i, '').trim();
+
+  const hits = ALLOWED_XPERIENCE_PRODUCTS.map((name) => {
+    const pattern = new RegExp(`\\b${escapeRegExp(name)}\\b`, 'i');
+    const match = pattern.exec(block);
+    return { name, index: match?.index ?? -1 };
+  }).filter((entry) => entry.index >= 0);
+
+  if (hits.length === 0) {
+    return null;
+  }
+
+  hits.sort((left, right) => left.index - right.index);
+  return hits[0].name;
 };
 
 const extractAdditionalInfo = (text: string): string | null => {
