@@ -29,6 +29,7 @@ import {
   ingestLatestBookingEmails,
   processBookingEmail,
 } from '../services/bookings/bookingIngestionService.js';
+import { syncEcwidBookingUtmByBookingId } from '../services/bookings/ecwidUtmSyncService.js';
 import logger from '../utils/logger.js';
 import type {
   UnifiedOrder,
@@ -1402,6 +1403,7 @@ export const importEcwidBooking = async (req: AuthenticatedRequest, res: Respons
     } as unknown as Parameters<typeof Booking.create>[0];
 
     const created = await Booking.create(payload as unknown as any);
+    await syncEcwidBookingUtmByBookingId(created.id);
 
     res.status(201).json({ status: 'created', bookingId: created.id });
   } catch (error) {

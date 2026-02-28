@@ -41,6 +41,7 @@ import type { UserType } from "../../types/userTypes/UserType";
 import { removeEmptyKeys } from "../../utils/removeEmptyKeys";
 import { getChangedValues } from "../../utils/getChangedValues";
 import { useModuleAccess } from "../../hooks/useModuleAccess";
+import { useCerebroBootstrap } from "../../api/cerebro";
 
 const MODULE_SLUG = "user-directory";
 
@@ -247,6 +248,7 @@ const SettingsUsersPanel = () => {
   const userTypesState = useAppSelector((state) => state.userTypes[0]);
   const loggedUserId = useAppSelector((state) => state.session.loggedUserId);
   const moduleAccess = useModuleAccess(MODULE_SLUG);
+  const cerebroBootstrapQuery = useCerebroBootstrap();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
@@ -361,6 +363,31 @@ const SettingsUsersPanel = () => {
   const activeUsers = useMemo(() => users.filter((user) => Boolean(user.status)).length, [users]);
   const inactiveUsers = users.length - activeUsers;
   const pendingApprovalUsers = useMemo(() => users.filter((user) => userNeedsApproval(user)).length, [users]);
+  const roleOnboardingSummary = useMemo(() => {
+    const roleId = formState.userTypeId ? Number(formState.userTypeId) : NaN;
+    if (!Number.isFinite(roleId) || !cerebroBootstrapQuery.data) {
+      return null;
+    }
+
+    const appliesToRole = (targetUserTypeIds?: number[]) =>
+      !targetUserTypeIds || targetUserTypeIds.length === 0 || targetUserTypeIds.includes(roleId);
+
+    const policies = cerebroBootstrapQuery.data.entries.filter(
+      (entry) => entry.requiresAcknowledgement && appliesToRole(entry.targetUserTypeIds),
+    );
+    const quizzes = cerebroBootstrapQuery.data.quizzes.filter((quiz) =>
+      appliesToRole(quiz.targetUserTypeIds),
+    );
+
+    if (policies.length === 0 && quizzes.length === 0) {
+      return null;
+    }
+
+    return {
+      policies,
+      quizzes,
+    };
+  }, [formState.userTypeId, cerebroBootstrapQuery.data]);
 
   const resetEditor = () => {
     setEditorOpen(false);
@@ -828,6 +855,21 @@ const SettingsUsersPanel = () => {
               searchable
               clearable
             />
+            {roleOnboardingSummary ? (
+              <Alert color="blue" variant="light" style={{ gridColumn: "1 / -1" }}>
+                {`Cerebro onboarding for this role: ${roleOnboardingSummary.policies.length} policy acknowledgement(s) and ${roleOnboardingSummary.quizzes.length} quiz(zes).`}
+                {roleOnboardingSummary.policies.length > 0 ? (
+                  <Text size="sm" mt={6}>
+                    Policies: {roleOnboardingSummary.policies.map((item) => item.title).slice(0, 3).join(", ")}
+                  </Text>
+                ) : null}
+                {roleOnboardingSummary.quizzes.length > 0 ? (
+                  <Text size="sm" mt={4}>
+                    Quizzes: {roleOnboardingSummary.quizzes.map((item) => item.title).slice(0, 3).join(", ")}
+                  </Text>
+                ) : null}
+              </Alert>
+            ) : null}
             <Switch
               label="Active account"
               checked={formState.status}

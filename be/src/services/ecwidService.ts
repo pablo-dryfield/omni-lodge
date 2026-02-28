@@ -93,6 +93,13 @@ export type EcwidPerson = {
   phone?: string;
 };
 
+export type EcwidUtmData = {
+  timestamp?: string;
+  source?: string;
+  medium?: string;
+  campaign?: string;
+};
+
 export type EcwidOrder = {
   id: string | number;
   externalTransactionId?: string | number;
@@ -103,6 +110,8 @@ export type EcwidOrder = {
   extraFields?: Record<string, string>;
   shippingPerson?: EcwidPerson;
   billingPerson?: EcwidPerson;
+  utmData?: EcwidUtmData | null;
+  utmDataSets?: EcwidUtmData[] | null;
 };
 
 export type FetchOrdersParams = {

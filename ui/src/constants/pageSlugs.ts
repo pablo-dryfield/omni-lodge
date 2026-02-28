@@ -20,6 +20,7 @@ export const PAGE_SLUGS = {
   channelNumbers: "channel-numbers",
   reviews: "reviews",
   scheduling: "scheduling",
+  cerebro: "cerebro",
   schedulingAvailability: "scheduling-availability",
   schedulingBuilder: "scheduling-builder",
   schedulingMyShifts: "scheduling-my-shifts",

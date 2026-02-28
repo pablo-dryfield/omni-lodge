@@ -21,6 +21,7 @@ import type { GmailMessagePayload } from './gmailClient.js';
 import type { BookingPlatform, KnownBookingPlatform } from '../../constants/bookings.js';
 import { canonicalizeProductLabel, sanitizeProductSource } from '../../utils/productName.js';
 import { getConfigValue } from '../configService.js';
+import { syncEcwidBookingUtmByBookingId } from './ecwidUtmSyncService.js';
 
 const FALLBACK_QUERY =
   '(subject:(booking OR reservation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR airbnb.com OR airbnbmail.com))';
@@ -828,8 +829,8 @@ const applyParsedEvent = async (
   email: BookingEmail,
   event: ParsedBookingEvent,
   options: { isReprocess?: boolean } = {},
-): Promise<void> => {
-  await sequelize.transaction(async (transaction) => {
+): Promise<number> => {
+  const bookingId = await sequelize.transaction(async (transaction) => {
     const eventOccurredAt = event.occurredAt ?? event.sourceReceivedAt ?? email.receivedAt ?? new Date();
     const priorEvent =
       options.isReprocess && email.messageId
@@ -1098,7 +1099,11 @@ const applyParsedEvent = async (
     await bookingEvent.save({ transaction });
 
     await syncAddons(bookingRecord.id, bookingEvent.id, event.addons, transaction);
+
+    return bookingRecord.id;
   });
+
+  return bookingId;
 };
 
 type ProcessResult = 'processed' | 'skipped_lower' | 'skipped_upper' | 'ignored' | 'failed';
@@ -1148,17 +1153,26 @@ export const processBookingEmail = async (
   }
 
   const pendingEvents: ParsedBookingEvent[] = [parsed];
+  const processedBookingIds = new Set<number>();
 
   try {
     while (pendingEvents.length > 0) {
       const current = pendingEvents.shift()!;
       const spawned = current.spawnedEvents ?? [];
-      await applyParsedEvent(emailRecord, current, { isReprocess: Boolean(options.force) });
+      const bookingId = await applyParsedEvent(emailRecord, current, {
+        isReprocess: Boolean(options.force),
+      });
+      processedBookingIds.add(bookingId);
       if (spawned.length > 0) {
         pendingEvents.push(...spawned);
       }
     }
     await updateEmailStatus(emailRecord, 'processed');
+
+    for (const bookingId of processedBookingIds) {
+      await syncEcwidBookingUtmByBookingId(bookingId);
+    }
+
     return 'processed';
   } catch (error) {
     if (error instanceof StaleBookingEventError) {

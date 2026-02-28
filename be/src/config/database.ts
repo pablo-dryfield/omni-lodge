@@ -88,6 +88,11 @@ import OpenBarDrinkIssue from "../models/OpenBarDrinkIssue.js";
 import OpenBarDelivery from "../models/OpenBarDelivery.js";
 import OpenBarDeliveryItem from "../models/OpenBarDeliveryItem.js";
 import OpenBarInventoryMovement from "../models/OpenBarInventoryMovement.js";
+import CerebroSection from "../models/CerebroSection.js";
+import CerebroEntry from "../models/CerebroEntry.js";
+import CerebroQuiz from "../models/CerebroQuiz.js";
+import CerebroQuizAttempt from "../models/CerebroQuizAttempt.js";
+import CerebroAcknowledgement from "../models/CerebroAcknowledgement.js";
 import {
   FinanceAccount,
   FinanceAuditLog,
@@ -163,6 +168,11 @@ const sequelize = new Sequelize({
     OpenBarDelivery,
     OpenBarDeliveryItem,
     OpenBarInventoryMovement,
+    CerebroSection,
+    CerebroEntry,
+    CerebroQuiz,
+    CerebroQuizAttempt,
+    CerebroAcknowledgement,
     Counter,
     CounterProduct,
     CounterUser,

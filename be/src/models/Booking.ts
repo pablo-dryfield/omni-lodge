@@ -115,6 +115,27 @@ export default class Booking extends Model<Booking> {
 
   @AllowNull(true)
   @Column({
+    field: 'utm_source',
+    type: DataType.STRING(255),
+  })
+  declare utmSource: string | null;
+
+  @AllowNull(true)
+  @Column({
+    field: 'utm_medium',
+    type: DataType.STRING(255),
+  })
+  declare utmMedium: string | null;
+
+  @AllowNull(true)
+  @Column({
+    field: 'utm_campaign',
+    type: DataType.STRING(512),
+  })
+  declare utmCampaign: string | null;
+
+  @AllowNull(true)
+  @Column({
     field: 'experience_date',
     type: DataType.DATEONLY,
   })

@@ -82,6 +82,11 @@ import OpenBarDrinkIssue from './OpenBarDrinkIssue.js';
 import OpenBarDelivery from './OpenBarDelivery.js';
 import OpenBarDeliveryItem from './OpenBarDeliveryItem.js';
 import OpenBarInventoryMovement from './OpenBarInventoryMovement.js';
+import CerebroSection from './CerebroSection.js';
+import CerebroEntry from './CerebroEntry.js';
+import CerebroQuiz from './CerebroQuiz.js';
+import CerebroQuizAttempt from './CerebroQuizAttempt.js';
+import CerebroAcknowledgement from './CerebroAcknowledgement.js';
 
 export function defineAssociations() {
   // User Associations
@@ -102,6 +107,8 @@ export function defineAssociations() {
   StaffPayoutLedger.belongsTo(User, { foreignKey: 'staff_user_id', as: 'ledgerUser' });
   User.hasMany(ConfigHistory, { foreignKey: 'actor_id', as: 'configHistory' });
   User.hasMany(ConfigValue, { foreignKey: 'updated_by', as: 'configValuesUpdated' });
+  User.hasMany(CerebroQuizAttempt, { foreignKey: 'user_id', as: 'cerebroQuizAttempts' });
+  User.hasMany(CerebroAcknowledgement, { foreignKey: 'user_id', as: 'cerebroAcknowledgements' });
 
   // UserType Associations
   UserType.hasMany(User, { foreignKey: 'userTypeId', as: 'users' });
@@ -142,6 +149,27 @@ export function defineAssociations() {
   RoleModulePermission.belongsTo(Action, { foreignKey: 'actionId', as: 'action' });
   RoleModulePermission.belongsTo(User, { foreignKey: 'createdBy', as: 'createdByUser' });
   RoleModulePermission.belongsTo(User, { foreignKey: 'updatedBy', as: 'updatedByUser' });
+
+  CerebroSection.belongsTo(User, { foreignKey: 'created_by', as: 'createdByUser' });
+  CerebroSection.belongsTo(User, { foreignKey: 'updated_by', as: 'updatedByUser' });
+  CerebroSection.hasMany(CerebroEntry, { foreignKey: 'section_id', as: 'entries' });
+
+  CerebroEntry.belongsTo(CerebroSection, { foreignKey: 'section_id', as: 'section' });
+  CerebroEntry.belongsTo(User, { foreignKey: 'created_by', as: 'createdByUser' });
+  CerebroEntry.belongsTo(User, { foreignKey: 'updated_by', as: 'updatedByUser' });
+  CerebroEntry.hasMany(CerebroQuiz, { foreignKey: 'entry_id', as: 'quizzes' });
+  CerebroEntry.hasMany(CerebroAcknowledgement, { foreignKey: 'entry_id', as: 'acknowledgements' });
+
+  CerebroQuiz.belongsTo(CerebroEntry, { foreignKey: 'entry_id', as: 'entry' });
+  CerebroQuiz.belongsTo(User, { foreignKey: 'created_by', as: 'createdByUser' });
+  CerebroQuiz.belongsTo(User, { foreignKey: 'updated_by', as: 'updatedByUser' });
+  CerebroQuiz.hasMany(CerebroQuizAttempt, { foreignKey: 'quiz_id', as: 'attempts' });
+
+  CerebroQuizAttempt.belongsTo(CerebroQuiz, { foreignKey: 'quiz_id', as: 'quiz' });
+  CerebroQuizAttempt.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
+  CerebroAcknowledgement.belongsTo(CerebroEntry, { foreignKey: 'entry_id', as: 'entry' });
+  CerebroAcknowledgement.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
   // Compensation components
   CompensationComponent.hasMany(CompensationComponentAssignment, { foreignKey: 'component_id', as: 'assignmentsCompensation' });

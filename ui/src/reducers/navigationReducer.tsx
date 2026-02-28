@@ -9,6 +9,7 @@ export const baseNavigationPages: NavigationPage[] = [
   { name: "Channel Numbers", path: "/channelNumbers", slug: PAGE_SLUGS.channelNumbers, icon: 'barChart' },
   { name: "Reviews", path: "/reviews", slug: PAGE_SLUGS.reviews, icon: 'star' },
   { name: "Staff Payment", path: "/pays", slug: PAGE_SLUGS.pays, icon: 'person' },
+  { name: "Cerebro", path: "/cerebro", slug: PAGE_SLUGS.cerebro, icon: 'assignmentTurnedIn' },
   { name: "Scheduling", path: "/scheduling", slug: PAGE_SLUGS.scheduling, icon: 'calendarMonth' },
   { name: "Task Planner", path: "/assistant-manager-tasks", slug: PAGE_SLUGS.assistantManagerTasks, icon: 'assignment' },
   { name: "Finance", path: "/finance", slug: PAGE_SLUGS.finance, icon: 'accountBalance' },
@@ -37,4 +38,3 @@ const navigationSlice = createSlice({
 
 export const { setCurrentPage, setPages } = navigationSlice.actions;
 export default navigationSlice.reducer;
-
