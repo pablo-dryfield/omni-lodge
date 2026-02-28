@@ -761,6 +761,7 @@ const TabContent = ({
   costCurrency,
   costLabel,
   costError,
+  infoNote,
   googleCostRows,
   isMobile,
   accent,
@@ -770,6 +771,7 @@ const TabContent = ({
   costCurrency?: string | null;
   costLabel?: string;
   costError?: string | null;
+  infoNote?: string;
   googleCostRows?: GoogleCostRow[];
   isMobile: boolean;
   accent: string;
@@ -808,6 +810,12 @@ const TabContent = ({
       {costError ? (
         <Alert color="yellow" radius="lg" title="Google Ads cost unavailable">
           {costError}
+        </Alert>
+      ) : null}
+
+      {infoNote ? (
+        <Alert color="blue" radius="lg" variant="light">
+          {infoNote}
         </Alert>
       ) : null}
 
@@ -1223,6 +1231,7 @@ const MarketingPage = ({ title }: GenericPageProps) => {
                 costCurrency={data.googleAds.costCurrency}
                 costLabel="Cost"
                 costError={data.googleAds.costError}
+                infoNote="Before 28/02/2026, Bookings uses Google Ads conversions and Revenue uses Google Ads conversion value because Omni-Lodge booking attribution was not available yet."
                 googleCostRows={data.googleAds.googleCostRows}
                 isMobile={Boolean(isMobile)}
                 accent="red"
