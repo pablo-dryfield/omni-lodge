@@ -126,6 +126,7 @@ const META_ADS_SOURCE_LABEL = 'Meta Ads';
 const GOOGLE_ADS_API_VERSION = 'v22';
 const GOOGLE_ADS_BOOKING_DATA_CUTOFF_DATE = '2026-02-28';
 const GOOGLE_ADS_NON_REVENUE_CAMPAIGN_PREFIXES = ['smart campaign'];
+const GOOGLE_ADS_MEDIUM_LEFTOVER_IGNORE_THRESHOLD = 0.01;
 
 const parseAmount = (value: unknown): number => {
   const numeric = typeof value === 'number' ? value : Number(value ?? 0);
@@ -401,7 +402,7 @@ const buildMediumCostByLabel = (
   campaignCostByCampaign.forEach((campaignCost, campaign) => {
     const adGroupCost = adGroupCostByCampaign.get(campaign) ?? 0;
     const missingCost = roundMoney(campaignCost - adGroupCost);
-    if (Math.abs(missingCost) < 0.005) {
+    if (Math.abs(missingCost) <= GOOGLE_ADS_MEDIUM_LEFTOVER_IGNORE_THRESHOLD) {
       return;
     }
     byMedium.set(formatBreakdownLabel(null), roundMoney((byMedium.get(formatBreakdownLabel(null)) ?? 0) + missingCost));
