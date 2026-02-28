@@ -12,6 +12,7 @@ import Pays from "../../pages/Pays";
 import ReviewCounters from "../../pages/ReviewCounters";
 import Reports from "../../pages/Reports";
 import OpenBarControl from "../../pages/OpenBarControl";
+import Cerebro from "../../pages/Cerebro";
 import DerivedFieldsManager from "../../pages/DerivedFieldsManager";
 import ReportDashboards from "../../pages/ReportDashboards";
 import MyAccount from "../../pages/MyAccount";
@@ -80,6 +81,7 @@ const Routes = () => {
       <Route path="/channelNumbers" element={<ChannelNumbers title="Channel Numbers" />} />
       <Route path="/reviews" element={<ReviewCounters />} />
       <Route path="/pays" element={<Pays />} />
+      <Route path="/cerebro" element={<Cerebro />} />
       <Route path="/assistant-manager-tasks" element={<AssistantManagerTasks />} />
       <Route path="/reports" element={<Reports title={"Reports"} />} />
       <Route path="/open-bar" element={<OpenBarControl title="Open Bar Control" />} />
