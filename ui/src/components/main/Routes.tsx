@@ -8,6 +8,7 @@ import AvailabilityCalendar from "../../pages/AvailabilityCalendar";
 import Counters from "../../pages/Counters";
 import VenueNumbers from "../../pages/VenueNumbers";
 import ChannelNumbers from "../../pages/ChannelNumbers";
+import MarketingPage from "../../pages/MarketingPage";
 import Pays from "../../pages/Pays";
 import ReviewCounters from "../../pages/ReviewCounters";
 import Reports from "../../pages/Reports";
@@ -79,6 +80,7 @@ const Routes = () => {
       <Route path="/counters" element={<Counters title="Counters" />} />
       <Route path="/venueNumbers" element={<VenueNumbers title="Venue Numbers" />} />
       <Route path="/channelNumbers" element={<ChannelNumbers title="Channel Numbers" />} />
+      <Route path="/marketing" element={<MarketingPage title="Marketing" />} />
       <Route path="/reviews" element={<ReviewCounters />} />
       <Route path="/pays" element={<Pays />} />
       <Route path="/cerebro" element={<Cerebro />} />
