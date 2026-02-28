@@ -319,28 +319,46 @@ const BreakdownSection = ({
         ))}
       </Stack>
     ) : (
-      <ScrollArea offsetScrollbars>
-        <Table highlightOnHover stickyHeader horizontalSpacing="md" verticalSpacing="sm" miw={560}>
+      <Table
+        highlightOnHover
+        stickyHeader
+        horizontalSpacing="md"
+        verticalSpacing="sm"
+        style={{ tableLayout: "fixed", width: "100%" }}
+      >
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>Value</Table.Th>
-              <Table.Th>Bookings</Table.Th>
-              <Table.Th>Revenue</Table.Th>
-              <Table.Th>Cost</Table.Th>
+              <Table.Th style={{ width: "40%", textAlign: "center", paddingInline: 14 }}>Value</Table.Th>
+              <Table.Th style={{ width: "20%", whiteSpace: "nowrap", textAlign: "center", paddingInline: 16 }}>Bookings</Table.Th>
+              <Table.Th style={{ width: "20%", whiteSpace: "nowrap", textAlign: "center", paddingInline: 14 }}>Revenue</Table.Th>
+              <Table.Th style={{ width: "20%", whiteSpace: "nowrap", textAlign: "center", paddingInline: 14 }}>Cost</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
             {rows.map((row) => (
               <Table.Tr key={`${title}-${row.label}`}>
-                <Table.Td style={{ whiteSpace: "nowrap" }}>{row.label}</Table.Td>
-                <Table.Td style={{ whiteSpace: "nowrap" }}>{row.bookingCount}</Table.Td>
-                <Table.Td style={{ whiteSpace: "nowrap" }}>{formatMoney(row.revenue, revenueCurrency)}</Table.Td>
-                <Table.Td style={{ whiteSpace: "nowrap" }}>{row.cost == null ? "-" : formatMoney(row.cost, costCurrency)}</Table.Td>
+                <Table.Td
+                  style={{
+                    whiteSpace: "normal",
+                    overflowWrap: "anywhere",
+                    lineHeight: 1.35,
+                    textAlign: "center",
+                    paddingInline: 14,
+                  }}
+                >
+                  {row.label}
+                </Table.Td>
+                <Table.Td style={{ whiteSpace: "nowrap", textAlign: "center", paddingInline: 16 }}>{row.bookingCount}</Table.Td>
+                <Table.Td style={{ whiteSpace: "nowrap", textAlign: "center", paddingInline: 14 }}>
+                  {formatMoney(row.revenue, revenueCurrency)}
+                </Table.Td>
+                <Table.Td style={{ whiteSpace: "nowrap", textAlign: "center", paddingInline: 14 }}>
+                  {row.cost == null ? "-" : formatMoney(row.cost, costCurrency)}
+                </Table.Td>
               </Table.Tr>
             ))}
           </Table.Tbody>
-        </Table>
-      </ScrollArea>
+      </Table>
     )}
   </SectionCard>
 );
@@ -769,15 +787,15 @@ const TabContent = ({
         isMobile={isMobile}
       />
       <BreakdownSection
-        title="Medium Totals"
-        rows={data.mediumBreakdown}
+        title="Campaign Totals"
+        rows={data.campaignBreakdown}
         revenueCurrency={data.revenueCurrency}
         costCurrency={costCurrency}
         isMobile={isMobile}
       />
       <BreakdownSection
-        title="Campaign Totals"
-        rows={data.campaignBreakdown}
+        title="Medium Totals"
+        rows={data.mediumBreakdown}
         revenueCurrency={data.revenueCurrency}
         costCurrency={costCurrency}
         isMobile={isMobile}
