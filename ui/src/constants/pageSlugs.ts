@@ -19,6 +19,7 @@ export const PAGE_SLUGS = {
   venueNumbers: "venue-numbers",
   channelNumbers: "channel-numbers",
   marketing: "marketing",
+  performance: "performance",
   reviews: "reviews",
   scheduling: "scheduling",
   cerebro: "cerebro",
