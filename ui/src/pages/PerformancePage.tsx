@@ -93,6 +93,15 @@ type DiagnosisItem = {
   actions: string[];
 };
 
+type HeapSnapshotGuidance = {
+  shouldCapture: boolean;
+  color: "red" | "yellow" | "blue" | "teal";
+  title: string;
+  summary: string;
+  metrics: string[];
+  reasons: string[];
+};
+
 type CustomHistoryRangeValue = [Date | null, Date | null];
 type SessionScope = "all" | "current" | "specific";
 
@@ -510,6 +519,103 @@ const generateDiagnostics = (
   return diagnostics.sort((left, right) => severityRank[left.severity] - severityRank[right.severity]);
 };
 
+const getHeapSnapshotGuidance = (
+  snapshot: PerformanceSnapshotResponse,
+  history: PerformanceSnapshotResponse["history"],
+): HeapSnapshotGuidance => {
+  const latestHistory = history[history.length - 1] ?? null;
+  const earliestHistory = history[0] ?? null;
+  const heapGrowth =
+    latestHistory && earliestHistory ? latestHistory.heapUsedMb - earliestHistory.heapUsedMb : 0;
+  const rssGrowth =
+    latestHistory && earliestHistory ? latestHistory.rssMb - earliestHistory.rssMb : 0;
+  const historyWindowHours =
+    latestHistory && earliestHistory
+      ? dayjs(latestHistory.timestamp).diff(dayjs(earliestHistory.timestamp), "hour", true)
+      : 0;
+  const metrics = [
+    `Heap used now: ${formatMetricNumber(snapshot.process.heapUsedMb, 1)} MB (${formatPercent(snapshot.process.heapUsedPercent)})`,
+    `Heap total now: ${formatMetricNumber(snapshot.process.heapTotalMb, 1)} MB`,
+    `RSS now: ${formatMetricNumber(snapshot.process.rssMb, 1)} MB`,
+    `Heap change in selected range: ${formatMetricNumber(heapGrowth, 1)} MB`,
+    `RSS change in selected range: ${formatMetricNumber(rssGrowth, 1)} MB`,
+    `Uptime: ${formatUptime(snapshot.process.uptimeSeconds)}`,
+    `History samples: ${formatMetricNumber(history.length)}`,
+  ];
+
+  const reasons: string[] = [];
+  const hasClearGrowthTrend = heapGrowth >= 30 || rssGrowth >= 60;
+  const hasSevereGrowthTrend = heapGrowth >= 60 || rssGrowth >= 120;
+  const hasHighHeapPressure = snapshot.process.heapUsedPercent >= 92;
+  const hasLatencyDuringGrowth =
+    snapshot.traffic.p95ResponseMs >= 1200 && (heapGrowth >= 20 || rssGrowth >= 40);
+  const hasLongUptimePressure =
+    snapshot.process.uptimeSeconds >= 6 * 60 * 60 &&
+    snapshot.process.heapUsedPercent >= 90 &&
+    (heapGrowth >= 10 || rssGrowth >= 20);
+
+  if (hasSevereGrowthTrend) {
+    reasons.push("Memory is climbing materially across the selected history window.");
+  } else if (hasClearGrowthTrend) {
+    reasons.push("Memory growth is visible across the selected history window.");
+  }
+  if (hasHighHeapPressure) {
+    reasons.push("Current heap utilization is very high inside the active V8 heap.");
+  }
+  if (hasLatencyDuringGrowth) {
+    reasons.push("Latency is already elevated while memory is also trending upward.");
+  }
+  if (hasLongUptimePressure) {
+    reasons.push("The process has been up for hours and memory has not settled back down.");
+  }
+
+  if (hasSevereGrowthTrend || hasLatencyDuringGrowth || hasLongUptimePressure) {
+    return {
+      shouldCapture: true,
+      color: hasSevereGrowthTrend || hasLatencyDuringGrowth ? "red" : "yellow",
+      title: "Heap snapshot recommended now",
+      summary:
+        "The current memory pattern is strong enough to justify capturing a heap snapshot for retained-object inspection.",
+      metrics,
+      reasons,
+    };
+  }
+
+  if (hasClearGrowthTrend || hasHighHeapPressure) {
+    return {
+      shouldCapture: false,
+      color: "yellow",
+      title: "Heap snapshot is not mandatory yet, but keep this under observation",
+      summary:
+        "Memory pressure exists, but the current window does not yet justify taking a heap snapshot immediately.",
+      metrics: [
+        ...metrics,
+        `Observed history window: ${formatMetricNumber(historyWindowHours, historyWindowHours < 10 ? 2 : 1)} h`,
+      ],
+      reasons:
+        reasons.length > 0
+          ? reasons
+          : ["Heap pressure is visible, but the trend is not strong enough to treat as leak evidence yet."],
+    };
+  }
+
+  return {
+    shouldCapture: false,
+    color: "teal",
+    title: "Heap snapshot is not recommended right now",
+    summary:
+      "Current memory behavior does not suggest that a heap snapshot would be the best next diagnostic step.",
+    metrics: [
+      ...metrics,
+      `Observed history window: ${formatMetricNumber(historyWindowHours, historyWindowHours < 10 ? 2 : 1)} h`,
+    ],
+    reasons: [
+      "Heap and RSS are not showing a meaningful upward trend in the selected window.",
+      "Use SQL, route, or external-call diagnostics first unless memory starts drifting upward.",
+    ],
+  };
+};
+
 const MetricCard = ({
   title,
   value,
@@ -628,7 +734,7 @@ const PerformancePage = ({ title }: GenericPageProps) => {
   const [error, setError] = useState<string | null>(null);
   const [historyRange, setHistoryRange] = useState<HistoryRange>("7d");
   const [customHistoryRange, setCustomHistoryRange] = useState<CustomHistoryRangeValue>(() => createDefaultCustomHistoryRange());
-  const [sessionScope, setSessionScope] = useState<SessionScope>("all");
+  const [sessionScope, setSessionScope] = useState<SessionScope>("current");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [explainResult, setExplainResult] = useState<PerformanceExplainResponse | null>(null);
@@ -857,6 +963,10 @@ const PerformancePage = ({ title }: GenericPageProps) => {
     tablePageSize,
   );
   const diagnosisItems = useMemo(() => (snapshot ? generateDiagnostics(snapshot, history) : []), [history, snapshot]);
+  const heapSnapshotGuidance = useMemo(
+    () => (snapshot ? getHeapSnapshotGuidance(snapshot, history) : null),
+    [history, snapshot],
+  );
 
   const diagnosticBundle = useMemo(() => {
     if (!snapshot) {
@@ -2230,6 +2340,43 @@ const PerformancePage = ({ title }: GenericPageProps) => {
 
             <SectionCard icon={<IconServer size={20} />} title="Heap Snapshots" badge={snapshot.heapSnapshots.recentSnapshots.length}>
               <Stack gap="md">
+                {heapSnapshotGuidance ? (
+                  <Alert
+                    radius="xl"
+                    color={heapSnapshotGuidance.color}
+                    icon={<IconAlertTriangle size={18} />}
+                    title={heapSnapshotGuidance.title}
+                  >
+                    <Stack gap="xs">
+                      <Group gap="xs">
+                        <Badge radius="xl" color={heapSnapshotGuidance.shouldCapture ? "red" : heapSnapshotGuidance.color}>
+                          {heapSnapshotGuidance.shouldCapture ? "Capture Recommended" : "Capture Not Needed"}
+                        </Badge>
+                      </Group>
+                      <Text size="sm">{heapSnapshotGuidance.summary}</Text>
+                      <Stack gap={4}>
+                        <Text size="sm" fw={700}>
+                          Metrics
+                        </Text>
+                        {heapSnapshotGuidance.metrics.map((metric) => (
+                          <Text key={metric} size="sm" c="dimmed">
+                            - {metric}
+                          </Text>
+                        ))}
+                      </Stack>
+                      <Stack gap={4}>
+                        <Text size="sm" fw={700}>
+                          Why
+                        </Text>
+                        {heapSnapshotGuidance.reasons.map((reason) => (
+                          <Text key={reason} size="sm" c="dimmed">
+                            - {reason}
+                          </Text>
+                        ))}
+                      </Stack>
+                    </Stack>
+                  </Alert>
+                ) : null}
                 <Group justify="space-between" align="center" wrap="wrap">
                   <Stack gap={2}>
                     <Text fw={700}>Capture a heap snapshot on demand</Text>
