@@ -6,6 +6,9 @@ export interface AuthorizationContext {
   userTypeId: number | null;
   roleSlug: string | null;
   userTypeSlug?: string | null;
+  roleName?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
   shiftRoleSlugs?: string[];
 }
 

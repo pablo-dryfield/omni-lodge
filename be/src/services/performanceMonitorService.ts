@@ -6,6 +6,8 @@ import sequelize from '../config/database.js';
 import logger from '../utils/logger.js';
 import { requestCounter, responseTimeHistogram } from '../metrics/metrics.js';
 import { queryDiagnosticsService } from './queryDiagnosticsService.js';
+import { externalRequestDiagnosticsService } from './externalRequestDiagnosticsService.js';
+import { heapDiagnosticsService, type HeapSnapshotFile } from './heapDiagnosticsService.js';
 
 type PoolSnapshot = {
   size: number | null;
@@ -18,6 +20,8 @@ type PoolSnapshot = {
 
 type PerformanceHistoryPoint = {
   timestamp: string;
+  sessionId: string;
+  processStartedAt: string;
   cpuPercent: number;
   rssMb: number;
   heapUsedMb: number;
@@ -33,6 +37,14 @@ type PerformanceHistoryPoint = {
   dbPending: number | null;
   dbBorrowed: number | null;
   systemMemoryUsedPercent: number | null;
+};
+
+type RestartSessionSummary = {
+  sessionId: string;
+  startedAt: string;
+  endedAt: string | null;
+  sampleCount: number;
+  isCurrent: boolean;
 };
 
 type RouteDiagnostics = {
@@ -56,6 +68,11 @@ type ActiveRequestSnapshot = {
   startedAt: string;
   runningForMs: number;
   ip: string | null;
+  userId: number | null;
+  userTypeId: number | null;
+  firstName: string | null;
+  lastName: string | null;
+  roleName: string | null;
 };
 
 type SlowRequestSnapshot = ActiveRequestSnapshot & {
@@ -117,15 +134,43 @@ type PerformanceSnapshot = {
         lastDurationMs: number;
         lastSeenAt: string;
         sqlSnippet: string;
+        sampleSql: string;
+        sampleSqlSnippet: string;
       }>;
       recentSlowQueries: Array<{
         startedAt: string;
         durationMs: number;
         label: string;
         sqlSnippet: string;
+        requestId: string | null;
+        routeKey: string | null;
+        method: string | null;
+      }>;
+      routeCorrelations: Array<{
+        routeKey: string;
+        method: string;
+        requestCount: number;
+        averageTotalQueryDurationMs: number;
+        maxTotalQueryDurationMs: number;
+        topQueryLabels: string[];
+      }>;
+      recentRequestCorrelations: Array<{
+        requestId: string;
+        routeKey: string;
+        method: string;
+        startedAt: string;
+        requestDurationMs: number;
+        statusCode: number;
+        totalQueryDurationMs: number;
+        queries: Array<{
+          label: string;
+          durationMs: number;
+          sqlSnippet: string;
+        }>;
       }>;
     };
   };
+  externalCalls: ReturnType<typeof externalRequestDiagnosticsService.getSnapshot>;
   traffic: {
     totalRequestsSinceStart: number;
     totalErrorsSinceStart: number;
@@ -144,6 +189,13 @@ type PerformanceSnapshot = {
   recentSlowRequests: SlowRequestSnapshot[];
   recentErrors: ErrorRequestSnapshot[];
   history: PerformanceHistoryPoint[];
+  currentSessionId: string;
+  restartSessions: RestartSessionSummary[];
+  heapSnapshots: {
+    supported: boolean;
+    directory: string;
+    recentSnapshots: HeapSnapshotFile[];
+  };
 };
 
 type RouteAggregate = {
@@ -175,12 +227,19 @@ type ActiveRequestRecord = {
   startedAtIso: string;
   ip: string | null;
   userAgent: string | null;
+  userId: number | null;
+  userTypeId: number | null;
+  firstName: string | null;
+  lastName: string | null;
+  roleName: string | null;
 };
 
 type RequestStartContext = ActiveRequestRecord;
 
 type PersistedPerformanceRow = {
   captured_at: Date | string;
+  performance_session_id: string;
+  process_started_at: Date | string;
   cpu_percent: number;
   rss_mb: number;
   heap_used_mb: number;
@@ -281,6 +340,8 @@ const readNumber = (value: unknown): number | null => {
 
 const toHistoryPoint = (row: PersistedPerformanceRow): PerformanceHistoryPoint => ({
   timestamp: new Date(row.captured_at).toISOString(),
+  sessionId: String(row.performance_session_id),
+  processStartedAt: new Date(row.process_started_at).toISOString(),
   cpuPercent: round(Number(row.cpu_percent ?? 0)),
   rssMb: round(Number(row.rss_mb ?? 0)),
   heapUsedMb: round(Number(row.heap_used_mb ?? 0)),
@@ -301,6 +362,7 @@ const toHistoryPoint = (row: PersistedPerformanceRow): PerformanceHistoryPoint =
 
 class PerformanceMonitorService {
   private readonly startedAt = new Date();
+  private readonly sessionId = `${os.hostname()}-${process.pid}-${this.startedAt.toISOString()}`;
   private readonly slowRequestThresholdMs =
     Number(process.env.PERFORMANCE_SLOW_REQUEST_MS) || DEFAULT_SLOW_REQUEST_THRESHOLD_MS;
   private readonly routeAggregates = new Map<string, RouteAggregate>();
@@ -359,15 +421,43 @@ class PerformanceMonitorService {
       startedAtIso: new Date(startedAtMs).toISOString(),
       ip: req.ip || null,
       userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
+      userId: req.authContext?.id ?? null,
+      userTypeId: req.authContext?.userTypeId ?? null,
+      firstName: req.authContext?.firstName ?? null,
+      lastName: req.authContext?.lastName ?? null,
+      roleName: req.authContext?.roleName ?? req.authContext?.roleSlug ?? null,
     };
 
     this.activeRequests.set(id, context);
+    queryDiagnosticsService.startRequest(context);
     return context;
+  }
+
+  attachAuthenticatedUser(
+    requestId: string,
+    user: {
+      userId: number | null;
+      userTypeId: number | null;
+      firstName: string | null;
+      lastName: string | null;
+      roleName: string | null;
+    },
+  ): void {
+    const activeRequest = this.activeRequests.get(requestId);
+    if (!activeRequest) {
+      return;
+    }
+    activeRequest.userId = user.userId;
+    activeRequest.userTypeId = user.userTypeId;
+    activeRequest.firstName = user.firstName;
+    activeRequest.lastName = user.lastName;
+    activeRequest.roleName = user.roleName;
   }
 
   finishRequest(context: RequestStartContext, statusCode: number, durationMs: number, responseBodySize?: number | null): void {
     this.activeRequests.delete(context.id);
     this.totalRequestsSinceStart += 1;
+    queryDiagnosticsService.finishRequest(context, statusCode, durationMs);
     if (statusCode >= 500) {
       this.totalErrorsSinceStart += 1;
     }
@@ -438,6 +528,11 @@ class PerformanceMonitorService {
         durationMs: round(durationMs),
         ip: context.ip,
         userAgent: context.userAgent,
+        userId: context.userId,
+        userTypeId: context.userTypeId,
+        firstName: context.firstName,
+        lastName: context.lastName,
+        roleName: context.roleName,
       };
       pushLimited(this.recentSlowRequests, slowRequest, SLOW_REQUEST_LIMIT);
       logger.warn('[performance] Slow request detected', {
@@ -449,6 +544,10 @@ class PerformanceMonitorService {
         activeRequests: this.activeRequests.size,
         eventLoopLagMs: round(this.eventLoopLagMs),
         heapUsedMb: toMegabytes(process.memoryUsage().heapUsed),
+        userId: context.userId,
+        userTypeId: context.userTypeId,
+        userName: `${context.firstName ?? ''} ${context.lastName ?? ''}`.trim() || null,
+        roleName: context.roleName,
         dbPool: this.readDbPoolSnapshot(),
       });
     }
@@ -465,6 +564,11 @@ class PerformanceMonitorService {
         ip: context.ip,
         userAgent: context.userAgent,
         responseBodySize: responseBodySize ?? null,
+        userId: context.userId,
+        userTypeId: context.userTypeId,
+        firstName: context.firstName,
+        lastName: context.lastName,
+        roleName: context.roleName,
       };
       pushLimited(this.recentErrors, errorRequest, ERROR_REQUEST_LIMIT);
       logger.error('[performance] Server error request', {
@@ -474,12 +578,19 @@ class PerformanceMonitorService {
         statusCode,
         durationMs: round(durationMs),
         activeRequests: this.activeRequests.size,
+        userId: context.userId,
+        userTypeId: context.userTypeId,
+        userName: `${context.firstName ?? ''} ${context.lastName ?? ''}`.trim() || null,
+        roleName: context.roleName,
         dbPool: this.readDbPoolSnapshot(),
       });
     }
   }
 
   async getSnapshot(): Promise<PerformanceSnapshot> {
+    const mergedHistory = await this.getMergedHistory();
+    const restartSessions = this.buildRestartSessions(mergedHistory);
+    const recentHeapSnapshots = await heapDiagnosticsService.listSnapshots();
     const memory = process.memoryUsage();
     const cpuPercent = this.computeCpuPercent();
     const eventLoopUtilizationValue = this.computeEventLoopUtilization();
@@ -531,6 +642,7 @@ class PerformanceMonitorService {
         pool: dbPool,
         queries: queryDiagnosticsService.getSnapshot(),
       },
+      externalCalls: externalRequestDiagnosticsService.getSnapshot(),
       traffic: {
         totalRequestsSinceStart: this.totalRequestsSinceStart,
         totalErrorsSinceStart: this.totalErrorsSinceStart,
@@ -552,13 +664,25 @@ class PerformanceMonitorService {
           startedAt: entry.startedAtIso,
           runningForMs: round(Date.now() - entry.startedAtMs),
           ip: entry.ip,
+          userId: entry.userId,
+          userTypeId: entry.userTypeId,
+          firstName: entry.firstName,
+          lastName: entry.lastName,
+          roleName: entry.roleName,
         }))
         .sort((left, right) => right.runningForMs - left.runningForMs)
         .slice(0, ACTIVE_REQUEST_LIMIT),
       topRoutes: this.buildRouteDiagnostics(),
       recentSlowRequests: [...this.recentSlowRequests].reverse(),
       recentErrors: [...this.recentErrors].reverse(),
-      history: await this.getMergedHistory(),
+      history: mergedHistory,
+      currentSessionId: this.sessionId,
+      restartSessions,
+      heapSnapshots: {
+        supported: true,
+        directory: heapDiagnosticsService.getSnapshotDirectory(),
+        recentSnapshots: recentHeapSnapshots,
+      },
     };
   }
 
@@ -581,6 +705,8 @@ class PerformanceMonitorService {
 
     const historyPoint: PerformanceHistoryPoint = {
       timestamp: new Date().toISOString(),
+      sessionId: this.sessionId,
+      processStartedAt: this.startedAt.toISOString(),
       cpuPercent: this.computeCpuPercent(),
       rssMb: toMegabytes(memory.rss),
       heapUsedMb: toMegabytes(memory.heapUsed),
@@ -631,6 +757,12 @@ class PerformanceMonitorService {
         p95Ms: route.p95ResponseMs,
         slowCount: route.slowCount,
       })),
+      topExternalCalls: snapshot.externalCalls.topEndpoints.slice(0, 3).map((call) => ({
+        endpoint: `${call.method} ${call.host}${call.pathLabel}`,
+        avgMs: call.averageDurationMs,
+        p95Ms: call.p95DurationMs,
+        slowCount: call.slowCount,
+      })),
     });
   }
 
@@ -661,10 +793,11 @@ class PerformanceMonitorService {
 
   private async getMergedHistory(): Promise<PerformanceHistoryPoint[]> {
     const persisted = await this.readPersistedHistory();
-    const liveMap = new Map(this.history.map((point) => [point.timestamp, point]));
+    const liveMap = new Map(this.history.map((point) => [`${point.sessionId}\u0000${point.timestamp}`, point]));
     for (const point of persisted) {
-      if (!liveMap.has(point.timestamp)) {
-        liveMap.set(point.timestamp, point);
+      const key = `${point.sessionId}\u0000${point.timestamp}`;
+      if (!liveMap.has(key)) {
+        liveMap.set(key, point);
       }
     }
     return [...liveMap.values()]
@@ -683,6 +816,8 @@ class PerformanceMonitorService {
           `
             SELECT
               captured_at,
+              performance_session_id,
+              process_started_at,
               cpu_percent,
               rss_mb,
               heap_used_mb,
@@ -733,6 +868,8 @@ class PerformanceMonitorService {
         `
           INSERT INTO ${PERFORMANCE_SNAPSHOTS_TABLE} (
             captured_at,
+            performance_session_id,
+            process_started_at,
             cpu_percent,
             rss_mb,
             heap_used_mb,
@@ -752,6 +889,8 @@ class PerformanceMonitorService {
             updated_at
           ) VALUES (
             :capturedAt,
+            :performanceSessionId,
+            :processStartedAt,
             :cpuPercent,
             :rssMb,
             :heapUsedMb,
@@ -774,6 +913,8 @@ class PerformanceMonitorService {
         {
           replacements: {
             capturedAt: point.timestamp,
+            performanceSessionId: point.sessionId,
+            processStartedAt: point.processStartedAt,
             cpuPercent: point.cpuPercent,
             rssMb: point.rssMb,
             heapUsedMb: point.heapUsedMb,
@@ -813,13 +954,54 @@ class PerformanceMonitorService {
 
   private handlePersistenceError(operation: 'read' | 'write', error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
-    const missingTable = /performance_snapshots|does not exist|relation .* does not exist|invalid object name/i.test(message);
-    if (missingTable && !this.persistenceUnavailableLogged) {
-      this.persistenceUnavailableLogged = true;
-      logger.warn(`[performance] Snapshot persistence unavailable during ${operation}. Run the performance snapshots migration to enable persisted history.`);
+    const missingPersistenceSchema =
+      /performance_snapshots|performance_session_id|process_started_at|does not exist|relation .* does not exist|column .* does not exist|invalid object name/i.test(
+        message,
+      );
+    if (missingPersistenceSchema) {
+      if (!this.persistenceUnavailableLogged) {
+        this.persistenceUnavailableLogged = true;
+        logger.warn(
+          `[performance] Snapshot persistence unavailable during ${operation}. Run the performance snapshots migrations to enable persisted history and restart-session tracking.`,
+        );
+      }
       return;
     }
     logger.warn(`[performance] Snapshot persistence ${operation} failed`, { message });
+  }
+
+  private buildRestartSessions(history: PerformanceHistoryPoint[]): RestartSessionSummary[] {
+    const sessions = new Map<string, RestartSessionSummary>();
+
+    for (const point of history) {
+      const current = sessions.get(point.sessionId);
+      if (!current) {
+        sessions.set(point.sessionId, {
+          sessionId: point.sessionId,
+          startedAt: point.processStartedAt,
+          endedAt: point.timestamp,
+          sampleCount: 1,
+          isCurrent: point.sessionId === this.sessionId,
+        });
+        continue;
+      }
+
+      current.sampleCount += 1;
+      if (new Date(point.timestamp).getTime() > new Date(current.endedAt ?? point.timestamp).getTime()) {
+        current.endedAt = point.timestamp;
+      }
+      if (new Date(point.processStartedAt).getTime() < new Date(current.startedAt).getTime()) {
+        current.startedAt = point.processStartedAt;
+      }
+      current.isCurrent = current.isCurrent || point.sessionId === this.sessionId;
+    }
+
+    return [...sessions.values()]
+      .sort((left, right) => new Date(right.startedAt).getTime() - new Date(left.startedAt).getTime())
+      .map((session) => ({
+        ...session,
+        endedAt: session.isCurrent ? null : session.endedAt,
+      }));
   }
 
   private computeCpuPercent(): number {

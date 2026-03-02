@@ -2,6 +2,8 @@ import axiosInstance from "../utils/axiosInstance";
 
 export type PerformanceHistoryPoint = {
   timestamp: string;
+  sessionId: string;
+  processStartedAt: string;
   cpuPercent: number;
   rssMb: number;
   heapUsedMb: number;
@@ -40,6 +42,11 @@ export type ActiveRequestSnapshot = {
   startedAt: string;
   runningForMs: number;
   ip: string | null;
+  userId: number | null;
+  userTypeId: number | null;
+  firstName: string | null;
+  lastName: string | null;
+  roleName: string | null;
 };
 
 export type SlowRequestSnapshot = ActiveRequestSnapshot & {
@@ -55,6 +62,7 @@ export type ErrorRequestSnapshot = SlowRequestSnapshot & {
 export type PerformanceSnapshotResponse = {
   generatedAt: string;
   startedAt: string;
+  currentSessionId: string;
   environment: {
     nodeEnv: string;
     hostname: string;
@@ -108,14 +116,107 @@ export type PerformanceSnapshotResponse = {
         lastDurationMs: number;
         lastSeenAt: string;
         sqlSnippet: string;
+        sampleSql: string;
+        sampleSqlSnippet: string;
       }>;
       recentSlowQueries: Array<{
         startedAt: string;
         durationMs: number;
         label: string;
         sqlSnippet: string;
+        requestId: string | null;
+        routeKey: string | null;
+        method: string | null;
+        userId: number | null;
+        userTypeId: number | null;
+      }>;
+      routeCorrelations: Array<{
+        routeKey: string;
+        method: string;
+        requestCount: number;
+        averageTotalQueryDurationMs: number;
+        maxTotalQueryDurationMs: number;
+        topQueryLabels: string[];
+      }>;
+      recentRequestCorrelations: Array<{
+        requestId: string;
+        routeKey: string;
+        method: string;
+        startedAt: string;
+        requestDurationMs: number;
+        statusCode: number;
+        totalQueryDurationMs: number;
+        userId: number | null;
+        userTypeId: number | null;
+        firstName: string | null;
+        lastName: string | null;
+        roleName: string | null;
+        queries: Array<{
+          label: string;
+          durationMs: number;
+          sqlSnippet: string;
+        }>;
       }>;
     };
+  };
+  externalCalls: {
+    totalCapturedSinceStart: number;
+    slowExternalCallThresholdMs: number;
+    topEndpoints: Array<{
+      protocol: "http" | "https";
+      method: string;
+      host: string;
+      pathLabel: string;
+      count: number;
+      slowCount: number;
+      averageDurationMs: number;
+      p95DurationMs: number;
+      maxDurationMs: number;
+      lastDurationMs: number;
+      lastStatusCode: number | null;
+      lastErrorCode: string | null;
+      lastSeenAt: string;
+    }>;
+    recentSlowCalls: Array<{
+      startedAt: string;
+      durationMs: number;
+      protocol: "http" | "https";
+      method: string;
+      host: string;
+      path: string;
+      statusCode: number | null;
+      errorCode: string | null;
+      requestId: string | null;
+      routeKey: string | null;
+      userId: number | null;
+      userTypeId: number | null;
+      firstName: string | null;
+      lastName: string | null;
+      roleName: string | null;
+    }>;
+    activeCalls: Array<{
+      requestId: string | null;
+      routeKey: string | null;
+      userId: number | null;
+      userTypeId: number | null;
+      firstName: string | null;
+      lastName: string | null;
+      roleName: string | null;
+      method: string;
+      protocol: "http" | "https";
+      host: string;
+      path: string;
+      startedAt: string;
+      startedAtMs: number;
+      runningForMs: number;
+    }>;
+    routeCorrelations: Array<{
+      routeKey: string;
+      requestCount: number;
+      averageExternalDurationMs: number;
+      maxExternalDurationMs: number;
+      topEndpoints: string[];
+    }>;
   };
   traffic: {
     totalRequestsSinceStart: number;
@@ -134,10 +235,54 @@ export type PerformanceSnapshotResponse = {
   topRoutes: RouteDiagnostics[];
   recentSlowRequests: SlowRequestSnapshot[];
   recentErrors: ErrorRequestSnapshot[];
+  restartSessions: Array<{
+    sessionId: string;
+    startedAt: string;
+    endedAt: string | null;
+    sampleCount: number;
+    isCurrent: boolean;
+  }>;
   history: PerformanceHistoryPoint[];
+  heapSnapshots: {
+    supported: boolean;
+    directory: string;
+    recentSnapshots: Array<{
+      fileName: string;
+      filePath: string;
+      sizeMb: number;
+      createdAt: string;
+    }>;
+  };
+};
+
+export type PerformanceExplainResponse = {
+  sql: string;
+  plan: string[];
+  generatedAt: string;
+};
+
+export type CaptureHeapSnapshotResponse = {
+  snapshot: {
+    fileName: string;
+    filePath: string;
+    sizeMb: number;
+    createdAt: string;
+  };
+  generatedAt: string;
+  warning: string;
 };
 
 export const fetchPerformanceSnapshot = async (): Promise<PerformanceSnapshotResponse> => {
   const response = await axiosInstance.get<PerformanceSnapshotResponse>("/performance/snapshot");
+  return response.data;
+};
+
+export const runPerformanceExplain = async (sql: string): Promise<PerformanceExplainResponse> => {
+  const response = await axiosInstance.post<PerformanceExplainResponse>("/performance/explain", { sql });
+  return response.data;
+};
+
+export const capturePerformanceHeapSnapshot = async (): Promise<CaptureHeapSnapshotResponse> => {
+  const response = await axiosInstance.post<CaptureHeapSnapshotResponse>("/performance/heap-snapshot");
   return response.data;
 };

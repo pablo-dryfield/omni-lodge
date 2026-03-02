@@ -2,12 +2,14 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Badge,
+  Button,
   Group,
   Loader,
   Pagination,
   Paper,
   ScrollArea,
   SegmentedControl,
+  Select,
   SimpleGrid,
   Stack,
   Table,
@@ -15,12 +17,15 @@ import {
   ThemeIcon,
   Title,
 } from "@mantine/core";
+import { DateTimePicker } from "@mantine/dates";
 import { useMediaQuery } from "@mantine/hooks";
 import {
   IconActivity,
   IconAlertTriangle,
+  IconCalendarEvent,
   IconChartLine,
   IconClock,
+  IconCopy,
   IconCpu,
   IconDatabase,
   IconRoute,
@@ -46,7 +51,11 @@ import { useAppDispatch } from "../store/hooks";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import type { GenericPageProps } from "../types/general/GenericPageProps";
 import {
+  capturePerformanceHeapSnapshot,
   fetchPerformanceSnapshot,
+  runPerformanceExplain,
+  type CaptureHeapSnapshotResponse,
+  type PerformanceExplainResponse,
   type PerformanceSnapshotResponse,
 } from "../api/performance";
 
@@ -58,6 +67,7 @@ const HISTORY_RANGE_OPTIONS = [
   { label: "24h", value: "24h" },
   { label: "7d", value: "7d" },
   { label: "30d", value: "30d" },
+  { label: "Custom", value: "custom" },
 ] as const;
 
 type HistoryRange = (typeof HISTORY_RANGE_OPTIONS)[number]["value"];
@@ -67,7 +77,11 @@ type PaginatedSectionKey =
   | "slowRequests"
   | "errors"
   | "topQueries"
-  | "slowQueries";
+  | "slowQueries"
+  | "queryRoutes"
+  | "requestQueries"
+  | "externalEndpoints"
+  | "externalSlowCalls";
 
 type DiagnosisSeverity = "critical" | "warning" | "info" | "healthy";
 
@@ -78,6 +92,9 @@ type DiagnosisItem = {
   signals: string[];
   actions: string[];
 };
+
+type CustomHistoryRangeValue = [Date | null, Date | null];
+type SessionScope = "all" | "current" | "specific";
 
 const formatMetricNumber = (value: number, digits = 0): string =>
   new Intl.NumberFormat("en-US", {
@@ -98,6 +115,28 @@ const formatDuration = (value: number): string => {
 const formatPercent = (value: number): string => `${formatMetricNumber(value, value < 10 ? 2 : 1)}%`;
 const formatTimestamp = (value: string): string => dayjs(value).format("DD/MM/YYYY HH:mm:ss");
 const formatChartTimestamp = (value: string): string => dayjs(value).format("DD/MM HH:mm");
+const formatDateOnly = (value: Date | string): string => dayjs(value).format("DD/MM/YYYY");
+const formatUserIdentity = (user: {
+  firstName?: string | null;
+  lastName?: string | null;
+  roleName?: string | null;
+  userId?: number | null;
+  userTypeId?: number | null;
+}): string => {
+  const fullName = `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim();
+  const role = user.roleName?.trim() || null;
+  const ids =
+    user.userId != null || user.userTypeId != null
+      ? `#${user.userId ?? "-"} / type ${user.userTypeId ?? "-"}`
+      : null;
+  return [fullName || null, role, ids].filter(Boolean).join(" | ") || "Guest / unauthenticated";
+};
+
+const createDefaultCustomHistoryRange = (): CustomHistoryRangeValue => {
+  const end = new Date();
+  const start = dayjs().subtract(6, "day").toDate();
+  return [start, end];
+};
 
 const formatUptime = (seconds: number): string => {
   const uptime = dayjs.duration(seconds, "seconds");
@@ -157,6 +196,8 @@ const generateDiagnostics = (
     latestHistory && earliestHistory ? latestHistory.p95ResponseMs - earliestHistory.p95ResponseMs : 0;
   const topRoute = snapshot.topRoutes[0];
   const topQuery = snapshot.database.queries.topQueries[0];
+  const topQueryRoute = snapshot.database.queries.routeCorrelations[0];
+  const topExternalEndpoint = snapshot.externalCalls.topEndpoints[0];
   const hasMemoryGrowthTrend = heapGrowth >= 250 || rssGrowth >= 400;
   const hasHighHeapPressure = snapshot.process.heapUsedPercent >= 88;
 
@@ -322,6 +363,42 @@ const generateDiagnostics = (
     });
   }
 
+  if (topQueryRoute && topQueryRoute.averageTotalQueryDurationMs >= 250) {
+    diagnostics.push({
+      severity: topQueryRoute.averageTotalQueryDurationMs >= 800 ? "critical" : "warning",
+      title: "One route is spending too much time inside SQL",
+      summary: "A specific request path is dominated by database work rather than application logic.",
+      signals: [
+        `${topQueryRoute.method} ${topQueryRoute.routeKey} averages ${formatDuration(topQueryRoute.averageTotalQueryDurationMs)} of SQL time per request.`,
+        `Its max SQL time reached ${formatDuration(topQueryRoute.maxTotalQueryDurationMs)}.`,
+        `Top query labels on this route: ${topQueryRoute.topQueryLabels.join(", ") || "none"}.`,
+      ],
+      actions: [
+        "Rewrite this endpoint so it executes fewer queries per request.",
+        "Preload related data in one targeted query instead of repeated follow-up queries.",
+        "Move expensive reporting or reconciliation logic off the interactive request path.",
+      ],
+    });
+  }
+
+  if (topExternalEndpoint && topExternalEndpoint.p95DurationMs >= 600) {
+    diagnostics.push({
+      severity: topExternalEndpoint.p95DurationMs >= 1500 ? "critical" : "warning",
+      title: "Outbound network calls are contributing meaningful latency",
+      summary: "At least one external dependency is slow enough to affect request responsiveness.",
+      signals: [
+        `${topExternalEndpoint.method} ${topExternalEndpoint.host}${topExternalEndpoint.pathLabel} has P95 ${formatDuration(topExternalEndpoint.p95DurationMs)}.`,
+        `Its average duration is ${formatDuration(topExternalEndpoint.averageDurationMs)} across ${formatMetricNumber(topExternalEndpoint.count)} calls.`,
+        topExternalEndpoint.lastErrorCode ? `Last error code was ${topExternalEndpoint.lastErrorCode}.` : "No recent transport error was recorded on the latest call.",
+      ],
+      actions: [
+        "Add tight client-side timeouts and fail-fast behavior to this external dependency.",
+        "Cache or defer calls that do not need to block the interactive request.",
+        "Retry only idempotent calls and keep retry counts bounded to avoid request pileups.",
+      ],
+    });
+  }
+
   if (history.length < 10) {
     diagnostics.push({
       severity: "info",
@@ -478,6 +555,22 @@ const PerformancePage = ({ title }: GenericPageProps) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [historyRange, setHistoryRange] = useState<HistoryRange>("7d");
+  const [customHistoryRange, setCustomHistoryRange] = useState<CustomHistoryRangeValue>(() => createDefaultCustomHistoryRange());
+  const [sessionScope, setSessionScope] = useState<SessionScope>("all");
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const [explainResult, setExplainResult] = useState<PerformanceExplainResponse | null>(null);
+  const [explainLoadingSql, setExplainLoadingSql] = useState<string | null>(null);
+  const [explainError, setExplainError] = useState<string | null>(null);
+  const [heapCaptureState, setHeapCaptureState] = useState<{
+    loading: boolean;
+    error: string | null;
+    lastCapture: CaptureHeapSnapshotResponse | null;
+  }>({
+    loading: false,
+    error: null,
+    lastCapture: null,
+  });
   const [tablePages, setTablePages] = useState<Record<PaginatedSectionKey, number>>({
     routes: 1,
     activeRequests: 1,
@@ -485,6 +578,10 @@ const PerformancePage = ({ title }: GenericPageProps) => {
     errors: 1,
     topQueries: 1,
     slowQueries: 1,
+    queryRoutes: 1,
+    requestQueries: 1,
+    externalEndpoints: 1,
+    externalSlowCalls: 1,
   });
   const tablePageSize = isMobile ? 6 : 10;
 
@@ -534,8 +631,51 @@ const PerformancePage = ({ title }: GenericPageProps) => {
     };
   }, []);
 
+  useEffect(() => {
+    if (!snapshot) {
+      return;
+    }
+    if (sessionScope === "current") {
+      setSelectedSessionId(snapshot.currentSessionId);
+      return;
+    }
+    if (sessionScope === "specific") {
+      const exists = snapshot.restartSessions.some((session) => session.sessionId === selectedSessionId);
+      if (!exists) {
+        setSelectedSessionId(snapshot.restartSessions[0]?.sessionId ?? null);
+      }
+      return;
+    }
+    setSelectedSessionId(null);
+  }, [selectedSessionId, sessionScope, snapshot]);
+
   const history = useMemo(() => {
     const source = snapshot?.history ?? [];
+    const sessionFiltered =
+      sessionScope === "all"
+        ? source
+        : source.filter((point) =>
+            sessionScope === "current"
+              ? point.sessionId === snapshot?.currentSessionId
+              : selectedSessionId
+                ? point.sessionId === selectedSessionId
+                : true,
+          );
+    if (historyRange === "custom") {
+      const [start, end] = customHistoryRange;
+      if (!start || !end) {
+        return sessionFiltered;
+      }
+      const rangeStart = dayjs(start);
+      const rangeEnd = dayjs(end);
+      return sessionFiltered.filter((point) => {
+        const timestamp = dayjs(point.timestamp);
+        return (
+          (timestamp.isAfter(rangeStart) || timestamp.isSame(rangeStart)) &&
+          (timestamp.isBefore(rangeEnd) || timestamp.isSame(rangeEnd))
+        );
+      });
+    }
     const now = dayjs();
     const threshold =
       historyRange === "24h"
@@ -543,8 +683,39 @@ const PerformancePage = ({ title }: GenericPageProps) => {
         : historyRange === "30d"
           ? now.subtract(30, "day")
           : now.subtract(7, "day");
-    return source.filter((point) => dayjs(point.timestamp).isAfter(threshold));
-  }, [historyRange, snapshot?.history]);
+    return sessionFiltered.filter((point) => dayjs(point.timestamp).isAfter(threshold));
+  }, [customHistoryRange, historyRange, selectedSessionId, sessionScope, snapshot?.currentSessionId, snapshot?.history]);
+
+  const historyRangeLabel = useMemo(() => {
+    if (historyRange !== "custom") {
+      return historyRange;
+    }
+    const [start, end] = customHistoryRange;
+    if (!start || !end) {
+      return "custom";
+    }
+    return `${dayjs(start).format("DD/MM/YYYY HH:mm:ss")} - ${dayjs(end).format("DD/MM/YYYY HH:mm:ss")}`;
+  }, [customHistoryRange, historyRange]);
+
+  const minHistoryDate = useMemo(() => {
+    const firstPoint = snapshot?.history?.[0];
+    return firstPoint ? dayjs(firstPoint.timestamp).toDate() : undefined;
+  }, [snapshot?.history]);
+
+  const maxHistoryDate = useMemo(() => {
+    const source = snapshot?.history ?? [];
+    const lastPoint = source[source.length - 1];
+    return lastPoint ? dayjs(lastPoint.timestamp).toDate() : new Date();
+  }, [snapshot?.history]);
+
+  const sessionOptions = useMemo(
+    () =>
+      (snapshot?.restartSessions ?? []).map((session) => ({
+        value: session.sessionId,
+        label: `${session.isCurrent ? "Current" : "Restart"}: ${formatTimestamp(session.startedAt)}${session.endedAt ? ` -> ${formatTimestamp(session.endedAt)}` : " -> now"}`,
+      })),
+    [snapshot?.restartSessions],
+  );
 
   const requestHistory = useMemo(
     () =>
@@ -575,6 +746,10 @@ const PerformancePage = ({ title }: GenericPageProps) => {
   const errorTotalPages = getTotalPages(snapshot?.recentErrors.length ?? 0, tablePageSize);
   const topQueryTotalPages = getTotalPages(snapshot?.database.queries.topQueries.length ?? 0, tablePageSize);
   const slowQueryTotalPages = getTotalPages(snapshot?.database.queries.recentSlowQueries.length ?? 0, tablePageSize);
+  const queryRouteTotalPages = getTotalPages(snapshot?.database.queries.routeCorrelations.length ?? 0, tablePageSize);
+  const requestQueryTotalPages = getTotalPages(snapshot?.database.queries.recentRequestCorrelations.length ?? 0, tablePageSize);
+  const externalEndpointTotalPages = getTotalPages(snapshot?.externalCalls.topEndpoints.length ?? 0, tablePageSize);
+  const externalSlowCallTotalPages = getTotalPages(snapshot?.externalCalls.recentSlowCalls.length ?? 0, tablePageSize);
 
   const routePage = Math.min(tablePages.routes, routeTotalPages);
   const activeRequestPage = Math.min(tablePages.activeRequests, activeRequestTotalPages);
@@ -582,6 +757,10 @@ const PerformancePage = ({ title }: GenericPageProps) => {
   const errorPage = Math.min(tablePages.errors, errorTotalPages);
   const topQueryPage = Math.min(tablePages.topQueries, topQueryTotalPages);
   const slowQueryPage = Math.min(tablePages.slowQueries, slowQueryTotalPages);
+  const queryRoutePage = Math.min(tablePages.queryRoutes, queryRouteTotalPages);
+  const requestQueryPage = Math.min(tablePages.requestQueries, requestQueryTotalPages);
+  const externalEndpointPage = Math.min(tablePages.externalEndpoints, externalEndpointTotalPages);
+  const externalSlowCallPage = Math.min(tablePages.externalSlowCalls, externalSlowCallTotalPages);
 
   const visibleRoutes = paginateItems(snapshot?.topRoutes ?? [], routePage, tablePageSize);
   const visibleActiveRequests = paginateItems(snapshot?.activeRequests ?? [], activeRequestPage, tablePageSize);
@@ -589,10 +768,276 @@ const PerformancePage = ({ title }: GenericPageProps) => {
   const visibleErrors = paginateItems(snapshot?.recentErrors ?? [], errorPage, tablePageSize);
   const visibleTopQueries = paginateItems(snapshot?.database.queries.topQueries ?? [], topQueryPage, tablePageSize);
   const visibleSlowQueries = paginateItems(snapshot?.database.queries.recentSlowQueries ?? [], slowQueryPage, tablePageSize);
-  const diagnosisItems = snapshot ? generateDiagnostics(snapshot, history) : [];
+  const visibleQueryRoutes = paginateItems(snapshot?.database.queries.routeCorrelations ?? [], queryRoutePage, tablePageSize);
+  const visibleRequestQueryCorrelations = paginateItems(
+    snapshot?.database.queries.recentRequestCorrelations ?? [],
+    requestQueryPage,
+    tablePageSize,
+  );
+  const visibleExternalEndpoints = paginateItems(
+    snapshot?.externalCalls.topEndpoints ?? [],
+    externalEndpointPage,
+    tablePageSize,
+  );
+  const visibleExternalSlowCalls = paginateItems(
+    snapshot?.externalCalls.recentSlowCalls ?? [],
+    externalSlowCallPage,
+    tablePageSize,
+  );
+  const diagnosisItems = useMemo(() => (snapshot ? generateDiagnostics(snapshot, history) : []), [history, snapshot]);
+
+  const diagnosticBundle = useMemo(() => {
+    if (!snapshot) {
+      return "";
+    }
+
+    const topRoutes = snapshot.topRoutes.slice(0, 5);
+    const topQueries = snapshot.database.queries.topQueries.slice(0, 5);
+    const queryRoutes = snapshot.database.queries.routeCorrelations.slice(0, 5);
+    const requestQueryCorrelations = snapshot.database.queries.recentRequestCorrelations.slice(0, 5);
+    const externalEndpoints = snapshot.externalCalls.topEndpoints.slice(0, 5);
+    const externalSlowCalls = snapshot.externalCalls.recentSlowCalls.slice(0, 5);
+    const slowRequests = snapshot.recentSlowRequests.slice(0, 5);
+    const errorRequests = snapshot.recentErrors.slice(0, 5);
+    const activeRequests = snapshot.activeRequests.slice(0, 5);
+    const activeHandles = snapshot.handles.slice(0, 5);
+    const heapSnapshots = snapshot.heapSnapshots.recentSnapshots.slice(0, 5);
+    const diagnoses = diagnosisItems.slice(0, 5);
+    const selectedSession =
+      sessionScope === "current"
+        ? snapshot.restartSessions.find((session) => session.sessionId === snapshot.currentSessionId) ?? null
+        : sessionScope === "specific" && selectedSessionId
+          ? snapshot.restartSessions.find((session) => session.sessionId === selectedSessionId) ?? null
+          : null;
+
+    return [
+      "OmniLodge Performance Diagnostic Bundle",
+      `Generated At: ${formatTimestamp(snapshot.generatedAt)}`,
+      `History Range: ${historyRangeLabel}`,
+      `Session Scope: ${sessionScope}${selectedSessionId ? ` (${selectedSessionId})` : ""}`,
+      `Process Started At: ${formatTimestamp(snapshot.startedAt)}`,
+      `Hostname: ${snapshot.environment.hostname}`,
+      `Platform: ${snapshot.environment.platform} ${snapshot.environment.release}`,
+      `PID: ${snapshot.environment.processId}`,
+      `Filtered History Samples: ${formatMetricNumber(history.length)}`,
+      "",
+      "Restart Session",
+      `- Current Session Id: ${snapshot.currentSessionId}`,
+      ...(selectedSession
+        ? [
+            `- Selected Session Id: ${selectedSession.sessionId}`,
+            `- Selected Session Start: ${formatTimestamp(selectedSession.startedAt)}`,
+            `- Selected Session End: ${selectedSession.endedAt ? formatTimestamp(selectedSession.endedAt) : "now"}`,
+            `- Selected Session Samples: ${formatMetricNumber(selectedSession.sampleCount)}`,
+          ]
+        : ["- Selected Session: none"]),
+      "",
+      "Top Metrics",
+      `- P95 Latency: ${formatDuration(snapshot.traffic.p95ResponseMs)}`,
+      `- Average Latency: ${formatDuration(snapshot.traffic.averageResponseMs)}`,
+      `- Active Requests: ${formatMetricNumber(snapshot.process.activeRequestCount)}`,
+      `- CPU: ${formatPercent(snapshot.process.cpuPercent)}`,
+      `- Heap Used: ${formatMetricNumber(snapshot.process.heapUsedMb, 1)} MB (${formatPercent(snapshot.process.heapUsedPercent)})`,
+      `- RSS: ${formatMetricNumber(snapshot.process.rssMb, 1)} MB`,
+      `- Event Loop Lag: ${formatDuration(snapshot.process.eventLoopLagMs)}`,
+      `- DB Pending: ${formatMetricNumber(snapshot.database.pool.pending ?? 0)}`,
+      `- DB Borrowed: ${formatMetricNumber(snapshot.database.pool.borrowed ?? 0)}`,
+      `- Recent Error Rate: ${formatPercent(snapshot.traffic.errorRatePercent)}`,
+      "",
+      "Runtime Health",
+      `- Uptime: ${formatUptime(snapshot.process.uptimeSeconds)}`,
+      `- Heap Total: ${formatMetricNumber(snapshot.process.heapTotalMb, 1)} MB`,
+      `- External: ${formatMetricNumber(snapshot.process.externalMb, 1)} MB`,
+      `- System Memory Used: ${formatMetricNumber(snapshot.system.usedMemoryMb, 1)} MB (${formatPercent(snapshot.system.usedMemoryPercent)})`,
+      `- Load Average: ${snapshot.system.loadAverage.map((value) => formatMetricNumber(value, 2)).join(" / ")}`,
+      `- DB Pool Size: ${formatMetricNumber(snapshot.database.pool.size ?? 0)}`,
+      `- DB Pool Available: ${formatMetricNumber(snapshot.database.pool.available ?? 0)}`,
+      `- DB Pool Borrowed: ${formatMetricNumber(snapshot.database.pool.borrowed ?? 0)}`,
+      `- DB Pool Pending: ${formatMetricNumber(snapshot.database.pool.pending ?? 0)}`,
+      "",
+      "Traffic Context",
+      `- Requests Since Start: ${formatMetricNumber(snapshot.traffic.totalRequestsSinceStart)}`,
+      `- 5xx Since Start: ${formatMetricNumber(snapshot.traffic.totalErrorsSinceStart)}`,
+      `- Recent Request Count: ${formatMetricNumber(snapshot.traffic.recentRequestCount)}`,
+      `- Recent Slow Request Count: ${formatMetricNumber(snapshot.traffic.slowRequestCount)}`,
+      `- Recent 5xx Count: ${formatMetricNumber(snapshot.traffic.recentErrorCount)}`,
+      "",
+      "Diagnosis",
+      ...(diagnoses.length > 0
+        ? diagnoses.flatMap((item, index) => [
+            `${index + 1}. [${item.severity.toUpperCase()}] ${item.title}`,
+            `   Summary: ${item.summary}`,
+            ...item.signals.map((signal) => `   Signal: ${signal}`),
+            ...item.actions.map((action) => `   Action: ${action}`),
+          ])
+        : ["- No active diagnosis items."]),
+      "",
+      "Top Slow Routes",
+      ...(topRoutes.length > 0
+        ? topRoutes.map(
+            (route, index) =>
+              `${index + 1}. ${route.method} ${route.routeKey} | p95=${formatDuration(route.p95ResponseMs)} | avg=${formatDuration(route.averageResponseMs)} | count=${formatMetricNumber(route.requestCount)} | errors=${formatMetricNumber(route.errorCount)}`,
+          )
+        : ["- None"]),
+      "",
+      "Top Slow SQL Patterns",
+      ...(topQueries.length > 0
+        ? topQueries.map(
+            (query, index) =>
+              `${index + 1}. ${query.label} | p95=${formatDuration(query.p95DurationMs)} | avg=${formatDuration(query.averageDurationMs)} | count=${formatMetricNumber(query.count)} | sql=${query.sqlSnippet}`,
+          )
+        : ["- None"]),
+      "",
+      "Route To SQL Correlation",
+      ...(queryRoutes.length > 0
+        ? queryRoutes.map(
+            (route, index) =>
+              `${index + 1}. ${route.method} ${route.routeKey} | avg-sql=${formatDuration(route.averageTotalQueryDurationMs)} | max-sql=${formatDuration(route.maxTotalQueryDurationMs)} | top=${route.topQueryLabels.join(", ") || "-"}`,
+          )
+        : ["- None"]),
+      "",
+      "Recent Request Query Correlations",
+      ...(requestQueryCorrelations.length > 0
+        ? requestQueryCorrelations.map(
+            (request, index) =>
+              `${index + 1}. ${request.method} ${request.routeKey} | user=${formatUserIdentity(request)} | request=${formatDuration(request.requestDurationMs)} | sql=${formatDuration(request.totalQueryDurationMs)} | queries=${request.queries.map((query) => query.label).join(", ") || "-"}`,
+          )
+        : ["- None"]),
+      "",
+      "Top External Calls",
+      ...(externalEndpoints.length > 0
+        ? externalEndpoints.map(
+            (call, index) =>
+              `${index + 1}. ${call.method} ${call.host}${call.pathLabel} | p95=${formatDuration(call.p95DurationMs)} | avg=${formatDuration(call.averageDurationMs)} | count=${formatMetricNumber(call.count)} | status=${call.lastStatusCode ?? "-"} | error=${call.lastErrorCode ?? "-"}`,
+          )
+        : ["- None"]),
+      "",
+      "Recent Slow External Calls",
+      ...(externalSlowCalls.length > 0
+        ? externalSlowCalls.map(
+            (call, index) =>
+              `${index + 1}. ${call.method} ${call.host}${call.path} | user=${formatUserIdentity(call)} | duration=${formatDuration(call.durationMs)} | route=${call.routeKey ?? "-"} | status=${call.statusCode ?? "-"} | error=${call.errorCode ?? "-"}`,
+          )
+        : ["- None"]),
+      "",
+      "Current In-Flight Requests",
+      ...(activeRequests.length > 0
+        ? activeRequests.map(
+            (request, index) =>
+              `${index + 1}. ${request.method} ${request.routeKey} | user=${formatUserIdentity(request)} | running=${formatDuration(request.runningForMs)} | started=${formatTimestamp(request.startedAt)}`,
+          )
+        : ["- None"]),
+      "",
+      "Active Handles",
+      ...(activeHandles.length > 0
+        ? activeHandles.map(
+            (handle, index) =>
+              `${index + 1}. ${handle.type} | count=${formatMetricNumber(handle.count)}`,
+          )
+        : ["- None"]),
+      "",
+      "Recent Slow Requests",
+      ...(slowRequests.length > 0
+        ? slowRequests.map(
+            (request, index) =>
+              `${index + 1}. ${request.method} ${request.routeKey} | user=${formatUserIdentity(request)} | status=${request.statusCode} | duration=${formatDuration(request.durationMs)} | started=${formatTimestamp(request.startedAt)}`,
+          )
+        : ["- None"]),
+      "",
+      "Recent 5xx Requests",
+      ...(errorRequests.length > 0
+        ? errorRequests.map(
+            (request, index) =>
+              `${index + 1}. ${request.method} ${request.routeKey} | user=${formatUserIdentity(request)} | status=${request.statusCode} | duration=${formatDuration(request.durationMs)} | started=${formatTimestamp(request.startedAt)}`,
+          )
+        : ["- None"]),
+      "",
+      "Heap Snapshots",
+      `- Directory: ${snapshot.heapSnapshots.directory}`,
+      ...(heapSnapshots.length > 0
+        ? heapSnapshots.map(
+            (file, index) =>
+              `${index + 1}. ${file.fileName} | created=${formatTimestamp(file.createdAt)} | size=${formatMetricNumber(file.sizeMb, 2)} MB`,
+          )
+        : ["- None"]),
+    ].join("\n");
+  }, [diagnosisItems, history.length, historyRangeLabel, selectedSessionId, sessionScope, snapshot]);
 
   const setSectionPage = (section: PaginatedSectionKey, page: number) => {
     setTablePages((current) => ({ ...current, [section]: page }));
+  };
+
+  const handleCopyDiagnosticBundle = async () => {
+    if (!diagnosticBundle) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(diagnosticBundle);
+      setCopyState("copied");
+    } catch {
+      setCopyState("error");
+    }
+  };
+
+  const handleRunExplain = async (sql: string) => {
+    setExplainLoadingSql(sql);
+    setExplainError(null);
+    try {
+      const response = await runPerformanceExplain(sql);
+      setExplainResult(response);
+    } catch (caughtError) {
+      const message = isAxiosError<{ message?: string }>(caughtError)
+        ? caughtError.response?.data?.message ?? caughtError.message
+        : caughtError instanceof Error
+          ? caughtError.message
+          : "Failed to run EXPLAIN ANALYZE";
+      setExplainError(message);
+    } finally {
+      setExplainLoadingSql(null);
+    }
+  };
+
+  const handleCaptureHeapSnapshot = async () => {
+    setHeapCaptureState((current) => ({
+      ...current,
+      loading: true,
+      error: null,
+    }));
+    try {
+      const response = await capturePerformanceHeapSnapshot();
+      setHeapCaptureState({
+        loading: false,
+        error: null,
+        lastCapture: response,
+      });
+      setSnapshot((current) =>
+        current
+          ? {
+              ...current,
+              heapSnapshots: {
+                ...current.heapSnapshots,
+                recentSnapshots: [response.snapshot, ...current.heapSnapshots.recentSnapshots]
+                  .sort(
+                    (left, right) =>
+                      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+                  )
+                  .slice(0, 20),
+              },
+            }
+          : current,
+      );
+    } catch (caughtError) {
+      const message = isAxiosError<{ message?: string }>(caughtError)
+        ? caughtError.response?.data?.message ?? caughtError.message
+        : caughtError instanceof Error
+          ? caughtError.message
+          : "Failed to capture heap snapshot";
+      setHeapCaptureState({
+        loading: false,
+        error: message,
+        lastCapture: null,
+      });
+    }
   };
 
   return (
@@ -659,13 +1104,83 @@ const PerformancePage = ({ title }: GenericPageProps) => {
                     Historical charts use persisted snapshots and live in-memory samples for the selected window.
                   </Text>
                 </Stack>
-                <SegmentedControl
-                  value={historyRange}
-                  onChange={(value) => setHistoryRange(value as HistoryRange)}
-                  data={[...HISTORY_RANGE_OPTIONS]}
-                  radius="xl"
-                />
+                <Group gap="sm" wrap="wrap" justify="flex-end">
+                  <SegmentedControl
+                    value={sessionScope}
+                    onChange={(value) => setSessionScope(value as SessionScope)}
+                    data={[
+                      { label: "All Data", value: "all" },
+                      { label: "Current Session", value: "current" },
+                      { label: "Specific Session", value: "specific" },
+                    ]}
+                    radius="xl"
+                  />
+                  <SegmentedControl
+                    value={historyRange}
+                    onChange={(value) => {
+                      const nextRange = value as HistoryRange;
+                      setHistoryRange(nextRange);
+                      if (nextRange === "custom" && (!customHistoryRange[0] || !customHistoryRange[1])) {
+                        setCustomHistoryRange(createDefaultCustomHistoryRange());
+                      }
+                    }}
+                    data={[...HISTORY_RANGE_OPTIONS]}
+                    radius="xl"
+                  />
+                  <Button
+                    radius="xl"
+                    variant="light"
+                    leftSection={<IconCopy size={16} />}
+                    color={copyState === "error" ? "red" : copyState === "copied" ? "teal" : "dark"}
+                    onClick={() => {
+                      void handleCopyDiagnosticBundle();
+                    }}
+                  >
+                    {copyState === "copied" ? "Copied" : copyState === "error" ? "Copy failed" : "Copy Diagnostic Bundle"}
+                  </Button>
+                </Group>
               </Group>
+              {sessionScope === "specific" ? (
+                <Select
+                  label="Restart Session"
+                  placeholder="Select a restart session"
+                  value={selectedSessionId}
+                  onChange={setSelectedSessionId}
+                  data={sessionOptions}
+                  radius="xl"
+                  searchable
+                  nothingFoundMessage="No restart sessions"
+                  maw={isMobile ? undefined : 620}
+                />
+              ) : null}
+              {historyRange === "custom" ? (
+                <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+                  <DateTimePicker
+                    value={customHistoryRange[0]}
+                    onChange={(value) => setCustomHistoryRange((current) => [value, current[1]])}
+                    valueFormat="DD/MM/YYYY HH:mm:ss"
+                    label="Start"
+                    placeholder="Select start date and time"
+                    leftSection={<IconCalendarEvent size={16} />}
+                    radius="xl"
+                    maxDate={maxHistoryDate}
+                    minDate={minHistoryDate}
+                    withSeconds
+                  />
+                  <DateTimePicker
+                    value={customHistoryRange[1]}
+                    onChange={(value) => setCustomHistoryRange((current) => [current[0], value])}
+                    valueFormat="DD/MM/YYYY HH:mm:ss"
+                    label="End"
+                    placeholder="Select end date and time"
+                    leftSection={<IconCalendarEvent size={16} />}
+                    radius="xl"
+                    maxDate={maxHistoryDate}
+                    minDate={minHistoryDate}
+                    withSeconds
+                  />
+                </SimpleGrid>
+              ) : null}
             </Paper>
 
             <SimpleGrid cols={{ base: 2, sm: 3, xl: 6 }} spacing="md">
@@ -1035,6 +1550,7 @@ const PerformancePage = ({ title }: GenericPageProps) => {
                         <Table.Thead>
                           <Table.Tr>
                             <Table.Th>Route</Table.Th>
+                            <Table.Th>User</Table.Th>
                             <Table.Th ta="center">Running</Table.Th>
                             <Table.Th ta="center">Started</Table.Th>
                             <Table.Th ta="center">IP</Table.Th>
@@ -1050,6 +1566,11 @@ const PerformancePage = ({ title }: GenericPageProps) => {
                                     {request.routeKey}
                                   </Text>
                                 </Stack>
+                              </Table.Td>
+                              <Table.Td>
+                                <Text size="sm" c="dimmed">
+                                  {formatUserIdentity(request)}
+                                </Text>
                               </Table.Td>
                               <Table.Td ta="center">{formatDuration(request.runningForMs)}</Table.Td>
                               <Table.Td ta="center">{dayjs(request.startedAt).format("HH:mm:ss")}</Table.Td>
@@ -1093,6 +1614,7 @@ const PerformancePage = ({ title }: GenericPageProps) => {
                           <Table.Tr>
                             <Table.Th>When</Table.Th>
                             <Table.Th>Route</Table.Th>
+                            <Table.Th>User</Table.Th>
                             <Table.Th ta="center">Duration</Table.Th>
                             <Table.Th ta="center">Status</Table.Th>
                           </Table.Tr>
@@ -1108,6 +1630,11 @@ const PerformancePage = ({ title }: GenericPageProps) => {
                                     {request.routeKey}
                                   </Text>
                                 </Stack>
+                              </Table.Td>
+                              <Table.Td>
+                                <Text size="sm" c="dimmed">
+                                  {formatUserIdentity(request)}
+                                </Text>
                               </Table.Td>
                               <Table.Td ta="center">{formatDuration(request.durationMs)}</Table.Td>
                               <Table.Td ta="center">{request.statusCode}</Table.Td>
@@ -1148,6 +1675,7 @@ const PerformancePage = ({ title }: GenericPageProps) => {
                           <Table.Tr>
                             <Table.Th>When</Table.Th>
                             <Table.Th>Route</Table.Th>
+                            <Table.Th>User</Table.Th>
                             <Table.Th ta="center">Duration</Table.Th>
                             <Table.Th ta="center">Status</Table.Th>
                           </Table.Tr>
@@ -1163,6 +1691,11 @@ const PerformancePage = ({ title }: GenericPageProps) => {
                                     {request.routeKey}
                                   </Text>
                                 </Stack>
+                              </Table.Td>
+                              <Table.Td>
+                                <Text size="sm" c="dimmed">
+                                  {formatUserIdentity(request)}
+                                </Text>
                               </Table.Td>
                               <Table.Td ta="center">{formatDuration(request.durationMs)}</Table.Td>
                               <Table.Td ta="center">{request.statusCode}</Table.Td>
@@ -1208,6 +1741,7 @@ const PerformancePage = ({ title }: GenericPageProps) => {
                             <Table.Th ta="center">P95</Table.Th>
                             <Table.Th ta="center">Avg</Table.Th>
                             <Table.Th ta="center">Max</Table.Th>
+                            <Table.Th ta="center">Action</Table.Th>
                           </Table.Tr>
                         </Table.Thead>
                         <Table.Tbody>
@@ -1225,6 +1759,20 @@ const PerformancePage = ({ title }: GenericPageProps) => {
                               <Table.Td ta="center">{formatDuration(query.p95DurationMs)}</Table.Td>
                               <Table.Td ta="center">{formatDuration(query.averageDurationMs)}</Table.Td>
                               <Table.Td ta="center">{formatDuration(query.maxDurationMs)}</Table.Td>
+                              <Table.Td ta="center">
+                                <Button
+                                  size="xs"
+                                  radius="xl"
+                                  variant="light"
+                                  color="dark"
+                                  loading={explainLoadingSql === query.sampleSql}
+                                  onClick={() => {
+                                    void handleRunExplain(query.sampleSql);
+                                  }}
+                                >
+                                  Explain
+                                </Button>
+                              </Table.Td>
                             </Table.Tr>
                           ))}
                         </Table.Tbody>
@@ -1299,6 +1847,364 @@ const PerformancePage = ({ title }: GenericPageProps) => {
                 )}
               </SectionCard>
             </SimpleGrid>
+
+            {(explainResult || explainError) ? (
+              <SectionCard icon={<IconSql size={20} />} title="Explain Analyze">
+                <Stack gap="sm">
+                  {explainError ? (
+                    <Alert radius="xl" color="red" icon={<IconAlertTriangle size={18} />} title="Explain failed">
+                      {explainError}
+                    </Alert>
+                  ) : null}
+                  {explainResult ? (
+                    <>
+                      <Text size="sm" c="dimmed">
+                        Generated {formatTimestamp(explainResult.generatedAt)}
+                      </Text>
+                      <Paper withBorder radius="xl" p="md" bg="gray.0">
+                        <Text size="sm" fw={700} mb="xs">
+                          SQL
+                        </Text>
+                        <Text ff="monospace" size="xs">
+                          {explainResult.sql}
+                        </Text>
+                      </Paper>
+                      <Paper withBorder radius="xl" p="md" bg="gray.0">
+                        <Text size="sm" fw={700} mb="xs">
+                          Plan
+                        </Text>
+                        <Text ff="monospace" size="xs" style={{ whiteSpace: "pre-wrap" }}>
+                          {explainResult.plan.join("\n")}
+                        </Text>
+                      </Paper>
+                    </>
+                  ) : null}
+                </Stack>
+              </SectionCard>
+            ) : null}
+
+            <SimpleGrid cols={{ base: 1, xl: 2 }} spacing="lg">
+              <SectionCard
+                icon={<IconRoute size={20} />}
+                title="Route To SQL Correlation"
+                badge={snapshot.database.queries.routeCorrelations.length}
+              >
+                {snapshot.database.queries.routeCorrelations.length === 0 ? (
+                  <Text c="dimmed" size="sm">
+                    No request-to-SQL correlations are available yet.
+                  </Text>
+                ) : (
+                  <>
+                    <ScrollArea>
+                      <Table highlightOnHover striped>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>Route</Table.Th>
+                            <Table.Th ta="center">Requests</Table.Th>
+                            <Table.Th ta="center">Avg SQL</Table.Th>
+                            <Table.Th ta="center">Max SQL</Table.Th>
+                            <Table.Th>Top Queries</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {visibleQueryRoutes.map((route) => (
+                            <Table.Tr key={`${route.method}-${route.routeKey}-sql`}>
+                              <Table.Td>
+                                <Stack gap={2}>
+                                  <Text fw={700}>{route.method}</Text>
+                                  <Text size="sm" c="dimmed">
+                                    {route.routeKey}
+                                  </Text>
+                                </Stack>
+                              </Table.Td>
+                              <Table.Td ta="center">{formatMetricNumber(route.requestCount)}</Table.Td>
+                              <Table.Td ta="center">{formatDuration(route.averageTotalQueryDurationMs)}</Table.Td>
+                              <Table.Td ta="center">{formatDuration(route.maxTotalQueryDurationMs)}</Table.Td>
+                              <Table.Td>
+                                <Text size="sm" c="dimmed">
+                                  {route.topQueryLabels.join(", ") || "-"}
+                                </Text>
+                              </Table.Td>
+                            </Table.Tr>
+                          ))}
+                        </Table.Tbody>
+                      </Table>
+                    </ScrollArea>
+                    {queryRouteTotalPages > 1 ? (
+                      <Group justify="center">
+                        <Pagination
+                          value={queryRoutePage}
+                          onChange={(page) => setSectionPage("queryRoutes", page)}
+                          total={queryRouteTotalPages}
+                          radius="xl"
+                          size={isMobile ? "sm" : "md"}
+                        />
+                      </Group>
+                    ) : null}
+                  </>
+                )}
+              </SectionCard>
+
+              <SectionCard
+                icon={<IconRoute size={20} />}
+                title="Recent Request Query Correlations"
+                badge={snapshot.database.queries.recentRequestCorrelations.length}
+              >
+                {snapshot.database.queries.recentRequestCorrelations.length === 0 ? (
+                  <Text c="dimmed" size="sm">
+                    No request/query correlations have been recorded yet.
+                  </Text>
+                ) : (
+                  <>
+                    <ScrollArea>
+                      <Table highlightOnHover striped>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>When</Table.Th>
+                            <Table.Th>Route</Table.Th>
+                            <Table.Th>User</Table.Th>
+                            <Table.Th ta="center">Request</Table.Th>
+                            <Table.Th ta="center">SQL</Table.Th>
+                            <Table.Th>Queries</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {visibleRequestQueryCorrelations.map((request) => (
+                            <Table.Tr key={`${request.requestId}-${request.startedAt}`}>
+                              <Table.Td>{formatTimestamp(request.startedAt)}</Table.Td>
+                              <Table.Td>
+                                <Stack gap={2}>
+                                  <Text fw={700}>{request.method}</Text>
+                                  <Text size="sm" c="dimmed">
+                                    {request.routeKey}
+                                  </Text>
+                                </Stack>
+                              </Table.Td>
+                              <Table.Td>
+                                <Text size="sm" c="dimmed">
+                                  {formatUserIdentity(request)}
+                                </Text>
+                              </Table.Td>
+                              <Table.Td ta="center">{formatDuration(request.requestDurationMs)}</Table.Td>
+                              <Table.Td ta="center">{formatDuration(request.totalQueryDurationMs)}</Table.Td>
+                              <Table.Td>
+                                <Text size="sm" c="dimmed">
+                                  {request.queries.map((query) => `${query.label} (${formatDuration(query.durationMs)})`).join(", ") || "-"}
+                                </Text>
+                              </Table.Td>
+                            </Table.Tr>
+                          ))}
+                        </Table.Tbody>
+                      </Table>
+                    </ScrollArea>
+                    {requestQueryTotalPages > 1 ? (
+                      <Group justify="center">
+                        <Pagination
+                          value={requestQueryPage}
+                          onChange={(page) => setSectionPage("requestQueries", page)}
+                          total={requestQueryTotalPages}
+                          radius="xl"
+                          size={isMobile ? "sm" : "md"}
+                        />
+                      </Group>
+                    ) : null}
+                  </>
+                )}
+              </SectionCard>
+            </SimpleGrid>
+
+            <SimpleGrid cols={{ base: 1, xl: 2 }} spacing="lg">
+              <SectionCard
+                icon={<IconActivity size={20} />}
+                title="External Calls"
+                badge={snapshot.externalCalls.topEndpoints.length}
+              >
+                {snapshot.externalCalls.topEndpoints.length === 0 ? (
+                  <Text c="dimmed" size="sm">
+                    No outbound HTTP/HTTPS calls have been captured yet.
+                  </Text>
+                ) : (
+                  <>
+                    <ScrollArea>
+                      <Table highlightOnHover striped>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>Endpoint</Table.Th>
+                            <Table.Th ta="center">Count</Table.Th>
+                            <Table.Th ta="center">P95</Table.Th>
+                            <Table.Th ta="center">Avg</Table.Th>
+                            <Table.Th ta="center">Status</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {visibleExternalEndpoints.map((call) => (
+                            <Table.Tr key={`${call.method}-${call.host}-${call.pathLabel}`}>
+                              <Table.Td>
+                                <Stack gap={2}>
+                                  <Text fw={700}>
+                                    {call.method} {call.host}
+                                  </Text>
+                                  <Text size="sm" c="dimmed">
+                                    {call.pathLabel}
+                                  </Text>
+                                </Stack>
+                              </Table.Td>
+                              <Table.Td ta="center">{formatMetricNumber(call.count)}</Table.Td>
+                              <Table.Td ta="center">{formatDuration(call.p95DurationMs)}</Table.Td>
+                              <Table.Td ta="center">{formatDuration(call.averageDurationMs)}</Table.Td>
+                              <Table.Td ta="center">{call.lastStatusCode ?? call.lastErrorCode ?? "-"}</Table.Td>
+                            </Table.Tr>
+                          ))}
+                        </Table.Tbody>
+                      </Table>
+                    </ScrollArea>
+                    {externalEndpointTotalPages > 1 ? (
+                      <Group justify="center">
+                        <Pagination
+                          value={externalEndpointPage}
+                          onChange={(page) => setSectionPage("externalEndpoints", page)}
+                          total={externalEndpointTotalPages}
+                          radius="xl"
+                          size={isMobile ? "sm" : "md"}
+                        />
+                      </Group>
+                    ) : null}
+                  </>
+                )}
+              </SectionCard>
+
+              <SectionCard
+                icon={<IconActivity size={20} />}
+                title="Recent Slow External Calls"
+                badge={snapshot.externalCalls.recentSlowCalls.length}
+              >
+                {snapshot.externalCalls.recentSlowCalls.length === 0 ? (
+                  <Text c="dimmed" size="sm">
+                    No external call has crossed the slow-call threshold of{" "}
+                    {formatDuration(snapshot.externalCalls.slowExternalCallThresholdMs)} yet.
+                  </Text>
+                ) : (
+                  <>
+                    <ScrollArea>
+                      <Table highlightOnHover striped>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>When</Table.Th>
+                            <Table.Th>Endpoint</Table.Th>
+                            <Table.Th>User</Table.Th>
+                            <Table.Th ta="center">Duration</Table.Th>
+                            <Table.Th ta="center">Route</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {visibleExternalSlowCalls.map((call) => (
+                            <Table.Tr key={`${call.startedAt}-${call.host}-${call.path}`}>
+                              <Table.Td>{formatTimestamp(call.startedAt)}</Table.Td>
+                              <Table.Td>
+                                <Stack gap={2}>
+                                  <Text fw={700}>
+                                    {call.method} {call.host}
+                                  </Text>
+                                  <Text size="sm" c="dimmed">
+                                    {call.path}
+                                  </Text>
+                                </Stack>
+                              </Table.Td>
+                              <Table.Td>
+                                <Text size="sm" c="dimmed">
+                                  {formatUserIdentity(call)}
+                                </Text>
+                              </Table.Td>
+                              <Table.Td ta="center">{formatDuration(call.durationMs)}</Table.Td>
+                              <Table.Td ta="center">{call.routeKey ?? "-"}</Table.Td>
+                            </Table.Tr>
+                          ))}
+                        </Table.Tbody>
+                      </Table>
+                    </ScrollArea>
+                    {externalSlowCallTotalPages > 1 ? (
+                      <Group justify="center">
+                        <Pagination
+                          value={externalSlowCallPage}
+                          onChange={(page) => setSectionPage("externalSlowCalls", page)}
+                          total={externalSlowCallTotalPages}
+                          radius="xl"
+                          size={isMobile ? "sm" : "md"}
+                        />
+                      </Group>
+                    ) : null}
+                  </>
+                )}
+              </SectionCard>
+            </SimpleGrid>
+
+            <SectionCard icon={<IconServer size={20} />} title="Heap Snapshots" badge={snapshot.heapSnapshots.recentSnapshots.length}>
+              <Stack gap="md">
+                <Group justify="space-between" align="center" wrap="wrap">
+                  <Stack gap={2}>
+                    <Text fw={700}>Capture a heap snapshot on demand</Text>
+                    <Text size="sm" c="dimmed">
+                      Heap snapshots help retained-object inspection, but capture can briefly pause the backend process.
+                    </Text>
+                  </Stack>
+                  <Button
+                    radius="xl"
+                    color="dark"
+                    loading={heapCaptureState.loading}
+                    onClick={() => {
+                      void handleCaptureHeapSnapshot();
+                    }}
+                  >
+                    Capture Heap Snapshot
+                  </Button>
+                </Group>
+                <Text size="sm" c="dimmed">
+                  Directory: {snapshot.heapSnapshots.directory}
+                </Text>
+                {heapCaptureState.error ? (
+                  <Alert radius="xl" color="red" icon={<IconAlertTriangle size={18} />} title="Heap snapshot failed">
+                    {heapCaptureState.error}
+                  </Alert>
+                ) : null}
+                {heapCaptureState.lastCapture ? (
+                  <Alert radius="xl" color="blue" icon={<IconServer size={18} />} title="Heap snapshot captured">
+                    {heapCaptureState.lastCapture.snapshot.fileName} | {formatMetricNumber(heapCaptureState.lastCapture.snapshot.sizeMb, 2)} MB
+                  </Alert>
+                ) : null}
+                {snapshot.heapSnapshots.recentSnapshots.length === 0 ? (
+                  <Text c="dimmed" size="sm">
+                    No heap snapshots have been captured yet.
+                  </Text>
+                ) : (
+                  <ScrollArea>
+                    <Table highlightOnHover striped>
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>File</Table.Th>
+                          <Table.Th ta="center">Created</Table.Th>
+                          <Table.Th ta="center">Size</Table.Th>
+                          <Table.Th>Path</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {snapshot.heapSnapshots.recentSnapshots.map((file) => (
+                          <Table.Tr key={file.filePath}>
+                            <Table.Td>{file.fileName}</Table.Td>
+                            <Table.Td ta="center">{formatTimestamp(file.createdAt)}</Table.Td>
+                            <Table.Td ta="center">{formatMetricNumber(file.sizeMb, 2)} MB</Table.Td>
+                            <Table.Td>
+                              <Text size="sm" c="dimmed">
+                                {file.filePath}
+                              </Text>
+                            </Table.Td>
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  </ScrollArea>
+                )}
+              </Stack>
+            </SectionCard>
 
             <Alert radius="xl" color="blue" icon={<IconServer size={18} />} title="How to read this page">
               If performance degrades over a day or two, look for one of these patterns: steadily rising heap or RSS,

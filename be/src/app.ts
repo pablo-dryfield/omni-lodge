@@ -77,6 +77,7 @@ import errorMiddleware from './middleware/errorMiddleware.js';
 import { defineAssociations } from './models/defineAssociations.js';
 import { initializeAccessControl } from './utils/initializeAccessControl.js';
 import { getConfigValue, initializeConfigRegistry } from './services/configService.js';
+import { externalRequestDiagnosticsService } from './services/externalRequestDiagnosticsService.js';
 
 // Scrapers
 // import { scrapeTripAdvisor } from './scrapers/tripAdvisorScraper.js';
@@ -90,6 +91,7 @@ const __filename = fileURLToPath(import.meta.url);
 const environment = (process.env.NODE_ENV || 'development').trim();
 const envFile = environment === 'production' ? '.env.prod' : '.env.dev';
 dotenv.config({ path: envFile });
+externalRequestDiagnosticsService.install();
 
 const resolveBoolean = (value: unknown, fallback: boolean): boolean => {
   if (typeof value === 'boolean') {
