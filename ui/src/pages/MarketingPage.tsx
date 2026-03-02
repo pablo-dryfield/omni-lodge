@@ -146,14 +146,20 @@ const getPresetRange = (preset: Exclude<MarketingDatePreset, "custom">, referenc
     }
     case "this_week":
       return [today.startOf("week").toDate(), today.toDate()];
-    case "last_7_days":
-      return [today.subtract(6, "day").toDate(), today.toDate()];
-    case "last_14_days":
-      return [today.subtract(13, "day").toDate(), today.toDate()];
+    case "last_7_days": {
+      const yesterday = today.subtract(1, "day");
+      return [yesterday.subtract(6, "day").toDate(), yesterday.toDate()];
+    }
+    case "last_14_days": {
+      const yesterday = today.subtract(1, "day");
+      return [yesterday.subtract(13, "day").toDate(), yesterday.toDate()];
+    }
     case "this_month":
       return [today.startOf("month").toDate(), today.toDate()];
-    case "last_30_days":
-      return [today.subtract(29, "day").toDate(), today.toDate()];
+    case "last_30_days": {
+      const yesterday = today.subtract(1, "day");
+      return [yesterday.subtract(29, "day").toDate(), yesterday.toDate()];
+    }
     case "last_month": {
       const lastMonthEnd = today.startOf("month").subtract(1, "day");
       return [lastMonthEnd.startOf("month").toDate(), lastMonthEnd.toDate()];

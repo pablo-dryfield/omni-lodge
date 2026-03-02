@@ -2744,12 +2744,9 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
       };
 
       setLocalDrinkIssues((current) => [entry, ...current]);
-      if (onlineNow) {
-        void syncLocalDrinkIssue(localId);
-      }
       return localId;
     },
-    [syncLocalDrinkIssue],
+    [],
   );
 
   const syncFailedDrinkIssues = useCallback(async () => {
