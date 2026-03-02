@@ -43,6 +43,7 @@ const defaultPages = [
   { slug: 'venue-numbers', name: 'Venue Numbers', description: 'Nightly venue headcounts and open bar metrics', sortOrder: 5 },
   { slug: 'channel-numbers', name: 'Channel Numbers', description: 'Channel performance summary across products and add-ons', sortOrder: 6 },
   { slug: 'marketing', name: 'Marketing', description: 'Marketing revenue and ad performance', sortOrder: 7 },
+  { slug: 'performance', name: 'Performance', description: 'Server and application performance diagnostics', sortOrder: 8 },
   { slug: 'reviews', name: 'Reviews', description: 'Track review credits and staff allocations', sortOrder: 7 },
   { slug: 'pays', name: 'Staff Payment', description: 'Staff commission overview', sortOrder: 8 },
   { slug: 'cerebro', name: 'Cerebro', description: 'Operational knowledge base, role quizzes, and policy acknowledgements', sortOrder: 9 },
@@ -83,6 +84,7 @@ const defaultModules = [
   { slug: 'venue-numbers-management', name: 'Venue Numbers', pageSlug: 'venue-numbers', description: 'Capture nightly venue counts and upload signed sheets', componentRef: 'VenueNumbersList', sortOrder: 1 },
   { slug: 'channel-numbers-summary', name: 'Channel Numbers Summary', pageSlug: 'channel-numbers', description: 'Analyze booking channels across tickets and add-ons', componentRef: 'ChannelNumbersSummary', sortOrder: 1 },
   { slug: 'marketing-overview', name: 'Marketing Overview', pageSlug: 'marketing', description: 'Review marketing revenue and Google Ads spend', componentRef: 'MarketingOverview', sortOrder: 1 },
+  { slug: 'performance-overview', name: 'Performance Overview', pageSlug: 'performance', description: 'Inspect live server, process, and request performance diagnostics', componentRef: 'PerformanceOverview', sortOrder: 1 },
   { slug: 'staff-payouts-all', name: 'Staff Payments (All)', pageSlug: 'pays', description: 'View commission data for all staff', componentRef: 'StaffPayoutsAll', sortOrder: 1 },
   { slug: 'staff-payouts-self', name: 'Staff Payments (Self)', pageSlug: 'pays', description: 'View personal commission data', componentRef: 'StaffPayoutsSelf', sortOrder: 2 },
   { slug: 'cerebro-library', name: 'Cerebro Library', pageSlug: 'cerebro', description: 'Browse operational knowledge, complete quizzes, and accept policies', componentRef: 'CerebroLibrary', sortOrder: 1 },
@@ -127,7 +129,7 @@ const defaultModules = [
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
-  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks', 'settings-products', 'settings-product-aliases', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-compensation-components', 'settings-actions', 'settings-channels', 'settings',
+  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'performance', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks', 'settings-products', 'settings-product-aliases', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-compensation-components', 'settings-actions', 'settings-channels', 'settings',
 'settings-users',
 'settings-user-types',
 'settings-pages',
@@ -174,6 +176,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
       'venue-numbers-management': ['view', 'create', 'update', 'delete'],
       'channel-numbers-summary': ['view'],
       'marketing-overview': ['view'],
+      'performance-overview': ['view'],
       'staff-payouts-all': ['view'],
       'scheduling-availability': ['view', 'create', 'update', 'delete'],
       'scheduling-builder': ['view', 'create', 'update', 'delete'],

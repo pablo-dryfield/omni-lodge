@@ -105,6 +105,7 @@ import {
   FinanceTransaction,
   FinanceVendor,
 } from "../finance/models/index.js";
+import { queryDiagnosticsService } from "../services/queryDiagnosticsService.js";
 
 const environment = (process.env.NODE_ENV || "development").trim();
 const envFile = environment === "production" ? ".env.prod" : ".env.dev";
@@ -129,7 +130,10 @@ const sequelize = new Sequelize({
   password: DB_PASSWORD,
   host: DB_HOST,
   port: parseInt(DB_PORT || "5432", 10),
-  logging: false,
+  benchmark: true,
+  logging: (sql: string, timing?: number) => {
+    queryDiagnosticsService.recordQuery(sql, timing);
+  },
   dialectOptions: {
     ssl: false,
   },
