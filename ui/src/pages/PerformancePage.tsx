@@ -132,6 +132,78 @@ const formatUserIdentity = (user: {
   return [fullName || null, role, ids].filter(Boolean).join(" | ") || "Guest / unauthenticated";
 };
 
+const summarizeActors = (
+  items: Array<{
+    userId?: number | null;
+    userTypeId?: number | null;
+    firstName?: string | null;
+    lastName?: string | null;
+    roleName?: string | null;
+  }>,
+  limit = 5,
+): string[] => {
+  const counts = new Map<
+    string,
+    {
+      count: number;
+      label: string;
+    }
+  >();
+
+  items.forEach((item) => {
+    const key =
+      item.userId != null
+        ? `user:${item.userId}`
+        : item.userTypeId != null
+          ? `usertype:${item.userTypeId}:${item.roleName ?? ""}`
+          : "guest";
+    const current = counts.get(key);
+    counts.set(key, {
+      count: (current?.count ?? 0) + 1,
+      label: formatUserIdentity(item),
+    });
+  });
+
+  return [...counts.values()]
+    .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label))
+    .slice(0, limit)
+    .map((entry, index) => `${index + 1}. ${entry.label} | count=${formatMetricNumber(entry.count)}`);
+};
+
+const summarizeUserTypes = (
+  items: Array<{
+    userTypeId?: number | null;
+    roleName?: string | null;
+  }>,
+  limit = 5,
+): string[] => {
+  const counts = new Map<
+    string,
+    {
+      count: number;
+      label: string;
+    }
+  >();
+
+  items.forEach((item) => {
+    const key = item.userTypeId != null ? `type:${item.userTypeId}:${item.roleName ?? ""}` : "guest";
+    const label =
+      item.userTypeId != null
+        ? `${item.roleName?.trim() || "Unknown role"} | type ${item.userTypeId}`
+        : "Guest / unauthenticated";
+    const current = counts.get(key);
+    counts.set(key, {
+      count: (current?.count ?? 0) + 1,
+      label,
+    });
+  });
+
+  return [...counts.values()]
+    .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label))
+    .slice(0, limit)
+    .map((entry, index) => `${index + 1}. ${entry.label} | count=${formatMetricNumber(entry.count)}`);
+};
+
 const createDefaultCustomHistoryRange = (): CustomHistoryRangeValue => {
   const end = new Date();
   const start = dayjs().subtract(6, "day").toDate();
@@ -803,6 +875,12 @@ const PerformancePage = ({ title }: GenericPageProps) => {
     const activeHandles = snapshot.handles.slice(0, 5);
     const heapSnapshots = snapshot.heapSnapshots.recentSnapshots.slice(0, 5);
     const diagnoses = diagnosisItems.slice(0, 5);
+    const topUsersInSlowRequests = summarizeActors(snapshot.recentSlowRequests);
+    const topUserTypesInSlowRequests = summarizeUserTypes(snapshot.recentSlowRequests);
+    const topUsersInRequestQueryCorrelations = summarizeActors(
+      snapshot.database.queries.recentRequestCorrelations,
+    );
+    const topUsersInSlowExternalCalls = summarizeActors(snapshot.externalCalls.recentSlowCalls);
     const selectedSession =
       sessionScope === "current"
         ? snapshot.restartSessions.find((session) => session.sessionId === snapshot.currentSessionId) ?? null
@@ -871,6 +949,18 @@ const PerformancePage = ({ title }: GenericPageProps) => {
             ...item.actions.map((action) => `   Action: ${action}`),
           ])
         : ["- No active diagnosis items."]),
+      "",
+      "Top Users In Slow Requests",
+      ...(topUsersInSlowRequests.length > 0 ? topUsersInSlowRequests : ["- None"]),
+      "",
+      "Top User Types In Slow Requests",
+      ...(topUserTypesInSlowRequests.length > 0 ? topUserTypesInSlowRequests : ["- None"]),
+      "",
+      "Top Users In Request Query Correlations",
+      ...(topUsersInRequestQueryCorrelations.length > 0 ? topUsersInRequestQueryCorrelations : ["- None"]),
+      "",
+      "Top Users In Slow External Calls",
+      ...(topUsersInSlowExternalCalls.length > 0 ? topUsersInSlowExternalCalls : ["- None"]),
       "",
       "Top Slow Routes",
       ...(topRoutes.length > 0
