@@ -24,6 +24,7 @@ export type MarketingBreakdownRow = {
   bookingCount: number;
   revenue: number;
   cost: number | null;
+  clicks: number | null;
 };
 
 export type MarketingDailySeriesPoint = {
@@ -31,11 +32,13 @@ export type MarketingDailySeriesPoint = {
   bookingCount: number;
   revenue: number;
   cost: number | null;
+  clicks: number | null;
   roas: number | null;
 };
 
 export type MarketingTabData = {
   bookingCount: number;
+  clickTotal: number | null;
   revenueTotal: number;
   revenueCurrency: string | null;
   sourceBreakdown: MarketingBreakdownRow[];
@@ -49,6 +52,7 @@ export type GoogleCostRow = {
   campaign: string;
   medium: string;
   cost: number;
+  clicks: number;
 };
 
 export type MarketingOverviewResponse = {
