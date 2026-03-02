@@ -1,9 +1,7 @@
-import { createNamespace, Namespace } from 'cls-hooked';
 import { Request, Response, NextFunction } from 'express';
 import logger from '../utils/logger.js';
 import { performanceMonitorService } from '../services/performanceMonitorService.js';
-
-const requestNamespace: Namespace = createNamespace('omni-request-context');
+import { runInRequestContext, setRequestContextValue } from '../services/requestContextService.js';
 
 const instrumentMiddleware = (req: Request, res: Response, next: NextFunction): void => {
   const requestContext = performanceMonitorService.startRequest(req);
@@ -32,9 +30,15 @@ const instrumentMiddleware = (req: Request, res: Response, next: NextFunction): 
   res.on('finish', finalize);
   res.on('close', finalize);
 
-  requestNamespace.run(() => {
-    requestNamespace.set('requestId', requestContext.id);
-    requestNamespace.set('routeKey', requestContext.routeKey);
+  runInRequestContext(() => {
+    setRequestContextValue('requestId', requestContext.id);
+    setRequestContextValue('routeKey', requestContext.routeKey);
+    setRequestContextValue('method', requestContext.method);
+    setRequestContextValue('userId', requestContext.userId);
+    setRequestContextValue('userTypeId', requestContext.userTypeId);
+    setRequestContextValue('firstName', requestContext.firstName);
+    setRequestContextValue('lastName', requestContext.lastName);
+    setRequestContextValue('roleName', requestContext.roleName);
     logger.info(`Request received: ${req.method} ${req.url}`);
     next();
   });

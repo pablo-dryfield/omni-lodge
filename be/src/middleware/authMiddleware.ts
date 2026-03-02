@@ -5,6 +5,9 @@ import User from '../models/User.js';
 import UserType from '../models/UserType.js';
 import ShiftRole from '../models/ShiftRole.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest';
+import { getRequestContextValue, setRequestContextValue } from '../services/requestContextService.js';
+import { performanceMonitorService } from '../services/performanceMonitorService.js';
+import { queryDiagnosticsService } from '../services/queryDiagnosticsService.js';
 
 dotenv.config();
 
@@ -79,9 +82,35 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
       userTypeId: user.userTypeId ?? null,
       roleSlug,
       userTypeSlug: role?.slug ?? null,
+      roleName: role?.name ?? null,
+      firstName: user.firstName ?? null,
+      lastName: user.lastName ?? null,
       shiftRoleSlugs,
     };
     req.permissionCache = new Map();
+    const requestId = getRequestContextValue('requestId');
+    if (requestId) {
+      performanceMonitorService.attachAuthenticatedUser(requestId, {
+        userId: user.id,
+        userTypeId: user.userTypeId ?? null,
+        firstName: user.firstName ?? null,
+        lastName: user.lastName ?? null,
+        roleName: role?.name ?? null,
+      });
+      queryDiagnosticsService.attachAuthenticatedUser(requestId, {
+        userId: user.id,
+        userTypeId: user.userTypeId ?? null,
+        firstName: user.firstName ?? null,
+        lastName: user.lastName ?? null,
+        roleName: role?.name ?? null,
+      });
+    }
+    setRequestContextValue('userId', user.id);
+    setRequestContextValue('userTypeId', user.userTypeId ?? null);
+    setRequestContextValue('firstName', user.firstName ?? null);
+    setRequestContextValue('lastName', user.lastName ?? null);
+    setRequestContextValue('roleName', role?.name ?? null);
+    setRequestContextValue('roleSlug', roleSlug);
 
     next();
   } catch (error) {
