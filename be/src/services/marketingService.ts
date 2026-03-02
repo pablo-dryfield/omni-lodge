@@ -30,6 +30,7 @@ type BreakdownRow = {
   bookingCount: number;
   revenue: number;
   cost: number | null;
+  clicks: number | null;
 };
 
 type MarketingMetricRow = {
@@ -46,11 +47,13 @@ type DailySeriesPoint = {
   bookingCount: number;
   revenue: number;
   cost: number | null;
+  clicks: number | null;
   roas: number | null;
 };
 
 type TabData = {
   bookingCount: number;
+  clickTotal: number | null;
   revenueTotal: number;
   revenueCurrency: string | null;
   sourceBreakdown: BreakdownRow[];
@@ -64,11 +67,13 @@ type GoogleCostRow = {
   campaign: string;
   medium: string;
   cost: number;
+  clicks: number;
 };
 
 type GoogleCampaignCostRow = {
   campaign: string;
   cost: number;
+  clicks: number;
 };
 
 type GoogleAdsPerformanceRow = {
@@ -76,6 +81,7 @@ type GoogleAdsPerformanceRow = {
   medium: string | null;
   date: string;
   cost: number;
+  clicks: number;
   bookingCount: number;
   revenue: number;
 };
@@ -86,7 +92,7 @@ type GoogleCostResult = {
   campaignRows: GoogleCampaignCostRow[];
   performanceRows: GoogleAdsPerformanceRow[];
   mediumPerformanceRows: GoogleAdsPerformanceRow[];
-  dailyRows: Array<{ date: string; cost: number }>;
+  dailyRows: Array<{ date: string; cost: number; clicks: number }>;
   error: string | null;
 };
 
@@ -96,6 +102,7 @@ type GoogleAdsStreamResult = {
   segments?: { date?: string | null } | null;
   metrics?: {
     costMicros?: string | number | null;
+    clicks?: string | number | null;
     conversions?: string | number | null;
     conversionsValue?: string | number | null;
   } | null;
@@ -210,6 +217,20 @@ const aggregateCampaignCostByLabel = (
   return map;
 };
 
+const aggregateClicksByLabel = <TRow extends { clicks: number }>(
+  rows: TRow[],
+  selector: (row: TRow) => string | null,
+): Map<string, number> => {
+  const map = new Map<string, number>();
+
+  rows.forEach((row) => {
+    const label = formatBreakdownLabel(selector(row));
+    map.set(label, roundMetricCount((map.get(label) ?? 0) + row.clicks));
+  });
+
+  return map;
+};
+
 const buildDateList = (startDate: string, endDate: string): string[] => {
   const dates: string[] = [];
   let cursor = dayjs(startDate);
@@ -228,6 +249,7 @@ const buildDailySeries = (
   startDate: string,
   endDate: string,
   costByDate?: Map<string, number>,
+  clickByDate?: Map<string, number>,
 ): DailySeriesPoint[] => {
   const revenueByDate = new Map<string, { bookingCount: number; revenue: number }>();
 
@@ -246,6 +268,8 @@ const buildDailySeries = (
     const revenueEntry = revenueByDate.get(date) ?? { bookingCount: 0, revenue: 0 };
     const rawCost = costByDate?.get(date);
     const cost = typeof rawCost === 'number' ? roundMoney(rawCost) : null;
+    const rawClicks = clickByDate?.get(date);
+    const clicks = typeof rawClicks === 'number' ? roundMetricCount(rawClicks) : null;
     const revenue = roundMoney(revenueEntry.revenue);
 
     return {
@@ -253,6 +277,7 @@ const buildDailySeries = (
       bookingCount: roundMetricCount(revenueEntry.bookingCount),
       revenue,
       cost,
+      clicks,
       roas: typeof cost === 'number' && cost > 0 ? roundMoney(revenue / cost) : null,
     };
   });
@@ -262,20 +287,27 @@ const buildBreakdown = (
   metricRows: MarketingMetricRow[],
   selector: (metricRow: MarketingMetricRow) => string | null,
   costByLabel?: Map<string, number>,
+  clickByLabel?: Map<string, number>,
 ): BreakdownRow[] => {
-  const map = new Map<string, { bookingCount: number; revenue: number; cost: number | null }>();
+  const map = new Map<string, { bookingCount: number; revenue: number; cost: number | null; clicks: number | null }>();
 
   metricRows.forEach((metricRow) => {
     const label = formatBreakdownLabel(selector(metricRow));
-    const entry = map.get(label) ?? { bookingCount: 0, revenue: 0, cost: null };
+    const entry = map.get(label) ?? { bookingCount: 0, revenue: 0, cost: null, clicks: null };
     entry.bookingCount += metricRow.bookingCount;
     entry.revenue += metricRow.revenue;
     map.set(label, entry);
   });
 
   costByLabel?.forEach((cost, label) => {
-    const entry = map.get(label) ?? { bookingCount: 0, revenue: 0, cost: null };
+    const entry = map.get(label) ?? { bookingCount: 0, revenue: 0, cost: null, clicks: null };
     entry.cost = roundMoney(cost);
+    map.set(label, entry);
+  });
+
+  clickByLabel?.forEach((clicks, label) => {
+    const entry = map.get(label) ?? { bookingCount: 0, revenue: 0, cost: null, clicks: null };
+    entry.clicks = roundMetricCount(clicks);
     map.set(label, entry);
   });
 
@@ -285,6 +317,7 @@ const buildBreakdown = (
       bookingCount: roundMetricCount(entry.bookingCount),
       revenue: roundMoney(entry.revenue),
       cost: entry.cost,
+      clicks: entry.clicks,
     }))
     .sort((left, right) => {
       const leftPrimary = left.cost ?? left.revenue;
@@ -309,7 +342,7 @@ const detectRevenueCurrency = (bookings: BookingRow[]): string | null => {
 const buildMetricRowsFromBookings = (bookings: BookingRow[], options: { excludeHistoricalGoogleAds?: boolean } = {}): MarketingMetricRow[] =>
   bookings
     .map((booking) => {
-      const date = normalizeText(booking.experienceDate);
+      const date = booking.sourceReceivedAt ? dayjs(booking.sourceReceivedAt).format('YYYY-MM-DD') : null;
       if (!date || !booking.marketingSource) {
         return null;
       }
@@ -418,11 +451,16 @@ const buildTabData = (
   endDate: string,
   options: {
     sourceCostByLabel?: Map<string, number>;
+    sourceClickByLabel?: Map<string, number>;
     mediumCostByLabel?: Map<string, number>;
+    mediumClickByLabel?: Map<string, number>;
     campaignCostByLabel?: Map<string, number>;
+    campaignClickByLabel?: Map<string, number>;
     dailyCostByDate?: Map<string, number>;
+    dailyClickByDate?: Map<string, number>;
     revenueCurrencyFallback?: string | null;
     mediumMetricRows?: MarketingMetricRow[];
+    clickTotal?: number | null;
   } = {},
 ): TabData => {
   const mediumMetricRows = options.mediumMetricRows ?? totalMetricRows;
@@ -431,12 +469,28 @@ const buildTabData = (
 
   return {
     bookingCount,
+    clickTotal: options.clickTotal ?? null,
     revenueTotal,
     revenueCurrency: detectRevenueCurrency(bookings) ?? options.revenueCurrencyFallback ?? null,
-    sourceBreakdown: buildBreakdown(totalMetricRows, (metricRow) => metricRow.marketingSource, options.sourceCostByLabel),
-    mediumBreakdown: buildBreakdown(mediumMetricRows, (metricRow) => metricRow.medium, options.mediumCostByLabel),
-    campaignBreakdown: buildBreakdown(totalMetricRows, (metricRow) => metricRow.campaign, options.campaignCostByLabel),
-    dailySeries: buildDailySeries(totalMetricRows, startDate, endDate, options.dailyCostByDate),
+    sourceBreakdown: buildBreakdown(
+      totalMetricRows,
+      (metricRow) => metricRow.marketingSource,
+      options.sourceCostByLabel,
+      options.sourceClickByLabel,
+    ),
+    mediumBreakdown: buildBreakdown(
+      mediumMetricRows,
+      (metricRow) => metricRow.medium,
+      options.mediumCostByLabel,
+      options.mediumClickByLabel,
+    ),
+    campaignBreakdown: buildBreakdown(
+      totalMetricRows,
+      (metricRow) => metricRow.campaign,
+      options.campaignCostByLabel,
+      options.campaignClickByLabel,
+    ),
+    dailySeries: buildDailySeries(totalMetricRows, startDate, endDate, options.dailyCostByDate, options.dailyClickByDate),
     bookings,
   };
 };
@@ -560,7 +614,7 @@ const fetchGoogleAdsCosts = async (startDate: string, endDate: string): Promise<
         `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers/${settings.customerId}/googleAds:searchStream`,
         {
           query: [
-            'SELECT campaign.name, metrics.cost_micros, metrics.conversions, metrics.conversions_value, segments.date',
+            'SELECT campaign.name, metrics.cost_micros, metrics.clicks, metrics.conversions, metrics.conversions_value, segments.date',
             'FROM campaign',
             `WHERE segments.date BETWEEN '${startDate}' AND '${endDate}'`,
           ].join(' '),
@@ -571,7 +625,7 @@ const fetchGoogleAdsCosts = async (startDate: string, endDate: string): Promise<
         `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers/${settings.customerId}/googleAds:searchStream`,
         {
           query: [
-            'SELECT campaign.name, ad_group.name, metrics.cost_micros, metrics.conversions, metrics.conversions_value, segments.date',
+            'SELECT campaign.name, ad_group.name, metrics.cost_micros, metrics.clicks, metrics.conversions, metrics.conversions_value, segments.date',
             'FROM ad_group',
             `WHERE segments.date BETWEEN '${startDate}' AND '${endDate}'`,
           ].join(' '),
@@ -583,7 +637,7 @@ const fetchGoogleAdsCosts = async (startDate: string, endDate: string): Promise<
     const campaignChunks: GoogleAdsStreamChunk[] = Array.isArray(campaignResponse.data) ? campaignResponse.data : [];
     const adGroupChunks: GoogleAdsStreamChunk[] = Array.isArray(adGroupResponse.data) ? adGroupResponse.data : [];
     const campaignRowsMap = new Map<string, GoogleCampaignCostRow>();
-    const dailyMap = new Map<string, number>();
+    const dailyMap = new Map<string, { cost: number; clicks: number }>();
     const campaignPerformanceMap = new Map<string, GoogleAdsPerformanceRow>();
     const adGroupRowsMap = new Map<string, GoogleCostRow>();
     const adGroupPerformanceMap = new Map<string, GoogleAdsPerformanceRow>();
@@ -594,16 +648,28 @@ const fetchGoogleAdsCosts = async (startDate: string, endDate: string): Promise<
         const campaign = normalizeText(result?.campaign?.name);
         const date = normalizeText(result?.segments?.date);
         const micros = Number(result?.metrics?.costMicros ?? 0);
+        const clicks = Number(result?.metrics?.clicks ?? 0);
         const conversions = Number(result?.metrics?.conversions ?? 0);
         const rawConversionValue = Number(result?.metrics?.conversionsValue ?? 0);
         const conversionValue = shouldIgnoreGoogleAdsConversionValue(campaign) ? 0 : rawConversionValue;
-        if (!campaign || !date || !Number.isFinite(micros) || !Number.isFinite(conversions) || !Number.isFinite(conversionValue)) {
+        if (
+          !campaign ||
+          !date ||
+          !Number.isFinite(micros) ||
+          !Number.isFinite(clicks) ||
+          !Number.isFinite(conversions) ||
+          !Number.isFinite(conversionValue)
+        ) {
           return;
         }
-        const current = campaignRowsMap.get(campaign) ?? { campaign, cost: 0 };
+        const current = campaignRowsMap.get(campaign) ?? { campaign, cost: 0, clicks: 0 };
         current.cost += micros / 1_000_000;
+        current.clicks += clicks;
         campaignRowsMap.set(campaign, current);
-        dailyMap.set(date, roundMoney((dailyMap.get(date) ?? 0) + micros / 1_000_000));
+        const currentDaily = dailyMap.get(date) ?? { cost: 0, clicks: 0 };
+        currentDaily.cost += micros / 1_000_000;
+        currentDaily.clicks += clicks;
+        dailyMap.set(date, currentDaily);
 
         const performanceKey = `${campaign}\u0000${date}`;
         const performanceEntry = campaignPerformanceMap.get(performanceKey) ?? {
@@ -611,10 +677,12 @@ const fetchGoogleAdsCosts = async (startDate: string, endDate: string): Promise<
           medium: null,
           date,
           cost: 0,
+          clicks: 0,
           bookingCount: 0,
           revenue: 0,
         };
         performanceEntry.cost += micros / 1_000_000;
+        performanceEntry.clicks += clicks;
         performanceEntry.bookingCount += conversions;
         performanceEntry.revenue += conversionValue;
         campaignPerformanceMap.set(performanceKey, performanceEntry);
@@ -628,18 +696,28 @@ const fetchGoogleAdsCosts = async (startDate: string, endDate: string): Promise<
         const medium = normalizeText(result?.adGroup?.name);
         const date = normalizeText(result?.segments?.date);
         const micros = Number(result?.metrics?.costMicros ?? 0);
+        const clicks = Number(result?.metrics?.clicks ?? 0);
         const conversions = Number(result?.metrics?.conversions ?? 0);
         const rawConversionValue = Number(result?.metrics?.conversionsValue ?? 0);
         const conversionValue = shouldIgnoreGoogleAdsConversionValue(campaign) ? 0 : rawConversionValue;
-        if (!campaign || !medium || !date || !Number.isFinite(micros) || !Number.isFinite(conversions) || !Number.isFinite(conversionValue)) {
+        if (
+          !campaign ||
+          !medium ||
+          !date ||
+          !Number.isFinite(micros) ||
+          !Number.isFinite(clicks) ||
+          !Number.isFinite(conversions) ||
+          !Number.isFinite(conversionValue)
+        ) {
           return;
         }
         const key = buildPairKey(campaign, medium);
         if (!key) {
           return;
         }
-        const current = adGroupRowsMap.get(key) ?? { campaign, medium, cost: 0 };
+        const current = adGroupRowsMap.get(key) ?? { campaign, medium, cost: 0, clicks: 0 };
         current.cost += micros / 1_000_000;
+        current.clicks += clicks;
         adGroupRowsMap.set(key, current);
 
         const performanceKey = `${key}\u0000${date}`;
@@ -648,10 +726,12 @@ const fetchGoogleAdsCosts = async (startDate: string, endDate: string): Promise<
           medium,
           date,
           cost: 0,
+          clicks: 0,
           bookingCount: 0,
           revenue: 0,
         };
         performanceEntry.cost += micros / 1_000_000;
+        performanceEntry.clicks += clicks;
         performanceEntry.bookingCount += conversions;
         performanceEntry.revenue += conversionValue;
         adGroupPerformanceMap.set(performanceKey, performanceEntry);
@@ -661,15 +741,16 @@ const fetchGoogleAdsCosts = async (startDate: string, endDate: string): Promise<
     return {
       currency,
       rows: Array.from(adGroupRowsMap.values())
-        .map((row) => ({ ...row, cost: roundMoney(row.cost) }))
+        .map((row) => ({ ...row, cost: roundMoney(row.cost), clicks: roundMetricCount(row.clicks) }))
         .sort((left, right) => right.cost - left.cost || left.campaign.localeCompare(right.campaign)),
       campaignRows: Array.from(campaignRowsMap.values())
-        .map((row) => ({ ...row, cost: roundMoney(row.cost) }))
+        .map((row) => ({ ...row, cost: roundMoney(row.cost), clicks: roundMetricCount(row.clicks) }))
         .sort((left, right) => right.cost - left.cost || left.campaign.localeCompare(right.campaign)),
       performanceRows: Array.from(campaignPerformanceMap.values())
         .map((row) => ({
           ...row,
           cost: roundMoney(row.cost),
+          clicks: roundMetricCount(row.clicks),
           bookingCount: roundMetricCount(row.bookingCount),
           revenue: roundMoney(row.revenue),
         }))
@@ -678,12 +759,17 @@ const fetchGoogleAdsCosts = async (startDate: string, endDate: string): Promise<
         .map((row) => ({
           ...row,
           cost: roundMoney(row.cost),
+          clicks: roundMetricCount(row.clicks),
           bookingCount: roundMetricCount(row.bookingCount),
           revenue: roundMoney(row.revenue),
         }))
         .sort((left, right) => left.date.localeCompare(right.date) || right.cost - left.cost),
       dailyRows: Array.from(dailyMap.entries())
-        .map(([date, cost]) => ({ date, cost: roundMoney(cost) }))
+        .map(([date, metrics]) => ({
+          date,
+          cost: roundMoney(metrics.cost),
+          clicks: roundMetricCount(metrics.clicks),
+        }))
         .sort((left, right) => left.date.localeCompare(right.date)),
       error: null,
     };
@@ -694,10 +780,13 @@ const fetchGoogleAdsCosts = async (startDate: string, endDate: string): Promise<
 };
 
 const fetchMarketingBookings = async (startDate: string, endDate: string): Promise<BookingRow[]> => {
+  const rangeStart = `${startDate}T00:00:00.000Z`;
+  const rangeEndExclusive = `${dayjs(endDate).add(1, 'day').format('YYYY-MM-DD')}T00:00:00.000Z`;
   const rows = await Booking.findAll({
     where: {
-      experienceDate: {
-        [Op.between]: [startDate, endDate],
+      sourceReceivedAt: {
+        [Op.gte]: rangeStart,
+        [Op.lt]: rangeEndExclusive,
       },
     },
     attributes: [
@@ -718,7 +807,7 @@ const fetchMarketingBookings = async (startDate: string, endDate: string): Promi
     ],
     include: [{ model: Product, as: 'product', attributes: ['name'] }],
     order: [
-      ['experienceStartAt', 'ASC'],
+      ['sourceReceivedAt', 'ASC'],
       ['id', 'ASC'],
     ],
   });
@@ -778,27 +867,42 @@ export const getMarketingOverview = async (startDate: string, endDate: string): 
   ];
   const metaMetricRows = buildMetricRowsFromBookings(metaBookings);
   const totalGoogleCost = roundMoney(googleCostResult.campaignRows.reduce((sum, row) => sum + row.cost, 0));
+  const totalGoogleClicks = roundMetricCount(googleCostResult.campaignRows.reduce((sum, row) => sum + row.clicks, 0));
   const dailyCostByDate = new Map<string, number>(googleCostResult.dailyRows.map((row) => [row.date, row.cost]));
+  const dailyClickByDate = new Map<string, number>(googleCostResult.dailyRows.map((row) => [row.date, row.clicks]));
   const sourceCostByLabel = new Map<string, number>([[GOOGLE_ADS_SOURCE_LABEL, totalGoogleCost]]);
+  const sourceClickByLabel = new Map<string, number>([[GOOGLE_ADS_SOURCE_LABEL, totalGoogleClicks]]);
   const mediumCostByLabel = buildMediumCostByLabel(googleCostResult.rows, googleCostResult.campaignRows);
+  const mediumClickByLabel = aggregateClicksByLabel(googleCostResult.rows, (row) => row.medium);
   const campaignCostByLabel = aggregateCampaignCostByLabel(googleCostResult.campaignRows, (row) => row.campaign);
+  const campaignClickByLabel = aggregateClicksByLabel(googleCostResult.campaignRows, (row) => row.campaign);
 
   const googleAds = buildTabData(googleBookings, googleMetricRows, normalizedStartDate, normalizedEndDate, {
     sourceCostByLabel,
+    sourceClickByLabel,
     mediumCostByLabel,
+    mediumClickByLabel,
     campaignCostByLabel,
+    campaignClickByLabel,
     dailyCostByDate,
+    dailyClickByDate,
     revenueCurrencyFallback: googleCostResult.currency,
     mediumMetricRows: googleMediumMetricRows,
+    clickTotal: totalGoogleClicks,
   });
   const metaAds = buildTabData(metaBookings, metaMetricRows, normalizedStartDate, normalizedEndDate);
   const overall = buildTabData(bookings, overallMetricRows, normalizedStartDate, normalizedEndDate, {
     sourceCostByLabel,
+    sourceClickByLabel,
     mediumCostByLabel,
+    mediumClickByLabel,
     campaignCostByLabel,
+    campaignClickByLabel,
     dailyCostByDate,
+    dailyClickByDate,
     revenueCurrencyFallback: googleCostResult.currency,
     mediumMetricRows: overallMediumMetricRows,
+    clickTotal: totalGoogleClicks,
   });
 
   return {

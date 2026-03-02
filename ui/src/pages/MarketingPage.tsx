@@ -108,6 +108,12 @@ const formatMoney = (value: number, currency?: string | null): string => {
   }).format(value);
 };
 
+const formatCount = (value: number): string =>
+  new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+    maximumFractionDigits: Number.isInteger(value) ? 0 : 2,
+  }).format(value);
+
 const formatDateTime = (value: string | null): string => {
   if (!value) {
     return "-";
@@ -311,12 +317,13 @@ const BreakdownSection = ({
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
                   alignItems: "start",
                   gap: 12,
                 }}
               >
                 <InfoPair label="Bookings" value={String(row.bookingCount)} />
+                <InfoPair label="Clicks" value={row.clicks == null ? "-" : formatCount(row.clicks)} accent="indigo" />
                 <InfoPair label="Revenue" value={formatMoney(row.revenue, revenueCurrency)} accent="blue" />
                 <InfoPair label="Cost" value={row.cost == null ? "-" : formatMoney(row.cost, costCurrency)} accent="red" />
               </div>
@@ -334,10 +341,11 @@ const BreakdownSection = ({
       >
           <Table.Thead>
             <Table.Tr>
-              <Table.Th style={{ width: "40%", textAlign: "center", paddingInline: 14 }}>Value</Table.Th>
-              <Table.Th style={{ width: "20%", whiteSpace: "nowrap", textAlign: "center", paddingInline: 16 }}>Bookings</Table.Th>
-              <Table.Th style={{ width: "20%", whiteSpace: "nowrap", textAlign: "center", paddingInline: 14 }}>Revenue</Table.Th>
-              <Table.Th style={{ width: "20%", whiteSpace: "nowrap", textAlign: "center", paddingInline: 14 }}>Cost</Table.Th>
+              <Table.Th style={{ width: "32%", textAlign: "center", paddingInline: 14 }}>Value</Table.Th>
+              <Table.Th style={{ width: "17%", whiteSpace: "nowrap", textAlign: "center", paddingInline: 16 }}>Bookings</Table.Th>
+              <Table.Th style={{ width: "17%", whiteSpace: "nowrap", textAlign: "center", paddingInline: 14 }}>Clicks</Table.Th>
+              <Table.Th style={{ width: "17%", whiteSpace: "nowrap", textAlign: "center", paddingInline: 14 }}>Revenue</Table.Th>
+              <Table.Th style={{ width: "17%", whiteSpace: "nowrap", textAlign: "center", paddingInline: 14 }}>Cost</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -355,6 +363,9 @@ const BreakdownSection = ({
                   {row.label}
                 </Table.Td>
                 <Table.Td style={{ whiteSpace: "nowrap", textAlign: "center", paddingInline: 16 }}>{row.bookingCount}</Table.Td>
+                <Table.Td style={{ whiteSpace: "nowrap", textAlign: "center", paddingInline: 14 }}>
+                  {row.clicks == null ? "-" : formatCount(row.clicks)}
+                </Table.Td>
                 <Table.Td style={{ whiteSpace: "nowrap", textAlign: "center", paddingInline: 14 }}>
                   {formatMoney(row.revenue, revenueCurrency)}
                 </Table.Td>
@@ -476,6 +487,7 @@ const GoogleSpendSection = ({
               <SimpleGrid cols={2} spacing="sm" verticalSpacing="sm">
                 <InfoPair label="Ad Group" value={row.medium} />
                 <InfoPair label="Cost" value={formatMoney(row.cost, currency)} accent="red" />
+                <InfoPair label="Clicks" value={formatCount(row.clicks)} accent="indigo" />
               </SimpleGrid>
             </Stack>
           </Card>
@@ -489,6 +501,7 @@ const GoogleSpendSection = ({
               <Table.Th>Campaign</Table.Th>
               <Table.Th>Ad Group</Table.Th>
               <Table.Th>Cost</Table.Th>
+              <Table.Th>Clicks</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -497,6 +510,7 @@ const GoogleSpendSection = ({
                 <Table.Td>{row.campaign}</Table.Td>
                 <Table.Td>{row.medium}</Table.Td>
                 <Table.Td>{formatMoney(row.cost, currency)}</Table.Td>
+                <Table.Td>{formatCount(row.clicks)}</Table.Td>
               </Table.Tr>
             ))}
           </Table.Tbody>
@@ -528,6 +542,7 @@ const MarketingChartSection = ({
   const roas = hasCost && costValue > 0 ? data.revenueTotal / costValue : null;
   const rangeHasCost = data.dailySeries.some((point) => typeof point.cost === "number");
   const rangeHasRoas = data.dailySeries.some((point) => typeof point.roas === "number");
+  const rangeHasClicks = data.dailySeries.some((point) => typeof point.clicks === "number");
 
   return (
     <SectionCard>
@@ -629,6 +644,9 @@ const MarketingChartSection = ({
                     <Text fw={800} size="xl">
                       {roas == null ? "-" : `${roas.toFixed(2)}x`}
                     </Text>
+                    <Text size="xs" c="dimmed" fw={600}>
+                      Clicks: {data.clickTotal == null ? "-" : formatCount(data.clickTotal)}
+                    </Text>
                   </Stack>
                 </div>
               </>
@@ -662,6 +680,7 @@ const MarketingChartSection = ({
                     width={isMobile ? 8 : 24}
                   />
                 ) : null}
+                {rangeHasClicks ? <YAxis yAxisId="clicks" hide domain={[0, "dataMax"]} /> : null}
                 <RechartsTooltip
                   content={({ active, payload, label }) => {
                     if (!active || !payload || payload.length === 0 || typeof label !== "string") {
@@ -708,6 +727,12 @@ const MarketingChartSection = ({
                           </Text>
                           <Text size="sm">
                             <Text span fw={700}>
+                              Clicks:
+                            </Text>{" "}
+                            {point.clicks == null ? "-" : formatCount(point.clicks)}
+                          </Text>
+                          <Text size="sm">
+                            <Text span fw={700}>
                               Bookings:
                             </Text>{" "}
                             {point.bookingCount}
@@ -746,6 +771,18 @@ const MarketingChartSection = ({
                     yAxisId="right"
                     dataKey="roas"
                     stroke="#f08c00"
+                    strokeWidth={2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                    connectNulls
+                  />
+                ) : null}
+                {rangeHasClicks ? (
+                  <Line
+                    type="monotone"
+                    yAxisId="clicks"
+                    dataKey="clicks"
+                    stroke="#5f3dc4"
                     strokeWidth={2}
                     dot={{ r: 3 }}
                     activeDot={{ r: 5 }}
@@ -832,6 +869,14 @@ const TabContent = ({
             value={formatMoney(data.revenueTotal, data.revenueCurrency)}
             description={`${data.bookingCount} booking${data.bookingCount === 1 ? "" : "s"}`}
             accent="blue"
+          />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <MetricCard
+            label="Clicks"
+            value={data.clickTotal == null ? "-" : formatCount(data.clickTotal)}
+            description={data.clickTotal == null ? "Unavailable for this source" : "Tracked"}
+            accent="dark"
           />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
