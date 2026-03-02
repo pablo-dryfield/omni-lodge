@@ -64,6 +64,7 @@ dayjs.extend(duration);
 const PAGE_SLUG = PAGE_SLUGS.performance;
 const POLL_INTERVAL_MS = 10_000;
 const HISTORY_RANGE_OPTIONS = [
+  { label: "Whole Session", value: "session" },
   { label: "24h", value: "24h" },
   { label: "7d", value: "7d" },
   { label: "30d", value: "30d" },
@@ -732,7 +733,7 @@ const PerformancePage = ({ title }: GenericPageProps) => {
   const [snapshot, setSnapshot] = useState<PerformanceSnapshotResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [historyRange, setHistoryRange] = useState<HistoryRange>("7d");
+  const [historyRange, setHistoryRange] = useState<HistoryRange>("session");
   const [customHistoryRange, setCustomHistoryRange] = useState<CustomHistoryRangeValue>(() => createDefaultCustomHistoryRange());
   const [sessionScope, setSessionScope] = useState<SessionScope>("current");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -839,6 +840,9 @@ const PerformancePage = ({ title }: GenericPageProps) => {
                 ? point.sessionId === selectedSessionId
                 : true,
           );
+    if (historyRange === "session") {
+      return sessionFiltered;
+    }
     if (historyRange === "custom") {
       const [start, end] = customHistoryRange;
       if (!start || !end) {
@@ -865,6 +869,9 @@ const PerformancePage = ({ title }: GenericPageProps) => {
   }, [customHistoryRange, historyRange, selectedSessionId, sessionScope, snapshot?.currentSessionId, snapshot?.history]);
 
   const historyRangeLabel = useMemo(() => {
+    if (historyRange === "session") {
+      return "Whole Session";
+    }
     if (historyRange !== "custom") {
       return historyRange;
     }
