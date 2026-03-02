@@ -157,6 +157,8 @@ const generateDiagnostics = (
     latestHistory && earliestHistory ? latestHistory.p95ResponseMs - earliestHistory.p95ResponseMs : 0;
   const topRoute = snapshot.topRoutes[0];
   const topQuery = snapshot.database.queries.topQueries[0];
+  const hasMemoryGrowthTrend = heapGrowth >= 250 || rssGrowth >= 400;
+  const hasHighHeapPressure = snapshot.process.heapUsedPercent >= 88;
 
   if (snapshot.traffic.p95ResponseMs >= 1500) {
     diagnostics.push({
@@ -194,7 +196,7 @@ const generateDiagnostics = (
     });
   }
 
-  if (snapshot.process.heapUsedPercent >= 80 || heapGrowth >= 250 || rssGrowth >= 400) {
+  if (hasMemoryGrowthTrend) {
     diagnostics.push({
       severity: snapshot.process.heapUsedPercent >= 88 ? "critical" : "warning",
       title: "Memory growth suggests retained state or a leak",
@@ -208,6 +210,24 @@ const generateDiagnostics = (
         "Shrink or remove long-lived in-memory caches, maps, arrays, and report buffers.",
         "Add TTL or eviction limits to every cache that can grow with uptime.",
         "Clear retained temporary data after each request or background job completes.",
+      ],
+    });
+  }
+
+  if (hasHighHeapPressure && !hasMemoryGrowthTrend) {
+    diagnostics.push({
+      severity: snapshot.process.heapUsedPercent >= 95 ? "warning" : "info",
+      title: "Heap usage is high right now, but a leak trend is not confirmed",
+      summary: "Current heap utilization is elevated, but the selected history window does not show upward memory growth.",
+      signals: [
+        `Heap used is ${formatMetricNumber(snapshot.process.heapUsedMb, 1)} MB (${formatPercent(snapshot.process.heapUsedPercent)}).`,
+        `Heap changed by ${formatMetricNumber(heapGrowth, 1)} MB in the selected history range.`,
+        `RSS changed by ${formatMetricNumber(rssGrowth, 1)} MB in the selected history range.`,
+      ],
+      actions: [
+        "Keep this under observation before treating it as a memory leak.",
+        "Reduce peak in-request allocations in heavy endpoints if this warning persists under normal traffic.",
+        "Only escalate to leak remediation if heap or RSS starts trending upward over time.",
       ],
     });
   }
