@@ -2,7 +2,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { Request, Response } from 'express';
 import { DataType } from 'sequelize-typescript';
-import { Op } from 'sequelize';
+import { Op, UniqueConstraintError, ValidationError } from 'sequelize';
 import User from '../models/User.js';
 import UserType from '../models/UserType.js';
 import StaffProfile from '../models/StaffProfile.js';
@@ -12,6 +12,7 @@ import { deleteProfilePhoto, storeProfilePhoto, StoreProfilePhotoResult, openPro
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { Env } from '../types/Env.js';
 import logger from '../utils/logger.js';
+import HttpError from '../errors/HttpError.js';
 
 const NAME_TO_SLUG: Record<string, string[]> = {
   guide: ['guide', 'pub-crawl-guide'],
@@ -152,6 +153,20 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
         instagramProfileUrl,
         discoverySource,
       } = req.body;
+
+      const existingUser = await User.findOne({
+        where: {
+          [Op.or]: [{ username }, { email }],
+        },
+        transaction,
+      });
+      if (existingUser) {
+        if (existingUser.email === email) {
+          throw new HttpError(409, 'Email is already registered.');
+        }
+        throw new HttpError(409, 'Username is already taken.');
+      }
+
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(password, salt);
       const userPayload = {
@@ -188,7 +203,7 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
 
       if (profilePhotoFile) {
         if (!shouldCreateStaffProfile) {
-          throw new Error('Staff type selection is required to upload a profile photo.');
+          throw new HttpError(400, 'Staff type selection is required to upload a profile photo.');
         }
 
         let uploadResult: StoreProfilePhotoResult | null = null;
@@ -240,7 +255,7 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
         });
 
         if (roles.length !== shiftRoleIds.length) {
-          throw new Error('One or more shift roles do not exist.');
+          throw new HttpError(400, 'One or more shift roles do not exist.');
         }
 
         const forbiddenRole = roles.find((role) => {
@@ -249,7 +264,7 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
         });
 
         if (forbiddenRole) {
-          throw new Error('Selected shift roles are not available during signup.');
+          throw new HttpError(400, 'Selected shift roles are not available during signup.');
         }
 
         const assignmentRows = roles.map((role) => ({
@@ -273,6 +288,32 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
     if (uploadedPhotoShouldCleanup && uploadedPhotoPath) {
       await deleteProfilePhoto(uploadedPhotoPath).catch(() => {});
     }
+
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+
+    if (error instanceof UniqueConstraintError) {
+      const field = error.errors?.[0]?.path ?? null;
+      if (field === 'email') {
+        res.status(409).json([{ message: 'Email is already registered.' }]);
+        return;
+      }
+      if (field === 'username') {
+        res.status(409).json([{ message: 'Username is already taken.' }]);
+        return;
+      }
+      res.status(409).json([{ message: 'User already exists with the provided data.' }]);
+      return;
+    }
+
+    if (error instanceof ValidationError) {
+      res.status(400).json([{ message: error.message }]);
+      return;
+    }
+
+    logger.error(`[users] registerUser failed: ${(error as ErrorWithMessage).message}`);
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);
   }

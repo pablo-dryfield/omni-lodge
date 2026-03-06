@@ -13,8 +13,10 @@ import {
 import type { NonAttribute } from 'sequelize';
 import AssistantManagerTaskTemplate from './AssistantManagerTaskTemplate.js';
 import User from './User.js';
+import ShiftRole from './ShiftRole.js';
+import UserType from './UserType.js';
 
-export type AssistantManagerTaskAssignmentScope = 'staff_type' | 'user';
+export type AssistantManagerTaskAssignmentScope = 'staff_type' | 'user' | 'user_type' | 'shift_role';
 
 @Table({
   tableName: 'am_task_assignments',
@@ -35,17 +37,31 @@ export default class AssistantManagerTaskAssignment extends Model {
 
   @AllowNull(false)
   @Default('staff_type')
-  @Column({ field: 'target_scope', type: DataType.ENUM('staff_type', 'user') })
+  @Column({ field: 'target_scope', type: DataType.ENUM('staff_type', 'user', 'user_type', 'shift_role') })
   declare targetScope: AssistantManagerTaskAssignmentScope;
 
   @AllowNull(true)
   @Column({ field: 'staff_type', type: DataType.STRING(64) })
   declare staffType: string | null;
 
+  @AllowNull(true)
+  @Column({ field: 'lives_in_accom', type: DataType.BOOLEAN })
+  declare livesInAccom: boolean | null;
+
   @ForeignKey(() => User)
   @AllowNull(true)
   @Column({ field: 'user_id', type: DataType.INTEGER })
   declare userId: number | null;
+
+  @ForeignKey(() => UserType)
+  @AllowNull(true)
+  @Column({ field: 'user_type_id', type: DataType.INTEGER })
+  declare userTypeId: number | null;
+
+  @ForeignKey(() => ShiftRole)
+  @AllowNull(true)
+  @Column({ field: 'shift_role_id', type: DataType.INTEGER })
+  declare shiftRoleId: number | null;
 
   @AllowNull(true)
   @Column({ field: 'effective_start', type: DataType.DATEONLY })
@@ -75,4 +91,10 @@ export default class AssistantManagerTaskAssignment extends Model {
 
   @BelongsTo(() => User, { foreignKey: 'user_id', as: 'user' })
   declare user?: NonAttribute<User | null>;
+
+  @BelongsTo(() => UserType, { foreignKey: 'user_type_id', as: 'userType' })
+  declare userType?: NonAttribute<UserType | null>;
+
+  @BelongsTo(() => ShiftRole, { foreignKey: 'shift_role_id', as: 'shiftRole' })
+  declare shiftRole?: NonAttribute<ShiftRole | null>;
 }

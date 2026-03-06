@@ -39,6 +39,31 @@ export default class AssistantManagerTaskTemplate extends Model {
   declare description: string | null;
 
   @AllowNull(false)
+  @Default('Assistant Manager Tasks')
+  @Column(DataType.STRING(120))
+  declare category: string;
+
+  @AllowNull(false)
+  @Default('General')
+  @Column(DataType.STRING(120))
+  declare subgroup: string;
+
+  @AllowNull(false)
+  @Default(100)
+  @Column({ field: 'category_order', type: DataType.INTEGER })
+  declare categoryOrder: number;
+
+  @AllowNull(false)
+  @Default(100)
+  @Column({ field: 'subgroup_order', type: DataType.INTEGER })
+  declare subgroupOrder: number;
+
+  @AllowNull(false)
+  @Default(100)
+  @Column({ field: 'template_order', type: DataType.INTEGER })
+  declare templateOrder: number;
+
+  @AllowNull(false)
   @Default('daily')
   @Column({
     type: DataType.ENUM('daily', 'weekly', 'biweekly', 'every_two_weeks', 'monthly'),

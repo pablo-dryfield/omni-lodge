@@ -80,9 +80,36 @@ const parseNumber = (raw: string | null): number | null => {
   if (!raw) {
     return null;
   }
-  const normalized = raw.replace(/\s+/g, '').replace(',', '.');
+  const compact = raw.replace(/\u00a0/g, ' ').replace(/\s+/g, '').trim();
+  const sign = compact.startsWith('-') ? -1 : 1;
+  const unsigned = compact.replace(/^-/, '');
+  if (!unsigned) {
+    return null;
+  }
+
+  const lastComma = unsigned.lastIndexOf(',');
+  const lastDot = unsigned.lastIndexOf('.');
+  let normalized = unsigned;
+
+  if (lastComma !== -1 && lastDot !== -1) {
+    const decimalSeparator = lastComma > lastDot ? ',' : '.';
+    const thousandSeparator = decimalSeparator === ',' ? '.' : ',';
+    normalized = unsigned.split(thousandSeparator).join('');
+    if (decimalSeparator === ',') {
+      normalized = normalized.replace(',', '.');
+    }
+  } else if (lastComma !== -1) {
+    const isThousands = /^\d{1,3}(,\d{3})+$/.test(unsigned);
+    normalized = isThousands
+      ? unsigned.split(',').join('')
+      : unsigned.split('.').join('').replace(',', '.');
+  } else if (lastDot !== -1) {
+    const isThousands = /^\d{1,3}(\.\d{3})+$/.test(unsigned);
+    normalized = isThousands ? unsigned.split('.').join('') : unsigned.split(',').join('');
+  }
+
   const parsed = Number.parseFloat(normalized);
-  return Number.isNaN(parsed) ? null : parsed;
+  return Number.isNaN(parsed) ? null : parsed * sign;
 };
 
 const currencyFromToken = (token: string | null): string | null => {

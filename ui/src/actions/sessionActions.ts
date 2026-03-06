@@ -10,7 +10,9 @@ export const fetchSession = createAsyncThunk(
     'session/session',
     async (_, { rejectWithValue }) => {
       try {
-        const response = await axiosInstance.get<[{authenticated:boolean, userId:number}]>('/session', {
+        const response = await axiosInstance.get<
+          [{ authenticated: boolean; userId: number; roleSlug?: string | null; roleName?: string | null; userTypeId?: number | null }]
+        >('/session', {
           withCredentials: true, 
         });
         return response.data;

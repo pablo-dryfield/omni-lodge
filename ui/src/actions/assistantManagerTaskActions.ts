@@ -1,4 +1,5 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
+import axios from 'axios';
 import axiosInstance from '../utils/axiosInstance';
 import type {
   AssistantManagerTaskTemplate,
@@ -6,8 +7,55 @@ import type {
   AssistantManagerTaskLog,
   ManualAssistantManagerTaskPayload,
   TaskLogMetaUpdatePayload,
+  UploadAmTaskEvidenceImageResponse,
 } from '../types/assistantManagerTasks/AssistantManagerTask';
 import type { ServerResponse } from '../types/general/ServerResponse';
+
+const extractApiErrorMessage = (error: unknown, fallbackMessage: string) => {
+  if (axios.isAxiosError(error)) {
+    const responseData = error.response?.data;
+    if (typeof responseData === 'string' && responseData.trim()) {
+      return responseData.trim();
+    }
+    if (Array.isArray(responseData)) {
+      const firstMessage = responseData.find(
+        (entry) =>
+          entry &&
+          typeof entry === 'object' &&
+          'message' in entry &&
+          typeof (entry as { message?: unknown }).message === 'string',
+      ) as { message: string } | undefined;
+      if (firstMessage?.message?.trim()) {
+        return firstMessage.message.trim();
+      }
+    }
+    if (
+      responseData &&
+      typeof responseData === 'object' &&
+      'message' in responseData &&
+      typeof (responseData as { message?: unknown }).message === 'string'
+    ) {
+      const message = (responseData as { message: string }).message.trim();
+      if (message) {
+        return message;
+      }
+    }
+    if (error.message?.trim()) {
+      return error.message.trim();
+    }
+    return fallbackMessage;
+  }
+
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+
+  if (typeof error === 'string' && error.trim()) {
+    return error.trim();
+  }
+
+  return fallbackMessage;
+};
 
 export const fetchAmTaskTemplates = createAsyncThunk(
   'assistantManagerTasks/fetchTemplates',
@@ -110,6 +158,31 @@ export const updateAmTaskAssignment = createAsyncThunk(
   },
 );
 
+export const bulkCreateAmTaskAssignments = createAsyncThunk(
+  'assistantManagerTasks/bulkCreateAssignments',
+  async (
+    {
+      templateIds,
+      payload,
+    }: { templateIds: number[]; payload: Partial<AssistantManagerTaskAssignment> },
+    { rejectWithValue },
+  ) => {
+    try {
+      const response = await axiosInstance.post(
+        '/assistantManagerTasks/templates/assignments/bulk',
+        { templateIds, payload },
+        { withCredentials: true },
+      );
+      return response.data;
+    } catch (error) {
+      if (error instanceof Error) {
+        return rejectWithValue(error.message);
+      }
+      return rejectWithValue('Failed to bulk create task assignments');
+    }
+  },
+);
+
 export const deleteAmTaskAssignment = createAsyncThunk(
   'assistantManagerTasks/deleteAssignment',
   async ({ templateId, assignmentId }: { templateId: number; assignmentId: number }, { rejectWithValue }) => {
@@ -159,10 +232,7 @@ export const updateAmTaskLogStatus = createAsyncThunk(
       const response = await axiosInstance.put(`/assistantManagerTasks/logs/${logId}`, payload, { withCredentials: true });
       return response.data;
     } catch (error) {
-      if (error instanceof Error) {
-        return rejectWithValue(error.message);
-      }
-      return rejectWithValue('Failed to update task log');
+      return rejectWithValue(extractApiErrorMessage(error, 'Failed to update task log'));
     }
   },
 );
@@ -189,10 +259,38 @@ export const updateAmTaskLogMeta = createAsyncThunk(
       const response = await axiosInstance.patch(`/assistantManagerTasks/logs/${logId}/meta`, payload, { withCredentials: true });
       return response.data;
     } catch (error) {
-      if (error instanceof Error) {
-        return rejectWithValue(error.message);
-      }
-      return rejectWithValue('Failed to update task log metadata');
+      return rejectWithValue(extractApiErrorMessage(error, 'Failed to update task log metadata'));
+    }
+  },
+);
+
+export const uploadAmTaskEvidenceImage = createAsyncThunk(
+  'assistantManagerTasks/uploadEvidenceImage',
+  async (
+    {
+      logId,
+      ruleKey,
+      file,
+    }: { logId: number; ruleKey: string; file: File },
+    { rejectWithValue },
+  ) => {
+    try {
+      const formData = new FormData();
+      formData.append('ruleKey', ruleKey);
+      formData.append('file', file);
+      const response = await axiosInstance.post<UploadAmTaskEvidenceImageResponse[]>(
+        `/assistantManagerTasks/logs/${logId}/evidence-files`,
+        formData,
+        {
+          withCredentials: true,
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        },
+      );
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(extractApiErrorMessage(error, 'Failed to upload task evidence image'));
     }
   },
 );

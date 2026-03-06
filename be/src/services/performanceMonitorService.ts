@@ -273,6 +273,7 @@ const SAMPLE_INTERVAL_MS = 60_000;
 const EVENT_LOOP_SAMPLE_MS = 1_000;
 const SUMMARY_LOG_INTERVAL_MS = 10 * 60_000;
 const DEFAULT_SLOW_REQUEST_THRESHOLD_MS = 1_500;
+const DIAGNOSTIC_EXCLUDED_ROUTE_KEYS = new Set(['/api/performance/heap-snapshot']);
 
 const round = (value: number, digits = 2): number => {
   if (!Number.isFinite(value)) {
@@ -300,6 +301,9 @@ const formatRouteKey = (req: Request): string => {
     .replace(/\/[A-Za-z0-9_-]{14,}(?=\/|$)/g, '/:token');
   return normalized || '/';
 };
+
+const shouldExcludeFromDiagnosticsScoring = (routeKey: string): boolean =>
+  DIAGNOSTIC_EXCLUDED_ROUTE_KEYS.has(routeKey);
 
 const percentile = (values: number[], percentileValue: number): number => {
   if (values.length === 0) {
@@ -461,47 +465,50 @@ class PerformanceMonitorService {
     if (statusCode >= 500) {
       this.totalErrorsSinceStart += 1;
     }
+    const excludedFromScoring = shouldExcludeFromDiagnosticsScoring(context.routeKey);
 
-    const routeMetricKey = `${context.method} ${context.routeKey}`;
-    const aggregate = this.routeAggregates.get(routeMetricKey) ?? {
-      routeKey: context.routeKey,
-      method: context.method,
-      requestCount: 0,
-      errorCount: 0,
-      slowCount: 0,
-      totalResponseMs: 0,
-      maxResponseMs: 0,
-      lastResponseMs: 0,
-      lastStatusCode: 0,
-      lastSeenAtMs: 0,
-      responseWindowMs: [],
-    };
+    if (!excludedFromScoring) {
+      const routeMetricKey = `${context.method} ${context.routeKey}`;
+      const aggregate = this.routeAggregates.get(routeMetricKey) ?? {
+        routeKey: context.routeKey,
+        method: context.method,
+        requestCount: 0,
+        errorCount: 0,
+        slowCount: 0,
+        totalResponseMs: 0,
+        maxResponseMs: 0,
+        lastResponseMs: 0,
+        lastStatusCode: 0,
+        lastSeenAtMs: 0,
+        responseWindowMs: [],
+      };
 
-    aggregate.requestCount += 1;
-    aggregate.totalResponseMs += durationMs;
-    aggregate.maxResponseMs = Math.max(aggregate.maxResponseMs, durationMs);
-    aggregate.lastResponseMs = durationMs;
-    aggregate.lastStatusCode = statusCode;
-    aggregate.lastSeenAtMs = Date.now();
-    if (statusCode >= 500) {
-      aggregate.errorCount += 1;
+      aggregate.requestCount += 1;
+      aggregate.totalResponseMs += durationMs;
+      aggregate.maxResponseMs = Math.max(aggregate.maxResponseMs, durationMs);
+      aggregate.lastResponseMs = durationMs;
+      aggregate.lastStatusCode = statusCode;
+      aggregate.lastSeenAtMs = Date.now();
+      if (statusCode >= 500) {
+        aggregate.errorCount += 1;
+      }
+      if (durationMs >= this.slowRequestThresholdMs) {
+        aggregate.slowCount += 1;
+      }
+      pushLimited(aggregate.responseWindowMs, durationMs, ROUTE_WINDOW_LIMIT);
+      this.routeAggregates.set(routeMetricKey, aggregate);
+
+      pushLimited(
+        this.recentRequests,
+        {
+          timestampMs: Date.now(),
+          durationMs,
+          statusCode,
+          routeKey: routeMetricKey,
+        },
+        RECENT_REQUEST_LIMIT,
+      );
     }
-    if (durationMs >= this.slowRequestThresholdMs) {
-      aggregate.slowCount += 1;
-    }
-    pushLimited(aggregate.responseWindowMs, durationMs, ROUTE_WINDOW_LIMIT);
-    this.routeAggregates.set(routeMetricKey, aggregate);
-
-    pushLimited(
-      this.recentRequests,
-      {
-        timestampMs: Date.now(),
-        durationMs,
-        statusCode,
-        routeKey: routeMetricKey,
-      },
-      RECENT_REQUEST_LIMIT,
-    );
 
     requestCounter.inc({
       method: context.method,
@@ -517,7 +524,7 @@ class PerformanceMonitorService {
       durationMs / 1000,
     );
 
-    if (durationMs >= this.slowRequestThresholdMs) {
+    if (!excludedFromScoring && durationMs >= this.slowRequestThresholdMs) {
       const slowRequest: SlowRequestSnapshot = {
         id: context.id,
         method: context.method,
@@ -552,7 +559,7 @@ class PerformanceMonitorService {
       });
     }
 
-    if (statusCode >= 500) {
+    if (!excludedFromScoring && statusCode >= 500) {
       const errorRequest: ErrorRequestSnapshot = {
         id: context.id,
         method: context.method,

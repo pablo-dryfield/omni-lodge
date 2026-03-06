@@ -4,7 +4,13 @@ import { AuthenticatedRequest } from '../types/AuthenticatedRequest';
 export const checkSession = (req: AuthenticatedRequest, res: Response) => {
     if (typeof req.user === 'object' && req.user !== null && 'id' in req.user) {
         const userId = req.user.id;
-        res.json([{ authenticated: true, userId: userId }]);
+        res.json([{
+          authenticated: true,
+          userId,
+          roleSlug: req.authContext?.roleSlug ?? null,
+          roleName: req.authContext?.roleName ?? null,
+          userTypeId: req.authContext?.userTypeId ?? null,
+        }]);
     } else {
         res.status(401).json([{ authenticated: false, message: "Invalid session or user not found." }]);
     }
