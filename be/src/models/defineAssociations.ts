@@ -185,6 +185,10 @@ export function defineAssociations() {
   AssistantManagerTaskLog.belongsTo(AssistantManagerTaskTemplate, { foreignKey: 'template_id', as: 'templateTaskLog' });
   User.hasMany(AssistantManagerTaskAssignment, { foreignKey: 'user_id', as: 'assistantManagerTaskAssignments' });
   AssistantManagerTaskAssignment.belongsTo(User, { foreignKey: 'user_id', as: 'assignmentUser' });
+  UserType.hasMany(AssistantManagerTaskAssignment, { foreignKey: 'user_type_id', as: 'assistantManagerTaskAssignments' });
+  AssistantManagerTaskAssignment.belongsTo(UserType, { foreignKey: 'user_type_id', as: 'assignmentUserType' });
+  ShiftRole.hasMany(AssistantManagerTaskAssignment, { foreignKey: 'shift_role_id', as: 'assistantManagerTaskAssignments' });
+  AssistantManagerTaskAssignment.belongsTo(ShiftRole, { foreignKey: 'shift_role_id', as: 'assignmentShiftRole' });
   User.hasMany(AssistantManagerTaskLog, { foreignKey: 'user_id', as: 'assistantManagerTaskLogs' });
   AssistantManagerTaskLog.belongsTo(User, { foreignKey: 'user_id', as: 'logUser' });
 

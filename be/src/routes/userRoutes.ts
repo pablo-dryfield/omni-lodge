@@ -19,6 +19,8 @@ const validateId = [
 
 const validateUserPOST = [
   check('username').isString().trim().isLength({ min: 3, max: 50 }).withMessage('Username must be a string between 3 and 50 characters'),
+  check('firstName').isString().trim().isLength({ min: 1, max: 100 }).withMessage('First name is required'),
+  check('lastName').isString().trim().isLength({ min: 1, max: 100 }).withMessage('Last name is required'),
   check('email').trim().isEmail().normalizeEmail().withMessage('Email must be a valid email address'),
   check('password').trim().isLength({ min: 8 }).withMessage('Password must be at least 8 characters long')
 ];

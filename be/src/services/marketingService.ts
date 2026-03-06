@@ -134,6 +134,17 @@ const GOOGLE_ADS_API_VERSION = 'v22';
 const GOOGLE_ADS_BOOKING_DATA_CUTOFF_DATE = '2026-02-28';
 const GOOGLE_ADS_NON_REVENUE_CAMPAIGN_PREFIXES = ['smart campaign'];
 const GOOGLE_ADS_MEDIUM_LEFTOVER_IGNORE_THRESHOLD = 0.01;
+const MARKETING_OVERVIEW_CACHE_TTL_MS = Number(process.env.MARKETING_OVERVIEW_CACHE_TTL_MS ?? 5 * 60_000);
+const MARKETING_OVERVIEW_CACHE_MAX_ENTRIES = Number(process.env.MARKETING_OVERVIEW_CACHE_MAX_ENTRIES ?? 64);
+
+type MarketingOverviewCacheEntry = {
+  cachedAtMs: number;
+  expiresAtMs: number;
+  value: MarketingOverview;
+};
+
+const marketingOverviewCache = new Map<string, MarketingOverviewCacheEntry>();
+const marketingOverviewInFlight = new Map<string, Promise<MarketingOverview>>();
 
 const parseAmount = (value: unknown): number => {
   const numeric = typeof value === 'number' ? value : Number(value ?? 0);
@@ -836,7 +847,42 @@ const fetchMarketingBookings = async (startDate: string, endDate: string): Promi
     }));
 };
 
-export const getMarketingOverview = async (startDate: string, endDate: string): Promise<MarketingOverview> => {
+const buildMarketingOverviewCacheKey = (startDate: string, endDate: string): string =>
+  `${startDate}\u0000${endDate}`;
+
+const getCachedMarketingOverview = (key: string): MarketingOverview | null => {
+  const entry = marketingOverviewCache.get(key);
+  if (!entry) {
+    return null;
+  }
+  if (entry.expiresAtMs <= Date.now()) {
+    marketingOverviewCache.delete(key);
+    return null;
+  }
+  return entry.value;
+};
+
+const setCachedMarketingOverview = (key: string, value: MarketingOverview): void => {
+  const now = Date.now();
+  marketingOverviewCache.set(key, {
+    cachedAtMs: now,
+    expiresAtMs: now + Math.max(5_000, MARKETING_OVERVIEW_CACHE_TTL_MS),
+    value,
+  });
+
+  if (marketingOverviewCache.size <= MARKETING_OVERVIEW_CACHE_MAX_ENTRIES) {
+    return;
+  }
+
+  const oldest = Array.from(marketingOverviewCache.entries()).sort(
+    (left, right) => left[1].cachedAtMs - right[1].cachedAtMs,
+  )[0];
+  if (oldest) {
+    marketingOverviewCache.delete(oldest[0]);
+  }
+};
+
+const buildMarketingOverview = async (startDate: string, endDate: string): Promise<MarketingOverview> => {
   const normalizedStartDate = dayjs(startDate).format('YYYY-MM-DD');
   const normalizedEndDate = dayjs(endDate).format('YYYY-MM-DD');
   const bookings = await fetchMarketingBookings(normalizedStartDate, normalizedEndDate);
@@ -922,4 +968,31 @@ export const getMarketingOverview = async (startDate: string, endDate: string): 
     },
     metaAds,
   };
+};
+
+export const getMarketingOverview = async (startDate: string, endDate: string): Promise<MarketingOverview> => {
+  const normalizedStartDate = dayjs(startDate).format('YYYY-MM-DD');
+  const normalizedEndDate = dayjs(endDate).format('YYYY-MM-DD');
+  const cacheKey = buildMarketingOverviewCacheKey(normalizedStartDate, normalizedEndDate);
+  const cached = getCachedMarketingOverview(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const inFlight = marketingOverviewInFlight.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const pending = buildMarketingOverview(normalizedStartDate, normalizedEndDate)
+    .then((overview) => {
+      setCachedMarketingOverview(cacheKey, overview);
+      return overview;
+    })
+    .finally(() => {
+      marketingOverviewInFlight.delete(cacheKey);
+    });
+
+  marketingOverviewInFlight.set(cacheKey, pending);
+  return pending;
 };

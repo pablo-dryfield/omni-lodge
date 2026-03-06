@@ -8,6 +8,9 @@ const initialState: SessionState = {
   authenticated: false,
   checkingSession: false,
   loggedUserId: 0,
+  roleSlug: null,
+  roleName: null,
+  userTypeId: null,
   error: null,
 };
 
@@ -39,12 +42,18 @@ const sessionSlice = createSlice({
       .addCase(loginUser.rejected, (state, action) => {
         state.loggedUserId = 0;
         state.authenticated = false;
+        state.roleSlug = null;
+        state.roleName = null;
+        state.userTypeId = null;
         state.error = (action.payload as string) ?? action.error.message ?? 'Login failed';
       })
       .addCase(logoutUser.fulfilled, (state) => {
         state.loggedUserId = 0;
         state.authenticated = false;
         state.user = '';
+        state.roleSlug = null;
+        state.roleName = null;
+        state.userTypeId = null;
         state.error = null;
       })
       .addCase(fetchSession.pending, (state) => {
@@ -54,11 +63,17 @@ const sessionSlice = createSlice({
         state.loggedUserId = action.payload[0].userId;
         state.authenticated = true;
         state.checkingSession = false;
+        state.roleSlug = action.payload[0].roleSlug ?? null;
+        state.roleName = action.payload[0].roleName ?? null;
+        state.userTypeId = action.payload[0].userTypeId ?? null;
         state.error = null;
       })
       .addCase(fetchSession.rejected, (state) => {
         state.checkingSession = false;
         state.authenticated = false;
+        state.roleSlug = null;
+        state.roleName = null;
+        state.userTypeId = null;
       });
   },
 });

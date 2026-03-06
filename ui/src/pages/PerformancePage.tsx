@@ -280,7 +280,13 @@ const generateDiagnostics = (
   const topQuery = snapshot.database.queries.topQueries[0];
   const topQueryRoute = snapshot.database.queries.routeCorrelations[0];
   const topExternalEndpoint = snapshot.externalCalls.topEndpoints[0];
-  const hasMemoryGrowthTrend = heapGrowth >= 250 || rssGrowth >= 400;
+  const latestHeapSnapshot = snapshot.heapSnapshots.recentSnapshots[0] ?? null;
+  const recentHeapSnapshotSideEffectLikely =
+    latestHeapSnapshot != null &&
+    dayjs(latestHeapSnapshot.createdAt).isAfter(dayjs().subtract(12, "hour")) &&
+    rssGrowth >= 300 &&
+    heapGrowth <= 120;
+  const hasMemoryGrowthTrend = !recentHeapSnapshotSideEffectLikely && (heapGrowth >= 250 || rssGrowth >= 400);
   const hasHighHeapPressure = snapshot.process.heapUsedPercent >= 88;
 
   if (snapshot.traffic.p95ResponseMs >= 1500) {
@@ -333,6 +339,27 @@ const generateDiagnostics = (
         "Shrink or remove long-lived in-memory caches, maps, arrays, and report buffers.",
         "Add TTL or eviction limits to every cache that can grow with uptime.",
         "Clear retained temporary data after each request or background job completes.",
+      ],
+    });
+  }
+
+  if (recentHeapSnapshotSideEffectLikely) {
+    diagnostics.push({
+      severity: "info",
+      title: "Recent heap snapshot likely inflated RSS temporarily",
+      summary:
+        "A heap snapshot was captured recently and the observed RSS increase matches expected diagnostic overhead.",
+      signals: [
+        latestHeapSnapshot
+          ? `Latest heap snapshot was captured at ${formatTimestamp(latestHeapSnapshot.createdAt)}.`
+          : "A recent heap snapshot was detected.",
+        `Heap changed by ${formatMetricNumber(heapGrowth, 1)} MB in the selected history range.`,
+        `RSS changed by ${formatMetricNumber(rssGrowth, 1)} MB in the selected history range.`,
+      ],
+      actions: [
+        "Re-check memory trend after normal traffic, without taking another heap snapshot immediately.",
+        "Use a second snapshot comparison only if heap and RSS keep climbing after this diagnostic window.",
+        "Prioritize SQL and external-call bottlenecks first while memory remains stable.",
       ],
     });
   }
@@ -545,6 +572,12 @@ const getHeapSnapshotGuidance = (
   ];
 
   const reasons: string[] = [];
+  const latestHeapSnapshot = snapshot.heapSnapshots.recentSnapshots[0] ?? null;
+  const recentHeapSnapshotSideEffectLikely =
+    latestHeapSnapshot != null &&
+    dayjs(latestHeapSnapshot.createdAt).isAfter(dayjs().subtract(12, "hour")) &&
+    rssGrowth >= 300 &&
+    heapGrowth <= 120;
   const hasClearGrowthTrend = heapGrowth >= 30 || rssGrowth >= 60;
   const hasSevereGrowthTrend = heapGrowth >= 60 || rssGrowth >= 120;
   const hasHighHeapPressure = snapshot.process.heapUsedPercent >= 92;
@@ -569,8 +602,11 @@ const getHeapSnapshotGuidance = (
   if (hasLongUptimePressure) {
     reasons.push("The process has been up for hours and memory has not settled back down.");
   }
+  if (recentHeapSnapshotSideEffectLikely) {
+    reasons.push("A recent heap snapshot likely caused temporary RSS inflation.");
+  }
 
-  if (hasSevereGrowthTrend || hasLatencyDuringGrowth || hasLongUptimePressure) {
+  if (!recentHeapSnapshotSideEffectLikely && (hasSevereGrowthTrend || hasLatencyDuringGrowth || hasLongUptimePressure)) {
     return {
       shouldCapture: true,
       color: hasSevereGrowthTrend || hasLatencyDuringGrowth ? "red" : "yellow",
@@ -582,7 +618,7 @@ const getHeapSnapshotGuidance = (
     };
   }
 
-  if (hasClearGrowthTrend || hasHighHeapPressure) {
+  if (hasClearGrowthTrend || hasHighHeapPressure || recentHeapSnapshotSideEffectLikely) {
     return {
       shouldCapture: false,
       color: "yellow",

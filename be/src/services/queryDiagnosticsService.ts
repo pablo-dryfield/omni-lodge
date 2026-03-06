@@ -103,6 +103,7 @@ const QUERY_WINDOW_LIMIT = 200;
 const RECENT_SLOW_QUERY_LIMIT = 100;
 const RECENT_REQUEST_CORRELATION_LIMIT = 100;
 const DEFAULT_SLOW_QUERY_THRESHOLD_MS = 250;
+const DIAGNOSTIC_EXCLUDED_ROUTE_KEYS = new Set(['/api/performance/heap-snapshot']);
 
 const round = (value: number, digits = 2): number => {
   if (!Number.isFinite(value)) {
@@ -132,6 +133,9 @@ const collapseWhitespace = (value: string): string => value.replace(/\s+/g, ' ')
 
 const stripSequelizePrefix = (sql: string): string =>
   sql.replace(/^Executing \([^)]+\):\s*/i, '');
+
+const shouldExcludeRouteFromDiagnostics = (routeKey: string | null): boolean =>
+  routeKey != null && DIAGNOSTIC_EXCLUDED_ROUTE_KEYS.has(routeKey);
 
 const truncate = (value: string, limit: number): string =>
   value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
@@ -218,6 +222,9 @@ class QueryDiagnosticsService {
       return;
     }
     this.activeRequestQueries.delete(request.id);
+    if (shouldExcludeRouteFromDiagnostics(request.routeKey)) {
+      return;
+    }
     if (active.queries.length === 0) {
       return;
     }
@@ -282,6 +289,9 @@ class QueryDiagnosticsService {
     const requestId = getRequestContextValue('requestId');
     const routeKey = getRequestContextValue('routeKey');
     const method = getRequestContextValue('method');
+    if (shouldExcludeRouteFromDiagnostics(routeKey)) {
+      return;
+    }
     const userId = getRequestContextValue('userId');
     const userTypeId = getRequestContextValue('userTypeId');
 

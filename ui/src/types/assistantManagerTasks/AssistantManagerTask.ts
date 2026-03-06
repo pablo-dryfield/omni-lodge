@@ -1,9 +1,49 @@
 export type AssistantManagerTaskCadence = 'daily' | 'weekly' | 'biweekly' | 'every_two_weeks' | 'monthly';
 
+export type AssistantManagerTaskEvidenceRuleType = 'link' | 'image';
+
+export type AssistantManagerTaskEvidenceLinkMatch = {
+  hosts?: string[];
+  contains?: string[];
+  regex?: string | null;
+};
+
+export type AssistantManagerTaskEvidenceRule = {
+  key: string;
+  label: string;
+  type: AssistantManagerTaskEvidenceRuleType;
+  required?: boolean;
+  multiple?: boolean;
+  minItems?: number | null;
+  maxItems?: number | null;
+  match?: AssistantManagerTaskEvidenceLinkMatch | null;
+};
+
+export type AssistantManagerTaskEvidenceItem = {
+  id: string;
+  ruleKey: string;
+  type: AssistantManagerTaskEvidenceRuleType;
+  value?: string | null;
+  valid?: boolean;
+  fileName?: string | null;
+  mimeType?: string | null;
+  fileSize?: number | null;
+  storagePath?: string | null;
+  driveFileId?: string | null;
+  driveWebViewLink?: string | null;
+  uploadedAt?: string | null;
+  uploadedBy?: number | null;
+};
+
 export type AssistantManagerTaskTemplate = {
   id: number;
   name: string;
   description?: string | null;
+  category: string;
+  subgroup: string;
+  categoryOrder: number;
+  subgroupOrder: number;
+  templateOrder: number;
   cadence: AssistantManagerTaskCadence;
   scheduleConfig: Record<string, unknown>;
   isActive: boolean;
@@ -27,6 +67,7 @@ export type AssistantManagerTaskLogMeta = {
   points?: number | null;
   tags?: string[];
   evidence?: string[];
+  evidenceItems?: AssistantManagerTaskEvidenceItem[];
   manual?: boolean;
   comments?: TaskCommentEntry[];
   requireShift?: boolean;
@@ -43,10 +84,15 @@ export type AssistantManagerTaskLogMeta = {
 export type AssistantManagerTaskAssignment = {
   id: number;
   templateId: number;
-  targetScope: 'staff_type' | 'user';
+  targetScope: 'staff_type' | 'user' | 'user_type' | 'shift_role';
   staffType?: string | null;
+  livesInAccom?: boolean | null;
   userId?: number | null;
   userName?: string | null;
+  userTypeId?: number | null;
+  userTypeName?: string | null;
+  shiftRoleId?: number | null;
+  shiftRoleName?: string | null;
   effectiveStart?: string | null;
   effectiveEnd?: string | null;
   isActive: boolean;
@@ -58,6 +104,7 @@ export type AssistantManagerTaskLog = {
   id: number;
   templateId: number;
   templateName?: string | null;
+  templateDescription?: string | null;
   userId: number;
   userName?: string | null;
   taskDate: string;
@@ -93,9 +140,24 @@ export type TaskLogMetaUpdatePayload = {
   points?: number | null;
   tags?: string[] | null;
   evidence?: string[] | null;
+  evidenceItems?: AssistantManagerTaskEvidenceItem[] | null;
   manual?: boolean;
   comment?: string;
   notes?: string | null;
   taskDate?: string;
   requireShift?: boolean;
+};
+
+export type UploadAmTaskEvidenceImageResponse = {
+  id: string;
+  ruleKey: string;
+  type: 'image';
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  storagePath: string;
+  driveFileId?: string | null;
+  driveWebViewLink?: string | null;
+  uploadedAt: string;
+  uploadedBy: number | null;
 };

@@ -1036,15 +1036,29 @@ export async function publishWeek(weekId: number, actorId: number | null): Promi
     ],
   });
 
-  const grouped = new Map<number, Array<Record<string, unknown>>>();
+  const grouped = new Map<
+    number,
+    {
+      user: User;
+      assignments: Array<Record<string, unknown>>;
+    }
+  >();
+
   assignments.forEach((assignment) => {
     if (!assignment.shiftInstance) {
       return;
     }
+    const assignee = (assignment as unknown as { assignee?: User | null }).assignee;
+    if (!assignee) {
+      return;
+    }
     const shiftType = (assignment.shiftInstance as unknown as { shiftType?: ShiftType }).shiftType;
     const dayLabel = dayjs(assignment.shiftInstance.date).format('dddd, MMM D');
-    const entry = grouped.get(assignment.userId) ?? [];
-    entry.push({
+    const entry = grouped.get(assignment.userId) ?? {
+      user: assignee,
+      assignments: [],
+    };
+    entry.assignments.push({
       shiftType: shiftType?.name ?? 'Shift',
       day: dayLabel,
       timeStart: assignment.shiftInstance.timeStart,
@@ -1054,11 +1068,7 @@ export async function publishWeek(weekId: number, actorId: number | null): Promi
   });
 
   await Promise.all(
-    Array.from(grouped.entries()).map(async ([userId, payload]) => {
-      const user = await User.findByPk(userId);
-      if (!user) {
-        return;
-      }
+    Array.from(grouped.values()).map(async ({ user, assignments: payload }) => {
       await sendSchedulingNotification({
         user,
         templateKey: 'assignment_published',
