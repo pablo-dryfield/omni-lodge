@@ -41,6 +41,8 @@ const DEFAULT_DRINK_LABEL_MODE_BY_TYPE: Record<OpenBarDrinkType, OpenBarDrinkLab
   soft: 'recipe_name',
   custom: 'recipe_name',
 };
+const OPEN_BAR_OVERVIEW_CACHE_TTL_MS = Number(process.env.OPEN_BAR_OVERVIEW_CACHE_TTL_MS ?? 15_000);
+const OPEN_BAR_BOOTSTRAP_CACHE_TTL_MS = Number(process.env.OPEN_BAR_BOOTSTRAP_CACHE_TTL_MS ?? 10_000);
 type OpenBarRealtimeEventType = 'drink_issue_created' | 'drink_issue_deleted';
 type OpenBarRealtimeEventPayload = {
   sessionId: number;
@@ -50,6 +52,69 @@ type OpenBarRealtimeEventPayload = {
 };
 
 const openBarEventStreamClientsBySession = new Map<number, Set<Response>>();
+type OpenBarCacheEntry = {
+  expiresAtMs: number;
+  payload: unknown;
+};
+const openBarOverviewCache = new Map<string, OpenBarCacheEntry>();
+const openBarOverviewInFlight = new Map<string, Promise<unknown>>();
+const openBarBootstrapCache = new Map<string, OpenBarCacheEntry>();
+const openBarBootstrapInFlight = new Map<string, Promise<unknown>>();
+
+const getCachedOpenBarPayload = (cache: Map<string, OpenBarCacheEntry>, key: string): unknown | null => {
+  const entry = cache.get(key);
+  if (!entry) {
+    return null;
+  }
+  if (entry.expiresAtMs <= Date.now()) {
+    cache.delete(key);
+    return null;
+  }
+  return entry.payload;
+};
+
+const setCachedOpenBarPayload = (
+  cache: Map<string, OpenBarCacheEntry>,
+  key: string,
+  payload: unknown,
+  ttlMs: number,
+): void => {
+  cache.set(key, {
+    expiresAtMs: Date.now() + Math.max(1_000, ttlMs),
+    payload,
+  });
+};
+
+const getOverviewCacheKey = (businessDate: string, actorId: number | null, managerAccess: boolean): string =>
+  `${businessDate}\u0000${actorId ?? 'guest'}\u0000${managerAccess ? 'manager' : 'member'}`;
+
+const getOrLoadOpenBarOverviewPayload = (
+  businessDate: string,
+  req: AuthenticatedRequest | undefined,
+  actorId: number | null,
+  managerAccess: boolean,
+): Promise<unknown> => {
+  const cacheKey = getOverviewCacheKey(businessDate, actorId, managerAccess);
+  const cached = getCachedOpenBarPayload(openBarOverviewCache, cacheKey);
+  if (cached) {
+    return Promise.resolve(cached);
+  }
+
+  let pending = openBarOverviewInFlight.get(cacheKey);
+  if (!pending) {
+    pending = buildOpenBarOverviewPayload(businessDate, req)
+      .then((payload) => {
+        setCachedOpenBarPayload(openBarOverviewCache, cacheKey, payload, OPEN_BAR_OVERVIEW_CACHE_TTL_MS);
+        return payload;
+      })
+      .finally(() => {
+        openBarOverviewInFlight.delete(cacheKey);
+      });
+    openBarOverviewInFlight.set(cacheKey, pending);
+  }
+
+  return pending;
+};
 
 const writeOpenBarSseEvent = (
   response: Response,
@@ -3925,8 +3990,10 @@ const buildOpenBarOverviewPayload = async (businessDate: string, req?: Authentic
 
 export const getOpenBarOverview = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const actorId = getActorId(req);
+    const managerAccess = hasOpenBarManagerOverrideAccess(req);
     const businessDate = normalizeDateOnly(req.query.businessDate);
-    const overview = await buildOpenBarOverviewPayload(businessDate, req);
+    const overview = await getOrLoadOpenBarOverviewPayload(businessDate, req, actorId, managerAccess);
     res.status(200).json(overview);
   } catch (error) {
     handleError(res, error, 'Failed to load open bar overview');
@@ -3941,6 +4008,28 @@ export const getOpenBarBootstrap = async (req: AuthenticatedRequest, res: Respon
     const sessionLimit = Math.min(parsePositiveInteger(req.query.sessionLimit, 'sessionLimit', 60), 200);
     const deliveryLimit = Math.min(parsePositiveInteger(req.query.deliveryLimit, 'deliveryLimit', 100), 300);
     const sessionIssueLimit = Math.min(parsePositiveInteger(req.query.sessionIssueLimit, 'sessionIssueLimit', 300), 1000);
+    const cacheKey = [
+      businessDate,
+      actorId,
+      managerAccess ? 'manager' : 'member',
+      sessionLimit,
+      deliveryLimit,
+      sessionIssueLimit,
+    ].join('\u0000');
+    const cached = getCachedOpenBarPayload(openBarBootstrapCache, cacheKey);
+    if (cached) {
+      res.status(200).json(cached);
+      return;
+    }
+
+    let pending = openBarBootstrapInFlight.get(cacheKey);
+    if (pending) {
+      const payload = await pending;
+      res.status(200).json(payload);
+      return;
+    }
+
+    pending = (async () => {
     const membershipContext = await getUserSessionMembershipContext(actorId, { businessDate });
     const serializationContext = {
       actorId,
@@ -3974,7 +4063,7 @@ export const getOpenBarBootstrap = async (req: AuthenticatedRequest, res: Respon
         ? joinableWhereClauses[0]
         : { [Op.and]: joinableWhereClauses };
 
-    const overviewPromise = buildOpenBarOverviewPayload(businessDate, req);
+    const overviewPromise = getOrLoadOpenBarOverviewPayload(businessDate, req, actorId, managerAccess);
     const stockMapPromise = getStockMap();
     const drinkLabelMapPromise = getDrinkLabelSettingMap();
     const sessionInclude = [
@@ -4091,26 +4180,37 @@ export const getOpenBarBootstrap = async (req: AuthenticatedRequest, res: Respon
     const sessionIds = Array.from(
       new Set([...sessionsRaw.map((session) => session.id), ...joinableSessionsFiltered.map((session) => session.id)]),
     );
-    const issueSummaries =
+    type OpenBarIssueSummaryRow = {
+      sessionId: number;
+      issuesCount: unknown;
+      servings: unknown;
+      lastIssuedAt: unknown | null;
+    };
+    const issueSummaries: OpenBarIssueSummaryRow[] =
       sessionIds.length > 0
-        ? await OpenBarDrinkIssue.findAll({
-            attributes: ['sessionId', 'servings', 'issuedAt'],
+        ? ((await OpenBarDrinkIssue.findAll({
+            attributes: [
+              ['session_id', 'sessionId'],
+              [fn('COUNT', col('id')), 'issuesCount'],
+              [fn('COALESCE', fn('SUM', col('servings')), 0), 'servings'],
+              [fn('MAX', col('issued_at')), 'lastIssuedAt'],
+            ],
             where: { sessionId: { [Op.in]: sessionIds } },
+            group: ['session_id'],
             raw: true,
-          })
+          })) as unknown as OpenBarIssueSummaryRow[])
         : [];
 
     const sessionSummaryMap = new Map<number, { issuesCount: number; servings: number; lastIssuedAt: Date | null }>();
     issueSummaries.forEach((issue) => {
-      const sessionId = Number((issue as { sessionId: number }).sessionId);
-      const current = sessionSummaryMap.get(sessionId) ?? { issuesCount: 0, servings: 0, lastIssuedAt: null };
-      current.issuesCount += 1;
-      current.servings += parseNumber((issue as { servings: unknown }).servings, 0);
-      const issuedAt = normalizeDateTime((issue as { issuedAt: unknown }).issuedAt, new Date(0));
-      if (!current.lastIssuedAt || issuedAt > current.lastIssuedAt) {
-        current.lastIssuedAt = issuedAt;
-      }
-      sessionSummaryMap.set(sessionId, current);
+      const sessionId = Number(issue.sessionId);
+      sessionSummaryMap.set(sessionId, {
+        issuesCount: parseNumber(issue.issuesCount, 0),
+        servings: parseNumber(issue.servings, 0),
+        lastIssuedAt: issue.lastIssuedAt
+          ? normalizeDateTime(issue.lastIssuedAt, new Date(0))
+          : null,
+      });
     });
 
     const sessions = sessionsRaw.map((session) =>
@@ -4136,7 +4236,7 @@ export const getOpenBarBootstrap = async (req: AuthenticatedRequest, res: Respon
             limit: sessionIssueLimit,
           });
 
-    res.status(200).json({
+    return {
       businessDate,
       overview,
       ingredients: ingredientsRaw.map((ingredient) => serializeIngredient(ingredient, stockMap)),
@@ -4164,7 +4264,19 @@ export const getOpenBarBootstrap = async (req: AuthenticatedRequest, res: Respon
         businessDate: issue.session?.businessDate ?? null,
       })),
       deliveries: deliveriesRaw.map((delivery) => serializeDelivery(delivery)),
-    });
+    };
+    })()
+      .then((payload) => {
+        setCachedOpenBarPayload(openBarBootstrapCache, cacheKey, payload, OPEN_BAR_BOOTSTRAP_CACHE_TTL_MS);
+        return payload;
+      })
+      .finally(() => {
+        openBarBootstrapInFlight.delete(cacheKey);
+      });
+
+    openBarBootstrapInFlight.set(cacheKey, pending);
+    const payload = await pending;
+    res.status(200).json(payload);
   } catch (error) {
     handleError(res, error, 'Failed to load open bar bootstrap');
   }

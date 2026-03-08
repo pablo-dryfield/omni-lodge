@@ -6,6 +6,18 @@ import Action from "../models/Action.js";
 import RolePagePermission from "../models/RolePagePermission.js";
 import RoleModulePermission from "../models/RoleModulePermission.js";
 
+const ACCESS_CONTROL_CACHE_TTL_MS = Number(process.env.ACCESS_CONTROL_CACHE_TTL_MS ?? 10 * 60_000);
+type AccessControlPayload = {
+  pages: string[];
+  modules: Record<string, string[]>;
+};
+type AccessControlCacheEntry = {
+  expiresAtMs: number;
+  payload: AccessControlPayload;
+};
+const accessControlCacheByUserType = new Map<number, AccessControlCacheEntry>();
+const accessControlInFlightByUserType = new Map<number, Promise<AccessControlPayload>>();
+
 const normalizeRole = (value?: string | null): string | null => {
   if (!value) {
     return null;
@@ -28,32 +40,27 @@ const normalizeRole = (value?: string | null): string | null => {
 
 const OPEN_BAR_PRIVILEGED_USER_TYPE_SLUGS = new Set(["admin", "administrator", "owner", "manager", "assistant-manager"]);
 
-export const getCurrentUserAccess = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  const userTypeId = req.authContext?.userTypeId;
-  const userTypeSlug = normalizeRole(req.authContext?.userTypeSlug ?? req.authContext?.roleSlug ?? null);
-  const shiftRoleSlugs = Array.from(
-    new Set((req.authContext?.shiftRoleSlugs ?? []).map((value) => normalizeRole(value)).filter((value): value is string => Boolean(value))),
-  );
-
-  const hasBartenderShiftRole = shiftRoleSlugs.includes("bartender");
-  const hasManagerShiftRole = shiftRoleSlugs.includes("manager");
-  const hasPrivilegedUserType = userTypeSlug != null && OPEN_BAR_PRIVILEGED_USER_TYPE_SLUGS.has(userTypeSlug);
-
-  const canUseBartenderMode = hasBartenderShiftRole || hasManagerShiftRole || hasPrivilegedUserType || userTypeSlug === "bartender";
-  const canUseManagerMode = hasManagerShiftRole || hasPrivilegedUserType;
-
-  const openBarModeAccess = {
-    canUseBartenderMode,
-    canUseManagerMode,
-    shiftRoleSlugs,
-    userTypeSlug,
-  };
-
-  if (!userTypeId) {
-    res.status(200).json({ pages: [], modules: {}, openBarModeAccess });
-    return;
+const getCachedAccessControlPayload = (userTypeId: number): AccessControlPayload | null => {
+  const entry = accessControlCacheByUserType.get(userTypeId);
+  if (!entry) {
+    return null;
   }
+  if (entry.expiresAtMs <= Date.now()) {
+    accessControlCacheByUserType.delete(userTypeId);
+    return null;
+  }
+  return entry.payload;
+};
 
+const setCachedAccessControlPayload = (userTypeId: number, payload: AccessControlPayload): void => {
+  const ttlMs = Math.max(5_000, ACCESS_CONTROL_CACHE_TTL_MS);
+  accessControlCacheByUserType.set(userTypeId, {
+    expiresAtMs: Date.now() + ttlMs,
+    payload,
+  });
+};
+
+const loadAccessControlPayload = async (userTypeId: number): Promise<AccessControlPayload> => {
   const [pages, modules, actions, pagePermissions, modulePermissions] = await Promise.all([
     Page.findAll(),
     Module.findAll(),
@@ -116,9 +123,66 @@ export const getCurrentUserAccess = async (req: AuthenticatedRequest, res: Respo
     }
   });
 
-  res.status(200).json({
+  return {
     pages: Array.from(allowedPageSlugs),
     modules: modulePermissionsBySlug,
+  };
+};
+
+export const getCurrentUserAccess = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const userTypeId = req.authContext?.userTypeId;
+  const userTypeSlug = normalizeRole(req.authContext?.userTypeSlug ?? req.authContext?.roleSlug ?? null);
+  const shiftRoleSlugs = Array.from(
+    new Set((req.authContext?.shiftRoleSlugs ?? []).map((value) => normalizeRole(value)).filter((value): value is string => Boolean(value))),
+  );
+
+  const hasBartenderShiftRole = shiftRoleSlugs.includes("bartender");
+  const hasManagerShiftRole = shiftRoleSlugs.includes("manager");
+  const hasPrivilegedUserType = userTypeSlug != null && OPEN_BAR_PRIVILEGED_USER_TYPE_SLUGS.has(userTypeSlug);
+
+  const canUseBartenderMode = hasBartenderShiftRole || hasManagerShiftRole || hasPrivilegedUserType || userTypeSlug === "bartender";
+  const canUseManagerMode = hasManagerShiftRole || hasPrivilegedUserType;
+
+  const openBarModeAccess = {
+    canUseBartenderMode,
+    canUseManagerMode,
+    shiftRoleSlugs,
+    userTypeSlug,
+  };
+
+  if (!userTypeId) {
+    res.status(200).json({ pages: [], modules: {}, openBarModeAccess });
+    return;
+  }
+
+  const cached = getCachedAccessControlPayload(userTypeId);
+  if (cached) {
+    res.status(200).json({
+      pages: cached.pages,
+      modules: cached.modules,
+      openBarModeAccess,
+    });
+    return;
+  }
+
+  let pending = accessControlInFlightByUserType.get(userTypeId);
+  if (!pending) {
+    pending = loadAccessControlPayload(userTypeId)
+      .then((payload) => {
+        setCachedAccessControlPayload(userTypeId, payload);
+        return payload;
+      })
+      .finally(() => {
+        accessControlInFlightByUserType.delete(userTypeId);
+      });
+    accessControlInFlightByUserType.set(userTypeId, pending);
+  }
+
+  const payload = await pending;
+
+  res.status(200).json({
+    pages: payload.pages,
+    modules: payload.modules,
     openBarModeAccess,
   });
 };
