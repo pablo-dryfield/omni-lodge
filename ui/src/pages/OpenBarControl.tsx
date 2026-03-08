@@ -134,6 +134,7 @@ const ICE_FLOATING_SUBMERGED_RATIO = 0.917;
 const BARTENDER_SESSION_PANEL_MIN_WIDTH = 320;
 const BARTENDER_SESSION_PANEL_DEFAULT_WIDTH = 420;
 const BARTENDER_SERVICE_PANEL_MIN_WIDTH = 520;
+const globalSyncingDrinkIssueIds = new Set<string>();
 
 const resolveIceCubes = (hasIce: boolean, iceCubes: number): number => {
   if (!hasIce) {
@@ -1212,6 +1213,7 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
   const bartenderLaunchIncludeIceRef = useRef<boolean | null>(null);
   const bartenderLaunchCategorySelectionsRef = useRef<Record<number, number>>({});
   const bartenderLaunchIsStaffDrinkRef = useRef<boolean>(false);
+  const syncingDrinkIssueIdsRef = useRef<Set<string>>(new Set());
 
   const [sessionName, setSessionName] = useState<string>(`Open Bar ${dayjs().format("YYYY-MM-DD")}`);
   const [sessionVenueId, setSessionVenueId] = useState<string>("");
@@ -2637,86 +2639,97 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
         allowInactiveSession?: boolean;
       },
     ): Promise<boolean> => {
-      const issuePayload = localDrinkIssues.find((entry) => entry.localId === localId)?.payload;
-      const currentStatus = localDrinkIssues.find((entry) => entry.localId === localId)?.status;
-      if (!issuePayload) {
+      if (syncingDrinkIssueIdsRef.current.has(localId) || globalSyncingDrinkIssueIds.has(localId)) {
         return false;
       }
-      if (currentStatus === "synced" || currentStatus === "syncing") {
-        return false;
-      }
-
-      setLocalDrinkIssues((current) =>
-        current.map((entry) => {
-          if (entry.localId !== localId) {
-            return entry;
-          }
-          return {
-            ...entry,
-            status: "syncing",
-            errorMessage: null,
-            updatedAt: new Date().toISOString(),
-          };
-        }),
-      );
-
-      const onlineNow = typeof navigator === "undefined" ? true : navigator.onLine;
-      setIsOnline(onlineNow);
-      if (!onlineNow) {
-        setLocalDrinkIssues((current) =>
-          current.map((entry) =>
-            entry.localId === localId
-              ? {
-                  ...entry,
-                  status: "failed",
-                  errorMessage: "No internet connection. Saved locally.",
-                  updatedAt: new Date().toISOString(),
-                }
-              : entry,
-          ),
-        );
-        return false;
-      }
+      syncingDrinkIssueIdsRef.current.add(localId);
+      globalSyncingDrinkIssueIds.add(localId);
 
       try {
-        const requestPayload = options?.allowInactiveSession
-          ? { ...issuePayload, allowInactiveSession: true }
-          : issuePayload;
-        const response = await createIssueMutation.mutateAsync(requestPayload);
+        const issuePayload = localDrinkIssues.find((entry) => entry.localId === localId)?.payload;
+        const currentStatus = localDrinkIssues.find((entry) => entry.localId === localId)?.status;
+        if (!issuePayload) {
+          return false;
+        }
+        if (currentStatus === "synced" || currentStatus === "syncing") {
+          return false;
+        }
+
         setLocalDrinkIssues((current) =>
-          current.map((entry) =>
-            entry.localId === localId
-              ? {
-                  ...entry,
-                  status: "synced",
-                  errorMessage: null,
-                  remoteIssueId: response.issue?.id ?? null,
-                  updatedAt: new Date().toISOString(),
-                }
-              : entry,
-          ),
+          current.map((entry) => {
+            if (entry.localId !== localId) {
+              return entry;
+            }
+            return {
+              ...entry,
+              status: "syncing",
+              errorMessage: null,
+              updatedAt: new Date().toISOString(),
+            };
+          }),
         );
-        await invalidateOpenBar();
-        return true;
-      } catch (error) {
-        const onlineAfterError = typeof navigator === "undefined" ? true : navigator.onLine;
-        setIsOnline(onlineAfterError);
-        const message = onlineAfterError
-          ? extractDrinkSyncErrorMessage(error, "Failed to sync drink issue.")
-          : "No internet connection. Saved locally.";
-        setLocalDrinkIssues((current) =>
-          current.map((entry) =>
-            entry.localId === localId
-              ? {
-                  ...entry,
-                  status: "failed",
-                  errorMessage: message,
-                  updatedAt: new Date().toISOString(),
-                }
-              : entry,
-          ),
-        );
-        return false;
+
+        const onlineNow = typeof navigator === "undefined" ? true : navigator.onLine;
+        setIsOnline(onlineNow);
+        if (!onlineNow) {
+          setLocalDrinkIssues((current) =>
+            current.map((entry) =>
+              entry.localId === localId
+                ? {
+                    ...entry,
+                    status: "failed",
+                    errorMessage: "No internet connection. Saved locally.",
+                    updatedAt: new Date().toISOString(),
+                  }
+                : entry,
+            ),
+          );
+          return false;
+        }
+
+        try {
+          const requestPayload = options?.allowInactiveSession
+            ? { ...issuePayload, allowInactiveSession: true }
+            : issuePayload;
+          const response = await createIssueMutation.mutateAsync(requestPayload);
+          setLocalDrinkIssues((current) =>
+            current.map((entry) =>
+              entry.localId === localId
+                ? {
+                    ...entry,
+                    status: "synced",
+                    errorMessage: null,
+                    remoteIssueId: response.issue?.id ?? null,
+                    updatedAt: new Date().toISOString(),
+                  }
+                : entry,
+            ),
+          );
+          await invalidateOpenBar();
+          return true;
+        } catch (error) {
+          const onlineAfterError = typeof navigator === "undefined" ? true : navigator.onLine;
+          setIsOnline(onlineAfterError);
+          const message = onlineAfterError
+            ? extractDrinkSyncErrorMessage(error, "Failed to sync drink issue.")
+            : "No internet connection. Saved locally.";
+          setLocalDrinkIssues((current) =>
+            current.map((entry) =>
+              entry.localId === localId
+                ? {
+                    ...entry,
+                    status: "failed",
+                    errorMessage: message,
+                    updatedAt: new Date().toISOString(),
+                  }
+                : entry,
+            ),
+          );
+          return false;
+        }
+      } finally {
+        syncingDrinkIssueIdsRef.current.delete(localId);
+        globalSyncingDrinkIssueIds.delete(localId);
       }
     },
     [createIssueMutation, invalidateOpenBar, localDrinkIssues],
