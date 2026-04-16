@@ -13,11 +13,18 @@ import {
   updateTaskAssignment,
   deleteTaskAssignment,
   listTaskLogs,
+  syncTaskLogsWithCurrentTemplateConfig,
   updateTaskLogStatus,
   createManualTaskLog,
   updateTaskLogMeta,
   uploadTaskLogEvidenceImage,
 } from '../controllers/assistantManagerTaskController.js';
+import {
+  deleteTaskPushSubscription,
+  getTaskPushConfig,
+  sendTaskPushTestNotification,
+  upsertTaskPushSubscription,
+} from '../controllers/assistantManagerTaskPushController.js';
 
 const router: Router = express.Router();
 const managerGuard = requireRoles(['admin', 'owner', 'manager', 'assistant-manager']);
@@ -35,9 +42,15 @@ router.put('/templates/:id/assignments/:assignmentId', authMiddleware, managerGu
 router.delete('/templates/:id/assignments/:assignmentId', authMiddleware, managerGuard, deleteTaskAssignment);
 
 router.get('/logs', authMiddleware, managerGuard, listTaskLogs);
+router.post('/logs/sync-template-config', authMiddleware, managerGuard, syncTaskLogsWithCurrentTemplateConfig);
 router.put('/logs/:id', authMiddleware, managerGuard, updateTaskLogStatus);
 router.post('/logs/manual', authMiddleware, managerGuard, createManualTaskLog);
 router.patch('/logs/:id/meta', authMiddleware, managerGuard, updateTaskLogMeta);
 router.post('/logs/:id/evidence-files', authMiddleware, managerGuard, upload.single('file'), uploadTaskLogEvidenceImage);
+
+router.get('/push/config', authMiddleware, managerGuard, getTaskPushConfig);
+router.put('/push/subscription', authMiddleware, managerGuard, upsertTaskPushSubscription);
+router.delete('/push/subscription', authMiddleware, managerGuard, deleteTaskPushSubscription);
+router.post('/push/test', authMiddleware, managerGuard, sendTaskPushTestNotification);
 
 export default router;

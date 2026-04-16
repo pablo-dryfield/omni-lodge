@@ -69,6 +69,7 @@ import FinanceReports from "../../pages/Finance/FinanceReports";
 import FinanceFiles from "../../pages/Finance/FinanceFiles";
 import FinanceSettings from "../../pages/Finance/FinanceSettings";
 import FinanceRefunds from "../../pages/Finance/FinanceRefunds";
+import NotificationsCenter from "../../pages/NotificationsCenter";
 
 const Routes = () => {
   return (
@@ -93,6 +94,7 @@ const Routes = () => {
       <Route path="/reports/derived-fields" element={<DerivedFieldsManager title="Derived fields" />} />
       <Route path="/reports/dashboards" element={<ReportDashboards title="Dashboards" />} />
       <Route path="/account" element={<MyAccount />} />
+      <Route path="/notifications" element={<NotificationsCenter title="Notifications" />} />
       <Route path="/scheduling" element={<SchedulingLayout />}>
         <Route index element={<AvailabilityPage />} />
         <Route path="availability" element={<AvailabilityPage />} />

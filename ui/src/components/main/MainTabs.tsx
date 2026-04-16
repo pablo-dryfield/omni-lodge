@@ -11,6 +11,7 @@ import {
   Group,
   ScrollArea,
   Menu,
+  Indicator,
   Stack,
   Tabs,
   Text,
@@ -23,6 +24,7 @@ import type { MantineTheme, TabsProps } from "@mantine/core";
 import { useDisclosure, useMediaQuery } from "@mantine/hooks";
 import {
   IconChevronDown,
+  IconBell,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
   IconLogout,
@@ -33,6 +35,10 @@ import { fetchUsers, logoutUser } from "../../actions/userActions";
 import { selectAllowedNavigationPages } from "../../selectors/accessControlSelectors";
 import type { User } from "../../types/users/User";
 import { buildUserProfilePhotoUrl } from "../../utils/profilePhoto";
+import {
+  fetchInboxNotifications,
+  type InboxNotification,
+} from "../../api/notifications";
 
 const NAV_GAP = 8;
 const OVERFLOW_TRIGGER_RESERVE = 72;
@@ -64,6 +70,9 @@ const MainTabs = ({
   const showSidebarToggle = hasSidebar && isTablet && Boolean(onSidebarToggle);
   const [visiblePages, setVisiblePages] = useState(allowedPages);
   const [overflowPages, setOverflowPages] = useState<typeof allowedPages>([]);
+  const [recentNotifications, setRecentNotifications] = useState<InboxNotification[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
   const navContainerRef = useRef<HTMLDivElement | null>(null);
   const navMeasurementRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const requestedUsersRef = useRef(false);
@@ -122,6 +131,24 @@ const MainTabs = ({
     return matchByName?.path ?? allowedPages[0]?.path;
   }, [allowedPages, location.pathname, currentPage]);
 
+  const loadRecentNotifications = useCallback(async () => {
+    setNotificationsLoading(true);
+    setNotificationsError(null);
+    try {
+      const response = await fetchInboxNotifications({ limit: 5, offset: 0 });
+      const sorted = [...response.items].sort(
+        (a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime(),
+      );
+      setRecentNotifications(sorted.slice(0, 5));
+    } catch (error) {
+      setNotificationsError(
+        error instanceof Error ? error.message : "Failed to load notifications",
+      );
+    } finally {
+      setNotificationsLoading(false);
+    }
+  }, []);
+
   const handleSignOut = () => {
     document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
     dispatch(logoutUser());
@@ -158,6 +185,21 @@ const MainTabs = ({
     requestedUsersRef.current = true;
     dispatch(fetchUsers());
   }, [loggedUserId, currentUserRecord, usersState, dispatch]);
+
+  useEffect(() => {
+    if (!loggedUserId) {
+      setRecentNotifications([]);
+      setNotificationsError(null);
+      return;
+    }
+    loadRecentNotifications().catch(() => undefined);
+    const intervalId = window.setInterval(() => {
+      loadRecentNotifications().catch(() => undefined);
+    }, 60_000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [loggedUserId, loadRecentNotifications]);
 
   useEffect(() => {
     setVisiblePages(allowedPages);
@@ -484,6 +526,82 @@ const MainTabs = ({
                 </ActionIcon>
               </Tooltip>
             )}
+            <Menu width={340} position="bottom-end" offset={8} withArrow>
+              <Menu.Target>
+                <ActionIcon
+                  variant="subtle"
+                  size={isMobile ? 34 : 36}
+                  aria-label="Open notifications inbox"
+                  radius="xl"
+                  style={{
+                    color: theme.white,
+                    backgroundColor: "rgba(255, 255, 255, 0.08)",
+                  }}
+                >
+                  <Indicator
+                    color="red"
+                    size={14}
+                    offset={4}
+                    disabled={recentNotifications.length === 0}
+                    label={
+                      recentNotifications.length > 9 ? "9+" : `${recentNotifications.length}`
+                    }
+                  >
+                    <IconBell size={20} />
+                  </Indicator>
+                </ActionIcon>
+              </Menu.Target>
+              <Menu.Dropdown>
+                <Menu.Label>Recent notifications</Menu.Label>
+                {notificationsLoading ? (
+                  <Menu.Item disabled>Loading...</Menu.Item>
+                ) : notificationsError ? (
+                  <>
+                    <Menu.Item disabled>{notificationsError}</Menu.Item>
+                    <Menu.Item
+                      onClick={() => {
+                        loadRecentNotifications().catch(() => undefined);
+                      }}
+                    >
+                      Retry
+                    </Menu.Item>
+                  </>
+                ) : recentNotifications.length === 0 ? (
+                  <Menu.Item disabled>No notifications yet</Menu.Item>
+                ) : (
+                  recentNotifications.map((notification) => (
+                    <Menu.Item
+                      key={notification.id}
+                      onClick={() => {
+                        if (notification.url) {
+                          navigate(notification.url);
+                          return;
+                        }
+                        navigate("/notifications");
+                      }}
+                    >
+                      <Stack gap={0}>
+                        <Text size="sm" fw={600} lineClamp={1}>
+                          {notification.title}
+                        </Text>
+                        {notification.body && (
+                          <Text size="xs" c="dimmed" lineClamp={2}>
+                            {notification.body}
+                          </Text>
+                        )}
+                        <Text size="xs" c="dimmed">
+                          {new Date(notification.sentAt).toLocaleString()}
+                        </Text>
+                      </Stack>
+                    </Menu.Item>
+                  ))
+                )}
+                <Menu.Divider />
+                <Menu.Item onClick={() => navigate("/notifications")}>
+                  See All
+                </Menu.Item>
+              </Menu.Dropdown>
+            </Menu>
             <Tooltip label="My profile" position="bottom" offset={4} withArrow>
               <ActionIcon
                 variant="subtle"

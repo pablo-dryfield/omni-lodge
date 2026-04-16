@@ -56,7 +56,7 @@
   "scripts": {
     "start": "craco start",
     "start:prod": "npm run start",
-    "start:dev": "npm run start",
+    "start:dev": "cross-env PORT=3000 npm run start",
     "build": "craco build",
     "test": "craco test",
     "eject": "react-scripts eject"
@@ -89,6 +89,7 @@
     "@types/react-big-calendar": "^1.8.8",
     "@types/react-signature-canvas": "^1.0.5",
     "autoprefixer": "^10.4.19",
+    "cross-env": "^7.0.3",
     "eslint-plugin-react-hooks": "^4.6.0",
     "postcss": "^8.4.38",
     "postcss-preset-mantine": "^1.14.4",

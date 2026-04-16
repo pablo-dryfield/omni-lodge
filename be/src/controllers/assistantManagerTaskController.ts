@@ -19,18 +19,59 @@ import {
   ensureAssistantManagerTaskEvidenceStorage,
   storeAssistantManagerTaskEvidenceImage,
 } from '../services/assistantManagerTaskEvidenceStorageService.js';
+import { getConfigValue } from '../services/configService.js';
 
 const CADENCE_VALUES = new Set<AssistantManagerTaskCadence>(['daily', 'weekly', 'biweekly', 'every_two_weeks', 'monthly']);
 const STATUS_VALUES = new Set<AssistantManagerTaskStatus>(['pending', 'completed', 'missed', 'waived']);
 const ASSIGNMENT_SCOPE_VALUES = new Set<AssistantManagerTaskAssignmentScope>(['staff_type', 'user', 'user_type', 'shift_role']);
 const GLOBAL_TASK_VIEWER_ROLES = new Set(['admin', 'owner', 'manager']);
 const EVIDENCE_RULE_TYPE_VALUES = new Set(['link', 'image']);
+const AM_TASK_PLANNER_START_DATE_KEY = 'AM_TASK_PLANNER_START_DATE';
+const TEMPLATE_CONFIG_MANAGED_META_KEYS = [
+  'manual',
+  'time',
+  'durationHours',
+  'priority',
+  'points',
+  'tags',
+  'requireShift',
+  'onShift',
+  'offDay',
+  'scheduleConflict',
+  'shiftInstanceId',
+  'shiftAssignmentId',
+  'shiftTimeStart',
+  'shiftTimeEnd',
+] as const;
 
 const startOfPlannerWeek = (value?: string | dayjs.Dayjs | Date | null) => {
   const date = value ? dayjs(value) : dayjs();
   const dayOfWeek = date.day();
   const offset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
   return date.startOf('day').subtract(offset, 'day');
+};
+
+const resolvePlannerStartDate = (): dayjs.Dayjs | null => {
+  try {
+    const rawValue = getConfigValue(AM_TASK_PLANNER_START_DATE_KEY);
+    const value = typeof rawValue === 'string' ? rawValue.trim() : '';
+    if (!value) {
+      return null;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return null;
+    }
+    const parsed = dayjs(value);
+    if (!parsed.isValid()) {
+      return null;
+    }
+    if (parsed.format('YYYY-MM-DD') !== value) {
+      return null;
+    }
+    return parsed.startOf('day');
+  } catch {
+    return null;
+  }
 };
 
 const normalizeRoleSlug = (value?: string | null): string | null => {
@@ -1936,6 +1977,189 @@ export const deleteTaskTemplate = async (req: AuthenticatedRequest, res: Respons
   }
 };
 
+export const syncTaskLogsWithCurrentTemplateConfig = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    if (!canViewAllTaskLogs(req)) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    const startDate = sanitizeTaskDate(req.body?.startDate);
+    const endDate = sanitizeTaskDate(req.body?.endDate);
+    const templateId = parsePositiveInt(req.body?.templateId);
+    if (!startDate || !endDate) {
+      res.status(400).json([{ message: 'startDate and endDate are required (YYYY-MM-DD)' }]);
+      return;
+    }
+
+    const start = dayjs(startDate).startOf('day');
+    const end = dayjs(endDate).endOf('day');
+    if (!start.isValid() || !end.isValid() || end.isBefore(start, 'day')) {
+      res.status(400).json([{ message: 'Invalid date range provided' }]);
+      return;
+    }
+
+    const plannerStartDate = resolvePlannerStartDate();
+    const effectiveStart =
+      plannerStartDate && start.isBefore(plannerStartDate, 'day')
+        ? plannerStartDate
+        : start;
+    if (end.isBefore(effectiveStart, 'day')) {
+      res.status(200).json([
+        {
+          data: {
+            startDate: effectiveStart.format('YYYY-MM-DD'),
+            endDate: end.format('YYYY-MM-DD'),
+            templateId: templateId ?? null,
+            totalCount: 0,
+            updatedCount: 0,
+            unchangedCount: 0,
+            skippedManualCount: 0,
+            skippedMissingTemplateCount: 0,
+            skippedInvalidDateCount: 0,
+          },
+          columns: [],
+        },
+      ]);
+      return;
+    }
+
+    if (templateId) {
+      const template = await AssistantManagerTaskTemplate.findByPk(templateId, {
+        attributes: ['id'],
+      });
+      if (!template) {
+        res.status(404).json([{ message: 'Task template not found' }]);
+        return;
+      }
+    }
+
+    const logs = await AssistantManagerTaskLog.findAll({
+      where: {
+        status: 'pending',
+        ...(templateId ? { templateId } : {}),
+        taskDate: {
+          [Op.between]: [effectiveStart.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')],
+        },
+      },
+      include: [
+        {
+          model: AssistantManagerTaskTemplate,
+          as: 'template',
+          attributes: ['id', 'name', 'scheduleConfig', 'isActive'],
+          required: false,
+        },
+      ],
+      order: [['taskDate', 'ASC'], ['id', 'ASC']],
+    });
+
+    const actorId = getActorId(req);
+    const shiftAvailabilityCache = new Map<number, Map<string, ShiftDayInfo>>();
+    let updatedCount = 0;
+    let unchangedCount = 0;
+    let skippedManualCount = 0;
+    let skippedMissingTemplateCount = 0;
+    let skippedInvalidDateCount = 0;
+
+    for (const log of logs) {
+      const existingMeta = { ...(log.meta ?? {}) } as Record<string, unknown>;
+      if (Boolean(existingMeta.manual)) {
+        skippedManualCount += 1;
+        continue;
+      }
+
+      const template =
+        ((log as unknown as { template?: AssistantManagerTaskTemplate | null }).template ??
+          null) as AssistantManagerTaskTemplate | null;
+      if (!template) {
+        skippedMissingTemplateCount += 1;
+        continue;
+      }
+
+      const taskDate = dayjs(log.taskDate).format('YYYY-MM-DD');
+      if (!dayjs(taskDate).isValid()) {
+        skippedInvalidDateCount += 1;
+        continue;
+      }
+
+      const shiftInfo = await getShiftInfoForUserOnDate(
+        log.userId,
+        taskDate,
+        effectiveStart.startOf('day'),
+        end.endOf('day'),
+        shiftAvailabilityCache,
+      );
+      const shiftTime = shiftInfo?.timeStart ? normalizeTimeValue(shiftInfo.timeStart) : null;
+      const scheduleMeta = sanitizeScheduleConfigMeta(template.scheduleConfig ?? {}, shiftTime);
+      const nextManagedMeta: Record<string, unknown> = {
+        manual: false,
+        ...scheduleMeta,
+      };
+      if (!Object.prototype.hasOwnProperty.call(nextManagedMeta, 'priority')) {
+        nextManagedMeta.priority = 'medium';
+      }
+      if (!Object.prototype.hasOwnProperty.call(nextManagedMeta, 'points')) {
+        nextManagedMeta.points = 1;
+      }
+      if (!Object.prototype.hasOwnProperty.call(nextManagedMeta, 'durationHours')) {
+        nextManagedMeta.durationHours = 1;
+      }
+      if (!Object.prototype.hasOwnProperty.call(nextManagedMeta, 'time') && shiftTime) {
+        nextManagedMeta.time = shiftTime;
+      }
+      Object.assign(nextManagedMeta, buildShiftMeta(shiftInfo, getRequireShiftFlag(template)));
+
+      const unmanagedMeta = { ...existingMeta };
+      TEMPLATE_CONFIG_MANAGED_META_KEYS.forEach((key) => {
+        delete unmanagedMeta[key];
+      });
+      const nextMeta = { ...unmanagedMeta, ...nextManagedMeta };
+      const previousTime = normalizeTimeValue(existingMeta.time);
+      const nextTime = normalizeTimeValue(nextMeta.time);
+      if (previousTime !== nextTime) {
+        delete nextMeta.pushNotificationEvents;
+      }
+
+      if (JSON.stringify(existingMeta) === JSON.stringify(nextMeta)) {
+        unchangedCount += 1;
+        continue;
+      }
+
+      await AssistantManagerTaskLog.update(
+        {
+          meta: nextMeta,
+          updatedBy: actorId,
+        },
+        { where: { id: log.id } },
+      );
+      updatedCount += 1;
+    }
+
+    res.status(200).json([
+      {
+        data: {
+          startDate: effectiveStart.format('YYYY-MM-DD'),
+          endDate: end.format('YYYY-MM-DD'),
+          templateId: templateId ?? null,
+          totalCount: logs.length,
+          updatedCount,
+          unchangedCount,
+          skippedManualCount,
+          skippedMissingTemplateCount,
+          skippedInvalidDateCount,
+        },
+        columns: [],
+      },
+    ]);
+  } catch (error) {
+    console.error('Failed to sync existing task logs with template config', error);
+    res.status(500).json([{ message: 'Failed to update existing task logs' }]);
+  }
+};
+
 export const listTaskAssignments = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!canViewAllTaskLogs(req)) {
@@ -2235,6 +2459,21 @@ export const listTaskLogs = async (req: AuthenticatedRequest, res: Response): Pr
       res.status(400).json([{ message: 'Invalid date range provided' }]);
       return;
     }
+    const plannerStartDate = resolvePlannerStartDate();
+    const effectiveStart =
+      plannerStartDate && start.isBefore(plannerStartDate, 'day')
+        ? plannerStartDate
+        : start.startOf('day');
+    const effectiveEnd = end.endOf('day');
+    if (effectiveEnd.isBefore(effectiveStart, 'day')) {
+      res.status(200).json([
+        {
+          data: [],
+          columns: [],
+        },
+      ]);
+      return;
+    }
     const actorId = getActorId(req);
     const allowGlobalView = canViewAllTaskLogs(req);
     if (!allowGlobalView && !actorId) {
@@ -2248,14 +2487,14 @@ export const listTaskLogs = async (req: AuthenticatedRequest, res: Response): Pr
 
     const expectedLogKeys = await generateLogsForAssignments(
       assignments,
-      start.startOf('day'),
-      end.endOf('day'),
+      effectiveStart,
+      effectiveEnd,
       actorId,
     );
 
     const where: WhereOptions = {
       taskDate: {
-        [Op.between]: [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')],
+        [Op.between]: [effectiveStart.format('YYYY-MM-DD'), effectiveEnd.format('YYYY-MM-DD')],
       },
     };
 
@@ -2282,9 +2521,13 @@ export const listTaskLogs = async (req: AuthenticatedRequest, res: Response): Pr
       ],
     });
 
+    const today = dayjs().startOf('day');
     const visibleLogs = logs.filter((log) => {
       const isManual = Boolean((log.meta ?? {})['manual']);
       if (isManual) {
+        return true;
+      }
+      if (dayjs(log.taskDate).isBefore(today, 'day')) {
         return true;
       }
       return expectedLogKeys.has(buildTaskLogKey(log.templateId, log.userId, log.taskDate));

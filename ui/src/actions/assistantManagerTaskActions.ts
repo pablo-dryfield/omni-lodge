@@ -57,6 +57,19 @@ const extractApiErrorMessage = (error: unknown, fallbackMessage: string) => {
   return fallbackMessage;
 };
 
+const extractEnvelopeData = <T>(payload: unknown): T | null => {
+  if (Array.isArray(payload)) {
+    const first = payload[0] as { data?: unknown } | undefined;
+    if (first && typeof first === 'object' && 'data' in first) {
+      return (first.data as T) ?? null;
+    }
+  }
+  if (payload && typeof payload === 'object' && 'data' in payload) {
+    return ((payload as { data?: unknown }).data as T) ?? null;
+  }
+  return null;
+};
+
 export const fetchAmTaskTemplates = createAsyncThunk(
   'assistantManagerTasks/fetchTemplates',
   async (_, { rejectWithValue }) => {
@@ -225,6 +238,63 @@ export const fetchAmTaskLogs = createAsyncThunk(
   },
 );
 
+export type SyncAmTaskLogsWithTemplateConfigResponse = {
+  startDate: string;
+  endDate: string;
+  totalCount: number;
+  updatedCount: number;
+  unchangedCount: number;
+  skippedManualCount: number;
+  skippedMissingTemplateCount: number;
+  skippedInvalidDateCount: number;
+};
+
+export const syncAmTaskLogsWithTemplateConfig = async (
+  params: { startDate: string; endDate: string; templateId?: number | null },
+): Promise<SyncAmTaskLogsWithTemplateConfigResponse> => {
+  try {
+    const response = await axiosInstance.post(
+      '/assistantManagerTasks/logs/sync-template-config',
+      {
+        startDate: params.startDate,
+        endDate: params.endDate,
+        templateId: params.templateId ?? null,
+      },
+      { withCredentials: true },
+    );
+    const data = extractEnvelopeData<Partial<SyncAmTaskLogsWithTemplateConfigResponse>>(
+      response.data,
+    );
+    return {
+      startDate:
+        typeof data?.startDate === 'string' ? data.startDate : params.startDate,
+      endDate: typeof data?.endDate === 'string' ? data.endDate : params.endDate,
+      totalCount:
+        typeof data?.totalCount === 'number' ? data.totalCount : 0,
+      updatedCount:
+        typeof data?.updatedCount === 'number' ? data.updatedCount : 0,
+      unchangedCount:
+        typeof data?.unchangedCount === 'number' ? data.unchangedCount : 0,
+      skippedManualCount:
+        typeof data?.skippedManualCount === 'number'
+          ? data.skippedManualCount
+          : 0,
+      skippedMissingTemplateCount:
+        typeof data?.skippedMissingTemplateCount === 'number'
+          ? data.skippedMissingTemplateCount
+          : 0,
+      skippedInvalidDateCount:
+        typeof data?.skippedInvalidDateCount === 'number'
+          ? data.skippedInvalidDateCount
+          : 0,
+    };
+  } catch (error) {
+    throw new Error(
+      extractApiErrorMessage(error, 'Failed to update existing task logs'),
+    );
+  }
+};
+
 export const updateAmTaskLogStatus = createAsyncThunk(
   'assistantManagerTasks/updateLog',
   async ({ logId, payload }: { logId: number; payload: Partial<AssistantManagerTaskLog> }, { rejectWithValue }) => {
@@ -294,3 +364,61 @@ export const uploadAmTaskEvidenceImage = createAsyncThunk(
     }
   },
 );
+
+export type AmTaskPushConfig = {
+  enabled: boolean;
+  publicKey: string | null;
+};
+
+export const fetchAmTaskPushConfig = async (): Promise<AmTaskPushConfig> => {
+  const response = await axiosInstance.get('/assistantManagerTasks/push/config', {
+    withCredentials: true,
+  });
+  const data = extractEnvelopeData<Partial<AmTaskPushConfig>>(response.data);
+  return {
+    enabled: data?.enabled === true,
+    publicKey:
+      typeof data?.publicKey === 'string' && data.publicKey.trim()
+        ? data.publicKey.trim()
+        : null,
+  };
+};
+
+export const saveAmTaskPushSubscription = async (
+  subscription: PushSubscriptionJSON,
+): Promise<void> => {
+  await axiosInstance.put(
+    '/assistantManagerTasks/push/subscription',
+    { subscription },
+    { withCredentials: true },
+  );
+};
+
+export const removeAmTaskPushSubscription = async (
+  endpoint: string,
+): Promise<void> => {
+  await axiosInstance.delete('/assistantManagerTasks/push/subscription', {
+    withCredentials: true,
+    data: { endpoint },
+  });
+};
+
+export type AmTaskPushTestResponse = {
+  userId: number;
+  sent: boolean;
+};
+
+export const sendAmTaskPushTestNotification = async (
+  userId: number,
+): Promise<AmTaskPushTestResponse> => {
+  const response = await axiosInstance.post(
+    '/assistantManagerTasks/push/test',
+    { userId },
+    { withCredentials: true },
+  );
+  const data = extractEnvelopeData<Partial<AmTaskPushTestResponse>>(response.data);
+  return {
+    userId: typeof data?.userId === 'number' ? data.userId : userId,
+    sent: data?.sent === true,
+  };
+};

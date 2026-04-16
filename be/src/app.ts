@@ -63,11 +63,13 @@ import migrationAuditRoutes from './routes/migrationAuditRoutes.js';
 import maintenanceCommandRoutes from './routes/maintenanceCommandRoutes.js';
 import marketingRoutes from './routes/marketingRoutes.js';
 import performanceRoutes from './routes/performanceRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
 import { financeRouter } from './finance/index.js';
 import { startFinanceRecurringJob } from './finance/jobs/recurringJob.js';
 import { startScheduleJobs } from './jobs/schedules.cron.js';
 import { startDbBackupJob } from './jobs/dbBackup.cron.js';
 import { startBookingEmailIngestionJob } from './jobs/bookingEmailIngestion.cron.js';
+import { startAmTaskPushNotificationsJob } from './jobs/amTaskPushNotifications.cron.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -211,6 +213,7 @@ app.use('/api/openBar', openBarRoutes);
 app.use('/api/cerebro', cerebroRoutes);
 app.use('/api/marketing', marketingRoutes);
 app.use('/api/performance', performanceRoutes);
+app.use('/api/notifications', notificationRoutes);
 app.use('/api/rolePagePermissions', rolePagePermissionRoutes);
 app.use('/api/roleModulePermissions', roleModulePermissionRoutes);
 app.use('/api/accessControl', accessControlRoutes);
@@ -271,6 +274,7 @@ async function bootstrap(): Promise<void> {
         startScheduleJobs();
         startDbBackupJob();
         startBookingEmailIngestionJob();
+        startAmTaskPushNotificationsJob();
       });
     } else {
       app.listen(PORT, '0.0.0.0', () => {
@@ -279,6 +283,7 @@ async function bootstrap(): Promise<void> {
         startScheduleJobs();
         startDbBackupJob();
         startBookingEmailIngestionJob();
+        startAmTaskPushNotificationsJob();
       });
     }
   } catch (err) {

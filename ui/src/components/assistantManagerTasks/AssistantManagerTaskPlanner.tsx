@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import {
   Accordion,
@@ -55,8 +55,14 @@ import {
   createAmTaskTemplate,
   createManualAmTaskLog,
   deleteAmTaskAssignment,
+  fetchAmTaskPushConfig,
   fetchAmTaskLogs,
   fetchAmTaskTemplates,
+  removeAmTaskPushSubscription,
+  sendAmTaskPushTestNotification,
+  saveAmTaskPushSubscription,
+  syncAmTaskLogsWithTemplateConfig,
+  type SyncAmTaskLogsWithTemplateConfigResponse,
   uploadAmTaskEvidenceImage,
   updateAmTaskAssignment,
   updateAmTaskLogMeta,
@@ -66,6 +72,7 @@ import {
 import { fetchUserTypes } from '../../actions/userTypeActions';
 import { useShiftRoles } from '../../api/shiftRoles';
 import { useActiveUsers } from '../../api/users';
+import { useConfigEntry } from '../../api/config';
 import { useModuleAccess } from '../../hooks/useModuleAccess';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { compressImageFile } from '../../utils/imageCompression';
@@ -103,6 +110,8 @@ type TemplateFormState = {
   defaultPriority: PlannerPriority;
   defaultPoints: string;
   requireShift: boolean;
+  reminderMinutesBeforeStart: string;
+  notifyAtStart: boolean;
   evidenceRules: EvidenceRuleDraft[];
 };
 
@@ -204,6 +213,8 @@ const defaultTemplateFormState: TemplateFormState = {
   defaultPriority: 'medium',
   defaultPoints: '',
   requireShift: false,
+  reminderMinutesBeforeStart: '',
+  notifyAtStart: true,
   evidenceRules: [],
 };
 
@@ -698,6 +709,73 @@ const formatEvidenceFileSize = (value?: number | null) => {
   return `${value} B`;
 };
 
+const parseTaskStartDateTime = (
+  log: AssistantManagerTaskLog,
+  templateMap: Map<number, AssistantManagerTaskTemplate>,
+) => {
+  const template = templateMap.get(log.templateId);
+  const scheduleConfig = (template?.scheduleConfig ?? {}) as Record<string, unknown>;
+  const meta = (log.meta ?? {}) as AssistantManagerTaskLogMeta;
+  const rawTime =
+    typeof meta.time === 'string' && meta.time.trim()
+      ? meta.time.trim()
+      : typeof meta.shiftTimeStart === 'string' && meta.shiftTimeStart.trim()
+        ? meta.shiftTimeStart.trim()
+        : typeof scheduleConfig.time === 'string' && scheduleConfig.time.trim()
+          ? scheduleConfig.time.trim()
+          : typeof scheduleConfig.hour === 'string' && scheduleConfig.hour.trim()
+            ? scheduleConfig.hour.trim()
+            : '';
+
+  if (!rawTime) {
+    return null;
+  }
+
+  const parsedTime = dayjs(rawTime, TIME_INPUT_FORMATS, true);
+  if (!parsedTime.isValid()) {
+    return null;
+  }
+
+  const parsedDate = dayjs(log.taskDate);
+  if (!parsedDate.isValid()) {
+    return null;
+  }
+
+  return parsedDate
+    .hour(parsedTime.hour())
+    .minute(parsedTime.minute())
+    .second(0)
+    .millisecond(0);
+};
+
+const getTaskNotificationEventKey = (
+  logId: number,
+  eventType: 'reminder' | 'start',
+  eventTimestamp: number,
+) => `am-task-notification:${logId}:${eventType}:${eventTimestamp}`;
+
+const hasTaskNotificationEventBeenShown = (eventKey: string) => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  try {
+    return window.localStorage.getItem(eventKey) != null;
+  } catch {
+    return false;
+  }
+};
+
+const markTaskNotificationEventShown = (eventKey: string) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.localStorage.setItem(eventKey, dayjs().toISOString());
+  } catch {
+    // Ignore localStorage errors and keep runtime notification flow alive.
+  }
+};
+
 const getErrorMessage = (error: unknown, fallback: string) => {
   if (typeof error === 'string' && error.trim()) {
     return error.trim();
@@ -746,6 +824,18 @@ const PLANNER_START_HOUR = 6;
 const PLANNER_END_HOUR = 22;
 const PLANNER_SLOT_HEIGHT = 56;
 const PLANNER_DAYS = 7;
+const TIME_INPUT_FORMATS = ['HH:mm', 'H:mm', 'HH:mm:ss', 'h:mm A', 'h A'];
+
+const decodeBase64UrlToUint8Array = (value: string): Uint8Array => {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+  const binary = window.atob(padded);
+  const output = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    output[index] = binary.charCodeAt(index);
+  }
+  return output;
+};
 
 const startOfPlannerWeek = (value: Date | string | dayjs.Dayjs) => {
   const date = dayjs(value);
@@ -862,6 +952,10 @@ const resolveTemplateDefaults = (template?: AssistantManagerTaskTemplate | null)
     typeof config.timesPerWeekPerAssignedUser === 'number'
       ? config.timesPerWeekPerAssignedUser
       : Number(config.timesPerWeekPerAssignedUser ?? NaN);
+  const reminderMinutesBeforeStartValue =
+    typeof config.reminderMinutesBeforeStart === 'number'
+      ? config.reminderMinutesBeforeStart
+      : Number(config.reminderMinutesBeforeStart ?? NaN);
 
   return {
     time: timeValue,
@@ -871,6 +965,12 @@ const resolveTemplateDefaults = (template?: AssistantManagerTaskTemplate | null)
       timesPerWeekPerAssignedUserValue > 0
       ? timesPerWeekPerAssignedUserValue
       : null,
+    reminderMinutesBeforeStart:
+      Number.isInteger(reminderMinutesBeforeStartValue) &&
+      reminderMinutesBeforeStartValue > 0
+        ? reminderMinutesBeforeStartValue
+        : null,
+    notifyAtStart: config.notifyAtStart !== false,
     priority: normalizePriority(config.priority),
     requireShift:
       config.requireShift === true || config.requireScheduledShift === true,
@@ -1405,6 +1505,7 @@ const SetupTemplateCard = ({
   onEdit,
   onMoveUp,
   onMoveDown,
+  onUpdateExistingTasks,
   onToggleSelected,
   onEditAssignment,
   onDeleteAssignment,
@@ -1420,6 +1521,7 @@ const SetupTemplateCard = ({
   onEdit: (template: AssistantManagerTaskTemplate) => void;
   onMoveUp: (template: AssistantManagerTaskTemplate) => void;
   onMoveDown: (template: AssistantManagerTaskTemplate) => void;
+  onUpdateExistingTasks: (template: AssistantManagerTaskTemplate) => void;
   onToggleSelected: (templateId: number, checked: boolean) => void;
   onEditAssignment: (
     template: AssistantManagerTaskTemplate,
@@ -1488,6 +1590,15 @@ const SetupTemplateCard = ({
               <Tooltip label="Assign template">
                 <ActionIcon variant="light" color="blue" onClick={() => onAssign(template)}>
                   <IconPlus size={16} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label="Update existing tasks">
+                <ActionIcon
+                  variant="light"
+                  color="teal"
+                  onClick={() => onUpdateExistingTasks(template)}
+                >
+                  <IconRefresh size={16} />
                 </ActionIcon>
               </Tooltip>
               <Tooltip label="Edit template">
@@ -2337,12 +2448,20 @@ const AssistantManagerTaskPlanner = () => {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const sessionRoleSlug = useAppSelector((state) => state.session.roleSlug);
+  const normalizedSessionRole = useMemo(
+    () => normalizeRoleSlug(sessionRoleSlug),
+    [sessionRoleSlug],
+  );
+  const canReadControlPanelConfig = normalizedSessionRole === 'admin';
   const loggedUserId = useAppSelector((state) => state.session.loggedUserId);
   const templateState = useAppSelector((state) => state.assistantManagerTasks.templates)[0];
   const logState = useAppSelector((state) => state.assistantManagerTasks.logs)[0];
   const userTypesState = useAppSelector((state) => state.userTypes[0]);
   const { data: shiftRolesResponse, isLoading: shiftRolesLoading, error: shiftRolesError } = useShiftRoles();
   const { data: activeUsers = [], isLoading: activeUsersLoading, error: activeUsersError } = useActiveUsers();
+  const { data: plannerStartConfig } = useConfigEntry(
+    canReadControlPanelConfig ? 'AM_TASK_PLANNER_START_DATE' : null,
+  );
   const templates = useMemo(
     () => ((templateState.data as any)[0]?.data ?? []) as AssistantManagerTaskTemplate[],
     [templateState.data],
@@ -2413,12 +2532,26 @@ const AssistantManagerTaskPlanner = () => {
       '',
     [shiftRoleOptions],
   );
+  const plannerStartDate = useMemo(() => {
+    const rawValue = plannerStartConfig?.value ?? plannerStartConfig?.defaultValue ?? null;
+    if (typeof rawValue !== 'string') {
+      return null;
+    }
+    const trimmed = rawValue.trim();
+    if (!trimmed || !/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return null;
+    }
+    const parsed = dayjs(trimmed);
+    if (!parsed.isValid() || parsed.format('YYYY-MM-DD') !== trimmed) {
+      return null;
+    }
+    return parsed.startOf('day');
+  }, [plannerStartConfig?.defaultValue, plannerStartConfig?.value]);
 
   const access = useModuleAccess('am-task-management');
   const canViewAllTasks = useMemo(() => {
-    const normalizedRole = normalizeRoleSlug(sessionRoleSlug);
-    return normalizedRole != null && GLOBAL_TASK_VIEWER_ROLES.has(normalizedRole);
-  }, [sessionRoleSlug]);
+    return normalizedSessionRole != null && GLOBAL_TASK_VIEWER_ROLES.has(normalizedSessionRole);
+  }, [normalizedSessionRole]);
   const canManage = canViewAllTasks && (access.canCreate || access.canUpdate || access.canDelete);
   const canCreateManualTasks = canViewAllTasks && access.canCreate;
   const requestedSectionParam = searchParams.get('section');
@@ -2454,6 +2587,16 @@ const AssistantManagerTaskPlanner = () => {
   const [bulkAssignmentModalOpen, setBulkAssignmentModalOpen] = useState(false);
   const [bulkAssignmentSubmitting, setBulkAssignmentSubmitting] = useState(false);
   const [bulkAssignmentError, setBulkAssignmentError] = useState<string | null>(null);
+  const [syncExistingTasksModalOpen, setSyncExistingTasksModalOpen] = useState(false);
+  const [syncExistingTasksDateRange, setSyncExistingTasksDateRange] = useState<
+    [Date | null, Date | null]
+  >([new Date(), dayjs().add(6, 'day').toDate()]);
+  const [syncExistingTasksSubmitting, setSyncExistingTasksSubmitting] = useState(false);
+  const [syncExistingTasksError, setSyncExistingTasksError] = useState<string | null>(null);
+  const [syncExistingTasksSummary, setSyncExistingTasksSummary] =
+    useState<SyncAmTaskLogsWithTemplateConfigResponse | null>(null);
+  const [syncExistingTasksTemplate, setSyncExistingTasksTemplate] =
+    useState<AssistantManagerTaskTemplate | null>(null);
 
   const [logDateRange, setLogDateRange] = useState<[Date | null, Date | null]>([
     new Date(),
@@ -2479,6 +2622,36 @@ const AssistantManagerTaskPlanner = () => {
   const [logDetailError, setLogDetailError] = useState<string | null>(null);
   const [evidenceUploadingRuleKey, setEvidenceUploadingRuleKey] = useState<string | null>(null);
   const [linkInputCounts, setLinkInputCounts] = useState<Record<string, number>>({});
+  const notificationsSupported = typeof window !== 'undefined' && 'Notification' in window;
+  const pushSupported =
+    typeof window !== 'undefined' &&
+    'serviceWorker' in navigator &&
+    'PushManager' in window;
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
+    () => {
+      if (typeof window === 'undefined' || !('Notification' in window)) {
+        return 'denied';
+      }
+      return window.Notification.permission;
+    },
+  );
+  const [pushPublicKey, setPushPublicKey] = useState<string | null>(null);
+  const [pushEnabledInBackend, setPushEnabledInBackend] = useState(false);
+  const [pushSubscriptionReady, setPushSubscriptionReady] = useState(false);
+  const [pushSyncBusy, setPushSyncBusy] = useState(false);
+  const [pushSyncError, setPushSyncError] = useState<string | null>(null);
+  const [pushTestModalOpen, setPushTestModalOpen] = useState(false);
+  const [pushTestUserId, setPushTestUserId] = useState<string | null>(null);
+  const [pushTestSubmitting, setPushTestSubmitting] = useState(false);
+  const [pushTestError, setPushTestError] = useState<string | null>(null);
+  const [pushTestSuccess, setPushTestSuccess] = useState<string | null>(null);
+  const backendPushConfigured =
+    notificationPermission === 'granted' &&
+    pushSupported &&
+    pushEnabledInBackend &&
+    Boolean(pushPublicKey);
+  const backgroundPushActive = backendPushConfigured && pushSubscriptionReady;
+  const notificationTimeoutsRef = useRef<ReturnType<typeof window.setTimeout>[]>([]);
   const [commentDraft, setCommentDraft] = useState('');
   const [commentSubmitting, setCommentSubmitting] = useState(false);
 
@@ -2513,6 +2686,77 @@ const AssistantManagerTaskPlanner = () => {
       setLogScope('self');
     }
   }, [canViewAllTasks]);
+
+  useEffect(() => {
+    if (!plannerStartDate) {
+      return;
+    }
+
+    setLogDateRange((prev) => {
+      const [start, end] = prev;
+      if (!start) {
+        return [plannerStartDate.toDate(), end];
+      }
+
+      const startDay = dayjs(start).startOf('day');
+      if (!startDay.isBefore(plannerStartDate, 'day')) {
+        return prev;
+      }
+
+      const nextEnd =
+        end && !dayjs(end).endOf('day').isBefore(plannerStartDate, 'day')
+          ? end
+          : plannerStartDate.add(6, 'day').toDate();
+
+      return [plannerStartDate.toDate(), nextEnd];
+    });
+  }, [plannerStartDate]);
+
+  useEffect(() => {
+    if (!notificationsSupported) {
+      return;
+    }
+
+    const syncPermission = () => {
+      setNotificationPermission(window.Notification.permission);
+    };
+
+    syncPermission();
+    window.addEventListener('focus', syncPermission);
+    document.addEventListener('visibilitychange', syncPermission);
+
+    return () => {
+      window.removeEventListener('focus', syncPermission);
+      document.removeEventListener('visibilitychange', syncPermission);
+    };
+  }, [notificationsSupported]);
+
+  useEffect(() => {
+    if (!loggedUserId) {
+      setPushPublicKey(null);
+      setPushEnabledInBackend(false);
+      setPushSubscriptionReady(false);
+      setPushSyncError(null);
+      return;
+    }
+
+    fetchAmTaskPushConfig()
+      .then((config) => {
+        setPushPublicKey(config.publicKey);
+        setPushEnabledInBackend(config.enabled);
+        if (!config.enabled || !config.publicKey) {
+          setPushSubscriptionReady(false);
+        }
+        setPushSyncError(null);
+      })
+      .catch((error) => {
+        console.error('Failed to load task push notification config', error);
+        setPushEnabledInBackend(false);
+        setPushPublicKey(null);
+        setPushSubscriptionReady(false);
+        setPushSyncError('Could not load push notification config');
+      });
+  }, [loggedUserId]);
 
   useEffect(() => {
     const normalizedSection =
@@ -2569,6 +2813,159 @@ const AssistantManagerTaskPlanner = () => {
     [canViewAllTasks, searchParams, setSearchParams],
   );
 
+  const syncPushSubscription = useCallback(async () => {
+    if (
+      !pushSupported ||
+      notificationPermission !== 'granted' ||
+      !pushEnabledInBackend ||
+      !pushPublicKey
+    ) {
+      setPushSubscriptionReady(false);
+      return false;
+    }
+
+    setPushSyncBusy(true);
+    try {
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (!registration) {
+        setPushSubscriptionReady(false);
+        setPushSyncError(
+          'Background push requires the app service worker (available on installed/production app).',
+        );
+        return false;
+      }
+      let subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: decodeBase64UrlToUint8Array(pushPublicKey),
+        });
+      }
+
+      await saveAmTaskPushSubscription(subscription.toJSON());
+      setPushSubscriptionReady(true);
+      setPushSyncError(null);
+      return true;
+    } catch (error) {
+      console.error('Failed to sync task push subscription', error);
+      setPushSubscriptionReady(false);
+      setPushSyncError('Background push subscription failed. Browser permission may be blocked.');
+      return false;
+    } finally {
+      setPushSyncBusy(false);
+    }
+  }, [
+    notificationPermission,
+    pushEnabledInBackend,
+    pushPublicKey,
+    pushSupported,
+  ]);
+
+  const removePushSubscription = useCallback(async () => {
+    if (!pushSupported) {
+      setPushSubscriptionReady(false);
+      return;
+    }
+    try {
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (!registration) {
+        return;
+      }
+      const subscription = await registration.pushManager.getSubscription();
+      if (subscription) {
+        const endpoint = subscription.endpoint;
+        await subscription.unsubscribe().catch(() => undefined);
+        if (endpoint) {
+          await removeAmTaskPushSubscription(endpoint).catch(() => undefined);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to remove task push subscription', error);
+    } finally {
+      setPushSubscriptionReady(false);
+    }
+  }, [pushSupported]);
+
+  const handleEnableTaskNotifications = useCallback(async () => {
+    if (!notificationsSupported) {
+      return;
+    }
+    try {
+      const permission = await window.Notification.requestPermission();
+      setNotificationPermission(permission);
+      if (permission === 'granted') {
+        await syncPushSubscription();
+      } else if (permission === 'denied') {
+        await removePushSubscription();
+      }
+    } catch (error) {
+      console.error('Failed to request browser notification permission', error);
+    }
+  }, [
+    notificationsSupported,
+    removePushSubscription,
+    syncPushSubscription,
+  ]);
+
+  const openPushTestModal = useCallback(() => {
+    setPushTestUserId((current) => current ?? activeUserOptions[0]?.value ?? null);
+    setPushTestError(null);
+    setPushTestSuccess(null);
+    setPushTestModalOpen(true);
+  }, [activeUserOptions]);
+
+  const closePushTestModal = useCallback(() => {
+    if (pushTestSubmitting) {
+      return;
+    }
+    setPushTestModalOpen(false);
+    setPushTestError(null);
+    setPushTestSuccess(null);
+  }, [pushTestSubmitting]);
+
+  const handleSendPushTestNotification = useCallback(async () => {
+    if (!pushTestUserId) {
+      setPushTestError('Select a user first');
+      return;
+    }
+    const userId = Number(pushTestUserId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      setPushTestError('Selected user is invalid');
+      return;
+    }
+
+    setPushTestSubmitting(true);
+    setPushTestError(null);
+    setPushTestSuccess(null);
+    try {
+      const response = await sendAmTaskPushTestNotification(userId);
+      if (response.sent) {
+        setPushTestSuccess(`Test notification sent to user #${response.userId}.`);
+      } else {
+        setPushTestError('Push test could not be delivered.');
+      }
+    } catch (error) {
+      setPushTestError(getErrorMessage(error, 'Failed to send test notification'));
+    } finally {
+      setPushTestSubmitting(false);
+    }
+  }, [pushTestUserId]);
+
+  useEffect(() => {
+    if (notificationPermission !== 'granted') {
+      setPushSubscriptionReady(false);
+      if (notificationPermission === 'denied') {
+        removePushSubscription().catch((error) =>
+          console.error('Failed to clear push subscription after deny', error),
+        );
+      }
+      return;
+    }
+    syncPushSubscription().catch((error) =>
+      console.error('Failed to auto-sync push subscription', error),
+    );
+  }, [notificationPermission, removePushSubscription, syncPushSubscription]);
+
   useEffect(() => {
     setSelectedTemplateIds((prev) => prev.filter((id) => templates.some((template) => template.id === id)));
   }, [templates]);
@@ -2591,6 +2988,134 @@ const AssistantManagerTaskPlanner = () => {
   useEffect(() => {
     refreshLogs().catch((error) => console.error('Failed to refresh task logs', error));
   }, [refreshLogs]);
+
+  useEffect(() => {
+    notificationTimeoutsRef.current.forEach((timerId) => {
+      window.clearTimeout(timerId);
+    });
+    notificationTimeoutsRef.current = [];
+
+    if (
+      !notificationsSupported ||
+      notificationPermission !== 'granted' ||
+      !loggedUserId ||
+      pushSubscriptionReady
+    ) {
+      return undefined;
+    }
+
+    const now = dayjs();
+    const nowMs = now.valueOf();
+    const maxTimeoutMs = 2_147_483_647;
+    const staleThresholdMs = 5 * 60 * 1000;
+
+    const selfPendingLogs = logs.filter(
+      (log) => log.userId === loggedUserId && log.status === 'pending',
+    );
+
+    selfPendingLogs.forEach((log) => {
+      const taskStart = parseTaskStartDateTime(log, templateMap);
+      if (!taskStart) {
+        return;
+      }
+
+      const templateDefaults = resolveTemplateDefaults(templateMap.get(log.templateId));
+      const reminderMinutes =
+        templateDefaults.reminderMinutesBeforeStart != null &&
+        templateDefaults.reminderMinutesBeforeStart > 0
+          ? templateDefaults.reminderMinutesBeforeStart
+          : null;
+      const events: Array<{
+        type: 'reminder' | 'start';
+        at: dayjs.Dayjs;
+        title: string;
+        body: string;
+      }> = [];
+
+      if (reminderMinutes != null) {
+        events.push({
+          type: 'reminder',
+          at: taskStart.subtract(reminderMinutes, 'minute'),
+          title: `Task reminder: ${log.templateName ?? `Task #${log.id}`}`,
+          body: `Starts in ${reminderMinutes} minute(s) at ${taskStart.format(
+            'HH:mm',
+          )}.`,
+        });
+      }
+
+      if (templateDefaults.notifyAtStart !== false) {
+        events.push({
+          type: 'start',
+          at: taskStart,
+          title: `Task starting now: ${log.templateName ?? `Task #${log.id}`}`,
+          body: `Scheduled for ${taskStart.format('ddd, MMM D HH:mm')}.`,
+        });
+      }
+
+      events.forEach((event) => {
+        const eventTimestamp = event.at.valueOf();
+        const eventKey = getTaskNotificationEventKey(log.id, event.type, eventTimestamp);
+        if (hasTaskNotificationEventBeenShown(eventKey)) {
+          return;
+        }
+
+        const triggerNotification = () => {
+          if (window.Notification.permission !== 'granted') {
+            return;
+          }
+          const notification = new window.Notification(event.title, {
+            body: event.body,
+            tag: `am-task-${log.id}-${event.type}`,
+            renotify: false,
+            requireInteraction: false,
+          });
+          notification.onclick = () => {
+            notification.close();
+            window.focus();
+            const nextParams = new URLSearchParams(window.location.search);
+            nextParams.set('section', 'dashboard');
+            nextParams.set('task', String(log.id));
+            setSearchParams(nextParams, { replace: false });
+          };
+          markTaskNotificationEventShown(eventKey);
+        };
+
+        const delayMs = eventTimestamp - nowMs;
+        if (delayMs <= 0) {
+          if (Math.abs(delayMs) <= staleThresholdMs) {
+            triggerNotification();
+          } else {
+            markTaskNotificationEventShown(eventKey);
+          }
+          return;
+        }
+
+        if (delayMs > maxTimeoutMs) {
+          return;
+        }
+
+        const timeoutId = window.setTimeout(() => {
+          triggerNotification();
+        }, delayMs);
+        notificationTimeoutsRef.current.push(timeoutId);
+      });
+    });
+
+    return () => {
+      notificationTimeoutsRef.current.forEach((timerId) => {
+        window.clearTimeout(timerId);
+      });
+      notificationTimeoutsRef.current = [];
+    };
+  }, [
+    loggedUserId,
+    logs,
+    notificationPermission,
+    notificationsSupported,
+    pushSubscriptionReady,
+    setSearchParams,
+    templateMap,
+  ]);
 
   const openTemplateModal = useCallback((template?: AssistantManagerTaskTemplate) => {
     if (template) {
@@ -2617,6 +3142,11 @@ const AssistantManagerTaskPlanner = () => {
         defaultPriority: defaults.priority,
         defaultPoints: defaults.points != null ? String(defaults.points) : '',
         requireShift: defaults.requireShift,
+        reminderMinutesBeforeStart:
+          defaults.reminderMinutesBeforeStart != null
+            ? String(defaults.reminderMinutesBeforeStart)
+            : '',
+        notifyAtStart: defaults.notifyAtStart,
         evidenceRules: buildEvidenceRuleDrafts(template),
       });
     } else {
@@ -2655,6 +3185,7 @@ const AssistantManagerTaskPlanner = () => {
       const durationNumeric = Number(templateFormState.defaultDuration);
       const pointsNumeric = Number(templateFormState.defaultPoints);
       const timesPerWeekNumeric = Number(templateFormState.timesPerWeekPerAssignedUser);
+      const reminderMinutesNumeric = Number(templateFormState.reminderMinutesBeforeStart);
       const categoryOrderNumeric = Number(templateFormState.categoryOrder);
       const subgroupOrderNumeric = Number(templateFormState.subgroupOrder);
       const templateOrderNumeric = Number(templateFormState.templateOrder);
@@ -2689,6 +3220,7 @@ const AssistantManagerTaskPlanner = () => {
 
       nextScheduleConfig.priority = templateFormState.defaultPriority;
       nextScheduleConfig.requireShift = templateFormState.requireShift;
+      nextScheduleConfig.notifyAtStart = templateFormState.notifyAtStart;
 
       if (
         templateFormState.defaultPoints.trim() &&
@@ -2708,6 +3240,16 @@ const AssistantManagerTaskPlanner = () => {
         nextScheduleConfig.timesPerWeekPerAssignedUser = timesPerWeekNumeric;
       } else {
         delete nextScheduleConfig.timesPerWeekPerAssignedUser;
+      }
+
+      if (templateFormState.reminderMinutesBeforeStart.trim()) {
+        if (!Number.isInteger(reminderMinutesNumeric) || reminderMinutesNumeric <= 0) {
+          setTemplateFormError('Reminder minutes before start must be a whole number above 0');
+          return;
+        }
+        nextScheduleConfig.reminderMinutesBeforeStart = reminderMinutesNumeric;
+      } else {
+        delete nextScheduleConfig.reminderMinutesBeforeStart;
       }
 
       const evidenceRuleKeys = new Set<string>();
@@ -2984,6 +3526,27 @@ const AssistantManagerTaskPlanner = () => {
     setBulkAssignmentError(null);
   }, [bulkAssignmentSubmitting]);
 
+  const openSyncExistingTasksModal = useCallback((template?: AssistantManagerTaskTemplate) => {
+    const [currentStart, currentEnd] = logDateRange;
+    setSyncExistingTasksDateRange([
+      currentStart ?? new Date(),
+      currentEnd ?? dayjs().add(6, 'day').toDate(),
+    ]);
+    setSyncExistingTasksTemplate(template ?? null);
+    setSyncExistingTasksError(null);
+    setSyncExistingTasksSummary(null);
+    setSyncExistingTasksModalOpen(true);
+  }, [logDateRange]);
+
+  const closeSyncExistingTasksModal = useCallback(() => {
+    if (syncExistingTasksSubmitting) {
+      return;
+    }
+    setSyncExistingTasksModalOpen(false);
+    setSyncExistingTasksError(null);
+    setSyncExistingTasksTemplate(null);
+  }, [syncExistingTasksSubmitting]);
+
   const buildAssignmentPayloadFromForm = useCallback(
     (formState: AssignmentFormState) => {
       const trimmedUserId = formState.userId.trim();
@@ -3141,6 +3704,40 @@ const AssistantManagerTaskPlanner = () => {
     dispatch,
     selectedTemplateIds,
   ]);
+
+  const handleSyncExistingTasksSubmit = useCallback(async () => {
+    const [startDate, endDate] = syncExistingTasksDateRange;
+    if (!startDate || !endDate) {
+      setSyncExistingTasksError('Select a start and end date');
+      return;
+    }
+
+    const start = dayjs(startDate).startOf('day');
+    const end = dayjs(endDate).endOf('day');
+    if (!start.isValid() || !end.isValid() || end.isBefore(start, 'day')) {
+      setSyncExistingTasksError('Choose a valid date range');
+      return;
+    }
+
+    setSyncExistingTasksSubmitting(true);
+    setSyncExistingTasksError(null);
+
+    try {
+      const summary = await syncAmTaskLogsWithTemplateConfig({
+        startDate: start.format('YYYY-MM-DD'),
+        endDate: end.format('YYYY-MM-DD'),
+        templateId: syncExistingTasksTemplate?.id ?? null,
+      });
+      setSyncExistingTasksSummary(summary);
+      await refreshLogs();
+    } catch (error) {
+      setSyncExistingTasksError(
+        getErrorMessage(error, 'Failed to update existing task logs'),
+      );
+    } finally {
+      setSyncExistingTasksSubmitting(false);
+    }
+  }, [refreshLogs, syncExistingTasksDateRange, syncExistingTasksTemplate?.id]);
 
   const handleAssignmentDateChange = useCallback(
     (key: 'effectiveStart' | 'effectiveEnd', date: Date | null) => {
@@ -4001,10 +4598,87 @@ const AssistantManagerTaskPlanner = () => {
                   <DatePickerInput
                     type="range"
                     label="Date range"
+                    description={
+                      plannerStartDate
+                        ? `Planner history starts on ${plannerStartDate.format('YYYY-MM-DD')}`
+                        : undefined
+                    }
                     value={logDateRange}
                     onChange={setLogDateRange}
                     valueFormat="YYYY-MM-DD"
+                    minDate={plannerStartDate ? plannerStartDate.toDate() : undefined}
                   />
+
+                  <Paper withBorder radius="lg" p="sm" bg="gray.0">
+                    <Group justify="space-between" align="flex-start" wrap="wrap">
+                      <Stack gap={2}>
+                        <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
+                          Task Notifications
+                        </Text>
+                        <Text fw={600}>
+                          {!notificationsSupported
+                            ? 'Not supported on this browser'
+                            : notificationPermission === 'denied'
+                              ? 'Blocked in browser settings'
+                              : backgroundPushActive
+                                ? 'Enabled (background)'
+                                : notificationPermission === 'granted'
+                                  ? 'Enabled (session only)'
+                                  : 'Not enabled'}
+                        </Text>
+                        <Text size="sm" c="dimmed">
+                          {backgroundPushActive
+                            ? 'Background push is active and notifications can fire while the app is closed.'
+                            : backendPushConfigured
+                              ? 'Background push is configured in backend. Finish enabling browser subscription for closed-app notifications.'
+                            : notificationPermission === 'granted'
+                              ? 'Notifications are active while the app is open.'
+                              : 'Uses template reminder minutes plus task start-time notifications for your pending tasks.'}
+                        </Text>
+                        {notificationPermission === 'granted' &&
+                          pushSupported &&
+                          (!pushEnabledInBackend || !pushPublicKey) && (
+                            <Text size="xs" c="orange.7">
+                              Background push is not configured in backend yet (missing VAPID keys).
+                            </Text>
+                          )}
+                        {pushSyncError && (
+                          <Text size="xs" c="red.7">
+                            {pushSyncError}
+                          </Text>
+                        )}
+                      </Stack>
+                      <Group gap="xs" justify="flex-end">
+                        {notificationsSupported &&
+                          (notificationPermission !== 'granted' ||
+                            (backendPushConfigured && !pushSubscriptionReady)) && (
+                          <Button
+                            size="xs"
+                            variant="light"
+                            loading={pushSyncBusy}
+                            onClick={() => {
+                              handleEnableTaskNotifications().catch((error) =>
+                                console.error('Failed to enable task notifications', error),
+                              );
+                            }}
+                          >
+                            {notificationPermission === 'granted'
+                              ? 'Enable Background'
+                              : 'Enable'}
+                          </Button>
+                        )}
+                        {canViewAllTasks && (
+                          <Button
+                            size="xs"
+                            variant="default"
+                            onClick={openPushTestModal}
+                          >
+                            Send Test
+                          </Button>
+                        )}
+                      </Group>
+                    </Group>
+                  </Paper>
 
                   <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
                     {canViewAllTasks ? (
@@ -4550,6 +5224,9 @@ const AssistantManagerTaskPlanner = () => {
                                           console.error('Failed to move template down', error),
                                         );
                                       }}
+                                      onUpdateExistingTasks={(selectedTemplate) =>
+                                        openSyncExistingTasksModal(selectedTemplate)
+                                      }
                                       onToggleSelected={toggleTemplateSelection}
                                       onEditAssignment={openAssignmentModal}
                                       onDeleteAssignment={handleAssignmentDelete}
@@ -4669,6 +5346,18 @@ const AssistantManagerTaskPlanner = () => {
                   }))
                 }
               />
+              <TextInput
+                label="Reminder Minutes Before Start"
+                placeholder="30"
+                description="Send a reminder notification this many minutes before the task start time."
+                value={templateFormState.reminderMinutesBeforeStart}
+                onChange={(event) =>
+                  setTemplateFormState((prev) => ({
+                    ...prev,
+                    reminderMinutesBeforeStart: event.currentTarget.value,
+                  }))
+                }
+              />
               <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
                 <TextInput
                   label="Default Start Time"
@@ -4720,6 +5409,16 @@ const AssistantManagerTaskPlanner = () => {
                   }
                 />
               </SimpleGrid>
+              <Switch
+                label="Notify again at task start time"
+                checked={templateFormState.notifyAtStart}
+                onChange={(event) =>
+                  setTemplateFormState((prev) => ({
+                    ...prev,
+                    notifyAtStart: event.currentTarget.checked,
+                  }))
+                }
+              />
               <Switch
                 label="Require staff to be on shift by default"
                 checked={templateFormState.requireShift}
@@ -5330,6 +6029,124 @@ const AssistantManagerTaskPlanner = () => {
             </Button>
             <Button onClick={handleBulkAssignmentSubmit} loading={bulkAssignmentSubmitting}>
               Assign Selected Templates
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={pushTestModalOpen}
+        onClose={closePushTestModal}
+        title="Send Test Notification"
+        centered
+        size="sm"
+      >
+        <Stack gap="md">
+          <Select
+            label="User"
+            placeholder={activeUsersLoading ? 'Loading active users...' : 'Select user'}
+            searchable
+            clearable={false}
+            data={activeUserOptions}
+            value={pushTestUserId}
+            onChange={(value) => setPushTestUserId(value ?? null)}
+            disabled={activeUsersLoading || pushTestSubmitting}
+            nothingFoundMessage="No active users found"
+          />
+
+          {pushTestError && (
+            <Alert color="red" title="Unable to send test">
+              {pushTestError}
+            </Alert>
+          )}
+          {pushTestSuccess && (
+            <Alert color="green" title="Test sent">
+              {pushTestSuccess}
+            </Alert>
+          )}
+
+          <Group justify="flex-end" gap="sm" wrap="wrap">
+            <Button
+              variant="default"
+              onClick={closePushTestModal}
+              disabled={pushTestSubmitting}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                handleSendPushTestNotification().catch((error) =>
+                  console.error('Failed to send push test notification', error),
+                );
+              }}
+              loading={pushTestSubmitting}
+              disabled={!pushTestUserId || activeUsersLoading}
+            >
+              Send Test Notification
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={syncExistingTasksModalOpen}
+        onClose={closeSyncExistingTasksModal}
+        title={
+          syncExistingTasksTemplate
+            ? `Update Existing Tasks - ${syncExistingTasksTemplate.name}`
+            : 'Update Existing Tasks'
+        }
+        centered
+        size="md"
+        fullScreen={Boolean(isMobile)}
+      >
+        <Stack gap="md">
+          <Alert color="blue" title="Apply Current Template Configuration">
+            {syncExistingTasksTemplate
+              ? 'Pending logs for this template in the selected date range will be updated to match the current template settings.'
+              : 'Pending task logs in the selected date range will be updated to match current template settings.'}
+          </Alert>
+
+          <DatePickerInput
+            type="range"
+            label="Date range"
+            value={syncExistingTasksDateRange}
+            onChange={setSyncExistingTasksDateRange}
+            valueFormat="YYYY-MM-DD"
+            minDate={plannerStartDate ? plannerStartDate.toDate() : undefined}
+          />
+
+          {syncExistingTasksError && (
+            <Alert color="red" title="Unable to update">
+              {syncExistingTasksError}
+            </Alert>
+          )}
+
+          {syncExistingTasksSummary && (
+            <Alert color="green" title="Existing tasks updated">
+              Updated {syncExistingTasksSummary.updatedCount} of{' '}
+              {syncExistingTasksSummary.totalCount} pending tasks. Unchanged:{' '}
+              {syncExistingTasksSummary.unchangedCount}
+              {syncExistingTasksSummary.skippedManualCount > 0
+                ? `, manual skipped: ${syncExistingTasksSummary.skippedManualCount}`
+                : ''}
+              .
+            </Alert>
+          )}
+
+          <Group justify="flex-end" gap="sm" wrap="wrap">
+            <Button
+              variant="default"
+              onClick={closeSyncExistingTasksModal}
+              disabled={syncExistingTasksSubmitting}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSyncExistingTasksSubmit}
+              loading={syncExistingTasksSubmitting}
+            >
+              Update Existing Tasks
             </Button>
           </Group>
         </Stack>

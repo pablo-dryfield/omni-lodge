@@ -39,6 +39,9 @@ const addonKeywordMatchers: Array<{ test: RegExp; field: 'tshirts' | 'cocktails'
   { test: /t-?shirts?|pub\s+crawl\s+t-?shirt/i, field: 'tshirts' },
 ];
 
+const BOTTOMLESS_BRUNCH_PATTERN = /bottomless brunch/i;
+const PUBCRAWL_UPSELL_PATTERN = /\bpub\s*crawl\b|\bpubcrawl\b/i;
+
 const sectionStopMarkers: RegExp[] = [
   /\bMain customer\b/i,
   /\bCustomer language\b/i,
@@ -52,9 +55,14 @@ const sectionStopMarkers: RegExp[] = [
 
 const extractParticipantsAndExtras = (
   text: string,
-): { adults: number | null; extras: { tshirts: number; cocktails: number; photos: number } } => {
+): {
+  adults: number | null;
+  extras: { tshirts: number; cocktails: number; photos: number };
+  pubCrawlUpsellQuantity: number;
+} => {
   const extras = { tshirts: 0, cocktails: 0, photos: 0 };
   let adults: number | null = null;
+  let pubCrawlUpsellQuantity = 0;
   const leadingQuantityPattern =
     /(?:^|[\s,>])(\d+)\s*[xÆ×-]\s*([A-Za-z][^,\n]+?)(?=(?:\s+\d+\s*[xÆ×-]\s*[A-Za-z])|\s+(?:Main customer|Customer language|Tour language|Pickup (?:time|method)|Phone|Language|Price|Open booking|We['’]re here)|$)/gi;
   const trailingQuantityPattern = /([A-Za-z][^,\n]+?)\s*[xÆ×-]\s*(\d+)(?:\s|$)/gi;
@@ -89,6 +97,12 @@ const extractParticipantsAndExtras = (
     if (!label) {
       return;
     }
+
+    const normalizedLabel = label.replace(/\s+/g, ' ').trim();
+    if (PUBCRAWL_UPSELL_PATTERN.test(normalizedLabel) && !/t-?shirt/i.test(normalizedLabel)) {
+      pubCrawlUpsellQuantity += quantity;
+      return;
+    }
     if (adults === null && /\badults?\b/i.test(label)) {
       adults = quantity;
       return;
@@ -106,7 +120,7 @@ const extractParticipantsAndExtras = (
   while ((match = trailingQuantityPattern.exec(text)) !== null) {
     processMatch(match[2], match[1]);
   }
-  return { adults, extras };
+  return { adults, extras, pubCrawlUpsellQuantity };
 };
 
 const mergeExtrasSnapshot = (
@@ -290,6 +304,61 @@ const extractBookingFields = (text: string): BookingFieldPatch => {
   return fields;
 };
 
+const resolvePubCrawlUpsellStartAt = (experienceDate: string | null | undefined): Date | null => {
+  if (!experienceDate || !/^\d{4}-\d{2}-\d{2}$/.test(experienceDate)) {
+    return null;
+  }
+  const parsed = dayjs.tz(`${experienceDate} 21:00`, 'YYYY-MM-DD HH:mm', GETYOURGUIDE_TIMEZONE);
+  return parsed.isValid() ? parsed.toDate() : null;
+};
+
+const buildPubCrawlUpsellEvent = (
+  bookingId: string,
+  sourceBookingFields: BookingFieldPatch,
+  attendeeCount: number,
+  status: BookingStatus,
+  eventType: BookingEventType,
+  paymentStatus: 'paid' | 'unknown',
+  occurredAt: Date | null,
+): ParsedBookingEvent | null => {
+  if (!Number.isFinite(attendeeCount) || attendeeCount <= 0) {
+    return null;
+  }
+
+  const experienceDate = sourceBookingFields.experienceDate ?? null;
+  const experienceStartAt = resolvePubCrawlUpsellStartAt(experienceDate);
+
+  const bookingFields: BookingFieldPatch = {
+    channelId: sourceBookingFields.channelId ?? null,
+    productName: 'Krawl Through Krakow Pub Crawl',
+    guestFirstName: sourceBookingFields.guestFirstName ?? null,
+    guestLastName: sourceBookingFields.guestLastName ?? null,
+    guestEmail: sourceBookingFields.guestEmail ?? null,
+    guestPhone: sourceBookingFields.guestPhone ?? null,
+    partySizeTotal: attendeeCount,
+    partySizeAdults: attendeeCount,
+    experienceDate,
+    experienceStartAt,
+    currency: sourceBookingFields.currency ?? null,
+    priceGross: 0,
+    priceNet: 0,
+    baseAmount: 0,
+  };
+
+  return {
+    platform: 'getyourguide',
+    platformBookingId: `${bookingId}-PUBCRAWL`,
+    platformOrderId: bookingId,
+    eventType,
+    status,
+    paymentStatus,
+    bookingFields,
+    notes: `Generated from GetYourGuide Bottomless Brunch upsell (${attendeeCount} x Pubcrawl).`,
+    occurredAt,
+    sourceReceivedAt: occurredAt,
+  };
+};
+
 const deriveStatusFromContext = (context: BookingParserContext, text: string): BookingStatus => {
   const haystack = `${context.subject ?? ''}\n${text}`.toLowerCase();
   if (/(?:canceled|cancelled|cancellation)/i.test(haystack)) {
@@ -360,6 +429,7 @@ export class GetYourGuideBookingParser implements BookingEmailParser {
     }
 
     const bookingFields = extractBookingFields(text);
+    const participantInfo = extractParticipantsAndExtras(text);
 
     const priceMatch = text.match(/Price\s+([^\s]+)\s*([\d.,]+)/i);
     if (priceMatch) {
@@ -375,6 +445,8 @@ export class GetYourGuideBookingParser implements BookingEmailParser {
 
     const status = deriveStatusFromContext(context, text);
     const eventType = statusToEventType(status);
+    const paymentStatus: 'paid' | 'unknown' = bookingFields.priceGross ? 'paid' : 'unknown';
+    const occurredAt = context.receivedAt ?? context.internalDate ?? null;
 
     const tourLanguageMatch = text.match(/Tour language\s+(.+?)\s+Price/i);
     const customerLanguageMatch = text.match(/Language:\s*([A-Za-z]+)/i);
@@ -391,17 +463,34 @@ export class GetYourGuideBookingParser implements BookingEmailParser {
       notes.push('Email indicates booking was amended/changed.');
     }
 
+    const shouldSpawnPubCrawlUpsell =
+      participantInfo.pubCrawlUpsellQuantity > 0 &&
+      typeof bookingFields.productName === 'string' &&
+      BOTTOMLESS_BRUNCH_PATTERN.test(bookingFields.productName);
+    const pubCrawlSpawnedEvent = shouldSpawnPubCrawlUpsell
+      ? buildPubCrawlUpsellEvent(
+          bookingId,
+          bookingFields,
+          participantInfo.pubCrawlUpsellQuantity,
+          status,
+          eventType,
+          paymentStatus,
+          occurredAt,
+        )
+      : null;
+
     return {
       platform: 'getyourguide',
       platformBookingId: bookingId,
       platformOrderId: bookingId,
       eventType,
       status,
-      paymentStatus: bookingFields.priceGross ? 'paid' : 'unknown',
+      paymentStatus,
       bookingFields,
       notes: notes.length > 0 ? notes.join(' | ') : 'Parsed from GetYourGuide confirmation email.',
-      occurredAt: context.receivedAt ?? context.internalDate ?? null,
-      sourceReceivedAt: context.receivedAt ?? context.internalDate ?? null,
+      occurredAt,
+      sourceReceivedAt: occurredAt,
+      spawnedEvents: pubCrawlSpawnedEvent ? [pubCrawlSpawnedEvent] : undefined,
     };
   }
 }
