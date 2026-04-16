@@ -174,6 +174,19 @@ const validateValue = (definition: ConfigDefinition, raw: string | null): void =
         throw new HttpError(400, `${definition.key} must be a valid cron expression`);
       }
     }
+    if (rules.format === 'date') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        throw new HttpError(400, `${definition.key} must use YYYY-MM-DD`);
+      }
+      const parsed = new Date(`${raw}T00:00:00Z`);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new HttpError(400, `${definition.key} must be a valid date`);
+      }
+      const normalized = parsed.toISOString().slice(0, 10);
+      if (normalized !== raw) {
+        throw new HttpError(400, `${definition.key} must be a valid calendar date`);
+      }
+    }
   }
 };
 

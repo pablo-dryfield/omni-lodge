@@ -836,6 +836,19 @@ const applyParsedEvent = async (
       options.isReprocess && email.messageId
         ? await BookingEvent.findOne({
             where: { emailMessageId: email.messageId },
+            include: [
+              {
+                model: Booking,
+                as: 'booking',
+                required: true,
+                attributes: ['id', 'platform', 'platformBookingId'],
+                where: {
+                  platform: event.platform,
+                  platformBookingId: event.platformBookingId,
+                },
+              },
+            ],
+            order: [['id', 'DESC']],
             transaction,
           })
         : null;

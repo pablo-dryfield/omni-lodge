@@ -28,8 +28,16 @@ dayjs.extend(customParseFormat);
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const DYNAMIC_RULE_TIMEZONE =
-  (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ?? 'Europe/Warsaw';
+const DEFAULT_DYNAMIC_RULE_TIMEZONE = 'Europe/Warsaw';
+
+const resolveDynamicRuleTimezone = (): string => {
+  const configured = getConfigValue('BOOKING_PARSER_TIMEZONE');
+  if (typeof configured !== 'string') {
+    return DEFAULT_DYNAMIC_RULE_TIMEZONE;
+  }
+  const trimmed = configured.trim();
+  return trimmed.length > 0 ? trimmed : DEFAULT_DYNAMIC_RULE_TIMEZONE;
+};
 
 const DATE_ONLY_FORMATS = [
   'YYYY-MM-DD',
@@ -39,6 +47,8 @@ const DATE_ONLY_FORMATS = [
   'MM-DD-YYYY',
   'MMMM D, YYYY',
   'MMM D, YYYY',
+  'D MMMM, YYYY',
+  'D MMM, YYYY',
   'D MMMM YYYY',
   'D MMM YYYY',
 ] as const;
@@ -50,8 +60,16 @@ const DATE_TIME_FORMATS = [
   'YYYY-MM-DDTHH:mm:ss',
   'DD/MM/YYYY HH:mm',
   'DD-MM-YYYY HH:mm',
+  'MMMM D, YYYY H:mm',
+  'MMMM D, YYYY HH:mm',
+  'MMM D, YYYY H:mm',
+  'MMM D, YYYY HH:mm',
   'MMMM D, YYYY h:mm A',
   'MMM D, YYYY h:mm A',
+  'D MMMM, YYYY H:mm',
+  'D MMMM, YYYY HH:mm',
+  'D MMM, YYYY H:mm',
+  'D MMM, YYYY HH:mm',
   'D MMMM YYYY H:mm',
   'D MMM YYYY H:mm',
 ] as const;
@@ -288,66 +306,114 @@ const statusToEventType = (status: BookingStatus): BookingEventType => {
   }
 };
 
-const tryParseInTimezone = (value: string, format?: string): dayjs.Dayjs | null => {
-  try {
-    const parsed = format ? dayjs.tz(value, format, DYNAMIC_RULE_TIMEZONE) : dayjs.tz(value, DYNAMIC_RULE_TIMEZONE);
-    return parsed.isValid() ? parsed : null;
-  } catch {
+const WEEKDAY_PREFIX_REGEX = /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+/i;
+const DATE_LEXICON_ENTRIES: Array<[RegExp, string]> = [
+  [/\bmonday\b/gi, 'Monday'],
+  [/\btuesday\b/gi, 'Tuesday'],
+  [/\bwednesday\b/gi, 'Wednesday'],
+  [/\bthursday\b/gi, 'Thursday'],
+  [/\bfriday\b/gi, 'Friday'],
+  [/\bsaturday\b/gi, 'Saturday'],
+  [/\bsunday\b/gi, 'Sunday'],
+  [/\bjanuary\b/gi, 'January'],
+  [/\bfebruary\b/gi, 'February'],
+  [/\bmarch\b/gi, 'March'],
+  [/\bapril\b/gi, 'April'],
+  [/\bmay\b/gi, 'May'],
+  [/\bjune\b/gi, 'June'],
+  [/\bjuly\b/gi, 'July'],
+  [/\baugust\b/gi, 'August'],
+  [/\bseptember\b/gi, 'September'],
+  [/\boctober\b/gi, 'October'],
+  [/\bnovember\b/gi, 'November'],
+  [/\bdecember\b/gi, 'December'],
+] as const;
+
+const normalizeDateLexicon = (value: string): string => {
+  let normalized = value;
+  for (const [pattern, replacement] of DATE_LEXICON_ENTRIES) {
+    normalized = normalized.replace(pattern, replacement);
+  }
+  return normalized;
+};
+
+const sanitizeDateToken = (value: string): string =>
+  normalizeDateLexicon(value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim());
+
+const stripWeekdayPrefix = (value: string): string => value.replace(WEEKDAY_PREFIX_REGEX, '').trim();
+
+const parseInTimezoneUsingFormats = (
+  value: string,
+  formats: readonly string[],
+): dayjs.Dayjs | null => {
+  const timezone = resolveDynamicRuleTimezone();
+  const token = sanitizeDateToken(value);
+  if (!token) {
     return null;
   }
+
+  const candidates = [token];
+  const withoutWeekday = stripWeekdayPrefix(token);
+  if (withoutWeekday && withoutWeekday !== token) {
+    candidates.push(withoutWeekday);
+  }
+
+  for (const candidate of candidates) {
+    for (const format of formats) {
+      const naive = dayjs(candidate, format, true);
+      if (!naive.isValid()) {
+        continue;
+      }
+      const zoned = naive.tz(timezone, true);
+      if (zoned.isValid()) {
+        return zoned;
+      }
+    }
+  }
+
+  return null;
 };
 
 const normalizeMeridiemToken = (value: string): string =>
   value.replace(/\b(am|pm)\b/gi, (match) => match.toUpperCase());
 
 const normalizeDateOnly = (value: string): string | null => {
-  const token = value.trim();
+  const token = sanitizeDateToken(value);
   if (!token) {
     return null;
   }
 
-  for (const format of DATE_ONLY_FORMATS) {
-    const parsed = tryParseInTimezone(token, format);
-    if (parsed) {
-      return parsed.format('YYYY-MM-DD');
-    }
-  }
-
-  const zonedFallback = tryParseInTimezone(token);
-  if (zonedFallback) {
-    return zonedFallback.format('YYYY-MM-DD');
+  const parsedByFormat = parseInTimezoneUsingFormats(token, DATE_ONLY_FORMATS);
+  if (parsedByFormat) {
+    return parsedByFormat.format('YYYY-MM-DD');
   }
 
   const fallback = dayjs(token);
   if (!fallback.isValid()) {
     return null;
   }
-  return fallback.format('YYYY-MM-DD');
+
+  const fallbackDateStamp = fallback.format('YYYY-MM-DD');
+  const normalizedFallback = parseInTimezoneUsingFormats(fallbackDateStamp, ['YYYY-MM-DD']);
+  return normalizedFallback ? normalizedFallback.format('YYYY-MM-DD') : fallbackDateStamp;
 };
 
 const normalizeDateTime = (value: string, fallbackDate?: string | null): Date | null => {
-  const token = normalizeMeridiemToken(
+  const token = sanitizeDateToken(normalizeMeridiemToken(
     value
-    .replace(/\b(?:date|hour|time)\s*:\s*/gi, ' ')
-    .replace(/\([^)]*\)/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim(),
-  );
+      .replace(/\b(?:date|hour|time)\s*:\s*/gi, ' ')
+      .replace(/\([^)]*\)/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim(),
+  ));
   if (!token) {
     return null;
   }
   const normalizedFallbackDate = normalizeDateOnly(fallbackDate ?? '');
 
-  for (const format of DATE_TIME_FORMATS) {
-    const parsed = tryParseInTimezone(token, format);
-    if (parsed) {
-      return parsed.toDate();
-    }
-  }
-
-  const zonedFallback = tryParseInTimezone(token);
-  if (zonedFallback) {
-    return zonedFallback.toDate();
+  const parsedByFormat = parseInTimezoneUsingFormats(token, DATE_TIME_FORMATS);
+  if (parsedByFormat) {
+    return parsedByFormat.toDate();
   }
 
   const timeOnlyToken = token.match(/^(\d{1,2}:\d{2}(?:\s*[AP]M)?)$/i)?.[1] ?? null;
@@ -355,7 +421,7 @@ const normalizeDateTime = (value: string, fallbackDate?: string | null): Date | 
     const normalizedTime = normalizeMeridiemToken(timeOnlyToken).replace(/\s+/g, ' ').trim();
     for (const timeFormat of TIME_ONLY_FORMATS) {
       const combined = `${normalizedFallbackDate} ${normalizedTime}`;
-      const parsed = tryParseInTimezone(combined, `YYYY-MM-DD ${timeFormat}`);
+      const parsed = parseInTimezoneUsingFormats(combined, [`YYYY-MM-DD ${timeFormat}`]);
       if (parsed) {
         return parsed.toDate();
       }
@@ -364,7 +430,11 @@ const normalizeDateTime = (value: string, fallbackDate?: string | null): Date | 
 
   const fallback = dayjs(token);
   if (fallback.isValid()) {
-    return fallback.toDate();
+    const fallbackWallClock = fallback.format('YYYY-MM-DD HH:mm:ss');
+    const normalizedFallback = parseInTimezoneUsingFormats(fallbackWallClock, ['YYYY-MM-DD HH:mm:ss']);
+    if (normalizedFallback) {
+      return normalizedFallback.toDate();
+    }
   }
   return null;
 };

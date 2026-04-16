@@ -55,6 +55,7 @@
         "@types/node-cron": "^3.0.11",
         "@types/nodemailer": "^7.0.3",
         "@types/sequelize": "^4.28.20",
+        "@types/web-push": "^3.6.4",
         "axios": "^1.11.0",
         "bcryptjs": "^2.4.3",
         "cls-hooked": "^4.2.2",
@@ -84,6 +85,7 @@
         "stripe": "^20.1.1",
         "typescript": "^5.3.3",
         "umzug": "^3.4.1",
+        "web-push": "^3.6.7",
         "winston": "^3.10.0"
     },
     "devDependencies": {

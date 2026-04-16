@@ -75,6 +75,7 @@ import CompensationComponentAssignment from "../models/CompensationComponentAssi
 import AssistantManagerTaskTemplate from "../models/AssistantManagerTaskTemplate.js";
 import AssistantManagerTaskAssignment from "../models/AssistantManagerTaskAssignment.js";
 import AssistantManagerTaskLog from "../models/AssistantManagerTaskLog.js";
+import AssistantManagerTaskPushSubscription from "../models/AssistantManagerTaskPushSubscription.js";
 import OpenBarIngredient from "../models/OpenBarIngredient.js";
 import OpenBarIngredientCategory from "../models/OpenBarIngredientCategory.js";
 import OpenBarIngredientVariant from "../models/OpenBarIngredientVariant.js";
@@ -159,6 +160,7 @@ const sequelize = new Sequelize({
     AssistantManagerTaskTemplate,
     AssistantManagerTaskAssignment,
     AssistantManagerTaskLog,
+    AssistantManagerTaskPushSubscription,
     OpenBarIngredient,
     OpenBarIngredientCategory,
     OpenBarIngredientVariant,

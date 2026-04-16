@@ -74,6 +74,7 @@ import CompensationComponentAssignment from './CompensationComponentAssignment.j
 import AssistantManagerTaskTemplate from './AssistantManagerTaskTemplate.js';
 import AssistantManagerTaskAssignment from './AssistantManagerTaskAssignment.js';
 import AssistantManagerTaskLog from './AssistantManagerTaskLog.js';
+import AssistantManagerTaskPushSubscription from './AssistantManagerTaskPushSubscription.js';
 import OpenBarIngredient from './OpenBarIngredient.js';
 import OpenBarRecipe from './OpenBarRecipe.js';
 import OpenBarRecipeIngredient from './OpenBarRecipeIngredient.js';
@@ -191,6 +192,14 @@ export function defineAssociations() {
   AssistantManagerTaskAssignment.belongsTo(ShiftRole, { foreignKey: 'shift_role_id', as: 'assignmentShiftRole' });
   User.hasMany(AssistantManagerTaskLog, { foreignKey: 'user_id', as: 'assistantManagerTaskLogs' });
   AssistantManagerTaskLog.belongsTo(User, { foreignKey: 'user_id', as: 'logUser' });
+  User.hasMany(AssistantManagerTaskPushSubscription, {
+    foreignKey: 'user_id',
+    as: 'assistantManagerTaskPushSubscriptions',
+  });
+  AssistantManagerTaskPushSubscription.belongsTo(User, {
+    foreignKey: 'user_id',
+    as: 'assistantManagerTaskPushSubscriptionUser',
+  });
 
   // Product Associations
   Product.belongsTo(ProductType, { foreignKey: 'productTypeId' });

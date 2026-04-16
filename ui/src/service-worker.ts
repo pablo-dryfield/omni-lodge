@@ -48,3 +48,81 @@ self.addEventListener('message', (event) => {
     self.skipWaiting();
   }
 });
+
+self.addEventListener('push', (event) => {
+  const payload = (() => {
+    if (!event.data) {
+      return {};
+    }
+    try {
+      return event.data.json() as Record<string, unknown>;
+    } catch {
+      return {
+        title: 'Task reminder',
+        body: event.data.text(),
+      };
+    }
+  })();
+
+  const title =
+    typeof payload.title === 'string' && payload.title.trim()
+      ? payload.title.trim()
+      : 'Task reminder';
+  const body =
+    typeof payload.body === 'string' && payload.body.trim()
+      ? payload.body.trim()
+      : 'You have a pending task to complete.';
+  const targetUrl =
+    typeof payload.url === 'string' && payload.url.trim()
+      ? payload.url.trim()
+      : '/assistant-manager-tasks?section=dashboard';
+  const tag =
+    typeof payload.tag === 'string' && payload.tag.trim()
+      ? payload.tag.trim()
+      : 'am-task-reminder';
+  const renotify = payload.renotify === true;
+  const requireInteraction = payload.requireInteraction === true;
+  const silent = payload.silent === true;
+
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      tag,
+      renotify,
+      requireInteraction,
+      silent,
+      data: {
+        targetUrl,
+      },
+      badge: `${process.env.PUBLIC_URL ?? ''}/logo192.png`,
+      icon: `${process.env.PUBLIC_URL ?? ''}/logo192.png`,
+    }),
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const notificationData = event.notification.data as
+    | { targetUrl?: string }
+    | undefined;
+  const targetUrl =
+    notificationData?.targetUrl && notificationData.targetUrl.trim()
+      ? notificationData.targetUrl
+      : '/assistant-manager-tasks?section=dashboard';
+
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      const matchingClient = clients.find((client) => {
+        const url = new URL(client.url);
+        return url.pathname === '/assistant-manager-tasks';
+      });
+
+      if (matchingClient) {
+        matchingClient.navigate(targetUrl).catch(() => undefined);
+        return matchingClient.focus();
+      }
+
+      return self.clients.openWindow(targetUrl);
+    }),
+  );
+});
