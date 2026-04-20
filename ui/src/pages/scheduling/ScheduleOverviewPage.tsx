@@ -368,7 +368,7 @@ const getUserColor = (
 
 const ISO_WEEK_VALUE_REGEX = /^(\d{4})-W(\d{1,2})$/;
 
-const ensureIsoWeekString = (value: Dayjs | string) => {
+const ensureIsoWeekString = (value: Dayjs | string): string => {
   if (typeof value === "string") {
     const trimmed = value.trim();
     const match = ISO_WEEK_VALUE_REGEX.exec(trimmed);

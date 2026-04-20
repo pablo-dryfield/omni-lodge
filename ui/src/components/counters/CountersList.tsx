@@ -12,7 +12,8 @@ import { type MRT_ColumnDef, MRT_Row } from "mantine-react-table";
 import { removeEmptyKeys } from "../../utils/removeEmptyKeys";
 import { getChangedValues } from "../../utils/getChangedValues";
 import { CounterProduct } from "../../types/counterProducts/CounterProduct";
-import { Box, Grid, Paper, Typography } from "@mui/material";
+import { Box, Paper, Typography } from "@mui/material";
+import Grid from "@mui/material/GridLegacy";
 import { Product } from "../../types/products/Product";
 import { CounterUser } from "../../types/counterUsers/CounterUser";
 

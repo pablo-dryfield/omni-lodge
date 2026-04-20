@@ -8823,7 +8823,7 @@ const getColumnLabel = useCallback(
     if (!selectedDerivedField || derivedFieldDraft.error) {
       return;
     }
-    let parsed;
+    let parsed: ReturnType<typeof parseDerivedFieldExpression>;
     try {
       parsed = parseDerivedFieldExpression(derivedFieldDraft.expression);
     } catch (error) {

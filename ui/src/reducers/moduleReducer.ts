@@ -62,9 +62,10 @@ const moduleSlice = createSlice({
       })
       .addCase(updateModule.fulfilled, (state, action: PayloadAction<Partial<Module> | undefined>) => {
         state[0].loading = false;
-        if (action.payload?.id !== undefined) {
+        const payload = action.payload;
+        if (payload && payload.id !== undefined) {
           state[0].data[0].data = state[0].data[0].data.map((moduleRecord) =>
-            moduleRecord.id === action.payload?.id ? action.payload : moduleRecord
+            moduleRecord.id === payload.id ? payload : moduleRecord
           );
         }
         state[0].error = null;

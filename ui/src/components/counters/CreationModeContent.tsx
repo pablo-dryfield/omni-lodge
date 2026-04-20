@@ -4,7 +4,8 @@ import { fetchActiveProducts } from '../../actions/productActions';
 import { fetchActiveUsers } from '../../actions/userActions';
 import { Product } from '../../types/products/Product';
 import { User } from '../../types/users/User';
-import { Button, Grid, Typography, Paper, Box, IconButton, MenuItem, Select } from '@mui/material';
+import { Button, Typography, Paper, Box, IconButton, MenuItem, Select } from '@mui/material';
+import Grid from '@mui/material/GridLegacy';
 import RemoveIcon from '@mui/icons-material/Remove';
 import AddIcon from '@mui/icons-material/Add';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -169,7 +170,7 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
                     <Grid item xs={12} sm={6} md={4} key={id}>
                         <CounterCard
                         productId={id}
-                        productTypeId={productTypeId}
+                        productTypeId={productTypeId ?? 0}
                         name={name}
                         normalCount={0}
                         cocktailCount={0}

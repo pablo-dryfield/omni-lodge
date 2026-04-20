@@ -29,16 +29,18 @@ const coerceProductAddonPayload = (
   { forCreate = false }: { forCreate?: boolean } = {},
 ): Partial<ProductAddon> => {
   const next: Partial<ProductAddon> = {};
+  const hasValue = (value: unknown): boolean =>
+    value !== undefined && value !== null && String(value).trim() !== "";
 
-  if (payload.productId !== undefined && payload.productId !== null && payload.productId !== "") {
+  if (hasValue(payload.productId)) {
     next.productId = Number(payload.productId);
   }
-  if (payload.addonId !== undefined && payload.addonId !== null && payload.addonId !== "") {
+  if (hasValue(payload.addonId)) {
     next.addonId = Number(payload.addonId);
   }
 
   if (payload.maxPerAttendee !== undefined) {
-    if (payload.maxPerAttendee === null || payload.maxPerAttendee === "") {
+    if (payload.maxPerAttendee === null || String(payload.maxPerAttendee).trim() === "") {
       next.maxPerAttendee = null;
     } else {
       next.maxPerAttendee = Number(payload.maxPerAttendee);
@@ -46,7 +48,7 @@ const coerceProductAddonPayload = (
   }
 
   if (payload.priceOverride !== undefined) {
-    if (payload.priceOverride === null || payload.priceOverride === "") {
+    if (payload.priceOverride === null || String(payload.priceOverride).trim() === "") {
       next.priceOverride = null;
     } else {
       next.priceOverride = Number(payload.priceOverride);
@@ -54,7 +56,7 @@ const coerceProductAddonPayload = (
   }
 
   if (payload.sortOrder !== undefined) {
-    if (payload.sortOrder === "" || payload.sortOrder === null) {
+    if (payload.sortOrder === null || String(payload.sortOrder).trim() === "") {
       if (forCreate) {
         next.sortOrder = 0;
       }

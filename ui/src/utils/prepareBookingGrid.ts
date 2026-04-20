@@ -59,7 +59,11 @@ const ensureProductDates = (
 const sortTimeslots = (grid: BookingGrid): void => {
   Object.values(grid).forEach((dateMap) => {
     Object.values(dateMap).forEach((cells) => {
-      cells.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
+      cells.sort((a, b) => {
+        const timeA = a.time ?? '';
+        const timeB = b.time ?? '';
+        return timeA < timeB ? -1 : timeA > timeB ? 1 : 0;
+      });
     });
   });
 };
@@ -119,7 +123,7 @@ export function prepareBookingGrid(
     cell.menCount += menCount;
     cell.womenCount += womenCount;
     cell.undefinedCount += undefinedCount;
-    cell.orders.push({ ...order, timeslot: displayTime ?? undefined });
+    cell.orders.push({ ...order, timeslot: displayTime ?? order.timeslot });
   });
 
   sortTimeslots(grid);

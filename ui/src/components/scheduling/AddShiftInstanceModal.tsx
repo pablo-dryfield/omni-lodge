@@ -100,10 +100,10 @@ const AddShiftInstanceModal = ({
           <TimeInput
             label="Start time"
             value={timeStart}
-            onChange={(value) => setTimeStart(value ?? "")}
+            onChange={(event) => setTimeStart(event.currentTarget.value)}
             required
           />
-          <TimeInput label="End time" value={timeEnd} onChange={(value) => setTimeEnd(value ?? "")} />
+          <TimeInput label="End time" value={timeEnd} onChange={(event) => setTimeEnd(event.currentTarget.value)} />
         </Group>
         <NumberInput
           label="Capacity"

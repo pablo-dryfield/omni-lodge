@@ -28,8 +28,6 @@ const coerceActionPayload = (payload: Partial<Action>): Partial<Action> => {
   if (typeof next.description === "string") {
     const trimmed = next.description.trim();
     next.description = trimmed.length === 0 ? null : trimmed;
-  } else if (next.description === "") {
-    next.description = null;
   }
 
   if (next.isAssignable !== undefined && next.isAssignable !== null) {

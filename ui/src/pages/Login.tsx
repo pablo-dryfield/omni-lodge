@@ -618,6 +618,84 @@ const LoginPage: React.FC = () => {
     }
   };
 
+  const updateWhatsappFromParts = (code: string, digits: string) => {
+    const cleaned = digits.replace(/\D/g, '');
+    if (cleaned.length === 0) {
+      setWhatsappHandle('');
+      return '';
+    }
+    const full = buildPhoneFromParts(code, cleaned);
+    setWhatsappHandle(full);
+    return full;
+  };
+
+  const handleWhatsappSameToggle = (checked: boolean) => {
+    setUseSameWhatsappNumber(checked);
+    if (checked) {
+      setWhatsappHandle(phone);
+      setWhatsappPhoneError(null);
+      return;
+    }
+    const parts = splitPhoneNumber(whatsappHandle || phone);
+    setWhatsappCountryCode(parts.code);
+    setWhatsappLocalNumber(parts.digits);
+    if (parts.digits.length === 0) {
+      setWhatsappHandle('');
+      setWhatsappPhoneError('WhatsApp number is required');
+    } else {
+      const full = buildPhoneFromParts(parts.code, parts.digits);
+      setWhatsappHandle(full);
+      setWhatsappPhoneError(
+        isPhoneNumberValid(normalizePhoneNumber(full)) ? null : 'Enter a valid phone number',
+      );
+    }
+  };
+
+  const handleWhatsappCountryCodeChange = (code: string) => {
+    setWhatsappCountryCode(code);
+    if (useSameWhatsappNumber) {
+      return;
+    }
+    if (whatsappLocalNumber.length === 0) {
+      setWhatsappHandle('');
+      return;
+    }
+    const full = updateWhatsappFromParts(code, whatsappLocalNumber);
+    setWhatsappPhoneError(
+      isPhoneNumberValid(normalizePhoneNumber(full)) ? null : 'Enter a valid phone number',
+    );
+  };
+
+  const handleWhatsappLocalNumberChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const digitsOnly = event.target.value.replace(/\D/g, '');
+    setWhatsappLocalNumber(digitsOnly);
+    if (useSameWhatsappNumber) {
+      return;
+    }
+    if (digitsOnly.length === 0) {
+      setWhatsappHandle('');
+      setWhatsappPhoneError('WhatsApp number is required');
+      return;
+    }
+    const full = updateWhatsappFromParts(whatsappCountryCode, digitsOnly);
+    setWhatsappPhoneError(
+      isPhoneNumberValid(normalizePhoneNumber(full)) ? null : 'Enter a valid phone number',
+    );
+  };
+
+  const handleWhatsappBlur = () => {
+    if (useSameWhatsappNumber) {
+      return;
+    }
+    if (whatsappLocalNumber.length === 0) {
+      setWhatsappPhoneError('WhatsApp number is required');
+      return;
+    }
+    if (!isPhoneNumberValid(normalizePhoneNumber(whatsappHandle))) {
+      setWhatsappPhoneError('Enter a valid phone number');
+    }
+  };
+
 
   const handleEmergencyEmailChange = (event: ChangeEvent<HTMLInputElement>) => {
     const value = event.target.value;
@@ -1281,80 +1359,3 @@ const sanitize = (value: string) => {
   );
 };
 export default LoginPage;
-  const updateWhatsappFromParts = (code: string, digits: string) => {
-    const cleaned = digits.replace(/\D/g, '');
-    if (cleaned.length === 0) {
-      setWhatsappHandle('');
-      return '';
-    }
-    const full = buildPhoneFromParts(code, cleaned);
-    setWhatsappHandle(full);
-    return full;
-  };
-
-  const handleWhatsappSameToggle = (checked: boolean) => {
-    setUseSameWhatsappNumber(checked);
-    if (checked) {
-      setWhatsappHandle(phone);
-      setWhatsappPhoneError(null);
-      return;
-    }
-    const parts = splitPhoneNumber(whatsappHandle || phone);
-    setWhatsappCountryCode(parts.code);
-    setWhatsappLocalNumber(parts.digits);
-    if (parts.digits.length === 0) {
-      setWhatsappHandle('');
-      setWhatsappPhoneError('WhatsApp number is required');
-    } else {
-      const full = buildPhoneFromParts(parts.code, parts.digits);
-      setWhatsappHandle(full);
-      setWhatsappPhoneError(
-        isPhoneNumberValid(normalizePhoneNumber(full)) ? null : 'Enter a valid phone number',
-      );
-    }
-  };
-
-  const handleWhatsappCountryCodeChange = (code: string) => {
-    setWhatsappCountryCode(code);
-    if (useSameWhatsappNumber) {
-      return;
-    }
-    if (whatsappLocalNumber.length === 0) {
-      setWhatsappHandle('');
-      return;
-    }
-    const full = updateWhatsappFromParts(code, whatsappLocalNumber);
-    setWhatsappPhoneError(
-      isPhoneNumberValid(normalizePhoneNumber(full)) ? null : 'Enter a valid phone number',
-    );
-  };
-
-  const handleWhatsappLocalNumberChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const digitsOnly = event.target.value.replace(/\D/g, '');
-    setWhatsappLocalNumber(digitsOnly);
-    if (useSameWhatsappNumber) {
-      return;
-    }
-    if (digitsOnly.length === 0) {
-      setWhatsappHandle('');
-      setWhatsappPhoneError('WhatsApp number is required');
-      return;
-    }
-    const full = updateWhatsappFromParts(whatsappCountryCode, digitsOnly);
-    setWhatsappPhoneError(
-      isPhoneNumberValid(normalizePhoneNumber(full)) ? null : 'Enter a valid phone number',
-    );
-  };
-
-  const handleWhatsappBlur = () => {
-    if (useSameWhatsappNumber) {
-      return;
-    }
-    if (whatsappLocalNumber.length === 0) {
-      setWhatsappPhoneError('WhatsApp number is required');
-      return;
-    }
-    if (!isPhoneNumberValid(normalizePhoneNumber(whatsappHandle))) {
-      setWhatsappPhoneError('Enter a valid phone number');
-    }
-  };

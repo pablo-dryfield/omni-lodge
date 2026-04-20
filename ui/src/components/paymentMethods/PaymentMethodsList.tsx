@@ -27,8 +27,6 @@ const coercePaymentMethodPayload = (payload: Partial<PaymentMethod>): Partial<Pa
     if (typeof next.description === "string") {
       const trimmed = next.description.trim();
       next.description = trimmed.length === 0 ? null : trimmed;
-    } else if (next.description === "") {
-      next.description = null;
     }
   }
 

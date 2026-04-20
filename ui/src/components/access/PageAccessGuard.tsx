@@ -52,7 +52,7 @@ const defaultDenied = (
   </AlertShell>
 );
 
-export const PageAccessGuard = ({ pageSlug, children, fallback }: PageAccessGuardProps) => {
+export const PageAccessGuard = ({ pageSlug, children, fallback }: PageAccessGuardProps): JSX.Element => {
   const { loading, loaded, error } = useAppSelector((state) => state.accessControl);
   const selector = useMemo(() => makeSelectIsPageAllowed(pageSlug), [pageSlug]);
   const allowed = useAppSelector(selector);
@@ -66,11 +66,11 @@ export const PageAccessGuard = ({ pageSlug, children, fallback }: PageAccessGuar
       );
     }
 
-    return fallback ?? defaultUnavailable(error ?? undefined);
+    return <>{fallback ?? defaultUnavailable(error ?? undefined)}</>;
   }
 
   if (!allowed) {
-    return fallback ?? defaultDenied;
+    return <>{fallback ?? defaultDenied}</>;
   }
 
   return <>{children}</>;
