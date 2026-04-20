@@ -25,22 +25,24 @@ type ChannelCommissionListProps = {
 
 const normalizeCommissionPayload = (payload: Partial<ChannelCommission>) => {
   const next: Partial<ChannelCommission> = {};
+  const hasValue = (value: unknown): boolean =>
+    value !== undefined && value !== null && String(value).trim() !== "";
 
-  if (payload.channelId !== undefined && payload.channelId !== null && payload.channelId !== "") {
+  if (hasValue(payload.channelId)) {
     next.channelId = Number(payload.channelId);
   }
 
-  if (payload.rate !== undefined && payload.rate !== null && payload.rate !== "") {
+  if (hasValue(payload.rate)) {
     next.rate = Number(payload.rate);
   }
 
-  if (payload.validFrom !== undefined && payload.validFrom !== null && payload.validFrom !== "") {
+  if (hasValue(payload.validFrom)) {
     next.validFrom = dayjs(payload.validFrom).format("YYYY-MM-DD");
   }
 
   if (payload.validTo !== undefined) {
     next.validTo =
-      payload.validTo === null || payload.validTo === ""
+      payload.validTo === null || String(payload.validTo).trim() === ""
         ? null
         : dayjs(payload.validTo).format("YYYY-MM-DD");
   }

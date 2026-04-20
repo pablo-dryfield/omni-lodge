@@ -25,22 +25,24 @@ type ProductPriceListProps = {
 
 const normalizeProductPricePayload = (payload: Partial<ProductPrice>) => {
   const next: Partial<ProductPrice> = {};
+  const hasValue = (value: unknown): boolean =>
+    value !== undefined && value !== null && String(value).trim() !== "";
 
-  if (payload.productId !== undefined && payload.productId !== null && payload.productId !== "") {
+  if (hasValue(payload.productId)) {
     next.productId = Number(payload.productId);
   }
 
-  if (payload.price !== undefined && payload.price !== null && payload.price !== "") {
+  if (hasValue(payload.price)) {
     next.price = Number(payload.price);
   }
 
-  if (payload.validFrom !== undefined && payload.validFrom !== null && payload.validFrom !== "") {
+  if (hasValue(payload.validFrom)) {
     next.validFrom = dayjs(payload.validFrom).format("YYYY-MM-DD");
   }
 
   if (payload.validTo !== undefined) {
     next.validTo =
-      payload.validTo === null || payload.validTo === ""
+      payload.validTo === null || String(payload.validTo).trim() === ""
         ? null
         : dayjs(payload.validTo).format("YYYY-MM-DD");
   }

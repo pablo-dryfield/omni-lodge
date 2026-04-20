@@ -28,37 +28,39 @@ type ChannelProductPriceListProps = {
 const normalizeChannelProductPricePayload = (payload: Partial<ChannelProductPrice>) => {
   const next: Partial<ChannelProductPrice> = {};
   const allowedTicketTypes = new Set<string>(WALK_IN_TICKET_TYPE_VALUES);
+  const hasValue = (value: unknown): boolean =>
+    value !== undefined && value !== null && String(value).trim() !== "";
 
-  if (payload.channelId !== undefined && payload.channelId !== null && payload.channelId !== "") {
+  if (hasValue(payload.channelId)) {
     next.channelId = Number(payload.channelId);
   }
 
-  if (payload.productId !== undefined && payload.productId !== null && payload.productId !== "") {
+  if (hasValue(payload.productId)) {
     next.productId = Number(payload.productId);
   }
 
-  if (payload.price !== undefined && payload.price !== null && payload.price !== "") {
+  if (hasValue(payload.price)) {
     next.price = Number(payload.price);
   }
 
-  if (payload.ticketType !== undefined && payload.ticketType !== null && payload.ticketType !== "") {
+  if (hasValue(payload.ticketType)) {
     const normalizedTicketType = String(payload.ticketType).trim().toLowerCase();
     if (allowedTicketTypes.has(normalizedTicketType)) {
       next.ticketType = normalizedTicketType;
     }
   }
 
-  if (payload.currencyCode !== undefined && payload.currencyCode !== null && payload.currencyCode !== "") {
+  if (hasValue(payload.currencyCode)) {
     next.currencyCode = String(payload.currencyCode).trim().toUpperCase().slice(0, 3);
   }
 
-  if (payload.validFrom !== undefined && payload.validFrom !== null && payload.validFrom !== "") {
+  if (hasValue(payload.validFrom)) {
     next.validFrom = dayjs(payload.validFrom).format("YYYY-MM-DD");
   }
 
   if (payload.validTo !== undefined) {
     next.validTo =
-      payload.validTo === null || payload.validTo === ""
+      payload.validTo === null || String(payload.validTo).trim() === ""
         ? null
         : dayjs(payload.validTo).format("YYYY-MM-DD");
   }

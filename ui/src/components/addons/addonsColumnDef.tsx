@@ -5,14 +5,14 @@ import { Addon } from "../../types/addons/Addon";
 import CustomEditSwitch from "../../utils/CustomEditSwitch";
 import { resolveHeaderLabel } from "../../utils/resolveHeaderLabel";
 
-const formatNumber = (value: unknown) => {
+const formatNumber = (value: unknown): string => {
   if (value === null || value === undefined || value === "") {
     return "";
   }
 
   const numeric = Number(value);
   if (Number.isNaN(numeric)) {
-    return value;
+    return String(value);
   }
 
   return numeric.toFixed(2);

@@ -67,9 +67,10 @@ const rolePagePermissionSlice = createSlice({
         updateRolePagePermission.fulfilled,
         (state, action: PayloadAction<Partial<RolePagePermission> | undefined>) => {
           state[0].loading = false;
-          if (action.payload?.id !== undefined) {
+          const payload = action.payload;
+          if (payload && payload.id !== undefined) {
             state[0].data[0].data = state[0].data[0].data.map((record) =>
-              record.id === action.payload?.id ? action.payload : record
+              record.id === payload.id ? payload : record
             );
           }
           state[0].error = null;

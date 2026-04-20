@@ -135,7 +135,7 @@ const Table = <T extends object>({
       showAlertBanner: Boolean(error),
       showProgressBars: loading,
     },
-    renderAlertBannerContent: () => (
+    renderToolbarAlertBannerContent: () => (
       <Alert color="red" title="Error">
         {error}
       </Alert>

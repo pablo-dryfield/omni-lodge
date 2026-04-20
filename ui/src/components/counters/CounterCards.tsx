@@ -1,5 +1,6 @@
 import React from 'react';
-import { Paper, Grid, Typography, Box, IconButton } from '@mui/material';
+import { Paper, Typography, Box, IconButton } from '@mui/material';
+import Grid from '@mui/material/GridLegacy';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 

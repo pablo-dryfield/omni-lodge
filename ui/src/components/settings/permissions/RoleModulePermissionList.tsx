@@ -106,7 +106,7 @@ const RoleModulePermissionList = ({ pageTitle }: { pageTitle?: string }) => {
     const map = new Map<number, string>();
     userTypeRecords.forEach((role) => {
       if (typeof role.id === "number") {
-        map.set(role.id, role.name ?? role.slug ?? `Role ${role.id}`);
+        map.set(role.id, role.name ?? `Role ${role.id}`);
       }
     });
     return map;

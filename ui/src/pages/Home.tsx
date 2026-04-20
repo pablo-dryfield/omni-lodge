@@ -383,8 +383,9 @@ const resolveVisualDateRange = (
     return overrideRange;
   }
   const activeDateFilter = dateFilterOverride ?? config.dateFilter ?? null;
-  if (activeDateFilter && Array.isArray(config.queryConfig?.filters)) {
-    const match = config.queryConfig.filters.find(
+  const queryFilters = config.queryConfig?.filters;
+  if (activeDateFilter && Array.isArray(queryFilters)) {
+    const match = queryFilters.find(
       (filter) => filter.modelId === activeDateFilter.modelId && filter.fieldId === activeDateFilter.fieldId,
     );
     const filterRange = extractFilterRange(match);
@@ -3407,7 +3408,13 @@ const Home = (props: GenericPageProps) => {
   }, [buildBulkRequestId, bulkCacheVersion, cardHydrationDescriptors, refreshNonce, refreshTargetsSet]);
 
   const previewTableDescriptors = useMemo(
-    () => cardHydrationDescriptors.filter((descriptor) => descriptor.mode === "preview_table"),
+    () =>
+      cardHydrationDescriptors.filter(
+        (
+          descriptor,
+        ): descriptor is Extract<CardHydrationDescriptor, { mode: "preview_table" }> =>
+          descriptor.mode === "preview_table",
+      ),
     [cardHydrationDescriptors],
   );
   const previewTableQueries = useQueries({

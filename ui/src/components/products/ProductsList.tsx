@@ -114,7 +114,7 @@ const ProductList = ({ moduleSlug = DEFAULT_MODULE_SLUG, pageTitle }: ProductsLi
     const map = new Map<number, string>();
     productTypeRecords.forEach((record) => {
       if (typeof record.id === "number") {
-        map.set(record.id, record.name ?? record.slug ?? `Type ${record.id}`);
+        map.set(record.id, record.name ?? `Type ${record.id}`);
       }
     });
     return map;

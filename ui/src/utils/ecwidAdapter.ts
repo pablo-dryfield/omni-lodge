@@ -256,6 +256,7 @@ export const transformEcwidOrders = (ecwidOrders: EcwidOrder[]) => {
         customerName: order.shippingPerson?.name ?? order.billingPerson?.name ?? "",
         customerPhone: order.shippingPerson?.phone ?? order.billingPerson?.phone,
         platform: "ecwid",
+        status: "confirmed",
         pickupDateTime: pickupMoment?.toISOString(),
         rawData: { order, item },
       });

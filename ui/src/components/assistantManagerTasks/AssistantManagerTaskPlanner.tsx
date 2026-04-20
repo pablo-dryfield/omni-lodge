@@ -452,10 +452,11 @@ const splitDelimitedValues = (value: string) =>
 const normalizeEvidenceRule = (
   rule: AssistantManagerTaskEvidenceRule,
 ): AssistantManagerTaskEvidenceRule => {
+  const match = rule.match ?? null;
   const multiple = rule.multiple === true;
   const required = rule.required !== false;
-  const hosts = Array.isArray(rule.match?.hosts) ? rule.match.hosts : [];
-  const contains = Array.isArray(rule.match?.contains) ? rule.match.contains : [];
+  const hosts: string[] = Array.isArray(match?.hosts) ? (match!.hosts as string[]) : [];
+  const contains: string[] = Array.isArray(match?.contains) ? (match!.contains as string[]) : [];
   const minItemsValue =
     rule.minItems == null || rule.minItems === undefined ? (required ? 1 : 0) : Number(rule.minItems);
   const maxItemsValue =
@@ -479,8 +480,8 @@ const normalizeEvidenceRule = (
         ? {
             hosts: hosts.map((entry) => entry.trim()).filter(Boolean),
             contains: contains.map((entry) => entry.trim()).filter(Boolean),
-            regex: typeof rule.match?.regex === 'string' && rule.match.regex.trim()
-              ? rule.match.regex.trim()
+            regex: typeof match?.regex === 'string' && match.regex.trim()
+              ? match.regex.trim()
               : null,
           }
         : null,
@@ -593,11 +594,12 @@ const getAdvancedScheduleConfigText = (template?: AssistantManagerTaskTemplate |
 };
 
 const getNormalizedEvidenceItems = (meta?: AssistantManagerTaskLogMeta | null): AssistantManagerTaskEvidenceItem[] => {
-  if (!Array.isArray(meta?.evidenceItems)) {
+  const evidenceItems = meta?.evidenceItems;
+  if (!Array.isArray(evidenceItems)) {
     return [];
   }
 
-  return meta.evidenceItems
+  return evidenceItems
     .filter((entry): entry is AssistantManagerTaskEvidenceItem => Boolean(entry && typeof entry === 'object'))
     .map((entry) => ({
       ...entry,
@@ -2651,7 +2653,7 @@ const AssistantManagerTaskPlanner = () => {
     pushEnabledInBackend &&
     Boolean(pushPublicKey);
   const backgroundPushActive = backendPushConfigured && pushSubscriptionReady;
-  const notificationTimeoutsRef = useRef<ReturnType<typeof window.setTimeout>[]>([]);
+  const notificationTimeoutsRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
   const [commentDraft, setCommentDraft] = useState('');
   const [commentSubmitting, setCommentSubmitting] = useState(false);
 
@@ -2991,7 +2993,7 @@ const AssistantManagerTaskPlanner = () => {
 
   useEffect(() => {
     notificationTimeoutsRef.current.forEach((timerId) => {
-      window.clearTimeout(timerId);
+      clearTimeout(timerId);
     });
     notificationTimeoutsRef.current = [];
 
@@ -3094,7 +3096,7 @@ const AssistantManagerTaskPlanner = () => {
           return;
         }
 
-        const timeoutId = window.setTimeout(() => {
+        const timeoutId = setTimeout(() => {
           triggerNotification();
         }, delayMs);
         notificationTimeoutsRef.current.push(timeoutId);
@@ -3103,7 +3105,7 @@ const AssistantManagerTaskPlanner = () => {
 
     return () => {
       notificationTimeoutsRef.current.forEach((timerId) => {
-        window.clearTimeout(timerId);
+        clearTimeout(timerId);
       });
       notificationTimeoutsRef.current = [];
     };

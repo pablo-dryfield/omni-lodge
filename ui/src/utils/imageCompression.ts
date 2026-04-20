@@ -123,7 +123,7 @@ const drawImageToCanvas = (
 const loadImageSource = async (file: File): Promise<ImageBitmap | HTMLImageElement> => {
   if ('createImageBitmap' in window) {
     try {
-      return await createImageBitmap(file, { imageOrientation: 'from-image' });
+      return await createImageBitmap(file);
     } catch {
       // Fallback to HTMLImageElement below.
     }

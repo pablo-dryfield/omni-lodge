@@ -110,7 +110,7 @@ const UsersList = ({ pageTitle, moduleSlug = DEFAULT_MODULE_SLUG }: UsersListPro
     const map = new Map<number, string>();
     userTypeRecords.forEach((record) => {
       if (typeof record.id === "number") {
-        map.set(record.id, record.name ?? record.slug ?? `Role ${record.id}`);
+        map.set(record.id, record.name ?? `Role ${record.id}`);
       }
     });
     return map;

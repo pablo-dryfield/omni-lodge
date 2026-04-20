@@ -57,9 +57,10 @@ const pageSlice = createSlice({
       })
       .addCase(updatePage.fulfilled, (state, action: PayloadAction<Partial<Page> | undefined>) => {
         state[0].loading = false;
-        if (action.payload?.id !== undefined) {
+        const payload = action.payload;
+        if (payload && payload.id !== undefined) {
           state[0].data[0].data = state[0].data[0].data.map((page) =>
-            page.id === action.payload?.id ? action.payload : page
+            page.id === payload.id ? payload : page
           );
         }
         state[0].error = null;

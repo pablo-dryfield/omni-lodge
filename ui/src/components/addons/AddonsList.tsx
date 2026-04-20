@@ -18,14 +18,16 @@ const MODULE_SLUG = "addon-management";
 
 const coerceAddonPayload = (payload: Partial<Addon>): Partial<Addon> => {
   const next: Partial<Addon> = { ...payload };
+  const hasValue = (value: unknown): boolean =>
+    value !== undefined && value !== null && String(value).trim() !== "";
 
-  if (next.basePrice === "" || next.basePrice === undefined) {
+  if (!hasValue(next.basePrice)) {
     next.basePrice = null;
   } else if (next.basePrice !== null) {
     next.basePrice = Number(next.basePrice);
   }
 
-  if (next.taxRate === "" || next.taxRate === undefined) {
+  if (!hasValue(next.taxRate)) {
     next.taxRate = null;
   } else if (next.taxRate !== null) {
     next.taxRate = Number(next.taxRate);

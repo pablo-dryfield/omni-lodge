@@ -1,6 +1,7 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 
 import {
+  ActionIcon,
   Alert,
   Anchor,
   Badge,
@@ -12,6 +13,7 @@ import {
   Loader,
   Modal,
   NumberInput,
+  Popover,
   Paper,
   Select,
   SegmentedControl,
@@ -23,10 +25,11 @@ import {
   TextInput,
 } from "@mantine/core";
 
-import { DatePickerInput, TimeInput } from "@mantine/dates";
+import { DatePicker, DatePickerInput, TimeInput } from "@mantine/dates";
 import { useMediaQuery } from '@mantine/hooks';
+import { Checkroom, LocalBar, MailOutline, PhotoCamera, WhatsApp } from "@mui/icons-material";
 
-import { IconArrowLeft, IconArrowRight, IconCalendar, IconRefresh, IconSearch } from "@tabler/icons-react";
+import { IconArrowLeft, IconArrowRight, IconEye, IconEyeOff, IconRefresh, IconSearch } from "@tabler/icons-react";
 
 import dayjs, { Dayjs } from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
@@ -87,6 +90,65 @@ const toWhatsAppLink = (raw?: string) => {
   // wa.me requires digits only (no '+', no symbols)
   const href = `https://wa.me/${s.replace(/^\+/, '')}`;
   return { display: s, href };
+};
+
+const PHONE_NATIONALITY_PREFIXES: Array<{ prefix: string; nationality: string }> = [
+  { prefix: "+48", nationality: "Poland" },
+  { prefix: "+44", nationality: "United Kingdom" },
+  { prefix: "+1", nationality: "United States / Canada" },
+  { prefix: "+34", nationality: "Spain" },
+  { prefix: "+33", nationality: "France" },
+  { prefix: "+49", nationality: "Germany" },
+  { prefix: "+39", nationality: "Italy" },
+  { prefix: "+351", nationality: "Portugal" },
+  { prefix: "+353", nationality: "Ireland" },
+  { prefix: "+31", nationality: "Netherlands" },
+  { prefix: "+32", nationality: "Belgium" },
+  { prefix: "+46", nationality: "Sweden" },
+  { prefix: "+47", nationality: "Norway" },
+  { prefix: "+45", nationality: "Denmark" },
+  { prefix: "+358", nationality: "Finland" },
+  { prefix: "+420", nationality: "Czech Republic" },
+  { prefix: "+421", nationality: "Slovakia" },
+  { prefix: "+36", nationality: "Hungary" },
+  { prefix: "+43", nationality: "Austria" },
+  { prefix: "+41", nationality: "Switzerland" },
+  { prefix: "+40", nationality: "Romania" },
+  { prefix: "+30", nationality: "Greece" },
+  { prefix: "+370", nationality: "Lithuania" },
+  { prefix: "+371", nationality: "Latvia" },
+  { prefix: "+372", nationality: "Estonia" },
+  { prefix: "+380", nationality: "Ukraine" },
+  { prefix: "+61", nationality: "Australia" },
+  { prefix: "+64", nationality: "New Zealand" },
+  { prefix: "+52", nationality: "Mexico" },
+  { prefix: "+55", nationality: "Brazil" },
+  { prefix: "+54", nationality: "Argentina" },
+  { prefix: "+57", nationality: "Colombia" },
+];
+
+const guessNationalityFromPhone = (raw?: string): string => {
+  const source = String(raw ?? "").trim().replace(/[^\d+]/g, "");
+  if (!source) {
+    return "Unknown";
+  }
+
+  let normalized = source;
+  if (normalized.startsWith("00")) {
+    normalized = `+${normalized.slice(2)}`;
+  } else if (normalized.startsWith("07")) {
+    normalized = `+44${normalized.slice(1)}`;
+  } else if (normalized.startsWith("44")) {
+    normalized = `+${normalized}`;
+  } else if (!normalized.startsWith("+")) {
+    return "Unknown";
+  }
+
+  if (!normalized) {
+    return "Unknown";
+  }
+  const match = PHONE_NATIONALITY_PREFIXES.find((entry) => normalized.startsWith(entry.prefix));
+  return match?.nationality ?? "Unknown";
 };
 
 type ManifestResponse = {
@@ -194,6 +256,17 @@ const PLATFORM_COLORS: Record<string, string> = {
   unknown: "dark",
 };
 
+const PLATFORM_LABELS: Record<string, string> = {
+  ecwid: "Ecwid",
+  fareharbor: "FareHarbor",
+  viator: "Viator",
+  getyourguide: "GetYourGuide",
+  freetour: "FreeTour",
+  xperiencepoland: "XperiencePoland",
+  airbnb: "Airbnb",
+  unknown: "Unknown",
+};
+
 const BOOKING_STATUSES: BookingStatus[] = [
   "pending",
   "confirmed",
@@ -205,15 +278,18 @@ const BOOKING_STATUSES: BookingStatus[] = [
   "unknown",
 ];
 
-const STATUS_COLORS: Record<BookingStatus, string> = {
-  pending: "gray",
-  confirmed: "green",
-  amended: "yellow",
-  rebooked: "orange",
-  cancelled: "red",
-  completed: "teal",
-  no_show: "grape",
-  unknown: "dark",
+const BOOKING_BREAKDOWN_BADGE_BASE_STYLE = {
+  width: "100%",
+  justifyContent: "center",
+  whiteSpace: "nowrap" as const,
+  border: "1px solid transparent",
+  fontSize: 11,
+};
+
+const BOOKING_BREAKDOWN_BADGE_STYLES = {
+  men: { backgroundColor: "#e5eef8", color: "#1f3f63", borderColor: "#bfd2e8" },
+  women: { backgroundColor: "#f4e7ee", color: "#6b2f4a", borderColor: "#ddc1cf" },
+  undefined: { backgroundColor: "#eceff4", color: "#3f4b5a", borderColor: "#cdd5df" },
 };
 
 const normalizePlatformKey = (value?: string | null): string => {
@@ -225,6 +301,12 @@ const normalizePlatformKey = (value?: string | null): string => {
 };
 
 const formatPlatformLabel = (value?: string | null): string => {
+  const key = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (key && PLATFORM_LABELS[key]) {
+    return PLATFORM_LABELS[key];
+  }
   const safe = value ?? "Unknown";
   return safe
     .split(/[\s_-]+/)
@@ -294,17 +376,207 @@ const createEmptyStatusCounts = (): Record<BookingStatus, number> => {
   }, {} as Record<BookingStatus, number>);
 };
 
-const resolveStatusColor = (value?: BookingStatus | null): string => {
-  const key = value ?? "unknown";
-  return STATUS_COLORS[key] ?? STATUS_COLORS.unknown;
+const ATTENDANCE_TRACKED_BOOKING_STATUSES = new Set<BookingStatus>([
+  "confirmed",
+  "amended",
+  "rebooked",
+]);
+
+const createStatusCountsFromOrders = (orders: UnifiedOrder[]): Record<BookingStatus, number> => {
+  return orders.reduce((acc, order) => {
+    const rawStatus = order.status ?? "unknown";
+    if (rawStatus !== "completed" && rawStatus !== "no_show") {
+      acc[rawStatus] = (acc[rawStatus] ?? 0) + 1;
+    }
+
+    if (!ATTENDANCE_TRACKED_BOOKING_STATUSES.has(rawStatus)) {
+      return acc;
+    }
+
+    const attendanceStatus = String(order.attendanceStatus ?? "")
+      .trim()
+      .toLowerCase();
+
+    if (attendanceStatus === "checked_in_full" || attendanceStatus === "checked_in_partial") {
+      acc.completed = (acc.completed ?? 0) + 1;
+      return acc;
+    }
+
+    if (attendanceStatus === "no_show") {
+      acc.no_show = (acc.no_show ?? 0) + 1;
+    }
+
+    return acc;
+  }, createEmptyStatusCounts());
 };
 
-const StatusBadge = ({ status }: { status?: BookingStatus | null }) => {
+const createStatusCountsFromGroups = (groups: ManifestGroup[]): Record<BookingStatus, number> => {
+  return createStatusCountsFromOrders(groups.flatMap((group) => group.orders));
+};
+
+type OrderStatusDisplayKey =
+  | "pending"
+  | "confirmed"
+  | "amended"
+  | "rebooked"
+  | "cancelled"
+  | "completed"
+  | "partial"
+  | "no_show"
+  | "unknown";
+
+const ORDER_STATUS_APPEARANCE: Record<
+  OrderStatusDisplayKey,
+  { label: string; backgroundColor: string; textColor: string }
+> = {
+  pending: { label: "Pending", backgroundColor: "#2563eb", textColor: "#ffffff" },
+  confirmed: { label: "Confirmed", backgroundColor: "#16a34a", textColor: "#ffffff" },
+  amended: { label: "Amended", backgroundColor: "#6b7280", textColor: "#ffffff" },
+  rebooked: { label: "Rebooked", backgroundColor: "#6b7280", textColor: "#ffffff" },
+  cancelled: { label: "Cancelled", backgroundColor: "#ec4899", textColor: "#ffffff" },
+  completed: { label: "Completed", backgroundColor: "#16a34a", textColor: "#ffffff" },
+  partial: { label: "Partial", backgroundColor: "#dc2626", textColor: "#ffffff" },
+  no_show: { label: "No Show", backgroundColor: "#111827", textColor: "#ffffff" },
+  unknown: { label: "Unknown", backgroundColor: "#111827", textColor: "#ffffff" },
+};
+
+const resolveOrderStatusDisplayKey = (
+  status?: BookingStatus | null,
+  attendanceStatus?: string | null,
+): OrderStatusDisplayKey => {
   const safeStatus = status ?? "unknown";
+  const normalizedAttendanceStatus = String(attendanceStatus ?? "")
+    .trim()
+    .toLowerCase();
+
+  if (ATTENDANCE_TRACKED_BOOKING_STATUSES.has(safeStatus)) {
+    if (normalizedAttendanceStatus === "checked_in_full") {
+      return "completed";
+    }
+    if (normalizedAttendanceStatus === "checked_in_partial") {
+      return "partial";
+    }
+    if (normalizedAttendanceStatus === "no_show") {
+      return "no_show";
+    }
+  }
+
+  if (safeStatus === "pending") return "pending";
+  if (safeStatus === "confirmed") return "confirmed";
+  if (safeStatus === "amended") return "amended";
+  if (safeStatus === "rebooked") return "rebooked";
+  if (safeStatus === "cancelled") return "cancelled";
+  if (safeStatus === "completed") return "completed";
+  if (safeStatus === "no_show") return "no_show";
+  return "unknown";
+};
+
+const normalizeAttendanceCount = (value?: number | null): number => {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return Math.max(0, Math.round(parsed));
+};
+
+const PARTIAL_ATTENDANCE_ADDON_LABELS: Array<{ key: keyof OrderExtras; label: string }> = [
+  { key: "tshirts", label: "T-Shirts attended" },
+  { key: "cocktails", label: "Cocktails attended" },
+  { key: "photos", label: "Photos attended" },
+];
+
+const PartialStatusPopoverContent = ({ order }: { order: UnifiedOrder }) => {
+  const bookedPeople = normalizeAttendanceCount(order.quantity);
+  const attendedPeople = Math.min(bookedPeople, normalizeAttendanceCount(order.attendedTotal));
+  const bookedExtras: OrderExtras = {
+    tshirts: normalizeAttendanceCount(order.extras?.tshirts),
+    cocktails: normalizeAttendanceCount(order.extras?.cocktails),
+    photos: normalizeAttendanceCount(order.extras?.photos),
+  };
+  const attendedExtras: OrderExtras = {
+    tshirts: Math.min(bookedExtras.tshirts, normalizeAttendanceCount(order.attendedExtras?.tshirts)),
+    cocktails: Math.min(bookedExtras.cocktails, normalizeAttendanceCount(order.attendedExtras?.cocktails)),
+    photos: Math.min(bookedExtras.photos, normalizeAttendanceCount(order.attendedExtras?.photos)),
+  };
+  const addonLines = PARTIAL_ATTENDANCE_ADDON_LABELS
+    .map((entry) => ({
+      key: entry.key,
+      label: entry.label,
+      booked: bookedExtras[entry.key],
+      attended: attendedExtras[entry.key],
+    }))
+    .filter((entry) => entry.booked > 0 || entry.attended > 0);
+
   return (
-    <Badge color={resolveStatusColor(safeStatus)} variant="light">
-      {formatStatusLabel(safeStatus)}
+    <Stack gap={4}>
+      <Text size="xs" fw={700} c="dark.7">
+        {`Attended people: ${attendedPeople}/${bookedPeople}`}
+      </Text>
+      {addonLines.length > 0 ? (
+        <Stack gap={2}>
+          {addonLines.map((entry) => (
+            <Text key={`partial-addon-${entry.key}`} size="xs" c="dark.6">
+              {`${entry.label}: ${entry.attended}/${entry.booked}`}
+            </Text>
+          ))}
+        </Stack>
+      ) : (
+        <Text size="xs" c="dimmed">
+          No add-on attendance
+        </Text>
+      )}
+    </Stack>
+  );
+};
+
+const StatusBadge = ({
+  status,
+  attendanceStatus,
+  order,
+}: {
+  status?: BookingStatus | null;
+  attendanceStatus?: string | null;
+  order?: UnifiedOrder;
+}) => {
+  const statusDisplayKey = resolveOrderStatusDisplayKey(status, attendanceStatus);
+  const presentation = ORDER_STATUS_APPEARANCE[statusDisplayKey];
+  const badgeNode = (
+    <Badge
+      variant="filled"
+      style={{
+        backgroundColor: presentation.backgroundColor,
+        color: presentation.textColor,
+      }}
+    >
+      {presentation.label}
     </Badge>
+  );
+
+  if (statusDisplayKey !== "partial" || !order) {
+    return badgeNode;
+  }
+
+  return (
+    <Popover withArrow position="top" shadow="md" width={220}>
+      <Popover.Target>
+        <Box
+          component="button"
+          type="button"
+          style={{
+            padding: 0,
+            border: 0,
+            background: "transparent",
+            cursor: "pointer",
+          }}
+          aria-label="Show partial attendance details"
+        >
+          {badgeNode}
+        </Box>
+      </Popover.Target>
+      <Popover.Dropdown p="xs">
+        <PartialStatusPopoverContent order={order} />
+      </Popover.Dropdown>
+    </Popover>
   );
 };
 
@@ -338,13 +610,7 @@ const createSummaryFromGroups = (groups: ManifestGroup[]): ManifestSummary => ({
     photos: groups.reduce((acc, group) => acc + (group.extras?.photos ?? 0), 0),
   },
   platformBreakdown: buildPlatformBreakdown(groups),
-  statusCounts: groups.reduce((acc, group) => {
-    group.orders.forEach((order) => {
-      const status = order.status ?? "unknown";
-      acc[status] = (acc[status] ?? 0) + 1;
-    });
-    return acc;
-  }, createEmptyStatusCounts()),
+  statusCounts: createStatusCountsFromGroups(groups),
 });
 
 const filterOrdersByStatus = (orders: UnifiedOrder[], filter: BookingFilter): UnifiedOrder[] => {
@@ -479,6 +745,270 @@ const PlatformBadges = ({
         </Badge>
       ))}
     </Group>
+  );
+};
+
+const SUMMARY_CHIP_TONES = {
+  overview: { bg: "#d6eceb", border: "#7faeac", text: "#173f3d" },
+  breakdown: { bg: "#f1d3e2", border: "#c389aa", text: "#5b1f3f" },
+  extras: { bg: "#d4eadf", border: "#8ebaa2", text: "#1f4a36" },
+  platforms: { bg: "#d8dee8", border: "#8e9aae", text: "#243347" },
+} as const;
+
+type SummaryChipTone = keyof typeof SUMMARY_CHIP_TONES;
+
+const SUMMARY_SECTION_TONES: Record<SummaryChipTone, { bg: string; border: string }> = {
+  overview: { bg: "#edf5f5", border: "#c5dddd" },
+  breakdown: { bg: "#f8edf3", border: "#e6cdd9" },
+  extras: { bg: "#eef6eb", border: "#ccddc5" },
+  platforms: { bg: "#eef1f5", border: "#cfd7e1" },
+};
+
+const SummaryChip = ({
+  children,
+  tone = "overview",
+  noWrap = false,
+  textSize = "sm",
+}: {
+  children: ReactNode;
+  tone?: SummaryChipTone;
+  noWrap?: boolean;
+  textSize?: "sm" | "xs";
+}) => {
+  const palette = SUMMARY_CHIP_TONES[tone];
+  return (
+    <Paper
+      withBorder
+      radius="md"
+      py={5}
+      px="sm"
+      style={{
+        width: "100%",
+        minWidth: 0,
+        textAlign: "center",
+        backgroundColor: palette.bg,
+        borderColor: palette.border,
+        minHeight: 36,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <Text
+        size={textSize}
+        fw={600}
+        c={palette.text}
+        style={{
+          whiteSpace: noWrap ? "nowrap" : "normal",
+          overflow: "visible",
+          textOverflow: "clip",
+          wordBreak: noWrap ? "normal" : "break-word",
+          lineHeight: 1.2,
+          width: "100%",
+        }}
+      >
+        {children}
+      </Text>
+    </Paper>
+  );
+};
+
+const SummaryChipGridRow = ({
+  children,
+  columns,
+}: {
+  children: ReactNode;
+  columns: number;
+}) => (
+  <Box
+    w="100%"
+    style={{
+      display: "grid",
+      gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+      gap: 8,
+    }}
+  >
+    {children}
+  </Box>
+);
+
+const SummarySection = ({
+  children,
+  tone,
+}: {
+  children: ReactNode;
+  tone: SummaryChipTone;
+}) => {
+  const palette = SUMMARY_SECTION_TONES[tone];
+  return (
+    <Paper
+      withBorder
+      radius="md"
+      p={8}
+      style={{
+        backgroundColor: palette.bg,
+        borderColor: palette.border,
+      }}
+    >
+      {children}
+    </Paper>
+  );
+};
+
+type SummaryPanelView = "totals" | "statuses";
+
+const SummaryPanelSwitcher = ({
+  totalsContent,
+  statusesContent,
+  buttonSize = "sm",
+}: {
+  totalsContent: ReactNode;
+  statusesContent: ReactNode;
+  buttonSize?: "xs" | "sm";
+}) => {
+  const [activeView, setActiveView] = useState<SummaryPanelView | null>(null);
+
+  return (
+    <Stack gap="sm" w="100%">
+      <Group gap="xs" wrap="nowrap" grow>
+        <Button
+          size={buttonSize}
+          variant={activeView === "totals" ? "filled" : "light"}
+          onClick={() => setActiveView((prev) => (prev === "totals" ? null : "totals"))}
+        >
+          Totals
+        </Button>
+        <Button
+          size={buttonSize}
+          variant={activeView === "statuses" ? "filled" : "light"}
+          onClick={() => setActiveView((prev) => (prev === "statuses" ? null : "statuses"))}
+        >
+          Statuses
+        </Button>
+      </Group>
+      {activeView === "totals" ? totalsContent : null}
+      {activeView === "statuses" ? statusesContent : null}
+    </Stack>
+  );
+};
+
+const ProductSummaryPanels = ({
+  group,
+  undefinedGroupCount,
+}: {
+  group: ManifestGroup;
+  undefinedGroupCount: number;
+}) => {
+  const groupStatusCounts = createStatusCountsFromOrders(group.orders);
+  const platformEntries = (group.platformBreakdown ?? []).filter((entry) => entry.totalPeople > 0);
+  const overviewChips = [
+    { key: "people", value: group.totalPeople, label: `People: ${group.totalPeople}` },
+    { key: "bookings", value: group.orders.length, label: `Bookings: ${group.orders.length}` },
+  ].filter((chip) => chip.value > 0);
+  const breakdownChips = [
+    { key: "men", value: group.men, label: `Men: ${group.men}` },
+    { key: "women", value: group.women, label: `Women: ${group.women}` },
+    { key: "undefined", value: undefinedGroupCount, label: `Undefined: ${undefinedGroupCount}` },
+  ].filter((chip) => chip.value > 0);
+  const extrasChips = [
+    { key: "tshirts", value: group.extras.tshirts, label: `T-Shirts: ${group.extras.tshirts}`, textSize: "xs" as const },
+    { key: "cocktails", value: group.extras.cocktails, label: `Cocktails: ${group.extras.cocktails}`, textSize: "xs" as const },
+    { key: "photos", value: group.extras.photos, label: `Photos: ${group.extras.photos}`, textSize: "xs" as const },
+  ].filter((chip) => chip.value > 0);
+  const statusChips = BOOKING_STATUSES.map((status) => ({
+    status,
+    count: groupStatusCounts?.[status] ?? 0,
+  })).filter((chip) => chip.count > 0);
+
+  return (
+    <SummaryPanelSwitcher
+      buttonSize="xs"
+      totalsContent={
+        <Stack gap="sm" w="100%">
+          {overviewChips.length > 0 && (
+            <SummarySection tone="overview">
+              <SummaryChipGridRow columns={Math.min(2, overviewChips.length)}>
+                {overviewChips.map((chip) => (
+                  <SummaryChip key={`product-summary-overview-${group.productId}-${group.time}-${chip.key}`} tone="overview">
+                    {chip.label}
+                  </SummaryChip>
+                ))}
+              </SummaryChipGridRow>
+            </SummarySection>
+          )}
+
+          {breakdownChips.length > 0 && (
+            <SummarySection tone="breakdown">
+              <SummaryChipGridRow columns={Math.min(3, breakdownChips.length)}>
+                {breakdownChips.map((chip) => (
+                  <SummaryChip
+                    key={`product-summary-breakdown-${group.productId}-${group.time}-${chip.key}`}
+                    tone="breakdown"
+                    noWrap
+                    textSize="xs"
+                  >
+                    {chip.key === "undefined" ? <span style={{ fontSize: 10 }}>{chip.label}</span> : chip.label}
+                  </SummaryChip>
+                ))}
+              </SummaryChipGridRow>
+            </SummarySection>
+          )}
+
+          {extrasChips.length > 0 && (
+            <SummarySection tone="extras">
+              <SummaryChipGridRow columns={Math.min(3, extrasChips.length)}>
+                {extrasChips.map((chip) => (
+                  <SummaryChip
+                    key={`product-summary-extras-${group.productId}-${group.time}-${chip.key}`}
+                    tone="extras"
+                    noWrap
+                    textSize={chip.textSize}
+                  >
+                    {chip.key === "cocktails" ? <span style={{ fontSize: 11 }}>{chip.label}</span> : chip.label}
+                  </SummaryChip>
+                ))}
+              </SummaryChipGridRow>
+            </SummarySection>
+          )}
+
+          {platformEntries.length > 0 && (
+            <SummarySection tone="platforms">
+              <SummaryChipGridRow columns={Math.min(2, platformEntries.length)}>
+                {platformEntries.map((entry) => (
+                  <SummaryChip key={`product-summary-platform-${group.productId}-${group.time}-${entry.platform}`} tone="platforms">
+                    {`${formatPlatformLabel(entry.platform)}: ${entry.totalPeople}`}
+                    <wbr />
+                    <span style={{ whiteSpace: "nowrap" }}>
+                      {` (${entry.orderCount} ${entry.orderCount === 1 ? "order" : "orders"})`}
+                    </span>
+                  </SummaryChip>
+                ))}
+              </SummaryChipGridRow>
+            </SummarySection>
+          )}
+        </Stack>
+      }
+      statusesContent={
+        <Stack gap="sm" w="100%">
+          {statusChips.length > 0 && (
+            <SummarySection tone="platforms">
+              <SummaryChipGridRow columns={Math.min(2, statusChips.length)}>
+                {statusChips.map((chip) => (
+                  <SummaryChip
+                    key={`product-summary-status-${group.productId}-${group.time}-${chip.status}`}
+                    tone="platforms"
+                    noWrap
+                    textSize="xs"
+                  >
+                    {`${formatStatusLabel(chip.status)}: ${chip.count}`}
+                  </SummaryChip>
+                ))}
+              </SummaryChipGridRow>
+            </SummarySection>
+          )}
+        </Stack>
+      }
+    />
   );
 };
 
@@ -949,10 +1479,12 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>("idle");
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [dateModalOpened, setDateModalOpened] = useState(false);
 
   const [ingestStatus, setIngestStatus] = useState<FetchStatus>("idle");
 
   const [reloadToken, setReloadToken] = useState(0);
+  const [isFilterPanelVisible, setIsFilterPanelVisible] = useState(false);
   const [statusFilter, setStatusFilter] = useState<BookingFilter>("active");
   const [searchInput, setSearchInput] = useState(searchParam);
   const [amendState, setAmendState] = useState<AmendModalState>(createDefaultAmendState());
@@ -989,6 +1521,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     addonQuantities: {},
   });
   const [cancelState, setCancelState] = useState<CancelRefundState>(createDefaultCancelState());
+  const [mobileActionsOrder, setMobileActionsOrder] = useState<UnifiedOrder | null>(null);
+  const [expandedMobileCustomerDetails, setExpandedMobileCustomerDetails] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setSearchInput(searchParam);
@@ -1589,6 +2123,46 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
   };
 
+  const closeMobileActionsModal = () => {
+    setMobileActionsOrder(null);
+  };
+
+  const handleMobileActionsDetails = () => {
+    if (!mobileActionsOrder) {
+      return;
+    }
+    const order = mobileActionsOrder;
+    closeMobileActionsModal();
+    openDetailsModal(order);
+  };
+
+  const handleMobileActionsAmend = () => {
+    if (!mobileActionsOrder) {
+      return;
+    }
+    const order = mobileActionsOrder;
+    closeMobileActionsModal();
+    openAmendModal(order);
+  };
+
+  const handleMobileActionsPartialRefund = () => {
+    if (!mobileActionsOrder) {
+      return;
+    }
+    const order = mobileActionsOrder;
+    closeMobileActionsModal();
+    openPartialRefundModal(order);
+  };
+
+  const handleMobileActionsCancel = async () => {
+    if (!mobileActionsOrder) {
+      return;
+    }
+    const order = mobileActionsOrder;
+    closeMobileActionsModal();
+    await openCancelModal(order);
+  };
+
 
 
   useEffect(() => {
@@ -1640,13 +2214,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           ? {
               ...serverSummary,
               platformBreakdown: serverSummary.platformBreakdown ?? buildPlatformBreakdown(mergedGroups),
-              statusCounts: (() => {
-                const normalized = createEmptyStatusCounts();
-                BOOKING_STATUSES.forEach((status) => {
-                  normalized[status] = serverSummary.statusCounts?.[status] ?? 0;
-                });
-                return normalized;
-              })(),
+              statusCounts: createStatusCountsFromGroups(mergedGroups),
             }
           : createSummaryFromGroups(mergedGroups);
 
@@ -1716,6 +2284,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     filteredSummary.extras.tshirts > 0 ||
     filteredSummary.extras.cocktails > 0 ||
     filteredSummary.extras.photos > 0;
+  const platformSummaryEntries = filteredSummary.platformBreakdown ?? [];
   const detailsPreviewHtml = detailsState.previewData?.htmlBody ?? null;
   const detailsPreviewBody =
     detailsState.previewData?.previewText ??
@@ -1723,6 +2292,24 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     detailsState.previewData?.htmlText ??
     detailsState.previewData?.snippet ??
     null;
+  const mobileActionsBookingId = mobileActionsOrder ? getBookingIdFromOrder(mobileActionsOrder) : null;
+  const mobileActionsCanAmend = Boolean(
+    mobileActionsOrder &&
+      (isEcwidOrder(mobileActionsOrder) || isXperiencePolandOrder(mobileActionsOrder)) &&
+      mobileActionsBookingId,
+  );
+  const mobileActionsCanCancel = Boolean(
+    mobileActionsOrder &&
+      (isEcwidOrder(mobileActionsOrder) || isXperiencePolandOrder(mobileActionsOrder)) &&
+      mobileActionsBookingId &&
+      mobileActionsOrder.status !== "cancelled",
+  );
+  const mobileActionsCanPartialRefund = Boolean(
+    mobileActionsOrder &&
+      isEcwidOrder(mobileActionsOrder) &&
+      mobileActionsBookingId &&
+      mobileActionsOrder.status !== "cancelled",
+  );
 
   const groupOptions = useMemo(() => {
 
@@ -1762,40 +2349,25 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
 
 
-  const handleGoToToday = () => {
-
-    const today = dayjs().startOf("day");
-
-    setSelectedDate(today);
-
-    updateSearchParamDate(today);
-
+  const handleDatePickerChange = (value: Date | null) => {
+    if (!value) {
+      return;
+    }
+    const parsed = dayjs(value);
+    if (!parsed.isValid()) {
+      return;
+    }
+    const normalized = parsed.startOf("day");
+    setSelectedDate(normalized);
+    updateSearchParamDate(normalized);
+    setDateModalOpened(false);
   };
 
-
-
-  const handleDateInputChange = (event: ChangeEvent<HTMLInputElement>) => {
-
-    const value = event.currentTarget.value;
-
-    if (!value) {
-
-      return;
-
-    }
-
-    const parsed = dayjs(value);
-
-    if (parsed.isValid()) {
-
-      const normalized = parsed.startOf("day");
-
-      setSelectedDate(normalized);
-
-      updateSearchParamDate(normalized);
-
-    }
-
+  const handlePickToday = () => {
+    const today = dayjs().startOf("day");
+    setSelectedDate(today);
+    updateSearchParamDate(today);
+    setDateModalOpened(false);
   };
 
 
@@ -1843,7 +2415,52 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
       <Stack gap="lg">
 
-        <Title order={2}>{title}</Title>
+        <Box style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center" }}>
+          <Group justify="flex-start">
+            <ActionIcon
+              variant={isFilterPanelVisible ? "filled" : "subtle"}
+              size="lg"
+              aria-label={isFilterPanelVisible ? "Hide filters panel" : "Show filters panel"}
+              onClick={() => setIsFilterPanelVisible((prev) => !prev)}
+            >
+              <Text fw={700}>F</Text>
+            </ActionIcon>
+          </Group>
+          <Title order={2} ta="center">{title}</Title>
+          <Group justify="flex-end">
+            {modulePermissions.ready && !modulePermissions.loading && modulePermissions.canView && (
+              <Button
+                variant="subtle"
+                size="sm"
+                aria-label="Refresh manifest"
+                onClick={handleReload}
+                loading={ingestStatus === "loading" || fetchStatus === "loading"}
+              >
+                <IconRefresh size={16} />
+              </Button>
+            )}
+          </Group>
+        </Box>
+
+        <Modal
+          opened={dateModalOpened}
+          onClose={() => setDateModalOpened(false)}
+          withCloseButton={false}
+          centered
+          size="auto"
+          styles={{ content: { width: "fit-content" } }}
+        >
+          <Stack gap="md" align="center">
+            <Box style={{ width: "max-content" }}>
+              <DatePicker value={selectedDate.toDate()} onChange={handleDatePickerChange} />
+            </Box>
+            <Group justify="center" w="100%">
+              <Button onClick={handlePickToday} w={200}>
+                Today
+              </Button>
+            </Group>
+          </Stack>
+        </Modal>
 
 
 
@@ -1867,101 +2484,75 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
           <Stack gap="md">
 
-            <Flex justify="space-between" align="center" wrap="wrap" gap="sm">
-
-              <Group gap="sm" wrap="wrap">
-
-                <Button size="sm" variant="light" leftSection={<IconCalendar size={16} />} onClick={handleGoToToday}>
-
-                  Today
-
-                </Button>
-
-                <Button size="sm" variant="subtle" leftSection={<IconArrowLeft size={16} />} onClick={() => handleShiftDate(-1)}>
-
-                  Prev day
-
-                </Button>
-
-                <Button size="sm" variant="subtle" rightSection={<IconArrowRight size={16} />} onClick={() => handleShiftDate(1)}>
-
-                  Next day
-
-                </Button>
-
-                <input
-
-                  type="date"
-
-                  value={selectedDate.format(DATE_FORMAT)}
-
-                  onChange={handleDateInputChange}
-
-                  style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #ced4da" }}
-
-                />
-
-              </Group>
-
-
-
-              <Group gap="xs" wrap="wrap" align="center">
-
-                <Select
-                  data={groupOptions}
-                  value={selectedGroupKey}
-                  onChange={handleGroupChange}
-                  size="sm"
-                  allowDeselect={false}
-                  style={{ minWidth: 220 }}
-                  label="Event"
-                  disabled={hasSearchParam}
-                />
-
+            <Stack gap="sm">
+              <Group gap="sm" justify="center" wrap="nowrap" style={{ width: "100%" }}>
                 <Button
-
-                  variant="subtle"
-
                   size="sm"
-
-                  onClick={handleReload}
-
-                  leftSection={<IconRefresh size={16} />}
-
-                  loading={ingestStatus === "loading" || fetchStatus === "loading"}
-
+                  variant="subtle"
+                  aria-label="Previous day"
+                  onClick={() => handleShiftDate(-1)}
                 >
-
-                  Refresh
-
+                  <IconArrowLeft size={16} />
                 </Button>
-
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={() => setDateModalOpened(true)}
+                  style={{ width: 260 }}
+                >
+                  {selectedDate.format("ddd, MMMM D YYYY")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="subtle"
+                  aria-label="Next day"
+                  onClick={() => handleShiftDate(1)}
+                >
+                  <IconArrowRight size={16} />
+                </Button>
               </Group>
 
-            </Flex>
+            </Stack>
 
             <form onSubmit={handleSearchSubmit}>
-              <Stack gap={4}>
-                <Group gap="xs" wrap="wrap" align="flex-end">
-                  <TextInput
-                    value={searchInput}
-                    onChange={handleSearchChange}
-                    placeholder="Search booking id, name, or phone"
-                    leftSection={<IconSearch size={16} />}
-                    size="sm"
-                    w={isMobile ? "100%" : 320}
-                  />
-                  <Button type="submit" size="sm">
-                    Search
-                  </Button>
-                  {hasSearchParam && (
-                    <Button variant="subtle" color="gray" size="sm" onClick={handleSearchClear}>
-                      Clear
+              <Stack gap={4} align="center" w="100%" px={8}>
+                <TextInput
+                  value={searchInput}
+                  onChange={handleSearchChange}
+                  placeholder="Search booking id, name, or phone"
+                  leftSection={<IconSearch size={16} />}
+                  rightSection={
+                    <Button
+                      type="submit"
+                      size="xs"
+                      variant="light"
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        borderTopLeftRadius: 0,
+                        borderBottomLeftRadius: 0,
+                      }}
+                    >
+                      Search
                     </Button>
-                  )}
-                </Group>
+                  }
+                  rightSectionWidth={88}
+                  rightSectionPointerEvents="all"
+                  styles={{
+                    section: {
+                      padding: 0,
+                    },
+                  }}
+                  size="sm"
+                  w="100%"
+                />
                 {hasSearchParam && (
-                  <Text size="sm" c="dimmed">
+                  <Button variant="subtle" color="gray" size="sm" onClick={handleSearchClear}>
+                    Clear
+                  </Button>
+                )}
+                {hasSearchParam && (
+                  <Text size="sm" c="dimmed" ta="center">
                     Showing results for &ldquo;{searchParam}&rdquo;. Date and event filters are ignored while
                     search is active.
                   </Text>
@@ -1969,109 +2560,101 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               </Stack>
             </form>
 
-            <Group gap="sm" wrap="wrap" align="center">
-              <Text size="sm" fw={600}>
-                Filters
-              </Text>
-              <SegmentedControl
-                value={statusFilter}
-                onChange={(value) => setStatusFilter(value as BookingFilter)}
-                data={[
-                  { label: "All", value: "all" },
-                  { label: "Has people", value: "active" },
-                  { label: "Cancelled", value: "cancelled" },
-                ]}
-                size="sm"
+            {isFilterPanelVisible && (
+              <Group gap="xs" wrap="wrap" align="center" justify="center">
+                <Select
+                  data={groupOptions}
+                  value={selectedGroupKey}
+                  onChange={handleGroupChange}
+                  size="sm"
+                  allowDeselect={false}
+                  style={{ minWidth: 320 }}
+                  styles={{
+                    input: { textAlign: "center" },
+                    option: { textAlign: "center", justifyContent: "center" },
+                    dropdown: { textAlign: "center" },
+                  }}
+                  disabled={hasSearchParam}
+                />
+              </Group>
+            )}
+
+            {isFilterPanelVisible && (
+              <Group gap="sm" wrap="wrap" align="center" justify="center">
+                <SegmentedControl
+                  value={statusFilter}
+                  onChange={(value) => setStatusFilter(value as BookingFilter)}
+                  data={[
+                    { label: "All", value: "all" },
+                    { label: "Has people", value: "active" },
+                    { label: "Cancelled", value: "cancelled" },
+                  ]}
+                  size="sm"
+                />
+              </Group>
+            )}
+
+            {isFilterPanelVisible && (
+              <SummaryPanelSwitcher
+                totalsContent={
+                  <Stack gap="sm" w="100%">
+                    <SummarySection tone="overview">
+                      <SummaryChipGridRow columns={2}>
+                        <SummaryChip tone="overview">{`People: ${filteredSummary.totalPeople}`}</SummaryChip>
+                        <SummaryChip tone="overview">{`Bookings: ${filteredSummary.totalOrders}`}</SummaryChip>
+                      </SummaryChipGridRow>
+                    </SummarySection>
+
+                    <SummarySection tone="breakdown">
+                      <SummaryChipGridRow columns={3}>
+                        <SummaryChip tone="breakdown" noWrap>{`Men: ${filteredSummary.men}`}</SummaryChip>
+                        <SummaryChip tone="breakdown" noWrap>{`Women: ${filteredSummary.women}`}</SummaryChip>
+                        <SummaryChip tone="breakdown" noWrap textSize="xs">{`Undefined: ${summaryUndefinedCount}`}</SummaryChip>
+                      </SummaryChipGridRow>
+                    </SummarySection>
+
+                    <SummarySection tone="extras">
+                      <SummaryChipGridRow columns={3}>
+                        <SummaryChip tone="extras" noWrap>{`T-Shirts: ${filteredSummary.extras.tshirts}`}</SummaryChip>
+                        <SummaryChip tone="extras" noWrap textSize="xs">{`Cocktails: ${filteredSummary.extras.cocktails}`}</SummaryChip>
+                        <SummaryChip tone="extras" noWrap>{`Photos: ${filteredSummary.extras.photos}`}</SummaryChip>
+                      </SummaryChipGridRow>
+                    </SummarySection>
+
+                    <SummarySection tone="platforms">
+                      <SummaryChipGridRow columns={2}>
+                        {platformSummaryEntries.length === 0 ? (
+                          <SummaryChip tone="platforms">Platforms: -</SummaryChip>
+                        ) : (
+                          platformSummaryEntries.map((entry) => (
+                            <SummaryChip key={`summary-platform-${entry.platform}`} tone="platforms">
+                              {`${formatPlatformLabel(entry.platform)}: ${entry.totalPeople}`}
+                              <wbr />
+                              <span style={{ whiteSpace: "nowrap" }}>
+                                {` (${entry.orderCount} ${entry.orderCount === 1 ? "order" : "orders"})`}
+                              </span>
+                            </SummaryChip>
+                          ))
+                        )}
+                      </SummaryChipGridRow>
+                    </SummarySection>
+                  </Stack>
+                }
+                statusesContent={
+                  <Stack gap="sm" w="100%">
+                    <SummarySection tone="platforms">
+                      <SummaryChipGridRow columns={2}>
+                        {BOOKING_STATUSES.map((status) => (
+                          <SummaryChip key={`summary-status-${status}`} tone="platforms" noWrap textSize="xs">
+                            {`${formatStatusLabel(status)}: ${filteredSummary.statusCounts?.[status] ?? 0}`}
+                          </SummaryChip>
+                        ))}
+                      </SummaryChipGridRow>
+                    </SummarySection>
+                  </Stack>
+                }
               />
-            </Group>
-
-
-
-            <Group gap="md" wrap="wrap">
-              {hasSearchParam ? (
-                <Badge size="lg" color="gray" variant="light">
-                  {`Search: ${searchParam}`}
-                </Badge>
-              ) : (
-                <Badge size="lg" color="blue" variant="light">
-                  {selectedDate.format("dddd, MMM D")}
-                </Badge>
-              )}
-
-              <Badge size="lg" color="green" variant="light">
-
-                {`Total: ${filteredSummary.totalPeople} people`}
-
-              </Badge>
-
-              <Badge size="lg" color="teal" variant="light">
-
-                {`Men: ${filteredSummary.men}`}
-
-              </Badge>
-
-              <Badge size="lg" color="pink" variant="light">
-
-                {`Women: ${filteredSummary.women}`}
-
-              </Badge>
-
-              {summaryUndefinedCount > 0 && (
-                <Badge size="lg" color="gray" variant="light">
-                  {`Undefined Genre: ${summaryUndefinedCount}`}
-                </Badge>
-              )}
-
-              {filteredSummary.extras.tshirts > 0 && (
-                <Badge size="lg" color="blue" variant="light">
-
-                  {`T-Shirts: ${filteredSummary.extras.tshirts}`}
-
-                </Badge>
-              )}
-
-              {filteredSummary.extras.cocktails > 0 && (
-                <Badge size="lg" color="violet" variant="light">
-
-                  {`Cocktails: ${filteredSummary.extras.cocktails}`}
-
-                </Badge>
-              )}
-
-              {filteredSummary.extras.photos > 0 && (
-                <Badge size="lg" color="grape" variant="light">
-
-                  {`Photos: ${filteredSummary.extras.photos}`}
-
-                </Badge>
-              )}
-
-              <Badge size="lg" color="gray" variant="light">
-
-                {`Bookings: ${filteredSummary.totalOrders}`}
-
-              </Badge>
-
-              <PlatformBadges entries={filteredSummary.platformBreakdown} prefix="summary" />
-
-              <Stack gap={4} w="100%">
-                <Text fw={600} size="sm">
-                  Booking statuses
-                </Text>
-                <Group gap="xs" wrap="wrap">
-                  {BOOKING_STATUSES.map((status) => (
-                    <Badge
-                      key={`summary-status-${status}`}
-                      color={STATUS_COLORS[status]}
-                      variant="light"
-                    >
-                      {`${formatStatusLabel(status)}: ${filteredSummary.statusCounts?.[status] ?? 0}`}
-                    </Badge>
-                  ))}
-                </Group>
-              </Stack>
-
-            </Group>
+            )}
 
 
 
@@ -2110,7 +2693,6 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
               <Stack gap="lg">
                 {activeGroups.map((group) => {
-                  const readableDate = dayjs(group.date).format("dddd, MMM D");
                   const bookingsLabel = `${group.orders.length} booking${group.orders.length === 1 ? "" : "s"}`;
                   const undefinedGroupCount = getUndefinedGenreCount(group.totalPeople, group.men, group.women);
                   const sortedOrders = [...group.orders].sort((a, b) => {
@@ -2132,57 +2714,39 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                         p="md"
                       >
                         <Stack gap="sm">
-                          <Stack gap={4}>
-                            <Text fw={700} size="lg">
+                          <Box
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+                              alignItems: "center",
+                              columnGap: 8,
+                            }}
+                          >
+                            <Text
+                              fw={700}
+                              size="lg"
+                              style={{
+                                minWidth: 0,
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                textAlign: "center",
+                              }}
+                            >
                               {group.productName}
                             </Text>
-                            <Group gap="xs" align="center">
-                              <Badge color="orange" variant="filled" radius="sm">
+                            <Box style={{ display: "flex", justifyContent: "center" }}>
+                              <Badge
+                                color="orange"
+                                variant="filled"
+                                radius="sm"
+                                style={{ minWidth: 68, justifyContent: "center" }}
+                              >
                                 {group.time}
                               </Badge>
-                              <Text size="sm" c="dimmed">
-                                {readableDate}
-                              </Text>
-                            </Group>
-                          </Stack>
-                          <Group gap="xs" wrap="wrap">
-                            <Badge color="green" variant="light">
-                              {`${group.totalPeople} people`}
-                            </Badge>
-                              <Badge color="teal" variant="light">
-                                {`Men: ${group.men}`}
-                              </Badge>
-                              <Badge color="pink" variant="light">
-                                {`Women: ${group.women}`}
-                              </Badge>
-                              {undefinedGroupCount > 0 && (
-                                <Badge color="gray" variant="light">
-                                  {`Undefined Genre: ${undefinedGroupCount}`}
-                                </Badge>
-                              )}
-                              {group.extras.tshirts > 0 && (
-                                <Badge color="blue" variant="light">
-                                  {`T-Shirts: ${group.extras.tshirts}`}
-                                </Badge>
-                            )}
-                            {group.extras.cocktails > 0 && (
-                              <Badge color="violet" variant="light">
-                                {`Cocktails: ${group.extras.cocktails}`}
-                              </Badge>
-                            )}
-                          {group.extras.photos > 0 && (
-                            <Badge color="grape" variant="light">
-                              {`Photos: ${group.extras.photos}`}
-                            </Badge>
-                          )}
-                          <Badge color="gray" variant="light">
-                            {bookingsLabel}
-                          </Badge>
-                          <PlatformBadges
-                            entries={group.platformBreakdown}
-                            prefix={`group-desktop-${group.productId}-${group.time}`}
-                          />
-                        </Group>
+                            </Box>
+                          </Box>
+                          <ProductSummaryPanels group={group} undefinedGroupCount={undefinedGroupCount} />
                           <Divider />
                           <Stack gap="sm">
                             {sortedOrders.map((order) => {
@@ -2190,15 +2754,74 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               const bookingDisplay = normalizedBookingId ?? order.platformBookingId ?? order.id;
                               const bookingLink =
                                 order.platformBookingUrl ?? getPlatformBookingLink(order.platform, normalizedBookingId ?? order.platformBookingId);
-                              const bookingId = getBookingIdFromOrder(order);
-                              const canAmend = (isEcwidOrder(order) || isXperiencePolandOrder(order)) && Boolean(bookingId);
-                              const canCancel = (isEcwidOrder(order) || isXperiencePolandOrder(order)) && Boolean(bookingId) && order.status !== "cancelled";
-                              const canPartialRefund = isEcwidOrder(order) && Boolean(bookingId) && order.status !== "cancelled";
+                              const isCustomerDetailsExpanded = Boolean(expandedMobileCustomerDetails[order.id]);
                               const undefinedOrderCount = getUndefinedGenreCount(
                                 order.quantity,
                                 order.menCount,
                                 order.womenCount,
                               );
+                              const whatsappLink = toWhatsAppLink(order.customerPhone);
+                              const guessedNationality = guessNationalityFromPhone(order.customerPhone);
+                              const isUnknownNationality = guessedNationality.trim().toLowerCase() === "unknown";
+                              const orderStatusDisplayKey = resolveOrderStatusDisplayKey(
+                                order.status,
+                                order.attendanceStatus,
+                              );
+                              const orderStatusPresentation = ORDER_STATUS_APPEARANCE[orderStatusDisplayKey];
+                              const bookingBreakdownChips = [
+                                order.menCount > 0
+                                  ? {
+                                      key: "men",
+                                      color: "teal",
+                                      label: `Men: ${order.menCount}`,
+                                      style: BOOKING_BREAKDOWN_BADGE_STYLES.men,
+                                    }
+                                  : null,
+                                order.womenCount > 0
+                                  ? {
+                                      key: "women",
+                                      color: "pink",
+                                      label: `Women: ${order.womenCount}`,
+                                      style: BOOKING_BREAKDOWN_BADGE_STYLES.women,
+                                    }
+                                  : null,
+                                undefinedOrderCount > 0
+                                  ? {
+                                      key: "undefined",
+                                      color: "gray",
+                                      label: `Undefined: ${undefinedOrderCount}`,
+                                      style: BOOKING_BREAKDOWN_BADGE_STYLES.undefined,
+                                    }
+                                  : null,
+                              ].filter((chip): chip is {
+                                key: "men" | "women" | "undefined";
+                                color: "teal" | "pink" | "gray";
+                                label: string;
+                                style: { backgroundColor: string; color: string; borderColor: string };
+                              } => Boolean(chip));
+                              const bookingExtrasChips = [
+                                (order.extras?.cocktails ?? 0) > 0
+                                  ? {
+                                      key: "cocktails",
+                                      value: order.extras?.cocktails ?? 0,
+                                      icon: <LocalBar fontSize="small" sx={{ color: "text.secondary", fontSize: 16 }} />,
+                                    }
+                                  : null,
+                                (order.extras?.tshirts ?? 0) > 0
+                                  ? {
+                                      key: "tshirts",
+                                      value: order.extras?.tshirts ?? 0,
+                                      icon: <Checkroom fontSize="small" sx={{ color: "text.secondary", fontSize: 16 }} />,
+                                    }
+                                  : null,
+                                (order.extras?.photos ?? 0) > 0
+                                  ? {
+                                      key: "photos",
+                                      value: order.extras?.photos ?? 0,
+                                      icon: <PhotoCamera fontSize="small" sx={{ color: "text.secondary", fontSize: 16 }} />,
+                                    }
+                                  : null,
+                              ].filter((chip): chip is NonNullable<typeof chip> => chip !== null);
                               return (
                                 <Paper
                                   key={order.id}
@@ -2206,123 +2829,533 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                   radius="md"
                                   shadow="xs"
                                   p="sm"
-                                  style={{ background: "#f8fafc" }}
+                                  style={{
+                                    background: "#6b63692a",
+                                    boxShadow: "4px 4px 10px rgba(15, 23, 42, 0.18)",
+                                    border: "0.5px solid #8f9bad",
+                                  }}
                                 >
                                   <Stack gap={8}>
-                                    <Group justify="space-between" align="flex-start">
-                                      <Stack gap={2}>
-                                        <Text fw={600}>{order.customerName || "Unnamed guest"}</Text>
-                                        <Text size="xs" c="dimmed">
-                                          {bookingLink ? (
-                                            <Anchor
-                                              href={bookingLink}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              size="xs"
-                                            >
-                                              {bookingDisplay}
-                                            </Anchor>
+                                    <Box
+                                      style={{
+                                        display: "grid",
+                                        gridTemplateColumns: "minmax(0, 1fr) auto",
+                                        alignItems: "center",
+                                        columnGap: 8,
+                                      }}
+                                    >
+                                      <Box
+                                        style={{
+                                          minWidth: 0,
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: 6,
+                                        }}
+                                      >
+                                        <Box
+                                          component="button"
+                                          type="button"
+                                          onClick={() =>
+                                            setExpandedMobileCustomerDetails((prev) => ({
+                                              ...prev,
+                                              [order.id]: !prev[order.id],
+                                            }))
+                                          }
+                                          aria-label={
+                                            isCustomerDetailsExpanded
+                                              ? "Hide customer contact details"
+                                              : "Show customer contact details"
+                                          }
+                                          style={{
+                                            minWidth: 0,
+                                            maxWidth: "100%",
+                                            border: "none",
+                                            background: "transparent",
+                                            padding: 0,
+                                            margin: 0,
+                                            textAlign: "left",
+                                            cursor: "pointer",
+                                            color: "inherit",
+                                          }}
+                                        >
+                                          <Text
+                                            fw={600}
+                                            style={{
+                                              minWidth: 0,
+                                              whiteSpace: "nowrap",
+                                              overflow: "hidden",
+                                              textOverflow: "ellipsis",
+                                            }}
+                                          >
+                                            {order.customerName || "Unnamed guest"}
+                                          </Text>
+                                        </Box>
+                                        <Box
+                                          component="button"
+                                          type="button"
+                                          onClick={() =>
+                                            setExpandedMobileCustomerDetails((prev) => ({
+                                              ...prev,
+                                              [order.id]: !prev[order.id],
+                                            }))
+                                          }
+                                          aria-label={
+                                            isCustomerDetailsExpanded
+                                              ? "Hide customer contact details"
+                                              : "Show customer contact details"
+                                          }
+                                          style={{
+                                            border: "none",
+                                            background: "transparent",
+                                            padding: 0,
+                                            margin: 0,
+                                            cursor: "pointer",
+                                            color: "inherit",
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            flexShrink: 0,
+                                          }}
+                                        >
+                                          {isCustomerDetailsExpanded ? (
+                                            <IconEyeOff size={14} />
                                           ) : (
-                                            bookingDisplay
+                                            <IconEye size={14} />
                                           )}
-                                        </Text>
-                                      </Stack>
-                                    <Badge color="orange" variant="light">
-                                      {`${order.quantity} people`}
-                                    </Badge>
-                                  </Group>
-                                  <Group gap="xs" wrap="wrap">
-                                      <Badge color="teal" variant="light">
-                                        {`Men: ${order.menCount}`}
+                                        </Box>
+                                      </Box>
+                                      <Badge
+                                        color="orange"
+                                        variant="light"
+                                        style={{ whiteSpace: "nowrap", flexShrink: 0 }}
+                                      >
+                                        {`${order.quantity} people`}
                                       </Badge>
-                                      <Badge color="pink" variant="light">
-                                        {`Women: ${order.womenCount}`}
-                                      </Badge>
-                                      {undefinedOrderCount > 0 && (
-                                        <Badge color="gray" variant="light">
-                                          {`Undefined Genre: ${undefinedOrderCount}`}
-                                        </Badge>
-                                      )}
-                                      <OrderPlatformBadge platform={order.platform} />
-                                      <StatusBadge status={order.status} />
-                                    {order.extras && (order.extras.tshirts ?? 0) > 0 ? (
-                                      <Badge color="blue" variant="light">
-                                        {`T-Shirts: ${order.extras.tshirts}`}
-                                      </Badge>
-                                    ) : null}
-                                    {order.extras && (order.extras.cocktails ?? 0) > 0 ? (
-                                      <Badge color="violet" variant="light">
-                                        {`Cocktails: ${order.extras.cocktails}`}
-                                      </Badge>
-                                    ) : null}
-                                    {order.extras && (order.extras.photos ?? 0) > 0 ? (
-                                      <Badge color="grape" variant="light">
-                                        {`Photos: ${order.extras.photos}`}
-                                      </Badge>
-                                    ) : null}
-                                  </Group>
-                                  <Stack gap={4}>
-                                    <Text size="sm" c="dimmed">
-                                      Activity Time: {order.timeslot}
-                                    </Text>
-                                    {(() => {
-                                      const link = toWhatsAppLink(order.customerPhone);
-                                      return (
-                                        <Text size="sm" c="dimmed">
-                                          Phone:{' '}
-                                          {link ? (
-                                            <Text
-                                              component="a"
-                                              href={link.href}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              fw={600}
-                                              c="blue"
-                                              style={{ textDecoration: 'none' }}
-                                              title="Open in WhatsApp"
-                                            >
-                                              {link.display}
+                                    </Box>
+                                    {isCustomerDetailsExpanded && (
+                                      <Paper
+                                        withBorder
+                                        radius="sm"
+                                        py={6}
+                                        px={8}
+                                        style={{
+                                          backgroundColor: "#f8fafc",
+                                          borderColor: "#e2e8f0",
+                                        }}
+                                      >
+                                        <Stack gap={2}>
+                                          <Text size="xs" c="dimmed" style={{ lineHeight: 1.2 }}>
+                                            {`Phone: ${whatsappLink?.display ?? order.customerPhone ?? "-"}`}
+                                          </Text>
+                                          <Text size="xs" c="dimmed" style={{ lineHeight: 1.2 }}>
+                                            {`Email: ${order.customerEmail || "-"}`}
+                                          </Text>
+                                        </Stack>
+                                      </Paper>
+                                    )}
+                                    {bookingBreakdownChips.length > 0 && (
+                                      <Box
+                                        style={{
+                                          display: "grid",
+                                          gridTemplateColumns: `repeat(${bookingBreakdownChips.length}, minmax(0, 1fr))`,
+                                          gap: 8,
+                                        }}
+                                      >
+                                        {bookingBreakdownChips.map((chip) => (
+                                          <Badge
+                                            key={`${order.id}-${chip.key}`}
+                                            color={chip.color}
+                                            variant="light"
+                                            size="xs"
+                                            style={{
+                                              ...BOOKING_BREAKDOWN_BADGE_BASE_STYLE,
+                                              ...chip.style,
+                                            }}
+                                          >
+                                            {chip.label}
+                                          </Badge>
+                                        ))}
+                                      </Box>
+                                    )}
+                                    {bookingExtrasChips.length > 0 && (
+                                      <Box
+                                        style={{
+                                          display: "grid",
+                                          gridTemplateColumns: `repeat(${bookingExtrasChips.length}, minmax(0, 1fr))`,
+                                          gap: 8,
+                                        }}
+                                      >
+                                        {bookingExtrasChips.map((chip) => (
+                                          <Paper
+                                            key={`${order.id}-extra-${chip.key}`}
+                                            withBorder
+                                            radius="xl"
+                                            py={4}
+                                            px={8}
+                                            style={{
+                                              display: "flex",
+                                              alignItems: "center",
+                                              justifyContent: "center",
+                                              gap: 6,
+                                              backgroundColor: "#f4f7fa",
+                                              borderColor: "#d9e1ea",
+                                            }}
+                                          >
+                                            {chip.icon}
+                                            <Text size="xs" fw={700} c="dark.6" style={{ lineHeight: 1 }}>
+                                              {chip.value}
                                             </Text>
-                                          ) : (
-                                            order.customerPhone || "Not provided"
-                                          )}
+                                          </Paper>
+                                        ))}
+                                      </Box>
+                                    )}
+                                    <Box
+                                      style={{
+                                        display: "grid",
+                                        gridTemplateColumns: "minmax(0, 0.85fr) minmax(0, 0.85fr) minmax(0, 1.3fr)",
+                                        gap: 8,
+                                      }}
+                                    >
+                                      {whatsappLink ? (
+                                        <Anchor
+                                          href={whatsappLink.href}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          size="xs"
+                                          title={whatsappLink.display}
+                                          aria-label={`Open WhatsApp ${whatsappLink.display}`}
+                                          style={{
+                                            display: "block",
+                                            width: "100%",
+                                            color: "inherit",
+                                            textDecoration: "none",
+                                          }}
+                                        >
+                                          <Paper
+                                            withBorder
+                                            radius="xl"
+                                            py={4}
+                                            px={8}
+                                            style={{
+                                              display: "flex",
+                                              alignItems: "center",
+                                              justifyContent: "center",
+                                              backgroundColor: "#f4f7fa",
+                                              borderColor: "#d9e1ea",
+                                              minWidth: 0,
+                                              cursor: "pointer",
+                                            }}
+                                          >
+                                            <WhatsApp fontSize="small" style={{ color: "#25D366" }} />
+                                          </Paper>
+                                        </Anchor>
+                                      ) : (
+                                        <Paper
+                                          withBorder
+                                          radius="xl"
+                                          py={4}
+                                          px={8}
+                                          style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            backgroundColor: "#f4f7fa",
+                                            borderColor: "#d9e1ea",
+                                            minWidth: 0,
+                                            position: "relative",
+                                            overflow: "hidden",
+                                          }}
+                                        >
+                                          <WhatsApp fontSize="small" style={{ color: "#25D366", opacity: 0.35 }} />
+                                          <Box
+                                            style={{
+                                              position: "absolute",
+                                              left: 6,
+                                              right: 6,
+                                              top: "50%",
+                                              height: 1.5,
+                                              backgroundColor: "#8fa0b3",
+                                              transform: "rotate(-26deg)",
+                                              transformOrigin: "center",
+                                              pointerEvents: "none",
+                                            }}
+                                          />
+                                        </Paper>
+                                      )}
+                                      {order.customerEmail ? (
+                                        <Anchor
+                                          href={`mailto:${order.customerEmail}`}
+                                          size="xs"
+                                          title={order.customerEmail}
+                                          aria-label={`Send email to ${order.customerEmail}`}
+                                          style={{
+                                            display: "block",
+                                            width: "100%",
+                                            color: "inherit",
+                                            textDecoration: "none",
+                                          }}
+                                        >
+                                          <Paper
+                                            withBorder
+                                            radius="xl"
+                                            py={4}
+                                            px={8}
+                                            style={{
+                                              display: "flex",
+                                              alignItems: "center",
+                                              justifyContent: "center",
+                                              backgroundColor: "#f4f7fa",
+                                              borderColor: "#d9e1ea",
+                                              minWidth: 0,
+                                              cursor: "pointer",
+                                            }}
+                                          >
+                                            <MailOutline fontSize="small" />
+                                          </Paper>
+                                        </Anchor>
+                                      ) : (
+                                        <Paper
+                                          withBorder
+                                          radius="xl"
+                                          py={4}
+                                          px={8}
+                                          style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            backgroundColor: "#f4f7fa",
+                                            borderColor: "#d9e1ea",
+                                            minWidth: 0,
+                                            position: "relative",
+                                            overflow: "hidden",
+                                          }}
+                                        >
+                                          <MailOutline fontSize="small" style={{ opacity: 0.35 }} />
+                                          <Box
+                                            style={{
+                                              position: "absolute",
+                                              left: 6,
+                                              right: 6,
+                                              top: "50%",
+                                              height: 1.5,
+                                              backgroundColor: "#8fa0b3",
+                                              transform: "rotate(-26deg)",
+                                              transformOrigin: "center",
+                                              pointerEvents: "none",
+                                            }}
+                                          />
+                                        </Paper>
+                                      )}
+                                      <Paper
+                                        withBorder
+                                        radius="xl"
+                                        py={4}
+                                        px={8}
+                                        style={{
+                                          display: "flex",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          backgroundColor: isUnknownNationality ? "#ffffff" : "#334155",
+                                          borderColor: "#334155",
+                                          borderWidth: isUnknownNationality ? 2 : 1,
+                                          minWidth: 0,
+                                        }}
+                                      >
+                                        <Text
+                                          size="xs"
+                                          fw={700}
+                                          c={isUnknownNationality ? "#334155" : "white"}
+                                          style={{
+                                            width: "100%",
+                                            textAlign: "center",
+                                            whiteSpace: "nowrap",
+                                            overflow: "hidden",
+                                            textOverflow: "ellipsis",
+                                          }}
+                                        >
+                                          {guessedNationality}
                                         </Text>
-                                      );
-                                    })()}
-                                    <Group gap="xs">
-                                      {canAmend && (
-                                        <Button
+                                      </Paper>
+                                    </Box>
+                                  <Stack gap={4}>
+                                    <Button
+                                      size="xs"
+                                      variant="light"
+                                      fullWidth
+                                      styles={{ label: { color: "#3a3a3a" } }}
+                                      onClick={() => setMobileActionsOrder(order)}
+                                    >
+                                      Actions
+                                    </Button>
+                                    <Box
+                                      mt={2}
+                                      style={{
+                                        display: "grid",
+                                        gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                                        gap: 8,
+                                      }}
+                                    >
+                                      <Paper
+                                        withBorder
+                                        radius="xl"
+                                        py={4}
+                                        px={8}
+                                        style={{
+                                          display: "flex",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          backgroundColor: "#f4f7fa",
+                                          borderColor: "#d9e1ea",
+                                          minWidth: 0,
+                                        }}
+                                      >
+                                        <Text
                                           size="xs"
-                                          variant="light"
-                                          onClick={() => openAmendModal(order)}
+                                          fw={700}
+                                          c="dark.6"
+                                          style={{
+                                            width: "100%",
+                                            textAlign: "center",
+                                            whiteSpace: "nowrap",
+                                            overflow: "hidden",
+                                            textOverflow: "ellipsis",
+                                          }}
                                         >
-                                          Amend
-                                        </Button>
-                                      )}
-                                      <Button size="xs" variant="default" onClick={() => openDetailsModal(order)}>
-                                        Details
-                                      </Button>
-                                      {canPartialRefund && (
-                                        <Button
-                                          size="xs"
-                                          color="orange"
-                                          variant="outline"
-                                          onClick={() => openPartialRefundModal(order)}
+                                          {formatPlatformLabel(order.platform)}
+                                        </Text>
+                                      </Paper>
+                                      <Paper
+                                        withBorder
+                                        radius="xl"
+                                        py={4}
+                                        px={8}
+                                        style={{
+                                          display: "flex",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          backgroundColor: "#f4f7fa",
+                                          borderColor: "#d9e1ea",
+                                          minWidth: 0,
+                                        }}
+                                      >
+                                        {bookingLink ? (
+                                          <Anchor
+                                            href={bookingLink}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            size="xs"
+                                            style={{
+                                              width: "100%",
+                                              textAlign: "center",
+                                              whiteSpace: "nowrap",
+                                              overflow: "hidden",
+                                              textOverflow: "ellipsis",
+                                              color: "inherit",
+                                              fontWeight: 700,
+                                              textDecoration: "none",
+                                            }}
+                                          >
+                                            {bookingDisplay}
+                                          </Anchor>
+                                        ) : (
+                                          <Text
+                                            size="xs"
+                                            fw={700}
+                                            c="dark.6"
+                                            style={{
+                                              width: "100%",
+                                              textAlign: "center",
+                                              whiteSpace: "nowrap",
+                                              overflow: "hidden",
+                                              textOverflow: "ellipsis",
+                                            }}
+                                          >
+                                            {bookingDisplay}
+                                          </Text>
+                                        )}
+                                      </Paper>
+                                      {orderStatusDisplayKey === "partial" ? (
+                                        <Popover withArrow position="top" shadow="md" width={220}>
+                                          <Popover.Target>
+                                            <Box
+                                              component="button"
+                                              type="button"
+                                              style={{
+                                                padding: 0,
+                                                border: 0,
+                                                background: "transparent",
+                                                minWidth: 0,
+                                                cursor: "pointer",
+                                              }}
+                                              aria-label="Show partial attendance details"
+                                            >
+                                              <Paper
+                                                withBorder
+                                                radius="xl"
+                                                py={4}
+                                                px={8}
+                                                style={{
+                                                  display: "flex",
+                                                  alignItems: "center",
+                                                  justifyContent: "center",
+                                                  backgroundColor: orderStatusPresentation.backgroundColor,
+                                                  borderColor: orderStatusPresentation.backgroundColor,
+                                                  minWidth: 0,
+                                                }}
+                                              >
+                                                <Text
+                                                  size="xs"
+                                                  fw={700}
+                                                  style={{
+                                                    color: orderStatusPresentation.textColor,
+                                                    width: "100%",
+                                                    textAlign: "center",
+                                                    whiteSpace: "nowrap",
+                                                    overflow: "hidden",
+                                                    textOverflow: "ellipsis",
+                                                  }}
+                                                >
+                                                  {orderStatusPresentation.label}
+                                                </Text>
+                                              </Paper>
+                                            </Box>
+                                          </Popover.Target>
+                                          <Popover.Dropdown p="xs">
+                                            <PartialStatusPopoverContent order={order} />
+                                          </Popover.Dropdown>
+                                        </Popover>
+                                      ) : (
+                                        <Paper
+                                          withBorder
+                                          radius="xl"
+                                          py={4}
+                                          px={8}
+                                          style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            backgroundColor: orderStatusPresentation.backgroundColor,
+                                            borderColor: orderStatusPresentation.backgroundColor,
+                                            minWidth: 0,
+                                          }}
                                         >
-                                          Partial Refund
-                                        </Button>
+                                          <Text
+                                            size="xs"
+                                            fw={700}
+                                            style={{
+                                              color: orderStatusPresentation.textColor,
+                                              width: "100%",
+                                              textAlign: "center",
+                                              whiteSpace: "nowrap",
+                                              overflow: "hidden",
+                                              textOverflow: "ellipsis",
+                                            }}
+                                          >
+                                            {orderStatusPresentation.label}
+                                          </Text>
+                                        </Paper>
                                       )}
-                                      {canCancel && (
-                                        <Button
-                                          size="xs"
-                                          color="red"
-                                          variant="outline"
-                                          onClick={() => openCancelModal(order)}
-                                        >
-                                          Cancel
-                                        </Button>
-                                      )}
-                                    </Group>
+                                    </Box>
                                   </Stack>
                                 </Stack>
                               </Paper>
@@ -2340,63 +3373,49 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                         background: "#fff",
                         borderRadius: 10,
                         boxShadow: "0 18px 36px rgba(15, 23, 42, 0.08)",
-                        border: "1px solid #e2e8f0",
+                        border: "0.5px solid #c4cfdd",
                         padding: 24,
                       }}
                     >
                       <Flex justify="space-between" align="center" wrap="wrap" gap="sm">
-                        <Stack gap={4}>
-                          <Text fw={700} size="lg">
+                        <Box
+                          style={{
+                            minWidth: 0,
+                            flex: "1 1 auto",
+                            display: "grid",
+                            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+                            alignItems: "center",
+                            columnGap: 8,
+                          }}
+                        >
+                          <Text
+                            fw={700}
+                            size="lg"
+                            style={{
+                              minWidth: 0,
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              textAlign: "center",
+                            }}
+                          >
                             {group.productName}
                           </Text>
-                          <Group gap="xs" align="center">
-                            <Badge color="orange" variant="filled" radius="sm">
+                          <Box style={{ display: "flex", justifyContent: "center" }}>
+                            <Badge
+                              color="orange"
+                              variant="filled"
+                              radius="sm"
+                              style={{ minWidth: 68, justifyContent: "center" }}
+                            >
                               {group.time}
                             </Badge>
-                            <Text size="sm" c="dimmed">
-                              {readableDate}
-                            </Text>
-                          </Group>
-                        </Stack>
-                        <Group gap="xs" wrap="wrap">
-                          <Badge color="green" variant="light">
-                            {`${group.totalPeople} people`}
-                          </Badge>
-                          <Badge color="teal" variant="light">
-                            {`Men: ${group.men}`}
-                          </Badge>
-                          <Badge color="pink" variant="light">
-                            {`Women: ${group.women}`}
-                          </Badge>
-                          {undefinedGroupCount > 0 && (
-                            <Badge color="gray" variant="light">
-                              {`Undefined Genre: ${undefinedGroupCount}`}
-                            </Badge>
-                          )}
-                          {group.extras.tshirts > 0 && (
-                            <Badge color="blue" variant="light">
-                              {`T-Shirts: ${group.extras.tshirts}`}
-                            </Badge>
-                          )}
-                          {group.extras.cocktails > 0 && (
-                            <Badge color="violet" variant="light">
-                              {`Cocktails: ${group.extras.cocktails}`}
-                            </Badge>
-                          )}
-                          {group.extras.photos > 0 && (
-                            <Badge color="grape" variant="light">
-                              {`Photos: ${group.extras.photos}`}
-                            </Badge>
-                          )}
-                          <Badge color="gray" variant="light">
-                            {bookingsLabel}
-                          </Badge>
-                          <PlatformBadges
-                            entries={group.platformBreakdown}
-                            prefix={`group-mobile-${group.productId}-${group.time}`}
-                          />
-                        </Group>
+                          </Box>
+                        </Box>
                       </Flex>
+                      <Box mt="sm">
+                        <ProductSummaryPanels group={group} undefinedGroupCount={undefinedGroupCount} />
+                      </Box>
 
                       <Table striped highlightOnHover withColumnBorders mt="md" horizontalSpacing="md" verticalSpacing="sm">
                           <Table.Thead>
@@ -2497,7 +3516,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                 <OrderPlatformBadge platform={order.platform} />
                               </Table.Td>
                               <Table.Td>
-                                <StatusBadge status={order.status} />
+                                <StatusBadge status={order.status} attendanceStatus={order.attendanceStatus} order={order} />
                               </Table.Td>
                               <Table.Td>
                                 {(() => {
@@ -2577,6 +3596,46 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         )}
 
       </Stack>
+
+      <Modal
+        opened={Boolean(mobileActionsOrder)}
+        onClose={closeMobileActionsModal}
+        title={
+          mobileActionsOrder
+            ? `Actions - ${mobileActionsOrder.customerName || mobileActionsOrder.platformBookingId || mobileActionsOrder.id}`
+            : "Actions"
+        }
+        size="sm"
+        centered
+      >
+        <Stack gap="xs">
+          <Button variant="default" fullWidth onClick={handleMobileActionsDetails}>
+            Details
+          </Button>
+          {mobileActionsCanAmend && (
+            <Button variant="light" fullWidth onClick={handleMobileActionsAmend}>
+              Amend
+            </Button>
+          )}
+          {mobileActionsCanPartialRefund && (
+            <Button color="orange" variant="outline" fullWidth onClick={handleMobileActionsPartialRefund}>
+              Partial Refund
+            </Button>
+          )}
+          {mobileActionsCanCancel && (
+            <Button
+              color="red"
+              variant="outline"
+              fullWidth
+              onClick={() => {
+                void handleMobileActionsCancel();
+              }}
+            >
+              Cancel
+            </Button>
+          )}
+        </Stack>
+      </Modal>
 
       <Modal
         opened={amendState.opened}
