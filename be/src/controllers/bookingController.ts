@@ -8,6 +8,7 @@ import Booking from '../models/Booking.js';
 import BookingEmail from '../models/BookingEmail.js';
 import BookingAddon from '../models/BookingAddon.js';
 import BookingEvent from '../models/BookingEvent.js';
+import EmailTemplate from '../models/EmailTemplate.js';
 import Channel from '../models/Channel.js';
 import Guest from '../models/Guest.js';
 import Addon from '../models/Addon.js';
@@ -29,6 +30,16 @@ import {
   ingestLatestBookingEmails,
   processBookingEmail,
 } from '../services/bookings/bookingIngestionService.js';
+import {
+  fetchMessagePayload as fetchGmailMessagePayload,
+  listMailboxMessages,
+  sendMessage as sendGmailMessage,
+} from '../services/bookings/gmailClient.js';
+import {
+  renderReactEmailTemplateSource,
+  renderStoredEmailTemplate,
+  type EmailTemplateContext,
+} from '../services/emailTemplates/emailTemplateRenderer.js';
 import { syncEcwidBookingUtmByBookingId } from '../services/bookings/ecwidUtmSyncService.js';
 import logger from '../utils/logger.js';
 import type {
@@ -47,6 +58,7 @@ import {
 } from '../constants/bookings.js';
 import { getEcwidOrder, updateEcwidOrder, type EcwidExtraField, type EcwidOrder } from '../services/ecwidService.js';
 import { getConfigValue } from '../services/configService.js';
+import type { EmailTemplateType } from '../models/EmailTemplate.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -241,6 +253,12 @@ type BookingEmailQueryParams = QueryParams & {
   threadId?: string;
 };
 
+type BookingMailboxQueryParams = {
+  email?: string;
+  limit?: string;
+  pageToken?: string;
+};
+
 type BulkEmailReprocessBody = {
   messageIds?: string[];
   pickupFrom?: string;
@@ -253,6 +271,42 @@ type BackfillEmailRequestBody = {
   pickupTo?: string;
   batchSize?: number;
   query?: string;
+};
+
+type SendBookingEmailBody = {
+  to?: unknown;
+  subject?: unknown;
+  body?: unknown;
+  templateId?: unknown;
+  templateContext?: Record<string, unknown> | null;
+  htmlBodyOverride?: unknown;
+  textBodyOverride?: unknown;
+};
+
+type RenderedEmailResult = {
+  templateId: number | null;
+  templateType: EmailTemplateType | null;
+  subject: string;
+  textBody: string;
+  htmlBody: string | null;
+};
+
+type CreateEmailTemplateBody = {
+  name?: unknown;
+  description?: unknown;
+  templateType?: unknown;
+  subjectTemplate?: unknown;
+  bodyTemplate?: unknown;
+  isActive?: unknown;
+};
+
+type UpdateEmailTemplateBody = {
+  name?: unknown;
+  description?: unknown;
+  templateType?: unknown;
+  subjectTemplate?: unknown;
+  bodyTemplate?: unknown;
+  isActive?: unknown;
 };
 
 type GmailMessagePart = {
@@ -268,6 +322,10 @@ type StoredGmailMessage = {
 
 const EMAIL_DEFAULT_LIMIT = 50;
 const EMAIL_MAX_LIMIT = 1000;
+const MAILBOX_DEFAULT_LIMIT = 25;
+const MAILBOX_MAX_LIMIT = 100;
+const EMAIL_ADDRESS_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_TEMPLATE_TYPES: EmailTemplateType[] = ['plain_text', 'react_email'];
 const FALLBACK_BOOKING_QUERY =
   '(subject:(booking OR reservation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR airbnb.com OR airbnbmail.com))';
 
@@ -299,6 +357,388 @@ const parseEmailLimitParam = (value: unknown, fallback: number): number => {
     return fallback;
   }
   return Math.min(parsed, EMAIL_MAX_LIMIT);
+};
+
+const parseMailboxLimitParam = (value: unknown): number => {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return MAILBOX_DEFAULT_LIMIT;
+  }
+  return Math.min(parsed, MAILBOX_MAX_LIMIT);
+};
+
+const sanitizeHeaderValue = (value: string): string => value.replace(/[\r\n]+/g, ' ').trim();
+
+const parseOptionalInteger = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+};
+
+const normalizeEmailTemplateType = (value: unknown): EmailTemplateType | null => {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase();
+  if (EMAIL_TEMPLATE_TYPES.includes(normalized as EmailTemplateType)) {
+    return normalized as EmailTemplateType;
+  }
+  return null;
+};
+
+const normalizeOptionalString = (value: unknown): string | null => {
+  const normalized = String(value ?? '').trim();
+  return normalized.length > 0 ? normalized : null;
+};
+
+const normalizeTemplateName = (value: unknown): string | null => {
+  const normalized = String(value ?? '')
+    .trim()
+    .replace(/\s+/g, ' ');
+  return normalized.length > 0 ? normalized : null;
+};
+
+const normalizeTemplateContext = (value: unknown): EmailTemplateContext => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  const sanitizeValue = (input: unknown, depth = 0): unknown => {
+    if (depth > 8) {
+      return null;
+    }
+    if (
+      input === null ||
+      input === undefined ||
+      typeof input === 'string' ||
+      typeof input === 'number' ||
+      typeof input === 'boolean'
+    ) {
+      return input;
+    }
+    if (Array.isArray(input)) {
+      return input.map((entry) => sanitizeValue(entry, depth + 1));
+    }
+    if (typeof input === 'object') {
+      return Object.entries(input as Record<string, unknown>).reduce<Record<string, unknown>>((acc, [key, raw]) => {
+        const normalizedKey = String(key ?? '').trim();
+        if (!normalizedKey) {
+          return acc;
+        }
+        acc[normalizedKey] = sanitizeValue(raw, depth + 1);
+        return acc;
+      }, {});
+    }
+    return null;
+  };
+
+  return Object.entries(value as Record<string, unknown>).reduce<EmailTemplateContext>((acc, [key, raw]) => {
+    const normalizedKey = String(key ?? '').trim();
+    if (!normalizedKey) {
+      return acc;
+    }
+    acc[normalizedKey] = sanitizeValue(raw, 0);
+    return acc;
+  }, {});
+};
+
+const enrichTemplateContextAliases = (context: EmailTemplateContext): EmailTemplateContext => {
+  const normalized: EmailTemplateContext = { ...context };
+  const toFiniteNumber = (value: unknown, fallback = 0): number => {
+    const parsed = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  const toNonNegativeInt = (value: unknown, fallback = 0): number =>
+    Math.max(0, Math.round(toFiniteNumber(value, fallback)));
+  const asRecord = (value: unknown): Record<string, unknown> | null => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+    return value as Record<string, unknown>;
+  };
+  const normalizeAddonNameKey = (value: unknown): string =>
+    String(value ?? '')
+      .toLowerCase()
+      .replace(/[^a-z]/g, '');
+  const buildRefundAddonRow = (
+    rawValue: unknown,
+    fallbackName: string,
+    fallbackQuantity = 0,
+    fallbackAmount = 0,
+  ): Record<string, unknown> => {
+    const record = asRecord(rawValue);
+    const name = normalizeOptionalString(record?.name) ?? fallbackName;
+    const bookedQty = toNonNegativeInt(record?.bookedQty ?? record?.qty, fallbackQuantity);
+    const refundQty = toNonNegativeInt(record?.refundQty ?? record?.quantity, 0);
+    const amount = toFiniteNumber(record?.amount, fallbackAmount);
+    const unitPrice = toFiniteNumber(record?.unitPrice, 0);
+    return {
+      name,
+      qty: bookedQty,
+      quantity: refundQty,
+      bookedQty,
+      refundQty,
+      unitPrice,
+      amount,
+    };
+  };
+
+  const resolveStringAlias = (keys: string[]): string | null => {
+    for (const key of keys) {
+      const value = normalizeOptionalString(normalized[key]);
+      if (value) {
+        return value;
+      }
+    }
+    return null;
+  };
+
+  const bookingReference = resolveStringAlias(['bookingReference', 'bookingId', 'platformBookingId', 'reservationId']);
+  if (bookingReference) {
+    if (!normalizeOptionalString(normalized.bookingReference)) {
+      normalized.bookingReference = bookingReference;
+    }
+    if (!normalizeOptionalString(normalized.bookingId)) {
+      normalized.bookingId = bookingReference;
+    }
+    if (!normalizeOptionalString(normalized.platformBookingId)) {
+      normalized.platformBookingId = bookingReference;
+    }
+    if (!normalizeOptionalString(normalized.reservationId)) {
+      normalized.reservationId = bookingReference;
+    }
+  }
+
+  const peopleCountRaw = normalized.peopleCount ?? normalized.quantity;
+  const peopleCount = typeof peopleCountRaw === 'number' ? peopleCountRaw : Number.parseInt(String(peopleCountRaw ?? ''), 10);
+  if (Number.isFinite(peopleCount)) {
+    if (!Number.isFinite(Number(normalized.peopleCount))) {
+      normalized.peopleCount = peopleCount;
+    }
+    if (!Number.isFinite(Number(normalized.quantity))) {
+      normalized.quantity = peopleCount;
+    }
+  }
+
+  if (!normalizeOptionalString(normalized.currency)) {
+    normalized.currency = 'EUR';
+  }
+
+  const contextHint = `${String(normalized.templateKey ?? '')} ${String(normalized.partialReason ?? '')} ${String(
+    normalized.refundReason ?? '',
+  )}`.toLowerCase();
+  const isRefundLikeContext =
+    contextHint.includes('refund') ||
+    normalized.refundedAmount !== undefined ||
+    normalized.totalPaidAmount !== undefined ||
+    normalized.isFullRefund !== undefined ||
+    normalized.refundedAddons !== undefined;
+
+  if (isRefundLikeContext) {
+    const quantity = toNonNegativeInt(normalized.quantity ?? normalized.peopleCount, 0);
+    const peopleRefundSource = asRecord(normalized.peopleRefund) ?? asRecord(normalized.peopleRefundDetails);
+    const peopleRefund = {
+      name: normalizeOptionalString(peopleRefundSource?.name) ?? 'People',
+      qty: toNonNegativeInt(peopleRefundSource?.qty ?? peopleRefundSource?.bookedQty, quantity),
+      quantity: toNonNegativeInt(peopleRefundSource?.quantity ?? peopleRefundSource?.refundQty, 0),
+      bookedQty: toNonNegativeInt(peopleRefundSource?.bookedQty ?? peopleRefundSource?.qty, quantity),
+      refundQty: toNonNegativeInt(peopleRefundSource?.refundQty ?? peopleRefundSource?.quantity, 0),
+      unitPrice: toFiniteNumber(peopleRefundSource?.unitPrice, 0),
+      amount: toFiniteNumber(peopleRefundSource?.amount, 0),
+    };
+    normalized.peopleRefund = peopleRefund;
+    if (!asRecord(normalized.peopleRefundDetails)) {
+      normalized.peopleRefundDetails = peopleRefund;
+    }
+    if (!asRecord(normalized.peopleChange)) {
+      normalized.peopleChange = {
+        from: quantity,
+        to: quantity,
+        amount: 0,
+      };
+    }
+
+    const addonRows = Array.isArray(normalized.refundedAddons)
+      ? (normalized.refundedAddons as unknown[]).map((entry) => buildRefundAddonRow(entry, 'Add-On'))
+      : [];
+    const existingByName = (tokens: string[]): Record<string, unknown> | null =>
+      addonRows.find((row) => {
+        const key = normalizeAddonNameKey((row as Record<string, unknown>).name);
+        return tokens.some((token) => key.includes(token));
+      }) ?? null;
+    const ensureByAlias = (
+      aliasKey: 'cocktailsRefund' | 'tshirtsRefund' | 'photosRefund',
+      tokens: string[],
+      fallbackName: string,
+    ): Record<string, unknown> => {
+      const existing = existingByName(tokens);
+      if (existing) {
+        return existing;
+      }
+      const aliasFallback = buildRefundAddonRow(normalized[aliasKey], fallbackName);
+      addonRows.push(aliasFallback);
+      return aliasFallback;
+    };
+
+    const cocktailsRefund = ensureByAlias('cocktailsRefund', ['cocktail', 'drink'], 'Cocktails Add-On');
+    const tshirtsRefund = ensureByAlias('tshirtsRefund', ['tshirt', 'shirt'], 'T-Shirts Add-On');
+    const photosRefund = ensureByAlias('photosRefund', ['photo', 'picture', 'instantpic'], 'Photos Add-On');
+
+    const refundedAmount = Math.max(0, toFiniteNumber(normalized.refundedAmount, 0));
+    const hasPositiveRefundBreakdown = addonRows.some(
+      (row) =>
+        toFiniteNumber((row as Record<string, unknown>).amount, 0) > 0 ||
+        toNonNegativeInt((row as Record<string, unknown>).refundQty, 0) > 0,
+    );
+    if (!hasPositiveRefundBreakdown && refundedAmount > 0) {
+      addonRows.push(
+        buildRefundAddonRow(
+          {
+            name: 'Manual adjustment',
+            qty: 1,
+            quantity: 1,
+            bookedQty: 1,
+            refundQty: 1,
+            unitPrice: refundedAmount,
+            amount: refundedAmount,
+          },
+          'Manual adjustment',
+          1,
+          refundedAmount,
+        ),
+      );
+    }
+
+    normalized.refundedAddons = addonRows;
+    if (!Array.isArray(normalized.addons) || normalized.addons.length === 0) {
+      normalized.addons = addonRows;
+    }
+    if (!Array.isArray(normalized.addonsBreakdown) || normalized.addonsBreakdown.length === 0) {
+      normalized.addonsBreakdown = addonRows;
+    }
+    normalized.cocktailsRefund = cocktailsRefund;
+    normalized.tshirtsRefund = tshirtsRefund;
+    normalized.photosRefund = photosRefund;
+    const refundedAddonsByType = asRecord(normalized.refundedAddonsByType) ?? {};
+    normalized.refundedAddonsByType = {
+      ...refundedAddonsByType,
+      cocktails: refundedAddonsByType.cocktails ?? cocktailsRefund,
+      tshirts: refundedAddonsByType.tshirts ?? tshirtsRefund,
+      photos: refundedAddonsByType.photos ?? photosRefund,
+    };
+  }
+
+  return normalized;
+};
+
+const toEmailTemplateResponse = (template: EmailTemplate) => ({
+  id: template.id,
+  name: template.name,
+  description: template.description,
+  templateType: template.templateType,
+  subjectTemplate: template.subjectTemplate,
+  bodyTemplate: template.bodyTemplate,
+  isActive: template.isActive,
+  createdBy: template.createdBy,
+  updatedBy: template.updatedBy,
+});
+
+const resolveRenderedEmailFromPayload = async (payload: SendBookingEmailBody): Promise<RenderedEmailResult> => {
+  const subjectInput = sanitizeHeaderValue(String(payload?.subject ?? ''));
+  const bodyInput = String(payload?.body ?? '').trim();
+  const htmlBodyOverrideInput = normalizeOptionalString(payload?.htmlBodyOverride);
+  const textBodyOverrideInput = normalizeOptionalString(payload?.textBodyOverride);
+  const templateId = parseOptionalInteger(payload?.templateId);
+  const normalizedContext = enrichTemplateContextAliases(normalizeTemplateContext(payload?.templateContext));
+  const reactTemplateSourceRaw = normalizedContext.reactTemplateSource;
+  const reactTemplateSource =
+    typeof reactTemplateSourceRaw === 'string' && reactTemplateSourceRaw.trim().length > 0
+      ? reactTemplateSourceRaw
+      : null;
+
+  let subject = subjectInput;
+  let textBody = bodyInput;
+  let htmlBody: string | null = null;
+  let templateType: EmailTemplateType | null = null;
+
+  if (!templateId && reactTemplateSource) {
+    let renderedTemplate: Awaited<ReturnType<typeof renderReactEmailTemplateSource>>;
+    try {
+      renderedTemplate = await renderReactEmailTemplateSource({
+        source: reactTemplateSource,
+        subject: subjectInput,
+        context: normalizedContext,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to render React Email template source';
+      throw new HttpError(400, message);
+    }
+    subject = sanitizeHeaderValue(renderedTemplate.subject);
+    textBody = renderedTemplate.textBody;
+    htmlBody = renderedTemplate.htmlBody;
+    templateType = renderedTemplate.templateType;
+  }
+
+  if (templateId) {
+    const template = await EmailTemplate.findByPk(templateId);
+    if (!template) {
+      throw new HttpError(404, 'Email template not found');
+    }
+    if (!template.isActive) {
+      throw new HttpError(400, 'Email template is inactive');
+    }
+
+    let renderedTemplate: Awaited<ReturnType<typeof renderStoredEmailTemplate>>;
+    try {
+      renderedTemplate = await renderStoredEmailTemplate({
+        template,
+        context: normalizedContext,
+        subjectOverride: subjectInput || null,
+        bodyOverride: bodyInput || null,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to render selected email template';
+      throw new HttpError(400, message);
+    }
+
+    subject = sanitizeHeaderValue(renderedTemplate.subject);
+    textBody = renderedTemplate.textBody;
+    htmlBody = renderedTemplate.htmlBody;
+    templateType = renderedTemplate.templateType;
+  }
+
+  if (!subject) {
+    throw new HttpError(400, 'subject is required');
+  }
+  if (htmlBodyOverrideInput || textBodyOverrideInput) {
+    const htmlBodyOverride = htmlBodyOverrideInput ?? null;
+    const textBodyOverride = textBodyOverrideInput ?? (htmlBodyOverride ? stripHtmlToText(htmlBodyOverride) : null);
+    if (!textBodyOverride) {
+      throw new HttpError(400, 'body is required');
+    }
+    return {
+      templateId: templateId ?? null,
+      templateType,
+      subject,
+      textBody: textBodyOverride,
+      htmlBody: htmlBodyOverride ?? htmlBody,
+    };
+  }
+  if (!textBody) {
+    throw new HttpError(400, 'body is required');
+  }
+
+  return {
+    templateId: templateId ?? null,
+    templateType,
+    subject,
+    textBody,
+    htmlBody,
+  };
 };
 
 const resolveEmailRange = (query: QueryParams): { start: Date | null; end: Date | null } => {
@@ -1217,6 +1657,316 @@ export const getBookingEmailPreview = async (req: Request, res: Response): Promi
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load booking email preview';
+    res.status(500).json({ message });
+  }
+};
+
+export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const query = req.query as BookingMailboxQueryParams;
+    const email = String(query?.email ?? '').trim().toLowerCase();
+    if (!email) {
+      res.status(400).json({ message: 'email is required' });
+      return;
+    }
+    if (!EMAIL_ADDRESS_REGEX.test(email)) {
+      res.status(400).json({ message: 'email must be a valid email address' });
+      return;
+    }
+
+    const limit = parseMailboxLimitParam(query?.limit);
+    const pageTokenRaw = String(query?.pageToken ?? '').trim();
+    const pageToken = pageTokenRaw.length > 0 ? pageTokenRaw : null;
+
+    const result = await listMailboxMessages({
+      email,
+      maxResults: limit,
+      pageToken,
+    });
+
+    res.status(200).json({
+      email,
+      count: result.messages.length,
+      nextPageToken: result.nextPageToken,
+      messages: result.messages,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to load mailbox emails';
+    res.status(500).json({ message });
+  }
+};
+
+export const getMailboxEmailPreview = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const messageId = String(req.params?.messageId ?? '').trim();
+    if (!messageId) {
+      res.status(400).json({ message: 'messageId is required' });
+      return;
+    }
+
+    const payload = await fetchGmailMessagePayload(messageId);
+    if (!payload) {
+      res.status(404).json({ message: 'Email not found in Gmail mailbox' });
+      return;
+    }
+
+    const htmlBody = payload.htmlBody ?? null;
+    const textBody = payload.textBody?.trim() ? payload.textBody.trim() : null;
+    const htmlText = htmlBody ? stripHtmlToText(htmlBody).trim() : null;
+    const snippet = payload.message.snippet ? payload.message.snippet.trim() : null;
+    const previewText = textBody || htmlText || snippet || null;
+
+    const internalDateRaw = payload.message.internalDate ?? null;
+    const internalDateNumber = internalDateRaw !== null ? Number(internalDateRaw) : NaN;
+    const internalDateCandidate =
+      Number.isFinite(internalDateNumber) && !Number.isNaN(internalDateNumber)
+        ? new Date(internalDateNumber)
+        : null;
+    const internalDate =
+      internalDateCandidate && !Number.isNaN(internalDateCandidate.getTime())
+        ? internalDateCandidate.toISOString()
+        : null;
+
+    const labels = payload.message.labelIds ?? [];
+    const ingestionStatus = labels.includes('SENT') ? 'sent' : 'received';
+
+    res.status(200).json({
+      id: 0,
+      messageId,
+      fromAddress: payload.headers['from'] ?? null,
+      toAddresses: payload.headers['to'] ?? null,
+      ccAddresses: payload.headers['cc'] ?? null,
+      subject: payload.headers['subject'] ?? null,
+      snippet,
+      receivedAt: internalDate,
+      internalDate,
+      ingestionStatus,
+      failureReason: null,
+      previewText,
+      textBody,
+      htmlBody,
+      htmlText,
+      gmailQuery: null,
+      labelIds: labels,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to load mailbox email preview';
+    res.status(500).json({ message });
+  }
+};
+
+export const listEmailTemplates = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const templates = await EmailTemplate.findAll({
+      order: [
+        ['isActive', 'DESC'],
+        ['name', 'ASC'],
+      ],
+    });
+
+    res.status(200).json({
+      count: templates.length,
+      templates: templates.map(toEmailTemplateResponse),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to load email templates';
+    res.status(500).json({ message });
+  }
+};
+
+export const createEmailTemplate = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const payload = req.body as CreateEmailTemplateBody;
+    const name = normalizeTemplateName(payload?.name);
+    const description = normalizeOptionalString(payload?.description);
+    const templateType = normalizeEmailTemplateType(payload?.templateType);
+    const subjectTemplate = normalizeOptionalString(payload?.subjectTemplate);
+    const bodyTemplate = normalizeOptionalString(payload?.bodyTemplate);
+    const isActive = payload?.isActive === undefined ? true : Boolean(payload?.isActive);
+
+    if (!name) {
+      res.status(400).json({ message: 'name is required' });
+      return;
+    }
+    if (!templateType) {
+      res.status(400).json({ message: `templateType must be one of ${EMAIL_TEMPLATE_TYPES.join(', ')}` });
+      return;
+    }
+    if (!subjectTemplate) {
+      res.status(400).json({ message: 'subjectTemplate is required' });
+      return;
+    }
+    if (!bodyTemplate) {
+      res.status(400).json({ message: 'bodyTemplate is required' });
+      return;
+    }
+
+    const existing = await EmailTemplate.findOne({
+      where: {
+        name: { [Op.iLike]: name },
+      },
+      attributes: ['id'],
+    });
+    if (existing) {
+      res.status(409).json({ message: 'An email template with the same name already exists' });
+      return;
+    }
+
+    const template = EmailTemplate.build();
+    template.name = name;
+    template.description = description;
+    template.templateType = templateType;
+    template.subjectTemplate = subjectTemplate;
+    template.bodyTemplate = bodyTemplate;
+    template.isActive = isActive;
+    template.createdBy = req.authContext?.id ?? null;
+    template.updatedBy = req.authContext?.id ?? null;
+    await template.save();
+
+    res.status(201).json(toEmailTemplateResponse(template));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to create email template';
+    res.status(500).json({ message });
+  }
+};
+
+export const updateEmailTemplate = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const templateId = parseOptionalInteger(req.params?.templateId);
+    if (!templateId) {
+      res.status(400).json({ message: 'templateId must be a valid positive integer' });
+      return;
+    }
+
+    const template = await EmailTemplate.findByPk(templateId);
+    if (!template) {
+      res.status(404).json({ message: 'Email template not found' });
+      return;
+    }
+
+    const payload = req.body as UpdateEmailTemplateBody;
+
+    if (payload.name !== undefined) {
+      const name = normalizeTemplateName(payload.name);
+      if (!name) {
+        res.status(400).json({ message: 'name cannot be empty' });
+        return;
+      }
+      const conflict = await EmailTemplate.findOne({
+        where: {
+          id: { [Op.ne]: template.id },
+          name: { [Op.iLike]: name },
+        },
+        attributes: ['id'],
+      });
+      if (conflict) {
+        res.status(409).json({ message: 'An email template with the same name already exists' });
+        return;
+      }
+      template.name = name;
+    }
+
+    if (payload.description !== undefined) {
+      template.description = normalizeOptionalString(payload.description);
+    }
+
+    if (payload.templateType !== undefined) {
+      const templateType = normalizeEmailTemplateType(payload.templateType);
+      if (!templateType) {
+        res.status(400).json({ message: `templateType must be one of ${EMAIL_TEMPLATE_TYPES.join(', ')}` });
+        return;
+      }
+      template.templateType = templateType;
+    }
+
+    if (payload.subjectTemplate !== undefined) {
+      const subjectTemplate = normalizeOptionalString(payload.subjectTemplate);
+      if (!subjectTemplate) {
+        res.status(400).json({ message: 'subjectTemplate cannot be empty' });
+        return;
+      }
+      template.subjectTemplate = subjectTemplate;
+    }
+
+    if (payload.bodyTemplate !== undefined) {
+      const bodyTemplate = normalizeOptionalString(payload.bodyTemplate);
+      if (!bodyTemplate) {
+        res.status(400).json({ message: 'bodyTemplate cannot be empty' });
+        return;
+      }
+      template.bodyTemplate = bodyTemplate;
+    }
+
+    if (payload.isActive !== undefined) {
+      template.isActive = Boolean(payload.isActive);
+    }
+
+    template.updatedBy = req.authContext?.id ?? null;
+    await template.save();
+
+    res.status(200).json(toEmailTemplateResponse(template));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to update email template';
+    res.status(500).json({ message });
+  }
+};
+
+export const renderBookingEmailPreview = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const payload = req.body as SendBookingEmailBody;
+    const rendered = await resolveRenderedEmailFromPayload(payload);
+
+    res.status(200).json({
+      templateId: rendered.templateId,
+      templateType: rendered.templateType,
+      subject: rendered.subject,
+      textBody: rendered.textBody,
+      htmlBody: rendered.htmlBody,
+    });
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json({ message: error.message, details: error.details });
+      return;
+    }
+    const message = error instanceof Error ? error.message : 'Failed to render booking email preview';
+    res.status(500).json({ message });
+  }
+};
+
+export const sendBookingEmail = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const payload = req.body as SendBookingEmailBody;
+    const to = String(payload?.to ?? '').trim();
+
+    if (!to) {
+      res.status(400).json({ message: 'to is required' });
+      return;
+    }
+    if (!EMAIL_ADDRESS_REGEX.test(to)) {
+      res.status(400).json({ message: 'to must be a valid email address' });
+      return;
+    }
+
+    const rendered = await resolveRenderedEmailFromPayload(payload);
+
+    const sendResult = await sendGmailMessage({
+      to,
+      subject: rendered.subject,
+      textBody: rendered.textBody,
+      htmlBody: rendered.htmlBody,
+    });
+    res.status(200).json({
+      status: 'sent',
+      id: sendResult.id,
+      threadId: sendResult.threadId,
+      templateType: rendered.templateType,
+    });
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json({ message: error.message, details: error.details });
+      return;
+    }
+    const message = error instanceof Error ? error.message : 'Failed to send booking email';
     res.status(500).json({ message });
   }
 };
@@ -2189,6 +2939,12 @@ type EcwidRefundPreview = {
 
 type PartialRefundPreview = EcwidRefundPreview & {
   remainingAmount: number;
+  people: {
+    quantity: number;
+    unitPrice: string | null;
+    totalPrice: string | null;
+    currency: string | null;
+  };
   addons: Array<{
     id: number;
     platformAddonName: string | null;
@@ -2345,6 +3101,293 @@ const buildEcwidRefundPreview = async (booking: Booking): Promise<EcwidRefundPre
     externalTransactionId,
     stripe: stripeSummary,
   };
+};
+
+type ResolvedPartialRefundAddon = {
+  bookingAddon: BookingAddon;
+  displayName: string;
+  quantity: number;
+  unitPrice: number;
+  currency: string | null;
+};
+
+type ResolvedPartialRefundPeople = {
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+  currency: string | null;
+};
+
+const parseMoneyValue = (value: unknown): number | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().replace(/\s+/g, '').replace(',', '.');
+    if (!normalized) {
+      return null;
+    }
+    const parsed = Number.parseFloat(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+const roundMoney = (value: number): number =>
+  Math.round((value + Number.EPSILON) * 100) / 100;
+
+const formatMoneyValue = (value: number): string => roundMoney(value).toFixed(2);
+
+const normalizeAddonNameForRefund = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/add[-\s]?on/gi, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const classifyAddonExtraKey = (name: string | null): keyof OrderExtras | null => {
+  const normalized = normalizeAddonNameForRefund(String(name ?? ''));
+  if (!normalized) {
+    return null;
+  }
+  if (/shirt|t shirt|tshirt/.test(normalized)) {
+    return 'tshirts';
+  }
+  if (/cocktail|open bar|vip/.test(normalized)) {
+    return 'cocktails';
+  }
+  if (/photo|instant photo|picture/.test(normalized)) {
+    return 'photos';
+  }
+  return null;
+};
+
+const resolvePartialRefundPeople = (booking: Booking, fallbackCurrency: string): ResolvedPartialRefundPeople => {
+  const toPositiveCount = (value: unknown): number => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return 0;
+    }
+    return Math.max(0, Math.round(parsed));
+  };
+
+  // Primary source must be party_size_total.
+  let quantity = toPositiveCount(booking.partySizeTotal);
+
+  // Fallbacks for records that may not have party_size_total populated.
+  if (quantity <= 0) {
+    const snapshotBreakdown = extractPartyBreakdown(booking.addonsSnapshot ?? undefined);
+    const fromBreakdown = toPositiveCount(snapshotBreakdown.men) + toPositiveCount(snapshotBreakdown.women);
+    if (fromBreakdown > 0) {
+      quantity = fromBreakdown;
+    }
+  }
+
+  if (quantity <= 0) {
+    const adults = toPositiveCount(booking.partySizeAdults);
+    const children = toPositiveCount(booking.partySizeChildren);
+    quantity = adults + children;
+  }
+
+  const baseAmountRaw =
+    parseMoneyValue(booking.baseAmount) ??
+    (() => {
+      const gross = parseMoneyValue(booking.priceGross);
+      const addons = parseMoneyValue(booking.addonsAmount);
+      if (gross !== null && addons !== null) {
+        return Math.max(gross - addons, 0);
+      }
+      return null;
+    })() ??
+    0;
+
+  const totalPrice = roundMoney(Math.max(baseAmountRaw, 0));
+  const unitPrice = quantity > 0 ? roundMoney(totalPrice / quantity) : 0;
+
+  return {
+    quantity,
+    unitPrice,
+    totalPrice,
+    currency: booking.currency ?? fallbackCurrency.toUpperCase(),
+  };
+};
+
+const resolvePartialRefundPeopleFromBaseAmount = (
+  booking: Booking,
+  fallbackCurrency: string,
+  addonsTotalAmount: number,
+): ResolvedPartialRefundPeople => {
+  const people = resolvePartialRefundPeople(booking, fallbackCurrency);
+  const baseAmount = parseMoneyValue(booking.baseAmount);
+  if (baseAmount === null) {
+    return people;
+  }
+
+  const normalizedAddonsTotal = Number.isFinite(addonsTotalAmount)
+    ? Math.max(roundMoney(addonsTotalAmount), 0)
+    : 0;
+  const peopleTotal = Math.max(roundMoney(baseAmount - normalizedAddonsTotal), 0);
+  const peopleUnitPrice = people.quantity > 0 ? roundMoney(peopleTotal / people.quantity) : 0;
+
+  return {
+    quantity: people.quantity,
+    unitPrice: peopleUnitPrice,
+    totalPrice: peopleTotal,
+    currency: booking.currency ?? fallbackCurrency.toUpperCase(),
+  };
+};
+
+const resolveAddonsTotalAmount = (addons: ResolvedPartialRefundAddon[]): number =>
+  roundMoney(
+    addons.reduce((sum, entry) => {
+      const lineTotal = roundMoney(entry.unitPrice * entry.quantity);
+      return sum + lineTotal;
+    }, 0),
+  );
+
+const resolvePartialRefundAddons = async (
+  booking: Booking,
+  fallbackCurrency: string,
+): Promise<ResolvedPartialRefundAddon[]> => {
+  const addons = await BookingAddon.findAll({
+    where: { bookingId: booking.id },
+    include: [
+      {
+        model: Addon,
+        as: 'addon',
+        attributes: ['id', 'name', 'basePrice'],
+      },
+    ],
+    order: [['id', 'ASC']],
+  });
+
+  const priceOverrides = booking.productId
+    ? await ProductAddon.findAll({
+        where: { productId: booking.productId },
+        attributes: ['addonId', 'priceOverride'],
+        include: [{ model: Addon, as: 'addon', attributes: ['id', 'name', 'basePrice'] }],
+      })
+    : [];
+
+  const priceOverrideByAddonId = new Map(
+    priceOverrides.map((entry) => [entry.addonId, entry.priceOverride]),
+  );
+
+  const productAddonByName = new Map<
+    string,
+    { addonId: number; priceOverride: number | null; basePrice: number | null; name: string | null }
+  >();
+  priceOverrides.forEach((entry) => {
+    const addonRecord = entry.addon as Addon | undefined;
+    if (!addonRecord?.name) {
+      return;
+    }
+    const key = normalizeAddonNameForRefund(addonRecord.name);
+    if (!key) {
+      return;
+    }
+    productAddonByName.set(key, {
+      addonId: addonRecord.id,
+      priceOverride: entry.priceOverride ?? null,
+      basePrice: addonRecord.basePrice ?? null,
+      name: addonRecord.name,
+    });
+  });
+
+  const hasMissingAddonId = addons.some((addon) => !addon.addonId && addon.platformAddonName);
+  const fallbackAddonByName = new Map<
+    string,
+    { addonId: number; priceOverride: number | null; basePrice: number | null; name: string | null }
+  >();
+
+  if (hasMissingAddonId) {
+    const allAddons = await Addon.findAll({ attributes: ['id', 'name', 'basePrice'] });
+    allAddons.forEach((addon) => {
+      if (!addon.name) {
+        return;
+      }
+      const key = normalizeAddonNameForRefund(addon.name);
+      if (!key) {
+        return;
+      }
+      fallbackAddonByName.set(key, {
+        addonId: addon.id,
+        priceOverride: null,
+        basePrice: addon.basePrice ?? null,
+        name: addon.name,
+      });
+    });
+  }
+
+  const findAddonByName = (
+    rawName: string | null,
+  ): { addonId: number; priceOverride: number | null; basePrice: number | null; name: string | null } | null => {
+    if (!rawName) {
+      return null;
+    }
+    const normalized = normalizeAddonNameForRefund(rawName);
+    if (!normalized) {
+      return null;
+    }
+    const direct = productAddonByName.get(normalized);
+    if (direct) {
+      return direct;
+    }
+    const fallbackDirect = fallbackAddonByName.get(normalized);
+    if (fallbackDirect) {
+      return fallbackDirect;
+    }
+    for (const [key, value] of productAddonByName.entries()) {
+      if (normalized.includes(key) || key.includes(normalized)) {
+        return value;
+      }
+    }
+    for (const [key, value] of fallbackAddonByName.entries()) {
+      if (normalized.includes(key) || key.includes(normalized)) {
+        return value;
+      }
+    }
+    return null;
+  };
+
+  const resolvedAddons: Array<ResolvedPartialRefundAddon | null> = addons.map(
+    (addon): ResolvedPartialRefundAddon | null => {
+      const addonRecord = addon.addon as Addon | undefined;
+      let addonId = addon.addonId ?? addonRecord?.id ?? null;
+      let override = addonId !== null ? parseMoneyValue(priceOverrideByAddonId.get(addonId)) : null;
+      let fallbackBase = parseMoneyValue(addonRecord?.basePrice ?? null);
+      if (addonId === null && addon.platformAddonName) {
+        const mapped = findAddonByName(addon.platformAddonName);
+        if (mapped) {
+          addonId = mapped.addonId;
+          override = parseMoneyValue(mapped.priceOverride);
+          fallbackBase = parseMoneyValue(mapped.basePrice);
+        }
+      }
+
+      const fromUnit = parseMoneyValue(addon.unitPrice);
+      const fromTotal = parseMoneyValue(addon.totalPrice);
+      const derivedFromTotal = fromTotal !== null && addon.quantity > 0 ? fromTotal / addon.quantity : null;
+      const resolvedUnit = roundMoney(Math.max(override ?? fallbackBase ?? fromUnit ?? derivedFromTotal ?? 0, 0));
+      if (resolvedUnit <= 0 || addon.quantity <= 0) {
+        return null;
+      }
+
+      return {
+        bookingAddon: addon,
+        displayName: addon.platformAddonName ?? addonRecord?.name ?? `Addon ${addon.id}`,
+        quantity: Math.max(0, Math.round(addon.quantity)),
+        unitPrice: resolvedUnit,
+        currency: addon.currency ?? booking.currency ?? fallbackCurrency.toUpperCase(),
+      };
+    },
+  );
+
+  return resolvedAddons.filter((entry): entry is ResolvedPartialRefundAddon => entry !== null);
 };
 
 const createStripeRefundFromSummary = async (
@@ -2583,112 +3626,13 @@ export const getPartialRefundPreview = async (req: AuthenticatedRequest, res: Re
 
     const preview = await buildEcwidRefundPreview(booking);
     const remaining = Math.max(preview.stripe.amount - preview.stripe.amountRefunded, 0);
-
-    const addons = await BookingAddon.findAll({
-      where: { bookingId: booking.id },
-      include: [
-        {
-          model: Addon,
-          as: 'addon',
-          attributes: ['id', 'name', 'basePrice'],
-        },
-      ],
-      order: [['id', 'ASC']],
-    });
-
-    const normalizeAddonName = (value: string): string =>
-      value
-        .toLowerCase()
-        .replace(/add[-\s]?on/gi, '')
-        .replace(/[^a-z0-9]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-    const priceOverrides = booking.productId
-      ? await ProductAddon.findAll({
-          where: { productId: booking.productId },
-          attributes: ['addonId', 'priceOverride'],
-          include: [{ model: Addon, as: 'addon', attributes: ['id', 'name', 'basePrice'] }],
-        })
-      : [];
-    const priceOverrideByAddonId = new Map(
-      priceOverrides.map((entry) => [entry.addonId, entry.priceOverride]),
+    const resolvedAddons = await resolvePartialRefundAddons(booking, preview.stripe.currency);
+    const addonsTotalAmount = resolveAddonsTotalAmount(resolvedAddons);
+    const people = resolvePartialRefundPeopleFromBaseAmount(
+      booking,
+      preview.stripe.currency,
+      addonsTotalAmount,
     );
-    const productAddonByName = new Map<
-      string,
-      { addonId: number; priceOverride: number | null; basePrice: number | null; name: string | null }
-    >();
-    priceOverrides.forEach((entry) => {
-      const addonRecord = entry.addon as Addon | undefined;
-      if (!addonRecord?.name) {
-        return;
-      }
-      const key = normalizeAddonName(addonRecord.name);
-      if (!key) {
-        return;
-      }
-      productAddonByName.set(key, {
-        addonId: addonRecord.id,
-        priceOverride: entry.priceOverride ?? null,
-        basePrice: addonRecord.basePrice ?? null,
-        name: addonRecord.name,
-      });
-    });
-
-    const hasMissingAddonId = addons.some((addon) => !addon.addonId && addon.platformAddonName);
-    const fallbackAddonByName = new Map<
-      string,
-      { addonId: number; priceOverride: number | null; basePrice: number | null; name: string | null }
-    >();
-    if (hasMissingAddonId) {
-      const allAddons = await Addon.findAll({ attributes: ['id', 'name', 'basePrice'] });
-      allAddons.forEach((addon) => {
-        if (!addon.name) {
-          return;
-        }
-        const key = normalizeAddonName(addon.name);
-        if (!key) {
-          return;
-        }
-        fallbackAddonByName.set(key, {
-          addonId: addon.id,
-          priceOverride: null,
-          basePrice: addon.basePrice ?? null,
-          name: addon.name,
-        });
-      });
-    }
-
-    const findAddonByName = (
-      rawName: string | null,
-    ): { addonId: number; priceOverride: number | null; basePrice: number | null; name: string | null } | null => {
-      if (!rawName) {
-        return null;
-      }
-      const normalized = normalizeAddonName(rawName);
-      if (!normalized) {
-        return null;
-      }
-      const direct = productAddonByName.get(normalized);
-      if (direct) {
-        return direct;
-      }
-      const fallbackDirect = fallbackAddonByName.get(normalized);
-      if (fallbackDirect) {
-        return fallbackDirect;
-      }
-      for (const [key, value] of productAddonByName.entries()) {
-        if (normalized.includes(key) || key.includes(normalized)) {
-          return value;
-        }
-      }
-      for (const [key, value] of fallbackAddonByName.entries()) {
-        if (normalized.includes(key) || key.includes(normalized)) {
-          return value;
-        }
-      }
-      return null;
-    };
 
     res.status(200).json({
       bookingId: preview.bookingId,
@@ -2696,54 +3640,20 @@ export const getPartialRefundPreview = async (req: AuthenticatedRequest, res: Re
       externalTransactionId: preview.externalTransactionId,
       stripe: preview.stripe,
       remainingAmount: remaining,
-      addons: addons.map((addon) => {
-        const addonRecord = addon.addon as Addon | undefined;
-        let addonId = addon.addonId ?? addonRecord?.id ?? null;
-        const toNumber = (value: unknown): number | null => {
-          if (value === null || value === undefined) {
-            return null;
-          }
-          if (typeof value === 'number') {
-            return Number.isFinite(value) ? value : null;
-          }
-          if (typeof value === 'string') {
-            const parsed = Number.parseFloat(value);
-            return Number.isFinite(parsed) ? parsed : null;
-          }
-          return null;
-        };
-
-        let override: number | null = addonId !== null ? toNumber(priceOverrideByAddonId.get(addonId)) : null;
-        let fallbackBase = toNumber(addonRecord?.basePrice ?? null);
-        if (addonId === null && addon.platformAddonName) {
-          const mapped = findAddonByName(addon.platformAddonName);
-          if (mapped) {
-            addonId = mapped.addonId;
-            override = toNumber(mapped.priceOverride);
-            fallbackBase = toNumber(mapped.basePrice);
-          }
-        }
-        const unitPriceValue = override ?? fallbackBase ?? null;
-        const fallbackUnitPrice = addon.unitPrice ? Number.parseFloat(addon.unitPrice) : null;
-        const computedUnitPrice =
-          fallbackUnitPrice ??
-          (addon.totalPrice && addon.quantity > 0
-            ? Number.parseFloat(addon.totalPrice) / addon.quantity
-            : null);
-        return {
-          id: addon.id,
-          platformAddonName: addon.platformAddonName ?? addonRecord?.name ?? null,
-          quantity: addon.quantity,
-          unitPrice:
-            unitPriceValue !== null
-              ? unitPriceValue.toFixed(2)
-              : computedUnitPrice !== null && Number.isFinite(computedUnitPrice)
-                ? computedUnitPrice.toFixed(2)
-                : null,
-          totalPrice: addon.totalPrice,
-          currency: addon.currency,
-        };
-      }),
+      people: {
+        quantity: people.quantity,
+        unitPrice: formatMoneyValue(people.unitPrice),
+        totalPrice: formatMoneyValue(people.totalPrice),
+        currency: people.currency,
+      },
+      addons: resolvedAddons.map((entry) => ({
+        id: entry.bookingAddon.id,
+        platformAddonName: entry.displayName,
+        quantity: entry.quantity,
+        unitPrice: formatMoneyValue(entry.unitPrice),
+        totalPrice: formatMoneyValue(entry.unitPrice * entry.quantity),
+        currency: entry.currency,
+      })),
     } satisfies PartialRefundPreview);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load partial refund preview';
@@ -2770,15 +3680,106 @@ export const partialRefundEcwidBooking = async (req: AuthenticatedRequest, res: 
       return;
     }
 
-    const rawAmount = (req.body as { amount?: unknown }).amount;
-    const numericAmount = typeof rawAmount === 'string' ? Number.parseFloat(rawAmount) : Number(rawAmount);
-    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
-      res.status(400).json({ message: 'A valid refund amount is required' });
+    const preview = await buildEcwidRefundPreview(booking);
+    const resolvedAddons = await resolvePartialRefundAddons(booking, preview.stripe.currency);
+    const addonsTotalAmount = resolveAddonsTotalAmount(resolvedAddons);
+    const people = resolvePartialRefundPeopleFromBaseAmount(
+      booking,
+      preview.stripe.currency,
+      addonsTotalAmount,
+    );
+    const addonByBookingAddonId = new Map(resolvedAddons.map((entry) => [entry.bookingAddon.id, entry]));
+
+    const body = req.body as {
+      amount?: unknown;
+      peopleQuantity?: unknown;
+      addonQuantities?: Record<string, unknown>;
+    };
+
+    const peopleQuantityRaw = Number(body.peopleQuantity ?? 0);
+    const requestedPeopleQuantity = Number.isFinite(peopleQuantityRaw)
+      ? Math.max(0, Math.min(Math.round(peopleQuantityRaw), people.quantity))
+      : 0;
+
+    const addonQuantitiesRaw = body.addonQuantities && typeof body.addonQuantities === 'object'
+      ? body.addonQuantities
+      : {};
+    const requestedAddonQuantities = new Map<number, number>();
+    for (const [rawKey, rawValue] of Object.entries(addonQuantitiesRaw)) {
+      const bookingAddonId = Number.parseInt(rawKey, 10);
+      if (!Number.isFinite(bookingAddonId) || !addonByBookingAddonId.has(bookingAddonId)) {
+        continue;
+      }
+      const parsedQty = Number(rawValue);
+      const addonEntry = addonByBookingAddonId.get(bookingAddonId);
+      if (!addonEntry) {
+        continue;
+      }
+      const normalizedQty = Number.isFinite(parsedQty)
+        ? Math.max(0, Math.min(Math.round(parsedQty), addonEntry.quantity))
+        : 0;
+      requestedAddonQuantities.set(bookingAddonId, normalizedQty);
+    }
+
+    const peopleRefundAmount = roundMoney(requestedPeopleQuantity * people.unitPrice);
+    const addonRefundBreakdown = resolvedAddons
+      .map((entry) => {
+        const refundQty = requestedAddonQuantities.get(entry.bookingAddon.id) ?? 0;
+        if (refundQty <= 0) {
+          return null;
+        }
+        const refundAmount = roundMoney(refundQty * entry.unitPrice);
+        return {
+          bookingAddonId: entry.bookingAddon.id,
+          name: entry.displayName,
+          refundQty,
+          unitPrice: entry.unitPrice,
+          refundAmount,
+          currency: entry.currency,
+          remainingQty: Math.max(entry.quantity - refundQty, 0),
+        };
+      })
+      .filter(
+        (
+          entry,
+        ): entry is {
+          bookingAddonId: number;
+          name: string;
+          refundQty: number;
+          unitPrice: number;
+          refundAmount: number;
+          currency: string | null;
+          remainingQty: number;
+        } => entry !== null,
+      );
+    const addonsRefundAmount = roundMoney(
+      addonRefundBreakdown.reduce((sum, entry) => sum + entry.refundAmount, 0),
+    );
+
+    const computedAmount = roundMoney(peopleRefundAmount + addonsRefundAmount);
+    if (computedAmount <= 0) {
+      res.status(400).json({
+        message: 'Select at least one refunded person or add-on quantity.',
+      });
       return;
     }
-    const amountInCents = Math.round(numericAmount * 100);
 
-    const preview = await buildEcwidRefundPreview(booking);
+    const rawAmount = body.amount;
+    if (rawAmount !== null && rawAmount !== undefined && `${rawAmount}`.trim() !== '') {
+      const numericAmount = typeof rawAmount === 'string' ? Number.parseFloat(rawAmount) : Number(rawAmount);
+      if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+        res.status(400).json({ message: 'A valid refund amount is required' });
+        return;
+      }
+      if (Math.abs(roundMoney(numericAmount) - computedAmount) > 0.01) {
+        res.status(400).json({
+          message: 'Refund amount does not match selected people/add-ons breakdown. Refresh and try again.',
+        });
+        return;
+      }
+    }
+
+    const amountInCents = Math.round(computedAmount * 100);
     const remaining = Math.max(preview.stripe.amount - preview.stripe.amountRefunded, 0);
     if (amountInCents >= remaining) {
       res.status(400).json({ message: 'Refund amount must be less than the remaining paid amount. Use Cancel for full refunds.' });
@@ -2790,10 +3791,162 @@ export const partialRefundEcwidBooking = async (req: AuthenticatedRequest, res: 
       orderId: preview.orderId,
     }, amountInCents);
 
+    const sequelizeClient = Booking.sequelize;
+    if (!sequelizeClient) {
+      throw new Error('Database client is not initialized');
+    }
+    const now = new Date();
+
+    await sequelizeClient.transaction(async (transaction) => {
+      if (requestedPeopleQuantity > 0) {
+        const currentTotal = deriveBookingPartySize(booking);
+        booking.partySizeTotal = Math.max(currentTotal - requestedPeopleQuantity, 0);
+
+        if (booking.partySizeAdults !== null || booking.partySizeChildren !== null) {
+          let remainingToDeduct = requestedPeopleQuantity;
+          let adults = Math.max(0, Math.round(Number(booking.partySizeAdults ?? 0)));
+          let children = Math.max(0, Math.round(Number(booking.partySizeChildren ?? 0)));
+
+          const deductedAdults = Math.min(adults, remainingToDeduct);
+          adults -= deductedAdults;
+          remainingToDeduct -= deductedAdults;
+
+          if (remainingToDeduct > 0) {
+            const deductedChildren = Math.min(children, remainingToDeduct);
+            children -= deductedChildren;
+            remainingToDeduct -= deductedChildren;
+          }
+
+          booking.partySizeAdults = adults;
+          booking.partySizeChildren = children;
+        }
+      }
+
+      const previousBaseAmount = parseMoneyValue(booking.baseAmount) ?? 0;
+      const previousAddonsAmount = parseMoneyValue(booking.addonsAmount) ?? 0;
+      const previousGross = parseMoneyValue(booking.priceGross) ?? 0;
+      const previousNet = parseMoneyValue(booking.priceNet) ?? 0;
+      const previousRefunded = parseMoneyValue(booking.refundedAmount) ?? 0;
+
+      const nextBaseAmount = Math.max(roundMoney(previousBaseAmount - peopleRefundAmount), 0);
+      const nextAddonsAmount = Math.max(roundMoney(previousAddonsAmount - addonsRefundAmount), 0);
+      const nextGross = Math.max(roundMoney(previousGross - computedAmount), 0);
+      const nextNet = Math.max(roundMoney(previousNet - computedAmount), 0);
+      const nextRefunded = roundMoney(previousRefunded + computedAmount);
+
+      booking.baseAmount = formatMoneyValue(nextBaseAmount);
+      booking.addonsAmount = formatMoneyValue(nextAddonsAmount);
+      booking.priceGross = formatMoneyValue(nextGross);
+      if (booking.priceNet !== null) {
+        booking.priceNet = formatMoneyValue(nextNet);
+      }
+      booking.refundedAmount = formatMoneyValue(nextRefunded);
+      booking.refundedCurrency = (booking.currency ?? preview.stripe.currency ?? '').toUpperCase() || null;
+      booking.paymentStatus = 'partial';
+
+      const snapshotBase =
+        booking.addonsSnapshot && typeof booking.addonsSnapshot === 'object'
+          ? { ...(booking.addonsSnapshot as Record<string, unknown>) }
+          : {};
+      const previousExtras = normalizeExtras(snapshotBase);
+      const nextExtras: OrderExtras = {
+        tshirts: previousExtras.tshirts,
+        cocktails: previousExtras.cocktails,
+        photos: previousExtras.photos,
+      };
+
+      addonRefundBreakdown.forEach((entry) => {
+        const addonEntry = addonByBookingAddonId.get(entry.bookingAddonId);
+        if (!addonEntry) {
+          return;
+        }
+        const bookingAddon = addonEntry.bookingAddon;
+        const nextQuantity = Math.max(addonEntry.quantity - entry.refundQty, 0);
+        bookingAddon.quantity = nextQuantity;
+        bookingAddon.unitPrice = formatMoneyValue(addonEntry.unitPrice);
+        bookingAddon.totalPrice = formatMoneyValue(nextQuantity * addonEntry.unitPrice);
+        bookingAddon.currency = bookingAddon.currency ?? addonEntry.currency ?? booking.currency ?? null;
+        bookingAddon.updatedAt = now;
+
+        const category = classifyAddonExtraKey(entry.name);
+        if (category) {
+          nextExtras[category] = Math.max(nextExtras[category] - entry.refundQty, 0);
+        }
+      });
+
+      await Promise.all(
+        addonRefundBreakdown.map(async (entry) => {
+          const addonEntry = addonByBookingAddonId.get(entry.bookingAddonId);
+          if (!addonEntry) {
+            return;
+          }
+          await addonEntry.bookingAddon.save({ transaction });
+        }),
+      );
+
+      snapshotBase.extras = nextExtras;
+      booking.addonsSnapshot = snapshotBase;
+      booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
+      await booking.save({ transaction });
+
+      const partialRefundEvent = BookingEvent.build();
+      partialRefundEvent.bookingId = booking.id;
+      partialRefundEvent.emailId = null;
+      partialRefundEvent.eventType = 'note';
+      partialRefundEvent.platform = booking.platform;
+      partialRefundEvent.statusAfter = booking.status;
+      partialRefundEvent.emailMessageId = null;
+      partialRefundEvent.eventPayload = {
+        source: 'manual',
+        actorId: req.authContext?.id ?? null,
+        action: 'partial-refund',
+        orderId: preview.orderId,
+        externalTransactionId: preview.externalTransactionId,
+        stripeTransactionId: preview.stripe.id,
+        stripeTransactionType: preview.stripe.type,
+        stripeRefundId: refund?.id ?? null,
+        totalRefundAmount: computedAmount,
+        currency: booking.currency ?? preview.stripe.currency ?? null,
+        people: {
+          refundedQty: requestedPeopleQuantity,
+          unitPrice: people.unitPrice,
+          amount: peopleRefundAmount,
+          remainingQty: booking.partySizeTotal ?? 0,
+        },
+        addons: addonRefundBreakdown.map((entry) => ({
+          bookingAddonId: entry.bookingAddonId,
+          name: entry.name,
+          refundedQty: entry.refundQty,
+          unitPrice: entry.unitPrice,
+          amount: entry.refundAmount,
+          remainingQty: entry.remainingQty,
+        })),
+      };
+      partialRefundEvent.occurredAt = now;
+      partialRefundEvent.ingestedAt = now;
+      partialRefundEvent.processedAt = now;
+      await partialRefundEvent.save({ transaction });
+    });
+
     res.status(200).json({
       message: refund ? 'Partial refund issued successfully' : 'Unable to issue refund',
       refund,
       stripe: preview.stripe,
+      breakdown: {
+        amount: computedAmount,
+        people: {
+          refundedQty: requestedPeopleQuantity,
+          unitPrice: people.unitPrice,
+          amount: peopleRefundAmount,
+        },
+        addons: addonRefundBreakdown.map((entry) => ({
+          bookingAddonId: entry.bookingAddonId,
+          name: entry.name,
+          refundedQty: entry.refundQty,
+          unitPrice: entry.unitPrice,
+          amount: entry.refundAmount,
+        })),
+      },
     });
   } catch (error) {
     const status = isAxiosError(error) ? error.response?.status ?? 502 : 500;

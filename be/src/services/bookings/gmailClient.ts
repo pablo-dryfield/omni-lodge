@@ -39,6 +39,31 @@ export type ListMessagesResult = {
   totalSizeEstimate: number | null;
 };
 
+export type MailboxDirection = 'sent' | 'received';
+
+export type MailboxMessageSummary = {
+  messageId: string;
+  threadId: string | null;
+  fromAddress: string | null;
+  toAddresses: string | null;
+  subject: string | null;
+  snippet: string | null;
+  internalDate: string | null;
+  labelIds: string[];
+  direction: MailboxDirection;
+};
+
+type ListMailboxMessagesParams = {
+  email: string;
+  maxResults?: number;
+  pageToken?: string | null;
+};
+
+export type ListMailboxMessagesResult = {
+  messages: MailboxMessageSummary[];
+  nextPageToken: string | null;
+};
+
 export const listMessages = async (
   params: ListMessagesParams,
 ): Promise<ListMessagesResult> => {
@@ -54,6 +79,93 @@ export const listMessages = async (
     nextPageToken: response.data.nextPageToken ?? null,
     totalSizeEstimate:
       typeof response.data.resultSizeEstimate === 'number' ? response.data.resultSizeEstimate : null,
+  };
+};
+
+const normalizeInternalDate = (value?: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  const date = new Date(parsed);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date.toISOString();
+};
+
+const extractHeaderFromMetadata = (
+  payload?: gmail_v1.Schema$MessagePart | null,
+  headerName?: string,
+): string | null => {
+  if (!payload?.headers || !headerName) {
+    return null;
+  }
+  const match = payload.headers.find(
+    (header) => header?.name?.toLowerCase() === headerName.toLowerCase(),
+  );
+  const value = String(match?.value ?? '').trim();
+  return value.length > 0 ? value : null;
+};
+
+const resolveDirection = (labelIds?: string[] | null): MailboxDirection =>
+  Array.isArray(labelIds) && labelIds.includes('SENT') ? 'sent' : 'received';
+
+export const listMailboxMessages = async (
+  params: ListMailboxMessagesParams,
+): Promise<ListMailboxMessagesResult> => {
+  const gmail = getGmailClient();
+  const query = `(from:"${params.email}" OR to:"${params.email}")`;
+  const response = await gmail.users.messages.list({
+    userId: 'me',
+    q: query,
+    maxResults: params.maxResults ?? 25,
+    pageToken: params.pageToken ?? undefined,
+  });
+
+  const listedMessages = response.data.messages ?? [];
+  const summaries = await Promise.all(
+    listedMessages.map(async (message): Promise<MailboxMessageSummary | null> => {
+      if (!message.id) {
+        return null;
+      }
+      try {
+        const { data } = await gmail.users.messages.get({
+          userId: 'me',
+          id: message.id,
+          format: 'metadata',
+          metadataHeaders: ['From', 'To', 'Subject', 'Date'],
+        });
+        if (!data.id) {
+          return null;
+        }
+        const labels = data.labelIds ?? [];
+        return {
+          messageId: data.id,
+          threadId: data.threadId ?? null,
+          fromAddress: extractHeaderFromMetadata(data.payload, 'From'),
+          toAddresses: extractHeaderFromMetadata(data.payload, 'To'),
+          subject: extractHeaderFromMetadata(data.payload, 'Subject'),
+          snippet: data.snippet ?? null,
+          internalDate: normalizeInternalDate(data.internalDate),
+          labelIds: labels,
+          direction: resolveDirection(labels),
+        };
+      } catch (error) {
+        logger.warn(
+          `[booking-email] Failed to read Gmail message metadata ${message.id}: ${(error as Error).message}`,
+        );
+        return null;
+      }
+    }),
+  );
+
+  return {
+    messages: summaries.filter((entry): entry is MailboxMessageSummary => entry !== null),
+    nextPageToken: response.data.nextPageToken ?? null,
   };
 };
 
@@ -101,6 +213,64 @@ export type GmailMessagePayload = {
   headers: Record<string, string>;
 };
 
+type SendMessageParams = {
+  to: string;
+  subject: string;
+  body?: string;
+  textBody?: string;
+  htmlBody?: string | null;
+};
+
+export type SendMessageResult = {
+  id: string | null;
+  threadId: string | null;
+};
+
+const encodeBase64Url = (value: string): string =>
+  Buffer.from(value, 'utf-8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+
+const buildRawMessage = (params: SendMessageParams): string => {
+  const normalizedTextBody = (params.textBody ?? params.body ?? '').replace(/\r\n/g, '\n');
+  const normalizedHtmlBody = (params.htmlBody ?? '').replace(/\r\n/g, '\n').trim();
+
+  const messageLines: string[] = [
+    `To: ${params.to}`,
+    `Subject: ${params.subject}`,
+    'MIME-Version: 1.0',
+  ];
+
+  if (normalizedHtmlBody.length > 0) {
+    const boundary = `omni-lodge-email-boundary-${Date.now().toString(16)}`;
+    messageLines.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+    messageLines.push('');
+    messageLines.push(`--${boundary}`);
+    messageLines.push('Content-Type: text/plain; charset="UTF-8"');
+    messageLines.push('Content-Transfer-Encoding: 8bit');
+    messageLines.push('');
+    messageLines.push(normalizedTextBody);
+    messageLines.push('');
+    messageLines.push(`--${boundary}`);
+    messageLines.push('Content-Type: text/html; charset="UTF-8"');
+    messageLines.push('Content-Transfer-Encoding: 8bit');
+    messageLines.push('');
+    messageLines.push(normalizedHtmlBody);
+    messageLines.push('');
+    messageLines.push(`--${boundary}--`);
+  } else {
+    messageLines.push('Content-Type: text/plain; charset="UTF-8"');
+    messageLines.push('Content-Transfer-Encoding: 8bit');
+    messageLines.push('');
+    messageLines.push(normalizedTextBody);
+  }
+
+  const message = messageLines.join('\r\n');
+  return encodeBase64Url(message);
+};
+
 export const fetchMessagePayload = async (messageId: string): Promise<GmailMessagePayload | null> => {
   const gmail = getGmailClient();
   try {
@@ -133,6 +303,24 @@ export const fetchMessagePayload = async (messageId: string): Promise<GmailMessa
     };
   } catch (error) {
     logger.error(`[booking-email] Failed to fetch Gmail message ${messageId}: ${(error as Error).message}`);
+    throw error;
+  }
+};
+
+export const sendMessage = async (params: SendMessageParams): Promise<SendMessageResult> => {
+  const gmail = getGmailClient();
+  try {
+    const raw = buildRawMessage(params);
+    const { data } = await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: { raw },
+    });
+    return {
+      id: data.id ?? null,
+      threadId: data.threadId ?? null,
+    };
+  } catch (error) {
+    logger.error(`[booking-email] Failed to send Gmail message: ${(error as Error).message}`);
     throw error;
   }
 };

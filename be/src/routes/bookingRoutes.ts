@@ -3,7 +3,11 @@ import authMiddleware from '../middleware/authMiddleware.js';
 import {
   listBookings,
   listBookingEmails,
+  listBookingMailboxEmails,
   getBookingEmailPreview,
+  getMailboxEmailPreview,
+  renderBookingEmailPreview,
+  sendBookingEmail,
   reprocessBookingEmail,
   reprocessBookingEmails,
   backfillBookingEmails,
@@ -28,7 +32,11 @@ const router = Router();
 
 router.get(['/', ''], authMiddleware, listBookings);
 router.get('/emails', authMiddleware, listBookingEmails);
+router.get('/emails/mailbox', authMiddleware, listBookingMailboxEmails);
 router.get('/emails/:messageId/preview', authMiddleware, getBookingEmailPreview);
+router.get('/emails/gmail/:messageId/preview', authMiddleware, getMailboxEmailPreview);
+router.post('/emails/render-preview', authMiddleware, renderBookingEmailPreview);
+router.post('/emails/send', authMiddleware, sendBookingEmail);
 router.post('/emails/reprocess', authMiddleware, reprocessBookingEmails);
 router.post('/emails/:messageId/reprocess', authMiddleware, reprocessBookingEmail);
 router.post('/emails/backfill', authMiddleware, backfillBookingEmails);
