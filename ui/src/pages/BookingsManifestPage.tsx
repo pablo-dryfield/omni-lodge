@@ -1567,6 +1567,35 @@ type PartialRefundPreview = {
 const normalizePartialRefundPreview = (preview: PartialRefundPreview): PartialRefundPreview => {
   const fallbackCurrency = preview?.stripe?.currency ?? null;
   const safePeople = preview?.people;
+  const safeAddons: PartialRefundAddon[] = Array.isArray(preview?.addons)
+    ? preview.addons
+        .map<PartialRefundAddon | null>((addon) => {
+          const rawAddon = addon as PartialRefundAddon & {
+            bookingAddonId?: unknown;
+            booking_addon_id?: unknown;
+            addonId?: unknown;
+          };
+          const idCandidate =
+            rawAddon.id ??
+            rawAddon.bookingAddonId ??
+            rawAddon.booking_addon_id ??
+            rawAddon.addonId;
+          const parsedId = Number.parseInt(String(idCandidate ?? ""), 10);
+          if (!Number.isFinite(parsedId) || parsedId <= 0) {
+            return null;
+          }
+          const parsedQty = Number(rawAddon.quantity ?? 0);
+          return {
+            id: parsedId,
+            platformAddonName: rawAddon.platformAddonName ?? null,
+            quantity: Number.isFinite(parsedQty) ? Math.max(0, Math.round(parsedQty)) : 0,
+            unitPrice: rawAddon.unitPrice ?? null,
+            totalPrice: rawAddon.totalPrice ?? null,
+            currency: rawAddon.currency ?? fallbackCurrency,
+          };
+        })
+        .filter((addon): addon is PartialRefundAddon => addon !== null)
+    : [];
   return {
     ...preview,
     people: {
@@ -1575,7 +1604,7 @@ const normalizePartialRefundPreview = (preview: PartialRefundPreview): PartialRe
       totalPrice: safePeople?.totalPrice ?? null,
       currency: safePeople?.currency ?? fallbackCurrency,
     },
-    addons: Array.isArray(preview?.addons) ? preview.addons : [],
+    addons: safeAddons,
   };
 };
 
@@ -2590,7 +2619,16 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       return;
     }
 
-    const selectedAddonQty = Object.values(partialRefundState.addonQuantities).reduce(
+    const addonQuantitiesPayload = (partialRefundState.preview?.addons ?? []).reduce<Record<number, number>>(
+      (acc, addon) => {
+        const rawQty = partialRefundState.addonQuantities[addon.id] ?? 0;
+        const normalizedQty = Number.isFinite(rawQty) ? Math.max(0, Math.round(rawQty)) : 0;
+        acc[addon.id] = normalizedQty;
+        return acc;
+      },
+      {},
+    );
+    const selectedAddonQty = Object.values(addonQuantitiesPayload).reduce(
       (sum, value) => sum + (Number.isFinite(value) ? value : 0),
       0,
     );
@@ -2618,7 +2656,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       await axiosInstance.post(`/bookings/${partialRefundState.bookingId}/partial-refund`, {
         amount: partialRefundState.amount,
         peopleQuantity: partialRefundState.peopleQuantity,
-        addonQuantities: partialRefundState.addonQuantities,
+        addonQuantities: addonQuantitiesPayload,
       });
       let successMessage = "Partial refund submitted and email sent.";
       if (preparedEmail) {
