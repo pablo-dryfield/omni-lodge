@@ -3704,21 +3704,64 @@ export const partialRefundEcwidBooking = async (req: AuthenticatedRequest, res: 
     const addonQuantitiesRaw = body.addonQuantities && typeof body.addonQuantities === 'object'
       ? body.addonQuantities
       : {};
+    const normalizeAddonLookupKey = (value: string): string =>
+      String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+    const addonByAlias = new Map<string, ResolvedPartialRefundAddon>();
+    resolvedAddons.forEach((entry) => {
+      const aliases = [
+        String(entry.bookingAddon.id),
+        entry.bookingAddon.addonId !== null ? String(entry.bookingAddon.addonId) : null,
+        entry.bookingAddon.platformAddonId,
+        entry.bookingAddon.platformAddonName,
+        entry.displayName,
+      ];
+      aliases.forEach((alias) => {
+        if (!alias) {
+          return;
+        }
+        const rawKey = String(alias).trim().toLowerCase();
+        if (rawKey) {
+          addonByAlias.set(rawKey, entry);
+        }
+        const normalizedKey = normalizeAddonLookupKey(alias);
+        if (normalizedKey) {
+          addonByAlias.set(normalizedKey, entry);
+        }
+      });
+    });
     const requestedAddonQuantities = new Map<number, number>();
     for (const [rawKey, rawValue] of Object.entries(addonQuantitiesRaw)) {
-      const bookingAddonId = Number.parseInt(rawKey, 10);
-      if (!Number.isFinite(bookingAddonId) || !addonByBookingAddonId.has(bookingAddonId)) {
+      const parsedQty = Number(rawValue);
+      if (!Number.isFinite(parsedQty) || parsedQty <= 0) {
         continue;
       }
-      const parsedQty = Number(rawValue);
-      const addonEntry = addonByBookingAddonId.get(bookingAddonId);
+      const bookingAddonId = Number.parseInt(rawKey, 10);
+      let addonEntry =
+        Number.isFinite(bookingAddonId) && addonByBookingAddonId.has(bookingAddonId)
+          ? addonByBookingAddonId.get(bookingAddonId)
+          : undefined;
+      if (!addonEntry) {
+        const rawLookupKey = String(rawKey).trim().toLowerCase();
+        addonEntry =
+          addonByAlias.get(rawLookupKey) ??
+          addonByAlias.get(normalizeAddonLookupKey(rawKey));
+      }
+      if (!addonEntry && resolvedAddons.length === 1) {
+        addonEntry = resolvedAddons[0];
+      }
       if (!addonEntry) {
         continue;
       }
       const normalizedQty = Number.isFinite(parsedQty)
         ? Math.max(0, Math.min(Math.round(parsedQty), addonEntry.quantity))
         : 0;
-      requestedAddonQuantities.set(bookingAddonId, normalizedQty);
+      requestedAddonQuantities.set(
+        addonEntry.bookingAddon.id,
+        Math.max(requestedAddonQuantities.get(addonEntry.bookingAddon.id) ?? 0, normalizedQty),
+      );
     }
 
     const peopleRefundAmount = roundMoney(requestedPeopleQuantity * people.unitPrice);
