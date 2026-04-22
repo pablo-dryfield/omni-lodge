@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   ActionIcon,
@@ -21,6 +21,7 @@ import {
   Table,
   Tabs,
   Text,
+  Textarea,
   Title,
   TextInput,
 } from "@mantine/core";
@@ -29,7 +30,7 @@ import { DatePicker, DatePickerInput, TimeInput } from "@mantine/dates";
 import { useMediaQuery } from '@mantine/hooks';
 import { Checkroom, LocalBar, MailOutline, PhotoCamera, WhatsApp } from "@mui/icons-material";
 
-import { IconArrowLeft, IconArrowRight, IconEye, IconEyeOff, IconRefresh, IconSearch } from "@tabler/icons-react";
+import { IconArrowLeft, IconArrowRight, IconEye, IconEyeOff, IconKey, IconRefresh, IconSearch } from "@tabler/icons-react";
 
 import dayjs, { Dayjs } from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
@@ -66,6 +67,132 @@ import {
 const DATE_FORMAT = "YYYY-MM-DD";
 
 const MANIFEST_MODULE = "booking-manifest";
+const REACT_EMAIL_SOURCE_MARKER = "/* @react-email-template-source */";
+
+type MailVariableScope = "base" | "refund" | "supply" | "react";
+
+type MailVariableDefinition = {
+  key: string;
+  scope: MailVariableScope;
+  description: string;
+};
+
+type MailVariableField = "subject" | "body" | "react";
+
+type MailVariableDropdownState = {
+  field: MailVariableField | null;
+  tokenStart: number;
+  tokenEnd: number;
+  query: string;
+};
+
+const BASE_MAIL_VARIABLES: MailVariableDefinition[] = [
+  { key: "customerName", scope: "base", description: "Customer full name" },
+  { key: "customerEmail", scope: "base", description: "Customer email address" },
+  { key: "customerPhone", scope: "base", description: "Customer phone number" },
+  { key: "productName", scope: "base", description: "Product/experience name" },
+  { key: "bookingDate", scope: "base", description: "Raw booking date (YYYY-MM-DD)" },
+  { key: "bookingDateDisplay", scope: "base", description: "Formatted booking date label" },
+  { key: "bookingTime", scope: "base", description: "Booking/activity time" },
+  { key: "bookingId", scope: "base", description: "Booking ID alias" },
+  { key: "bookingReference", scope: "base", description: "Primary booking reference" },
+  { key: "reservationId", scope: "base", description: "Reservation ID alias" },
+  { key: "platformBookingId", scope: "base", description: "Platform booking ID" },
+  { key: "platform", scope: "base", description: "Booking platform name" },
+  { key: "quantity", scope: "base", description: "People quantity" },
+  { key: "peopleCount", scope: "base", description: "People quantity alias" },
+  { key: "menCount", scope: "base", description: "Men count" },
+  { key: "womenCount", scope: "base", description: "Women count" },
+  { key: "currency", scope: "base", description: "Currency code" },
+];
+
+const REFUND_MAIL_VARIABLES: MailVariableDefinition[] = [
+  { key: "refundedAmount", scope: "refund", description: "Refunded amount value" },
+  { key: "totalPaidAmount", scope: "refund", description: "Original paid amount" },
+  { key: "alreadyRefundedAmount", scope: "refund", description: "Previously refunded amount value" },
+  { key: "isFullRefund", scope: "refund", description: "Full refund boolean flag" },
+  { key: "partialReason", scope: "refund", description: "Partial refund reason text" },
+  { key: "refundReason", scope: "refund", description: "Refund reason text alias" },
+  { key: "experienceDate", scope: "refund", description: "Experience date value" },
+  { key: "transactionId", scope: "refund", description: "External transaction ID alias" },
+  { key: "externalTransactionId", scope: "refund", description: "External transaction ID" },
+  { key: "stripeTransactionId", scope: "refund", description: "Stripe transaction ID" },
+  { key: "stripeTransactionType", scope: "refund", description: "Stripe transaction type" },
+  { key: "stripeTransactionStatus", scope: "refund", description: "Stripe transaction status" },
+  { key: "stripeTransactionCreatedAt", scope: "refund", description: "Stripe transaction created at" },
+  { key: "peopleChange", scope: "refund", description: "People change object ({from,to,amount})" },
+  { key: "refundedAddons", scope: "refund", description: "Refunded add-ons array" },
+];
+
+const SUPPLY_MAIL_VARIABLES: MailVariableDefinition[] = [
+  { key: "supplierName", scope: "supply", description: "Supplier display name" },
+  { key: "requestedBy", scope: "supply", description: "Who requested the order" },
+  { key: "deliveryDate", scope: "supply", description: "Expected delivery date" },
+  { key: "location", scope: "supply", description: "Delivery location" },
+  { key: "notes", scope: "supply", description: "General notes" },
+  { key: "items", scope: "supply", description: "Supply line items array" },
+];
+
+const REACT_MAIL_VARIABLES: MailVariableDefinition[] = [
+  { key: "templateKey", scope: "react", description: "Forces React renderer variant key" },
+  { key: "reactPlainText", scope: "react", description: "Text fallback for rendered HTML" },
+];
+
+const resolveMailVariableTokenContext = (
+  value: string,
+  cursorPosition: number,
+): { tokenStart: number; tokenEnd: number; query: string } | null => {
+  const source = String(value ?? "");
+  const safeCursor = Math.max(0, Math.min(cursorPosition, source.length));
+  const beforeCursor = source.slice(0, safeCursor);
+  const tokenStart = beforeCursor.lastIndexOf("{{");
+
+  if (tokenStart < 0) {
+    return null;
+  }
+
+  const between = source.slice(tokenStart + 2, safeCursor);
+  if (between.includes("{") || between.includes("}") || /\s/.test(between)) {
+    return null;
+  }
+
+  const closingIndex = source.indexOf("}}", tokenStart + 2);
+  if (closingIndex !== -1 && closingIndex < safeCursor) {
+    return null;
+  }
+
+  return {
+    tokenStart,
+    tokenEnd: safeCursor,
+    query: between.trim(),
+  };
+};
+
+const isReactEmailSource = (value: string): boolean =>
+  value.includes(REACT_EMAIL_SOURCE_MARKER);
+
+const createDefaultReactEmailSource = (message: string): string => {
+  const safeMessage = message.trim().length > 0 ? message.trim() : "Write your message here.";
+  return `${REACT_EMAIL_SOURCE_MARKER}
+const {
+  Section,
+  Heading,
+  Text,
+  Hr,
+  Button,
+  Row,
+  Column
+} = components;
+
+return (
+  <Section style={{ backgroundColor: "#ffffff", padding: "24px", borderRadius: "12px", border: "1px solid #dbe3f4" }}>
+    <Heading style={{ fontSize: "24px", margin: "0 0 12px", color: "#0f172a" }}>{subject}</Heading>
+    <Hr style={{ borderColor: "#dbe3f4", margin: "0 0 16px" }} />
+    <Text style={{ fontSize: "15px", lineHeight: "24px", color: "#1e293b" }}>${JSON.stringify(safeMessage)}</Text>
+  </Section>
+);
+`;
+};
 
 const toWhatsAppLink = (raw?: string) => {
   if (!raw) return null;
@@ -410,8 +537,46 @@ const createStatusCountsFromOrders = (orders: UnifiedOrder[]): Record<BookingSta
   }, createEmptyStatusCounts());
 };
 
+const getOrderPeopleCount = (order: UnifiedOrder): number => {
+  const men = Number.isFinite(order.menCount) ? order.menCount : 0;
+  const women = Number.isFinite(order.womenCount) ? order.womenCount : 0;
+  const fallback = Number.isFinite(order.quantity) ? order.quantity : 0;
+  const total = men + women > 0 ? men + women : fallback;
+  return total > 0 ? total : 0;
+};
+
+const createStatusCountsFromOrdersByPeople = (orders: UnifiedOrder[]): Record<BookingStatus, number> => {
+  return orders.reduce((acc, order) => {
+    const rawStatus = order.status ?? "unknown";
+    const peopleCount = getOrderPeopleCount(order);
+
+    if (rawStatus !== "completed" && rawStatus !== "no_show") {
+      acc[rawStatus] = (acc[rawStatus] ?? 0) + peopleCount;
+    }
+
+    if (!ATTENDANCE_TRACKED_BOOKING_STATUSES.has(rawStatus)) {
+      return acc;
+    }
+
+    const attendanceStatus = String(order.attendanceStatus ?? "")
+      .trim()
+      .toLowerCase();
+
+    if (attendanceStatus === "checked_in_full" || attendanceStatus === "checked_in_partial") {
+      acc.completed = (acc.completed ?? 0) + peopleCount;
+      return acc;
+    }
+
+    if (attendanceStatus === "no_show") {
+      acc.no_show = (acc.no_show ?? 0) + peopleCount;
+    }
+
+    return acc;
+  }, createEmptyStatusCounts());
+};
+
 const createStatusCountsFromGroups = (groups: ManifestGroup[]): Record<BookingStatus, number> => {
-  return createStatusCountsFromOrders(groups.flatMap((group) => group.orders));
+  return createStatusCountsFromOrdersByPeople(groups.flatMap((group) => group.orders));
 };
 
 type OrderStatusDisplayKey =
@@ -899,7 +1064,7 @@ const ProductSummaryPanels = ({
   group: ManifestGroup;
   undefinedGroupCount: number;
 }) => {
-  const groupStatusCounts = createStatusCountsFromOrders(group.orders);
+  const groupStatusCounts = createStatusCountsFromOrdersByPeople(group.orders);
   const platformEntries = (group.platformBreakdown ?? []).filter((entry) => entry.totalPeople > 0);
   const overviewChips = [
     { key: "people", value: group.totalPeople, label: `People: ${group.totalPeople}` },
@@ -1195,6 +1360,27 @@ const computeAddonRefundTotal = (addons: PartialRefundAddon[], quantities: Recor
   }, 0);
 };
 
+const computePeopleRefundTotal = (
+  people: { unitPrice: string | null } | null | undefined,
+  quantity: number,
+): number => {
+  if (!people || quantity <= 0) {
+    return 0;
+  }
+  const unitPrice = people.unitPrice ? parseMoney(people.unitPrice) : 0;
+  if (unitPrice <= 0) {
+    return 0;
+  }
+  return unitPrice * quantity;
+};
+
+const getPartialRefundRemainingAmountMajor = (preview: PartialRefundPreview | null | undefined): number => {
+  if (!preview) {
+    return 0;
+  }
+  return Math.max(Number((preview.remainingAmount / 100).toFixed(2)), 0);
+};
+
 const formatDateTime = (value?: string | null): string => {
   if (!value) {
     return "-";
@@ -1369,18 +1555,42 @@ type PartialRefundPreview = {
     fullyRefunded: boolean;
   };
   remainingAmount: number;
+  people: {
+    quantity: number;
+    unitPrice: string | null;
+    totalPrice: string | null;
+    currency: string | null;
+  };
   addons: PartialRefundAddon[];
+};
+
+const normalizePartialRefundPreview = (preview: PartialRefundPreview): PartialRefundPreview => {
+  const fallbackCurrency = preview?.stripe?.currency ?? null;
+  const safePeople = preview?.people;
+  return {
+    ...preview,
+    people: {
+      quantity: Number.isFinite(safePeople?.quantity) ? Math.max(0, Math.round(safePeople.quantity)) : 0,
+      unitPrice: safePeople?.unitPrice ?? null,
+      totalPrice: safePeople?.totalPrice ?? null,
+      currency: safePeople?.currency ?? fallbackCurrency,
+    },
+    addons: Array.isArray(preview?.addons) ? preview.addons : [],
+  };
 };
 
 type PartialRefundState = {
   opened: boolean;
   loading: boolean;
   submitting: boolean;
+  manualAmountUnlocked: boolean;
   error: string | null;
   success: string | null;
+  order: UnifiedOrder | null;
   bookingId: number | null;
   preview: PartialRefundPreview | null;
   amount: number | null;
+  peopleQuantity: number;
   addonQuantities: Record<number, number>;
 };
 
@@ -1428,6 +1638,249 @@ const createDefaultCancelState = (): CancelRefundState => ({
   error: null,
   preview: null,
 });
+
+type MailComposerState = {
+  opened: boolean;
+  sourceOrder: UnifiedOrder | null;
+  to: string;
+  subject: string;
+  body: string;
+  reactLiveSource: string;
+  sending: boolean;
+  error: string | null;
+  success: string | null;
+};
+
+type EmailTemplateType = "plain_text" | "react_email";
+
+type EmailTemplate = {
+  id: number;
+  name: string;
+  description: string | null;
+  templateType: EmailTemplateType;
+  subjectTemplate: string;
+  bodyTemplate: string;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+type EmailTemplateListResponse = {
+  count: number;
+  templates: EmailTemplate[];
+};
+
+type MailTemplateState = {
+  loading: boolean;
+  saving: boolean;
+  error: string | null;
+  templates: EmailTemplate[];
+  selectedTemplateId: string | null;
+  editorName: string;
+  editorDescription: string;
+  editorType: EmailTemplateType;
+};
+
+type MailComposerPreviewResponse = {
+  templateId: number | null;
+  templateType: EmailTemplateType | null;
+  subject: string;
+  textBody: string;
+  htmlBody: string | null;
+};
+
+type EmailTemplateRenderRequestPayload = {
+  to?: string;
+  subject?: string;
+  body?: string;
+  templateId?: number;
+  templateContext: Record<string, unknown>;
+};
+
+type MailComposerPreviewState = {
+  opened: boolean;
+  loading: boolean;
+  refreshing: boolean;
+  error: string | null;
+  data: MailComposerPreviewResponse | null;
+};
+
+type CancelRefundEmailPreviewState = {
+  opened: boolean;
+  loading: boolean;
+  error: string | null;
+  data: MailComposerPreviewResponse | null;
+  templateName: string | null;
+};
+
+type PartialRefundEmailPreviewState = {
+  opened: boolean;
+  loading: boolean;
+  error: string | null;
+  data: MailComposerPreviewResponse | null;
+  templateName: string | null;
+};
+
+const createDefaultMailComposerState = (): MailComposerState => ({
+  opened: false,
+  sourceOrder: null,
+  to: "",
+  subject: "",
+  body: "",
+  reactLiveSource: "",
+  sending: false,
+  error: null,
+  success: null,
+});
+
+const createDefaultMailTemplateState = (): MailTemplateState => ({
+  loading: false,
+  saving: false,
+  error: null,
+  templates: [],
+  selectedTemplateId: null,
+  editorName: "",
+  editorDescription: "",
+  editorType: "plain_text",
+});
+
+const createDefaultMailComposerPreviewState = (): MailComposerPreviewState => ({
+  opened: false,
+  loading: false,
+  refreshing: false,
+  error: null,
+  data: null,
+});
+
+const createDefaultCancelRefundEmailPreviewState = (): CancelRefundEmailPreviewState => ({
+  opened: false,
+  loading: false,
+  error: null,
+  data: null,
+  templateName: null,
+});
+
+const createDefaultPartialRefundEmailPreviewState = (): PartialRefundEmailPreviewState => ({
+  opened: false,
+  loading: false,
+  error: null,
+  data: null,
+  templateName: null,
+});
+
+type MailboxMessageDirection = "sent" | "received";
+
+type MailboxMessage = {
+  messageId: string;
+  threadId?: string | null;
+  fromAddress?: string | null;
+  toAddresses?: string | null;
+  subject?: string | null;
+  snippet?: string | null;
+  internalDate?: string | null;
+  labelIds?: string[];
+  direction: MailboxMessageDirection;
+};
+
+type MailboxResponse = {
+  email: string;
+  count: number;
+  nextPageToken: string | null;
+  messages: MailboxMessage[];
+};
+
+type MailboxState = {
+  opened: boolean;
+  loading: boolean;
+  loadingMore: boolean;
+  error: string | null;
+  customerEmail: string;
+  customerName: string;
+  sourceOrder: UnifiedOrder | null;
+  messages: MailboxMessage[];
+  filter: "all" | "received" | "sent";
+  nextPageToken: string | null;
+  previewOpen: boolean;
+  previewLoading: boolean;
+  previewError: string | null;
+  previewData: BookingEmailPreview | null;
+};
+
+const createDefaultMailboxState = (): MailboxState => ({
+  opened: false,
+  loading: false,
+  loadingMore: false,
+  error: null,
+  customerEmail: "",
+  customerName: "",
+  sourceOrder: null,
+  messages: [],
+  filter: "all",
+  nextPageToken: null,
+  previewOpen: false,
+  previewLoading: false,
+  previewError: null,
+  previewData: null,
+});
+
+const pickRefundTemplate = (templates: EmailTemplate[]): EmailTemplate | null => {
+  if (!Array.isArray(templates) || templates.length === 0) {
+    return null;
+  }
+  const activeTemplates = templates.filter((template) => template.isActive);
+  const source = activeTemplates.length > 0 ? activeTemplates : templates;
+  const scored = source
+    .map((template) => {
+      const haystack = `${template.name} ${template.description ?? ""} ${template.subjectTemplate}`.toLowerCase();
+      let score = 0;
+      if (haystack.includes("refund")) {
+        score += 10;
+      }
+      if (haystack.includes("booking")) {
+        score += 2;
+      }
+      if (template.templateType === "react_email") {
+        score += 1;
+      }
+      return { template, score };
+    })
+    .sort((left, right) => right.score - left.score);
+
+  if (scored.length === 0 || scored[0].score <= 0) {
+    return null;
+  }
+  return scored[0].template;
+};
+
+const pickPartialRefundTemplate = (templates: EmailTemplate[]): EmailTemplate | null => {
+  if (!Array.isArray(templates) || templates.length === 0) {
+    return null;
+  }
+  const activeTemplates = templates.filter((template) => template.isActive);
+  const source = activeTemplates.length > 0 ? activeTemplates : templates;
+  const scored = source
+    .map((template) => {
+      const haystack = `${template.name} ${template.description ?? ""} ${template.subjectTemplate}`.toLowerCase();
+      let score = 0;
+      if (haystack.includes("partial") && haystack.includes("refund")) {
+        score += 20;
+      } else if (haystack.includes("partial")) {
+        score += 12;
+      } else if (haystack.includes("refund")) {
+        score += 8;
+      }
+      if (template.templateType === "react_email") {
+        score += 1;
+      }
+      return { template, score };
+    })
+    .sort((left, right) => right.score - left.score);
+
+  if (scored.length === 0 || scored[0].score <= 0) {
+    return null;
+  }
+  return scored[0].template;
+};
 
 const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
@@ -1513,16 +1966,37 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     opened: false,
     loading: false,
     submitting: false,
+    manualAmountUnlocked: false,
     error: null,
     success: null,
+    order: null,
     bookingId: null,
     preview: null,
     amount: null,
+    peopleQuantity: 0,
     addonQuantities: {},
   });
   const [cancelState, setCancelState] = useState<CancelRefundState>(createDefaultCancelState());
   const [mobileActionsOrder, setMobileActionsOrder] = useState<UnifiedOrder | null>(null);
   const [expandedMobileCustomerDetails, setExpandedMobileCustomerDetails] = useState<Record<string, boolean>>({});
+  const [mailboxState, setMailboxState] = useState<MailboxState>(createDefaultMailboxState());
+  const [mailComposerState, setMailComposerState] = useState<MailComposerState>(createDefaultMailComposerState());
+  const [mailTemplateState, setMailTemplateState] = useState<MailTemplateState>(createDefaultMailTemplateState());
+  const [mailComposerPreviewState, setMailComposerPreviewState] =
+    useState<MailComposerPreviewState>(createDefaultMailComposerPreviewState());
+  const [cancelRefundEmailPreviewState, setCancelRefundEmailPreviewState] =
+    useState<CancelRefundEmailPreviewState>(createDefaultCancelRefundEmailPreviewState());
+  const [partialRefundEmailPreviewState, setPartialRefundEmailPreviewState] =
+    useState<PartialRefundEmailPreviewState>(createDefaultPartialRefundEmailPreviewState());
+  const [mailVariableDropdown, setMailVariableDropdown] = useState<MailVariableDropdownState>({
+    field: null,
+    tokenStart: -1,
+    tokenEnd: -1,
+    query: "",
+  });
+  const mailSubjectInputRef = useRef<HTMLInputElement | null>(null);
+  const mailBodyInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const mailReactSourceInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     setSearchInput(searchParam);
@@ -1704,7 +2178,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   };
 
   const handleAmendTimeChange = (event: ChangeEvent<HTMLInputElement>) => {
-    setAmendState((prev) => ({ ...prev, formTime: event.currentTarget.value }));
+    const nextValue = event.currentTarget.value;
+    setAmendState((prev) => ({ ...prev, formTime: nextValue }));
   };
 
   const handleAmendSubmit = async () => {
@@ -1921,12 +2396,15 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   };
 
   const openPartialRefundModal = (order: UnifiedOrder) => {
+    setPartialRefundEmailPreviewState(createDefaultPartialRefundEmailPreviewState());
     const bookingId = getBookingIdFromOrder(order);
     if (!bookingId) {
       setPartialRefundState((prev) => ({
         ...prev,
         opened: true,
         loading: false,
+        manualAmountUnlocked: false,
+        order,
         error: "Unable to locate OmniLodge booking reference for this order.",
       }));
       return;
@@ -1935,23 +2413,26 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       opened: true,
       loading: true,
       submitting: false,
+      manualAmountUnlocked: false,
       error: null,
       success: null,
+      order,
       bookingId,
       preview: null,
       amount: null,
+      peopleQuantity: 0,
       addonQuantities: {},
     });
     axiosInstance
       .get<PartialRefundPreview>(`/bookings/${bookingId}/partial-refund-preview`)
       .then((response) => {
-        const preview = response.data;
+        const preview = normalizePartialRefundPreview(response.data);
         const addonQuantities: Record<number, number> = {};
         preview.addons.forEach((addon) => {
           addonQuantities[addon.id] = 0;
         });
         const computedAmount = computeAddonRefundTotal(preview.addons, addonQuantities);
-        const maxAmount = Math.max((preview.remainingAmount - 1) / 100, 0);
+        const maxAmount = getPartialRefundRemainingAmountMajor(preview);
         const nextAmount = Math.min(computedAmount, maxAmount);
         setPartialRefundState((prev) => ({
           ...prev,
@@ -1975,13 +2456,17 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       opened: false,
       loading: false,
       submitting: false,
+      manualAmountUnlocked: false,
       error: null,
       success: null,
+      order: null,
       bookingId: null,
       preview: null,
       amount: null,
+      peopleQuantity: 0,
       addonQuantities: {},
     });
+    setPartialRefundEmailPreviewState(createDefaultPartialRefundEmailPreviewState());
   };
 
   const handlePartialRefundAddonChange = (addonId: number, value: number | string) => {
@@ -1994,8 +2479,13 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         ...prev.addonQuantities,
         [addonId]: Number.isFinite(nextValue) && nextValue >= 0 ? nextValue : 0,
       };
-      const computedAmount = computeAddonRefundTotal(prev.preview.addons, updated);
-      const maxAmount = Math.max((prev.preview.remainingAmount - 1) / 100, 0);
+      if (prev.manualAmountUnlocked) {
+        return prev;
+      }
+      const computedAmount =
+        computePeopleRefundTotal(prev.preview.people, prev.peopleQuantity) +
+        computeAddonRefundTotal(prev.preview.addons, updated);
+      const maxAmount = getPartialRefundRemainingAmountMajor(prev.preview);
       const nextAmount = Math.min(computedAmount, maxAmount);
       return {
         ...prev,
@@ -2007,14 +2497,76 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     });
   };
 
+  const handlePartialRefundPeopleChange = (value: number | string) => {
+    const nextValue = typeof value === "number" ? value : Number.parseInt(String(value), 10);
+    setPartialRefundState((prev) => {
+      if (!prev.preview) {
+        return prev;
+      }
+      const maxPeople = Math.max(0, Math.round(prev.preview.people?.quantity || 0));
+      const normalizedQuantity = Number.isFinite(nextValue)
+        ? Math.max(0, Math.min(Math.round(nextValue), maxPeople))
+        : 0;
+      if (prev.manualAmountUnlocked) {
+        return prev;
+      }
+      const computedAmount =
+        computePeopleRefundTotal(prev.preview.people, normalizedQuantity) +
+        computeAddonRefundTotal(prev.preview.addons, prev.addonQuantities);
+      const maxAmount = getPartialRefundRemainingAmountMajor(prev.preview);
+      const nextAmount = Math.min(computedAmount, maxAmount);
+      return {
+        ...prev,
+        peopleQuantity: normalizedQuantity,
+        amount: Number(nextAmount.toFixed(2)),
+        success: null,
+        error: null,
+      };
+    });
+  };
+
   const handlePartialRefundAmountChange = (value: number | string) => {
     const nextValue = typeof value === "number" ? value : Number.parseFloat(String(value));
-    setPartialRefundState((prev) => ({
-      ...prev,
-      amount: Number.isFinite(nextValue) ? nextValue : null,
-      success: null,
-      error: null,
-    }));
+    setPartialRefundState((prev) => {
+      if (!prev.manualAmountUnlocked) {
+        return prev;
+      }
+      return {
+        ...prev,
+        amount: Number.isFinite(nextValue) ? nextValue : null,
+        success: null,
+        error: null,
+      };
+    });
+  };
+
+  const handleTogglePartialRefundManualAmount = () => {
+    setPartialRefundState((prev) => {
+      if (!prev.preview) {
+        return prev;
+      }
+      const nextUnlocked = !prev.manualAmountUnlocked;
+      if (nextUnlocked) {
+        return {
+          ...prev,
+          manualAmountUnlocked: true,
+          success: null,
+          error: null,
+        };
+      }
+      const computedAmount =
+        computePeopleRefundTotal(prev.preview.people, prev.peopleQuantity) +
+        computeAddonRefundTotal(prev.preview.addons, prev.addonQuantities);
+      const maxAmount = getPartialRefundRemainingAmountMajor(prev.preview);
+      const nextAmount = Math.min(computedAmount, maxAmount);
+      return {
+        ...prev,
+        manualAmountUnlocked: false,
+        amount: Number(nextAmount.toFixed(2)),
+        success: null,
+        error: null,
+      };
+    });
   };
 
   const handleSubmitPartialRefund = async () => {
@@ -2026,23 +2578,66 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       setPartialRefundState((prev) => ({ ...prev, error: "Enter a refund amount." }));
       return;
     }
-    const remainingMajor = (partialRefundState.preview.remainingAmount - 1) / 100;
-    if (partialRefundState.amount >= remainingMajor) {
+    const remainingMajor = getPartialRefundRemainingAmountMajor(partialRefundState.preview);
+    const shouldProceedToCancel = remainingMajor > 0 && partialRefundState.amount + 0.0001 >= remainingMajor;
+    if (shouldProceedToCancel) {
+      if (!partialRefundState.order) {
+        setPartialRefundState((prev) => ({ ...prev, error: "Missing booking details for cancellation." }));
+        return;
+      }
+      closePartialRefundModal();
+      await openCancelModal(partialRefundState.order);
+      return;
+    }
+
+    const selectedAddonQty = Object.values(partialRefundState.addonQuantities).reduce(
+      (sum, value) => sum + (Number.isFinite(value) ? value : 0),
+      0,
+    );
+    if ((partialRefundState.peopleQuantity ?? 0) <= 0 && selectedAddonQty <= 0) {
       setPartialRefundState((prev) => ({
         ...prev,
-        error: "Amount must be less than the remaining paid amount. Use Cancel for a full refund.",
+        error: "Select refunded people quantity or add-on quantities.",
       }));
       return;
     }
+
+    let preparedEmail: { payload: EmailTemplateRenderRequestPayload; templateName: string | null } | null = null;
+    try {
+      preparedEmail = await buildPartialRefundEmailPayload();
+    } catch (error) {
+      setPartialRefundState((prev) => ({
+        ...prev,
+        error: extractErrorMessage(error),
+      }));
+      return;
+    }
+
     setPartialRefundState((prev) => ({ ...prev, submitting: true, error: null, success: null }));
     try {
       await axiosInstance.post(`/bookings/${partialRefundState.bookingId}/partial-refund`, {
         amount: partialRefundState.amount,
+        peopleQuantity: partialRefundState.peopleQuantity,
+        addonQuantities: partialRefundState.addonQuantities,
       });
+      let successMessage = "Partial refund submitted and email sent.";
+      if (preparedEmail) {
+        try {
+          await axiosInstance.post("/bookings/emails/send", preparedEmail.payload, {
+            withCredentials: true,
+          });
+        } catch (emailError) {
+          successMessage = "Partial refund submitted, but sending the email failed.";
+          setPartialRefundState((prev) => ({
+            ...prev,
+            error: extractErrorMessage(emailError),
+          }));
+        }
+      }
       setPartialRefundState((prev) => ({
         ...prev,
         submitting: false,
-        success: "Partial refund submitted.",
+        success: successMessage,
       }));
       setReloadToken((token) => token + 1);
     } catch (error) {
@@ -2099,6 +2694,406 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       return;
     }
     setCancelState(createDefaultCancelState());
+    setCancelRefundEmailPreviewState(createDefaultCancelRefundEmailPreviewState());
+  };
+
+  const closeCancelRefundEmailPreview = () => {
+    if (cancelRefundEmailPreviewState.loading) {
+      return;
+    }
+    setCancelRefundEmailPreviewState(createDefaultCancelRefundEmailPreviewState());
+  };
+
+  const resolveRefundTemplateForCancelPreview = async (): Promise<EmailTemplate | null> => {
+    const existingTemplate = pickRefundTemplate(mailTemplateState.templates);
+    if (existingTemplate) {
+      return existingTemplate;
+    }
+    const response = await axiosInstance.get<EmailTemplateListResponse>("/email-templates", {
+      withCredentials: true,
+    });
+    const templates = Array.isArray(response.data?.templates) ? response.data.templates : [];
+    return pickRefundTemplate(templates);
+  };
+
+  const closePartialRefundEmailPreview = () => {
+    if (partialRefundEmailPreviewState.loading) {
+      return;
+    }
+    setPartialRefundEmailPreviewState(createDefaultPartialRefundEmailPreviewState());
+  };
+
+  const resolvePartialRefundTemplateForPreview = async (): Promise<EmailTemplate | null> => {
+    const existingTemplate = pickPartialRefundTemplate(mailTemplateState.templates);
+    if (existingTemplate) {
+      return existingTemplate;
+    }
+    const response = await axiosInstance.get<EmailTemplateListResponse>("/email-templates", {
+      withCredentials: true,
+    });
+    const templates = Array.isArray(response.data?.templates) ? response.data.templates : [];
+    return pickPartialRefundTemplate(templates);
+  };
+
+  const buildPartialRefundEmailPayload = async (): Promise<{
+    payload: EmailTemplateRenderRequestPayload;
+    templateName: string | null;
+  }> => {
+    if (!partialRefundState.order || !partialRefundState.preview) {
+      throw new Error("Partial refund email requires an open partial refund preview.");
+    }
+
+    const customerEmail = String(partialRefundState.order.customerEmail ?? "").trim();
+    if (!customerEmail) {
+      throw new Error("Customer email is required to send the partial refund confirmation.");
+    }
+
+    const preview = partialRefundState.preview;
+    const baseContext = buildMailTemplateContextFromOrder(partialRefundState.order, customerEmail);
+    const bookingReference = String(baseContext.bookingReference ?? "").trim() || "booking";
+    const toAmount = (value: number): number => Number(value.toFixed(2));
+
+    const peopleQty = Math.max(0, Math.round(preview.people?.quantity ?? 0));
+    const peopleRefundQty = Math.max(0, Math.min(Math.round(partialRefundState.peopleQuantity ?? 0), peopleQty));
+    const peopleUnitPrice = preview.people?.unitPrice ? parseMoney(preview.people.unitPrice) : 0;
+    const peopleRefundAmount = toAmount(Math.max(peopleRefundQty * peopleUnitPrice, 0));
+    const peopleAfterRefund = Math.max(peopleQty - peopleRefundQty, 0);
+
+    const selectedAddonBreakdown = preview.addons
+      .map((addon) => {
+        const refundQty = Math.max(
+          0,
+          Math.min(Math.round(partialRefundState.addonQuantities[addon.id] ?? 0), Math.round(addon.quantity ?? 0)),
+        );
+        if (refundQty <= 0) {
+          return null;
+        }
+        const unitPrice =
+          addon.unitPrice
+            ? parseMoney(addon.unitPrice)
+            : addon.totalPrice && addon.quantity > 0
+              ? parseMoney(addon.totalPrice) / addon.quantity
+              : 0;
+        if (unitPrice <= 0) {
+          return null;
+        }
+        return {
+          bookingAddonId: addon.id,
+          name: addon.platformAddonName ?? `Addon ${addon.id}`,
+          qty: Math.max(0, Math.round(addon.quantity ?? 0)),
+          unitPrice: toAmount(unitPrice),
+          refundQty,
+          amount: toAmount(refundQty * unitPrice),
+        };
+      })
+      .filter(
+        (
+          entry,
+        ): entry is {
+          bookingAddonId: number;
+          name: string;
+          qty: number;
+          unitPrice: number;
+          refundQty: number;
+          amount: number;
+        } => entry !== null,
+      );
+
+    const addonsRefundAmount = toAmount(
+      selectedAddonBreakdown.reduce((sum, entry) => sum + entry.amount, 0),
+    );
+    const totalRefundAmount = toAmount(
+      partialRefundState.amount && partialRefundState.amount > 0
+        ? partialRefundState.amount
+        : peopleRefundAmount + addonsRefundAmount,
+    );
+    if (totalRefundAmount <= 0) {
+      throw new Error("Select refunded people quantity or add-on quantities before previewing email.");
+    }
+
+    const transactionAmount = preview.stripe ? preview.stripe.amount / 100 : 0;
+    const alreadyRefundedAmount = preview.stripe ? preview.stripe.amountRefunded / 100 : 0;
+    const refundedAddonRows = selectedAddonBreakdown.map((entry) => ({
+      name: entry.name,
+      qty: entry.qty,
+      quantity: entry.refundQty,
+      bookedQty: entry.qty,
+      unitPrice: entry.unitPrice,
+      refundQty: entry.refundQty,
+      amount: entry.amount,
+    }));
+    const normalizeAddonKey = (value: string): string => value.toLowerCase().replace(/[^a-z]/g, "");
+    const hasAddonMatch = (
+      rows: Array<{ name: string }>,
+      tokens: string[],
+    ): boolean =>
+      rows.some((row) => {
+        const key = normalizeAddonKey(String(row.name ?? ""));
+        return tokens.some((token) => key.includes(token));
+      });
+    const createFallbackAddon = (name: string) => ({
+      name,
+      qty: 0,
+      quantity: 0,
+      bookedQty: 0,
+      unitPrice: 0,
+      refundQty: 0,
+      amount: 0,
+    });
+    const safeRefundedAddons = [...refundedAddonRows];
+    if (!hasAddonMatch(safeRefundedAddons, ["cocktail", "drink"])) {
+      safeRefundedAddons.push(createFallbackAddon("Cocktails Add-On"));
+    }
+    if (!hasAddonMatch(safeRefundedAddons, ["tshirt", "shirt"])) {
+      safeRefundedAddons.push(createFallbackAddon("T-Shirts Add-On"));
+    }
+    if (!hasAddonMatch(safeRefundedAddons, ["photo", "picture", "instantpic"])) {
+      safeRefundedAddons.push(createFallbackAddon("Photos Add-On"));
+    }
+    const resolveAddonByKeywords = (tokens: string[], fallbackLabel: string) =>
+      safeRefundedAddons.find((addon) => {
+        const key = normalizeAddonKey(String(addon.name ?? ""));
+        return tokens.some((token) => key.includes(token));
+      }) ?? createFallbackAddon(fallbackLabel);
+    const cocktailsRefund = resolveAddonByKeywords(["cocktail", "drink"], "Cocktails Add-On");
+    const tshirtsRefund = resolveAddonByKeywords(["tshirt", "shirt"], "T-Shirts Add-On");
+    const photosRefund = resolveAddonByKeywords(["photo", "picture", "instantpic"], "Photos Add-On");
+    const peopleRefund = {
+      name: "People",
+      qty: peopleQty,
+      quantity: peopleRefundQty,
+      bookedQty: peopleQty,
+      refundQty: peopleRefundQty,
+      unitPrice: toAmount(peopleUnitPrice),
+      amount: peopleRefundAmount,
+    };
+    const partialReason =
+      peopleRefundQty > 0 && selectedAddonBreakdown.length > 0
+        ? "People quantity and add-ons adjustment"
+        : peopleRefundQty > 0
+          ? "People quantity adjustment"
+          : selectedAddonBreakdown.length > 0
+            ? "Add-ons adjustment"
+            : "Manual partial refund";
+    const context: Record<string, unknown> = {
+      ...baseContext,
+      templateKey: "partial_refund",
+      refundedAmount: totalRefundAmount,
+      totalPaidAmount: toAmount(transactionAmount),
+      alreadyRefundedAmount: toAmount(alreadyRefundedAmount),
+      isFullRefund: false,
+      partialReason,
+      refundReason: partialReason,
+      experienceDate: String(baseContext.bookingDateDisplay ?? baseContext.bookingDate ?? "").trim(),
+      peopleChange: {
+        from: peopleQty,
+        to: peopleAfterRefund,
+        amount: peopleRefundAmount,
+      },
+      peopleRefundDetails: {
+        qty: peopleQty,
+        quantity: peopleRefundQty,
+        bookedQty: peopleQty,
+        unitPrice: toAmount(peopleUnitPrice),
+        refundQty: peopleRefundQty,
+        amount: peopleRefundAmount,
+      },
+      peopleRefund,
+      refundedAddons: safeRefundedAddons,
+      addons: safeRefundedAddons,
+      addonsBreakdown: safeRefundedAddons,
+      cocktailsRefund,
+      tshirtsRefund,
+      photosRefund,
+      refundedAddonsByType: {
+        cocktails: cocktailsRefund,
+        tshirts: tshirtsRefund,
+        photos: photosRefund,
+      },
+      transactionId: preview.externalTransactionId ?? "",
+      externalTransactionId: preview.externalTransactionId ?? "",
+      stripeTransactionId: preview.stripe?.id ?? "",
+      stripeTransactionType: preview.stripe?.type ?? "",
+      stripeTransactionStatus: preview.stripe?.status ?? "",
+      stripeTransactionCreatedAt:
+        preview.stripe && Number.isFinite(preview.stripe.created)
+          ? dayjs.unix(preview.stripe.created).format("YYYY-MM-DD HH:mm")
+          : "",
+    };
+
+    const partialTemplate = await resolvePartialRefundTemplateForPreview();
+    const templateContextForRequest: Record<string, unknown> = { ...context };
+    if (
+      partialTemplate &&
+      partialTemplate.templateType === "react_email" &&
+      isReactEmailSource(partialTemplate.bodyTemplate)
+    ) {
+      templateContextForRequest.reactTemplateSource = partialTemplate.bodyTemplate;
+    }
+
+    const payload: EmailTemplateRenderRequestPayload = {
+      to: customerEmail,
+      templateContext: templateContextForRequest,
+    };
+    if (partialTemplate) {
+      payload.templateId = partialTemplate.id;
+    } else {
+      payload.subject = `Partial refund update - Booking ${bookingReference}`;
+      payload.body = `Refunded amount: ${totalRefundAmount} ${context.currency ?? "EUR"} for booking ${bookingReference}.`;
+    }
+
+    return {
+      payload,
+      templateName: partialTemplate?.name ?? null,
+    };
+  };
+
+  const handlePreviewPartialRefundEmail = async () => {
+    if (!partialRefundState.preview || partialRefundState.loading) {
+      return;
+    }
+    setPartialRefundEmailPreviewState((prev) => ({
+      ...prev,
+      opened: true,
+      loading: true,
+      error: null,
+      data: null,
+      templateName: null,
+    }));
+
+    try {
+      const preparedEmail = await buildPartialRefundEmailPayload();
+      const response = await axiosInstance.post<MailComposerPreviewResponse>(
+        "/bookings/emails/render-preview",
+        preparedEmail.payload,
+        { withCredentials: true },
+      );
+      setPartialRefundEmailPreviewState({
+        opened: true,
+        loading: false,
+        error: null,
+        data: response.data,
+        templateName: preparedEmail.templateName,
+      });
+    } catch (error) {
+      setPartialRefundEmailPreviewState({
+        opened: true,
+        loading: false,
+        error: extractErrorMessage(error),
+        data: null,
+        templateName: null,
+      });
+    }
+  };
+
+  const buildCancelRefundEmailPayload = async (): Promise<{
+    payload: EmailTemplateRenderRequestPayload;
+    templateName: string | null;
+  }> => {
+    if (!cancelState.order || cancelState.mode !== "ecwid_refund" || !cancelState.preview) {
+      throw new Error("Refund email is available only for Ecwid refund cancellations.");
+    }
+
+    const customerEmail = String(cancelState.order.customerEmail ?? "").trim();
+    if (!customerEmail) {
+      throw new Error("Customer email is required to send the refund confirmation.");
+    }
+
+    const baseContext = buildMailTemplateContextFromOrder(cancelState.order, customerEmail);
+    const stripePreview = cancelState.preview.stripe ?? null;
+    const transactionAmount = stripePreview ? stripePreview.amount / 100 : 0;
+    const alreadyRefundedAmount = stripePreview ? stripePreview.amountRefunded / 100 : 0;
+    const currentRefundAmount = stripePreview
+      ? stripePreview.fullyRefunded
+        ? alreadyRefundedAmount || transactionAmount
+        : Math.max(0, (stripePreview.amount - stripePreview.amountRefunded) / 100)
+      : 0;
+    const bookingReference = String(baseContext.bookingReference ?? "").trim() || "booking";
+    const context: Record<string, unknown> = {
+      ...baseContext,
+      refundedAmount: Number(currentRefundAmount.toFixed(2)),
+      totalPaidAmount: Number(transactionAmount.toFixed(2)),
+      alreadyRefundedAmount: Number(alreadyRefundedAmount.toFixed(2)),
+      isFullRefund: true,
+      experienceDate: String(baseContext.bookingDateDisplay ?? baseContext.bookingDate ?? "").trim(),
+      transactionId: cancelState.preview.externalTransactionId ?? "",
+      externalTransactionId: cancelState.preview.externalTransactionId ?? "",
+      stripeTransactionId: stripePreview?.id ?? "",
+      stripeTransactionType: stripePreview?.type ?? "",
+      stripeTransactionStatus: stripePreview?.status ?? "",
+      stripeTransactionCreatedAt:
+        stripePreview && Number.isFinite(stripePreview.created)
+          ? dayjs.unix(stripePreview.created).format("YYYY-MM-DD HH:mm")
+          : "",
+      refundedAddons: [],
+      peopleChange: null,
+    };
+
+    const refundTemplate = await resolveRefundTemplateForCancelPreview();
+    const templateContextForRequest: Record<string, unknown> = { ...context };
+    if (
+      refundTemplate &&
+      refundTemplate.templateType === "react_email" &&
+      isReactEmailSource(refundTemplate.bodyTemplate)
+    ) {
+      templateContextForRequest.reactTemplateSource = refundTemplate.bodyTemplate;
+    }
+    const fallbackSubject = `Refund Information - Booking ${bookingReference}`;
+    const fallbackBody = `Refunded amount: ${context.refundedAmount ?? ""} ${context.currency ?? "EUR"} for booking ${bookingReference}.`;
+    const payload: EmailTemplateRenderRequestPayload = {
+      to: customerEmail,
+      templateContext: templateContextForRequest,
+    };
+    if (refundTemplate) {
+      payload.templateId = refundTemplate.id;
+    } else {
+      payload.subject = fallbackSubject;
+      payload.body = fallbackBody;
+    }
+
+    return {
+      payload,
+      templateName: refundTemplate?.name ?? null,
+    };
+  };
+
+  const handlePreviewCancelRefundEmail = async () => {
+    if (cancelState.mode !== "ecwid_refund" || cancelState.loading) {
+      return;
+    }
+
+    setCancelRefundEmailPreviewState((prev) => ({
+      ...prev,
+      opened: true,
+      loading: true,
+      error: null,
+      data: null,
+      templateName: null,
+    }));
+
+    try {
+      const preparedEmail = await buildCancelRefundEmailPayload();
+      const response = await axiosInstance.post<MailComposerPreviewResponse>(
+        "/bookings/emails/render-preview",
+        preparedEmail.payload,
+        { withCredentials: true },
+      );
+      setCancelRefundEmailPreviewState({
+        opened: true,
+        loading: false,
+        error: null,
+        data: response.data,
+        templateName: preparedEmail.templateName,
+      });
+    } catch (error) {
+      setCancelRefundEmailPreviewState({
+        opened: true,
+        loading: false,
+        error: extractErrorMessage(error),
+        data: null,
+        templateName: null,
+      });
+    }
   };
 
   const handleConfirmRefund = async () => {
@@ -2106,10 +3101,29 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       setCancelState((prev) => ({ ...prev, error: "Missing OmniLodge booking reference." }));
       return;
     }
+
+    let preparedEmail: { payload: EmailTemplateRenderRequestPayload; templateName: string | null } | null = null;
+    if (cancelState.mode === "ecwid_refund") {
+      try {
+        preparedEmail = await buildCancelRefundEmailPayload();
+      } catch (error) {
+        setCancelState((prev) => ({
+          ...prev,
+          error: extractErrorMessage(error),
+        }));
+        return;
+      }
+    }
+
     setCancelState((prev) => ({ ...prev, submitting: true, error: null }));
     try {
       if (cancelState.mode === "ecwid_refund") {
         await axiosInstance.post(`/bookings/${cancelState.bookingId}/cancel-ecwid`);
+        if (preparedEmail) {
+          await axiosInstance.post("/bookings/emails/send", preparedEmail.payload, {
+            withCredentials: true,
+          });
+        }
       } else if (cancelState.mode === "xperience_cancel") {
         await axiosInstance.post(`/bookings/${cancelState.bookingId}/cancel-xperience`);
       } else {
@@ -2163,7 +3177,1090 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     await openCancelModal(order);
   };
 
+  const buildMailDraftFromOrder = (order: UnifiedOrder) => {
+    const to = String(order.customerEmail ?? "").trim();
+    const productName = String(order.productName ?? "Booking").trim() || "Booking";
+    const displayDate = dayjs(order.date).isValid() ? dayjs(order.date).format("ddd, MMM D YYYY") : order.date;
+    const timeslot = order.timeslot && order.timeslot !== "--:--" ? order.timeslot : "";
+    const bookingId = normalizeManifestBookingId(order);
+    const subjectParts = [productName, displayDate, timeslot].filter((part) => Boolean(part && String(part).trim()));
+    const subject = bookingId
+      ? `Booking Information - ${subjectParts.join(" @ ")} (${bookingId})`
+      : `Booking Information - ${subjectParts.join(" @ ")}`;
+    const customerName = String(order.customerName ?? "").trim() || "Guest";
+    const body = `Hi ${customerName},\n\n\n\nBest regards,`;
+    return { to, subject, body };
+  };
 
+  const interpolateTemplateText = (
+    template: string,
+    context: Record<string, string | number | boolean | null | undefined>,
+  ): string =>
+    template.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_, rawKey: string) => {
+      const key = String(rawKey ?? "").trim();
+      if (!key) {
+        return "";
+      }
+      if (!(key in context)) {
+        return `{{${key}}}`;
+      }
+      const value = context[key];
+      if (value === null || value === undefined) {
+        return "";
+      }
+      return String(value);
+    });
+
+  const buildMailTemplateContextFromOrder = useCallback(
+    (
+      order: UnifiedOrder | null,
+      toEmail: string,
+    ): Record<string, string | number | boolean | null | undefined> => {
+      const customerName = String(order?.customerName ?? "").trim();
+      const productName = String(order?.productName ?? "").trim();
+      const dateRaw = String(order?.date ?? "").trim();
+      const dateDisplay = dayjs(dateRaw).isValid() ? dayjs(dateRaw).format("ddd, MMM D YYYY") : dateRaw;
+      const timeslot = String(order?.timeslot ?? "").trim();
+      const bookingId = order ? normalizeManifestBookingId(order) : null;
+      const platformBookingId = String(order?.platformBookingId ?? "").trim();
+      const bookingReference = bookingId || platformBookingId || String(order?.id ?? "").trim();
+      const quantity = Number.isFinite(order?.quantity) ? order?.quantity : 0;
+      return {
+        customerName: customerName || "Guest",
+        customerEmail: toEmail || "",
+        customerPhone: String(order?.customerPhone ?? "").trim(),
+        productName: productName || "Booking",
+        bookingDate: dateRaw,
+        bookingDateDisplay: dateDisplay,
+        bookingTime: timeslot,
+        bookingId: bookingId || "",
+        bookingReference,
+        reservationId: bookingReference,
+        platformBookingId,
+        platform: String(order?.platform ?? "").trim(),
+        quantity,
+        peopleCount: quantity,
+        menCount: Number.isFinite(order?.menCount) ? order?.menCount : 0,
+        womenCount: Number.isFinite(order?.womenCount) ? order?.womenCount : 0,
+        currency: "EUR",
+      };
+    },
+    [],
+  );
+
+  const mergeMailboxMessages = (current: MailboxMessage[], incoming: MailboxMessage[]): MailboxMessage[] => {
+    const map = new Map<string, MailboxMessage>();
+    current.forEach((message) => {
+      map.set(message.messageId, message);
+    });
+    incoming.forEach((message) => {
+      map.set(message.messageId, message);
+    });
+    return Array.from(map.values());
+  };
+
+  const closeMailboxModal = () => {
+    setMailboxState(createDefaultMailboxState());
+  };
+
+  const closeMailboxPreview = () => {
+    setMailboxState((prev) => ({
+      ...prev,
+      previewOpen: false,
+      previewLoading: false,
+      previewError: null,
+      previewData: null,
+    }));
+  };
+
+  const handleMailboxPreview = async (messageId: string) => {
+    setMailboxState((prev) => ({
+      ...prev,
+      previewOpen: true,
+      previewLoading: true,
+      previewError: null,
+      previewData: null,
+    }));
+
+    try {
+      const response = await axiosInstance.get(`/bookings/emails/gmail/${encodeURIComponent(messageId)}/preview`, {
+        withCredentials: true,
+      });
+      setMailboxState((prev) => ({
+        ...prev,
+        previewLoading: false,
+        previewError: null,
+        previewData: response.data as BookingEmailPreview,
+      }));
+    } catch (error) {
+      setMailboxState((prev) => ({
+        ...prev,
+        previewLoading: false,
+        previewError: extractErrorMessage(error),
+      }));
+    }
+  };
+
+  const fetchMailboxMessages = async (
+    email: string,
+    options?: {
+      pageToken?: string | null;
+      append?: boolean;
+    },
+  ) => {
+    const append = options?.append === true;
+    const pageToken = options?.pageToken ?? null;
+    if (!append) {
+      setMailboxState((prev) => ({
+        ...prev,
+        loading: true,
+        loadingMore: false,
+        error: null,
+      }));
+    } else {
+      setMailboxState((prev) => ({
+        ...prev,
+        loadingMore: true,
+        error: null,
+      }));
+    }
+    try {
+      const response = await axiosInstance.get<MailboxResponse>("/bookings/emails/mailbox", {
+        params: {
+          email,
+          limit: 25,
+          pageToken: pageToken || undefined,
+        },
+        withCredentials: true,
+      });
+      const payload = response.data;
+      const incoming = Array.isArray(payload.messages) ? payload.messages : [];
+      setMailboxState((prev) => ({
+        ...prev,
+        loading: false,
+        loadingMore: false,
+        error: null,
+        messages: append ? mergeMailboxMessages(prev.messages, incoming) : incoming,
+        nextPageToken: payload.nextPageToken ?? null,
+      }));
+    } catch (error) {
+      setMailboxState((prev) => ({
+        ...prev,
+        loading: false,
+        loadingMore: false,
+        error: extractErrorMessage(error),
+      }));
+    }
+  };
+
+  const openMailboxModal = (order: UnifiedOrder) => {
+    const to = String(order.customerEmail ?? "").trim();
+    if (!to) {
+      return;
+    }
+    setMailboxState({
+      opened: true,
+      loading: true,
+      loadingMore: false,
+      error: null,
+      customerEmail: to,
+      customerName: String(order.customerName ?? "").trim(),
+      sourceOrder: order,
+      messages: [],
+      filter: "all",
+      nextPageToken: null,
+      previewOpen: false,
+      previewLoading: false,
+      previewError: null,
+      previewData: null,
+    });
+    void fetchMailboxMessages(to);
+  };
+
+  const handleMailboxFilterChange = (value: string) => {
+    if (value !== "all" && value !== "received" && value !== "sent") {
+      return;
+    }
+    setMailboxState((prev) => ({ ...prev, filter: value }));
+  };
+
+  const handleMailboxLoadMore = async () => {
+    const email = mailboxState.customerEmail;
+    const token = mailboxState.nextPageToken;
+    if (!email || !token || mailboxState.loadingMore || mailboxState.loading) {
+      return;
+    }
+    await fetchMailboxMessages(email, { pageToken: token, append: true });
+  };
+
+  const handleMailboxRefresh = async () => {
+    const email = mailboxState.customerEmail;
+    if (!email || mailboxState.loading || mailboxState.loadingMore) {
+      return;
+    }
+    await fetchMailboxMessages(email, { append: false });
+  };
+
+  const handleMailboxCreateNewEmail = () => {
+    const sourceOrder = mailboxState.sourceOrder;
+    if (!sourceOrder) {
+      return;
+    }
+    setMailboxState(createDefaultMailboxState());
+    openMailComposerModal(sourceOrder);
+  };
+
+  const loadMailTemplates = async () => {
+    setMailTemplateState((prev) => ({
+      ...prev,
+      loading: true,
+      error: null,
+    }));
+
+    try {
+      const response = await axiosInstance.get<EmailTemplateListResponse>("/email-templates", {
+        withCredentials: true,
+      });
+      const templates = Array.isArray(response.data?.templates) ? response.data.templates : [];
+      setMailTemplateState((prev) => {
+        const selectedTemplateId =
+          prev.selectedTemplateId && templates.some((template) => String(template.id) === prev.selectedTemplateId)
+            ? prev.selectedTemplateId
+            : null;
+        return {
+          ...prev,
+          loading: false,
+          error: null,
+          templates,
+          selectedTemplateId,
+          editorName: selectedTemplateId
+            ? templates.find((template) => String(template.id) === selectedTemplateId)?.name ?? ""
+            : "",
+          editorDescription: selectedTemplateId
+            ? templates.find((template) => String(template.id) === selectedTemplateId)?.description ?? ""
+            : "",
+          editorType: selectedTemplateId
+            ? templates.find((template) => String(template.id) === selectedTemplateId)?.templateType ?? "plain_text"
+            : "plain_text",
+        };
+      });
+    } catch (error) {
+      setMailTemplateState((prev) => ({
+        ...prev,
+        loading: false,
+        error: extractErrorMessage(error),
+      }));
+    }
+  };
+
+  const applyTemplateToComposer = (template: EmailTemplate) => {
+    setMailComposerState((prev) => {
+      const context = buildMailTemplateContextFromOrder(prev.sourceOrder, prev.to.trim());
+      const subject = interpolateTemplateText(template.subjectTemplate, context).trim();
+      const body = interpolateTemplateText(template.bodyTemplate, context);
+      const reactLiveSource =
+        template.templateType === "react_email"
+          ? isReactEmailSource(template.bodyTemplate)
+            ? template.bodyTemplate
+            : createDefaultReactEmailSource(body)
+          : "";
+      return {
+        ...prev,
+        subject,
+        body,
+        reactLiveSource,
+        error: null,
+        success: null,
+      };
+    });
+
+    setMailTemplateState((prev) => ({
+      ...prev,
+      selectedTemplateId: String(template.id),
+      editorName: template.name,
+      editorDescription: template.description ?? "",
+      editorType: template.templateType,
+      error: null,
+    }));
+  };
+
+  const openMailComposerModal = (order: UnifiedOrder) => {
+    const { to, subject, body } = buildMailDraftFromOrder(order);
+    if (!to) {
+      return;
+    }
+
+    setMailTemplateState(createDefaultMailTemplateState());
+    setMailComposerState({
+      opened: true,
+      sourceOrder: order,
+      to,
+      subject,
+      body,
+      reactLiveSource: "",
+      sending: false,
+      error: null,
+      success: null,
+    });
+    setMailVariableDropdown({ field: null, tokenStart: -1, tokenEnd: -1, query: "" });
+
+    void loadMailTemplates();
+  };
+
+  const closeMailComposerModal = () => {
+    if (mailComposerState.sending) {
+      return;
+    }
+    setMailComposerState(createDefaultMailComposerState());
+    setMailTemplateState(createDefaultMailTemplateState());
+    setMailComposerPreviewState(createDefaultMailComposerPreviewState());
+    setMailVariableDropdown({ field: null, tokenStart: -1, tokenEnd: -1, query: "" });
+  };
+
+  const handleMailToChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const nextValue = event.currentTarget.value;
+    setMailComposerState((prev) => ({
+      ...prev,
+      to: nextValue,
+      error: null,
+      success: null,
+    }));
+    closeMailVariableDropdown();
+  };
+
+  const handleMailSubjectChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const nextValue = event.currentTarget.value;
+    const cursorPosition = event.currentTarget.selectionStart ?? nextValue.length;
+    setMailComposerState((prev) => ({
+      ...prev,
+      subject: nextValue,
+      error: null,
+      success: null,
+    }));
+    updateMailVariableDropdownForField("subject", nextValue, cursorPosition);
+  };
+
+  const handleMailBodyChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    const nextValue = event.currentTarget.value;
+    const cursorPosition = event.currentTarget.selectionStart ?? nextValue.length;
+    setMailComposerState((prev) => ({
+      ...prev,
+      body: nextValue,
+      error: null,
+      success: null,
+    }));
+    updateMailVariableDropdownForField("body", nextValue, cursorPosition);
+  };
+
+  const handleMailPreviewBodyChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    const nextValue = event.currentTarget.value;
+    const cursorPosition = event.currentTarget.selectionStart ?? nextValue.length;
+    setMailComposerState((prev) => ({
+      ...prev,
+      reactLiveSource: nextValue,
+      error: null,
+      success: null,
+    }));
+    updateMailVariableDropdownForField("react", nextValue, cursorPosition);
+    setMailComposerPreviewState((prev) => ({
+      ...prev,
+      error: null,
+    }));
+  };
+
+  const handleMailTemplateSelection = (value: string | null) => {
+    if (!value) {
+      setMailTemplateState((prev) => ({
+        ...prev,
+        selectedTemplateId: null,
+        editorName: "",
+        editorDescription: "",
+        editorType: "plain_text",
+        error: null,
+      }));
+      return;
+    }
+
+    const template = mailTemplateState.templates.find((entry) => String(entry.id) === value);
+    if (!template) {
+      return;
+    }
+    applyTemplateToComposer(template);
+  };
+
+  const handleTemplateNameChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const nextValue = event.currentTarget.value;
+    setMailTemplateState((prev) => ({
+      ...prev,
+      editorName: nextValue,
+      error: null,
+    }));
+  };
+
+  const handleTemplateDescriptionChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const nextValue = event.currentTarget.value;
+    setMailTemplateState((prev) => ({
+      ...prev,
+      editorDescription: nextValue,
+      error: null,
+    }));
+  };
+
+  const handleTemplateTypeChange = (value: string | null) => {
+    if (value !== "plain_text" && value !== "react_email") {
+      return;
+    }
+    setMailTemplateState((prev) => ({
+      ...prev,
+      editorType: value,
+      error: null,
+    }));
+    if (value === "react_email") {
+      setMailComposerState((prev) => ({
+        ...prev,
+        reactLiveSource:
+          prev.reactLiveSource.trim().length > 0
+            ? prev.reactLiveSource
+            : createDefaultReactEmailSource(prev.body),
+      }));
+    }
+  };
+
+  const handleCreateTemplate = async () => {
+    const name = mailTemplateState.editorName.trim();
+    const description = mailTemplateState.editorDescription.trim();
+    const subjectTemplate = mailComposerState.subject.trim();
+    const bodyTemplate =
+      mailTemplateState.editorType === "react_email"
+        ? mailComposerState.reactLiveSource.trim()
+        : mailComposerState.body.trim();
+
+    if (!name) {
+      setMailTemplateState((prev) => ({ ...prev, error: "Template name is required." }));
+      return;
+    }
+    if (!subjectTemplate) {
+      setMailTemplateState((prev) => ({ ...prev, error: "Subject is required to save a template." }));
+      return;
+    }
+    if (!bodyTemplate) {
+      setMailTemplateState((prev) => ({
+        ...prev,
+        error:
+          mailTemplateState.editorType === "react_email"
+            ? "React template source is required to save a template."
+            : "Body is required to save a template.",
+      }));
+      return;
+    }
+
+    setMailTemplateState((prev) => ({
+      ...prev,
+      saving: true,
+      error: null,
+    }));
+
+    try {
+      const response = await axiosInstance.post<EmailTemplate>(
+        "/email-templates",
+        {
+          name,
+          description: description || null,
+          templateType: mailTemplateState.editorType,
+          subjectTemplate,
+          bodyTemplate,
+          isActive: true,
+        },
+        { withCredentials: true },
+      );
+      const createdTemplate = response.data;
+      setMailTemplateState((prev) => ({
+        ...prev,
+        saving: false,
+        error: null,
+        selectedTemplateId: String(createdTemplate.id),
+        editorName: createdTemplate.name,
+        editorDescription: createdTemplate.description ?? "",
+        editorType: createdTemplate.templateType,
+        templates: [createdTemplate, ...prev.templates.filter((template) => template.id !== createdTemplate.id)],
+      }));
+      setMailComposerState((prev) => ({
+        ...prev,
+        error: null,
+        success: `Template "${createdTemplate.name}" saved.`,
+      }));
+    } catch (error) {
+      setMailTemplateState((prev) => ({
+        ...prev,
+        saving: false,
+        error: extractErrorMessage(error),
+      }));
+    }
+  };
+
+  const handleUpdateTemplate = async () => {
+    const selectedTemplateId = mailTemplateState.selectedTemplateId;
+    if (!selectedTemplateId) {
+      setMailTemplateState((prev) => ({ ...prev, error: "Select a template to update." }));
+      return;
+    }
+    const name = mailTemplateState.editorName.trim();
+    const description = mailTemplateState.editorDescription.trim();
+    const subjectTemplate = mailComposerState.subject.trim();
+    const bodyTemplate =
+      mailTemplateState.editorType === "react_email"
+        ? mailComposerState.reactLiveSource.trim()
+        : mailComposerState.body.trim();
+
+    if (!name) {
+      setMailTemplateState((prev) => ({ ...prev, error: "Template name is required." }));
+      return;
+    }
+    if (!subjectTemplate) {
+      setMailTemplateState((prev) => ({ ...prev, error: "Subject is required to update a template." }));
+      return;
+    }
+    if (!bodyTemplate) {
+      setMailTemplateState((prev) => ({
+        ...prev,
+        error:
+          mailTemplateState.editorType === "react_email"
+            ? "React template source is required to update a template."
+            : "Body is required to update a template.",
+      }));
+      return;
+    }
+
+    setMailTemplateState((prev) => ({
+      ...prev,
+      saving: true,
+      error: null,
+    }));
+
+    try {
+      const response = await axiosInstance.patch<EmailTemplate>(
+        `/email-templates/${encodeURIComponent(selectedTemplateId)}`,
+        {
+          name,
+          description: description || null,
+          templateType: mailTemplateState.editorType,
+          subjectTemplate,
+          bodyTemplate,
+          isActive: true,
+        },
+        { withCredentials: true },
+      );
+      const updatedTemplate = response.data;
+      setMailTemplateState((prev) => ({
+        ...prev,
+        saving: false,
+        error: null,
+        templates: prev.templates.map((template) =>
+          template.id === updatedTemplate.id ? updatedTemplate : template,
+        ),
+      }));
+      setMailComposerState((prev) => ({
+        ...prev,
+        error: null,
+        success: `Template "${updatedTemplate.name}" updated.`,
+      }));
+    } catch (error) {
+      setMailTemplateState((prev) => ({
+        ...prev,
+        saving: false,
+        error: extractErrorMessage(error),
+      }));
+    }
+  };
+
+  const selectedMailTemplate = useMemo(
+    () =>
+      mailTemplateState.selectedTemplateId
+        ? mailTemplateState.templates.find(
+            (template) => String(template.id) === mailTemplateState.selectedTemplateId,
+          ) ?? null
+        : null,
+    [mailTemplateState.selectedTemplateId, mailTemplateState.templates],
+  );
+  const isReactTemplateSelected =
+    (selectedMailTemplate?.templateType ?? mailTemplateState.editorType) === "react_email";
+
+  const mailTemplateVariableDefinitions = useMemo(() => {
+    const normalizedTemplateHint = `${selectedMailTemplate?.name ?? ""} ${mailTemplateState.editorName ?? ""}`
+      .toLowerCase()
+      .trim();
+    const isRefundTemplate = normalizedTemplateHint.includes("refund");
+    const isSupplyTemplate = normalizedTemplateHint.includes("supply");
+
+    const definitions: MailVariableDefinition[] = [...BASE_MAIL_VARIABLES];
+    if (isRefundTemplate) {
+      definitions.push(...REFUND_MAIL_VARIABLES);
+    }
+    if (isSupplyTemplate) {
+      definitions.push(...SUPPLY_MAIL_VARIABLES);
+    }
+    if (isReactTemplateSelected) {
+      definitions.push(...REACT_MAIL_VARIABLES);
+    }
+
+    const unique = new Map<string, MailVariableDefinition>();
+    definitions.forEach((definition) => {
+      if (!unique.has(definition.key)) {
+        unique.set(definition.key, definition);
+      }
+    });
+    return Array.from(unique.values());
+  }, [selectedMailTemplate?.name, mailTemplateState.editorName, isReactTemplateSelected]);
+
+  const activeMailVariableOptions = useMemo(() => {
+    if (!mailVariableDropdown.field) {
+      return [] as MailVariableDefinition[];
+    }
+    return mailTemplateVariableDefinitions;
+  }, [mailTemplateVariableDefinitions, mailVariableDropdown.field]);
+
+  const closeMailVariableDropdown = useCallback((): void => {
+    setMailVariableDropdown({ field: null, tokenStart: -1, tokenEnd: -1, query: "" });
+  }, []);
+
+  function updateMailVariableDropdownForField(field: MailVariableField, value: string, cursorPosition: number): void {
+    const tokenContext = resolveMailVariableTokenContext(value, cursorPosition);
+    if (!tokenContext) {
+      setMailVariableDropdown((prev) =>
+        prev.field === field ? { field: null, tokenStart: -1, tokenEnd: -1, query: "" } : prev,
+      );
+      return;
+    }
+    setMailVariableDropdown({
+      field,
+      tokenStart: tokenContext.tokenStart,
+      tokenEnd: tokenContext.tokenEnd,
+      query: tokenContext.query,
+    });
+  }
+
+  const handleSelectMailVariableFromDropdown = useCallback(
+    (definition: MailVariableDefinition) => {
+      if (!mailVariableDropdown.field || mailVariableDropdown.tokenStart < 0 || mailVariableDropdown.tokenEnd < 0) {
+        return;
+      }
+      const token = `{{${definition.key}}}`;
+      const replaceTokenRange = (source: string): { nextValue: string; nextCursor: number } => {
+        const nextValue =
+          source.slice(0, mailVariableDropdown.tokenStart) +
+          token +
+          source.slice(mailVariableDropdown.tokenEnd);
+        const nextCursor = mailVariableDropdown.tokenStart + token.length;
+        return { nextValue, nextCursor };
+      };
+
+      const field = mailVariableDropdown.field;
+      let nextCursor = 0;
+      if (field === "subject") {
+        setMailComposerState((prev) => {
+          const replaced = replaceTokenRange(prev.subject);
+          nextCursor = replaced.nextCursor;
+          return { ...prev, subject: replaced.nextValue, error: null, success: null };
+        });
+      } else if (field === "body") {
+        setMailComposerState((prev) => {
+          const replaced = replaceTokenRange(prev.body);
+          nextCursor = replaced.nextCursor;
+          return { ...prev, body: replaced.nextValue, error: null, success: null };
+        });
+      } else {
+        setMailComposerState((prev) => {
+          const replaced = replaceTokenRange(prev.reactLiveSource);
+          nextCursor = replaced.nextCursor;
+          return { ...prev, reactLiveSource: replaced.nextValue, error: null, success: null };
+        });
+      }
+
+      window.requestAnimationFrame(() => {
+        const targetInput =
+          field === "subject"
+            ? mailSubjectInputRef.current
+            : field === "body"
+              ? mailBodyInputRef.current
+              : mailReactSourceInputRef.current;
+        if (targetInput) {
+          targetInput.focus();
+          targetInput.setSelectionRange(nextCursor, nextCursor);
+        }
+      });
+
+      closeMailVariableDropdown();
+      setMailComposerPreviewState((prev) => ({ ...prev, error: null }));
+    },
+    [closeMailVariableDropdown, mailVariableDropdown.field, mailVariableDropdown.tokenEnd, mailVariableDropdown.tokenStart],
+  );
+
+  const renderMailVariableDropdown = (field: MailVariableField): ReactNode => {
+    if (mailVariableDropdown.field !== field) {
+      return null;
+    }
+
+    if (activeMailVariableOptions.length === 0) {
+      return (
+        <Paper withBorder radius="md" p="xs">
+          <Text size="xs" c="dimmed">
+            No variables found for this query.
+          </Text>
+        </Paper>
+      );
+    }
+
+    return (
+      <Paper withBorder radius="md" p="xs">
+        <Stack gap={4} style={{ maxHeight: 220, overflowY: "auto" }}>
+          {activeMailVariableOptions.map((entry) => (
+            <Box
+              key={`mail-variable-option-${field}-${entry.key}`}
+              component="button"
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                handleSelectMailVariableFromDropdown(entry);
+              }}
+              style={{
+                width: "100%",
+                textAlign: "left",
+                border: "none",
+                background: "transparent",
+                padding: "6px 8px",
+                borderRadius: 6,
+                cursor: "pointer",
+              }}
+            >
+              <Text size="sm" fw={600}>
+                {`{{${entry.key}}}`}
+              </Text>
+              <Text size="xs" c="dimmed">
+                {entry.description}
+              </Text>
+            </Box>
+          ))}
+        </Stack>
+      </Paper>
+    );
+  };
+
+  const resolveSelectedTemplateId = useCallback((): number | null => {
+    const selectedTemplateId = mailTemplateState.selectedTemplateId;
+    const parsedTemplateId =
+      selectedTemplateId !== null ? Number.parseInt(selectedTemplateId, 10) : Number.NaN;
+    return Number.isFinite(parsedTemplateId) && parsedTemplateId > 0 ? parsedTemplateId : null;
+  }, [mailTemplateState.selectedTemplateId]);
+
+  const withSafeRefundTemplateContext = useCallback(
+    (baseContext: Record<string, unknown>): Record<string, unknown> => {
+      const quantityRaw = Number(baseContext.quantity ?? baseContext.peopleCount ?? 0);
+      const quantity = Number.isFinite(quantityRaw) ? Math.max(0, Math.round(quantityRaw)) : 0;
+      const createAddonFallback = (name: string) => ({
+        name,
+        qty: 0,
+        quantity: 0,
+        bookedQty: 0,
+        unitPrice: 0,
+        refundQty: 0,
+        amount: 0,
+      });
+      const addonFallbacks = [
+        createAddonFallback("Cocktails Add-On"),
+        createAddonFallback("T-Shirts Add-On"),
+        createAddonFallback("Photos Add-On"),
+      ];
+      const existingRefundedAddons = Array.isArray(baseContext.refundedAddons)
+        ? (baseContext.refundedAddons as Array<Record<string, unknown>>)
+        : [];
+      const refundedAddons =
+        existingRefundedAddons.length > 0
+          ? existingRefundedAddons.map((addon) => ({
+              ...addon,
+              name: String(addon.name ?? ""),
+              qty: Number.isFinite(Number(addon.qty)) ? Number(addon.qty) : Number(addon.quantity ?? 0) || 0,
+              quantity: Number.isFinite(Number(addon.quantity))
+                ? Number(addon.quantity)
+                : Number(addon.refundQty ?? addon.qty ?? 0) || 0,
+              bookedQty: Number.isFinite(Number(addon.bookedQty))
+                ? Number(addon.bookedQty)
+                : Number(addon.qty ?? 0) || 0,
+              unitPrice: Number.isFinite(Number(addon.unitPrice)) ? Number(addon.unitPrice) : 0,
+              refundQty: Number.isFinite(Number(addon.refundQty))
+                ? Number(addon.refundQty)
+                : Number(addon.quantity ?? addon.qty ?? 0) || 0,
+              amount: Number.isFinite(Number(addon.amount)) ? Number(addon.amount) : 0,
+            }))
+          : addonFallbacks;
+      const peopleRefund =
+        baseContext.peopleRefund && typeof baseContext.peopleRefund === "object"
+          ? (baseContext.peopleRefund as Record<string, unknown>)
+          : {
+              name: "People",
+              qty: quantity,
+              quantity: 0,
+              bookedQty: quantity,
+              refundQty: 0,
+              unitPrice: 0,
+              amount: 0,
+            };
+
+      return {
+        ...baseContext,
+        refundedAmount: Number(baseContext.refundedAmount ?? 0) || 0,
+        totalPaidAmount: Number(baseContext.totalPaidAmount ?? 0) || 0,
+        alreadyRefundedAmount: Number(baseContext.alreadyRefundedAmount ?? 0) || 0,
+        isFullRefund: Boolean(baseContext.isFullRefund ?? false),
+        partialReason: String(baseContext.partialReason ?? ""),
+        refundReason: String(baseContext.refundReason ?? ""),
+        experienceDate:
+          String(baseContext.experienceDate ?? baseContext.bookingDateDisplay ?? baseContext.bookingDate ?? "").trim(),
+        peopleChange:
+          baseContext.peopleChange && typeof baseContext.peopleChange === "object"
+            ? baseContext.peopleChange
+            : { from: quantity, to: quantity, amount: 0 },
+        peopleRefundDetails:
+          baseContext.peopleRefundDetails && typeof baseContext.peopleRefundDetails === "object"
+            ? baseContext.peopleRefundDetails
+            : peopleRefund,
+        peopleRefund,
+        refundedAddons,
+        addons: Array.isArray(baseContext.addons) ? baseContext.addons : refundedAddons,
+        addonsBreakdown: Array.isArray(baseContext.addonsBreakdown)
+          ? baseContext.addonsBreakdown
+          : refundedAddons,
+        cocktailsRefund:
+          baseContext.cocktailsRefund && typeof baseContext.cocktailsRefund === "object"
+            ? baseContext.cocktailsRefund
+            : refundedAddons[0],
+        tshirtsRefund:
+          baseContext.tshirtsRefund && typeof baseContext.tshirtsRefund === "object"
+            ? baseContext.tshirtsRefund
+            : refundedAddons[1] ?? refundedAddons[0],
+        photosRefund:
+          baseContext.photosRefund && typeof baseContext.photosRefund === "object"
+            ? baseContext.photosRefund
+            : refundedAddons[2] ?? refundedAddons[0],
+      };
+    },
+    [],
+  );
+
+  const buildMailTemplateContextForRequest = useCallback(
+    (recipientEmail: string): Record<string, unknown> | undefined => {
+      const templateId = resolveSelectedTemplateId();
+      const baseContext = buildMailTemplateContextFromOrder(mailComposerState.sourceOrder, recipientEmail);
+      const templateHint = `${selectedMailTemplate?.name ?? ""} ${mailTemplateState.editorName ?? ""}`
+        .toLowerCase()
+        .trim();
+      const shouldIncludeRefundContext = templateHint.includes("refund");
+      const contextWithDefaults = shouldIncludeRefundContext
+        ? withSafeRefundTemplateContext(baseContext as Record<string, unknown>)
+        : (baseContext as Record<string, unknown>);
+      if (isReactTemplateSelected) {
+        return {
+          ...contextWithDefaults,
+          reactTemplateSource: mailComposerState.reactLiveSource,
+        };
+      }
+      if (!templateId) {
+        return undefined;
+      }
+      return contextWithDefaults;
+    },
+    [
+      resolveSelectedTemplateId,
+      buildMailTemplateContextFromOrder,
+      selectedMailTemplate?.name,
+      mailTemplateState.editorName,
+      withSafeRefundTemplateContext,
+      mailComposerState.sourceOrder,
+      mailComposerState.reactLiveSource,
+      isReactTemplateSelected,
+    ],
+  );
+
+  const closeMailComposerPreview = () => {
+    if (mailComposerPreviewState.loading) {
+      return;
+    }
+    closeMailVariableDropdown();
+    setMailComposerPreviewState(createDefaultMailComposerPreviewState());
+  };
+
+  const handlePreviewMail = useCallback(async (options?: { silentValidation?: boolean; background?: boolean }) => {
+    const silentValidation = options?.silentValidation === true;
+    const background = options?.background === true;
+    const to = mailComposerState.to.trim();
+    const subject = mailComposerState.subject.trim();
+    const body = mailComposerState.body.trim();
+    const templateId = resolveSelectedTemplateId();
+
+    if (!subject) {
+      if (!silentValidation) {
+        setMailComposerState((prev) => ({ ...prev, error: "Subject is required." }));
+      }
+      return;
+    }
+    if (!isReactTemplateSelected && !body) {
+      if (!silentValidation) {
+        setMailComposerState((prev) => ({ ...prev, error: "Body is required." }));
+      }
+      return;
+    }
+    if (isReactTemplateSelected && !mailComposerState.reactLiveSource.trim()) {
+      if (!silentValidation) {
+        setMailComposerState((prev) => ({ ...prev, error: "React template source is required." }));
+      }
+      return;
+    }
+
+    if (!silentValidation) {
+      setMailComposerState((prev) => ({
+        ...prev,
+        error: null,
+        success: null,
+      }));
+    }
+    setMailComposerPreviewState((prev) => {
+      const blockingLoading = !background && prev.data === null;
+      return {
+        ...prev,
+        opened: true,
+        loading: blockingLoading,
+        refreshing: !blockingLoading,
+        error: null,
+      };
+    });
+
+    try {
+      const response = await axiosInstance.post<MailComposerPreviewResponse>(
+        "/bookings/emails/render-preview",
+        {
+          to: to || undefined,
+          subject,
+          body: isReactTemplateSelected ? undefined : body,
+          templateId: templateId ?? undefined,
+          templateContext: buildMailTemplateContextForRequest(to),
+        },
+        { withCredentials: true },
+      );
+      setMailComposerPreviewState((prev) => ({
+        ...prev,
+        opened: true,
+        loading: false,
+        refreshing: false,
+        error: null,
+        data: response.data,
+      }));
+    } catch (error) {
+      setMailComposerPreviewState((prev) => ({
+        ...prev,
+        opened: true,
+        loading: false,
+        refreshing: false,
+        error: extractErrorMessage(error),
+      }));
+    }
+  }, [
+    mailComposerState.to,
+    mailComposerState.subject,
+    mailComposerState.body,
+    mailComposerState.reactLiveSource,
+    isReactTemplateSelected,
+    resolveSelectedTemplateId,
+    buildMailTemplateContextForRequest,
+  ]);
+
+  const handleSendMail = async () => {
+    const to = mailComposerState.to.trim();
+    const subject = mailComposerState.subject.trim();
+    const body = mailComposerState.body.trim();
+    const templateId = resolveSelectedTemplateId();
+
+    if (!to) {
+      setMailComposerState((prev) => ({ ...prev, error: "Recipient email is required." }));
+      return;
+    }
+    if (!subject) {
+      setMailComposerState((prev) => ({ ...prev, error: "Subject is required." }));
+      return;
+    }
+    if (!isReactTemplateSelected && !body) {
+      setMailComposerState((prev) => ({ ...prev, error: "Body is required." }));
+      return;
+    }
+    if (isReactTemplateSelected && !mailComposerState.reactLiveSource.trim()) {
+      setMailComposerState((prev) => ({ ...prev, error: "React template source is required." }));
+      return;
+    }
+
+    setMailComposerState((prev) => ({
+      ...prev,
+      sending: true,
+      error: null,
+      success: null,
+    }));
+
+    try {
+      await axiosInstance.post(
+        "/bookings/emails/send",
+        {
+          to,
+          subject,
+          body: isReactTemplateSelected ? undefined : body,
+          templateId: templateId ?? undefined,
+          templateContext: buildMailTemplateContextForRequest(to),
+        },
+        { withCredentials: true },
+      );
+      setMailComposerState((prev) => ({
+        ...prev,
+        sending: false,
+        success: "Email sent successfully.",
+      }));
+    } catch (error) {
+      setMailComposerState((prev) => ({
+        ...prev,
+        sending: false,
+        error: extractErrorMessage(error),
+      }));
+    }
+  };
+
+  useEffect(() => {
+    const isReactSelected =
+      (
+        mailTemplateState.selectedTemplateId
+          ? mailTemplateState.templates.find(
+              (template) => String(template.id) === mailTemplateState.selectedTemplateId,
+            )?.templateType
+          : mailTemplateState.editorType
+      ) === "react_email";
+
+    if (!mailComposerPreviewState.opened || !isReactSelected) {
+      return;
+    }
+    const source = mailComposerState.reactLiveSource.trim();
+    if (!source) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void handlePreviewMail({ silentValidation: true, background: true });
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    mailComposerPreviewState.opened,
+    mailTemplateState.selectedTemplateId,
+    mailTemplateState.templates,
+    mailTemplateState.editorType,
+    mailComposerState.reactLiveSource,
+    handlePreviewMail,
+  ]);
 
   useEffect(() => {
 
@@ -2292,6 +4389,57 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     detailsState.previewData?.htmlText ??
     detailsState.previewData?.snippet ??
     null;
+  const mailboxMessages = useMemo(
+    () =>
+      mailboxState.filter === "all"
+        ? mailboxState.messages
+        : mailboxState.messages.filter((message) => message.direction === mailboxState.filter),
+    [mailboxState.filter, mailboxState.messages],
+  );
+  const mailboxPreviewHtml = mailboxState.previewData?.htmlBody ?? null;
+  const mailboxPreviewBody =
+    mailboxState.previewData?.previewText ??
+    mailboxState.previewData?.textBody ??
+    mailboxState.previewData?.htmlText ??
+    mailboxState.previewData?.snippet ??
+    null;
+  const mailComposerPreviewHtml = mailComposerPreviewState.data?.htmlBody ?? null;
+  const mailComposerDisplayHtml = mailComposerPreviewHtml;
+  const mailComposerPreviewBody = mailComposerPreviewState.data?.textBody ?? null;
+  const cancelRefundPreviewHtml = cancelRefundEmailPreviewState.data?.htmlBody ?? null;
+  const cancelRefundPreviewBody = cancelRefundEmailPreviewState.data?.textBody ?? null;
+  const partialRefundPreviewHtml = partialRefundEmailPreviewState.data?.htmlBody ?? null;
+  const partialRefundPreviewBody = partialRefundEmailPreviewState.data?.textBody ?? null;
+  const partialRefundAmountValue = Number(partialRefundState.amount ?? 0);
+  const partialRefundRemainingMajor = getPartialRefundRemainingAmountMajor(partialRefundState.preview);
+  const partialRefundHasPositiveAmount = partialRefundAmountValue > 0;
+  const partialRefundShouldProceedToCancel =
+    Boolean(partialRefundState.preview) &&
+    partialRefundRemainingMajor > 0 &&
+    partialRefundHasPositiveAmount &&
+    partialRefundAmountValue + 0.0001 >= partialRefundRemainingMajor;
+  const partialRefundHasCustomerEmail = Boolean(String(partialRefundState.order?.customerEmail ?? "").trim());
+  const partialRefundCanPreviewEmail =
+    Boolean(partialRefundState.preview) &&
+    !partialRefundState.submitting &&
+    !partialRefundState.loading &&
+    partialRefundHasCustomerEmail &&
+    partialRefundHasPositiveAmount &&
+    !partialRefundShouldProceedToCancel;
+  const partialRefundCanSubmit =
+    Boolean(partialRefundState.preview) &&
+    !partialRefundState.submitting &&
+    partialRefundHasPositiveAmount &&
+    (partialRefundShouldProceedToCancel || partialRefundHasCustomerEmail);
+  const mailTemplateOptions = useMemo(
+    () =>
+      mailTemplateState.templates.map((template) => ({
+        value: String(template.id),
+        label: template.name,
+      })),
+    [mailTemplateState.templates],
+  );
+  const hasSelectedMailTemplate = Boolean(selectedMailTemplate);
   const mobileActionsBookingId = mobileActionsOrder ? getBookingIdFromOrder(mobileActionsOrder) : null;
   const mobileActionsCanAmend = Boolean(
     mobileActionsOrder &&
@@ -3083,16 +5231,21 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                         </Paper>
                                       )}
                                       {order.customerEmail ? (
-                                        <Anchor
-                                          href={`mailto:${order.customerEmail}`}
-                                          size="xs"
+                                        <Box
+                                          component="button"
+                                          type="button"
+                                          onClick={() => openMailboxModal(order)}
                                           title={order.customerEmail}
-                                          aria-label={`Send email to ${order.customerEmail}`}
+                                          aria-label={`Open mailbox for ${order.customerEmail}`}
                                           style={{
                                             display: "block",
                                             width: "100%",
+                                            padding: 0,
+                                            border: 0,
+                                            background: "transparent",
                                             color: "inherit",
                                             textDecoration: "none",
+                                            cursor: "pointer",
                                           }}
                                         >
                                           <Paper
@@ -3112,7 +5265,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                           >
                                             <MailOutline fontSize="small" />
                                           </Paper>
-                                        </Anchor>
+                                        </Box>
                                       ) : (
                                         <Paper
                                           withBorder
@@ -3859,35 +6012,41 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         opened={partialRefundState.opened}
         onClose={closePartialRefundModal}
         title="Partial Refund"
-        size="md"
-        centered
+        styles={{
+          header: { position: "relative" },
+          title: { width: "100%", textAlign: "center", fontWeight: 700 },
+          close: { position: "absolute", right: 12 },
+        }}
+        fullScreen
       >
-        <Stack gap="md">
-          <Text size="sm" c="dimmed">
-            Partial refunds must be less than the remaining paid amount. Use Cancel for a full refund.
-          </Text>
+        <Stack gap="md" align="center">
           {partialRefundState.loading && (
-            <Group gap="sm">
+            <Group gap="sm" justify="center">
               <Loader size="sm" />
               <Text size="sm">Loading refund details...</Text>
             </Group>
           )}
           {partialRefundState.error && (
-            <Alert color="red" title="Unable to load refund details">
+            <Alert color="red" title="Unable to load refund details" style={{ width: "100%", textAlign: "center" }}>
               {partialRefundState.error}
             </Alert>
           )}
+          {partialRefundState.preview && !partialRefundHasCustomerEmail && !partialRefundShouldProceedToCancel && (
+            <Alert color="yellow" title="Missing customer email" style={{ width: "100%", textAlign: "center" }}>
+              Partial refund confirmation email cannot be sent because this booking has no customer email.
+            </Alert>
+          )}
           {partialRefundState.preview && (
-            <Stack gap="sm">
+            <Stack gap="sm" align="center" style={{ width: "100%" }}>
               <Table withColumnBorders>
                 <Table.Tbody>
                   <Table.Tr>
-                    <Table.Th>Order</Table.Th>
-                    <Table.Td>{partialRefundState.preview.orderId}</Table.Td>
+                    <Table.Th style={{ textAlign: "center", width: "40%" }}>Order</Table.Th>
+                    <Table.Td align="center">{partialRefundState.preview.orderId}</Table.Td>
                   </Table.Tr>
                   <Table.Tr>
-                    <Table.Th>Paid</Table.Th>
-                    <Table.Td>
+                    <Table.Th style={{ textAlign: "center", width: "40%" }}>Paid</Table.Th>
+                    <Table.Td align="center">
                       {formatStripeAmount(
                         partialRefundState.preview.stripe.amount,
                         partialRefundState.preview.stripe.currency,
@@ -3895,8 +6054,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                     </Table.Td>
                   </Table.Tr>
                   <Table.Tr>
-                    <Table.Th>Refunded</Table.Th>
-                    <Table.Td>
+                    <Table.Th style={{ textAlign: "center", width: "40%" }}>Refunded</Table.Th>
+                    <Table.Td align="center">
                       {formatStripeAmount(
                         partialRefundState.preview.stripe.amountRefunded,
                         partialRefundState.preview.stripe.currency,
@@ -3904,8 +6063,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                     </Table.Td>
                   </Table.Tr>
                   <Table.Tr>
-                    <Table.Th>Remaining</Table.Th>
-                    <Table.Td>
+                    <Table.Th style={{ textAlign: "center", width: "40%" }}>Remaining</Table.Th>
+                    <Table.Td align="center">
                       {formatStripeAmount(
                         partialRefundState.preview.remainingAmount,
                         partialRefundState.preview.stripe.currency,
@@ -3915,18 +6074,63 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                 </Table.Tbody>
               </Table>
 
+              <Stack gap="xs">
+                <Text size="sm" fw={600} ta="center">
+                  People refund
+                </Text>
+                <Table withColumnBorders striped highlightOnHover>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th align="center">Item</Table.Th>
+                      <Table.Th align="center">Qty</Table.Th>
+                      <Table.Th align="center">Unit</Table.Th>
+                      <Table.Th align="center">Total</Table.Th>
+                      <Table.Th align="center">Refund</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    <Table.Tr>
+                      <Table.Td align="center">People</Table.Td>
+                      <Table.Td align="center">{partialRefundState.preview.people?.quantity ?? 0}</Table.Td>
+                      <Table.Td align="center">
+                        {partialRefundState.preview.people?.unitPrice
+                          ? `${parseMoney(partialRefundState.preview.people.unitPrice).toFixed(2)} ${(partialRefundState.preview.people?.currency ?? partialRefundState.preview?.stripe.currency ?? "").toUpperCase()}`
+                          : "-"}
+                      </Table.Td>
+                      <Table.Td align="center">
+                        {partialRefundState.preview.people?.totalPrice
+                          ? `${parseMoney(partialRefundState.preview.people.totalPrice).toFixed(2)} ${(partialRefundState.preview.people?.currency ?? partialRefundState.preview?.stripe.currency ?? "").toUpperCase()}`
+                          : "-"}
+                      </Table.Td>
+                      <Table.Td align="center">
+                        <NumberInput
+                          value={partialRefundState.peopleQuantity}
+                          min={0}
+                          max={partialRefundState.preview.people?.quantity ?? 0}
+                          step={1}
+                          allowDecimal={false}
+                          disabled={partialRefundState.manualAmountUnlocked}
+                          onChange={handlePartialRefundPeopleChange}
+                        />
+                      </Table.Td>
+                    </Table.Tr>
+                  </Table.Tbody>
+                </Table>
+              </Stack>
+
               {partialRefundState.preview.addons.length > 0 && (
                 <Stack gap="xs">
-                  <Text size="sm" fw={600}>
+                  <Text size="sm" fw={600} ta="center">
                     Add-ons refund
                   </Text>
                   <Table withColumnBorders striped highlightOnHover>
                     <Table.Thead>
                       <Table.Tr>
-                        <Table.Th>Addon</Table.Th>
-                        <Table.Th align="right">Qty</Table.Th>
-                        <Table.Th align="right">Unit Price</Table.Th>
-                        <Table.Th align="right">Refund Qty</Table.Th>
+                        <Table.Th align="center">Item</Table.Th>
+                        <Table.Th align="center">Qty</Table.Th>
+                        <Table.Th align="center">Unit</Table.Th>
+                        <Table.Th align="center">Total</Table.Th>
+                        <Table.Th align="center">Refund</Table.Th>
                       </Table.Tr>
                     </Table.Thead>
                     <Table.Tbody>
@@ -3938,20 +6142,28 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                             : 0;
                         return (
                           <Table.Tr key={addon.id}>
-                            <Table.Td>{addon.platformAddonName ?? `Addon ${addon.id}`}</Table.Td>
-                            <Table.Td align="right">{addon.quantity}</Table.Td>
-                            <Table.Td align="right">
+                            <Table.Td align="center">{addon.platformAddonName ?? `Addon ${addon.id}`}</Table.Td>
+                            <Table.Td align="center">{addon.quantity}</Table.Td>
+                            <Table.Td align="center">
                               {unitPrice > 0
                                 ? `${unitPrice.toFixed(2)} ${(addon.currency ?? partialRefundState.preview?.stripe.currency ?? "").toUpperCase()}`
                                 : "-"}
                             </Table.Td>
-                            <Table.Td align="right">
+                            <Table.Td align="center">
+                              {addon.totalPrice
+                                ? `${parseMoney(addon.totalPrice).toFixed(2)} ${(addon.currency ?? partialRefundState.preview?.stripe.currency ?? "").toUpperCase()}`
+                                : unitPrice > 0
+                                  ? `${(unitPrice * addon.quantity).toFixed(2)} ${(addon.currency ?? partialRefundState.preview?.stripe.currency ?? "").toUpperCase()}`
+                                  : "-"}
+                            </Table.Td>
+                            <Table.Td align="center">
                               <NumberInput
                                 value={partialRefundState.addonQuantities[addon.id] ?? 0}
                                 min={0}
                                 max={addon.quantity}
                                 step={1}
                                 allowDecimal={false}
+                                disabled={partialRefundState.manualAmountUnlocked}
                                 onChange={(value) => handlePartialRefundAddonChange(addon.id, value)}
                               />
                             </Table.Td>
@@ -3964,15 +6176,37 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               )}
 
               <NumberInput
-                label="Refund amount"
+                label={
+                  <Group gap={6} justify="center" wrap="nowrap">
+                    <Text fw={700}>Refund amount</Text>
+                    <ActionIcon
+                      size="xs"
+                      variant={partialRefundState.manualAmountUnlocked ? "filled" : "light"}
+                      color={partialRefundState.manualAmountUnlocked ? "orange" : "gray"}
+                      onClick={handleTogglePartialRefundManualAmount}
+                      aria-label={
+                        partialRefundState.manualAmountUnlocked
+                          ? "Lock refund amount editing"
+                          : "Unlock refund amount editing"
+                      }
+                    >
+                      <IconKey size={12} />
+                    </ActionIcon>
+                  </Group>
+                }
+                style={{ width: "100%" }}
                 value={partialRefundState.amount ?? 0}
                 min={0}
-                max={Math.max((partialRefundState.preview.remainingAmount - 1) / 100, 0)}
+                max={partialRefundRemainingMajor}
                 step={1}
                 decimalScale={2}
                 fixedDecimalScale
                 onChange={handlePartialRefundAmountChange}
-                description="Amount is auto-calculated from selected add-ons. You can override it."
+                readOnly={!partialRefundState.manualAmountUnlocked}
+                styles={{
+                  label: { width: "100%", textAlign: "center" },
+                  input: { textAlign: "center" },
+                }}
                 rightSection={
                   <Text size="xs" c="dimmed">
                     {partialRefundState.preview.stripe.currency?.toUpperCase() ?? ""}
@@ -3982,26 +6216,98 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               />
 
               {partialRefundState.success && (
-                <Alert color="green" title="Refund submitted">
+                <Alert color="green" title="Refund submitted" style={{ width: "100%", textAlign: "center" }}>
                   {partialRefundState.success}
                 </Alert>
               )}
             </Stack>
           )}
 
-          <Group justify="flex-end">
-            <Button variant="default" onClick={closePartialRefundModal} disabled={partialRefundState.submitting}>
-              Close
+          <Box
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gap: 8,
+            }}
+          >
+            <Button
+              size="xs"
+              variant="light"
+              onClick={() => {
+                void handlePreviewPartialRefundEmail();
+              }}
+              loading={partialRefundEmailPreviewState.loading}
+              disabled={!partialRefundCanPreviewEmail}
+            >
+              Preview Email
             </Button>
             <Button
-              color="orange"
+              size="xs"
+              color={partialRefundShouldProceedToCancel ? "red" : "orange"}
               onClick={handleSubmitPartialRefund}
               loading={partialRefundState.submitting}
-              disabled={!partialRefundState.preview || partialRefundState.submitting}
+              disabled={!partialRefundCanSubmit}
             >
-              Issue Partial Refund
+              {partialRefundShouldProceedToCancel ? "Proceed to Cancel" : "Issue Partial Refund"}
             </Button>
-          </Group>
+          </Box>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={partialRefundEmailPreviewState.opened}
+        onClose={closePartialRefundEmailPreview}
+        title="Partial refund email preview"
+        fullScreen
+        centered
+      >
+        <Stack gap="sm">
+          {partialRefundEmailPreviewState.error ? (
+            <Alert color="red" title="Failed to render partial refund email preview">
+              {partialRefundEmailPreviewState.error}
+            </Alert>
+          ) : null}
+          {partialRefundEmailPreviewState.loading ? (
+            <Box style={{ minHeight: 120 }}>
+              <Loader variant="dots" />
+            </Box>
+          ) : null}
+          {partialRefundEmailPreviewState.data ? (
+            <>
+              <Stack gap={4}>
+                <Text fw={600}>{partialRefundEmailPreviewState.data.subject || "No subject"}</Text>
+                <Text size="sm" c="dimmed">
+                  {partialRefundEmailPreviewState.templateName
+                    ? `Template: ${partialRefundEmailPreviewState.templateName}`
+                    : "Template: Inline fallback"}
+                </Text>
+              </Stack>
+              {partialRefundPreviewHtml ? (
+                <Box style={{ height: "calc(100vh - 240px)" }}>
+                  <iframe
+                    title="Partial refund email preview"
+                    srcDoc={partialRefundPreviewHtml}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 8,
+                    }}
+                  />
+                </Box>
+              ) : partialRefundPreviewBody ? (
+                <Paper withBorder radius="md" p="sm" bg="#f8fafc">
+                  <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
+                    {partialRefundPreviewBody}
+                  </Text>
+                </Paper>
+              ) : (
+                <Alert color="yellow" title="No preview content">
+                  No email preview content available.
+                </Alert>
+              )}
+            </>
+          ) : null}
         </Stack>
       </Modal>
 
@@ -4013,8 +6319,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
             ? `Cancel booking ${cancelState.order.platformBookingId ?? cancelState.order.id}`
             : "Cancel booking"
         }
-        size="md"
-        centered
+        fullScreen
       >
         <Stack gap="md">
           <Text size="sm" c="dimmed">
@@ -4091,6 +6396,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               No Stripe refund will be issued from this action.
             </Alert>
           )}
+          {cancelState.mode === "ecwid_refund" && !String(cancelState.order?.customerEmail ?? "").trim() && (
+            <Alert color="yellow" title="Missing customer email">
+              Refund confirmation email cannot be sent because this booking has no customer email.
+            </Alert>
+          )}
           {cancelState.error && (
             <Alert
               color="red"
@@ -4099,11 +6409,31 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               {cancelState.error}
             </Alert>
           )}
-          <Group justify="flex-end">
-            <Button variant="default" onClick={closeCancelModal} disabled={cancelState.submitting}>
-              Close
+          <Box
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gap: 8,
+            }}
+          >
+            <Button
+              size="xs"
+              variant="light"
+              onClick={() => {
+                void handlePreviewCancelRefundEmail();
+              }}
+              loading={cancelRefundEmailPreviewState.loading}
+              disabled={
+                cancelState.loading ||
+                cancelState.submitting ||
+                cancelState.mode !== "ecwid_refund" ||
+                !cancelState.preview
+              }
+            >
+              Preview Email
             </Button>
             <Button
+              size="xs"
               color="red"
               onClick={handleConfirmRefund}
               loading={cancelState.submitting}
@@ -4111,7 +6441,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                 cancelState.loading ||
                 cancelState.submitting ||
                 !cancelState.mode ||
-                (cancelState.mode === "ecwid_refund" && !cancelState.preview)
+                (cancelState.mode === "ecwid_refund" &&
+                  (!cancelState.preview || !String(cancelState.order?.customerEmail ?? "").trim()))
               }
             >
               {cancelState.mode === "ecwid_refund"
@@ -4120,7 +6451,64 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                   : "Confirm Refund"
                 : "Confirm Cancel"}
             </Button>
-          </Group>
+          </Box>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={cancelRefundEmailPreviewState.opened}
+        onClose={closeCancelRefundEmailPreview}
+        title="Refund email preview"
+        fullScreen
+        centered
+      >
+        <Stack gap="sm">
+          {cancelRefundEmailPreviewState.error ? (
+            <Alert color="red" title="Failed to render refund email preview">
+              {cancelRefundEmailPreviewState.error}
+            </Alert>
+          ) : null}
+          {cancelRefundEmailPreviewState.loading ? (
+            <Box style={{ minHeight: 120 }}>
+              <Loader variant="dots" />
+            </Box>
+          ) : null}
+          {cancelRefundEmailPreviewState.data ? (
+            <>
+              <Stack gap={4}>
+                <Text fw={600}>{cancelRefundEmailPreviewState.data.subject || "No subject"}</Text>
+                <Text size="sm" c="dimmed">
+                  {cancelRefundEmailPreviewState.templateName
+                    ? `Template: ${cancelRefundEmailPreviewState.templateName}`
+                    : "Template: Inline fallback"}
+                </Text>
+              </Stack>
+              {cancelRefundPreviewHtml ? (
+                <Box style={{ height: "calc(100vh - 240px)" }}>
+                  <iframe
+                    title="Cancel refund email preview"
+                    srcDoc={cancelRefundPreviewHtml}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 8,
+                    }}
+                  />
+                </Box>
+              ) : cancelRefundPreviewBody ? (
+                <Paper withBorder radius="md" p="sm" bg="#f8fafc">
+                  <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
+                    {cancelRefundPreviewBody}
+                  </Text>
+                </Paper>
+              ) : (
+                <Alert color="yellow" title="No preview content">
+                  No email preview content available.
+                </Alert>
+              )}
+            </>
+          ) : null}
         </Stack>
       </Modal>
 
@@ -4377,6 +6765,476 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               )}
             </>
           )}
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={mailboxState.opened}
+        onClose={closeMailboxModal}
+        title={`Mailbox${mailboxState.customerEmail ? ` - ${mailboxState.customerEmail}` : ""}`}
+        fullScreen
+        centered
+      >
+        <Stack gap="md" style={{ minHeight: "calc(100vh - 120px)" }}>
+          <Group justify="space-between" align="center">
+            <Stack gap={2}>
+              <Text fw={600}>{mailboxState.customerName || "Customer mailbox"}</Text>
+              <Text size="sm" c="dimmed">
+                {mailboxState.customerEmail || "-"}
+              </Text>
+            </Stack>
+            <Group gap="xs">
+              <Button
+                size="xs"
+                variant="default"
+                onClick={handleMailboxRefresh}
+                loading={mailboxState.loading && mailboxState.messages.length > 0}
+                disabled={!mailboxState.customerEmail || mailboxState.loadingMore}
+              >
+                Refresh
+              </Button>
+              <Button
+                size="xs"
+                onClick={handleMailboxCreateNewEmail}
+                disabled={!mailboxState.sourceOrder}
+              >
+                Create new email
+              </Button>
+            </Group>
+          </Group>
+
+          <SegmentedControl
+            value={mailboxState.filter}
+            onChange={handleMailboxFilterChange}
+            data={[
+              { label: "All", value: "all" },
+              { label: "Received", value: "received" },
+              { label: "Sent", value: "sent" },
+            ]}
+            size="sm"
+          />
+
+          {mailboxState.error ? (
+            <Alert color="red" title="Failed to load mailbox">
+              {mailboxState.error}
+            </Alert>
+          ) : null}
+
+          {mailboxState.loading && mailboxState.messages.length === 0 ? (
+            <Box style={{ minHeight: 160 }}>
+              <Loader variant="dots" />
+            </Box>
+          ) : mailboxMessages.length === 0 ? (
+            <Alert color="blue" title="No emails">
+              No matching emails were found for this customer.
+            </Alert>
+          ) : (
+            <Stack gap="xs">
+              {mailboxMessages.map((message) => (
+                <Paper key={`mailbox-message-${message.messageId}`} withBorder radius="md" p="sm">
+                  <Group justify="space-between" align="flex-start" wrap="nowrap">
+                    <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
+                      <Group gap={6}>
+                        <Badge
+                          size="xs"
+                          color={message.direction === "sent" ? "blue" : "teal"}
+                          variant="light"
+                        >
+                          {message.direction === "sent" ? "Sent" : "Received"}
+                        </Badge>
+                        <Text size="xs" c="dimmed">
+                          {formatDateTime(message.internalDate ?? null)}
+                        </Text>
+                      </Group>
+                      <Text fw={600} size="sm" lineClamp={1}>
+                        {message.subject?.trim() || "(No subject)"}
+                      </Text>
+                      <Text size="xs" c="dimmed" lineClamp={1}>
+                        {message.fromAddress || "-"}
+                      </Text>
+                      <Text size="xs" c="dimmed" lineClamp={1}>
+                        {message.toAddresses || "-"}
+                      </Text>
+                      <Text size="xs" lineClamp={2}>
+                        {message.snippet || "No snippet available."}
+                      </Text>
+                    </Stack>
+                    <Button
+                      size="xs"
+                      variant="light"
+                      onClick={() => handleMailboxPreview(message.messageId)}
+                    >
+                      Preview
+                    </Button>
+                  </Group>
+                </Paper>
+              ))}
+            </Stack>
+          )}
+
+          {mailboxState.nextPageToken ? (
+            <Group justify="center" mt="sm">
+              <Button
+                variant="default"
+                onClick={handleMailboxLoadMore}
+                loading={mailboxState.loadingMore}
+                disabled={mailboxState.loading}
+              >
+                Load more
+              </Button>
+            </Group>
+          ) : null}
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={mailboxState.previewOpen}
+        onClose={closeMailboxPreview}
+        title="Mailbox email preview"
+        fullScreen
+        centered
+      >
+        <Stack gap="sm">
+          {mailboxState.previewError ? (
+            <Alert color="red" title="Failed to load mailbox email preview">
+              {mailboxState.previewError}
+            </Alert>
+          ) : null}
+          {mailboxState.previewLoading ? (
+            <Box style={{ minHeight: 120 }}>
+              <Loader variant="dots" />
+            </Box>
+          ) : null}
+          {mailboxState.previewData ? (
+            <>
+              <Stack gap={4}>
+                <Text fw={600}>{mailboxState.previewData.subject ?? "No subject"}</Text>
+                <Text size="sm" c="dimmed">
+                  {mailboxState.previewData.fromAddress ?? "-"}
+                </Text>
+                <Text size="sm" c="dimmed">
+                  {mailboxState.previewData.toAddresses ?? "-"}
+                </Text>
+                <Text size="sm">
+                  {formatDateTime(mailboxState.previewData.receivedAt ?? mailboxState.previewData.internalDate ?? null)}
+                </Text>
+                <Badge size="sm" variant="light">
+                  {(mailboxState.previewData.ingestionStatus ?? "unknown").toUpperCase()}
+                </Badge>
+              </Stack>
+              {mailboxPreviewHtml ? (
+                <Box style={{ height: "calc(100vh - 240px)" }}>
+                  <iframe
+                    title="Mailbox email HTML preview"
+                    srcDoc={mailboxPreviewHtml}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 8,
+                    }}
+                  />
+                </Box>
+              ) : mailboxPreviewBody ? (
+                <Paper withBorder radius="md" p="sm" bg="#f8fafc">
+                  <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
+                    {mailboxPreviewBody}
+                  </Text>
+                </Paper>
+              ) : (
+                <Alert color="yellow" title="No preview content">
+                  No email preview content available.
+                </Alert>
+              )}
+            </>
+          ) : null}
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={mailComposerState.opened}
+        onClose={closeMailComposerModal}
+        title="Mail sender"
+        fullScreen
+        centered
+      >
+        <Stack gap="md" style={{ minHeight: "calc(100vh - 120px)" }}>
+          {mailTemplateState.error ? (
+            <Alert color="red" title="Template error">
+              {mailTemplateState.error}
+            </Alert>
+          ) : null}
+          {mailComposerState.error ? (
+            <Alert color="red" title="Failed to send email">
+              {mailComposerState.error}
+            </Alert>
+          ) : null}
+          {mailComposerState.success ? (
+            <Alert color="green" title="Success">
+              {mailComposerState.success}
+            </Alert>
+          ) : null}
+
+          <Group align="flex-end">
+            <Select
+              label="Email template"
+              placeholder={mailTemplateState.loading ? "Loading templates..." : "Select a template"}
+              data={mailTemplateOptions}
+              value={mailTemplateState.selectedTemplateId}
+              onChange={handleMailTemplateSelection}
+              clearable
+              searchable
+              style={{ flex: 1 }}
+              disabled={mailTemplateState.loading || mailComposerState.sending || mailTemplateState.saving}
+            />
+            <Button
+              variant="default"
+              onClick={loadMailTemplates}
+              loading={mailTemplateState.loading}
+              disabled={mailComposerState.sending || mailTemplateState.saving}
+            >
+              Reload templates
+            </Button>
+          </Group>
+
+          <Group grow>
+            <TextInput
+              label="Template name"
+              value={mailTemplateState.editorName}
+              onChange={handleTemplateNameChange}
+              placeholder="Example: Supply order follow-up"
+              disabled={mailComposerState.sending || mailTemplateState.loading || mailTemplateState.saving}
+            />
+            <Select
+              label="Template format"
+              data={[
+                { value: "plain_text", label: "Plain text" },
+                { value: "react_email", label: "React Email" },
+              ]}
+              value={mailTemplateState.editorType}
+              onChange={handleTemplateTypeChange}
+              disabled={mailComposerState.sending || mailTemplateState.loading || mailTemplateState.saving}
+            />
+          </Group>
+
+          <TextInput
+            label="Template description"
+            value={mailTemplateState.editorDescription}
+            onChange={handleTemplateDescriptionChange}
+            placeholder="Optional description for this template"
+            disabled={mailComposerState.sending || mailTemplateState.loading || mailTemplateState.saving}
+          />
+
+          <Group justify="flex-end">
+            <Button
+              variant="default"
+              onClick={handleCreateTemplate}
+              loading={mailTemplateState.saving}
+              disabled={mailComposerState.sending || mailTemplateState.loading}
+            >
+              Save as new template
+            </Button>
+            <Button
+              variant="light"
+              onClick={handleUpdateTemplate}
+              loading={mailTemplateState.saving}
+              disabled={!hasSelectedMailTemplate || mailComposerState.sending || mailTemplateState.loading}
+            >
+              Update template
+            </Button>
+          </Group>
+
+          <Text size="xs" c="dimmed">
+            Type {"{{"} in Subject, Body, or React source to open variable suggestions.
+          </Text>
+
+          <Divider />
+
+          <TextInput
+            label="To"
+            value={mailComposerState.to}
+            onChange={handleMailToChange}
+            onClick={closeMailVariableDropdown}
+            placeholder="recipient@example.com"
+            required
+          />
+          <TextInput
+            ref={mailSubjectInputRef}
+            label="Subject"
+            value={mailComposerState.subject}
+            onChange={handleMailSubjectChange}
+            onClick={(event) => {
+              const target = event.currentTarget;
+              updateMailVariableDropdownForField("subject", target.value, target.selectionStart ?? target.value.length);
+            }}
+            onKeyUp={(event) => {
+              const target = event.currentTarget;
+              updateMailVariableDropdownForField("subject", target.value, target.selectionStart ?? target.value.length);
+            }}
+            placeholder="Email subject"
+            required
+          />
+          {renderMailVariableDropdown("subject")}
+          {isReactTemplateSelected ? (
+            <Alert color="blue" title="React Email Live Editor">
+              Use the Preview modal to live edit the React Email source and components.
+            </Alert>
+          ) : (
+            <Textarea
+              ref={mailBodyInputRef}
+              label="Body"
+              value={mailComposerState.body}
+              onChange={handleMailBodyChange}
+              onClick={(event) => {
+                const target = event.currentTarget;
+                updateMailVariableDropdownForField("body", target.value, target.selectionStart ?? target.value.length);
+              }}
+              onKeyUp={(event) => {
+                const target = event.currentTarget;
+                updateMailVariableDropdownForField("body", target.value, target.selectionStart ?? target.value.length);
+              }}
+              placeholder="Write your message..."
+              autosize
+              minRows={14}
+              maxRows={24}
+              required
+            />
+          )}
+          {!isReactTemplateSelected ? renderMailVariableDropdown("body") : null}
+
+          <Group justify="flex-end" mt="auto">
+            <Button
+              variant="default"
+              onClick={closeMailComposerModal}
+              disabled={mailComposerState.sending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="light"
+              onClick={() => {
+                void handlePreviewMail();
+              }}
+              loading={mailComposerPreviewState.loading}
+              disabled={mailComposerState.sending}
+            >
+              Preview
+            </Button>
+            <Button onClick={handleSendMail} loading={mailComposerState.sending}>
+              Send email
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={mailComposerPreviewState.opened}
+        onClose={closeMailComposerPreview}
+        title="Email preview"
+        fullScreen
+        centered
+      >
+        <Stack gap="sm">
+          {mailComposerPreviewState.error ? (
+            <Alert color="red" title="Failed to render email preview">
+              {mailComposerPreviewState.error}
+            </Alert>
+          ) : null}
+          {mailComposerPreviewState.loading ? (
+            <Box style={{ minHeight: 120 }}>
+              <Loader variant="dots" />
+            </Box>
+          ) : null}
+          {mailComposerPreviewState.refreshing && mailComposerPreviewState.data ? (
+            <Text size="xs" c="dimmed">
+              Updating preview...
+            </Text>
+          ) : null}
+          {mailComposerPreviewState.data ? (
+            <>
+              <Stack gap={4}>
+                <Text fw={600}>{mailComposerPreviewState.data.subject || "No subject"}</Text>
+                <Text size="sm" c="dimmed">
+                  {mailComposerPreviewState.data.templateType
+                    ? `Template type: ${mailComposerPreviewState.data.templateType}`
+                    : "Template type: plain_text"}
+                </Text>
+              </Stack>
+              {isReactTemplateSelected ? (
+                <Stack gap="xs">
+                  <Textarea
+                    ref={mailReactSourceInputRef}
+                    label="React Email source (live)"
+                    value={mailComposerState.reactLiveSource}
+                    onChange={handleMailPreviewBodyChange}
+                    onClick={(event) => {
+                      const target = event.currentTarget;
+                      updateMailVariableDropdownForField("react", target.value, target.selectionStart ?? target.value.length);
+                    }}
+                    onKeyUp={(event) => {
+                      const target = event.currentTarget;
+                      updateMailVariableDropdownForField("react", target.value, target.selectionStart ?? target.value.length);
+                    }}
+                    autosize
+                    minRows={16}
+                    maxRows={28}
+                    disabled={mailComposerState.sending || mailTemplateState.saving}
+                  />
+                  {renderMailVariableDropdown("react")}
+                  <Text size="xs" c="dimmed">
+                    You can use React Email components directly (for example `Section`, `Text`, `Button`, `Row`, `Column`, `Img`, `Link`).
+                    The source should return JSX.
+                  </Text>
+                  <Group justify="flex-end">
+                    {hasSelectedMailTemplate ? (
+                      <Button
+                        variant="default"
+                        onClick={handleUpdateTemplate}
+                        loading={mailTemplateState.saving}
+                        disabled={mailComposerPreviewState.loading || mailComposerState.sending}
+                      >
+                        Save template changes
+                      </Button>
+                    ) : null}
+                    <Button
+                      variant="light"
+                      onClick={() => {
+                        void handlePreviewMail();
+                      }}
+                      loading={mailComposerPreviewState.loading}
+                      disabled={mailComposerState.sending || mailTemplateState.saving}
+                    >
+                      Refresh now
+                    </Button>
+                  </Group>
+                </Stack>
+              ) : null}
+              {mailComposerDisplayHtml ? (
+                <Box style={{ height: "calc(100vh - 240px)" }}>
+                  <iframe
+                    title="Mail composer preview"
+                    srcDoc={mailComposerDisplayHtml}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 8,
+                    }}
+                  />
+                </Box>
+              ) : mailComposerPreviewBody ? (
+                <Paper withBorder radius="md" p="sm" bg="#f8fafc">
+                  <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
+                    {mailComposerPreviewBody}
+                  </Text>
+                </Paper>
+              ) : (
+                <Alert color="yellow" title="No preview content">
+                  No email preview content available.
+                </Alert>
+              )}
+            </>
+          ) : null}
         </Stack>
       </Modal>
 

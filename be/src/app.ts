@@ -12,6 +12,7 @@ import { ValidationError } from 'sequelize';
 // TypeScript routes imports (make sure all route files are .ts)
 import guestRoutes from './routes/guestRoutes.js';
 import bookingRoutes from './routes/bookingRoutes.js';
+import emailTemplateRoutes from './routes/emailTemplateRoutes.js';
 import channelRoutes from './routes/channelRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import sessionRoutes from './routes/sessionRoutes.js';
@@ -166,6 +167,7 @@ app.use('/api/', apiLimiter);
 
 app.use('/api/guests', guestRoutes);
 app.use('/api/bookings', bookingRoutes);
+app.use('/api/email-templates', emailTemplateRoutes);
 app.use('/api/channels', channelRoutes);
 app.use('/api/channelCommissions', channelCommissionRoutes);
 app.use('/api/channelProductPrices', channelProductPriceRoutes);
