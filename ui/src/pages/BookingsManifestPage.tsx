@@ -3263,6 +3263,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       const platformBookingId = String(order?.platformBookingId ?? "").trim();
       const bookingReference = bookingId || platformBookingId || String(order?.id ?? "").trim();
       const quantity = Number.isFinite(order?.quantity) ? order?.quantity : 0;
+      const extrasTshirts = Number.isFinite(order?.extras?.tshirts) ? Number(order?.extras?.tshirts) : 0;
+      const extrasCocktails = Number.isFinite(order?.extras?.cocktails) ? Number(order?.extras?.cocktails) : 0;
+      const extrasPhotos = Number.isFinite(order?.extras?.photos) ? Number(order?.extras?.photos) : 0;
       return {
         customerName: customerName || "Guest",
         customerEmail: toEmail || "",
@@ -3280,6 +3283,12 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         peopleCount: quantity,
         menCount: Number.isFinite(order?.menCount) ? order?.menCount : 0,
         womenCount: Number.isFinite(order?.womenCount) ? order?.womenCount : 0,
+        extrasTshirts,
+        extrasCocktails,
+        extrasPhotos,
+        tshirtsCount: extrasTshirts,
+        cocktailsCount: extrasCocktails,
+        photosCount: extrasPhotos,
         currency: "EUR",
       };
     },
@@ -3493,9 +3502,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
   const applyTemplateToComposer = (template: EmailTemplate) => {
     setMailComposerState((prev) => {
-      const context = buildMailTemplateContextFromOrder(prev.sourceOrder, prev.to.trim());
-      const subject = interpolateTemplateText(template.subjectTemplate, context).trim();
-      const body = interpolateTemplateText(template.bodyTemplate, context);
+      const subject = template.subjectTemplate ?? "";
+      const body = template.bodyTemplate ?? "";
       const reactLiveSource =
         template.templateType === "react_email"
           ? isReactEmailSource(template.bodyTemplate)
@@ -3664,14 +3672,60 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
   };
 
+  const resolveTemplateFieldsForPersistence = useCallback(
+    (editorType: EmailTemplateType): { subjectTemplate: string; bodyTemplate: string } => {
+      const currentSubject = mailComposerState.subject.trim();
+      const currentPlainBody = mailComposerState.body.trim();
+      const currentReactBody = mailComposerState.reactLiveSource.trim();
+      const context = buildMailTemplateContextFromOrder(
+        mailComposerState.sourceOrder,
+        mailComposerState.to.trim(),
+      );
+      const selectedTemplate =
+        mailTemplateState.selectedTemplateId
+          ? mailTemplateState.templates.find(
+              (template) => String(template.id) === mailTemplateState.selectedTemplateId,
+            ) ?? null
+          : null;
+
+      let subjectTemplate = currentSubject;
+      let bodyTemplate = editorType === "react_email" ? currentReactBody : currentPlainBody;
+
+      if (selectedTemplate) {
+        const renderedSelectedSubject = interpolateTemplateText(selectedTemplate.subjectTemplate, context).trim();
+        if (currentSubject === renderedSelectedSubject) {
+          subjectTemplate = selectedTemplate.subjectTemplate.trim();
+        }
+
+        if (editorType !== "react_email") {
+          const renderedSelectedBody = interpolateTemplateText(selectedTemplate.bodyTemplate, context).trim();
+          if (currentPlainBody === renderedSelectedBody) {
+            bodyTemplate = selectedTemplate.bodyTemplate;
+          }
+        }
+      }
+
+      return {
+        subjectTemplate,
+        bodyTemplate,
+      };
+    },
+    [
+      mailComposerState.subject,
+      mailComposerState.body,
+      mailComposerState.reactLiveSource,
+      mailComposerState.sourceOrder,
+      mailComposerState.to,
+      buildMailTemplateContextFromOrder,
+      mailTemplateState.selectedTemplateId,
+      mailTemplateState.templates,
+    ],
+  );
+
   const handleCreateTemplate = async () => {
     const name = mailTemplateState.editorName.trim();
     const description = mailTemplateState.editorDescription.trim();
-    const subjectTemplate = mailComposerState.subject.trim();
-    const bodyTemplate =
-      mailTemplateState.editorType === "react_email"
-        ? mailComposerState.reactLiveSource.trim()
-        : mailComposerState.body.trim();
+    const { subjectTemplate, bodyTemplate } = resolveTemplateFieldsForPersistence(mailTemplateState.editorType);
 
     if (!name) {
       setMailTemplateState((prev) => ({ ...prev, error: "Template name is required." }));
@@ -3744,11 +3798,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
     const name = mailTemplateState.editorName.trim();
     const description = mailTemplateState.editorDescription.trim();
-    const subjectTemplate = mailComposerState.subject.trim();
-    const bodyTemplate =
-      mailTemplateState.editorType === "react_email"
-        ? mailComposerState.reactLiveSource.trim()
-        : mailComposerState.body.trim();
+    const { subjectTemplate, bodyTemplate } = resolveTemplateFieldsForPersistence(mailTemplateState.editorType);
 
     if (!name) {
       setMailTemplateState((prev) => ({ ...prev, error: "Template name is required." }));
@@ -4215,6 +4265,14 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     const subject = mailComposerState.subject.trim();
     const body = mailComposerState.body.trim();
     const templateId = resolveSelectedTemplateId();
+
+    if (!mailComposerPreviewState.data || mailComposerPreviewState.loading || mailComposerPreviewState.refreshing) {
+      setMailComposerState((prev) => ({
+        ...prev,
+        error: "Open and load the email preview before sending.",
+      }));
+      return;
+    }
 
     if (!to) {
       setMailComposerState((prev) => ({ ...prev, error: "Recipient email is required." }));
@@ -7156,10 +7214,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               loading={mailComposerPreviewState.loading}
               disabled={mailComposerState.sending}
             >
-              Preview
-            </Button>
-            <Button onClick={handleSendMail} loading={mailComposerState.sending}>
-              Send email
+              Preview email
             </Button>
           </Group>
         </Stack>
@@ -7173,6 +7228,16 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         centered
       >
         <Stack gap="sm">
+          {mailComposerState.error ? (
+            <Alert color="red" title="Failed to send email">
+              {mailComposerState.error}
+            </Alert>
+          ) : null}
+          {mailComposerState.success ? (
+            <Alert color="green" title="Success">
+              {mailComposerState.success}
+            </Alert>
+          ) : null}
           {mailComposerPreviewState.error ? (
             <Alert color="red" title="Failed to render email preview">
               {mailComposerPreviewState.error}
@@ -7244,9 +7309,28 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                     >
                       Refresh now
                     </Button>
+                    <Button
+                      color="blue"
+                      onClick={handleSendMail}
+                      loading={mailComposerState.sending}
+                      disabled={mailComposerPreviewState.loading || mailComposerPreviewState.refreshing}
+                    >
+                      Send email
+                    </Button>
                   </Group>
                 </Stack>
-              ) : null}
+              ) : (
+                <Group justify="flex-end">
+                  <Button
+                    color="blue"
+                    onClick={handleSendMail}
+                    loading={mailComposerState.sending}
+                    disabled={mailComposerPreviewState.loading || mailComposerPreviewState.refreshing}
+                  >
+                    Send email
+                  </Button>
+                </Group>
+              )}
               {mailComposerDisplayHtml ? (
                 <Box style={{ height: "calc(100vh - 240px)" }}>
                   <iframe
