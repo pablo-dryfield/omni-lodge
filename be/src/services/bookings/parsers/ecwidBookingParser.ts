@@ -244,8 +244,8 @@ const parseNameFromCustomerSection = (section: string | null, email: string | nu
 };
 
 const parsePartySize = (text: string): { total: number | null; men: number | null; women: number | null } => {
-  const manMatch = text.match(/Man:\s*(\d+)/i);
-  const womanMatch = text.match(/Woman:\s*(\d+)/i);
+  const manMatch = text.match(/\bMan\b\s*:\s*(\d+)/i);
+  const womanMatch = text.match(/\bWoman\b\s*:\s*(\d+)/i);
   const men = manMatch ? Number.parseInt(manMatch[1], 10) : null;
   const women = womanMatch ? Number.parseInt(womanMatch[1], 10) : null;
   const total =
@@ -256,6 +256,9 @@ const parsePartySize = (text: string): { total: number | null; men: number | nul
     women,
   };
 };
+
+const PRODUCT_NAME_STOP_LABEL_PATTERN =
+  /\b(?:Man|Woman|Packages?|Drinks Package|Activity Date|Activity Time|Pickup Date|Pickup Time|Date|Time|Phone Number|Vehicle Type|Full Name|Flight Number|Price per item|Quantity|Subtotal|Total|Meeting Point|How to find us\?|Cocktails Add-On|T-Shirt Add-On|Instant Photos Add-On|Hotel\/Bnb Address)\b\s*:?/i;
 
 type ParsedAddonRow = {
   label: string;
@@ -455,10 +458,37 @@ const parseProductNameFromBlock = (block: string): string | null => {
   if (!block) {
     return null;
   }
-  const match = block.match(
-    /^(.+?)(?:\s+(?:Man:|Woman:|Packages?:|Activity Date:|Activity Time:|Pickup Date:|Pickup Time:|Date:|Time:|Phone Number:|Vehicle Type:|Full Name:|Flight Number:|Price per item:|Quantity:|Subtotal|Total)\b|$)/i,
-  );
-  return match?.[1]?.trim() ?? null;
+  let normalizedBlock = normalizeText(block);
+  if (!normalizedBlock) {
+    return null;
+  }
+
+  const howToNeedle = 'how to find us?';
+  const howToIndex = normalizedBlock.toLowerCase().indexOf(howToNeedle);
+  if (howToIndex !== -1) {
+    const trailing = normalizeText(normalizedBlock.slice(howToIndex + howToNeedle.length));
+    if (trailing) {
+      const sentenceBreak = trailing.search(/[!?]/);
+      if (sentenceBreak !== -1 && sentenceBreak + 1 < trailing.length) {
+        normalizedBlock = normalizeText(trailing.slice(sentenceBreak + 1));
+      } else {
+        normalizedBlock = trailing;
+      }
+    }
+  }
+
+  const firstLabel = normalizedBlock.match(PRODUCT_NAME_STOP_LABEL_PATTERN);
+  const prefix = firstLabel?.index !== undefined && firstLabel.index > 0
+    ? normalizedBlock.slice(0, firstLabel.index).trim()
+    : normalizedBlock;
+
+  const punctuationSegments = prefix
+    .split(/[!?]/)
+    .map((segment) => normalizeText(segment))
+    .filter(Boolean);
+  const candidate = punctuationSegments.length > 0 ? punctuationSegments[punctuationSegments.length - 1] : prefix;
+  const cleaned = normalizeText(candidate.replace(/^[|:;\-–—\s]+/, '').replace(/[|:;\-–—\s]+$/, ''));
+  return cleaned || null;
 };
 
 const parseVariantFromBlock = (block: string): string | null => {
