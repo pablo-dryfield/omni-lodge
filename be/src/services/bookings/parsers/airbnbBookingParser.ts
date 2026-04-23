@@ -51,6 +51,45 @@ const isReminderEmail = (context: BookingParserContext): boolean => {
   return haystack.includes('reminder');
 };
 
+const EXPERIENCE_INTENT_PATTERNS: RegExp[] = [
+  /\bbooked your experience\b/i,
+  /\bexperience date(?:\s+and\s+time)?\b/i,
+  /\bexperience listing(?:s)?\b/i,
+  /\bexperiences?\s+and\s+services?\b/i,
+  /\bairbnb experiences?\b/i,
+];
+
+const ACCOMMODATION_INTENT_PATTERNS: RegExp[] = [
+  /\btrip\b/i,
+  /\bairbnb receipt\b/i,
+  /\bhouse rules\b/i,
+  /\bcheck-?in\b/i,
+  /\bcheck(?:\s*|-)?out\b/i,
+  /\bself check-?in\b/i,
+  /\bwhere you'?ll be\b/i,
+  /\bguests?\s+maximum\b/i,
+  /\/trips\/v1\/reservation-details\//i,
+  /reservation2_checkin/i,
+];
+
+const classifyAirbnbIntent = (
+  context: BookingParserContext,
+  text: string,
+): { isExperience: boolean; isAccommodation: boolean } => {
+  const haystack = [
+    context.subject ?? '',
+    context.snippet ?? '',
+    context.textBody ?? '',
+    context.rawTextBody ?? '',
+    text,
+  ]
+    .join(' ')
+    .toLowerCase();
+  const isExperience = EXPERIENCE_INTENT_PATTERNS.some((pattern) => pattern.test(haystack));
+  const isAccommodation = ACCOMMODATION_INTENT_PATTERNS.some((pattern) => pattern.test(haystack));
+  return { isExperience, isAccommodation };
+};
+
 const extractField = (text: string, label: string, nextLabels: string[]): string | null => {
   const lowerText = text.toLowerCase();
   const lowerLabel = label.toLowerCase();
@@ -578,6 +617,8 @@ export class AirbnbBookingParser implements BookingEmailParser {
     const subjectMatch = /airbnb/i.test(subject);
     const text = normalizeWhitespace(context.textBody || context.rawTextBody || context.snippet || '');
     const bookingId = text ? extractBookingId(text, subject) : null;
+    const intent = classifyAirbnbIntent(context, text);
+    const isAccommodationOnly = intent.isAccommodation && !intent.isExperience;
 
     const canParseChecks: BookingParserCheck[] = [
       { label: 'is reminder email', passed: !reminder },
@@ -586,6 +627,15 @@ export class AirbnbBookingParser implements BookingEmailParser {
     ];
     const parseChecks: BookingParserCheck[] = [
       { label: 'text body present', passed: Boolean(text) },
+      {
+        label: 'not accommodation rental email',
+        passed: !isAccommodationOnly,
+        value: intent.isExperience
+          ? 'experience signals detected'
+          : intent.isAccommodation
+            ? 'accommodation signals detected'
+            : 'neutral signals',
+      },
       { label: 'booking id detected', passed: Boolean(bookingId), value: bookingId ?? null },
     ];
 
@@ -611,6 +661,10 @@ export class AirbnbBookingParser implements BookingEmailParser {
     }
     const text = normalizeWhitespace(context.textBody || context.rawTextBody || context.snippet || '');
     if (!text) {
+      return null;
+    }
+    const intent = classifyAirbnbIntent(context, text);
+    if (intent.isAccommodation && !intent.isExperience) {
       return null;
     }
 

@@ -579,6 +579,73 @@ const updateEmailStatus = async (email: BookingEmail, status: string, failureRea
   await email.save();
 };
 
+const cleanupIgnoredReprocessArtifacts = async (email: BookingEmail): Promise<void> => {
+  await sequelize.transaction(async (transaction) => {
+    const emailEvents = await BookingEvent.findAll({
+      where: {
+        [Op.or]: [{ emailId: email.id }, { emailMessageId: email.messageId }],
+      },
+      attributes: ['id', 'bookingId'],
+      transaction,
+    });
+
+    if (emailEvents.length === 0) {
+      return;
+    }
+
+    const eventIds = emailEvents.map((event) => event.id);
+    const bookingIds = Array.from(
+      new Set(
+        emailEvents
+          .map((event) => event.bookingId)
+          .filter((bookingId): bookingId is number => Number.isFinite(bookingId)),
+      ),
+    );
+
+    if (eventIds.length > 0) {
+      await BookingAddon.destroy({
+        where: { sourceEventId: { [Op.in]: eventIds } },
+        transaction,
+      });
+      await BookingEvent.destroy({
+        where: { id: { [Op.in]: eventIds } },
+        transaction,
+      });
+    }
+
+    if (bookingIds.length === 0) {
+      return;
+    }
+
+    const bookingsWithRemainingEvents = await BookingEvent.findAll({
+      where: { bookingId: { [Op.in]: bookingIds } },
+      attributes: ['bookingId'],
+      group: ['bookingId'],
+      transaction,
+      raw: true,
+    });
+    const bookingIdsWithRemainingEvents = new Set<number>(
+      bookingsWithRemainingEvents
+        .map((entry) => Number((entry as { bookingId?: unknown }).bookingId))
+        .filter((bookingId) => Number.isFinite(bookingId)),
+    );
+    const orphanBookingIds = bookingIds.filter((bookingId) => !bookingIdsWithRemainingEvents.has(bookingId));
+
+    if (orphanBookingIds.length === 0) {
+      return;
+    }
+
+    await BookingAddon.destroy({
+      where: { bookingId: { [Op.in]: orphanBookingIds } },
+      transaction,
+    });
+    await Booking.destroy({
+      where: { id: { [Op.in]: orphanBookingIds } },
+      transaction,
+    });
+  });
+};
+
 const sanitizeDiagnosticValue = (value?: string | null, maxLength = 160): string | null => {
   if (!value) {
     return null;
@@ -835,19 +902,7 @@ const applyParsedEvent = async (
     const priorEvent =
       options.isReprocess && email.messageId
         ? await BookingEvent.findOne({
-            where: { emailMessageId: email.messageId },
-            include: [
-              {
-                model: Booking,
-                as: 'booking',
-                required: true,
-                attributes: ['id', 'platform', 'platformBookingId'],
-                where: {
-                  platform: event.platform,
-                  platformBookingId: event.platformBookingId,
-                },
-              },
-            ],
+            where: { emailMessageId: email.messageId, platform: event.platform },
             order: [['id', 'DESC']],
             transaction,
           })
@@ -892,6 +947,16 @@ const applyParsedEvent = async (
 
     if (bookingRecord.platform === 'unknown' && event.platform !== 'unknown') {
       bookingRecord.platform = event.platform;
+    }
+    if (options.isReprocess && priorEvent?.bookingId && bookingRecord.id === priorEvent.bookingId) {
+      const normalizedBookingId = event.platformBookingId?.trim() ?? '';
+      if (normalizedBookingId && bookingRecord.platformBookingId !== normalizedBookingId) {
+        bookingRecord.platformBookingId = normalizedBookingId;
+      }
+      const normalizedOrderId = event.platformOrderId?.trim() ?? '';
+      if (normalizedOrderId && bookingRecord.platformOrderId !== normalizedOrderId) {
+        bookingRecord.platformOrderId = normalizedOrderId;
+      }
     }
 
     const lastMutationAt = bookingRecord.statusChangedAt ?? bookingRecord.createdAt ?? null;
@@ -1161,6 +1226,9 @@ export const processBookingEmail = async (
   const { parsed, diagnostics } = await runParsers(context);
 
   if (!parsed) {
+    if (options.force) {
+      await cleanupIgnoredReprocessArtifacts(emailRecord);
+    }
     await updateEmailStatus(emailRecord, 'ignored', buildIgnoredReason(diagnostics));
     return 'ignored';
   }
