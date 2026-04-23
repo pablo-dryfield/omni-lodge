@@ -10,6 +10,8 @@ import BookingAddon from '../models/BookingAddon.js';
 import BookingEvent from '../models/BookingEvent.js';
 import EmailTemplate from '../models/EmailTemplate.js';
 import Channel from '../models/Channel.js';
+import Counter from '../models/Counter.js';
+import CounterChannelMetric from '../models/CounterChannelMetric.js';
 import Guest from '../models/Guest.js';
 import Addon from '../models/Addon.js';
 import Product from '../models/Product.js';
@@ -1423,6 +1425,25 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
     rawData: {
       bookingId: booking.id,
       platform: booking.platform,
+      channelId: booking.channelId,
+      currency: booking.currency ?? null,
+      paymentStatus: booking.paymentStatus,
+      baseAmount: booking.baseAmount,
+      addonsAmount: booking.addonsAmount,
+      discountAmount: booking.discountAmount,
+      refundedAmount: booking.refundedAmount,
+      refundedCurrency: booking.refundedCurrency ?? null,
+      priceGross: booking.priceGross,
+      priceNet: booking.priceNet,
+      commissionAmount: booking.commissionAmount,
+      commissionRate: booking.commissionRate,
+      partySizeTotal: booking.partySizeTotal,
+      attendedTotal: booking.attendedTotal,
+      experienceDate: booking.experienceDate,
+      experienceStartAt: booking.experienceStartAt ? dayjs(booking.experienceStartAt).toISOString() : null,
+      statusChangedAt: booking.statusChangedAt ? dayjs(booking.statusChangedAt).toISOString() : null,
+      cancelledAt: booking.cancelledAt ? dayjs(booking.cancelledAt).toISOString() : null,
+      sourceReceivedAt: booking.sourceReceivedAt ? dayjs(booking.sourceReceivedAt).toISOString() : null,
     },
   };
 };
@@ -1441,6 +1462,64 @@ const collectProducts = (orders: UnifiedOrder[]): UnifiedProduct[] => {
   });
 
   return Array.from(map.values());
+};
+
+const parseMoneyLikeNumber = (value: unknown): number => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return 0;
+    }
+    const normalized = trimmed.replace(/\s+/g, '').replace(',', '.').replace(/[^\d.-]/g, '');
+    const parsed = Number.parseFloat(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+};
+
+const roundCurrency = (value: number): number => Math.round(value * 100) / 100;
+
+const FREE_TICKET_REGEXES = [
+  /(?:free|complimentary|comp)\s*tickets?\s*[:=-]?\s*(\d{1,4})/gi,
+  /(\d{1,4})\s*(?:free|complimentary|comp)\s*tickets?/gi,
+  /(?:ticket[s]?\s*free)\s*[:=-]?\s*(\d{1,4})/gi,
+];
+
+const extractFreeTicketsFromNote = (note: string | null | undefined): number => {
+  if (!note || typeof note !== 'string') {
+    return 0;
+  }
+  let total = 0;
+  FREE_TICKET_REGEXES.forEach((regex) => {
+    regex.lastIndex = 0;
+    let match: RegExpExecArray | null = regex.exec(note);
+    while (match) {
+      const parsed = Number.parseInt(match[1] ?? '0', 10);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        total += parsed;
+      }
+      match = regex.exec(note);
+    }
+  });
+  if (total === 0 && /(free|complimentary|comp)\s*tickets?/i.test(note)) {
+    return 1;
+  }
+  return total;
+};
+
+const resolveCounterDateWhere = (start: string | null, end: string | null): WhereOptions => {
+  const dateWhere: WhereOptions = {};
+  if (start && end) {
+    (dateWhere as { date?: unknown }).date = { [Op.between]: [start, end] };
+  } else if (start) {
+    (dateWhere as { date?: unknown }).date = { [Op.gte]: start };
+  } else if (end) {
+    (dateWhere as { date?: unknown }).date = { [Op.lte]: end };
+  }
+  return dateWhere;
 };
 
 export const listBookings = async (req: Request, res: Response): Promise<void> => {
@@ -1471,12 +1550,159 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
       .filter((order): order is UnifiedOrder => order !== null);
 
     const products = collectProducts(orders);
+    const bookingIds = rows.map((booking) => Number(booking.id)).filter((id) => Number.isFinite(id) && id > 0);
+
+    const bookingAddonsRows = bookingIds.length
+      ? await BookingAddon.findAll({
+          where: { bookingId: { [Op.in]: bookingIds } },
+          include: [{ model: Addon, as: 'addon', attributes: ['id', 'name'], required: false }],
+          order: [
+            ['bookingId', 'ASC'],
+            ['id', 'ASC'],
+          ],
+        })
+      : [];
+
+    const bookingAddons = bookingAddonsRows.map((addon) => {
+      const plain = addon.get({ plain: true }) as {
+        id: number;
+        bookingId: number;
+        addonId: number | null;
+        platformAddonId: string | null;
+        platformAddonName: string | null;
+        quantity: number;
+        unitPrice: string | null;
+        totalPrice: string | null;
+        currency: string | null;
+        isIncluded: boolean;
+        addon?: { id: number; name: string } | null;
+      };
+
+      const addonName =
+        (plain.addon?.name && plain.addon.name.trim()) ||
+        (plain.platformAddonName && plain.platformAddonName.trim()) ||
+        'Unknown add-on';
+
+      return {
+        id: plain.id,
+        bookingId: plain.bookingId,
+        addonId: plain.addonId,
+        addonName,
+        platformAddonId: plain.platformAddonId,
+        platformAddonName: plain.platformAddonName,
+        quantity: Number.isFinite(Number(plain.quantity)) ? Number(plain.quantity) : 0,
+        unitPrice: roundCurrency(parseMoneyLikeNumber(plain.unitPrice)),
+        totalPrice: roundCurrency(parseMoneyLikeNumber(plain.totalPrice)),
+        currency: plain.currency ?? null,
+        isIncluded: Boolean(plain.isIncluded),
+      };
+    });
+
+    const counters =
+      start || end
+        ? await Counter.findAll({
+            where: resolveCounterDateWhere(start, end),
+            attributes: ['id', 'date', 'notes'],
+            include: [
+              {
+                model: CounterChannelMetric,
+                as: 'metrics',
+                required: false,
+                where: { kind: 'cash_payment', tallyType: 'attended' },
+                attributes: ['id', 'counterId', 'channelId', 'qty', 'kind', 'tallyType'],
+                include: [{ model: Channel, as: 'channel', required: false, attributes: ['id', 'name'] }],
+              },
+            ],
+            order: [
+              ['date', 'ASC'],
+              ['id', 'ASC'],
+            ],
+          })
+        : [];
+
+    type CashByChannelRow = { channelId: number | null; channelName: string; amount: number };
+    type CashEntryRow = {
+      counterId: number;
+      counterDate: string;
+      channelId: number | null;
+      channelName: string;
+      amount: number;
+    };
+    type FreeTicketEntryRow = { counterId: number; counterDate: string; count: number; note: string };
+
+    let cashPaymentsTotal = 0;
+    let freeTicketsTotal = 0;
+    const cashByChannelMap = new Map<string, CashByChannelRow>();
+    const cashEntries: CashEntryRow[] = [];
+    const freeTicketEntries: FreeTicketEntryRow[] = [];
+
+    counters.forEach((counter) => {
+      const counterDate = String(counter.date);
+      const note = typeof counter.notes === 'string' ? counter.notes.trim() : '';
+      const freeTickets = extractFreeTicketsFromNote(note);
+      if (freeTickets > 0) {
+        freeTicketsTotal += freeTickets;
+        freeTicketEntries.push({
+          counterId: counter.id,
+          counterDate,
+          count: freeTickets,
+          note,
+        });
+      }
+
+      const metrics = (counter as unknown as { metrics?: CounterChannelMetric[] }).metrics ?? [];
+      metrics.forEach((metric) => {
+        const amount = roundCurrency(parseMoneyLikeNumber(metric.qty));
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return;
+        }
+        const metricPlain = metric.get({ plain: true }) as {
+          channelId?: number;
+          channel?: { id?: number; name?: string } | null;
+        };
+        const channelId = Number.isFinite(Number(metricPlain.channelId)) ? Number(metricPlain.channelId) : null;
+        const channelName =
+          (metricPlain.channel?.name && String(metricPlain.channel.name).trim()) ||
+          (channelId ? `Channel ${channelId}` : 'Unknown channel');
+        const channelKey = `${channelId ?? 'unknown'}|${channelName}`;
+
+        const channelBucket = cashByChannelMap.get(channelKey) ?? {
+          channelId,
+          channelName,
+          amount: 0,
+        };
+        channelBucket.amount = roundCurrency(channelBucket.amount + amount);
+        cashByChannelMap.set(channelKey, channelBucket);
+
+        cashEntries.push({
+          counterId: counter.id,
+          counterDate,
+          channelId,
+          channelName,
+          amount,
+        });
+        cashPaymentsTotal = roundCurrency(cashPaymentsTotal + amount);
+      });
+    });
+
+    const cashByChannel = Array.from(cashByChannelMap.values())
+      .map((entry) => ({ ...entry, amount: roundCurrency(entry.amount) }))
+      .sort((a, b) => b.amount - a.amount || a.channelName.localeCompare(b.channelName));
 
     res.status(200).json({
       total: orders.length,
       count: orders.length,
       products,
       orders,
+      bookingAddons,
+      counterInsights: {
+        currency: 'PLN',
+        cashPaymentsTotal: roundCurrency(cashPaymentsTotal),
+        cashByChannel,
+        cashEntries,
+        freeTicketsTotal,
+        freeTicketEntries,
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load bookings';

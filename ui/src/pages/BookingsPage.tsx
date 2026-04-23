@@ -35,8 +35,12 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { navigateToPage } from "../actions/navigationActions";
 import { GenericPageProps } from "../types/general/GenericPageProps";
 import { BookingsGrid } from "../components/BookingsGrid";
+import BookingsExecutiveDashboard, {
+  BookingAddonDashboardRow,
+  BookingCounterInsights,
+} from "../components/bookings/BookingsExecutiveDashboard";
 import axiosInstance from "../utils/axiosInstance";
-import { OrderExtras, PlatformBreakdownEntry, UnifiedOrder, UnifiedProduct } from "../store/bookingPlatformsTypes";
+import { UnifiedOrder, UnifiedProduct } from "../store/bookingPlatformsTypes";
 import { prepareBookingGrid, BookingGrid } from "../utils/prepareBookingGrid";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
@@ -95,50 +99,6 @@ type BookingEmailPreview = BookingEmailSummary & {
   bookings?: Array<Record<string, unknown>>;
   bookingAddons?: Array<Record<string, unknown>>;
   bookingEvents?: Array<Record<string, unknown>>;
-};
-
-const PLATFORM_COLORS: Record<string, string> = {
-  ecwid: "orange",
-  fareharbor: "blue",
-  viator: "teal",
-  getyourguide: "grape",
-  freetour: "gray",
-  xperiencepoland: "red",
-  airbnb: "pink",
-  unknown: "dark",
-};
-
-const normalizePlatformKey = (value?: string | null): string => {
-  if (!value) {
-    return "unknown";
-  }
-  const key = value.toLowerCase().trim();
-  return PLATFORM_COLORS[key] ? key : "unknown";
-};
-
-const formatPlatformLabel = (value?: string | null): string => {
-  const safe = value ?? "Unknown";
-  return safe
-    .split(/[\s_-]+/)
-    .filter(Boolean)
-    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
-    .join(" ");
-};
-
-const resolvePlatformColor = (value?: string | null): string => {
-  const key = normalizePlatformKey(value);
-  return PLATFORM_COLORS[key] ?? PLATFORM_COLORS.unknown;
-};
-
-const PlatformBadge = ({ platform }: { platform?: string }) => {
-  if (!platform) {
-    return null;
-  }
-  return (
-    <Badge variant="light" color={resolvePlatformColor(platform)} size="sm">
-      {formatPlatformLabel(platform)}
-    </Badge>
-  );
 };
 
 const EMAIL_STATUS_COLORS: Record<string, string> = {
@@ -513,17 +473,6 @@ const parseEmailDiagnostics = (failureReason?: string | null): EmailDiagnosticGr
     });
 };
 
-type BookingSummaryStats = {
-  totalOrders: number;
-  totalPeople: number;
-  men: number;
-  women: number;
-  extras: OrderExtras;
-  platformBreakdown: PlatformBreakdownEntry[];
-};
-
-const emptyExtras = (): OrderExtras => ({ tshirts: 0, cocktails: 0, photos: 0 });
-
 const filterOrdersByStatus = (orders: UnifiedOrder[], filter: BookingFilter): UnifiedOrder[] => {
   if (filter === "all") {
     return orders;
@@ -535,79 +484,6 @@ const filterOrdersByStatus = (orders: UnifiedOrder[], filter: BookingFilter): Un
     const quantity = Number.isFinite(order.quantity) ? order.quantity : 0;
     return order.status !== "cancelled" && quantity > 0;
   });
-};
-
-const computeSummaryStats = (orders: UnifiedOrder[]): BookingSummaryStats => {
-  const extras = emptyExtras();
-  const platformMap = new Map<string, PlatformBreakdownEntry>();
-
-  let men = 0;
-  let women = 0;
-  let totalPeople = 0;
-
-  orders.forEach((order) => {
-    const menCount = Number.isFinite(order.menCount) ? order.menCount : 0;
-    const womenCount = Number.isFinite(order.womenCount) ? order.womenCount : 0;
-    const fallback = Number.isFinite(order.quantity) ? order.quantity : 0;
-    const participants = menCount + womenCount > 0 ? menCount + womenCount : fallback;
-
-    men += menCount;
-    women += womenCount;
-    totalPeople += participants;
-
-    extras.tshirts += order.extras?.tshirts ?? 0;
-    extras.cocktails += order.extras?.cocktails ?? 0;
-    extras.photos += order.extras?.photos ?? 0;
-
-    const platformKey = order.platform ?? "unknown";
-    const bucket =
-      platformMap.get(platformKey) ??
-      {
-        platform: platformKey,
-        totalPeople: 0,
-        men: 0,
-        women: 0,
-        orderCount: 0,
-      };
-
-    bucket.totalPeople += participants;
-    bucket.men += menCount;
-    bucket.women += womenCount;
-    bucket.orderCount += 1;
-    platformMap.set(platformKey, bucket);
-  });
-
-  const platformBreakdown = Array.from(platformMap.values()).sort((a, b) =>
-    a.platform.localeCompare(b.platform),
-  );
-
-  return {
-    totalOrders: orders.length,
-    totalPeople,
-    men,
-    women,
-    extras,
-    platformBreakdown,
-  };
-};
-
-const formatExtrasSummary = (extras: OrderExtras): string => {
-  const tokens: string[] = [];
-  if (extras.tshirts > 0) tokens.push(`T-Shirts: ${extras.tshirts}`);
-  if (extras.cocktails > 0) tokens.push(`Cocktails: ${extras.cocktails}`);
-  if (extras.photos > 0) tokens.push(`Photos: ${extras.photos}`);
-  return tokens.join(" • ");
-};
-
-const formatOrderExtras = (extras?: OrderExtras): string => {
-  if (!extras) {
-    return "—";
-  }
-  const parts: string[] = [];
-  if (extras.tshirts > 0) parts.push(`${extras.tshirts} tee${extras.tshirts === 1 ? "" : "s"}`);
-  if (extras.cocktails > 0) parts.push(`${extras.cocktails} cocktail${extras.cocktails === 1 ? "" : "s"}`);
-  if (extras.photos > 0) parts.push(`${extras.photos} photo${extras.photos === 1 ? "" : "s"}`);
-  return parts.length > 0 ? parts.join(", ") : "—";
 };
 
 const derivePickupMoment = (order: UnifiedOrder) => {
@@ -627,7 +503,7 @@ const derivePickupMoment = (order: UnifiedOrder) => {
 const formatPickupLabel = (order: UnifiedOrder): string => {
   const moment = derivePickupMoment(order);
   if (moment) {
-    return moment.format("ddd, MMM D • HH:mm");
+    return moment.format("ddd, MMM D - HH:mm");
   }
   return `${order.date} ${order.timeslot}`;
 };
@@ -872,6 +748,8 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const [calendarScrollDate, setCalendarScrollDate] = useState<string | null>(null);
   const [products, setProducts] = useState<UnifiedProduct[]>([]);
   const [orders, setOrders] = useState<UnifiedOrder[]>([]);
+  const [bookingAddons, setBookingAddons] = useState<BookingAddonDashboardRow[]>([]);
+  const [counterInsights, setCounterInsights] = useState<BookingCounterInsights | null>(null);
   const [pendingOrders, setPendingOrders] = useState<UnifiedOrder[]>([]);
   const [statusFilter, setStatusFilter] = useState<BookingFilter>("active");
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>("idle");
@@ -1398,6 +1276,8 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     const fetchOrders = async () => {
       setFetchStatus("loading");
       setErrorMessage(null);
+      setBookingAddons([]);
+      setCounterInsights(null);
 
       try {
         const response = await axiosInstance.get("/bookings", {
@@ -1411,9 +1291,16 @@ const BookingsPage = ({ title }: GenericPageProps) => {
         });
         const productsPayload = Array.isArray(response.data?.products) ? response.data.products : [];
         const ordersPayload = Array.isArray(response.data?.orders) ? response.data.orders : [];
+        const bookingAddonsPayload = Array.isArray(response.data?.bookingAddons) ? response.data.bookingAddons : [];
+        const counterInsightsPayload =
+          response.data?.counterInsights && typeof response.data.counterInsights === "object"
+            ? response.data.counterInsights
+            : null;
 
         setProducts(productsPayload as UnifiedProduct[]);
         setOrders(ordersPayload as UnifiedOrder[]);
+        setBookingAddons(bookingAddonsPayload as BookingAddonDashboardRow[]);
+        setCounterInsights(counterInsightsPayload as BookingCounterInsights | null);
         setFetchStatus("success");
       } catch (error) {
         if (controller.signal.aborted) {
@@ -1585,6 +1472,16 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     () => filterOrdersByStatus(orders, statusFilter),
     [orders, statusFilter],
   );
+  const filteredBookingAddons = useMemo(() => {
+    const bookingIds = new Set<number>();
+    filteredOrders.forEach((order) => {
+      const id = Number(order.id);
+      if (Number.isFinite(id) && id > 0) {
+        bookingIds.add(id);
+      }
+    });
+    return bookingAddons.filter((row) => bookingIds.has(Number(row.bookingId)));
+  }, [bookingAddons, filteredOrders]);
 
   const filteredProducts = useMemo(() => {
     if (statusFilter === "all") {
@@ -1605,28 +1502,6 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const grid: BookingGrid = useMemo(() => {
     return prepareBookingGrid(filteredProducts, filteredOrders, filteredDateRange);
   }, [filteredProducts, filteredOrders, filteredDateRange]);
-
-  const summaryStats = useMemo(() => computeSummaryStats(filteredOrders), [filteredOrders]);
-
-  const sortedOrders = useMemo(() => {
-    const copy = [...filteredOrders];
-    return copy.sort((a, b) => {
-      const momentA = derivePickupMoment(a);
-      const momentB = derivePickupMoment(b);
-      if (momentA && momentB) {
-        if (momentA.isBefore(momentB)) return -1;
-        if (momentA.isAfter(momentB)) return 1;
-      } else if (momentA && !momentB) {
-        return -1;
-      } else if (!momentA && momentB) {
-        return 1;
-      }
-      if (a.productName !== b.productName) {
-        return a.productName.localeCompare(b.productName);
-      }
-      return a.id.localeCompare(b.id);
-    });
-  }, [filteredOrders]);
 
   const dbEcwidOrders = useMemo(
     () => orders.filter((order) => (order.platform ?? "").toLowerCase() === "ecwid"),
@@ -1837,7 +1712,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                   <Stack gap={4}>
                     {row.differences.map((diff) => (
                       <Text key={`${row.platformBookingId}-${diff.field}`} size="sm">
-                        {`${diff.field}: ${diff.db} → ${diff.ecwid}`}
+                        {`${diff.field}: ${diff.db} -> ${diff.ecwid}`}
                       </Text>
                     ))}
                   </Stack>
@@ -2025,111 +1900,12 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                     <Loader variant="bars" />
                   </Box>
                 ) : (
-                  <Stack gap="md">
-                    <Title order={3}>Bookings summary</Title>
-                    {filteredOrders.length === 0 ? (
-                      <Alert color="blue" title="No bookings">
-                        No bookings found for the selected range.
-                      </Alert>
-                    ) : (
-                      <>
-                        <Group gap="sm" wrap="wrap">
-                          <Badge size="lg" color="blue" variant="light">
-                            {`Bookings: ${summaryStats.totalOrders}`}
-                          </Badge>
-                          <Badge size="lg" color="green" variant="light">
-                            {`Total people: ${summaryStats.totalPeople}`}
-                          </Badge>
-                          <Badge size="lg" color="teal" variant="light">
-                            {`Men: ${summaryStats.men}`}
-                          </Badge>
-                          <Badge size="lg" color="pink" variant="light">
-                            {`Women: ${summaryStats.women}`}
-                          </Badge>
-                          {summaryStats.extras.tshirts > 0 ||
-                          summaryStats.extras.cocktails > 0 ||
-                          summaryStats.extras.photos > 0 ? (
-                            <Badge size="lg" color="violet" variant="light">
-                              {formatExtrasSummary(summaryStats.extras)}
-                            </Badge>
-                          ) : null}
-                        </Group>
-
-                        {summaryStats.platformBreakdown.length > 0 && (
-                          <Group gap="xs" wrap="wrap">
-                            {summaryStats.platformBreakdown.map((entry) => (
-                              <Badge
-                                key={`platform-${entry.platform}`}
-                                color={resolvePlatformColor(entry.platform)}
-                                variant="outline"
-                              >
-                                {`${formatPlatformLabel(entry.platform)}: ${entry.totalPeople} (${entry.orderCount} ${
-                                  entry.orderCount === 1 ? "booking" : "bookings"
-                                })`}
-                              </Badge>
-                            ))}
-                          </Group>
-                        )}
-
-                        <Paper withBorder radius="lg" shadow="sm" p="md">
-                          <ScrollArea style={{ width: "100%" }}>
-                            <Table striped highlightOnHover withColumnBorders horizontalSpacing="md" verticalSpacing="sm">
-                              <Table.Thead>
-                                <Table.Tr>
-                                  <Table.Th>Booking</Table.Th>
-                                  <Table.Th>Product</Table.Th>
-                                  <Table.Th>Platform</Table.Th>
-                                  <Table.Th>Pickup</Table.Th>
-                                  <Table.Th align="right">People</Table.Th>
-                                  <Table.Th align="right">Men</Table.Th>
-                                  <Table.Th align="right">Women</Table.Th>
-                                  <Table.Th>Contact</Table.Th>
-                                  <Table.Th>Phone</Table.Th>
-                                  <Table.Th>Extras</Table.Th>
-                                </Table.Tr>
-                              </Table.Thead>
-                              <Table.Tbody>
-                                {sortedOrders.map((order) => (
-                                  <Table.Tr key={`${order.id}-${order.productId}`}>
-                                    <Table.Td>
-                                      <Stack gap={2} style={{ minWidth: 140 }}>
-                                        <Text fw={600}>{order.id}</Text>
-                                        <Text size="xs" c="dimmed">
-                                          {formatPlatformLabel(order.platform)}
-                                        </Text>
-                                      </Stack>
-                                    </Table.Td>
-                                    <Table.Td>
-                                      <Stack gap={2}>
-                                        <Text fw={600}>{order.productName}</Text>
-                                        <Text size="xs" c="dimmed">
-                                          {order.productId}
-                                        </Text>
-                                      </Stack>
-                                    </Table.Td>
-                                    <Table.Td>
-                                      <PlatformBadge platform={order.platform} />
-                                    </Table.Td>
-                                    <Table.Td>{formatPickupLabel(order)}</Table.Td>
-                                    <Table.Td align="right">{order.quantity}</Table.Td>
-                                    <Table.Td align="right">{order.menCount}</Table.Td>
-                                    <Table.Td align="right">{order.womenCount}</Table.Td>
-                                    <Table.Td>
-                                      <Stack gap={2}>
-                                        <Text fw={600}>{order.customerName || "—"}</Text>
-                                      </Stack>
-                                    </Table.Td>
-                                    <Table.Td>{order.customerPhone ?? "—"}</Table.Td>
-                                    <Table.Td>{formatOrderExtras(order.extras)}</Table.Td>
-                                  </Table.Tr>
-                                ))}
-                              </Table.Tbody>
-                            </Table>
-                          </ScrollArea>
-                        </Paper>
-                      </>
-                    )}
-                  </Stack>
+                  <BookingsExecutiveDashboard
+                    orders={filteredOrders}
+                    bookingAddons={filteredBookingAddons}
+                    counterInsights={counterInsights}
+                    rangeLabel={rangeLabel}
+                  />
                 )}
               </Tabs.Panel>
 

@@ -4948,8 +4948,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                     return (a.customerName ?? "").localeCompare(b.customerName ?? "");
                   });
 
-                  if (isMobile) {
-                    return (
+                  const renderGroupCards = () => (
                       <Paper
                         key={`${group.productId}-${group.date}-${group.time}`}
                         withBorder
@@ -4992,7 +4991,13 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                           </Box>
                           <ProductSummaryPanels group={group} undefinedGroupCount={undefinedGroupCount} />
                           <Divider />
-                          <Stack gap="sm">
+                          <Box
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(auto-fit, minmax(420px, 1fr))",
+                              gap: 12,
+                            }}
+                          >
                             {sortedOrders.map((order) => {
                               const normalizedBookingId = normalizeManifestBookingId(order);
                               const bookingDisplay = normalizedBookingId ?? order.platformBookingId ?? order.id;
@@ -5610,230 +5615,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               </Paper>
                             );
                           })}
-                          </Stack>
+                          </Box>
                         </Stack>
                       </Paper>
                     );
-                  }
-                  return (
-                    <Box
-                      key={`${group.productId}-${group.date}-${group.time}`}
-                      style={{
-                        background: "#fff",
-                        borderRadius: 10,
-                        boxShadow: "0 18px 36px rgba(15, 23, 42, 0.08)",
-                        border: "0.5px solid #c4cfdd",
-                        padding: 24,
-                      }}
-                    >
-                      <Flex justify="space-between" align="center" wrap="wrap" gap="sm">
-                        <Box
-                          style={{
-                            minWidth: 0,
-                            flex: "1 1 auto",
-                            display: "grid",
-                            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-                            alignItems: "center",
-                            columnGap: 8,
-                          }}
-                        >
-                          <Text
-                            fw={700}
-                            size="lg"
-                            style={{
-                              minWidth: 0,
-                              whiteSpace: "nowrap",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              textAlign: "center",
-                            }}
-                          >
-                            {group.productName}
-                          </Text>
-                          <Box style={{ display: "flex", justifyContent: "center" }}>
-                            <Badge
-                              color="orange"
-                              variant="filled"
-                              radius="sm"
-                              style={{ minWidth: 68, justifyContent: "center" }}
-                            >
-                              {group.time}
-                            </Badge>
-                          </Box>
-                        </Box>
-                      </Flex>
-                      <Box mt="sm">
-                        <ProductSummaryPanels group={group} undefinedGroupCount={undefinedGroupCount} />
-                      </Box>
-
-                      <Table striped highlightOnHover withColumnBorders mt="md" horizontalSpacing="md" verticalSpacing="sm">
-                          <Table.Thead>
-                            <Table.Tr>
-                              <Table.Th>Booking #</Table.Th>
-                              <Table.Th>Contact</Table.Th>
-                              <Table.Th>Platform</Table.Th>
-                              <Table.Th>Status</Table.Th>
-                              <Table.Th>Phone</Table.Th>
-                              <Table.Th align="right">People</Table.Th>
-                          <Table.Th align="right">Men</Table.Th>
-                          <Table.Th align="right">Women</Table.Th>
-                          <Table.Th align="right">Undefined Genre</Table.Th>
-                          {showAddonColumns && (
-                            <>
-                              <Table.Th align="right">T-Shirts</Table.Th>
-                              <Table.Th align="right">Cocktails</Table.Th>
-                              <Table.Th align="right">Photos</Table.Th>
-                            </>
-                          )}
-                          <Table.Th>Activity Time</Table.Th>
-                          <Table.Th>Actions</Table.Th>
-                        </Table.Tr>
-                      </Table.Thead>
-                        <Table.Tbody>
-                          <Table.Tr style={{ background: "#fff7e6" }}>
-                            <Table.Td fw={600} c="#475569">Summary</Table.Td>
-                              <Table.Td fw={600}>{bookingsLabel}</Table.Td>
-                              <Table.Td>
-                                <PlatformBadges
-                                  entries={group.platformBreakdown}
-                                  prefix={`table-summary-${group.productId}-${group.time}`}
-                                  withMargin={false}
-                                />
-                              </Table.Td>
-                              <Table.Td />
-                              <Table.Td />
-                              <Table.Td align="right" fw={600}>
-                                {group.totalPeople}
-                            </Table.Td>
-                            <Table.Td align="right" fw={600}>
-                              {group.men}
-                            </Table.Td>
-                            <Table.Td align="right" fw={600}>
-                              {group.women}
-                            </Table.Td>
-                            <Table.Td align="right" fw={600}>
-                              {undefinedGroupCount}
-                            </Table.Td>
-                            {showAddonColumns && (
-                              <>
-                                <Table.Td align="right" fw={600}>
-                                  {formatAddonValue(group.extras.tshirts)}
-                                </Table.Td>
-                                <Table.Td align="right" fw={600}>
-                                  {formatAddonValue(group.extras.cocktails)}
-                                </Table.Td>
-                                <Table.Td align="right" fw={600}>
-                                  {formatAddonValue(group.extras.photos)}
-                                </Table.Td>
-                              </>
-                            )}
-                            <Table.Td fw={600}>{group.time}</Table.Td>
-                            <Table.Td />
-                          </Table.Tr>
-                          {sortedOrders.map((order) => {
-                            const normalizedBookingId = normalizeManifestBookingId(order);
-                            const bookingDisplay = normalizedBookingId ?? order.platformBookingId ?? order.id;
-                            const bookingLink =
-                              order.platformBookingUrl ?? getPlatformBookingLink(order.platform, normalizedBookingId ?? order.platformBookingId);
-                            const bookingId = getBookingIdFromOrder(order);
-                            const canAmend = (isEcwidOrder(order) || isXperiencePolandOrder(order)) && Boolean(bookingId);
-                            const canCancel = (isEcwidOrder(order) || isXperiencePolandOrder(order)) && Boolean(bookingId) && order.status !== "cancelled";
-                            const canPartialRefund = isEcwidOrder(order) && Boolean(bookingId) && order.status !== "cancelled";
-                            const undefinedOrderCount = getUndefinedGenreCount(
-                              order.quantity,
-                              order.menCount,
-                              order.womenCount,
-                            );
-                            return (
-                              <Table.Tr key={order.id}>
-                                <Table.Td>
-                                  {bookingLink ? (
-                                    <Anchor
-                                      href={bookingLink}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      size="sm"
-                                    >
-                                      {bookingDisplay}
-                                    </Anchor>
-                                  ) : (
-                                    bookingDisplay
-                                  )}
-                                </Table.Td>
-                              <Table.Td>{order.customerName || "-"}</Table.Td>
-                              <Table.Td>
-                                <OrderPlatformBadge platform={order.platform} />
-                              </Table.Td>
-                              <Table.Td>
-                                <StatusBadge status={order.status} attendanceStatus={order.attendanceStatus} order={order} />
-                              </Table.Td>
-                              <Table.Td>
-                                {(() => {
-                                  const link = toWhatsAppLink(order.customerPhone);
-                                  return link ? (
-                                    <a
-                                      href={link.href}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      style={{ fontWeight: 600, textDecoration: 'none', color: 'var(--mantine-color-blue-7)' }}
-                                      title="Open in WhatsApp"
-                                    >
-                                      {link.display}
-                                    </a>
-                                  ) : (order.customerPhone || "-");
-                                })()}
-                              </Table.Td>
-                              <Table.Td align="right">{order.quantity}</Table.Td>
-                              <Table.Td align="right">{order.menCount}</Table.Td>
-                              <Table.Td align="right">{order.womenCount}</Table.Td>
-                              <Table.Td align="right">{undefinedOrderCount}</Table.Td>
-                              {showAddonColumns && (
-                                <>
-                                  <Table.Td align="right">{formatAddonValue(order.extras?.tshirts)}</Table.Td>
-                                  <Table.Td align="right">{formatAddonValue(order.extras?.cocktails)}</Table.Td>
-                                  <Table.Td align="right">{formatAddonValue(order.extras?.photos)}</Table.Td>
-                                </>
-                              )}
-                              <Table.Td>{order.timeslot}</Table.Td>
-                              <Table.Td>
-                                <Group gap="xs">
-                                  {canAmend && (
-                                    <Button size="xs" variant="light" onClick={() => openAmendModal(order)}>
-                                      Amend
-                                    </Button>
-                                  )}
-                                  <Button size="xs" variant="default" onClick={() => openDetailsModal(order)}>
-                                    Details
-                                  </Button>
-                                  {canPartialRefund && (
-                                    <Button
-                                      size="xs"
-                                      color="orange"
-                                      variant="outline"
-                                      onClick={() => openPartialRefundModal(order)}
-                                    >
-                                      Partial Refund
-                                    </Button>
-                                  )}
-                                  {canCancel && (
-                                    <Button
-                                      size="xs"
-                                      color="red"
-                                      variant="outline"
-                                      onClick={() => openCancelModal(order)}
-                                    >
-                                      Cancel
-                                    </Button>
-                                  )}
-                                </Group>
-                              </Table.Td>
-                            </Table.Tr>
-                          );
-                        })}
-                        </Table.Tbody>
-                      </Table>
-                    </Box>
-                  );
+                  return renderGroupCards();
                 })}
 
               </Stack>
