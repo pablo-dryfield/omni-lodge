@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { isAxiosError } from 'axios';
-import { Op, type WhereOptions, fn, col, where as sequelizeWhere, type Transaction } from 'sequelize';
+import { Op, type WhereOptions, fn, col, where as sequelizeWhere, type Transaction, literal, type OrderItem } from 'sequelize';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
@@ -1724,10 +1724,9 @@ export const listBookingEmails = async (req: Request, res: Response): Promise<vo
     const queryOptions = {
       where,
       order: [
-        ['receivedAt', 'DESC'],
-        ['internalDate', 'DESC'],
+        [literal('COALESCE("received_at", "internal_date")'), 'DESC'],
         ['id', 'DESC'],
-      ] as Array<[string, string]>,
+      ] as OrderItem[],
       limit,
       offset,
       attributes: [
