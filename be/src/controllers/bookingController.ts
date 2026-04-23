@@ -3343,6 +3343,15 @@ type ResolvedPartialRefundPeople = {
   currency: string | null;
 };
 
+type EcwidMoneySnapshot = {
+  gross: number | null;
+  net: number | null;
+  discount: number | null;
+  remaining: number;
+  refunded: number;
+  addons: number | null;
+};
+
 const parseMoneyValue = (value: unknown): number | null => {
   if (value === null || value === undefined) {
     return null;
@@ -3365,6 +3374,61 @@ const roundMoney = (value: number): number =>
   Math.round((value + Number.EPSILON) * 100) / 100;
 
 const formatMoneyValue = (value: number): string => roundMoney(value).toFixed(2);
+
+const buildEcwidMoneySnapshot = (booking: Booking): EcwidMoneySnapshot => {
+  let gross = parseMoneyValue(booking.priceGross);
+  let net = parseMoneyValue(booking.priceNet);
+  let discount = parseMoneyValue(booking.discountAmount);
+
+  gross = gross !== null ? Math.max(roundMoney(gross), 0) : null;
+  net = net !== null ? Math.max(roundMoney(net), 0) : null;
+  discount = discount !== null ? Math.max(roundMoney(discount), 0) : null;
+
+  if (gross === null && net !== null && discount !== null) {
+    gross = roundMoney(net + discount);
+  }
+  if (net === null && gross !== null && discount !== null) {
+    net = Math.max(roundMoney(gross - discount), 0);
+  }
+  if (discount === null && gross !== null && net !== null) {
+    discount = Math.max(roundMoney(gross - net), 0);
+  }
+
+  const refunded = Math.max(roundMoney(parseMoneyValue(booking.refundedAmount) ?? 0), 0);
+  const addons = parseMoneyValue(booking.addonsAmount);
+  let remaining = parseMoneyValue(booking.baseAmount);
+
+  if (remaining === null) {
+    if (net !== null) {
+      remaining = Math.max(roundMoney(net - refunded), 0);
+    } else {
+      remaining = 0;
+    }
+  }
+
+  return {
+    gross,
+    net,
+    discount,
+    remaining: Math.max(roundMoney(remaining), 0),
+    refunded,
+    addons: addons !== null ? Math.max(roundMoney(addons), 0) : null,
+  };
+};
+
+const applyEcwidMoneySnapshot = (booking: Booking, snapshot: EcwidMoneySnapshot): void => {
+  if (snapshot.gross !== null) {
+    booking.priceGross = formatMoneyValue(snapshot.gross);
+  }
+  if (snapshot.net !== null) {
+    booking.priceNet = formatMoneyValue(snapshot.net);
+  }
+  if (snapshot.discount !== null) {
+    booking.discountAmount = formatMoneyValue(snapshot.discount);
+  }
+  booking.baseAmount = formatMoneyValue(snapshot.remaining);
+  booking.refundedAmount = formatMoneyValue(snapshot.refunded);
+};
 
 const normalizeAddonNameForRefund = (value: string): string =>
   value
@@ -3420,6 +3484,7 @@ const resolvePartialRefundPeople = (booking: Booking, fallbackCurrency: string):
 
   const baseAmountRaw =
     parseMoneyValue(booking.baseAmount) ??
+    parseMoneyValue(booking.priceNet) ??
     (() => {
       const gross = parseMoneyValue(booking.priceGross);
       const addons = parseMoneyValue(booking.addonsAmount);
@@ -3697,9 +3762,18 @@ export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Respons
     });
 
     const now = new Date();
+    const money = buildEcwidMoneySnapshot(booking);
+    const fullRefundAmount = refund?.amount ? roundMoney(refund.amount / 100) : money.remaining;
     booking.status = 'cancelled';
     booking.statusChangedAt = now;
     booking.cancelledAt = now;
+    money.remaining = 0;
+    money.refunded = roundMoney(money.refunded + fullRefundAmount);
+    money.addons = 0;
+    applyEcwidMoneySnapshot(booking, money);
+    booking.addonsAmount = formatMoneyValue(0);
+    booking.refundedCurrency = (booking.currency ?? preview.stripe.currency ?? '').toUpperCase() || null;
+    booking.paymentStatus = 'refunded';
     booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
 
     const sequelizeClient = Booking.sequelize;
@@ -3712,6 +3786,8 @@ export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Respons
       await recordManualCancellationEvent(booking, now, req.authContext?.id ?? null, {
         action: 'cancel-ecwid',
         refunded: Boolean(refund),
+        refundedAmount: fullRefundAmount,
+        currency: booking.refundedCurrency ?? booking.currency ?? preview.stripe.currency ?? null,
         orderId: preview.orderId,
         externalTransactionId: preview.externalTransactionId,
         stripeTransactionId: preview.stripe.id,
@@ -4090,27 +4166,18 @@ export const partialRefundEcwidBooking = async (req: AuthenticatedRequest, res: 
         }
       }
 
-      const previousBaseAmount = parseMoneyValue(booking.baseAmount) ?? 0;
-      const previousAddonsAmount = parseMoneyValue(booking.addonsAmount) ?? 0;
-      const previousGross = parseMoneyValue(booking.priceGross) ?? 0;
-      const previousNet = parseMoneyValue(booking.priceNet) ?? 0;
-      const previousRefunded = parseMoneyValue(booking.refundedAmount) ?? 0;
+      const money = buildEcwidMoneySnapshot(booking);
+      const nextBaseAmount = Math.max(roundMoney(money.remaining - computedAmount), 0);
+      const nextRefunded = roundMoney(money.refunded + computedAmount);
+      const nextAddonsAmount = Math.max(roundMoney((money.addons ?? 0) - addonsRefundAmount), 0);
 
-      const nextBaseAmount = Math.max(roundMoney(previousBaseAmount - peopleRefundAmount), 0);
-      const nextAddonsAmount = Math.max(roundMoney(previousAddonsAmount - addonsRefundAmount), 0);
-      const nextGross = Math.max(roundMoney(previousGross - computedAmount), 0);
-      const nextNet = Math.max(roundMoney(previousNet - computedAmount), 0);
-      const nextRefunded = roundMoney(previousRefunded + computedAmount);
-
-      booking.baseAmount = formatMoneyValue(nextBaseAmount);
+      money.remaining = nextBaseAmount;
+      money.refunded = nextRefunded;
+      money.addons = nextAddonsAmount;
+      applyEcwidMoneySnapshot(booking, money);
       booking.addonsAmount = formatMoneyValue(nextAddonsAmount);
-      booking.priceGross = formatMoneyValue(nextGross);
-      if (booking.priceNet !== null) {
-        booking.priceNet = formatMoneyValue(nextNet);
-      }
-      booking.refundedAmount = formatMoneyValue(nextRefunded);
       booking.refundedCurrency = (booking.currency ?? preview.stripe.currency ?? '').toUpperCase() || null;
-      booking.paymentStatus = 'partial';
+      booking.paymentStatus = nextBaseAmount <= 0 ? 'refunded' : 'partial';
 
       const snapshotBase =
         booking.addonsSnapshot && typeof booking.addonsSnapshot === 'object'
