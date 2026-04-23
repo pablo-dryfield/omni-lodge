@@ -25,6 +25,7 @@ const AIRBNB_TIMEZONE =
 const normalizeWhitespace = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
 const AIRBNB_CANCELLATION_PLACEHOLDER_PREFIX = 'airbnb-cancel-';
+const UNICODE_NAME_FRAGMENT = `[\\p{L}\\p{M}' -]+`;
 
 const BOOKING_ID_STOP_WORDS = new Set([
   'THEY',
@@ -228,18 +229,21 @@ const extractGuestNameFromSubject = (subject?: string | null): string | null => 
     return null;
   }
   const cancelledSubjectMatch = subject.match(
-    /^([A-Za-z\u00C0-\u017F' -]+?)\s+(?:cancelled|canceled)\s+their\s+reservation\b/i,
+    new RegExp(`^(${UNICODE_NAME_FRAGMENT}?)\\s+(?:cancelled|canceled)\\s+their\\s+reservation\\b`, 'iu'),
   );
   if (cancelledSubjectMatch?.[1]) {
     return cancelledSubjectMatch[1].trim();
   }
   const confirmedMatch = subject.match(
-    /^(?:confirmed|canceled|cancelled|updated|alteration|change|request|inquiry)\s*:\s*([A-Za-z\u00C0-\u017F' -]+?)\s+(?:booked|requested|cancelled|canceled|updated|changed|altered)\b/i,
+    new RegExp(
+      `^(?:confirmed|canceled|cancelled|updated|alteration|change|request|inquiry)\\s*:\\s*(${UNICODE_NAME_FRAGMENT}?)\\s+(?:booked|requested|cancelled|canceled|updated|changed|altered)\\b`,
+      'iu',
+    ),
   );
   if (confirmedMatch?.[1]) {
     return confirmedMatch[1].trim();
   }
-  const bookedMatch = subject.match(/^([A-Za-z\u00C0-\u017F' -]+?)\s+booked your experience\b/i);
+  const bookedMatch = subject.match(new RegExp(`^(${UNICODE_NAME_FRAGMENT}?)\\s+booked your experience\\b`, 'iu'));
   if (bookedMatch?.[1]) {
     return bookedMatch[1].trim();
   }
@@ -508,19 +512,23 @@ const extractGuestName = (text: string): string | null => {
       return value;
     }
   }
-  const fromMatch = text.match(/(?:new reservation|reservation request|request to book)\s+from\s+([A-Za-z\u00C0-\u017F' -]+)/i);
+  const fromMatch = text.match(
+    new RegExp(`(?:new reservation|reservation request|request to book)\\s+from\\s+(${UNICODE_NAME_FRAGMENT})`, 'iu'),
+  );
   if (fromMatch?.[1]) {
     return fromMatch[1].trim();
   }
-  const cancelledMatch = text.match(/([A-Za-z\u00C0-\u017F' -]+?)\s+(?:canceled|cancelled)\s+their\s+reservation\b/i);
+  const cancelledMatch = text.match(
+    new RegExp(`(${UNICODE_NAME_FRAGMENT}?)\\s+(?:canceled|cancelled)\\s+their\\s+reservation\\b`, 'iu'),
+  );
   if (cancelledMatch?.[1]) {
     return cancelledMatch[1].trim();
   }
-  const arrivingMatch = text.match(/([A-Za-z\u00C0-\u017F' -]+)\s+is\s+arriving/i);
+  const arrivingMatch = text.match(new RegExp(`(${UNICODE_NAME_FRAGMENT})\\s+is\\s+arriving`, 'iu'));
   if (arrivingMatch?.[1]) {
     return arrivingMatch[1].trim();
   }
-  const bookedMatch = text.match(/([A-Za-z\u00C0-\u017F' -]+)\s+booked your experience\b/i);
+  const bookedMatch = text.match(new RegExp(`(${UNICODE_NAME_FRAGMENT})\\s+booked your experience\\b`, 'iu'));
   if (bookedMatch?.[1]) {
     return bookedMatch[1].trim();
   }

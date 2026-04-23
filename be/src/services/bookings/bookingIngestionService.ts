@@ -495,6 +495,24 @@ const normalizeDecimal = (value: unknown): string | null => {
   return null;
 };
 
+const parseDecimalNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Number.parseFloat(trimmed.replace(/,/g, '.'));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
 const normalizePatch = (patch: BookingFieldPatch | undefined): Record<string, unknown> => {
   if (!patch) {
     return {};
@@ -833,6 +851,55 @@ const syncAddons = async (
 const isValidDateValue = (value: unknown): value is Date =>
   value instanceof Date && Number.isFinite(value.valueOf());
 
+const reconcileRefundDerivedFields = (
+  booking: Booking,
+  event: ParsedBookingEvent,
+  patch: Record<string, unknown>,
+): void => {
+  const shouldReconcile =
+    event.paymentStatus === 'partial' ||
+    event.paymentStatus === 'refunded' ||
+    patch.refundedAmount !== undefined;
+  if (!shouldReconcile) {
+    return;
+  }
+
+  const parsedRefund = parseDecimalNumber(patch.refundedAmount);
+  if (parsedRefund === null) {
+    return;
+  }
+
+  const existingRefund = parseDecimalNumber(booking.refundedAmount);
+  const effectiveRefund =
+    existingRefund !== null && existingRefund > parsedRefund ? existingRefund : parsedRefund;
+  patch.refundedAmount = effectiveRefund;
+
+  const netAmount =
+    parseDecimalNumber(patch.priceNet) ??
+    parseDecimalNumber(booking.priceNet) ??
+    parseDecimalNumber(patch.baseAmount) ??
+    parseDecimalNumber(booking.baseAmount);
+  if (netAmount === null) {
+    return;
+  }
+
+  const remaining = Math.max(netAmount - effectiveRefund, 0);
+  patch.baseAmount = remaining;
+
+  if (event.paymentStatus === 'partial' || event.paymentStatus === 'refunded') {
+    event.paymentStatus = remaining <= 0 ? 'refunded' : 'partial';
+  }
+
+  const currentRefundedCurrency =
+    (typeof patch.refundedCurrency === 'string' && patch.refundedCurrency.trim()) ||
+    booking.refundedCurrency ||
+    (typeof patch.currency === 'string' && patch.currency.trim()) ||
+    booking.currency;
+  if (currentRefundedCurrency) {
+    patch.refundedCurrency = currentRefundedCurrency;
+  }
+};
+
 const deriveViatorAmendedStartAt = (
   booking: Booking,
   patch: Record<string, unknown>,
@@ -1149,6 +1216,7 @@ const applyParsedEvent = async (
     if (derivedViatorStartAt) {
       patch.experienceStartAt = derivedViatorStartAt;
     }
+    reconcileRefundDerivedFields(bookingRecord, event, patch);
 
     if (Object.keys(patch).length > 0) {
       bookingRecord.set(patch);
