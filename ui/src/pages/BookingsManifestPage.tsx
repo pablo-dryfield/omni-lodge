@@ -94,6 +94,14 @@ const BASE_MAIL_VARIABLES: MailVariableDefinition[] = [
   { key: "bookingDate", scope: "base", description: "Raw booking date (YYYY-MM-DD)" },
   { key: "bookingDateDisplay", scope: "base", description: "Formatted booking date label" },
   { key: "bookingTime", scope: "base", description: "Booking/activity time" },
+  { key: "previousDateDisplay", scope: "base", description: "Previous booking date label" },
+  { key: "previousTime", scope: "base", description: "Previous booking time (HH:mm)" },
+  { key: "previousDateTimeDisplay", scope: "base", description: "Previous date and time label" },
+  { key: "newDateDisplay", scope: "base", description: "New booking date label" },
+  { key: "newTime", scope: "base", description: "New booking time (HH:mm)" },
+  { key: "newDateTimeDisplay", scope: "base", description: "New date and time label" },
+  { key: "amendedFromDateTimeDisplay", scope: "base", description: "Previous date/time alias" },
+  { key: "amendedToDateTimeDisplay", scope: "base", description: "New date/time alias" },
   { key: "bookingId", scope: "base", description: "Booking ID alias" },
   { key: "bookingReference", scope: "base", description: "Primary booking reference" },
   { key: "reservationId", scope: "base", description: "Reservation ID alias" },
@@ -1300,6 +1308,22 @@ const normalizeTimeInput = (value: string): string | null => {
   return fallback.isValid() ? fallback.format('HH:mm') : null;
 };
 
+const formatManifestDateLabel = (value: string): string => {
+  const source = String(value ?? "").trim();
+  if (!source) {
+    return "";
+  }
+  const strictParsed = dayjs(source, DATE_FORMAT, true);
+  if (strictParsed.isValid()) {
+    return strictParsed.format("ddd, MMM D YYYY");
+  }
+  const parsed = dayjs(source);
+  if (parsed.isValid()) {
+    return parsed.format("ddd, MMM D YYYY");
+  }
+  return source;
+};
+
 const extractErrorMessage = (error: unknown): string => {
   if (!error) {
     return 'Something went wrong';
@@ -1750,6 +1774,15 @@ type PartialRefundEmailPreviewState = {
   templateName: string | null;
 };
 
+type AmendEmailPreviewState = {
+  opened: boolean;
+  loading: boolean;
+  submitting: boolean;
+  error: string | null;
+  data: MailComposerPreviewResponse | null;
+  templateName: string | null;
+};
+
 const createDefaultMailComposerState = (): MailComposerState => ({
   opened: false,
   sourceOrder: null,
@@ -1792,6 +1825,15 @@ const createDefaultCancelRefundEmailPreviewState = (): CancelRefundEmailPreviewS
 const createDefaultPartialRefundEmailPreviewState = (): PartialRefundEmailPreviewState => ({
   opened: false,
   loading: false,
+  error: null,
+  data: null,
+  templateName: null,
+});
+
+const createDefaultAmendEmailPreviewState = (): AmendEmailPreviewState => ({
+  opened: false,
+  loading: false,
+  submitting: false,
   error: null,
   data: null,
   templateName: null,
@@ -1897,6 +1939,43 @@ const pickPartialRefundTemplate = (templates: EmailTemplate[]): EmailTemplate | 
         score += 12;
       } else if (haystack.includes("refund")) {
         score += 8;
+      }
+      if (template.templateType === "react_email") {
+        score += 1;
+      }
+      return { template, score };
+    })
+    .sort((left, right) => right.score - left.score);
+
+  if (scored.length === 0 || scored[0].score <= 0) {
+    return null;
+  }
+  return scored[0].template;
+};
+
+const pickDateChangeTemplate = (templates: EmailTemplate[]): EmailTemplate | null => {
+  if (!Array.isArray(templates) || templates.length === 0) {
+    return null;
+  }
+  const activeTemplates = templates.filter((template) => template.isActive);
+  const source = activeTemplates.length > 0 ? activeTemplates : templates;
+  const scored = source
+    .map((template) => {
+      const haystack = `${template.name} ${template.description ?? ""} ${template.subjectTemplate}`.toLowerCase();
+      let score = 0;
+      if (haystack.includes("date") && (haystack.includes("change") || haystack.includes("amend"))) {
+        score += 24;
+      } else if (haystack.includes("booking") && haystack.includes("change")) {
+        score += 22;
+      } else if (haystack.includes("date") && haystack.includes("resched")) {
+        score += 20;
+      } else if (haystack.includes("amend")) {
+        score += 12;
+      } else if (haystack.includes("date") || haystack.includes("resched")) {
+        score += 8;
+      }
+      if (haystack.includes("pub crawl")) {
+        score += 3;
       }
       if (template.templateType === "react_email") {
         score += 1;
@@ -2017,6 +2096,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     useState<CancelRefundEmailPreviewState>(createDefaultCancelRefundEmailPreviewState());
   const [partialRefundEmailPreviewState, setPartialRefundEmailPreviewState] =
     useState<PartialRefundEmailPreviewState>(createDefaultPartialRefundEmailPreviewState());
+  const [amendEmailPreviewState, setAmendEmailPreviewState] =
+    useState<AmendEmailPreviewState>(createDefaultAmendEmailPreviewState());
   const [mailVariableDropdown, setMailVariableDropdown] = useState<MailVariableDropdownState>({
     field: null,
     tokenStart: -1,
@@ -2188,11 +2269,13 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         success: null,
       }));
     }
+    setAmendEmailPreviewState(createDefaultAmendEmailPreviewState());
   };
 
   const closeAmendModal = () => {
     setAmendState(createDefaultAmendState());
     setAmendPreview(createDefaultAmendPreview());
+    setAmendEmailPreviewState(createDefaultAmendEmailPreviewState());
     setReconcileState((prev) => ({
       ...prev,
       itemIndex: null,
@@ -2203,48 +2286,14 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   };
 
   const handleAmendDateChange = (value: Date | null) => {
-    setAmendState((prev) => ({ ...prev, formDate: value }));
+    setAmendState((prev) => ({ ...prev, formDate: value, error: null }));
+    setAmendEmailPreviewState(createDefaultAmendEmailPreviewState());
   };
 
   const handleAmendTimeChange = (event: ChangeEvent<HTMLInputElement>) => {
     const nextValue = event.currentTarget.value;
-    setAmendState((prev) => ({ ...prev, formTime: nextValue }));
-  };
-
-  const handleAmendSubmit = async () => {
-    if (!amendState.bookingId) {
-      setAmendState((prev) => ({ ...prev, error: "Missing OmniLodge booking reference." }));
-      return;
-    }
-    if (!amendState.formDate || !amendState.formTime) {
-      setAmendState((prev) => ({ ...prev, error: "Pickup date and time are required." }));
-      return;
-    }
-    if (!amendState.mode) {
-      setAmendState((prev) => ({ ...prev, error: "Amend is not supported for this platform." }));
-      return;
-    }
-    const normalizedTime = normalizeTimeInput(amendState.formTime);
-    if (!normalizedTime) {
-      setAmendState((prev) => ({ ...prev, error: "Please provide a valid pickup time (HH:mm)." }));
-      return;
-    }
-    setAmendState((prev) => ({ ...prev, submitting: true, error: null }));
-    try {
-      const endpoint =
-        amendState.mode === "ecwid"
-          ? `/bookings/${amendState.bookingId}/amend-ecwid`
-          : `/bookings/${amendState.bookingId}/amend-xperience`;
-      await axiosInstance.post(endpoint, {
-        pickupDate: dayjs(amendState.formDate).format(DATE_FORMAT),
-        pickupTime: normalizedTime,
-      });
-      setAmendState(createDefaultAmendState());
-      setReloadToken((token) => token + 1);
-    } catch (error) {
-      const message = extractErrorMessage(error);
-      setAmendState((prev) => ({ ...prev, submitting: false, error: message }));
-    }
+    setAmendState((prev) => ({ ...prev, formTime: nextValue, error: null }));
+    setAmendEmailPreviewState(createDefaultAmendEmailPreviewState());
   };
 
   const handleReconcileSubmit = async () => {
@@ -2773,6 +2822,140 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     return pickPartialRefundTemplate(templates);
   };
 
+  const closeAmendEmailPreview = () => {
+    if (amendEmailPreviewState.loading || amendEmailPreviewState.submitting) {
+      return;
+    }
+    setAmendEmailPreviewState(createDefaultAmendEmailPreviewState());
+  };
+
+  const resolveDateChangeTemplateForAmendPreview = async (): Promise<EmailTemplate | null> => {
+    const existingTemplate = pickDateChangeTemplate(mailTemplateState.templates);
+    if (existingTemplate) {
+      return existingTemplate;
+    }
+    const response = await axiosInstance.get<EmailTemplateListResponse>("/email-templates", {
+      withCredentials: true,
+    });
+    const templates = Array.isArray(response.data?.templates) ? response.data.templates : [];
+    return pickDateChangeTemplate(templates);
+  };
+
+  const submitAmendBookingUpdate = async (): Promise<{
+    pickupDate: string;
+    pickupTime: string;
+  }> => {
+    if (!amendState.bookingId) {
+      throw new Error("Missing OmniLodge booking reference.");
+    }
+    if (!amendState.formDate || !amendState.formTime) {
+      throw new Error("Pickup date and time are required.");
+    }
+    if (!amendState.mode) {
+      throw new Error("Amend is not supported for this platform.");
+    }
+    const normalizedTime = normalizeTimeInput(amendState.formTime);
+    if (!normalizedTime) {
+      throw new Error("Please provide a valid pickup time (HH:mm).");
+    }
+    const pickupDate = dayjs(amendState.formDate).format(DATE_FORMAT);
+    const endpoint =
+      amendState.mode === "ecwid"
+        ? `/bookings/${amendState.bookingId}/amend-ecwid`
+        : `/bookings/${amendState.bookingId}/amend-xperience`;
+    await axiosInstance.post(endpoint, {
+      pickupDate,
+      pickupTime: normalizedTime,
+    });
+    return { pickupDate, pickupTime: normalizedTime };
+  };
+
+  const buildAmendDateChangeEmailPayload = async (): Promise<{
+    payload: EmailTemplateRenderRequestPayload;
+    templateName: string | null;
+  }> => {
+    if (!amendState.order) {
+      throw new Error("Date change email requires an open amend booking.");
+    }
+    if (!amendState.formDate) {
+      throw new Error("Pickup date is required.");
+    }
+
+    const normalizedTime = normalizeTimeInput(amendState.formTime);
+    if (!normalizedTime) {
+      throw new Error("Please provide a valid pickup time (HH:mm).");
+    }
+
+    const customerEmail = String(amendState.order.customerEmail ?? "").trim();
+    if (!customerEmail) {
+      throw new Error("Customer email is required to send the date change confirmation.");
+    }
+
+    const nextDate = dayjs(amendState.formDate).format(DATE_FORMAT);
+    const nextTime = normalizedTime;
+    const previousDate = String(amendState.order.date ?? "").trim();
+    const previousTime = normalizeTimeInput(String(amendState.order.timeslot ?? "")) ?? "";
+    const previousDateDisplay = formatManifestDateLabel(previousDate);
+    const nextDateDisplay = formatManifestDateLabel(nextDate);
+    const previousDateTimeDisplay = previousTime ? `${previousDateDisplay} at ${previousTime}` : previousDateDisplay;
+    const nextDateTimeDisplay = nextTime ? `${nextDateDisplay} at ${nextTime}` : nextDateDisplay;
+
+    const baseContext = buildMailTemplateContextFromOrder(amendState.order, customerEmail);
+    const bookingReference = String(baseContext.bookingReference ?? "").trim() || "booking";
+    const context: Record<string, unknown> = {
+      ...baseContext,
+      templateKey: "date_change",
+      changeType: "date_change",
+      previousDate,
+      previousTime,
+      previousDateDisplay,
+      previousDateTimeDisplay,
+      newDate: nextDate,
+      newTime: nextTime,
+      newDateDisplay: nextDateDisplay,
+      newDateTimeDisplay: nextDateTimeDisplay,
+      amendedFromDate: previousDate,
+      amendedFromTime: previousTime,
+      amendedFromDateDisplay: previousDateDisplay,
+      amendedFromDateTimeDisplay: previousDateTimeDisplay,
+      amendedToDate: nextDate,
+      amendedToTime: nextTime,
+      amendedToDateDisplay: nextDateDisplay,
+      amendedToDateTimeDisplay: nextDateTimeDisplay,
+      bookingDate: nextDate,
+      bookingDateDisplay: nextDateDisplay,
+      bookingTime: nextTime,
+      experienceDate: nextDateDisplay,
+      experienceDateTime: nextDateTimeDisplay,
+    };
+
+    const dateChangeTemplate = await resolveDateChangeTemplateForAmendPreview();
+    const templateContextForRequest: Record<string, unknown> = { ...context };
+    if (
+      dateChangeTemplate &&
+      dateChangeTemplate.templateType === "react_email" &&
+      isReactEmailSource(dateChangeTemplate.bodyTemplate)
+    ) {
+      templateContextForRequest.reactTemplateSource = dateChangeTemplate.bodyTemplate;
+    }
+
+    const payload: EmailTemplateRenderRequestPayload = {
+      to: customerEmail,
+      templateContext: templateContextForRequest,
+    };
+    if (dateChangeTemplate) {
+      payload.templateId = dateChangeTemplate.id;
+    } else {
+      payload.subject = `Pub Crawl Date Change - Booking ${bookingReference}`;
+      payload.body = `Your Pub Crawl booking ${bookingReference} has been updated from ${previousDateTimeDisplay || "-"} to ${nextDateTimeDisplay || "-"}.`;
+    }
+
+    return {
+      payload,
+      templateName: dateChangeTemplate?.name ?? null,
+    };
+  };
+
   const buildPartialRefundEmailPayload = async (): Promise<{
     payload: EmailTemplateRenderRequestPayload;
     templateName: string | null;
@@ -3131,6 +3314,128 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         data: null,
         templateName: null,
       });
+    }
+  };
+
+  const handlePreviewAmendEmail = async () => {
+    if (amendState.submitting || !amendState.opened) {
+      return;
+    }
+
+    const normalizedTime = normalizeTimeInput(amendState.formTime);
+    const proposedDate = amendState.formDate ? dayjs(amendState.formDate).format(DATE_FORMAT) : "";
+    const originalDate = String(amendState.order?.date ?? "").trim();
+    const originalTime = normalizeTimeInput(String(amendState.order?.timeslot ?? "")) ?? "";
+    const hasScheduleChange =
+      Boolean(amendState.formDate && normalizedTime) &&
+      (proposedDate !== originalDate || normalizedTime !== originalTime);
+    if (!hasScheduleChange) {
+      setAmendState((prev) => ({
+        ...prev,
+        error: "Preview is available only after changing pickup date or time.",
+      }));
+      return;
+    }
+
+    setAmendEmailPreviewState((prev) => ({
+      ...prev,
+      opened: true,
+      loading: true,
+      submitting: false,
+      error: null,
+      data: null,
+      templateName: null,
+    }));
+
+    try {
+      const preparedEmail = await buildAmendDateChangeEmailPayload();
+      const response = await axiosInstance.post<MailComposerPreviewResponse>(
+        "/bookings/emails/render-preview",
+        preparedEmail.payload,
+        { withCredentials: true },
+      );
+      setAmendEmailPreviewState({
+        opened: true,
+        loading: false,
+        submitting: false,
+        error: null,
+        data: response.data,
+        templateName: preparedEmail.templateName,
+      });
+    } catch (error) {
+      setAmendEmailPreviewState({
+        opened: true,
+        loading: false,
+        submitting: false,
+        error: extractErrorMessage(error),
+        data: null,
+        templateName: null,
+      });
+    }
+  };
+
+  const handleConfirmAmendFromPreview = async () => {
+    if (amendEmailPreviewState.loading || amendEmailPreviewState.submitting) {
+      return;
+    }
+
+    setAmendEmailPreviewState((prev) => ({
+      ...prev,
+      submitting: true,
+      error: null,
+    }));
+    setAmendState((prev) => ({
+      ...prev,
+      submitting: true,
+      error: null,
+    }));
+
+    try {
+      const preparedEmail = await buildAmendDateChangeEmailPayload();
+      await submitAmendBookingUpdate();
+      try {
+        await axiosInstance.post("/bookings/emails/send", preparedEmail.payload, {
+          withCredentials: true,
+        });
+      } catch (emailError) {
+        const message = `Booking was updated, but sending the date change email failed: ${extractErrorMessage(emailError)}`;
+        setAmendEmailPreviewState((prev) => ({
+          ...prev,
+          submitting: false,
+          error: message,
+        }));
+        setAmendState((prev) => ({
+          ...prev,
+          submitting: false,
+          error: message,
+        }));
+        setReloadToken((token) => token + 1);
+        return;
+      }
+
+      setAmendEmailPreviewState(createDefaultAmendEmailPreviewState());
+      setAmendState(createDefaultAmendState());
+      setAmendPreview(createDefaultAmendPreview());
+      setReconcileState((prev) => ({
+        ...prev,
+        itemIndex: null,
+        loading: false,
+        error: null,
+        success: null,
+      }));
+      setReloadToken((token) => token + 1);
+    } catch (error) {
+      const message = extractErrorMessage(error);
+      setAmendEmailPreviewState((prev) => ({
+        ...prev,
+        submitting: false,
+        error: message,
+      }));
+      setAmendState((prev) => ({
+        ...prev,
+        submitting: false,
+        error: message,
+      }));
     }
   };
 
@@ -4506,6 +4811,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const cancelRefundPreviewBody = cancelRefundEmailPreviewState.data?.textBody ?? null;
   const partialRefundPreviewHtml = partialRefundEmailPreviewState.data?.htmlBody ?? null;
   const partialRefundPreviewBody = partialRefundEmailPreviewState.data?.textBody ?? null;
+  const amendEmailPreviewHtml = amendEmailPreviewState.data?.htmlBody ?? null;
+  const amendEmailPreviewBody = amendEmailPreviewState.data?.textBody ?? null;
   const partialRefundAmountValue = Number(partialRefundState.amount ?? 0);
   const partialRefundRemainingMajor = getPartialRefundRemainingAmountMajor(partialRefundState.preview);
   const partialRefundHasPositiveAmount = partialRefundAmountValue > 0;
@@ -4527,6 +4834,21 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     !partialRefundState.submitting &&
     partialRefundHasPositiveAmount &&
     (partialRefundShouldProceedToCancel || partialRefundHasCustomerEmail);
+  const amendOriginalDate = String(amendState.order?.date ?? "").trim();
+  const amendOriginalTime = normalizeTimeInput(String(amendState.order?.timeslot ?? "")) ?? "";
+  const amendProposedDate = amendState.formDate ? dayjs(amendState.formDate).format(DATE_FORMAT) : "";
+  const amendProposedTime = normalizeTimeInput(amendState.formTime);
+  const amendHasRequiredScheduleFields = Boolean(amendState.formDate && amendProposedTime);
+  const amendHasPendingScheduleChange =
+    amendHasRequiredScheduleFields &&
+    (amendProposedDate !== amendOriginalDate || amendProposedTime !== amendOriginalTime);
+  const amendHasCustomerEmail = Boolean(String(amendState.order?.customerEmail ?? "").trim());
+  const amendCanPreviewEmail =
+    Boolean(amendState.opened && amendState.mode && amendState.bookingId) &&
+    !amendState.submitting &&
+    amendHasRequiredScheduleFields &&
+    amendHasPendingScheduleChange &&
+    amendHasCustomerEmail;
   const mailTemplateOptions = useMemo(
     () =>
       mailTemplateState.templates.map((template) => ({
@@ -5870,23 +6192,100 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
             required
             placeholder="HH:mm"
           />
+          {amendState.mode && !amendHasCustomerEmail && (
+            <Alert color="yellow" title="Missing customer email">
+              Date change email preview is unavailable because this booking has no customer email.
+            </Alert>
+          )}
+          {amendHasRequiredScheduleFields && !amendHasPendingScheduleChange && (
+            <Alert color="blue" title="No changes detected">
+              Update pickup date or time to enable email preview.
+            </Alert>
+          )}
           {amendState.error && (
             <Alert color="red" title="Unable to update booking">
               {amendState.error}
             </Alert>
           )}
           <Group justify="flex-end">
-            <Button variant="default" onClick={closeAmendModal}>
-              Cancel
-            </Button>
             <Button
-              onClick={handleAmendSubmit}
-              loading={amendState.submitting}
-              disabled={!amendState.formDate || !amendState.formTime || amendState.submitting}
+              onClick={() => {
+                void handlePreviewAmendEmail();
+              }}
+              loading={amendEmailPreviewState.loading}
+              disabled={!amendCanPreviewEmail}
             >
-              Save changes
+              Preview Email
             </Button>
           </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={amendEmailPreviewState.opened}
+        onClose={closeAmendEmailPreview}
+        title="Date change email preview"
+        fullScreen
+        centered
+      >
+        <Stack gap="sm">
+          {amendEmailPreviewState.error ? (
+            <Alert color="red" title="Failed to process amend action">
+              {amendEmailPreviewState.error}
+            </Alert>
+          ) : null}
+          {amendEmailPreviewState.loading ? (
+            <Box style={{ minHeight: 120 }}>
+              <Loader variant="dots" />
+            </Box>
+          ) : null}
+          {amendEmailPreviewState.data ? (
+            <>
+              <Stack gap={4}>
+                <Text fw={600}>{amendEmailPreviewState.data.subject || "No subject"}</Text>
+                <Text size="sm" c="dimmed">
+                  {amendEmailPreviewState.templateName
+                    ? `Template: ${amendEmailPreviewState.templateName}`
+                    : "Template: Inline fallback"}
+                </Text>
+              </Stack>
+              {amendEmailPreviewHtml ? (
+                <Box style={{ height: "calc(100vh - 300px)" }}>
+                  <iframe
+                    title="Date change email preview"
+                    srcDoc={amendEmailPreviewHtml}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 8,
+                    }}
+                  />
+                </Box>
+              ) : amendEmailPreviewBody ? (
+                <Paper withBorder radius="md" p="sm" bg="#f8fafc">
+                  <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
+                    {amendEmailPreviewBody}
+                  </Text>
+                </Paper>
+              ) : (
+                <Alert color="yellow" title="No preview content">
+                  No email preview content available.
+                </Alert>
+              )}
+              <Group justify="flex-end">
+                <Button
+                  onClick={() => {
+                    void handleConfirmAmendFromPreview();
+                  }}
+                  loading={amendEmailPreviewState.submitting}
+                  disabled={amendEmailPreviewState.loading || !amendEmailPreviewState.data}
+                >
+                  Save Changes
+                </Button>
+              </Group>
+            </>
+          ) : null}
         </Stack>
       </Modal>
 
