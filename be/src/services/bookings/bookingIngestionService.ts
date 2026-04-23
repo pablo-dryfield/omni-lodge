@@ -581,6 +581,14 @@ const updateEmailStatus = async (email: BookingEmail, status: string, failureRea
 
 const cleanupIgnoredReprocessArtifacts = async (email: BookingEmail): Promise<void> => {
   await sequelize.transaction(async (transaction) => {
+    const normalizeIdToken = (value: unknown): string | null => {
+      if (value === null || value === undefined) {
+        return null;
+      }
+      const token = String(value).trim();
+      return token.length > 0 ? token : null;
+    };
+
     const emailEvents = await BookingEvent.findAll({
       where: {
         [Op.or]: [{ emailId: email.id }, { emailMessageId: email.messageId }],
@@ -589,16 +597,35 @@ const cleanupIgnoredReprocessArtifacts = async (email: BookingEmail): Promise<vo
       transaction,
     });
 
-    if (emailEvents.length === 0) {
+    const bookingsByLastEmailMessage = await Booking.findAll({
+      where: { lastEmailMessageId: email.messageId },
+      attributes: ['id'],
+      transaction,
+    });
+    const forcedBookingIds = Array.from(
+      new Set(
+        bookingsByLastEmailMessage
+          .map((booking) => normalizeIdToken(booking.id))
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+
+    if (emailEvents.length === 0 && forcedBookingIds.length === 0) {
       return;
     }
 
-    const eventIds = emailEvents.map((event) => event.id);
+    const eventIds = Array.from(
+      new Set(
+        emailEvents
+          .map((event) => normalizeIdToken(event.id))
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
     const bookingIds = Array.from(
       new Set(
         emailEvents
-          .map((event) => event.bookingId)
-          .filter((bookingId): bookingId is number => Number.isFinite(bookingId)),
+          .map((event) => normalizeIdToken(event.bookingId))
+          .filter((value): value is string => Boolean(value)),
       ),
     );
 
@@ -613,23 +640,52 @@ const cleanupIgnoredReprocessArtifacts = async (email: BookingEmail): Promise<vo
       });
     }
 
-    if (bookingIds.length === 0) {
+    if (forcedBookingIds.length > 0) {
+      const forcedBookingEventRows = await BookingEvent.findAll({
+        where: { bookingId: { [Op.in]: forcedBookingIds } },
+        attributes: ['id'],
+        transaction,
+      });
+      const forcedBookingEventIds = Array.from(
+        new Set(
+          forcedBookingEventRows
+            .map((event) => normalizeIdToken(event.id))
+            .filter((value): value is string => Boolean(value)),
+        ),
+      );
+      if (forcedBookingEventIds.length > 0) {
+        await BookingAddon.destroy({
+          where: { sourceEventId: { [Op.in]: forcedBookingEventIds } },
+          transaction,
+        });
+      }
+      await BookingEvent.destroy({
+        where: { bookingId: { [Op.in]: forcedBookingIds } },
+        transaction,
+      });
+    }
+
+    const candidateBookingIds = Array.from(new Set([...bookingIds, ...forcedBookingIds]));
+    if (candidateBookingIds.length === 0) {
       return;
     }
 
     const bookingsWithRemainingEvents = await BookingEvent.findAll({
-      where: { bookingId: { [Op.in]: bookingIds } },
+      where: { bookingId: { [Op.in]: candidateBookingIds } },
       attributes: ['bookingId'],
       group: ['bookingId'],
       transaction,
       raw: true,
     });
-    const bookingIdsWithRemainingEvents = new Set<number>(
+    const bookingIdsWithRemainingEvents = new Set<string>(
       bookingsWithRemainingEvents
-        .map((entry) => Number((entry as { bookingId?: unknown }).bookingId))
-        .filter((bookingId) => Number.isFinite(bookingId)),
+        .map((entry) => normalizeIdToken((entry as { bookingId?: unknown }).bookingId))
+        .filter((value): value is string => Boolean(value)),
     );
-    const orphanBookingIds = bookingIds.filter((bookingId) => !bookingIdsWithRemainingEvents.has(bookingId));
+    const forcedBookingIdSet = new Set(forcedBookingIds);
+    const orphanBookingIds = candidateBookingIds.filter(
+      (bookingId) => forcedBookingIdSet.has(bookingId) || !bookingIdsWithRemainingEvents.has(bookingId),
+    );
 
     if (orphanBookingIds.length === 0) {
       return;
