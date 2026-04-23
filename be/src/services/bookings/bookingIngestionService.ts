@@ -1090,6 +1090,13 @@ const applyParsedEvent = async (
     delete bookingFields.addonsExtrasDelta;
 
     const patch = normalizePatch(bookingFields);
+    if (event.status === 'cancelled') {
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null) {
+          delete patch[key];
+        }
+      }
+    }
     if (Object.keys(patch).length > 0) {
       bookingRecord.set(patch);
     }

@@ -30,6 +30,53 @@ const MONEY_SYMBOLS: Record<string, string> = {
 
 const FREETOUR_DATE_FORMATS = ['h:mm A MMMM D, YYYY', 'h:mm A MMM D, YYYY', 'h:mm A MMMM D YYYY'];
 
+const isPaidReservationSubject = (subject: string): boolean =>
+  /paid reservation from freetour\.com/i.test(subject);
+
+const isCancellationSubject = (subject: string): boolean =>
+  /\bcancellation\b/i.test(subject);
+
+const isFreeTourDomainSender = (from: string): boolean =>
+  /@(?:news\.)?freetour\.com/i.test(from);
+
+const isFreeTourBookingsSender = (from: string): boolean =>
+  /bookings@freetour\.com/i.test(from);
+
+const extractPaidReservationBookingId = (
+  subject: string,
+  text: string,
+): string | null => {
+  const subjectMatch = subject.match(/booking id:\s*([0-9-]{8,})/i);
+  if (subjectMatch?.[1]) {
+    return subjectMatch[1].trim();
+  }
+  const bodyReference = extractField(text, 'Booking Reference Number:', ['Booking Total Cost:']);
+  if (bodyReference && /^[0-9-]{8,}$/.test(bodyReference.trim())) {
+    return bodyReference.trim();
+  }
+  const bodyBookingId = text.match(/\bbooking id[:#]?\s*([0-9-]{8,})/i);
+  if (bodyBookingId?.[1]) {
+    return bodyBookingId[1].trim();
+  }
+  return null;
+};
+
+const extractCancellationBookingId = (subject: string, text: string): string | null => {
+  const bodyMatch = text.match(/\bbooking\s*\(#([0-9-]{8,})\)/i);
+  if (bodyMatch?.[1]) {
+    return bodyMatch[1].trim();
+  }
+  const subjectMatch = subject.match(/#([0-9-]{8,})/);
+  if (subjectMatch?.[1]) {
+    return subjectMatch[1].trim();
+  }
+  const hashFallback = text.match(/#([0-9-]{8,})/);
+  if (hashFallback?.[1]) {
+    return hashFallback[1].trim();
+  }
+  return null;
+};
+
 const extractField = (text: string, label: string, nextLabels: string[]): string | null => {
   const lowerText = text.toLowerCase();
   const lowerLabel = label.toLowerCase();
@@ -154,25 +201,22 @@ export class FreeTourBookingParser implements BookingEmailParser {
     const subject = context.subject ?? '';
     const fromMatch = /freetour/i.test(from);
     const subjectMatch = /freetour/i.test(subject);
+    const freeTourSender = isFreeTourDomainSender(from);
+    const paidReservationTemplate = isPaidReservationSubject(subject) && isFreeTourBookingsSender(from);
+    const cancellationTemplate = isCancellationSubject(subject) && freeTourSender;
     const text = context.textBody || context.rawTextBody || context.snippet || '';
-    let bookingReference =
-      text && extractField(text, 'Booking Reference Number:', ['Booking Total Cost:']);
-    if (!bookingReference && text) {
-      const inlineMatch = text.match(/#([\w-]{6,})/);
-      if (inlineMatch) {
-        bookingReference = inlineMatch[1];
-      }
-    }
-    if (!bookingReference && subject) {
-      const subjectMatchRef = subject.match(/#([\w-]{6,})/);
-      if (subjectMatchRef) {
-        bookingReference = subjectMatchRef[1];
-      }
-    }
+    const bookingReference = paidReservationTemplate
+      ? extractPaidReservationBookingId(subject, text)
+      : cancellationTemplate
+        ? extractCancellationBookingId(subject, text)
+        : null;
 
     const canParseChecks: BookingParserCheck[] = [
       { label: 'from matches /freetour/i', passed: fromMatch, value: from },
       { label: 'subject matches /freetour/i', passed: subjectMatch, value: subject },
+      { label: 'sender is @freetour.com', passed: freeTourSender, value: from },
+      { label: 'matches paid reservation template', passed: paidReservationTemplate, value: subject },
+      { label: 'matches cancellation template', passed: cancellationTemplate, value: subject },
     ];
     const parseChecks: BookingParserCheck[] = [
       { label: 'text body present', passed: Boolean(text) },
@@ -181,7 +225,7 @@ export class FreeTourBookingParser implements BookingEmailParser {
 
     return {
       name: this.name,
-      canParse: fromMatch || subjectMatch,
+      canParse: paidReservationTemplate || cancellationTemplate,
       canParseChecks,
       parseChecks,
     };
@@ -196,26 +240,22 @@ export class FreeTourBookingParser implements BookingEmailParser {
   }
 
   async parse(context: BookingParserContext): Promise<ParsedBookingEvent | null> {
+    const from = context.from ?? context.headers.from ?? '';
+    const subject = context.subject ?? '';
     const text = context.textBody || context.rawTextBody || context.snippet || '';
     if (!text) {
       return null;
     }
 
-    let bookingReference = extractField(text, 'Booking Reference Number:', ['Booking Total Cost:']);
-
-    if (!bookingReference) {
-      const inlineMatch = text.match(/#([\w-]{6,})/);
-      if (inlineMatch) {
-        bookingReference = inlineMatch[1];
-      }
+    const paidReservationTemplate = isPaidReservationSubject(subject) && isFreeTourBookingsSender(from);
+    const cancellationTemplate = isCancellationSubject(subject) && isFreeTourDomainSender(from);
+    if (!paidReservationTemplate && !cancellationTemplate) {
+      return null;
     }
 
-    if (!bookingReference && context.subject) {
-      const subjectMatch = context.subject.match(/#([\w-]{6,})/);
-      if (subjectMatch) {
-        bookingReference = subjectMatch[1];
-      }
-    }
+    const bookingReference = paidReservationTemplate
+      ? extractPaidReservationBookingId(subject, text)
+      : extractCancellationBookingId(subject, text);
 
     if (!bookingReference) {
       return null;
@@ -228,6 +268,12 @@ export class FreeTourBookingParser implements BookingEmailParser {
     } else {
       const fallback = text.match(/([A-Za-z0-9 .,'-]+?)\s+Tour Reservation/i);
       productName = fallback?.[1]?.trim() ?? null;
+    }
+    if (!productName && cancellationTemplate) {
+      const cancelSubjectMatch = subject.match(/cancellation:\s*(.+)$/i);
+      if (cancelSubjectMatch?.[1]) {
+        productName = cancelSubjectMatch[1].trim();
+      }
     }
 
     const dateRaw = extractField(text, 'Date of the Tour:', ['Language:']);
@@ -251,10 +297,14 @@ export class FreeTourBookingParser implements BookingEmailParser {
     let parsedDate: dayjs.Dayjs | null = null;
     if (normalizedDate) {
       for (const format of FREETOUR_DATE_FORMATS) {
-        const candidate = dayjs.tz(normalizedDate, format, FREETOUR_TIMEZONE);
-        if (candidate.isValid()) {
-          parsedDate = candidate;
-          break;
+        try {
+          const candidate = dayjs.tz(normalizedDate, format, FREETOUR_TIMEZONE);
+          if (candidate.isValid()) {
+            parsedDate = candidate;
+            break;
+          }
+        } catch {
+          // Ignore parse errors for non-standard date tokens and keep trying next format.
         }
       }
     }
