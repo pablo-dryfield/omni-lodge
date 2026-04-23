@@ -1,5 +1,9 @@
 import type { Transaction } from 'sequelize';
 import { Op } from 'sequelize';
+import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat.js';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 import sequelize from '../../config/database.js';
 import BookingEmail from '../../models/BookingEmail.js';
 import Booking from '../../models/Booking.js';
@@ -23,8 +27,17 @@ import { canonicalizeProductLabel, sanitizeProductSource } from '../../utils/pro
 import { getConfigValue } from '../configService.js';
 import { syncEcwidBookingUtmByBookingId } from './ecwidUtmSyncService.js';
 
+dayjs.extend(customParseFormat);
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
 const FALLBACK_QUERY =
   '(subject:(booking OR reservation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR airbnb.com OR airbnbmail.com))';
+
+const DEFAULT_BOOKING_TIMEZONE =
+  (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ?? 'Europe/Warsaw';
+const VIATOR_TIMEZONE =
+  (getConfigValue('VIATOR_TIMEZONE') as string | null) ?? DEFAULT_BOOKING_TIMEZONE;
 
 const resolveDefaultQuery = (): string =>
   (getConfigValue('BOOKING_GMAIL_QUERY') as string) ?? FALLBACK_QUERY;
@@ -820,6 +833,40 @@ const syncAddons = async (
 const isValidDateValue = (value: unknown): value is Date =>
   value instanceof Date && Number.isFinite(value.valueOf());
 
+const deriveViatorAmendedStartAt = (
+  booking: Booking,
+  patch: Record<string, unknown>,
+  event: ParsedBookingEvent,
+): Date | null => {
+  if (event.platform !== 'viator' || event.status !== 'amended') {
+    return null;
+  }
+  if (patch.experienceStartAt !== undefined && patch.experienceStartAt !== null) {
+    return null;
+  }
+  const nextDate =
+    typeof patch.experienceDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(patch.experienceDate.trim())
+      ? patch.experienceDate.trim()
+      : null;
+  if (!nextDate) {
+    return null;
+  }
+  if (!isValidDateValue(booking.experienceStartAt)) {
+    return null;
+  }
+
+  const currentStartAt = dayjs(booking.experienceStartAt).tz(VIATOR_TIMEZONE);
+  if (!currentStartAt.isValid()) {
+    return null;
+  }
+  const nextStartAt = dayjs.tz(
+    `${nextDate} ${currentStartAt.format('HH:mm:ss')}`,
+    'YYYY-MM-DD HH:mm:ss',
+    VIATOR_TIMEZONE,
+  );
+  return nextStartAt.isValid() ? nextStartAt.toDate() : null;
+};
+
 const normalizeNameForMatch = (value: unknown): string | null => {
   if (typeof value !== 'string') {
     return null;
@@ -1097,6 +1144,12 @@ const applyParsedEvent = async (
         }
       }
     }
+
+    const derivedViatorStartAt = deriveViatorAmendedStartAt(bookingRecord, patch, event);
+    if (derivedViatorStartAt) {
+      patch.experienceStartAt = derivedViatorStartAt;
+    }
+
     if (Object.keys(patch).length > 0) {
       bookingRecord.set(patch);
     }
