@@ -33,6 +33,34 @@ const MONEY_SYMBOLS: Record<string, string> = {
 
 const normalizeWhitespace = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
+const GYG_BOOKING_ID_PATTERN = /\bGYG[A-Z0-9]{8,}\b/gi;
+
+const TRANSACTIONAL_SUBJECT_PATTERNS: RegExp[] = [
+  /\bbooking\s*-\s*S\d+\s*-\s*GYG[A-Z0-9]{8,}\b/i,
+  /\burgent:\s*new booking received\s*-\s*S\d+\s*-\s*GYG[A-Z0-9]{8,}\b/i,
+  /\bbooking detail change:\s*-\s*S\d+\s*-\s*GYG[A-Z0-9]{8,}\b/i,
+  /\ba booking has been cancel(?:ed|led)\s*-\s*S\d+\s*-\s*GYG[A-Z0-9]{8,}\b/i,
+  /\bGYG[A-Z0-9]{8,}\s+was\s+cancel(?:ed|led)\b/i,
+];
+
+const TRANSACTIONAL_BODY_MARKERS: RegExp[] = [
+  /\byour offer has been booked\b/i,
+  /\bthe following booking has changed\b/i,
+  /\bbooking detail change\b/i,
+  /\breference number[:\s]+GYG[A-Z0-9]{8,}\b/i,
+  /\bbooking reference[:\s]+GYG[A-Z0-9]{8,}\b/i,
+  /\bGYG[A-Z0-9]{8,}\s+was\s+cancel(?:ed|led)\b/i,
+];
+
+const isNotificationSender = (from: string): boolean =>
+  /@notification\.getyourguide\.com\b/i.test(from);
+
+const isTransactionalSubject = (subject: string): boolean =>
+  TRANSACTIONAL_SUBJECT_PATTERNS.some((pattern) => pattern.test(subject));
+
+const hasTransactionalBodyMarker = (text: string): boolean =>
+  TRANSACTIONAL_BODY_MARKERS.some((pattern) => pattern.test(text));
+
 const addonKeywordMatchers: Array<{ test: RegExp; field: 'tshirts' | 'cocktails' | 'photos' }> = [
   { test: /cocktail|open\s+bar|vip entry/i, field: 'cocktails' },
   { test: /instant\s+photos?/i, field: 'photos' },
@@ -159,12 +187,22 @@ const parseMoney = (input: string): { currency: string | null; amount: number | 
 };
 
 const extractBookingId = (text: string, subject?: string | null): string | null => {
-  const referenceMatch = text.match(/Reference number[:\s]+([A-Z0-9]+)/i);
+  const referenceMatch =
+    text.match(/Reference number[:\s]+(GYG[A-Z0-9]{8,})/i) ??
+    text.match(/Reference Number[:\s]+(GYG[A-Z0-9]{8,})/i) ??
+    text.match(/Booking reference[:\s]+(GYG[A-Z0-9]{8,})/i) ??
+    text.match(/\b(GYG[A-Z0-9]{8,})\s+was\s+cancel(?:ed|led)\b/i);
   if (referenceMatch?.[1]) {
     return referenceMatch[1];
   }
+
+  const textMatch = text.match(GYG_BOOKING_ID_PATTERN);
+  if (textMatch && textMatch.length > 0) {
+    return textMatch[textMatch.length - 1];
+  }
+
   if (subject) {
-    const subjectMatch = subject.match(/[A-Z0-9]{10,}/g);
+    const subjectMatch = subject.match(GYG_BOOKING_ID_PATTERN);
     if (subjectMatch && subjectMatch.length > 0) {
       return subjectMatch[subjectMatch.length - 1];
     }
@@ -387,14 +425,20 @@ export class GetYourGuideBookingParser implements BookingEmailParser {
   private buildDiagnostics(context: BookingParserContext): BookingParserDiagnostics {
     const from = context.from ?? context.headers.from ?? '';
     const subject = context.subject ?? '';
-    const fromMatch = /getyourguide/i.test(from);
-    const subjectMatch = /getyourguide/i.test(subject);
+    const senderMatch = isNotificationSender(from);
+    const subjectMatch = isTransactionalSubject(subject);
     const text = normalizeWhitespace(context.textBody || context.rawTextBody || context.snippet || '');
+    const bodyMatch = text ? hasTransactionalBodyMarker(text) : false;
     const bookingId = text ? extractBookingId(text, subject) : null;
 
     const canParseChecks: BookingParserCheck[] = [
-      { label: 'from matches /getyourguide/i', passed: fromMatch, value: from },
-      { label: 'subject matches /getyourguide/i', passed: subjectMatch, value: subject },
+      {
+        label: 'from matches @notification.getyourguide.com',
+        passed: senderMatch,
+        value: from,
+      },
+      { label: 'subject matches transactional template', passed: subjectMatch, value: subject },
+      { label: 'text matches transactional marker', passed: bodyMatch },
     ];
     const parseChecks: BookingParserCheck[] = [
       { label: 'text body present', passed: Boolean(text) },
@@ -403,7 +447,7 @@ export class GetYourGuideBookingParser implements BookingEmailParser {
 
     return {
       name: this.name,
-      canParse: fromMatch || subjectMatch,
+      canParse: senderMatch && (subjectMatch || bodyMatch) && Boolean(bookingId),
       canParseChecks,
       parseChecks,
     };
@@ -418,6 +462,10 @@ export class GetYourGuideBookingParser implements BookingEmailParser {
   }
 
   async parse(context: BookingParserContext): Promise<ParsedBookingEvent | null> {
+    const diagnostics = this.buildDiagnostics(context);
+    if (!diagnostics.canParse) {
+      return null;
+    }
     const text = normalizeWhitespace(context.textBody || context.rawTextBody || context.snippet || '');
     if (!text) {
       return null;
