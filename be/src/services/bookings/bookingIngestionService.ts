@@ -955,14 +955,42 @@ const applyParsedEvent = async (
 ): Promise<number> => {
   const bookingId = await sequelize.transaction(async (transaction) => {
     const eventOccurredAt = event.occurredAt ?? event.sourceReceivedAt ?? email.receivedAt ?? new Date();
-    const priorEvent =
-      options.isReprocess && email.messageId
-        ? await BookingEvent.findOne({
-            where: { emailMessageId: email.messageId, platform: event.platform },
-            order: [['id', 'DESC']],
-            transaction,
-          })
-        : null;
+    let priorEvent: BookingEvent | null = null;
+    if (options.isReprocess && email.messageId) {
+      const priorEventForSameBooking = await BookingEvent.findOne({
+        where: { emailMessageId: email.messageId, platform: event.platform },
+        include: [
+          {
+            model: Booking,
+            as: 'booking',
+            required: true,
+            attributes: ['id', 'platform', 'platformBookingId'],
+            where: {
+              platform: event.platform,
+              platformBookingId: event.platformBookingId,
+            },
+          },
+        ],
+        order: [['id', 'DESC']],
+        transaction,
+      });
+
+      if (priorEventForSameBooking) {
+        priorEvent = priorEventForSameBooking;
+      } else {
+        // Fallback only for one-event emails where booking ID normalization changed on reprocess.
+        const fallbackCandidates = await BookingEvent.findAll({
+          where: { emailMessageId: email.messageId, platform: event.platform },
+          attributes: ['id', 'bookingId'],
+          order: [['id', 'DESC']],
+          limit: 2,
+          transaction,
+        });
+        if (fallbackCandidates.length === 1) {
+          priorEvent = fallbackCandidates[0];
+        }
+      }
+    }
 
     let booking = await Booking.findOne({
       where: {

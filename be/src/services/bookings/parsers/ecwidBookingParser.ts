@@ -129,14 +129,54 @@ const currencyFromToken = (token: string | null): string | null => {
   return null;
 };
 
-const parseOrderTotals = (text: string): { total: number | null; currency: string | null } => {
-  const match = text.match(/Total\s+([\d\s.,-]+)\s*([^\s\d]+)/i);
+type ParsedCoupon = {
+  code: string | null;
+  amount: number | null;
+};
+
+type ParsedOrderSummary = {
+  subtotal: number | null;
+  total: number | null;
+  coupon: ParsedCoupon | null;
+  currency: string | null;
+};
+
+const parseLabeledAmount = (
+  text: string,
+  label: 'Subtotal' | 'Total',
+): { amount: number | null; currency: string | null } => {
+  const match = text.match(new RegExp(`${label}\\s+([\\d\\s.,-]+)(?:\\s*([^\\s\\d]+))?`, 'i'));
   if (!match) {
-    return { total: null, currency: null };
+    return { amount: null, currency: null };
   }
   return {
-    total: parseNumber(match[1]) ?? null,
-    currency: currencyFromToken(match[2]),
+    amount: parseNumber(match[1]) ?? null,
+    currency: currencyFromToken(match[2] ?? null),
+  };
+};
+
+const parseCoupon = (text: string): ParsedCoupon | null => {
+  const match = text.match(/(?:Coupon|Discount)\s*\(([^)]+)\)\s*(-?[\d\s.,]+)/i);
+  if (!match) {
+    return null;
+  }
+  const code = normalizeText(match[1] ?? '');
+  return {
+    code: code || null,
+    amount: parseNumber(match[2]) ?? null,
+  };
+};
+
+const parseOrderSummary = (text: string): ParsedOrderSummary => {
+  const subtotal = parseLabeledAmount(text, 'Subtotal');
+  const total = parseLabeledAmount(text, 'Total');
+  const coupon = parseCoupon(text);
+  const currency = subtotal.currency ?? total.currency ?? null;
+  return {
+    subtotal: subtotal.amount,
+    total: total.amount,
+    coupon,
+    currency,
   };
 };
 
@@ -486,6 +526,29 @@ const buildExperienceMoment = (dateRaw: string | null, timeRaw: string | null): 
   return { experienceDate: null, startAt: null };
 };
 
+const roundMoney = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const splitAmountAcrossItems = (totalAmount: number, itemsCount: number): number[] => {
+  if (itemsCount <= 0 || totalAmount <= 0) {
+    return [];
+  }
+  const cents = Math.round(totalAmount * 100);
+  const base = Math.floor(cents / itemsCount);
+  const remainder = cents - base * itemsCount;
+  return Array.from({ length: itemsCount }, (_, index) => {
+    const share = index < remainder ? base + 1 : base;
+    return share / 100;
+  });
+};
+
+const formatMoneyForNote = (amount: number | null, currency: string | null): string | null => {
+  if (amount === null || !Number.isFinite(amount)) {
+    return null;
+  }
+  const core = `${roundMoney(amount).toFixed(2)}`;
+  return currency ? `${core} ${currency}` : core;
+};
+
 export class EcwidBookingParser implements BookingEmailParser {
   public readonly name = 'ecwid';
 
@@ -537,7 +600,7 @@ export class EcwidBookingParser implements BookingEmailParser {
     }
     const orderId = orderMatch[1].trim();
 
-    const totals = parseOrderTotals(text);
+    const summary = parseOrderSummary(text);
     const subjectProductMatch = (context.subject ?? '').match(/^(.+?)\s*:\s*New order/i);
     const itemsSection = extractItemsSection(text);
     const itemBlocks = splitItemBlocks(itemsSection);
@@ -546,7 +609,7 @@ export class EcwidBookingParser implements BookingEmailParser {
       : [{
           block: itemsSection ?? text,
           price: null,
-          currency: totals.currency,
+          currency: summary.currency,
           quantity: parseItemQuantity(text),
         }];
     const overallPickupDate = parsePickupDate(text);
@@ -569,6 +632,24 @@ export class EcwidBookingParser implements BookingEmailParser {
       paymentMethodMatch?.[1]?.replace(/View order details/i, '').trim() ?? null;
 
     const paymentStatus = /paid/i.test(context.subject ?? '') || /paid/i.test(text) ? 'paid' : 'unknown';
+    const orderSubtotal = summary.subtotal;
+    const orderTotal = summary.total;
+    const couponAmountRaw = summary.coupon?.amount ?? null;
+    const couponAmount = couponAmountRaw !== null ? Math.abs(couponAmountRaw) : null;
+    const inferredDiscount =
+      couponAmount ??
+      (orderSubtotal !== null && orderTotal !== null && orderSubtotal > orderTotal
+        ? roundMoney(orderSubtotal - orderTotal)
+        : null);
+    const discountShares = splitAmountAcrossItems(inferredDiscount ?? 0, fallbackBlocks.length);
+    const couponCode = summary.coupon?.code ?? null;
+    const couponNoteAmount = formatMoneyForNote(inferredDiscount, summary.currency);
+    const couponNote =
+      couponCode || couponNoteAmount
+        ? [couponCode ? `Coupon (${couponCode})` : 'Coupon', couponNoteAmount ? `-${couponNoteAmount}` : null]
+            .filter(Boolean)
+            .join(': ')
+        : null;
 
     const buildEvent = (item: EcwidItemBlock, index: number): ParsedBookingEvent => {
       const itemQuantity = item.quantity > 0 ? item.quantity : parseItemQuantity(item.block);
@@ -618,14 +699,21 @@ export class EcwidBookingParser implements BookingEmailParser {
           ? addonRows.map((row) => `${row.label}: ${row.rawValue}`).join(' | ')
           : null;
       const flightNumber = extractLabeledValue(item.block, 'Flight Number');
-      const notesParts = [addonsNote, flightNumber ? `Flight Number: ${flightNumber}` : null].filter(Boolean);
-      const itemTotal =
+      const notesParts = [addonsNote, flightNumber ? `Flight Number: ${flightNumber}` : null, couponNote].filter(Boolean);
+      const itemGross =
         item.price !== null
           ? item.price * itemQuantity
           : fallbackBlocks.length === 1
-            ? totals.total
+            ? (orderSubtotal ?? orderTotal)
             : null;
-      const currency = item.currency ?? totals.currency ?? 'PLN';
+      const itemDiscount = discountShares[index] ?? (inferredDiscount && fallbackBlocks.length === 1 ? inferredDiscount : null);
+      const itemNet =
+        itemGross !== null
+          ? roundMoney(Math.max(itemGross - (itemDiscount ?? 0), 0))
+          : fallbackBlocks.length === 1
+            ? orderTotal
+            : null;
+      const currency = item.currency ?? summary.currency ?? 'PLN';
 
       const addonsSnapshot: Record<string, unknown> = {};
       if (scaledParty.men !== null || scaledParty.women !== null) {
@@ -653,9 +741,10 @@ export class EcwidBookingParser implements BookingEmailParser {
         partySizeTotal: scaledParty.total,
         partySizeAdults: scaledParty.total,
         currency,
-        priceGross: itemTotal,
-        priceNet: itemTotal,
-        baseAmount: itemTotal,
+        priceGross: itemGross,
+        priceNet: itemNet,
+        baseAmount: itemNet,
+        discountAmount: itemDiscount,
         paymentMethod,
         pickupLocation: location,
         notes: notesParts.length > 0 ? notesParts.join(' | ') : null,
