@@ -36,6 +36,11 @@ const DATE_TIME_FORMATS = [
   'D/M/YYYY HH:mm',
 ];
 
+const BOOKING_SENDER_PATTERN = /(?:^|[<\s])friends@xperiencepoland\.com(?:[>\s]|$)/i;
+const BOOKING_SUBJECT_PATTERN = /\brezerwacja\s+na\b/i;
+const REPLY_SUBJECT_PATTERN = /^\s*(?:re|fw|fwd|odp)\s*:/i;
+const BOOKING_BODY_MARKER_PATTERN = /\bnowa rezerwacja czeka na twoje potwierdzenie\b/i;
+
 const normalizeLabels = (input: string | string[]): string[] => (Array.isArray(input) ? input : [input]);
 
 const findLabelStart = (text: string, candidates: string[]): { start: number; length: number } | null => {
@@ -222,24 +227,35 @@ const parseExperienceDate = (dateText?: string | null, timeText?: string | null,
   return null;
 };
 
+const extractReservationCandidate = (context: BookingParserContext, body: string): string | null => {
+  const byLabel = extractField(body, ['Reservation number:', 'Numer rezerwacji:'], [['Client:', 'Klient:']]);
+  const bySubject = context.subject?.match(/\|\s*([A-Z0-9]{4,})\s*$/i)?.[1] ?? null;
+  const raw = byLabel ?? bySubject;
+  if (!raw) {
+    return null;
+  }
+  const idMatch = raw.match(/[A-Z0-9]{4,}/i);
+  return idMatch?.[0]?.toUpperCase() ?? null;
+};
+
 export class XperiencePolandBookingParser implements BookingEmailParser {
   public readonly name = 'xperiencepoland';
 
   private buildDiagnostics(context: BookingParserContext): BookingParserDiagnostics {
     const from = context.from ?? context.headers.from ?? '';
     const subject = context.subject ?? '';
-    const fromMatch = /xperiencepoland\.com/i.test(from);
-    const subjectMatch = /xperience/i.test(subject);
+    const senderMatch = BOOKING_SENDER_PATTERN.test(from);
+    const subjectMatch = BOOKING_SUBJECT_PATTERN.test(subject);
+    const replySubjectMatch = REPLY_SUBJECT_PATTERN.test(subject);
     const body = context.textBody || context.rawTextBody || context.snippet || '';
-    const reservation =
-      (body &&
-        extractField(body, ['Reservation number:', 'Numer rezerwacji:'], [['Client:', 'Klient:']])) ??
-      context.subject?.match(/\|\s*([A-Z0-9]+)\)/)?.[1] ??
-      null;
+    const bodyMarkerMatch = BOOKING_BODY_MARKER_PATTERN.test(body);
+    const reservation = body ? extractReservationCandidate(context, body) : null;
 
     const canParseChecks: BookingParserCheck[] = [
-      { label: 'from matches /xperiencepoland\\.com/i', passed: fromMatch, value: from },
-      { label: 'subject matches /xperience/i', passed: subjectMatch, value: subject },
+      { label: 'from matches friends@xperiencepoland.com', passed: senderMatch, value: from },
+      { label: 'subject matches booking template', passed: subjectMatch, value: subject },
+      { label: 'subject is not reply/forward', passed: !replySubjectMatch, value: subject },
+      { label: 'body has new-booking marker', passed: bodyMarkerMatch },
     ];
     const parseChecks: BookingParserCheck[] = [
       { label: 'text body present', passed: Boolean(body) },
@@ -248,7 +264,7 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
 
     return {
       name: this.name,
-      canParse: fromMatch || subjectMatch,
+      canParse: senderMatch && subjectMatch && !replySubjectMatch && bodyMarkerMatch && Boolean(reservation),
       canParseChecks,
       parseChecks,
     };
@@ -263,14 +279,16 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
   }
 
   async parse(context: BookingParserContext): Promise<ParsedBookingEvent | null> {
+    const diagnostics = this.buildDiagnostics(context);
+    if (!diagnostics.canParse) {
+      return null;
+    }
     const body = context.textBody || context.rawTextBody || context.snippet || '';
     if (!body) {
       return null;
     }
 
-    const reservation =
-      extractField(body, ['Reservation number:', 'Numer rezerwacji:'], [['Client:', 'Klient:']]) ??
-      context.subject?.match(/\|\s*([A-Z0-9]+)\)/)?.[1];
+    const reservation = extractReservationCandidate(context, body);
     if (!reservation) {
       return null;
     }
