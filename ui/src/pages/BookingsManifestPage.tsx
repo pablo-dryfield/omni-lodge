@@ -1957,11 +1957,42 @@ const pickDateChangeTemplate = (templates: EmailTemplate[]): EmailTemplate | nul
   if (!Array.isArray(templates) || templates.length === 0) {
     return null;
   }
+  const normalized = (value: string): string =>
+    String(value ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
+
+  const preferredNameTokens = new Set([
+    "bookingchange",
+    "pubcrawldatechange",
+    "datechange",
+    "bookingdatechange",
+    "bookingamend",
+  ]);
+
+  const exactMatch = templates.find((template) => {
+    const key = normalized(template.name);
+    return preferredNameTokens.has(key);
+  });
+  if (exactMatch) {
+    return exactMatch;
+  }
+
   const activeTemplates = templates.filter((template) => template.isActive);
   const source = activeTemplates.length > 0 ? activeTemplates : templates;
   const scored = source
     .map((template) => {
       const haystack = `${template.name} ${template.description ?? ""} ${template.subjectTemplate}`.toLowerCase();
+
+      if (
+        haystack.includes("refund") ||
+        haystack.includes("partial refund") ||
+        haystack.includes("full refund") ||
+        haystack.includes("cancel")
+      ) {
+        return { template, score: -1000 };
+      }
+
       let score = 0;
       if (haystack.includes("date") && (haystack.includes("change") || haystack.includes("amend"))) {
         score += 24;
@@ -1982,6 +2013,7 @@ const pickDateChangeTemplate = (templates: EmailTemplate[]): EmailTemplate | nul
       }
       return { template, score };
     })
+    .filter((entry) => entry.score > 0)
     .sort((left, right) => right.score - left.score);
 
   if (scored.length === 0 || scored[0].score <= 0) {
