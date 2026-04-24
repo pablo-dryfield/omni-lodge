@@ -1431,6 +1431,8 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
       baseAmount: booking.baseAmount,
       addonsAmount: booking.addonsAmount,
       discountAmount: booking.discountAmount,
+      discountCode: booking.discountCode,
+      tipAmount: booking.tipAmount,
       refundedAmount: booking.refundedAmount,
       refundedCurrency: booking.refundedCurrency ?? null,
       priceGross: booking.priceGross,

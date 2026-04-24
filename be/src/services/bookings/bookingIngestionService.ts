@@ -194,6 +194,7 @@ const decimalKeys = new Set([
   'baseAmount',
   'addonsAmount',
   'discountAmount',
+  'tipAmount',
   'refundedAmount',
   'priceGross',
   'priceNet',
@@ -215,6 +216,7 @@ const bookingStringLimits: Partial<Record<keyof BookingFieldPatch, number>> = {
   currency: 3,
   refundedCurrency: 3,
   paymentMethod: 128,
+  discountCode: 128,
   rawPayloadLocation: 512,
 };
 

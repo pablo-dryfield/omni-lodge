@@ -109,7 +109,9 @@ type DynamicParserExtractConfig = {
   experienceDate?: DynamicClause;
   experienceStartAt?: DynamicClause;
   currency?: DynamicClause;
+  discountCode?: DynamicClause;
   baseAmount?: DynamicClause;
+  tipAmount?: DynamicClause;
   partySizeTotal?: DynamicClause;
   partySizeAdults?: DynamicClause;
   partySizeChildren?: DynamicClause;
@@ -569,7 +571,9 @@ const normalizeExtractConfig = (input: unknown): DynamicParserExtractConfig | nu
     experienceDate: normalizeClause(input.experienceDate, 'textBody') ?? undefined,
     experienceStartAt: normalizeClause(input.experienceStartAt, 'textBody') ?? undefined,
     currency: normalizeClause(input.currency, 'textBody') ?? undefined,
+    discountCode: normalizeClause(input.discountCode, 'textBody') ?? undefined,
     baseAmount: normalizeClause(input.baseAmount, 'textBody') ?? undefined,
+    tipAmount: normalizeClause(input.tipAmount, 'textBody') ?? undefined,
     partySizeTotal: normalizeClause(input.partySizeTotal, 'textBody') ?? undefined,
     partySizeAdults: normalizeClause(input.partySizeAdults, 'textBody') ?? undefined,
     partySizeChildren: normalizeClause(input.partySizeChildren, 'textBody') ?? undefined,
@@ -777,6 +781,7 @@ class DynamicRuleBookingParser implements BookingEmailParser {
     assignStringField('guestFirstName', extract.guestFirstName);
     assignStringField('guestLastName', extract.guestLastName);
     assignStringField('paymentMethod', extract.paymentMethod);
+    assignStringField('discountCode', extract.discountCode);
     assignStringField('notes', extract.notes);
     assignStringField('rawPayloadLocation', extract.rawPayloadLocation);
 
@@ -803,6 +808,12 @@ class DynamicRuleBookingParser implements BookingEmailParser {
     if (baseAmount) {
       const normalized = normalizeDecimal(baseAmount);
       fields.baseAmount = normalized ?? baseAmount;
+    }
+
+    const tipAmount = extractClauseValue(context, extract.tipAmount).value;
+    if (tipAmount) {
+      const normalized = normalizeDecimal(tipAmount);
+      fields.tipAmount = normalized ?? tipAmount;
     }
 
     const partySizeTotal = extractClauseValue(context, extract.partySizeTotal).value;
