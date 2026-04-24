@@ -128,6 +128,7 @@ const DEFAULT_EMAIL_FILTERS = {
   status: "all",
   messageId: "",
   threadId: "",
+  platformOrderId: "",
 };
 
 const DEFAULT_EMAIL_DATE_RANGE: [Date | null, Date | null] = [null, null];
@@ -805,6 +806,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       debouncedEmailFilters.to ||
       debouncedEmailFilters.messageId ||
       debouncedEmailFilters.threadId ||
+      debouncedEmailFilters.platformOrderId ||
       (debouncedEmailFilters.status && debouncedEmailFilters.status !== "all"),
   );
   const emailIncludeTotal = emailHasDateRange || emailHasSearchFilters;
@@ -865,6 +867,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       status: parseEmailStatusParam(searchParams.get("emailStatus")),
       messageId: searchParams.get("emailMessageId") ?? "",
       threadId: searchParams.get("emailThreadId") ?? "",
+      platformOrderId: searchParams.get("emailPlatformOrderId") ?? "",
     };
     suppressEmailUrlSyncRef.current = true;
     setEmailFilters((prev) => {
@@ -958,6 +961,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     );
     setOptionalParam("emailMessageId", emailFilters.messageId || null);
     setOptionalParam("emailThreadId", emailFilters.threadId || null);
+    setOptionalParam("emailPlatformOrderId", emailFilters.platformOrderId || null);
 
     const startValue = emailDateRange[0] ? dayjs(emailDateRange[0]).format("YYYY-MM-DD") : null;
     const endValue = emailDateRange[1] ? dayjs(emailDateRange[1]).format("YYYY-MM-DD") : null;
@@ -1422,6 +1426,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
             to: debouncedEmailFilters.to || undefined,
             messageId: debouncedEmailFilters.messageId || undefined,
             threadId: debouncedEmailFilters.threadId || undefined,
+            platformOrderId: debouncedEmailFilters.platformOrderId || undefined,
             status:
               debouncedEmailFilters.status && debouncedEmailFilters.status !== "all"
                 ? debouncedEmailFilters.status
@@ -1566,6 +1571,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       emailFilters.to ||
       emailFilters.messageId ||
       emailFilters.threadId ||
+      emailFilters.platformOrderId ||
       (emailFilters.status && emailFilters.status !== "all") ||
       emailDateRange[0] ||
       emailDateRange[1],
@@ -2117,6 +2123,16 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                             placeholder="Thread id..."
                             value={emailFilters.threadId}
                             onChange={(event) => handleEmailFilterValue("threadId", event.currentTarget.value)}
+                          />
+                          <TextInput
+                            size="sm"
+                            label="Platform Order ID(s)"
+                            placeholder="e.g. ABC123, XYZ789"
+                            value={emailFilters.platformOrderId}
+                            onChange={(event) =>
+                              handleEmailFilterValue("platformOrderId", event.currentTarget.value)
+                            }
+                            description="Use commas for bulk search."
                           />
                           <Select
                             size="sm"

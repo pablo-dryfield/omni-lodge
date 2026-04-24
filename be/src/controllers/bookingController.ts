@@ -253,6 +253,7 @@ type BookingEmailQueryParams = QueryParams & {
   status?: string;
   messageId?: string;
   threadId?: string;
+  platformOrderId?: string;
 };
 
 type BookingMailboxQueryParams = {
@@ -791,6 +792,18 @@ const normalizeEmailFilterValue = (value?: string | null): string | null => {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+};
+
+const parseBookingEmailPlatformOrderIds = (value?: string | null): string[] => {
+  const normalized = normalizeEmailFilterValue(value);
+  if (!normalized) {
+    return [];
+  }
+  const entries = normalized
+    .split(/[,\n]+/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return Array.from(new Set(entries));
 };
 
 const buildEmailLikeValue = (value: string): string => `%${escapeSearchTerm(value)}%`;
@@ -1714,14 +1727,77 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
 
 export const listBookingEmails = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { start, end } = resolveEmailRange(req.query as QueryParams);
-    const limit = clampEmailLimit((req.query as BookingEmailQueryParams).limit);
-    const offset = parseEmailOffset((req.query as BookingEmailQueryParams).offset);
-    const includeTotalParam = (req.query as BookingEmailQueryParams).includeTotal;
+    const query = req.query as BookingEmailQueryParams;
+    const { start, end } = resolveEmailRange(query);
+    const limit = clampEmailLimit(query.limit);
+    const offset = parseEmailOffset(query.offset);
+    const includeTotalParam = query.includeTotal;
     const includeTotal = String(includeTotalParam ?? 'true').toLowerCase() !== 'false';
     const rangeWhere = buildBookingEmailRangeWhere(start, end);
-    const filterWhere = buildBookingEmailFilterWhere(req.query as BookingEmailQueryParams);
-    const where = mergeBookingEmailWhere(rangeWhere, filterWhere);
+    const filterWhere = buildBookingEmailFilterWhere(query);
+    let where = mergeBookingEmailWhere(rangeWhere, filterWhere);
+
+    const platformOrderIds = parseBookingEmailPlatformOrderIds(query.platformOrderId ?? null);
+    if (platformOrderIds.length > 0) {
+      const normalizedPlatformOrderIds = platformOrderIds.map((value) => value.toLowerCase());
+      const bookings = await Booking.findAll({
+        where: sequelizeWhere(fn('lower', col('platform_order_id')), { [Op.in]: normalizedPlatformOrderIds }),
+        attributes: ['id', 'lastEmailMessageId'],
+      });
+
+      const bookingIds = bookings
+        .map((booking) => Number(booking.id))
+        .filter((value) => Number.isFinite(value) && value > 0);
+      const linkedMessageIds = new Set<string>();
+      bookings.forEach((booking) => {
+        const messageId = String(booking.lastEmailMessageId ?? '').trim();
+        if (messageId) {
+          linkedMessageIds.add(messageId);
+        }
+      });
+
+      const linkedEmailIds = new Set<number>();
+      if (bookingIds.length > 0) {
+        const bookingEvents = await BookingEvent.findAll({
+          where: { bookingId: { [Op.in]: bookingIds } },
+          attributes: ['emailId', 'emailMessageId'],
+        });
+        bookingEvents.forEach((event) => {
+          const emailMessageId = String(event.emailMessageId ?? '').trim();
+          if (emailMessageId) {
+            linkedMessageIds.add(emailMessageId);
+          }
+          const emailId = Number(event.emailId);
+          if (Number.isFinite(emailId) && emailId > 0) {
+            linkedEmailIds.add(emailId);
+          }
+        });
+      }
+
+      const linkedEmailClauses: WhereOptions[] = [];
+      if (linkedMessageIds.size > 0) {
+        linkedEmailClauses.push({ messageId: { [Op.in]: Array.from(linkedMessageIds) } });
+      }
+      if (linkedEmailIds.size > 0) {
+        linkedEmailClauses.push({ id: { [Op.in]: Array.from(linkedEmailIds) } });
+      }
+
+      if (linkedEmailClauses.length === 0) {
+        res.status(200).json({
+          total: includeTotal ? 0 : null,
+          count: 0,
+          limit,
+          offset,
+          hasMore: false,
+          emails: [],
+        });
+        return;
+      }
+
+      const platformOrderWhere =
+        linkedEmailClauses.length === 1 ? linkedEmailClauses[0] : { [Op.or]: linkedEmailClauses };
+      where = mergeBookingEmailWhere(where, platformOrderWhere);
+    }
 
     const queryOptions = {
       where,
