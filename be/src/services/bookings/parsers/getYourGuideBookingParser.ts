@@ -27,8 +27,11 @@ const MONEY_SYMBOLS: Record<string, string> = {
   zl: 'PLN',
   pln: 'PLN',
   $: 'USD',
+  usd: 'USD',
   '\u20ac': 'EUR',
+  eur: 'EUR',
   '\u00a3': 'GBP',
+  gbp: 'GBP',
 };
 
 const normalizeWhitespace = (value: string): string => value.replace(/\s+/g, ' ').trim();
@@ -168,22 +171,107 @@ const mergeExtrasSnapshot = (
   return current;
 };
 
+const normalizeMoneyAmount = (token: string): number | null => {
+  const stripped = token.replace(/[^\d,.-]/g, '').trim();
+  if (!stripped) {
+    return null;
+  }
+
+  let normalized = stripped;
+  const lastDot = stripped.lastIndexOf('.');
+  const lastComma = stripped.lastIndexOf(',');
+
+  if (lastDot !== -1 && lastComma !== -1) {
+    if (lastDot > lastComma) {
+      normalized = stripped.replace(/,/g, '');
+    } else {
+      normalized = stripped.replace(/\./g, '').replace(',', '.');
+    }
+  } else if (lastComma !== -1) {
+    const decimals = stripped.length - lastComma - 1;
+    normalized = decimals === 3 ? stripped.replace(/,/g, '') : stripped.replace(',', '.');
+  } else if (lastDot !== -1) {
+    const decimals = stripped.length - lastDot - 1;
+    if (decimals === 3) {
+      normalized = stripped.replace(/\./g, '');
+    }
+  }
+
+  const amount = Number.parseFloat(normalized);
+  return Number.isFinite(amount) ? amount : null;
+};
+
+const normalizeCurrencyToken = (token: string | null | undefined): string | null => {
+  if (!token) {
+    return null;
+  }
+  const compact = token.trim().toLowerCase();
+  if (!compact) {
+    return null;
+  }
+  if (MONEY_SYMBOLS[compact]) {
+    return MONEY_SYMBOLS[compact];
+  }
+
+  const lettersOnly = compact.replace(/[^a-z]/g, '');
+  if (lettersOnly && MONEY_SYMBOLS[lettersOnly]) {
+    return MONEY_SYMBOLS[lettersOnly];
+  }
+  if (lettersOnly.length === 3) {
+    return lettersOnly.toUpperCase();
+  }
+  return null;
+};
+
 const parseMoney = (input: string): { currency: string | null; amount: number | null } => {
-  const match = input.match(/([^\d\s]+)?\s*([\d.,]+)/);
-  if (!match) {
+  const normalizedInput = input.replace(/\s+/g, ' ').trim();
+  if (!normalizedInput) {
     return { currency: null, amount: null };
   }
-  const symbol = match[1]?.trim() ?? '';
-  const amount = Number.parseFloat(match[2].replace(/,/g, ''));
-  if (Number.isNaN(amount)) {
-    return { currency: null, amount: null };
+
+  const prefixed = normalizedInput.match(/([A-Za-z]{3}|z[\u0142l]|[$\u20AC\u00A3])\s*([\d][\d.,]*)/i);
+  if (prefixed) {
+    return {
+      currency: normalizeCurrencyToken(prefixed[1]),
+      amount: normalizeMoneyAmount(prefixed[2]),
+    };
   }
-  const normalizedSymbol = symbol.toLowerCase();
-  const currency =
-    MONEY_SYMBOLS[symbol] ??
-    MONEY_SYMBOLS[normalizedSymbol] ??
-    (symbol.toUpperCase().length === 3 ? symbol.toUpperCase() : null);
-  return { currency, amount };
+
+  const suffixed = normalizedInput.match(/([\d][\d.,]*)\s*([A-Za-z]{3}|z[\u0142l]|[$\u20AC\u00A3])/i);
+  if (suffixed) {
+    return {
+      currency: normalizeCurrencyToken(suffixed[2]),
+      amount: normalizeMoneyAmount(suffixed[1]),
+    };
+  }
+
+  const amountOnly = normalizedInput.match(/([\d][\d.,]*)/);
+  return {
+    currency: null,
+    amount: amountOnly ? normalizeMoneyAmount(amountOnly[1]) : null,
+  };
+};
+
+const extractPriceMoney = (text: string): { currency: string | null; amount: number | null } | null => {
+  const patterns = [
+    /Price\s+paid[:\s]+((?:[A-Za-z]{3}|z[\u0142l]|[$\u20AC\u00A3])\s*[\d][\d.,]*)/i,
+    /Price\s+paid[:\s]+([\d][\d.,]*\s*(?:[A-Za-z]{3}|z[\u0142l]|[$\u20AC\u00A3]))/i,
+    /Price[:\s]+((?:[A-Za-z]{3}|z[\u0142l]|[$\u20AC\u00A3])\s*[\d][\d.,]*)/i,
+    /Price[:\s]+([\d][\d.,]*\s*(?:[A-Za-z]{3}|z[\u0142l]|[$\u20AC\u00A3]))/i,
+    /Price\s+([^\s]+\s*[\d][\d.,]*)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match?.[1]) {
+      continue;
+    }
+    const money = parseMoney(match[1]);
+    if (money.amount !== null || money.currency !== null) {
+      return money;
+    }
+  }
+  return null;
 };
 
 const extractBookingId = (text: string, subject?: string | null): string | null => {
@@ -479,9 +567,8 @@ export class GetYourGuideBookingParser implements BookingEmailParser {
     const bookingFields = extractBookingFields(text);
     const participantInfo = extractParticipantsAndExtras(text);
 
-    const priceMatch = text.match(/Price\s+([^\s]+)\s*([\d.,]+)/i);
-    if (priceMatch) {
-      const money = parseMoney(`${priceMatch[1]} ${priceMatch[2]}`);
+    const money = extractPriceMoney(text);
+    if (money) {
       if (money.amount !== null) {
         bookingFields.priceGross = money.amount;
         bookingFields.baseAmount = money.amount;

@@ -470,8 +470,31 @@ const normalizeDecimal = (value: string): number | null => {
 };
 
 const normalizeCurrency = (value: string): string | null => {
-  const cleaned = value.replace(/[^A-Za-z]/g, '').toUpperCase();
-  return cleaned.length === 3 ? cleaned : null;
+  const compact = value.trim().toLowerCase();
+  if (!compact) {
+    return null;
+  }
+
+  const symbolMap: Record<string, string> = {
+    '$': 'USD',
+    usd: 'USD',
+    '\u20ac': 'EUR',
+    eur: 'EUR',
+    '\u00a3': 'GBP',
+    gbp: 'GBP',
+    'z\u0142': 'PLN',
+    zl: 'PLN',
+    pln: 'PLN',
+  };
+  if (symbolMap[compact]) {
+    return symbolMap[compact];
+  }
+
+  const letters = compact.replace(/[^a-z]/g, '');
+  if (letters && symbolMap[letters]) {
+    return symbolMap[letters];
+  }
+  return letters.length === 3 ? letters.toUpperCase() : null;
 };
 
 const normalizeBookingStatus = (value: unknown): BookingStatus | undefined => {
@@ -804,6 +827,18 @@ class DynamicRuleBookingParser implements BookingEmailParser {
       if (normalized != null) {
         fields.partySizeChildren = normalized;
       }
+    }
+
+    const normalizedTotal = typeof fields.partySizeTotal === 'number' ? fields.partySizeTotal : null;
+    const normalizedAdults = typeof fields.partySizeAdults === 'number' ? fields.partySizeAdults : null;
+    const normalizedChildren = typeof fields.partySizeChildren === 'number' ? fields.partySizeChildren : null;
+
+    if (normalizedAdults == null && normalizedTotal != null) {
+      fields.partySizeAdults =
+        normalizedChildren != null ? Math.max(0, normalizedTotal - normalizedChildren) : normalizedTotal;
+    }
+    if (normalizedTotal == null && normalizedAdults != null && normalizedChildren != null) {
+      fields.partySizeTotal = normalizedAdults + normalizedChildren;
     }
 
     return fields;
