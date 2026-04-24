@@ -117,6 +117,7 @@ const COUNTER_DATE_FORMAT = 'YYYY-MM-DD';
 const COUNTER_SUMMARY_ATTENDANCE_NOSHOW_FROM_DATE = '2026-02-20';
 const WALK_IN_CHANNEL_SLUG = 'walk-in';
 const DEFAULT_PRODUCT_NAME = 'Pub Crawl';
+const REACT_EMAIL_SOURCE_MARKER = '/* @react-email-template-source */';
 const bucketLabels: Record<string, string> = {
   attended: 'Cash Payments',
   before_cutoff: 'Booked BEFORE cut-off',
@@ -151,6 +152,88 @@ type BookingAttendancePatchPayload = {
 type StagedBookingAttendance = {
   attendedTotal: number;
   attendedExtras: OrderExtras;
+};
+
+type EmailTemplateType = 'plain_text' | 'react_email';
+
+type EmailTemplate = {
+  id: number;
+  name: string;
+  description: string | null;
+  templateType: EmailTemplateType;
+  subjectTemplate: string;
+  bodyTemplate: string;
+  isActive: boolean;
+};
+
+type EmailTemplateListResponse = {
+  count: number;
+  templates: EmailTemplate[];
+};
+
+type MailComposerPreviewResponse = {
+  templateId: number | null;
+  templateType: EmailTemplateType | null;
+  subject: string;
+  textBody: string;
+  htmlBody: string | null;
+};
+
+type EmailTemplateRenderRequestPayload = {
+  to?: string;
+  subject?: string;
+  body?: string;
+  templateId?: number;
+  templateContext: Record<string, unknown>;
+};
+
+type PartialRefundAddon = {
+  id: number;
+  platformAddonName: string | null;
+  quantity: number;
+  unitPrice: string | null;
+  totalPrice: string | null;
+  currency: string | null;
+};
+
+type PartialRefundPreview = {
+  bookingId: number;
+  orderId: string;
+  externalTransactionId: string;
+  stripe: {
+    id: string;
+    type: string;
+    amount: number;
+    amountRefunded: number;
+    currency: string;
+    status: string | null;
+    created: number;
+    receiptEmail?: string | null;
+    description?: string | null;
+    fullyRefunded: boolean;
+  };
+  remainingAmount: number;
+  people: {
+    quantity: number;
+    unitPrice: string | null;
+    totalPrice: string | null;
+    currency: string | null;
+  };
+  addons: PartialRefundAddon[];
+};
+
+type PartialCheckInModalStep = 'edit' | 'refund_decision' | 'refund_preview';
+
+type PartialCheckInRefundState = {
+  loading: boolean;
+  submitting: boolean;
+  error: string | null;
+  preview: PartialRefundPreview | null;
+  addonQuantities: Record<number, number>;
+  amount: number | null;
+  emailPayload: EmailTemplateRenderRequestPayload | null;
+  emailTemplateName: string | null;
+  emailPreview: MailComposerPreviewResponse | null;
 };
 
 type ScannerResultKind = 'qr' | 'barcode' | 'text';
@@ -239,6 +322,174 @@ const ECWID_ORDER_WORD_BLACKLIST = new Set([
 ]);
 
 const normalizeScannerText = (value: string): string => value.replace(/\s+/g, ' ').trim();
+
+const createDefaultPartialCheckInRefundState = (): PartialCheckInRefundState => ({
+  loading: false,
+  submitting: false,
+  error: null,
+  preview: null,
+  addonQuantities: {},
+  amount: null,
+  emailPayload: null,
+  emailTemplateName: null,
+  emailPreview: null,
+});
+
+const extractErrorMessage = (error: unknown): string => {
+  if (!error) {
+    return 'Something went wrong';
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  if (typeof error === 'object') {
+    const withMessage = error as { message?: string };
+    if ('response' in error && error.response) {
+      const responseData = (error as { response: { data?: unknown } }).response.data;
+      if (typeof responseData === 'string') {
+        return responseData;
+      }
+      if (responseData && typeof responseData === 'object' && 'message' in responseData) {
+        const nested = responseData as { message?: string };
+        if (nested.message) {
+          return nested.message;
+        }
+      }
+    }
+    if (withMessage.message) {
+      return withMessage.message;
+    }
+  }
+  return 'Something went wrong';
+};
+
+const parseMoney = (value?: string | null): number => {
+  if (!value) {
+    return 0;
+  }
+  const normalized = value.replace(/\s+/g, '').replace(',', '.');
+  const parsed = Number.parseFloat(normalized);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const computeAddonRefundTotal = (addons: PartialRefundAddon[], quantities: Record<number, number>): number => {
+  return addons.reduce((total, addon) => {
+    const qty = quantities[addon.id] ?? 0;
+    if (qty <= 0) {
+      return total;
+    }
+    const unitPrice = addon.unitPrice ? parseMoney(addon.unitPrice) : 0;
+    if (unitPrice > 0) {
+      return total + unitPrice * qty;
+    }
+    const totalPrice = addon.totalPrice ? parseMoney(addon.totalPrice) : 0;
+    if (totalPrice > 0 && addon.quantity > 0) {
+      return total + (totalPrice / addon.quantity) * qty;
+    }
+    return total;
+  }, 0);
+};
+
+const getPartialRefundRemainingAmountMajor = (preview: PartialRefundPreview | null | undefined): number => {
+  if (!preview) {
+    return 0;
+  }
+  return Math.max(Number((preview.remainingAmount / 100).toFixed(2)), 0);
+};
+
+const isReactEmailSource = (value: string): boolean => value.includes(REACT_EMAIL_SOURCE_MARKER);
+
+const pickPartialRefundTemplate = (templates: EmailTemplate[]): EmailTemplate | null => {
+  if (!Array.isArray(templates) || templates.length === 0) {
+    return null;
+  }
+  const activeTemplates = templates.filter((template) => template.isActive);
+  const source = activeTemplates.length > 0 ? activeTemplates : templates;
+  const scored = source
+    .map((template) => {
+      const haystack = `${template.name} ${template.description ?? ''} ${template.subjectTemplate}`.toLowerCase();
+      let score = 0;
+      if (haystack.includes('partial') && haystack.includes('refund')) {
+        score += 20;
+      } else if (haystack.includes('partial')) {
+        score += 12;
+      } else if (haystack.includes('refund')) {
+        score += 8;
+      }
+      if (template.templateType === 'react_email') {
+        score += 1;
+      }
+      return { template, score };
+    })
+    .sort((left, right) => right.score - left.score);
+
+  if (scored.length === 0 || scored[0].score <= 0) {
+    return null;
+  }
+  return scored[0].template;
+};
+
+const normalizePartialRefundPreview = (preview: PartialRefundPreview): PartialRefundPreview => {
+  const fallbackCurrency = preview?.stripe?.currency ?? null;
+  const safePeople = preview?.people;
+  const safeAddons: PartialRefundAddon[] = Array.isArray(preview?.addons)
+    ? preview.addons
+        .map<PartialRefundAddon | null>((addon) => {
+          const rawAddon = addon as PartialRefundAddon & {
+            bookingAddonId?: unknown;
+            booking_addon_id?: unknown;
+            addonId?: unknown;
+          };
+          const idCandidate =
+            rawAddon.id ??
+            rawAddon.bookingAddonId ??
+            rawAddon.booking_addon_id ??
+            rawAddon.addonId;
+          const parsedId = Number.parseInt(String(idCandidate ?? ''), 10);
+          if (!Number.isFinite(parsedId) || parsedId <= 0) {
+            return null;
+          }
+          const parsedQty = Number(rawAddon.quantity ?? 0);
+          return {
+            id: parsedId,
+            platformAddonName: rawAddon.platformAddonName ?? null,
+            quantity: Number.isFinite(parsedQty) ? Math.max(0, Math.round(parsedQty)) : 0,
+            unitPrice: rawAddon.unitPrice ?? null,
+            totalPrice: rawAddon.totalPrice ?? null,
+            currency: rawAddon.currency ?? fallbackCurrency,
+          };
+        })
+        .filter((addon): addon is PartialRefundAddon => addon !== null)
+    : [];
+
+  return {
+    ...preview,
+    people: {
+      quantity: Number.isFinite(safePeople?.quantity) ? Math.max(0, Math.round(safePeople.quantity)) : 0,
+      unitPrice: safePeople?.unitPrice ?? null,
+      totalPrice: safePeople?.totalPrice ?? null,
+      currency: safePeople?.currency ?? fallbackCurrency,
+    },
+    addons: safeAddons,
+  };
+};
+
+const resolveOrderExtraKeyFromLabel = (value?: string | null): keyof OrderExtras | null => {
+  const raw = String(value ?? '').toLowerCase();
+  if (!raw) {
+    return null;
+  }
+  if (raw.includes('cocktail') || raw.includes('drink')) {
+    return 'cocktails';
+  }
+  if (raw.includes('t-shirt') || raw.includes('tshirt') || raw.includes('shirt')) {
+    return 'tshirts';
+  }
+  if (raw.includes('photo') || raw.includes('picture') || raw.includes('instant')) {
+    return 'photos';
+  }
+  return null;
+};
 
 const isLikelyToken = (value: string): boolean => {
   if (!value || value.length < 4) {
@@ -2112,6 +2363,13 @@ const Counters = (props: GenericPageProps) => {
   const [syncingPendingAttendance, setSyncingPendingAttendance] = useState(false);
   const [partialCheckInEditorOrder, setPartialCheckInEditorOrder] = useState<UnifiedOrder | null>(null);
   const [partialCheckInEditorDraft, setPartialCheckInEditorDraft] = useState<StagedBookingAttendance | null>(null);
+  const [partialCheckInEditorInitialDraft, setPartialCheckInEditorInitialDraft] =
+    useState<StagedBookingAttendance | null>(null);
+  const [partialCheckInModalStep, setPartialCheckInModalStep] = useState<PartialCheckInModalStep>('edit');
+  const [partialCheckInPendingRemovedAddons, setPartialCheckInPendingRemovedAddons] =
+    useState<OrderExtras | null>(null);
+  const [partialCheckInRefundState, setPartialCheckInRefundState] =
+    useState<PartialCheckInRefundState>(createDefaultPartialCheckInRefundState());
   const [pendingBookingAttendanceById, setPendingBookingAttendanceById] = useState<
     Record<number, StagedBookingAttendance>
   >({});
@@ -6209,6 +6467,10 @@ useEffect(() => {
       setOnlineReservationsView('remaining');
       setPartialCheckInEditorOrder(null);
       setPartialCheckInEditorDraft(null);
+      setPartialCheckInEditorInitialDraft(null);
+      setPartialCheckInModalStep('edit');
+      setPartialCheckInPendingRemovedAddons(null);
+      setPartialCheckInRefundState(createDefaultPartialCheckInRefundState());
       return;
     }
 
@@ -6382,6 +6644,10 @@ useEffect(() => {
   const closePartialCheckInEditor = useCallback(() => {
     setPartialCheckInEditorOrder(null);
     setPartialCheckInEditorDraft(null);
+    setPartialCheckInEditorInitialDraft(null);
+    setPartialCheckInModalStep('edit');
+    setPartialCheckInPendingRemovedAddons(null);
+    setPartialCheckInRefundState(createDefaultPartialCheckInRefundState());
   }, []);
 
   const openPartialCheckInEditor = useCallback(
@@ -6406,8 +6672,7 @@ useEffect(() => {
         currentAttendedExtras.cocktails > 0 ||
         currentAttendedExtras.tshirts > 0 ||
         currentAttendedExtras.photos > 0;
-      setPartialCheckInEditorOrder(order);
-      setPartialCheckInEditorDraft({
+      const nextDraft: StagedBookingAttendance = {
         attendedTotal: hasExistingAttendance ? Math.min(currentAttendedTotal, peopleMax) : peopleMax,
         attendedExtras: hasExistingAttendance
           ? {
@@ -6425,7 +6690,13 @@ useEffect(() => {
               ),
             }
           : purchasedExtras,
-      });
+      };
+      setPartialCheckInEditorOrder(order);
+      setPartialCheckInEditorDraft(nextDraft);
+      setPartialCheckInEditorInitialDraft(nextDraft);
+      setPartialCheckInModalStep('edit');
+      setPartialCheckInPendingRemovedAddons(null);
+      setPartialCheckInRefundState(createDefaultPartialCheckInRefundState());
       setOnlineReservationsError(null);
     },
     [pendingBookingAttendanceById],
@@ -6481,9 +6752,9 @@ useEffect(() => {
     [partialCheckInEditorOrder],
   );
 
-  const handlePartialEditorApply = useCallback(() => {
+  const applyPartialEditorDraftLocally = useCallback((): boolean => {
     if (!partialCheckInEditorOrder || !partialCheckInEditorDraft) {
-      return;
+      return false;
     }
     const bookingId = getOrderBookingId(partialCheckInEditorOrder);
     const sourceOrder =
@@ -6494,16 +6765,41 @@ useEffect(() => {
       attendedTotal: partialCheckInEditorDraft.attendedTotal,
       attendedExtras: partialCheckInEditorDraft.attendedExtras,
     });
-    if (applied) {
-      closePartialCheckInEditor();
-    }
+    return Boolean(applied);
   }, [
     applyBookingAttendanceLocally,
-    closePartialCheckInEditor,
     onlineReservationOrders,
     partialCheckInEditorDraft,
     partialCheckInEditorOrder,
   ]);
+
+  const completePartialCheckInApply = useCallback((): boolean => {
+    const applied = applyPartialEditorDraftLocally();
+    if (applied) {
+      closePartialCheckInEditor();
+    }
+    return applied;
+  }, [applyPartialEditorDraftLocally, closePartialCheckInEditor]);
+
+  const handlePartialEditorApply = useCallback(() => {
+    if (!partialCheckInEditorDraft) {
+      return;
+    }
+    const baselineDraft = partialCheckInEditorInitialDraft ?? partialCheckInEditorDraft;
+    const removedAddons: OrderExtras = {
+      cocktails: Math.max(0, baselineDraft.attendedExtras.cocktails - partialCheckInEditorDraft.attendedExtras.cocktails),
+      tshirts: Math.max(0, baselineDraft.attendedExtras.tshirts - partialCheckInEditorDraft.attendedExtras.tshirts),
+      photos: Math.max(0, baselineDraft.attendedExtras.photos - partialCheckInEditorDraft.attendedExtras.photos),
+    };
+    const hasRemovedAddons = ORDER_EXTRA_KEYS.some((key) => removedAddons[key] > 0);
+    if (hasRemovedAddons) {
+      setPartialCheckInPendingRemovedAddons(removedAddons);
+      setPartialCheckInModalStep('refund_decision');
+      setPartialCheckInRefundState(createDefaultPartialCheckInRefundState());
+      return;
+    }
+    completePartialCheckInApply();
+  }, [completePartialCheckInApply, partialCheckInEditorDraft, partialCheckInEditorInitialDraft]);
 
   const partialEditorPeopleMax = useMemo(() => {
     if (!partialCheckInEditorOrder) {
@@ -6532,6 +6828,505 @@ useEffect(() => {
     () => resolvePlatformChipStyle(partialEditorPlatformLabel),
     [partialEditorPlatformLabel],
   );
+  const partialEditorBookingId = useMemo(
+    () => (partialCheckInEditorOrder ? getOrderBookingId(partialCheckInEditorOrder) : null),
+    [partialCheckInEditorOrder],
+  );
+  const partialEditorCustomerEmail = useMemo(
+    () => String(partialCheckInEditorOrder?.customerEmail ?? '').trim(),
+    [partialCheckInEditorOrder],
+  );
+  const partialEditorIsEcwid = useMemo(
+    () => normalizePlatformLookupKey(partialEditorPlatformLabel) === 'ecwid',
+    [partialEditorPlatformLabel],
+  );
+  const partialEditorRemovedAddonSummary = useMemo(() => {
+    const source = partialCheckInPendingRemovedAddons;
+    if (!source) {
+      return [];
+    }
+    const entries: Array<{ key: keyof OrderExtras; label: string; qty: number }> = [
+      { key: 'cocktails', label: 'Cocktails', qty: source.cocktails },
+      { key: 'tshirts', label: 'T-Shirts', qty: source.tshirts },
+      { key: 'photos', label: 'Instant Pictures', qty: source.photos },
+    ];
+    return entries.filter((entry) => entry.qty > 0);
+  }, [partialCheckInPendingRemovedAddons]);
+  const partialEditorIssueRefundDisabledReason = useMemo(() => {
+    if (!partialEditorRemovedAddonSummary.length) {
+      return 'No add-ons were removed.';
+    }
+    if (!partialEditorIsEcwid) {
+      return 'Partial refunds are currently available only for Ecwid bookings.';
+    }
+    if (!partialEditorBookingId) {
+      return 'Booking ID is missing, so refund cannot be issued.';
+    }
+    if (!partialEditorCustomerEmail) {
+      return 'Customer email is missing, so refund email cannot be sent.';
+    }
+    return null;
+  }, [partialEditorBookingId, partialEditorCustomerEmail, partialEditorIsEcwid, partialEditorRemovedAddonSummary.length]);
+
+  const resolvePartialRefundTemplateForPreview = useCallback(async (): Promise<EmailTemplate | null> => {
+    const response = await axiosInstance.get<EmailTemplateListResponse>('/email-templates', {
+      withCredentials: true,
+    });
+    const templates = Array.isArray(response.data?.templates) ? response.data.templates : [];
+    return pickPartialRefundTemplate(templates);
+  }, []);
+
+  const buildMailTemplateContextFromOrder = useCallback(
+    (
+      order: UnifiedOrder | null,
+      toEmail: string,
+    ): Record<string, string | number | boolean | null | undefined> => {
+      const customerName = String(order?.customerName ?? '').trim();
+      const productName = String(order?.productName ?? '').trim();
+      const dateRaw = String(order?.date ?? '').trim();
+      const parsedDate = dayjs(dateRaw);
+      const dateDisplay = parsedDate.isValid() ? parsedDate.format('ddd, MMM D YYYY') : dateRaw;
+      const timeslot = String(order?.timeslot ?? '').trim();
+      const platformBookingId = String(order?.platformBookingId ?? '').trim();
+      const bookingReference = platformBookingId || String(order?.id ?? '').trim();
+      const quantity = Number.isFinite(order?.quantity) ? order?.quantity : 0;
+      const extrasTshirts = Number.isFinite(order?.extras?.tshirts) ? Number(order?.extras?.tshirts) : 0;
+      const extrasCocktails = Number.isFinite(order?.extras?.cocktails) ? Number(order?.extras?.cocktails) : 0;
+      const extrasPhotos = Number.isFinite(order?.extras?.photos) ? Number(order?.extras?.photos) : 0;
+      const currencyCandidate = String(order?.rawData?.currency ?? '').trim().toUpperCase();
+      return {
+        customerName: customerName || 'Guest',
+        customerEmail: toEmail || '',
+        customerPhone: String(order?.customerPhone ?? '').trim(),
+        productName: productName || 'Booking',
+        bookingDate: dateRaw,
+        bookingDateDisplay: dateDisplay,
+        bookingTime: timeslot,
+        bookingId: bookingReference,
+        bookingReference,
+        reservationId: bookingReference,
+        platformBookingId,
+        platform: String(order?.platform ?? '').trim(),
+        quantity,
+        peopleCount: quantity,
+        menCount: Number.isFinite(order?.menCount) ? order?.menCount : 0,
+        womenCount: Number.isFinite(order?.womenCount) ? order?.womenCount : 0,
+        extrasTshirts,
+        extrasCocktails,
+        extrasPhotos,
+        tshirtsCount: extrasTshirts,
+        cocktailsCount: extrasCocktails,
+        photosCount: extrasPhotos,
+        currency: currencyCandidate || 'EUR',
+      };
+    },
+    [],
+  );
+
+  const buildPartialCheckInRefundEmailPayload = useCallback(
+    async (
+      order: UnifiedOrder,
+      preview: PartialRefundPreview,
+      addonQuantities: Record<number, number>,
+      amount: number,
+    ): Promise<{
+      payload: EmailTemplateRenderRequestPayload;
+      templateName: string | null;
+    }> => {
+      const customerEmail = String(order.customerEmail ?? '').trim();
+      if (!customerEmail) {
+        throw new Error('Customer email is required to send the partial refund confirmation.');
+      }
+
+      const toAmount = (value: number): number => Number(value.toFixed(2));
+      const baseContext = buildMailTemplateContextFromOrder(order, customerEmail);
+      const bookingReference = String(baseContext.bookingReference ?? '').trim() || 'booking';
+      const selectedAddonBreakdown = preview.addons
+        .map((addon) => {
+          const refundQty = Math.max(0, Math.min(Math.round(addonQuantities[addon.id] ?? 0), Math.round(addon.quantity ?? 0)));
+          if (refundQty <= 0) {
+            return null;
+          }
+          const unitPrice =
+            addon.unitPrice
+              ? parseMoney(addon.unitPrice)
+              : addon.totalPrice && addon.quantity > 0
+                ? parseMoney(addon.totalPrice) / addon.quantity
+                : 0;
+          if (unitPrice <= 0) {
+            return null;
+          }
+          return {
+            bookingAddonId: addon.id,
+            name: addon.platformAddonName ?? `Addon ${addon.id}`,
+            qty: Math.max(0, Math.round(addon.quantity ?? 0)),
+            unitPrice: toAmount(unitPrice),
+            refundQty,
+            amount: toAmount(refundQty * unitPrice),
+          };
+        })
+        .filter(
+          (
+            entry,
+          ): entry is {
+            bookingAddonId: number;
+            name: string;
+            qty: number;
+            unitPrice: number;
+            refundQty: number;
+            amount: number;
+          } => entry !== null,
+        );
+
+      const totalRefundAmount = toAmount(Math.max(amount, 0));
+      if (totalRefundAmount <= 0) {
+        throw new Error('Select at least one refunded add-on quantity.');
+      }
+
+      const transactionAmount = preview.stripe ? preview.stripe.amount / 100 : 0;
+      const alreadyRefundedAmount = preview.stripe ? preview.stripe.amountRefunded / 100 : 0;
+      const refundedAddonRows = selectedAddonBreakdown.map((entry) => ({
+        name: entry.name,
+        qty: entry.qty,
+        quantity: entry.refundQty,
+        bookedQty: entry.qty,
+        unitPrice: entry.unitPrice,
+        refundQty: entry.refundQty,
+        amount: entry.amount,
+      }));
+      const normalizeAddonKey = (value: string): string => value.toLowerCase().replace(/[^a-z]/g, '');
+      const hasAddonMatch = (
+        rows: Array<{ name: string }>,
+        tokens: string[],
+      ): boolean =>
+        rows.some((row) => {
+          const key = normalizeAddonKey(String(row.name ?? ''));
+          return tokens.some((token) => key.includes(token));
+        });
+      const createFallbackAddon = (name: string) => ({
+        name,
+        qty: 0,
+        quantity: 0,
+        bookedQty: 0,
+        unitPrice: 0,
+        refundQty: 0,
+        amount: 0,
+      });
+      const safeRefundedAddons = [...refundedAddonRows];
+      if (!hasAddonMatch(safeRefundedAddons, ['cocktail', 'drink'])) {
+        safeRefundedAddons.push(createFallbackAddon('Cocktails Add-On'));
+      }
+      if (!hasAddonMatch(safeRefundedAddons, ['tshirt', 'shirt'])) {
+        safeRefundedAddons.push(createFallbackAddon('T-Shirts Add-On'));
+      }
+      if (!hasAddonMatch(safeRefundedAddons, ['photo', 'picture', 'instantpic'])) {
+        safeRefundedAddons.push(createFallbackAddon('Photos Add-On'));
+      }
+      const resolveAddonByKeywords = (tokens: string[], fallbackLabel: string) =>
+        safeRefundedAddons.find((addon) => {
+          const key = normalizeAddonKey(String(addon.name ?? ''));
+          return tokens.some((token) => key.includes(token));
+        }) ?? createFallbackAddon(fallbackLabel);
+      const cocktailsRefund = resolveAddonByKeywords(['cocktail', 'drink'], 'Cocktails Add-On');
+      const tshirtsRefund = resolveAddonByKeywords(['tshirt', 'shirt'], 'T-Shirts Add-On');
+      const photosRefund = resolveAddonByKeywords(['photo', 'picture', 'instantpic'], 'Photos Add-On');
+      const context: Record<string, unknown> = {
+        ...baseContext,
+        templateKey: 'partial_refund',
+        refundedAmount: totalRefundAmount,
+        totalPaidAmount: toAmount(transactionAmount),
+        alreadyRefundedAmount: toAmount(alreadyRefundedAmount),
+        isFullRefund: false,
+        partialReason: 'Add-ons adjustment during partial check-in',
+        refundReason: 'Add-ons adjustment during partial check-in',
+        experienceDate: String(baseContext.bookingDateDisplay ?? baseContext.bookingDate ?? '').trim(),
+        peopleChange: {
+          from: Number(baseContext.peopleCount ?? 0),
+          to: Number(baseContext.peopleCount ?? 0),
+          amount: 0,
+        },
+        peopleRefundDetails: {
+          qty: Number(baseContext.peopleCount ?? 0),
+          quantity: 0,
+          bookedQty: Number(baseContext.peopleCount ?? 0),
+          unitPrice: 0,
+          refundQty: 0,
+          amount: 0,
+        },
+        peopleRefund: {
+          name: 'People',
+          qty: Number(baseContext.peopleCount ?? 0),
+          quantity: 0,
+          bookedQty: Number(baseContext.peopleCount ?? 0),
+          refundQty: 0,
+          unitPrice: 0,
+          amount: 0,
+        },
+        refundedAddons: safeRefundedAddons,
+        addons: safeRefundedAddons,
+        addonsBreakdown: safeRefundedAddons,
+        cocktailsRefund,
+        tshirtsRefund,
+        photosRefund,
+        refundedAddonsByType: {
+          cocktails: cocktailsRefund,
+          tshirts: tshirtsRefund,
+          photos: photosRefund,
+        },
+        transactionId: preview.externalTransactionId ?? '',
+        externalTransactionId: preview.externalTransactionId ?? '',
+        stripeTransactionId: preview.stripe?.id ?? '',
+        stripeTransactionType: preview.stripe?.type ?? '',
+        stripeTransactionStatus: preview.stripe?.status ?? '',
+        stripeTransactionCreatedAt:
+          preview.stripe && Number.isFinite(preview.stripe.created)
+            ? dayjs.unix(preview.stripe.created).format('YYYY-MM-DD HH:mm')
+            : '',
+      };
+
+      const partialTemplate = await resolvePartialRefundTemplateForPreview();
+      const templateContextForRequest: Record<string, unknown> = { ...context };
+      if (
+        partialTemplate &&
+        partialTemplate.templateType === 'react_email' &&
+        isReactEmailSource(partialTemplate.bodyTemplate)
+      ) {
+        templateContextForRequest.reactTemplateSource = partialTemplate.bodyTemplate;
+      }
+
+      const payload: EmailTemplateRenderRequestPayload = {
+        to: customerEmail,
+        templateContext: templateContextForRequest,
+      };
+      if (partialTemplate) {
+        payload.templateId = partialTemplate.id;
+      } else {
+        payload.subject = `Partial refund update - Booking ${bookingReference}`;
+        payload.body = `Refunded amount: ${totalRefundAmount} ${context.currency ?? 'EUR'} for booking ${bookingReference}.`;
+      }
+
+      return {
+        payload,
+        templateName: partialTemplate?.name ?? null,
+      };
+    },
+    [buildMailTemplateContextFromOrder, resolvePartialRefundTemplateForPreview],
+  );
+
+  const loadPartialCheckInRefundPreview = useCallback(async () => {
+    if (!partialCheckInEditorOrder || !partialCheckInPendingRemovedAddons) {
+      return;
+    }
+    const bookingId = getOrderBookingId(partialCheckInEditorOrder);
+    if (!bookingId) {
+      setPartialCheckInRefundState((prev) => ({
+        ...prev,
+        loading: false,
+        error: 'Booking ID is missing for this reservation.',
+      }));
+      return;
+    }
+    setPartialCheckInRefundState({
+      ...createDefaultPartialCheckInRefundState(),
+      loading: true,
+    });
+
+    try {
+      const response = await axiosInstance.get<PartialRefundPreview>(`/bookings/${bookingId}/partial-refund-preview`, {
+        withCredentials: true,
+      });
+      const preview = normalizePartialRefundPreview(response.data);
+      const requestedByType: OrderExtras = {
+        cocktails: Math.max(0, Math.round(Number(partialCheckInPendingRemovedAddons.cocktails) || 0)),
+        tshirts: Math.max(0, Math.round(Number(partialCheckInPendingRemovedAddons.tshirts) || 0)),
+        photos: Math.max(0, Math.round(Number(partialCheckInPendingRemovedAddons.photos) || 0)),
+      };
+      const addonQuantities: Record<number, number> = {};
+      preview.addons.forEach((addon) => {
+        addonQuantities[addon.id] = 0;
+      });
+
+      const sortedAddons = [...preview.addons].sort((left, right) => left.id - right.id);
+      sortedAddons.forEach((addon) => {
+        const key = resolveOrderExtraKeyFromLabel(addon.platformAddonName);
+        if (!key) {
+          return;
+        }
+        const needed = requestedByType[key];
+        if (needed <= 0) {
+          return;
+        }
+        const available = Math.max(0, Math.round(Number(addon.quantity) || 0));
+        const assigned = Math.min(needed, available);
+        if (assigned <= 0) {
+          return;
+        }
+        addonQuantities[addon.id] = assigned;
+        requestedByType[key] -= assigned;
+      });
+
+      let unresolvedTotal =
+        requestedByType.cocktails +
+        requestedByType.tshirts +
+        requestedByType.photos;
+      if (unresolvedTotal > 0) {
+        sortedAddons.forEach((addon) => {
+          if (unresolvedTotal <= 0) {
+            return;
+          }
+          const alreadyAssigned = addonQuantities[addon.id] ?? 0;
+          const available = Math.max(0, Math.round(Number(addon.quantity) || 0) - alreadyAssigned);
+          if (available <= 0) {
+            return;
+          }
+          const assigned = Math.min(unresolvedTotal, available);
+          addonQuantities[addon.id] = alreadyAssigned + assigned;
+          unresolvedTotal -= assigned;
+        });
+      }
+
+      if (unresolvedTotal > 0) {
+        throw new Error('Unable to map all removed add-ons to refundable quantities for this booking.');
+      }
+
+      const computedAmount = computeAddonRefundTotal(preview.addons, addonQuantities);
+      const maxAmount = getPartialRefundRemainingAmountMajor(preview);
+      const amount = Math.min(computedAmount, maxAmount);
+      if (amount <= 0) {
+        throw new Error('No refundable add-on amount available for the selected removal.');
+      }
+
+      const preparedEmail = await buildPartialCheckInRefundEmailPayload(
+        partialCheckInEditorOrder,
+        preview,
+        addonQuantities,
+        Number(amount.toFixed(2)),
+      );
+      const previewResponse = await axiosInstance.post<MailComposerPreviewResponse>(
+        '/bookings/emails/render-preview',
+        preparedEmail.payload,
+        { withCredentials: true },
+      );
+
+      setPartialCheckInRefundState({
+        loading: false,
+        submitting: false,
+        error: null,
+        preview,
+        addonQuantities,
+        amount: Number(amount.toFixed(2)),
+        emailPayload: preparedEmail.payload,
+        emailTemplateName: preparedEmail.templateName,
+        emailPreview: previewResponse.data,
+      });
+      setPartialCheckInModalStep('refund_preview');
+    } catch (error) {
+      setPartialCheckInRefundState((prev) => ({
+        ...prev,
+        loading: false,
+        error: extractErrorMessage(error),
+      }));
+    }
+  }, [
+    buildPartialCheckInRefundEmailPayload,
+    partialCheckInEditorOrder,
+    partialCheckInPendingRemovedAddons,
+  ]);
+
+  const handlePartialEditorIssueRefund = useCallback(() => {
+    if (partialEditorIssueRefundDisabledReason) {
+      setPartialCheckInRefundState((prev) => ({
+        ...prev,
+        error: partialEditorIssueRefundDisabledReason,
+      }));
+      return;
+    }
+    void loadPartialCheckInRefundPreview();
+  }, [loadPartialCheckInRefundPreview, partialEditorIssueRefundDisabledReason]);
+
+  const handlePartialEditorConfirmRefund = useCallback(async () => {
+    if (!partialCheckInEditorOrder || !partialCheckInRefundState.preview) {
+      return;
+    }
+    const bookingId = getOrderBookingId(partialCheckInEditorOrder);
+    if (!bookingId) {
+      setPartialCheckInRefundState((prev) => ({
+        ...prev,
+        error: 'Booking ID is missing for this reservation.',
+      }));
+      return;
+    }
+    if (!partialCheckInRefundState.amount || partialCheckInRefundState.amount <= 0) {
+      setPartialCheckInRefundState((prev) => ({
+        ...prev,
+        error: 'Refund amount is missing for this partial check-in.',
+      }));
+      return;
+    }
+    if (!partialCheckInRefundState.emailPayload) {
+      setPartialCheckInRefundState((prev) => ({
+        ...prev,
+        error: 'Refund email payload is missing. Refresh the preview and try again.',
+      }));
+      return;
+    }
+
+    setPartialCheckInRefundState((prev) => ({
+      ...prev,
+      submitting: true,
+      error: null,
+    }));
+
+    try {
+      await axiosInstance.post(
+        `/bookings/${bookingId}/partial-refund`,
+        {
+          amount: partialCheckInRefundState.amount,
+          peopleQuantity: 0,
+          addonQuantities: partialCheckInRefundState.addonQuantities,
+        },
+        { withCredentials: true },
+      );
+
+      let emailSendError: string | null = null;
+      try {
+        await axiosInstance.post('/bookings/emails/send', partialCheckInRefundState.emailPayload, {
+          withCredentials: true,
+        });
+      } catch (error) {
+        emailSendError = extractErrorMessage(error);
+      }
+
+      const applied = completePartialCheckInApply();
+      if (!applied) {
+        setPartialCheckInRefundState((prev) => ({
+          ...prev,
+          submitting: false,
+          error: 'Partial refund was processed, but partial check-in could not be applied locally.',
+        }));
+        return;
+      }
+
+      setOnlineReservationsRefreshToken((prev) => prev + 1);
+      if (emailSendError) {
+        setOnlineReservationsError(
+          `Partial refund was issued and partial check-in was applied, but sending the refund email failed: ${emailSendError}`,
+        );
+      } else {
+        setOnlineReservationsNotice('Partial refund email sent, refund processed, and partial check-in applied.');
+      }
+    } catch (error) {
+      setPartialCheckInRefundState((prev) => ({
+        ...prev,
+        submitting: false,
+        error: extractErrorMessage(error),
+      }));
+    }
+  }, [completePartialCheckInApply, partialCheckInEditorOrder, partialCheckInRefundState]);
+
+  const handlePartialEditorContinueWithoutRefund = useCallback(() => {
+    completePartialCheckInApply();
+  }, [completePartialCheckInApply]);
 
   useEffect(() => {
     if (
@@ -10656,7 +11451,7 @@ type SummaryRowOptions = {
         open={Boolean(partialCheckInEditorOrder && partialCheckInEditorDraft)}
         onClose={closePartialCheckInEditor}
         fullWidth
-        maxWidth="xs"
+        maxWidth={partialCheckInModalStep === 'refund_preview' ? 'md' : 'xs'}
         aria-labelledby="partial-checkin-dialog-title"
       >
         <DialogTitle
@@ -10693,164 +11488,336 @@ type SummaryRowOptions = {
                 </Stack>
               </Stack>
               <Divider />
-
-              <Stack direction="row" justifyContent="space-between" alignItems="center">
-                <Stack direction="row" spacing={0.75} alignItems="center">
-                  <Person fontSize="small" />
-                  <Typography variant="body2">People</Typography>
-                </Stack>
-                <Stack direction="row" spacing={0.5} alignItems="center">
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    onClick={() => {
-                      handlePartialEditorPeopleAdjust(-1);
-                    }}
-                    disabled={partialCheckInEditorDraft.attendedTotal <= 0 || syncingPendingAttendance}
-                    sx={{ minWidth: 36, px: 1 }}
-                  >
-                    <Remove fontSize="small" />
-                  </Button>
-                  <Chip size="small" label={`${partialCheckInEditorDraft.attendedTotal}/${partialEditorPeopleMax}`} />
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    onClick={() => {
-                      handlePartialEditorPeopleAdjust(1);
-                    }}
-                    disabled={partialCheckInEditorDraft.attendedTotal >= partialEditorPeopleMax || syncingPendingAttendance}
-                    sx={{ minWidth: 36, px: 1 }}
-                  >
-                    <Add fontSize="small" />
-                  </Button>
-                </Stack>
-              </Stack>
-
-              {partialEditorAddonMax.cocktails > 0 && (
-                <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Stack direction="row" spacing={0.75} alignItems="center">
-                    <LocalBar fontSize="small" />
-                    <Typography variant="body2">Cocktails</Typography>
+              {partialCheckInModalStep === 'edit' && (
+                <>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Stack direction="row" spacing={0.75} alignItems="center">
+                      <Person fontSize="small" />
+                      <Typography variant="body2">People</Typography>
+                    </Stack>
+                    <Stack direction="row" spacing={0.5} alignItems="center">
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => {
+                          handlePartialEditorPeopleAdjust(-1);
+                        }}
+                        disabled={partialCheckInEditorDraft.attendedTotal <= 0 || syncingPendingAttendance}
+                        sx={{ minWidth: 36, px: 1 }}
+                      >
+                        <Remove fontSize="small" />
+                      </Button>
+                      <Chip size="small" label={`${partialCheckInEditorDraft.attendedTotal}/${partialEditorPeopleMax}`} />
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => {
+                          handlePartialEditorPeopleAdjust(1);
+                        }}
+                        disabled={partialCheckInEditorDraft.attendedTotal >= partialEditorPeopleMax || syncingPendingAttendance}
+                        sx={{ minWidth: 36, px: 1 }}
+                      >
+                        <Add fontSize="small" />
+                      </Button>
+                    </Stack>
                   </Stack>
-                  <Stack direction="row" spacing={0.5} alignItems="center">
+
+                  {partialEditorAddonMax.cocktails > 0 && (
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Stack direction="row" spacing={0.75} alignItems="center">
+                        <LocalBar fontSize="small" />
+                        <Typography variant="body2">Cocktails</Typography>
+                      </Stack>
+                      <Stack direction="row" spacing={0.5} alignItems="center">
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => {
+                            handlePartialEditorAddonAdjust('cocktails', -1);
+                          }}
+                          disabled={partialCheckInEditorDraft.attendedExtras.cocktails <= 0 || syncingPendingAttendance}
+                          sx={{ minWidth: 36, px: 1 }}
+                        >
+                          <Remove fontSize="small" />
+                        </Button>
+                        <Chip
+                          size="small"
+                          label={`${partialCheckInEditorDraft.attendedExtras.cocktails}/${partialEditorAddonMax.cocktails}`}
+                        />
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => {
+                            handlePartialEditorAddonAdjust('cocktails', 1);
+                          }}
+                          disabled={
+                            partialCheckInEditorDraft.attendedExtras.cocktails >= partialEditorAddonMax.cocktails ||
+                            syncingPendingAttendance
+                          }
+                          sx={{ minWidth: 36, px: 1 }}
+                        >
+                          <Add fontSize="small" />
+                        </Button>
+                      </Stack>
+                    </Stack>
+                  )}
+
+                  {partialEditorAddonMax.tshirts > 0 && (
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Stack direction="row" spacing={0.75} alignItems="center">
+                        <Checkroom fontSize="small" />
+                        <Typography variant="body2">T-Shirts</Typography>
+                      </Stack>
+                      <Stack direction="row" spacing={0.5} alignItems="center">
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => {
+                            handlePartialEditorAddonAdjust('tshirts', -1);
+                          }}
+                          disabled={partialCheckInEditorDraft.attendedExtras.tshirts <= 0 || syncingPendingAttendance}
+                          sx={{ minWidth: 36, px: 1 }}
+                        >
+                          <Remove fontSize="small" />
+                        </Button>
+                        <Chip size="small" label={`${partialCheckInEditorDraft.attendedExtras.tshirts}/${partialEditorAddonMax.tshirts}`} />
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => {
+                            handlePartialEditorAddonAdjust('tshirts', 1);
+                          }}
+                          disabled={
+                            partialCheckInEditorDraft.attendedExtras.tshirts >= partialEditorAddonMax.tshirts ||
+                            syncingPendingAttendance
+                          }
+                          sx={{ minWidth: 36, px: 1 }}
+                        >
+                          <Add fontSize="small" />
+                        </Button>
+                      </Stack>
+                    </Stack>
+                  )}
+
+                  {partialEditorAddonMax.photos > 0 && (
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Stack direction="row" spacing={0.75} alignItems="center">
+                        <PhotoCamera fontSize="small" />
+                        <Typography variant="body2">Instant Pictures</Typography>
+                      </Stack>
+                      <Stack direction="row" spacing={0.5} alignItems="center">
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => {
+                            handlePartialEditorAddonAdjust('photos', -1);
+                          }}
+                          disabled={partialCheckInEditorDraft.attendedExtras.photos <= 0 || syncingPendingAttendance}
+                          sx={{ minWidth: 36, px: 1 }}
+                        >
+                          <Remove fontSize="small" />
+                        </Button>
+                        <Chip size="small" label={`${partialCheckInEditorDraft.attendedExtras.photos}/${partialEditorAddonMax.photos}`} />
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => {
+                            handlePartialEditorAddonAdjust('photos', 1);
+                          }}
+                          disabled={
+                            partialCheckInEditorDraft.attendedExtras.photos >= partialEditorAddonMax.photos ||
+                            syncingPendingAttendance
+                          }
+                          sx={{ minWidth: 36, px: 1 }}
+                        >
+                          <Add fontSize="small" />
+                        </Button>
+                      </Stack>
+                    </Stack>
+                  )}
+
+                  <Divider />
+                  <Stack direction="row" spacing={1} justifyContent="flex-end">
+                    <Button onClick={closePartialCheckInEditor}>Cancel</Button>
                     <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={() => {
-                        handlePartialEditorAddonAdjust('cocktails', -1);
-                      }}
-                      disabled={partialCheckInEditorDraft.attendedExtras.cocktails <= 0 || syncingPendingAttendance}
-                      sx={{ minWidth: 36, px: 1 }}
+                      variant="contained"
+                      onClick={handlePartialEditorApply}
+                      disabled={syncingPendingAttendance}
                     >
-                      <Remove fontSize="small" />
+                      Apply
                     </Button>
-                    <Chip
-                      size="small"
-                      label={`${partialCheckInEditorDraft.attendedExtras.cocktails}/${partialEditorAddonMax.cocktails}`}
-                    />
+                  </Stack>
+                </>
+              )}
+              {partialCheckInModalStep === 'refund_decision' && (
+                <>
+                  <Alert severity="warning">
+                    You removed add-ons from this check-in. Do you want to issue a partial refund before applying the check-in?
+                  </Alert>
+                  {partialEditorRemovedAddonSummary.length > 0 && (
+                    <Stack direction="row" spacing={0.6} useFlexGap sx={{ flexWrap: 'wrap' }}>
+                      {partialEditorRemovedAddonSummary.map((entry) => (
+                        <Chip
+                          key={`removed-addon-${entry.key}`}
+                          size="small"
+                          color="warning"
+                          label={`${entry.label}: ${entry.qty}`}
+                        />
+                      ))}
+                    </Stack>
+                  )}
+                  {partialCheckInRefundState.error && (
+                    <Alert severity="error">{partialCheckInRefundState.error}</Alert>
+                  )}
+                  {partialCheckInRefundState.loading && (
+                    <Stack spacing={1}>
+                      <LinearProgress />
+                      <Typography variant="body2" color="text.secondary">
+                        Loading partial refund preview and email preview...
+                      </Typography>
+                    </Stack>
+                  )}
+                  <Divider />
+                  <Stack direction="row" spacing={1} justifyContent="flex-end">
                     <Button
-                      size="small"
-                      variant="outlined"
                       onClick={() => {
-                        handlePartialEditorAddonAdjust('cocktails', 1);
+                        setPartialCheckInModalStep('edit');
+                        setPartialCheckInRefundState(createDefaultPartialCheckInRefundState());
+                      }}
+                      disabled={partialCheckInRefundState.loading || partialCheckInRefundState.submitting}
+                    >
+                      Back
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      onClick={handlePartialEditorContinueWithoutRefund}
+                      disabled={partialCheckInRefundState.loading || partialCheckInRefundState.submitting}
+                    >
+                      Continue Without Refund
+                    </Button>
+                    <Tooltip
+                      title={partialEditorIssueRefundDisabledReason ?? ''}
+                      disableHoverListener={!partialEditorIssueRefundDisabledReason}
+                    >
+                      <span>
+                        <Button
+                          variant="contained"
+                          color="warning"
+                          onClick={handlePartialEditorIssueRefund}
+                          disabled={
+                            partialCheckInRefundState.loading ||
+                            partialCheckInRefundState.submitting ||
+                            Boolean(partialEditorIssueRefundDisabledReason)
+                          }
+                        >
+                          Issue a Refund
+                        </Button>
+                      </span>
+                    </Tooltip>
+                  </Stack>
+                </>
+              )}
+              {partialCheckInModalStep === 'refund_preview' && (
+                <>
+                  <Stack spacing={1}>
+                    <Typography variant="subtitle2" fontWeight={700}>
+                      Partial Refund Email Preview
+                    </Typography>
+                    {partialCheckInRefundState.emailTemplateName && (
+                      <Typography variant="caption" color="text.secondary">
+                        Template: {partialCheckInRefundState.emailTemplateName}
+                      </Typography>
+                    )}
+                    <Stack direction="row" spacing={0.6} useFlexGap sx={{ flexWrap: 'wrap' }}>
+                      {partialEditorRemovedAddonSummary.map((entry) => (
+                        <Chip
+                          key={`refund-preview-${entry.key}`}
+                          size="small"
+                          color="warning"
+                          label={`${entry.label}: ${entry.qty}`}
+                        />
+                      ))}
+                      <Chip
+                        size="small"
+                        color="warning"
+                        label={`Refund: ${(partialCheckInRefundState.amount ?? 0).toFixed(2)} ${(partialCheckInRefundState.preview?.stripe.currency ?? '').toUpperCase()}`}
+                      />
+                    </Stack>
+                  </Stack>
+                  {partialCheckInRefundState.error && (
+                    <Alert severity="error">{partialCheckInRefundState.error}</Alert>
+                  )}
+                  {partialCheckInRefundState.emailPreview ? (
+                    <Stack spacing={1.25}>
+                      <Typography variant="body2" fontWeight={600}>
+                        {partialCheckInRefundState.emailPreview.subject || 'No subject'}
+                      </Typography>
+                      {partialCheckInRefundState.emailPreview.htmlBody ? (
+                        <Box
+                          sx={{
+                            border: '1px solid',
+                            borderColor: 'divider',
+                            borderRadius: 1,
+                            overflow: 'hidden',
+                            height: 360,
+                            bgcolor: '#fff',
+                          }}
+                        >
+                          <iframe
+                            title="partial-checkin-refund-email-preview"
+                            srcDoc={partialCheckInRefundState.emailPreview.htmlBody}
+                            style={{ width: '100%', height: '100%', border: 'none' }}
+                          />
+                        </Box>
+                      ) : (
+                        <Box
+                          sx={{
+                            border: '1px solid',
+                            borderColor: 'divider',
+                            borderRadius: 1,
+                            p: 1.25,
+                            maxHeight: 360,
+                            overflowY: 'auto',
+                            bgcolor: '#fafafa',
+                          }}
+                        >
+                          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                            {partialCheckInRefundState.emailPreview.textBody || 'No preview body available.'}
+                          </Typography>
+                        </Box>
+                      )}
+                    </Stack>
+                  ) : (
+                    <Alert severity="info">No email preview data is available yet.</Alert>
+                  )}
+                  <Divider />
+                  <Stack direction="row" spacing={1} justifyContent="flex-end">
+                    <Button
+                      onClick={() => {
+                        setPartialCheckInModalStep('refund_decision');
+                      }}
+                      disabled={partialCheckInRefundState.submitting}
+                    >
+                      Back
+                    </Button>
+                    <Button
+                      variant="contained"
+                      color="warning"
+                      onClick={() => {
+                        void handlePartialEditorConfirmRefund();
                       }}
                       disabled={
-                        partialCheckInEditorDraft.attendedExtras.cocktails >= partialEditorAddonMax.cocktails ||
-                        syncingPendingAttendance
+                        partialCheckInRefundState.submitting ||
+                        !partialCheckInRefundState.preview ||
+                        !partialCheckInRefundState.emailPayload ||
+                        !partialCheckInRefundState.amount
                       }
-                      sx={{ minWidth: 36, px: 1 }}
                     >
-                      <Add fontSize="small" />
+                      {partialCheckInRefundState.submitting ? 'Processing...' : 'Send Email, Refund, and Apply'}
                     </Button>
                   </Stack>
-                </Stack>
+                </>
               )}
-
-              {partialEditorAddonMax.tshirts > 0 && (
-                <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Stack direction="row" spacing={0.75} alignItems="center">
-                    <Checkroom fontSize="small" />
-                    <Typography variant="body2">T-Shirts</Typography>
-                  </Stack>
-                  <Stack direction="row" spacing={0.5} alignItems="center">
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={() => {
-                        handlePartialEditorAddonAdjust('tshirts', -1);
-                      }}
-                      disabled={partialCheckInEditorDraft.attendedExtras.tshirts <= 0 || syncingPendingAttendance}
-                      sx={{ minWidth: 36, px: 1 }}
-                    >
-                      <Remove fontSize="small" />
-                    </Button>
-                    <Chip size="small" label={`${partialCheckInEditorDraft.attendedExtras.tshirts}/${partialEditorAddonMax.tshirts}`} />
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={() => {
-                        handlePartialEditorAddonAdjust('tshirts', 1);
-                      }}
-                      disabled={
-                        partialCheckInEditorDraft.attendedExtras.tshirts >= partialEditorAddonMax.tshirts ||
-                        syncingPendingAttendance
-                      }
-                      sx={{ minWidth: 36, px: 1 }}
-                    >
-                      <Add fontSize="small" />
-                    </Button>
-                  </Stack>
-                </Stack>
-              )}
-
-              {partialEditorAddonMax.photos > 0 && (
-                <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Stack direction="row" spacing={0.75} alignItems="center">
-                    <PhotoCamera fontSize="small" />
-                    <Typography variant="body2">Instant Pictures</Typography>
-                  </Stack>
-                  <Stack direction="row" spacing={0.5} alignItems="center">
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={() => {
-                        handlePartialEditorAddonAdjust('photos', -1);
-                      }}
-                      disabled={partialCheckInEditorDraft.attendedExtras.photos <= 0 || syncingPendingAttendance}
-                      sx={{ minWidth: 36, px: 1 }}
-                    >
-                      <Remove fontSize="small" />
-                    </Button>
-                    <Chip size="small" label={`${partialCheckInEditorDraft.attendedExtras.photos}/${partialEditorAddonMax.photos}`} />
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={() => {
-                        handlePartialEditorAddonAdjust('photos', 1);
-                      }}
-                      disabled={
-                        partialCheckInEditorDraft.attendedExtras.photos >= partialEditorAddonMax.photos ||
-                        syncingPendingAttendance
-                      }
-                      sx={{ minWidth: 36, px: 1 }}
-                    >
-                      <Add fontSize="small" />
-                    </Button>
-                  </Stack>
-                </Stack>
-              )}
-
-              <Divider />
-              <Stack direction="row" spacing={1} justifyContent="flex-end">
-                <Button onClick={closePartialCheckInEditor}>Cancel</Button>
-                <Button
-                  variant="contained"
-                  onClick={handlePartialEditorApply}
-                  disabled={syncingPendingAttendance}
-                >
-                  Apply
-                </Button>
-              </Stack>
             </Stack>
           )}
         </DialogContent>
