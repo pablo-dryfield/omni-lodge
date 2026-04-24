@@ -331,6 +331,39 @@ const extractPaymentDetails = (
   };
 };
 
+// A stricter extractor used in parse() to avoid matching booking ids as money
+// when cancellation snippets contain "(Provider - PLN)" style metadata.
+const extractPaymentDetailsSafe = (
+  text: string,
+  currencyHint: string | null,
+): { paymentMethod: string | null; currency: string | null; amount: number | null } => {
+  const section = sliceSection(text, 'payments', 'details');
+  if (!section) {
+    return { paymentMethod: null, currency: currencyHint, amount: null };
+  }
+
+  const strictBulletPattern =
+    /[\u2022]\s*(PLN|USD|EUR|GBP)\s*([\d.,]+)\s*(?:[-\u2013]\s*([^(]+?)\s*)?\(([^)]+)\)/i;
+  const strictPaymentPattern =
+    /[\u2022*]?\s*(PLN|USD|EUR|GBP)\s*([\d.,]+)\s*(?:[-\u2013]\s*)?([^(]+?)\s*\(([^)]+)\)/i;
+
+  const match = section.match(strictBulletPattern) ?? section.match(strictPaymentPattern);
+  if (!match) {
+    return { paymentMethod: null, currency: currencyHint, amount: null };
+  }
+
+  const amount = Number.parseFloat(match[2].replace(/,/g, ''));
+  const method = match[3]?.replace(/\s+/g, ' ').trim() ?? null;
+  if (method && /(cancelled|canceled|booking\s*#)/i.test(method)) {
+    return { paymentMethod: null, currency: match[1] ?? currencyHint, amount: null };
+  }
+  return {
+    paymentMethod: method,
+    currency: match[1] ?? currencyHint,
+    amount: Number.isNaN(amount) ? null : amount,
+  };
+};
+
 const buildBookingFields = (
   contextText: string,
   scheduleText: string,
@@ -729,10 +762,19 @@ export class FareHarborBookingParser implements BookingEmailParser {
     const due = text.match(DUE_PATTERN);
     const dueMoney = due ? parseMoney(due[0]) : { currency: null, amount: null };
 
-    const paymentDetails = extractPaymentDetails(text, bookingTotalMoney.currency);
+    const paymentDetails = extractPaymentDetailsSafe(text, bookingTotalMoney.currency);
 
     const currency = bookingTotalMoney.currency ?? paymentDetails.currency ?? taxesMoney.currency ?? null;
-    const totalAmount = bookingTotalMoney.amount ?? paymentDetails.amount ?? null;
+    let totalAmount = bookingTotalMoney.amount ?? paymentDetails.amount ?? null;
+    const numericBookingNumber = /^\d+$/.test(bookingNumber) ? Number.parseInt(bookingNumber, 10) : null;
+    if (
+      totalAmount !== null &&
+      numericBookingNumber !== null &&
+      Number.isInteger(totalAmount) &&
+      totalAmount === numericBookingNumber
+    ) {
+      totalAmount = null;
+    }
 
     if (totalAmount !== null) {
       bookingFields.priceGross = totalAmount;
