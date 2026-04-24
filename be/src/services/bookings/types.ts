@@ -32,6 +32,8 @@ export type BookingFieldPatch = Partial<{
   baseAmount: number | string | null;
   addonsAmount: number | string | null;
   discountAmount: number | string | null;
+  discountCode: string | null;
+  tipAmount: number | string | null;
   refundedAmount: number | string | null;
   priceGross: number | string | null;
   priceNet: number | string | null;

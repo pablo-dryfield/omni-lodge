@@ -310,6 +310,20 @@ export default class Booking extends Model<Booking> {
 
   @AllowNull(true)
   @Column({
+    field: 'discount_code',
+    type: DataType.STRING(128),
+  })
+  declare discountCode: string | null;
+
+  @AllowNull(true)
+  @Column({
+    field: 'tip_amount',
+    type: DataType.DECIMAL(12, 2),
+  })
+  declare tipAmount: string | null;
+
+  @AllowNull(true)
+  @Column({
     field: 'refunded_amount',
     type: DataType.DECIMAL(12, 2),
   })

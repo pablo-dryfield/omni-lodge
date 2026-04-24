@@ -571,14 +571,6 @@ const splitAmountAcrossItems = (totalAmount: number, itemsCount: number): number
   });
 };
 
-const formatMoneyForNote = (amount: number | null, currency: string | null): string | null => {
-  if (amount === null || !Number.isFinite(amount)) {
-    return null;
-  }
-  const core = `${roundMoney(amount).toFixed(2)}`;
-  return currency ? `${core} ${currency}` : core;
-};
-
 export class EcwidBookingParser implements BookingEmailParser {
   public readonly name = 'ecwid';
 
@@ -672,14 +664,13 @@ export class EcwidBookingParser implements BookingEmailParser {
         ? roundMoney(orderSubtotal - orderTotal)
         : null);
     const discountShares = splitAmountAcrossItems(inferredDiscount ?? 0, fallbackBlocks.length);
-    const couponCode = summary.coupon?.code ?? null;
-    const couponNoteAmount = formatMoneyForNote(inferredDiscount, summary.currency);
-    const couponNote =
-      couponCode || couponNoteAmount
-        ? [couponCode ? `Coupon (${couponCode})` : 'Coupon', couponNoteAmount ? `-${couponNoteAmount}` : null]
-            .filter(Boolean)
-            .join(': ')
+    const inferredTip =
+      orderSubtotal !== null && orderTotal !== null
+        ? roundMoney(orderTotal - (orderSubtotal - (inferredDiscount ?? 0)))
         : null;
+    const normalizedTip = inferredTip !== null && inferredTip > 0 ? inferredTip : null;
+    const tipShares = splitAmountAcrossItems(normalizedTip ?? 0, fallbackBlocks.length);
+    const couponCode = summary.coupon?.code ?? null;
 
     const buildEvent = (item: EcwidItemBlock, index: number): ParsedBookingEvent => {
       const itemQuantity = item.quantity > 0 ? item.quantity : parseItemQuantity(item.block);
@@ -729,7 +720,7 @@ export class EcwidBookingParser implements BookingEmailParser {
           ? addonRows.map((row) => `${row.label}: ${row.rawValue}`).join(' | ')
           : null;
       const flightNumber = extractLabeledValue(item.block, 'Flight Number');
-      const notesParts = [addonsNote, flightNumber ? `Flight Number: ${flightNumber}` : null, couponNote].filter(Boolean);
+      const notesParts = [addonsNote, flightNumber ? `Flight Number: ${flightNumber}` : null].filter(Boolean);
       const itemGross =
         item.price !== null
           ? item.price * itemQuantity
@@ -737,6 +728,7 @@ export class EcwidBookingParser implements BookingEmailParser {
             ? (orderSubtotal ?? orderTotal)
             : null;
       const itemDiscount = discountShares[index] ?? (inferredDiscount && fallbackBlocks.length === 1 ? inferredDiscount : null);
+      const itemTip = tipShares[index] ?? (normalizedTip && fallbackBlocks.length === 1 ? normalizedTip : null);
       const itemNet =
         itemGross !== null
           ? roundMoney(Math.max(itemGross - (itemDiscount ?? 0), 0))
@@ -775,6 +767,8 @@ export class EcwidBookingParser implements BookingEmailParser {
         priceNet: itemNet,
         baseAmount: itemNet,
         discountAmount: itemDiscount,
+        discountCode: couponCode,
+        tipAmount: itemTip,
         paymentMethod,
         pickupLocation: location,
         notes: notesParts.length > 0 ? notesParts.join(' | ') : null,
