@@ -81,7 +81,10 @@ type QueryParams = {
   productId?: string;
   time?: string;
   search?: string;
+  dateField?: string;
 };
+
+type BookingsDateField = 'experience_date' | 'source_received_at';
 
 type UpdateBookingAttendanceBody = {
   attendedTotal?: unknown;
@@ -162,6 +165,14 @@ const resolveRange = (query: QueryParams): { start: string | null; end: string |
     return { start: end, end };
   }
   return { start, end };
+};
+
+const resolveBookingsDateField = (value?: string): BookingsDateField => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'source_received_at') {
+    return 'source_received_at';
+  }
+  return 'experience_date';
 };
 
 const normalizeAliasLabel = (value: string): string => sanitizeProductSource(value).toLowerCase();
@@ -1539,25 +1550,52 @@ const resolveCounterDateWhere = (start: string | null, end: string | null): Wher
 
 export const listBookings = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { start, end } = resolveRange(req.query as QueryParams);
+    const query = req.query as QueryParams;
+    const { start, end } = resolveRange(query);
+    const dateField = resolveBookingsDateField(query.dateField);
 
     const where: WhereOptions = {};
-    if (start && end) {
-      where.experienceDate = { [Op.between]: [start, end] };
-    } else if (start) {
-      where.experienceDate = { [Op.gte]: start };
-    } else if (end) {
-      where.experienceDate = { [Op.lte]: end };
+    if (dateField === 'experience_date') {
+      if (start && end) {
+        where.experienceDate = { [Op.between]: [start, end] };
+      } else if (start) {
+        where.experienceDate = { [Op.gte]: start };
+      } else if (end) {
+        where.experienceDate = { [Op.lte]: end };
+      }
+    } else {
+      const sourceDateExpression = fn('DATE', fn('timezone', STORE_TIMEZONE, col('source_received_at')));
+      const clauses: WhereOptions[] = [];
+      if (start && end) {
+        clauses.push(sequelizeWhere(sourceDateExpression, { [Op.between]: [start, end] }));
+      } else if (start) {
+        clauses.push(sequelizeWhere(sourceDateExpression, { [Op.gte]: start }));
+      } else if (end) {
+        clauses.push(sequelizeWhere(sourceDateExpression, { [Op.lte]: end }));
+      }
+      if (clauses.length > 0) {
+        Object.assign(where, { [Op.and]: clauses });
+      }
     }
+
+    const order: OrderItem[] =
+      dateField === 'source_received_at'
+        ? [
+            ['sourceReceivedAt', 'ASC'],
+            ['experienceDate', 'ASC'],
+            ['experienceStartAt', 'ASC'],
+            ['id', 'ASC'],
+          ]
+        : [
+            ['experienceDate', 'ASC'],
+            ['experienceStartAt', 'ASC'],
+            ['id', 'ASC'],
+          ];
 
     const rows = await Booking.findAll({
       where,
       include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
-      order: [
-        ['experienceDate', 'ASC'],
-        ['experienceStartAt', 'ASC'],
-        ['id', 'ASC'],
-      ],
+      order,
     });
 
     const orders = rows
