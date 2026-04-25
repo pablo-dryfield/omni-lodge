@@ -208,15 +208,34 @@ export const MobileBookingsList: React.FC<MobileBookingsListProps> = ({
     if (!scrollToDate) {
       return;
     }
-    const node = dateRefs.current[scrollToDate];
-    if (node) {
-      requestAnimationFrame(() => {
+    let rafId: number | null = null;
+    let attempts = 0;
+    const maxAttempts = 12;
+
+    const tryScroll = () => {
+      const node = dateRefs.current[scrollToDate];
+      if (node) {
         node.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
-    }
-    if (onScrollComplete) {
-      onScrollComplete();
-    }
+        onScrollComplete?.();
+        return;
+      }
+
+      attempts += 1;
+      if (attempts >= maxAttempts) {
+        onScrollComplete?.();
+        return;
+      }
+
+      rafId = requestAnimationFrame(tryScroll);
+    };
+
+    rafId = requestAnimationFrame(tryScroll);
+
+    return () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+    };
   }, [scrollToDate, onScrollComplete]);
 
   return (
