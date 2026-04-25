@@ -379,7 +379,7 @@ export const BookingsGrid: React.FC<BookingsGridProps> = ({
   scrollToDate,
   onScrollComplete,
 }) => {
-  const isMobile = useMediaQuery("(max-width: 900px)");
+  const isMobile = useMediaQuery("(max-width: 900px)", false, { getInitialValueInEffect: false });
   const [activeCell, setActiveCell] = useState<ActiveCell>(null);
   const headerRefs = useRef<Record<string, HTMLTableCellElement | null>>({});
 

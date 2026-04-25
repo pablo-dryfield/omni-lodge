@@ -542,7 +542,8 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const [orders, setOrders] = useState<UnifiedOrder[]>([]);
   const [bookingAddons, setBookingAddons] = useState<BookingAddonDashboardRow[]>([]);
   const [counterInsights, setCounterInsights] = useState<BookingCounterInsights | null>(null);
-  const [statusFilter, setStatusFilter] = useState<BookingFilter>("active");
+  const [calendarStatusFilter, setCalendarStatusFilter] = useState<BookingFilter>("active");
+  const [summaryStatusFilter, setSummaryStatusFilter] = useState<BookingFilter>("all");
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [ingestStatus, setIngestStatus] = useState<FetchStatus>("idle");
@@ -1210,9 +1211,12 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     reloadToken,
   ]);
 
+  const activeStatusFilter: BookingFilter =
+    activeTab === "summary" ? summaryStatusFilter : calendarStatusFilter;
+
   const filteredOrders = useMemo(
-    () => filterOrdersByStatus(orders, statusFilter),
-    [orders, statusFilter],
+    () => filterOrdersByStatus(orders, activeStatusFilter),
+    [orders, activeStatusFilter],
   );
   const filteredBookingAddons = useMemo(() => {
     const bookingIds = new Set<number>();
@@ -1226,20 +1230,20 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   }, [bookingAddons, filteredOrders]);
 
   const filteredProducts = useMemo(() => {
-    if (statusFilter === "all") {
+    if (activeStatusFilter === "all") {
       return products;
     }
     const ids = new Set(filteredOrders.map((order) => order.productId));
     return products.filter((product) => ids.has(product.id));
-  }, [products, filteredOrders, statusFilter]);
+  }, [products, filteredOrders, activeStatusFilter]);
 
   const filteredDateRange = useMemo(() => {
-    if (statusFilter === "all") {
+    if (activeStatusFilter === "all") {
       return dateRange;
     }
     const dates = new Set(filteredOrders.map((order) => order.date));
     return dateRange.filter((date) => dates.has(date));
-  }, [dateRange, filteredOrders, statusFilter]);
+  }, [dateRange, filteredOrders, activeStatusFilter]);
 
   const grid: BookingGrid = useMemo(() => {
     return prepareBookingGrid(filteredProducts, filteredOrders, filteredDateRange);
@@ -1449,8 +1453,15 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                   size="sm"
                 />
                 <SegmentedControl
-                  value={statusFilter}
-                  onChange={(value) => setStatusFilter(value as BookingFilter)}
+                  value={activeStatusFilter}
+                  onChange={(value) => {
+                    const next = value as BookingFilter;
+                    if (activeTab === "summary") {
+                      setSummaryStatusFilter(next);
+                      return;
+                    }
+                    setCalendarStatusFilter(next);
+                  }}
                   data={[
                     { label: "All", value: "all" },
                     { label: "Has people", value: "active" },
