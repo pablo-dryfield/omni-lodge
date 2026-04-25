@@ -1214,10 +1214,12 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const activeStatusFilter: BookingFilter =
     activeTab === "summary" ? summaryStatusFilter : calendarStatusFilter;
 
-  const filteredOrders = useMemo(
-    () => filterOrdersByStatus(orders, activeStatusFilter),
-    [orders, activeStatusFilter],
-  );
+  const filteredOrders = useMemo(() => {
+    if (activeTab === "summary" && activeStatusFilter === "all") {
+      return orders.filter((order) => order.status !== "cancelled");
+    }
+    return filterOrdersByStatus(orders, activeStatusFilter);
+  }, [orders, activeStatusFilter, activeTab]);
   const filteredBookingAddons = useMemo(() => {
     const bookingIds = new Set<number>();
     filteredOrders.forEach((order) => {
