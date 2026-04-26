@@ -259,6 +259,51 @@ const parseTravelerCounts = (
   return { total, adults: total };
 };
 
+const sanitizeTravelerName = (value: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const normalized = value
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,.;:()-]+|[\s,.;:()-]+$/g, '')
+    .trim();
+  return normalized.length > 0 ? normalized : null;
+};
+
+const extractAddedTravelerAmendments = (
+  input: string,
+): { count: number; names: string[] } => {
+  if (!input) {
+    return { count: 0, names: [] };
+  }
+
+  const pluralPattern = /(\d+)\s+travell?ers?\s+have\s+been\s+added\s+to\s+this\s+booking/gi;
+  let pluralCount = 0;
+  for (const match of input.matchAll(pluralPattern)) {
+    const value = Number.parseInt(match[1] ?? '', 10);
+    if (Number.isFinite(value) && value > 0) {
+      pluralCount += value;
+    }
+  }
+
+  const namedPattern =
+    /travell?er(?:\s+passenger)?(?:\s+([^\r\n\u2022<]{1,120}?))?\s+has\s+been\s+added\s+to\s+this\s+booking/gi;
+  const names: string[] = [];
+  let namedCount = 0;
+  for (const match of input.matchAll(namedPattern)) {
+    namedCount += 1;
+    const sanitizedName = sanitizeTravelerName(match[1] ?? null);
+    if (sanitizedName) {
+      names.push(sanitizedName);
+    }
+  }
+
+  if (pluralCount > 0) {
+    return { count: pluralCount, names };
+  }
+  return { count: namedCount, names };
+};
+
 const extractFallbackTourName = (text: string): string | null => {
   const headingMatch = text.match(/The following booking for\s+(.+?)\s+on\b/i);
   if (headingMatch?.[1]) {
@@ -530,6 +575,7 @@ export class ViatorBookingParser implements BookingEmailParser {
     const timeHint = tourGrade ?? tourGradeCode ?? '';
     const schedule = parseTravelDate(travelDate, timeHint);
     const counts = parseTravelerCounts(travelers);
+    const travelerAdditions = extractAddedTravelerAmendments(normalizedText);
     const leadTraveler = sanitizeLeadTraveler(leadTravelerRaw);
     const nameParts = parseName(leadTraveler);
     const money = parseMoney(netRate);
@@ -652,6 +698,16 @@ export class ViatorBookingParser implements BookingEmailParser {
       bookingFields,
       occurredAt: context.receivedAt ?? context.internalDate ?? null,
       sourceReceivedAt: context.receivedAt ?? context.internalDate ?? null,
+      rawPayload:
+        travelerAdditions.count > 0
+          ? {
+              viatorTravellerAddition: {
+                addedCount: travelerAdditions.count,
+                names: travelerAdditions.names,
+              },
+            }
+          : null,
     };
   }
 }
+
