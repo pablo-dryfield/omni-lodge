@@ -1270,8 +1270,28 @@ const isEcwidOrder = (order: UnifiedOrder): boolean => {
   return (order.platform ?? '').toLowerCase() === 'ecwid';
 };
 
+const isCivitatisOrder = (order: UnifiedOrder): boolean => {
+  return (order.platform ?? '').toLowerCase() === 'civitatis';
+};
+
 const isXperiencePolandOrder = (order: UnifiedOrder): boolean => {
   return (order.platform ?? '').toLowerCase() === 'xperiencepoland';
+};
+
+const isOrderExperienceDateOnOrBeforeToday = (order: UnifiedOrder): boolean => {
+  const rawDate = String(order.date ?? "").trim();
+  if (!rawDate) {
+    return false;
+  }
+  const parsed = dayjs(rawDate, DATE_FORMAT, true);
+  if (!parsed.isValid()) {
+    return false;
+  }
+  return !parsed.startOf("day").isAfter(dayjs().startOf("day"));
+};
+
+const isOrderAttendanceNoShow = (order: UnifiedOrder): boolean => {
+  return String(order.attendanceStatus ?? "").trim().toLowerCase() === "no_show";
 };
 
 const getBookingIdFromOrder = (order: UnifiedOrder): number | null => {
@@ -1674,7 +1694,7 @@ type CancelRefundState = {
   opened: boolean;
   order: UnifiedOrder | null;
   bookingId: number | null;
-  mode: "ecwid_refund" | "xperience_cancel" | null;
+  mode: "ecwid_refund" | "xperience_cancel" | "civitatis_cancel" | null;
   loading: boolean;
   submitting: boolean;
   error: string | null;
@@ -2771,18 +2791,34 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const openCancelModal = async (order: UnifiedOrder) => {
     const bookingId = getBookingIdFromOrder(order);
     const ecwidOrder = isEcwidOrder(order);
+    const civitatisOrder = isCivitatisOrder(order);
     const xperienceOrder = isXperiencePolandOrder(order);
+    const civitatisAllowed =
+      civitatisOrder &&
+      isOrderExperienceDateOnOrBeforeToday(order) &&
+      isOrderAttendanceNoShow(order) &&
+      order.status !== "cancelled";
     const baseState = createDefaultCancelState();
     baseState.opened = true;
     baseState.order = order;
     baseState.bookingId = bookingId;
-    baseState.mode = ecwidOrder ? "ecwid_refund" : xperienceOrder ? "xperience_cancel" : null;
+    baseState.mode = ecwidOrder
+      ? "ecwid_refund"
+      : xperienceOrder
+        ? "xperience_cancel"
+        : civitatisOrder
+          ? "civitatis_cancel"
+          : null;
     baseState.loading = Boolean(bookingId && ecwidOrder);
     if (!bookingId) {
       baseState.error = "Unable to locate OmniLodge booking reference for this order.";
       baseState.loading = false;
-    } else if (!ecwidOrder && !xperienceOrder) {
+    } else if (!ecwidOrder && !xperienceOrder && !civitatisOrder) {
       baseState.error = "Cancellation is not supported for this platform from the manifest.";
+      baseState.loading = false;
+    } else if (civitatisOrder && !civitatisAllowed) {
+      baseState.error =
+        "Civitatis cancellation requires: not already cancelled, experience date today/past, and attendance status no_show.";
       baseState.loading = false;
     }
     setCancelState(baseState);
@@ -3501,6 +3537,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         }
       } else if (cancelState.mode === "xperience_cancel") {
         await axiosInstance.post(`/bookings/${cancelState.bookingId}/cancel-xperience`);
+      } else if (cancelState.mode === "civitatis_cancel") {
+        await axiosInstance.post(`/bookings/${cancelState.bookingId}/cancel-civitatis`);
       } else {
         throw new Error("Cancellation mode is not supported.");
       }
@@ -4898,7 +4936,15 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   );
   const mobileActionsCanCancel = Boolean(
     mobileActionsOrder &&
-      (isEcwidOrder(mobileActionsOrder) || isXperiencePolandOrder(mobileActionsOrder)) &&
+      (
+        isEcwidOrder(mobileActionsOrder) ||
+        isXperiencePolandOrder(mobileActionsOrder) ||
+        (
+          isCivitatisOrder(mobileActionsOrder) &&
+          isOrderExperienceDateOnOrBeforeToday(mobileActionsOrder) &&
+          isOrderAttendanceNoShow(mobileActionsOrder)
+        )
+      ) &&
       mobileActionsBookingId &&
       mobileActionsOrder.status !== "cancelled",
   );
@@ -6638,6 +6684,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           <Text size="sm" c="dimmed">
             {cancelState.mode === "ecwid_refund"
               ? "We will verify the Stripe transaction before issuing the refund and cancelling the booking."
+              : cancelState.mode === "civitatis_cancel"
+                ? "This only cancels the booking internally in OmniLodge. Any customer refund must be handled directly in Civitatis."
               : "This will cancel the booking in OmniLodge and record a cancellation event."}
           </Text>
           {cancelState.loading && cancelState.mode === "ecwid_refund" && (
@@ -6707,6 +6755,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           {cancelState.mode === "xperience_cancel" && (
             <Alert color="blue" title="Direct cancellation">
               No Stripe refund will be issued from this action.
+            </Alert>
+          )}
+          {cancelState.mode === "civitatis_cancel" && (
+            <Alert color="yellow" title="Internal-only cancellation">
+              This action only marks the booking as cancelled in OmniLodge. Refunds must be processed externally in Civitatis.
             </Alert>
           )}
           {cancelState.mode === "ecwid_refund" && !String(cancelState.order?.customerEmail ?? "").trim() && (

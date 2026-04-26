@@ -10,6 +10,7 @@ import BookingAddon from '../models/BookingAddon.js';
 import BookingEvent from '../models/BookingEvent.js';
 import EmailTemplate from '../models/EmailTemplate.js';
 import Channel from '../models/Channel.js';
+import ChannelCommission from '../models/ChannelCommission.js';
 import Counter from '../models/Counter.js';
 import CounterChannelMetric from '../models/CounterChannelMetric.js';
 import Guest from '../models/Guest.js';
@@ -85,6 +86,14 @@ type QueryParams = {
 };
 
 type BookingsDateField = 'experience_date' | 'source_received_at';
+
+type BookingCommissionEnrichment = {
+  channelCommissionRate: number | null;
+  channelCommissionAmount: number | null;
+  baseAmountAfterChannelCommission: number | null;
+  channelCommissionDateBasis: BookingsDateField;
+  channelCommissionEffectiveDate: string | null;
+};
 
 type UpdateBookingAttendanceBody = {
   attendedTotal?: unknown;
@@ -1335,7 +1344,10 @@ const isAfterCutoffBySourceReceivedAt = (experienceDate: string, sourceReceivedA
   return sourceMoment.isAfter(cutoffMoment);
 };
 
-const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
+const bookingToUnifiedOrder = (
+  booking: Booking,
+  commissionEnrichment: BookingCommissionEnrichment | null = null,
+): UnifiedOrder | null => {
   const pickupMomentUtc = booking.experienceStartAt ? dayjs(booking.experienceStartAt) : null;
   const pickupMomentLocal =
     pickupMomentUtc?.isValid() && DISPLAY_TIMEZONE ? pickupMomentUtc.tz(DISPLAY_TIMEZONE) : pickupMomentUtc;
@@ -1463,6 +1475,11 @@ const bookingToUnifiedOrder = (booking: Booking): UnifiedOrder | null => {
       priceNet: booking.priceNet,
       commissionAmount: booking.commissionAmount,
       commissionRate: booking.commissionRate,
+      channelCommissionRate: commissionEnrichment?.channelCommissionRate ?? null,
+      channelCommissionAmount: commissionEnrichment?.channelCommissionAmount ?? null,
+      baseAmountAfterChannelCommission: commissionEnrichment?.baseAmountAfterChannelCommission ?? null,
+      channelCommissionDateBasis: commissionEnrichment?.channelCommissionDateBasis ?? null,
+      channelCommissionEffectiveDate: commissionEnrichment?.channelCommissionEffectiveDate ?? null,
       partySizeTotal: booking.partySizeTotal,
       attendedTotal: booking.attendedTotal,
       experienceDate: booking.experienceDate,
@@ -1507,6 +1524,145 @@ const parseMoneyLikeNumber = (value: unknown): number => {
 };
 
 const roundCurrency = (value: number): number => Math.round(value * 100) / 100;
+const roundRate = (value: number): number => Math.round(value * 10000) / 10000;
+
+const toDateOnlyString = (value: Date | null | undefined): string | null => {
+  if (!value || Number.isNaN(value.getTime())) {
+    return null;
+  }
+  return dayjs(value).tz(STORE_TIMEZONE).format(DATE_FORMAT);
+};
+
+const resolveBookingCommissionEffectiveDate = (
+  booking: Booking,
+  dateField: BookingsDateField,
+): string | null => {
+  const experienceDate =
+    typeof booking.experienceDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(booking.experienceDate)
+      ? booking.experienceDate
+      : null;
+  const sourceDate = toDateOnlyString(booking.sourceReceivedAt ?? null);
+
+  if (dateField === 'source_received_at') {
+    return sourceDate ?? experienceDate;
+  }
+  return experienceDate ?? sourceDate;
+};
+
+const buildCommissionEnrichmentMap = async (
+  bookings: Booking[],
+  dateField: BookingsDateField,
+): Promise<Map<number, BookingCommissionEnrichment>> => {
+  const map = new Map<number, BookingCommissionEnrichment>();
+  if (bookings.length === 0) {
+    return map;
+  }
+
+  const channelIdSet = new Set<number>();
+  const effectiveDates: string[] = [];
+  const effectiveDateByBookingId = new Map<number, string | null>();
+
+  bookings.forEach((booking) => {
+    const bookingId = Number(booking.id);
+    if (!Number.isFinite(bookingId) || bookingId <= 0) {
+      return;
+    }
+    const channelId = Number(booking.channelId);
+    if (Number.isFinite(channelId) && channelId > 0) {
+      channelIdSet.add(channelId);
+    }
+    const effectiveDate = resolveBookingCommissionEffectiveDate(booking, dateField);
+    effectiveDateByBookingId.set(bookingId, effectiveDate);
+    if (effectiveDate) {
+      effectiveDates.push(effectiveDate);
+    }
+  });
+
+  if (channelIdSet.size === 0 || effectiveDates.length === 0) {
+    return map;
+  }
+
+  const minDate = effectiveDates.reduce((best, current) => (current < best ? current : best), effectiveDates[0]);
+  const maxDate = effectiveDates.reduce((best, current) => (current > best ? current : best), effectiveDates[0]);
+
+  const commissions = await ChannelCommission.findAll({
+    where: {
+      channelId: { [Op.in]: Array.from(channelIdSet) },
+      validFrom: { [Op.lte]: maxDate },
+      [Op.or]: [{ validTo: null }, { validTo: { [Op.gte]: minDate } }],
+    },
+    attributes: ['id', 'channelId', 'rate', 'validFrom', 'validTo'],
+    order: [
+      ['channelId', 'ASC'],
+      ['validFrom', 'DESC'],
+      ['id', 'DESC'],
+    ],
+  });
+
+  const commissionByChannel = new Map<number, ChannelCommission[]>();
+  commissions.forEach((record) => {
+    const channelId = Number(record.channelId);
+    if (!Number.isFinite(channelId) || channelId <= 0) {
+      return;
+    }
+    const bucket = commissionByChannel.get(channelId) ?? [];
+    bucket.push(record);
+    commissionByChannel.set(channelId, bucket);
+  });
+
+  bookings.forEach((booking) => {
+    const bookingId = Number(booking.id);
+    if (!Number.isFinite(bookingId) || bookingId <= 0) {
+      return;
+    }
+    const effectiveDate = effectiveDateByBookingId.get(bookingId) ?? null;
+    const channelId = Number(booking.channelId);
+    if (!Number.isFinite(channelId) || channelId <= 0 || !effectiveDate) {
+      return;
+    }
+
+    const channelRecords = commissionByChannel.get(channelId) ?? [];
+    const selected = channelRecords.find((record) => {
+      const validFrom = String(record.validFrom ?? '').trim();
+      const validTo = record.validTo ? String(record.validTo).trim() : null;
+      if (!validFrom || validFrom > effectiveDate) {
+        return false;
+      }
+      if (validTo && validTo < effectiveDate) {
+        return false;
+      }
+      return true;
+    });
+
+    if (!selected) {
+      return;
+    }
+
+    const rawRate = parseMoneyLikeNumber(selected.rate);
+    if (!Number.isFinite(rawRate) || rawRate < 0) {
+      return;
+    }
+    const channelCommissionRate = Math.min(Math.max(rawRate, 0), 1);
+    const hasBaseAmount = booking.baseAmount !== null && booking.baseAmount !== undefined;
+    const baseAmount = hasBaseAmount ? parseMoneyLikeNumber(booking.baseAmount) : null;
+    if (baseAmount === null) {
+      return;
+    }
+
+    const baseAmountAfterChannelCommission = roundCurrency(Math.max(baseAmount * (1 - channelCommissionRate), 0));
+    const channelCommissionAmount = roundCurrency(Math.max(baseAmount - baseAmountAfterChannelCommission, 0));
+
+    map.set(bookingId, {
+      channelCommissionRate: roundRate(channelCommissionRate),
+      channelCommissionAmount,
+      baseAmountAfterChannelCommission,
+      channelCommissionDateBasis: dateField,
+      channelCommissionEffectiveDate: effectiveDate,
+    });
+  });
+
+  return map;
+};
 
 const FREE_TICKET_REGEXES = [
   /(?:free|complimentary|comp)\s*tickets?\s*[:=-]?\s*(\d{1,4})/gi,
@@ -1598,8 +1754,11 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
       order,
     });
 
+    const commissionEnrichmentByBookingId = await buildCommissionEnrichmentMap(rows, dateField);
     const orders = rows
-      .map((booking) => bookingToUnifiedOrder(booking))
+      .map((booking) =>
+        bookingToUnifiedOrder(booking, commissionEnrichmentByBookingId.get(Number(booking.id)) ?? null),
+      )
       .filter((order): order is UnifiedOrder => order !== null);
 
     const products = collectProducts(orders);
@@ -3847,6 +4006,18 @@ const recordManualCancellationEvent = async (
   await cancellationEvent.save(transaction ? { transaction } : undefined);
 };
 
+const isExperienceDateOnOrBeforeToday = (experienceDate: unknown): boolean => {
+  if (!experienceDate) {
+    return false;
+  }
+  const parsed = dayjs(experienceDate as string | Date).tz(STORE_TIMEZONE);
+  if (!parsed.isValid()) {
+    return false;
+  }
+  const today = dayjs().tz(STORE_TIMEZONE).startOf('day');
+  return !parsed.startOf('day').isAfter(today);
+};
+
 export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
@@ -3975,6 +4146,88 @@ export const cancelXperiencePolandBooking = async (req: AuthenticatedRequest, re
 
     res.status(200).json({
       message: 'Booking cancelled successfully',
+      booking: {
+        id: booking.id,
+        status: booking.status,
+        cancelledAt: booking.cancelledAt,
+      },
+    });
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json({ message: error.message, details: error.details });
+      return;
+    }
+    const message = error instanceof Error ? error.message : 'Failed to cancel booking';
+    res.status(500).json({ message });
+  }
+};
+
+export const cancelCivitatisBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const booking = await Booking.findByPk(bookingIdParam);
+    if (!booking) {
+      res.status(404).json({ message: 'Booking not found' });
+      return;
+    }
+
+    if (booking.platform !== 'civitatis') {
+      res.status(400).json({ message: 'Only Civitatis bookings can be cancelled through this endpoint' });
+      return;
+    }
+
+    if (booking.status === 'cancelled') {
+      res.status(400).json({ message: 'Booking is already cancelled' });
+      return;
+    }
+
+    if (booking.attendanceStatus !== 'no_show') {
+      res.status(400).json({
+        message: 'Civitatis bookings can only be cancelled when attendance_status is no_show',
+      });
+      return;
+    }
+
+    if (!isExperienceDateOnOrBeforeToday(booking.experienceDate)) {
+      res.status(400).json({
+        message: 'Civitatis bookings can only be cancelled when experience_date is today or in the past',
+      });
+      return;
+    }
+
+    const now = new Date();
+    booking.status = 'cancelled';
+    booking.statusChangedAt = now;
+    booking.cancelledAt = now;
+    booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
+
+    const sequelizeClient = Booking.sequelize;
+    if (!sequelizeClient) {
+      throw new Error('Database client is not initialized');
+    }
+
+    await sequelizeClient.transaction(async (transaction) => {
+      await booking.save({ transaction });
+      await recordManualCancellationEvent(
+        booking,
+        now,
+        req.authContext?.id ?? null,
+        {
+          action: 'cancel-civitatis',
+          internalOnly: true,
+          refundHandledExternally: true,
+        },
+        transaction,
+      );
+    });
+
+    res.status(200).json({
+      message: 'Booking cancelled internally in OmniLodge',
       booking: {
         id: booking.id,
         status: booking.status,

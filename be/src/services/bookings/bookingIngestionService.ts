@@ -1,5 +1,6 @@
 import type { Transaction } from 'sequelize';
 import { Op } from 'sequelize';
+import axios, { isAxiosError } from 'axios';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 import utc from 'dayjs/plugin/utc.js';
@@ -84,6 +85,10 @@ const productNameCache = new Map<number, string | null>();
 const PRODUCT_ALIAS_CACHE_TTL_MS = 60 * 1000;
 let productAliasCache: { fetchedAt: number; records: ProductAlias[] } | null = null;
 const AIRBNB_CANCELLATION_PLACEHOLDER_PREFIX = 'airbnb-cancel-';
+const BOOKING_REFUND_FX_TIMEOUT_MS = 5000;
+const BOOKING_REFUND_FX_MAX_FALLBACK_DAYS = 10;
+const BOOKING_REFUND_FX_NBP_BASE_URL = 'https://api.nbp.pl/api/exchangerates/rates/A';
+const refundFxDailyRateCache = new Map<string, number | null>();
 
 const normalizeAliasInput = (value: string): string => sanitizeProductSource(value).toLowerCase();
 
@@ -516,6 +521,185 @@ const parseDecimalNumber = (value: unknown): number | null => {
     const parsed = Number.parseFloat(trimmed.replace(/,/g, '.'));
     return Number.isFinite(parsed) ? parsed : null;
   }
+  return null;
+};
+
+const normalizeCurrencyCode = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(normalized) ? normalized : null;
+};
+
+const formatFxLookupDate = (value: Date): string =>
+  dayjs(value).tz(DEFAULT_BOOKING_TIMEZONE).format('YYYY-MM-DD');
+
+const REFUND_RECON_EPSILON = 0.01;
+
+const amountsRoughlyEqual = (left: number, right: number): boolean =>
+  Math.abs(left - right) <= REFUND_RECON_EPSILON;
+
+type ParsedRefundConversionPayload = {
+  originalAmount: number;
+  originalCurrency: string;
+  convertedAmount: number;
+  convertedCurrency: string;
+  fxRate: number | null;
+  fxRateDate: string | null;
+  fxRateSource: string | null;
+};
+
+const parseRefundConversionPayload = (payload: unknown): ParsedRefundConversionPayload | null => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return null;
+  }
+  const root = payload as Record<string, unknown>;
+  const raw = root.refundConversion;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+
+  const record = raw as Record<string, unknown>;
+  const originalAmount = parseDecimalNumber(record.originalAmount);
+  const convertedAmount = parseDecimalNumber(record.convertedAmount);
+  const originalCurrency = normalizeCurrencyCode(record.originalCurrency);
+  const convertedCurrency = normalizeCurrencyCode(record.convertedCurrency);
+  const fxRate = parseDecimalNumber(record.fxRate);
+  const fxRateDateRaw = typeof record.fxRateDate === 'string' ? record.fxRateDate.trim() : null;
+  const fxRateDate =
+    fxRateDateRaw && /^\d{4}-\d{2}-\d{2}$/.test(fxRateDateRaw) ? fxRateDateRaw : null;
+  const fxRateSource = typeof record.fxRateSource === 'string' ? record.fxRateSource.trim() : null;
+
+  if (
+    originalAmount === null ||
+    convertedAmount === null ||
+    !originalCurrency ||
+    !convertedCurrency ||
+    !Number.isFinite(originalAmount) ||
+    !Number.isFinite(convertedAmount)
+  ) {
+    return null;
+  }
+
+  return {
+    originalAmount,
+    originalCurrency,
+    convertedAmount,
+    convertedCurrency,
+    fxRate: fxRate !== null && Number.isFinite(fxRate) && fxRate > 0 ? fxRate : null,
+    fxRateDate,
+    fxRateSource: fxRateSource && fxRateSource.length > 0 ? fxRateSource : null,
+  };
+};
+
+const fetchNbpMidRateForDate = async (
+  currencyCode: string,
+  dateIso: string,
+): Promise<{ rate: number; effectiveDate: string } | null> => {
+  const cacheKey = `${currencyCode}:${dateIso}`;
+  if (refundFxDailyRateCache.has(cacheKey)) {
+    const cached = refundFxDailyRateCache.get(cacheKey) ?? null;
+    if (cached === null) {
+      return null;
+    }
+    return { rate: cached, effectiveDate: dateIso };
+  }
+
+  try {
+    const response = await axios.get(
+      `${BOOKING_REFUND_FX_NBP_BASE_URL}/${currencyCode}/${dateIso}/?format=json`,
+      {
+        timeout: BOOKING_REFUND_FX_TIMEOUT_MS,
+      },
+    );
+    const rates = Array.isArray(response.data?.rates)
+      ? (response.data.rates as Array<Record<string, unknown>>)
+      : [];
+    const first = rates[0] ?? null;
+    const mid = parseDecimalNumber(first?.mid);
+    const effectiveDateRaw = typeof first?.effectiveDate === 'string' ? first.effectiveDate.trim() : dateIso;
+    const effectiveDate =
+      effectiveDateRaw && /^\d{4}-\d{2}-\d{2}$/.test(effectiveDateRaw) ? effectiveDateRaw : dateIso;
+
+    if (mid === null || !Number.isFinite(mid) || mid <= 0) {
+      logger.warn(`[booking-email] NBP returned invalid FX rate for ${currencyCode} ${dateIso}`);
+      refundFxDailyRateCache.set(cacheKey, null);
+      return null;
+    }
+
+    refundFxDailyRateCache.set(cacheKey, mid);
+    return { rate: mid, effectiveDate };
+  } catch (error) {
+    if (isAxiosError(error)) {
+      if (error.response?.status === 404) {
+        refundFxDailyRateCache.set(cacheKey, null);
+        return null;
+      }
+      logger.warn(
+        `[booking-email] NBP FX request failed for ${currencyCode} ${dateIso}: ${error.message}`,
+      );
+      return null;
+    }
+    logger.warn(
+      `[booking-email] Unexpected NBP FX error for ${currencyCode} ${dateIso}: ${(error as Error).message}`,
+    );
+    return null;
+  }
+};
+
+const resolveRefundFxRate = async (
+  sourceCurrency: string,
+  targetCurrency: string,
+  eventDate: Date,
+): Promise<{ rate: number; rateDate: string; rateSource: string } | null> => {
+  if (sourceCurrency === targetCurrency) {
+    return {
+      rate: 1,
+      rateDate: formatFxLookupDate(eventDate),
+      rateSource: 'identity',
+    };
+  }
+
+  const baseDate = dayjs(eventDate).tz(DEFAULT_BOOKING_TIMEZONE).startOf('day');
+  if (!baseDate.isValid()) {
+    return null;
+  }
+
+  for (let offset = 0; offset <= BOOKING_REFUND_FX_MAX_FALLBACK_DAYS; offset += 1) {
+    const candidateDate = baseDate.subtract(offset, 'day').format('YYYY-MM-DD');
+    const sourcePerPln =
+      sourceCurrency === 'PLN'
+        ? { rate: 1, effectiveDate: candidateDate }
+        : await fetchNbpMidRateForDate(sourceCurrency, candidateDate);
+    if (!sourcePerPln) {
+      continue;
+    }
+
+    const targetPerPln =
+      targetCurrency === 'PLN'
+        ? { rate: 1, effectiveDate: candidateDate }
+        : await fetchNbpMidRateForDate(targetCurrency, candidateDate);
+    if (!targetPerPln) {
+      continue;
+    }
+
+    if (sourcePerPln.rate <= 0 || targetPerPln.rate <= 0) {
+      continue;
+    }
+
+    const rate = sourcePerPln.rate / targetPerPln.rate;
+    if (!Number.isFinite(rate) || rate <= 0) {
+      continue;
+    }
+
+    return {
+      rate,
+      rateDate: candidateDate,
+      rateSource: offset === 0 ? 'nbp-mid' : `nbp-mid-fallback-${offset}d`,
+    };
+  }
+
   return null;
 };
 
@@ -1016,27 +1200,103 @@ const syncAddons = async (
 const isValidDateValue = (value: unknown): value is Date =>
   value instanceof Date && Number.isFinite(value.valueOf());
 
-const reconcileRefundDerivedFields = (
+type RefundReconciliationOutcome = {
+  originalAmount: string;
+  originalCurrency: string;
+  convertedAmount: string;
+  convertedCurrency: string;
+  fxRate: string;
+  fxRateDate: string;
+  fxRateSource: string;
+  reusedPriorConversion?: boolean;
+  skippedReason?: string;
+};
+
+const reconcileRefundDerivedFields = async (
   booking: Booking,
   event: ParsedBookingEvent,
   patch: Record<string, unknown>,
-): void => {
+  options: {
+    priorEventPayload?: unknown;
+    eventOccurredAt: Date;
+  },
+): Promise<RefundReconciliationOutcome | null> => {
   const shouldReconcile =
     event.paymentStatus === 'partial' ||
     event.paymentStatus === 'refunded' ||
     patch.refundedAmount !== undefined;
   if (!shouldReconcile) {
-    return;
+    return null;
   }
 
-  const parsedRefund = parseDecimalNumber(patch.refundedAmount);
-  if (parsedRefund === null) {
-    return;
+  const parsedRefundRaw = parseDecimalNumber(patch.refundedAmount);
+  if (parsedRefundRaw === null) {
+    return null;
+  }
+  const parsedRefund = roundMoney(Math.max(parsedRefundRaw, 0));
+
+  const sourceCurrency =
+    normalizeCurrencyCode(patch.refundedCurrency) ??
+    normalizeCurrencyCode(booking.refundedCurrency) ??
+    normalizeCurrencyCode(patch.currency) ??
+    normalizeCurrencyCode(booking.currency);
+  const targetCurrency =
+    normalizeCurrencyCode(patch.currency) ??
+    normalizeCurrencyCode(booking.currency) ??
+    sourceCurrency;
+  if (!sourceCurrency || !targetCurrency) {
+    return null;
+  }
+
+  let convertedRefund = parsedRefund;
+  let fxRate = 1;
+  let fxRateDate = formatFxLookupDate(options.eventOccurredAt);
+  let fxRateSource = sourceCurrency === targetCurrency ? 'identity' : 'unknown';
+  let reusedPriorConversion = false;
+
+  if (sourceCurrency !== targetCurrency) {
+    const priorConversion = parseRefundConversionPayload(options.priorEventPayload ?? null);
+    if (
+      priorConversion &&
+      priorConversion.originalCurrency === sourceCurrency &&
+      priorConversion.convertedCurrency === targetCurrency &&
+      amountsRoughlyEqual(priorConversion.originalAmount, parsedRefund)
+    ) {
+      convertedRefund = roundMoney(Math.max(priorConversion.convertedAmount, 0));
+      fxRate = priorConversion.fxRate ?? roundMoney(convertedRefund / Math.max(parsedRefund, REFUND_RECON_EPSILON));
+      fxRateDate = priorConversion.fxRateDate ?? fxRateDate;
+      fxRateSource = priorConversion.fxRateSource ?? 'prior-event-payload';
+      reusedPriorConversion = true;
+    } else {
+      const resolved = await resolveRefundFxRate(sourceCurrency, targetCurrency, options.eventOccurredAt);
+      if (!resolved) {
+        logger.warn(
+          `[booking-email] Unable to resolve refund FX rate ${sourceCurrency}->${targetCurrency} for ${booking.platform}:${booking.platformBookingId}`,
+        );
+        delete patch.refundedAmount;
+        delete patch.refundedCurrency;
+        return {
+          originalAmount: normalizeDecimal(parsedRefund) ?? '0.00',
+          originalCurrency: sourceCurrency,
+          convertedAmount: normalizeDecimal(parsedRefund) ?? '0.00',
+          convertedCurrency: sourceCurrency,
+          fxRate: '1.000000',
+          fxRateDate,
+          fxRateSource: 'unresolved',
+          skippedReason: 'fx_rate_unavailable',
+        };
+      }
+
+      fxRate = resolved.rate;
+      fxRateDate = resolved.rateDate;
+      fxRateSource = resolved.rateSource;
+      convertedRefund = roundMoney(Math.max(parsedRefund * fxRate, 0));
+    }
   }
 
   const existingRefund = parseDecimalNumber(booking.refundedAmount);
   const effectiveRefund =
-    existingRefund !== null && existingRefund > parsedRefund ? existingRefund : parsedRefund;
+    existingRefund !== null && existingRefund > convertedRefund ? existingRefund : convertedRefund;
   patch.refundedAmount = effectiveRefund;
 
   const netAmount =
@@ -1045,24 +1305,37 @@ const reconcileRefundDerivedFields = (
     parseDecimalNumber(patch.baseAmount) ??
     parseDecimalNumber(booking.baseAmount);
   if (netAmount === null) {
-    return;
+    return {
+      originalAmount: normalizeDecimal(parsedRefund) ?? '0.00',
+      originalCurrency: sourceCurrency,
+      convertedAmount: normalizeDecimal(convertedRefund) ?? '0.00',
+      convertedCurrency: targetCurrency,
+      fxRate: fxRate.toFixed(6),
+      fxRateDate,
+      fxRateSource,
+      ...(reusedPriorConversion ? { reusedPriorConversion: true } : {}),
+      skippedReason: 'missing_net_amount',
+    };
   }
 
   const remaining = Math.max(netAmount - effectiveRefund, 0);
   patch.baseAmount = remaining;
+  patch.refundedCurrency = targetCurrency;
 
   if (event.paymentStatus === 'partial' || event.paymentStatus === 'refunded') {
     event.paymentStatus = remaining <= 0 ? 'refunded' : 'partial';
   }
 
-  const currentRefundedCurrency =
-    (typeof patch.refundedCurrency === 'string' && patch.refundedCurrency.trim()) ||
-    booking.refundedCurrency ||
-    (typeof patch.currency === 'string' && patch.currency.trim()) ||
-    booking.currency;
-  if (currentRefundedCurrency) {
-    patch.refundedCurrency = currentRefundedCurrency;
-  }
+  return {
+    originalAmount: normalizeDecimal(parsedRefund) ?? '0.00',
+    originalCurrency: sourceCurrency,
+    convertedAmount: normalizeDecimal(convertedRefund) ?? '0.00',
+    convertedCurrency: targetCurrency,
+    fxRate: fxRate.toFixed(6),
+    fxRateDate,
+    fxRateSource,
+    ...(reusedPriorConversion ? { reusedPriorConversion: true } : {}),
+  };
 };
 
 const deriveViatorAmendedStartAt = (
@@ -1381,7 +1654,10 @@ const applyParsedEvent = async (
     if (derivedViatorStartAt) {
       patch.experienceStartAt = derivedViatorStartAt;
     }
-    reconcileRefundDerivedFields(bookingRecord, event, patch);
+    const refundReconciliationOutcome = await reconcileRefundDerivedFields(bookingRecord, event, patch, {
+      priorEventPayload: priorEvent?.eventPayload ?? null,
+      eventOccurredAt,
+    });
 
     const viatorTravellerAddition = parseViatorTravellerAdditionPayload(event.rawPayload);
     const priorViatorTravellerAddition = parseViatorTravellerAdditionPayload(priorEvent?.eventPayload ?? null);
@@ -1653,6 +1929,9 @@ const applyParsedEvent = async (
           : {};
     if (viatorTravellerAdditionOutcome) {
       basePayload.viatorTravellerAddition = viatorTravellerAdditionOutcome;
+    }
+    if (refundReconciliationOutcome) {
+      basePayload.refundConversion = refundReconciliationOutcome;
     }
     if (options.isReprocess) {
       basePayload.reprocessed = true;

@@ -58,6 +58,9 @@ type BookingRawFinancial = {
   priceGross: number;
   priceNet: number;
   commissionAmount: number;
+  channelCommissionRate: number | null;
+  channelCommissionAmount: number | null;
+  baseAmountAfterChannelCommission: number | null;
 };
 
 export type BookingAddonDashboardRow = {
@@ -272,6 +275,9 @@ const BookingsExecutiveDashboard = ({ orders, bookingAddons, counterInsights, ra
       const raw = asRecord(order.rawData);
       const baseAmountValue = asNullableNumber(raw.baseAmount);
       const baseAmount = baseAmountValue ?? 0;
+      const baseAmountAfterChannelCommissionValue = asNullableNumber(raw.baseAmountAfterChannelCommission);
+      const channelCommissionRateValue = asNullableNumber(raw.channelCommissionRate);
+      const channelCommissionAmountValue = asNullableNumber(raw.channelCommissionAmount);
       const tipAmount = asNumber(raw.tipAmount);
       const addonsAmount = asNumber(raw.addonsAmount);
       const discountAmount = asNumber(raw.discountAmount);
@@ -281,7 +287,7 @@ const BookingsExecutiveDashboard = ({ orders, bookingAddons, counterInsights, ra
       const grossRevenue = roundMoney(priceGross > 0 ? priceGross : derivedGross);
       const priceNetValue = asNullableNumber(raw.priceNet);
       const priceNet = priceNetValue ?? 0;
-      const recognizedBase = baseAmountValue ?? priceNetValue ?? 0;
+      const recognizedBase = baseAmountAfterChannelCommissionValue ?? baseAmountValue ?? priceNetValue ?? 0;
       const recognizedRevenue = roundMoney(Math.max(recognizedBase + tipAmount, 0));
       const commissionAmount = asNumber(raw.commissionAmount);
       const participants = Math.max(order.menCount + order.womenCount, Number.isFinite(order.quantity) ? order.quantity : 0);
@@ -299,6 +305,9 @@ const BookingsExecutiveDashboard = ({ orders, bookingAddons, counterInsights, ra
         priceGross: roundMoney(grossRevenue),
         priceNet: roundMoney(priceNet),
         commissionAmount: roundMoney(commissionAmount),
+        channelCommissionRate: channelCommissionRateValue,
+        channelCommissionAmount: channelCommissionAmountValue,
+        baseAmountAfterChannelCommission: baseAmountAfterChannelCommissionValue,
       };
 
       return {
@@ -318,7 +327,7 @@ const BookingsExecutiveDashboard = ({ orders, bookingAddons, counterInsights, ra
         netRevenue: recognizedRevenue,
         refundedAmount: financial.refundedAmount,
         addonsRevenue: financial.addonsAmount,
-        baseRevenue: financial.baseAmount,
+        baseRevenue: roundMoney(recognizedBase),
         tipRevenue: financial.tipAmount,
         commissionAmount: financial.commissionAmount,
       };
@@ -568,12 +577,19 @@ const BookingsExecutiveDashboard = ({ orders, bookingAddons, counterInsights, ra
           info={
             <SectionInfo
               title="Revenue (Base + Tip)"
-              formula="Revenue = Base Amount + Tip Amount"
+              formula="Revenue = (Base Amount after Channel Commission, if configured) + Tip Amount"
               variables={[
-                { name: "Base Amount", description: "Recognized booking revenue after discounts and refunds." },
+                {
+                  name: "Base Amount",
+                  description:
+                    "Recognized booking revenue after discounts/refunds, adjusted by channel commission when configured for that booking date.",
+                },
                 { name: "Tip Amount", description: "Tip collected for the booking." },
               ]}
-              notes={["If base amount is missing, the dashboard falls back to Price Net for that row."]}
+              notes={[
+                "Commission adjustment uses channel_commissions valid_from/valid_to and the current summary date basis.",
+                "If base amount is missing, the dashboard falls back to Price Net for that row.",
+              ]}
             />
           }
           value={formatMoney(totalRevenue, defaultCurrency)}
