@@ -22,7 +22,11 @@ import type {
   ParsedBookingEvent,
 } from './types.js';
 import type { GmailMessagePayload } from './gmailClient.js';
-import type { BookingPlatform, KnownBookingPlatform } from '../../constants/bookings.js';
+import type {
+  BookingPlatform,
+  KnownBookingPlatform,
+  NormalizedAddonInput,
+} from '../../constants/bookings.js';
 import { canonicalizeProductLabel, sanitizeProductSource } from '../../utils/productName.js';
 import { getConfigValue } from '../configService.js';
 import { syncEcwidBookingUtmByBookingId } from './ecwidUtmSyncService.js';
@@ -515,6 +519,162 @@ const parseDecimalNumber = (value: unknown): number | null => {
   return null;
 };
 
+const roundMoney = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const splitNoteSegments = (value: string | null | undefined): string[] => {
+  if (!value || typeof value !== 'string') {
+    return [];
+  }
+  return value
+    .split('|')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+};
+
+const mergeNoteSegments = (...values: Array<string | null | undefined>): string | null => {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    for (const segment of splitNoteSegments(value)) {
+      const key = segment.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      merged.push(segment);
+    }
+  }
+  return merged.length > 0 ? merged.join(' | ') : null;
+};
+
+type ViatorTravellerAdditionPayload = {
+  addedCount: number;
+  names: string[];
+  applied?: boolean;
+};
+
+const parseViatorTravellerAdditionPayload = (
+  payload: unknown,
+): ViatorTravellerAdditionPayload | null => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return null;
+  }
+  const root = payload as Record<string, unknown>;
+  const raw = root.viatorTravellerAddition;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const addedCountRaw = record.addedCount;
+  const addedCount =
+    typeof addedCountRaw === 'number'
+      ? Math.trunc(addedCountRaw)
+      : typeof addedCountRaw === 'string'
+        ? Number.parseInt(addedCountRaw, 10)
+        : NaN;
+  if (!Number.isFinite(addedCount) || addedCount <= 0) {
+    return null;
+  }
+
+  const names = Array.isArray(record.names)
+    ? record.names
+        .filter((value): value is string => typeof value === 'string')
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+    : [];
+  const applied = typeof record.applied === 'boolean' ? record.applied : undefined;
+
+  return {
+    addedCount,
+    names,
+    applied,
+  };
+};
+
+const deriveNormalizedAddonsFromSnapshot = (
+  snapshot: unknown,
+): NormalizedAddonInput[] | undefined => {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    return undefined;
+  }
+  const snapshotRecord = snapshot as Record<string, unknown>;
+  const extras = snapshotRecord.extras;
+  if (!extras || typeof extras !== 'object' || Array.isArray(extras)) {
+    return undefined;
+  }
+
+  const extrasRecord = extras as Record<string, unknown>;
+  const addonDefinitions: Array<{ key: string; name: string }> = [
+    { key: 'cocktails', name: 'Cocktails' },
+    { key: 'tshirts', name: 'T-Shirts' },
+    { key: 'photos', name: 'Photos' },
+  ];
+
+  let hasRecognizedKey = false;
+  const normalized: NormalizedAddonInput[] = [];
+  for (const definition of addonDefinitions) {
+    const raw = extrasRecord[definition.key];
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+      continue;
+    }
+    hasRecognizedKey = true;
+    const quantity = Math.max(0, Math.round(raw));
+    if (quantity <= 0) {
+      continue;
+    }
+    normalized.push({
+      platformAddonName: definition.name,
+      quantity,
+      metadata: {
+        source: 'addons_snapshot.extras',
+        key: definition.key,
+      },
+    });
+  }
+
+  if (!hasRecognizedKey) {
+    return undefined;
+  }
+  return normalized;
+};
+
+const extractCocktailsQuantityFromSnapshot = (snapshot: unknown): number => {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    return 0;
+  }
+  const snapshotRecord = snapshot as Record<string, unknown>;
+  const extras = snapshotRecord.extras;
+  if (!extras || typeof extras !== 'object' || Array.isArray(extras)) {
+    return 0;
+  }
+  const cocktailsRaw = (extras as Record<string, unknown>).cocktails;
+  if (typeof cocktailsRaw !== 'number' || !Number.isFinite(cocktailsRaw)) {
+    return 0;
+  }
+  return Math.max(0, Math.round(cocktailsRaw));
+};
+
+const bookingHasCocktailsAddon = async (
+  booking: Booking,
+  transaction: Transaction,
+): Promise<boolean> => {
+  if (extractCocktailsQuantityFromSnapshot(booking.addonsSnapshot) > 0) {
+    return true;
+  }
+
+  const existingCocktailAddon = await BookingAddon.findOne({
+    where: {
+      bookingId: booking.id,
+      quantity: { [Op.gt]: 0 },
+      platformAddonName: { [Op.iLike]: '%cocktail%' },
+    },
+    attributes: ['id'],
+    transaction,
+  });
+
+  return Boolean(existingCocktailAddon);
+};
+
 const normalizePatch = (patch: BookingFieldPatch | undefined): Record<string, unknown> => {
   if (!patch) {
     return {};
@@ -824,6 +984,9 @@ const syncAddons = async (
   addons: ParsedBookingEvent['addons'] | undefined,
   transaction: Transaction,
 ): Promise<void> => {
+  if (addons === undefined) {
+    return;
+  }
   await BookingAddon.destroy({ where: { bookingId }, transaction });
   if (!addons || addons.length === 0) {
     return;
@@ -1196,10 +1359,10 @@ const applyParsedEvent = async (
         }
       }
     }
-    const partySizeTotalDelta = bookingFields.partySizeTotalDelta ?? null;
-    const partySizeAdultsDelta = bookingFields.partySizeAdultsDelta ?? null;
-    const addonsExtrasDelta = bookingFields.addonsExtrasDelta ?? null;
-    const explicitCocktailDelta =
+    let partySizeTotalDelta = bookingFields.partySizeTotalDelta ?? null;
+    let partySizeAdultsDelta = bookingFields.partySizeAdultsDelta ?? null;
+    let addonsExtrasDelta = bookingFields.addonsExtrasDelta ?? null;
+    let explicitCocktailDelta =
       addonsExtrasDelta && Object.prototype.hasOwnProperty.call(addonsExtrasDelta, 'cocktails');
     delete bookingFields.partySizeTotalDelta;
     delete bookingFields.partySizeAdultsDelta;
@@ -1219,6 +1382,116 @@ const applyParsedEvent = async (
       patch.experienceStartAt = derivedViatorStartAt;
     }
     reconcileRefundDerivedFields(bookingRecord, event, patch);
+
+    const viatorTravellerAddition = parseViatorTravellerAdditionPayload(event.rawPayload);
+    const priorViatorTravellerAddition = parseViatorTravellerAdditionPayload(priorEvent?.eventPayload ?? null);
+    let viatorTravellerAdditionOutcome: Record<string, unknown> | null = null;
+
+    if (event.platform === 'viator' && event.status === 'amended' && viatorTravellerAddition) {
+      const addedCount = viatorTravellerAddition.addedCount;
+      const names = viatorTravellerAddition.names;
+      let priorAlreadyApplied = priorViatorTravellerAddition?.applied === true;
+      if (!priorAlreadyApplied && options.isReprocess && email.messageId) {
+        const priorEventsForEmail = await BookingEvent.findAll({
+          where: { emailMessageId: email.messageId, platform: event.platform },
+          attributes: ['eventPayload'],
+          order: [['id', 'DESC']],
+          transaction,
+        });
+        priorAlreadyApplied = priorEventsForEmail.some((candidateEvent) => {
+          const candidatePayload = parseViatorTravellerAdditionPayload(candidateEvent.eventPayload ?? null);
+          return candidatePayload?.applied === true;
+        });
+      }
+      const hasExplicitPartyPatch = patch.partySizeTotal !== undefined || patch.partySizeAdults !== undefined;
+      const hasExplicitMoneyPatch =
+        patch.baseAmount !== undefined || patch.priceNet !== undefined || patch.priceGross !== undefined;
+      const noteSegment =
+        names.length > 0
+          ? `Viator traveller(s) added: ${names.join(', ')}`
+          : `Viator traveller(s) added: ${addedCount} (email ${email.messageId})`;
+
+      let applied = false;
+      let skippedReason: string | null = null;
+      let inferredPerTraveller: number | null = null;
+      let inferredAmountDelta: number | null = null;
+      let inferredAmountBefore: number | null = null;
+      let inferredPartyBefore: number | null = null;
+
+      if (priorAlreadyApplied) {
+        skippedReason = 'already_applied_for_email';
+      } else {
+        if (!hasExplicitPartyPatch) {
+          partySizeTotalDelta = (partySizeTotalDelta ?? 0) + addedCount;
+          partySizeAdultsDelta = (partySizeAdultsDelta ?? 0) + addedCount;
+          applied = true;
+        }
+
+        if (!explicitCocktailDelta) {
+          const hasCocktailsAddon = await bookingHasCocktailsAddon(bookingRecord, transaction);
+          if (hasCocktailsAddon) {
+            const nextDelta = { ...(addonsExtrasDelta ?? {}) };
+            nextDelta.cocktails = (nextDelta.cocktails ?? 0) + addedCount;
+            addonsExtrasDelta = nextDelta;
+            explicitCocktailDelta = true;
+            applied = true;
+          }
+        }
+
+        if (!hasExplicitMoneyPatch) {
+          const baseBefore =
+            parseDecimalNumber(bookingRecord.baseAmount) ??
+            parseDecimalNumber(bookingRecord.priceNet) ??
+            parseDecimalNumber(bookingRecord.priceGross);
+          const partyBefore =
+            bookingRecord.partySizeTotal ??
+            bookingRecord.partySizeAdults ??
+            (typeof patch.partySizeTotal === 'number' ? patch.partySizeTotal : null) ??
+            (typeof patch.partySizeAdults === 'number' ? patch.partySizeAdults : null);
+
+          if (
+            typeof baseBefore === 'number' &&
+            Number.isFinite(baseBefore) &&
+            baseBefore > 0 &&
+            typeof partyBefore === 'number' &&
+            Number.isFinite(partyBefore) &&
+            partyBefore > 0
+          ) {
+            inferredPerTraveller = roundMoney(baseBefore / partyBefore);
+            inferredAmountDelta = roundMoney(inferredPerTraveller * addedCount);
+            inferredAmountBefore = roundMoney(baseBefore);
+            inferredPartyBefore = partyBefore;
+            const inferredAmountAfter = roundMoney(baseBefore + inferredAmountDelta);
+            patch.baseAmount = normalizeDecimal(inferredAmountAfter);
+            patch.priceNet = normalizeDecimal(inferredAmountAfter);
+            patch.priceGross = normalizeDecimal(inferredAmountAfter);
+            applied = true;
+          } else if (!skippedReason) {
+            skippedReason = 'insufficient_base_or_party_for_money_inference';
+          }
+        }
+      }
+
+      patch.notes = mergeNoteSegments(bookingRecord.notes, patch.notes as string | null | undefined, noteSegment);
+
+      viatorTravellerAdditionOutcome = {
+        addedCount,
+        names,
+        applied: priorAlreadyApplied || applied,
+        appliedThisRun: applied,
+        ...(skippedReason ? { skippedReason } : {}),
+        ...(inferredPerTraveller !== null
+          ? { inferredPerTraveller: normalizeDecimal(inferredPerTraveller) }
+          : {}),
+        ...(inferredAmountDelta !== null
+          ? { inferredAmountDelta: normalizeDecimal(inferredAmountDelta) }
+          : {}),
+        ...(inferredAmountBefore !== null
+          ? { inferredAmountBefore: normalizeDecimal(inferredAmountBefore) }
+          : {}),
+        ...(inferredPartyBefore !== null ? { inferredPartyBefore } : {}),
+      };
+    }
 
     if (Object.keys(patch).length > 0) {
       bookingRecord.set(patch);
@@ -1330,6 +1603,14 @@ const applyParsedEvent = async (
       bookingRecord.notes = event.notes;
     }
 
+    let addonsForSync: ParsedBookingEvent['addons'] = event.addons;
+    if (event.platform === 'viator' && (!addonsForSync || addonsForSync.length === 0)) {
+      const derivedAddons = deriveNormalizedAddonsFromSnapshot(bookingRecord.addonsSnapshot);
+      if (derivedAddons !== undefined) {
+        addonsForSync = derivedAddons;
+      }
+    }
+
     await bookingRecord.save({ transaction });
 
     if (priorEvent) {
@@ -1370,6 +1651,9 @@ const applyParsedEvent = async (
         : event.rawPayload != null
           ? { rawPayload: event.rawPayload }
           : {};
+    if (viatorTravellerAdditionOutcome) {
+      basePayload.viatorTravellerAddition = viatorTravellerAdditionOutcome;
+    }
     if (options.isReprocess) {
       basePayload.reprocessed = true;
       basePayload.originalEventType = event.eventType;
@@ -1390,7 +1674,7 @@ const applyParsedEvent = async (
     );
     await bookingEvent.save({ transaction });
 
-    await syncAddons(bookingRecord.id, bookingEvent.id, event.addons, transaction);
+    await syncAddons(bookingRecord.id, bookingEvent.id, addonsForSync, transaction);
 
     return bookingRecord.id;
   });
