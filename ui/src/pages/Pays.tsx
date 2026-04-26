@@ -550,6 +550,136 @@ const buildDefaultPaymentLines = (
   fallbackCategoryId: string,
   componentDefinitions: Map<number, CompensationComponent>,
 ): EntryPaymentLine[] => {
+  const GUIDE_COMMISSION_CANDIDATE_KEYS = [
+    'guideCommission',
+    'guide_commission',
+    'guideCommissionRates',
+    'guide_commission_rates',
+    'productCommission',
+    'product_commission',
+    'productCommissionRates',
+    'product_commission_rates',
+    'commissionRates',
+    'commission_rates',
+  ] as const;
+
+  const normalizeProductKey = (productId: number | null): string =>
+    productId === null ? '__null__' : String(productId);
+
+  const parseProductId = (value: unknown): number | null | undefined => {
+    if (value === null) {
+      return null;
+    }
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === 'null' || normalized === 'none' || normalized === 'legacy') {
+        return null;
+      }
+      const numeric = Number(normalized);
+      if (Number.isFinite(numeric)) {
+        return Math.trunc(numeric);
+      }
+      return undefined;
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return Math.trunc(value);
+    }
+    return undefined;
+  };
+
+  const collectProductIds = (value: unknown): Array<number | null> => {
+    if (value === undefined) {
+      return [];
+    }
+    if (Array.isArray(value)) {
+      return value
+        .map((entry) => parseProductId(entry))
+        .filter((entry): entry is number | null => entry !== undefined);
+    }
+    const parsed = parseProductId(value);
+    return parsed === undefined ? [] : [parsed];
+  };
+
+  const extractCommissionConfigCandidate = (
+    config: Record<string, unknown> | undefined,
+  ): Record<string, unknown> | null => {
+    if (!config || typeof config !== 'object') {
+      return null;
+    }
+    for (const key of GUIDE_COMMISSION_CANDIDATE_KEYS) {
+      const candidate = config[key];
+      if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+        return candidate as Record<string, unknown>;
+      }
+    }
+    if (
+      'products' in config ||
+      'productRates' in config ||
+      'product_rates' in config ||
+      'productIds' in config ||
+      'product_ids' in config ||
+      'productId' in config ||
+      'product_id' in config
+    ) {
+      return config;
+    }
+    return null;
+  };
+
+  const getCommissionProductKeys = (component: CompensationComponent): Set<string> => {
+    const keys = new Set<string>();
+    if (component.category !== 'commission') {
+      return keys;
+    }
+    const candidate = extractCommissionConfigCandidate(component.config);
+    if (!candidate) {
+      return keys;
+    }
+
+    const products =
+      candidate.products ??
+      candidate.productRates ??
+      candidate.product_rates ??
+      candidate.entries ??
+      candidate.items;
+    if (Array.isArray(products)) {
+      products.forEach((raw) => {
+        if (!raw || typeof raw !== 'object') {
+          return;
+        }
+        const record = raw as Record<string, unknown>;
+        const ids = collectProductIds(
+          record.productIds ??
+            record.product_ids ??
+            record.products ??
+            record.productList ??
+            record.product_list ??
+            record.productId ??
+            record.product_id ??
+            record.id ??
+            record.counterProductId ??
+            record.counter_product_id,
+        );
+        ids.forEach((id) => keys.add(normalizeProductKey(id)));
+      });
+    }
+
+    const directIds = collectProductIds(
+      candidate.productIds ??
+        candidate.product_ids ??
+        candidate.products ??
+        candidate.productList ??
+        candidate.product_list ??
+        candidate.productId ??
+        candidate.product_id ??
+        candidate.id ??
+        candidate.counterProductId ??
+        candidate.counter_product_id,
+    );
+    directIds.forEach((id) => keys.add(normalizeProductKey(id)));
+    return keys;
+  };
+
   const lockedComponentIds = new Set((staff.lockedComponents ?? []).map((entry) => entry.componentId));
 
   const bucketBalances = new Map<
@@ -627,28 +757,37 @@ const buildDefaultPaymentLines = (
     }
   };
 
-  const findCommissionComponentMeta = (productName: string): CompensationComponent | null => {
-    const normalizedProduct = productName.trim().toLowerCase();
-    let firstCommission: CompensationComponent | null = null;
-    for (const component of componentDefinitions.values()) {
-      if (component.category !== 'commission') {
+  const findProductCommissionComponentId = (
+    entries: Array<{ componentId: number; amount: number }>,
+    productId: number | null,
+  ): number | null => {
+    for (const entry of entries) {
+      if (!entry.componentId || !entry.amount) {
         continue;
       }
-      if (!firstCommission) {
-        firstCommission = component;
-      }
-      const nameMatch = component.name?.toLowerCase() ?? '';
-      const slugMatch = component.slug?.toLowerCase() ?? '';
-      if (
-        normalizedProduct &&
-        ((nameMatch && nameMatch.includes(normalizedProduct)) ||
-          (slugMatch && slugMatch.includes(normalizedProduct)) ||
-          (nameMatch && normalizedProduct.includes(nameMatch)))
-      ) {
-        return component;
+      const definitionCategory = componentDefinitions.get(entry.componentId)?.category?.toLowerCase() ?? '';
+      const aggregateCategory = componentAggregates.get(entry.componentId)?.summary.category?.toLowerCase() ?? '';
+      if (definitionCategory === 'commission' || aggregateCategory === 'commission') {
+        return entry.componentId;
       }
     }
-    return firstCommission;
+
+    const productKey = normalizeProductKey(productId);
+    const matches: number[] = [];
+    componentDefinitions.forEach((component) => {
+      if (component.category !== 'commission' || component.isActive === false) {
+        return;
+      }
+      const configuredKeys = getCommissionProductKeys(component);
+      if (configuredKeys.has(productKey)) {
+        matches.push(component.id);
+      }
+    });
+    if (matches.length > 0) {
+      return matches[matches.length - 1];
+    }
+
+    return null;
   };
 
   const spendComponentAmount = (
@@ -705,7 +844,8 @@ const buildDefaultPaymentLines = (
 
   (staff.productTotals ?? []).forEach((product) => {
     const productName = product.productName || 'Product payout';
-    (product.componentTotals ?? []).forEach((entry) => {
+    const productComponentTotals = product.componentTotals ?? [];
+    productComponentTotals.forEach((entry) => {
       if (!entry.componentId || !entry.amount) {
         return;
       }
@@ -718,33 +858,25 @@ const buildDefaultPaymentLines = (
     const commissionAmount = product.totalCommission ?? 0;
     if (commissionAmount > 0) {
       const roundedCommission = roundLineAmount(commissionAmount);
-      const commissionAggregateEntry = Array.from(componentAggregates.entries()).find(
-        ([, aggregate]) => aggregate.summary.category === 'commission',
+      const productCommissionComponentId = findProductCommissionComponentId(
+        productComponentTotals,
+        product.productId ?? null,
       );
-      if (commissionAggregateEntry) {
-        spendComponentAmount(commissionAggregateEntry[0], roundedCommission, { productName });
-      } else {
-        const matchedCommissionMeta = findCommissionComponentMeta(productName);
-        const fallbackCommissionCategoryId = matchedCommissionMeta?.defaultFinanceCategoryId
-          ? String(matchedCommissionMeta.defaultFinanceCategoryId)
-          : findCategoryIdByName(categoryLookup, 'commission', fallbackCategoryId);
-        const fallbackAccountId = matchedCommissionMeta?.defaultFinanceAccountId
-          ? String(matchedCommissionMeta.defaultFinanceAccountId)
-          : '';
-        const baseComponentName = matchedCommissionMeta?.name ?? 'Commission';
-
-        lines.push({
-          id: createLineId(),
-          label: `${productName} - ${baseComponentName}`,
-          amount: roundedCommission,
-          categoryId: fallbackCommissionCategoryId,
-          accountId: fallbackAccountId,
-          componentId: matchedCommissionMeta?.id,
-          description: `Auto payout - ${baseComponentName}`,
-          include: true,
-        });
-        decrementBucket('commission', roundedCommission);
+      if (productCommissionComponentId) {
+        spendComponentAmount(productCommissionComponentId, roundedCommission, { productName });
+        return;
       }
+
+      lines.push({
+        id: createLineId(),
+        label: `${productName} - Commission`,
+        amount: roundedCommission,
+        categoryId: findCategoryIdByName(categoryLookup, 'commission', fallbackCategoryId),
+        accountId: '',
+        description: 'Auto payout - Commission',
+        include: true,
+      });
+      decrementBucket('commission', roundedCommission);
     }
   });
 
