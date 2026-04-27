@@ -431,19 +431,31 @@ const extractGenderCounts = (order: EcwidOrder, item: EcwidOrderItem): GenderCou
     }
 
     const optionLabel = normalizeLabel(option.name);
-    const optionValue = option.value;
     const optionGender: 'men' | 'women' | undefined = includesKeyword(optionLabel, MEN_LABELS)
       ? 'men'
       : includesKeyword(optionLabel, WOMEN_LABELS)
         ? 'women'
         : undefined;
     const optionHasGender = optionGender !== undefined;
-
-    if (optionGender) {
-      accumulateGenderCounts(totals, optionValue, optionGender);
-    } else {
-      accumulateGenderCounts(totals, optionValue);
+    const optionValues: unknown[] = [];
+    if (option.value !== undefined && option.value !== null) {
+      optionValues.push(option.value);
     }
+    const optionRecord = option as unknown as Record<string, unknown>;
+    if (Array.isArray(optionRecord.valuesArray)) {
+      optionValues.push(...(optionRecord.valuesArray as unknown[]));
+    }
+    if (optionRecord.valueTranslated && typeof optionRecord.valueTranslated === 'object') {
+      optionValues.push(...Object.values(optionRecord.valueTranslated as Record<string, unknown>));
+    }
+
+    optionValues.forEach((value) => {
+      if (optionGender) {
+        accumulateGenderCounts(totals, value, optionGender);
+        return;
+      }
+      accumulateGenderCounts(totals, value);
+    });
 
     option.selections?.forEach((selection: EcwidSelection) => {
       if (!selection) {

@@ -547,8 +547,17 @@ const resolveRawEcwidPeopleStats = (rawOrder: EcwidOrder): EcwidRawPeopleStats =
         : includesKeywordToken(optionLabel, ECWID_WOMEN_LABELS)
           ? 'women'
           : undefined;
-
-      accumulateGenderValue(counters, option.value, optionGender);
+      const optionValues: unknown[] = [];
+      if (option.value !== undefined && option.value !== null) {
+        optionValues.push(option.value);
+      }
+      if (Array.isArray(option.valuesArray)) {
+        optionValues.push(...(option.valuesArray as unknown[]));
+      }
+      if (option.valueTranslated && typeof option.valueTranslated === 'object') {
+        optionValues.push(...Object.values(option.valueTranslated as Record<string, unknown>));
+      }
+      optionValues.forEach((value) => accumulateGenderValue(counters, value, optionGender));
 
       const selections = Array.isArray(option.selections)
         ? (option.selections as Array<Record<string, unknown>>)
