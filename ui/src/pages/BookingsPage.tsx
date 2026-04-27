@@ -40,6 +40,7 @@ import BookingsExecutiveDashboard, {
   BookingCounterInsights,
   VenueCommissionCurrencyTotal,
 } from "../components/bookings/BookingsExecutiveDashboard";
+import BookingsSanityCheck from "../components/bookings/BookingsSanityCheck";
 import axiosInstance from "../utils/axiosInstance";
 import { UnifiedOrder, UnifiedProduct } from "../store/bookingPlatformsTypes";
 import { prepareBookingGrid, BookingGrid } from "../utils/prepareBookingGrid";
@@ -67,6 +68,8 @@ type FetchStatus = "idle" | "loading" | "error" | "success";
 
 type BookingFilter = "all" | "active" | "cancelled";
 type SummaryDateField = "experience_date" | "source_received_at";
+type BookingsTab = "calendar" | "summary" | "emails" | "sanity";
+type BookingsTabOption = BookingsTab | "manifest";
 
 type BookingEmailSummary = {
   id: number;
@@ -158,13 +161,19 @@ const parseEmailStatusParam = (value?: string | null): string => {
   return EMAIL_STATUS_OPTIONS.some((option) => option.value === normalized) ? normalized : "all";
 };
 
-const parseTabParam = (value?: string | null): "calendar" | "summary" | "emails" | null => {
+const parseTabParam = (value?: string | null): BookingsTabOption | null => {
   if (!value) {
     return null;
   }
   const normalized = value.trim().toLowerCase();
-  if (normalized === "calendar" || normalized === "summary" || normalized === "emails") {
-    return normalized as "calendar" | "summary" | "emails";
+  if (
+    normalized === "calendar" ||
+    normalized === "summary" ||
+    normalized === "emails" ||
+    normalized === "sanity" ||
+    normalized === "manifest"
+  ) {
+    return normalized as BookingsTabOption;
   }
   return null;
 };
@@ -534,7 +543,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const [viewMode, setViewMode] = useState<ViewMode>("month");
-  const [activeTab, setActiveTab] = useState<"calendar" | "summary" | "emails">("calendar");
+  const [activeTab, setActiveTab] = useState<BookingsTab>("calendar");
   const [summaryDateField, setSummaryDateField] = useState<SummaryDateField>("experience_date");
   const [rangeAnchor, setRangeAnchor] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [selectedDate, setSelectedDate] = useState<Dayjs>(() => dayjs().startOf("day"));
@@ -605,6 +614,23 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const emailPreviewParam = searchParams.get("emailPreview")?.trim() ?? "";
   const emailHasUrlPreview = Boolean(emailPreviewParam);
 
+  const openManifestForCurrentDate = useCallback(() => {
+    const params = new URLSearchParams();
+    params.set("date", dayjs().format(DATE_FORMAT));
+    navigate(`/bookings/manifest?${params.toString()}`);
+  }, [navigate]);
+
+  const handleBookingsTabChange = useCallback(
+    (value: string | null) => {
+      if (value === "manifest") {
+        openManifestForCurrentDate();
+        return;
+      }
+      setActiveTab((value as BookingsTab) ?? "calendar");
+    },
+    [openManifestForCurrentDate],
+  );
+
   const handleCloseEmailPreview = useCallback(() => {
     suppressEmailPreviewSyncRef.current = true;
     setEmailPreviewOpen(false);
@@ -646,8 +672,12 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     if (!nextTab) {
       return;
     }
+    if (nextTab === "manifest") {
+      openManifestForCurrentDate();
+      return;
+    }
     setActiveTab((prev) => (prev === nextTab ? prev : nextTab));
-  }, [emailPreviewParam, searchParams]);
+  }, [emailPreviewParam, openManifestForCurrentDate, searchParams]);
 
   useEffect(() => {
     const nextDateField = parseSummaryDateFieldParam(searchParams.get("summaryDateField"));
@@ -1538,15 +1568,15 @@ const BookingsPage = ({ title }: GenericPageProps) => {
 
             <Tabs
               value={activeTab}
-              onChange={(value) =>
-                setActiveTab((value as "calendar" | "summary" | "emails") ?? "calendar")
-              }
+              onChange={handleBookingsTabChange}
               keepMounted={false}
             >
               <Tabs.List>
                 <Tabs.Tab value="calendar">Calendar</Tabs.Tab>
+                <Tabs.Tab value="manifest">Manifest</Tabs.Tab>
                 <Tabs.Tab value="summary">Summary</Tabs.Tab>
                 <Tabs.Tab value="emails">Emails</Tabs.Tab>
+                <Tabs.Tab value="sanity">Sanity Check</Tabs.Tab>
               </Tabs.List>
 
               <Tabs.Panel value="calendar" pt="md">
@@ -1575,10 +1605,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
 
               <Tabs.Panel value="summary" pt="md">
                 <Stack gap="md">
-                  <Group justify="space-between" align="center" wrap="wrap">
-                    <Text size="sm" fw={600}>
-                      Date Basis
-                    </Text>
+                  <Group justify="center" align="center" wrap="wrap">
                     <SegmentedControl
                       value={summaryDateField}
                       onChange={(value) =>
@@ -2059,6 +2086,10 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                     )}
                   </Stack>
                 )}
+              </Tabs.Panel>
+
+              <Tabs.Panel value="sanity" pt="md">
+                <BookingsSanityCheck />
               </Tabs.Panel>
             </Tabs>
             <Modal

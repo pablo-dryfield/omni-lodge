@@ -390,10 +390,6 @@ const BookingsExecutiveDashboard = ({
     () => roundMoney(counterInsights?.cashPaymentsTotal ?? 0),
     [counterInsights],
   );
-  const totalRevenueCard = useMemo(
-    () => roundMoney(totalRevenueNoChannelCommission + totalCashPayments),
-    [totalRevenueNoChannelCommission, totalCashPayments],
-  );
   const totalAddonsRevenue = useMemo(() => {
     const addonsFromBookings = bookingFinancialRows.reduce((acc, row) => acc + row.addonsRevenue, 0);
     const addonsFromRows = scopedAddonRows.reduce((acc, row) => acc + row.totalPrice, 0);
@@ -421,6 +417,10 @@ const BookingsExecutiveDashboard = ({
   const venueCommissionTotal = venueCommissionSelected?.receivable ?? 0;
   const venueCommissionCurrency = venueCommissionSelected?.currency ?? defaultCurrency;
   const venueCommissionOutstanding = venueCommissionSelected?.receivableOutstanding ?? 0;
+  const totalRevenueCard = useMemo(
+    () => roundMoney(totalRevenueNoChannelCommission + venueCommissionTotal + totalCashPayments),
+    [totalRevenueNoChannelCommission, venueCommissionTotal, totalCashPayments],
+  );
 
   const dailyTrend = useMemo(() => {
     const map = new Map<
@@ -614,11 +614,29 @@ const BookingsExecutiveDashboard = ({
       <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
         <KpiCard
           icon={<IconReceipt2 size={20} />}
-          label="Revenue"
+          label="Total Revenue"
           info={
             <SectionInfo
-              title="Revenue"
-              formula="Revenue Card = (Base Amount without Channel Commission + Tip Amount) + Cash Payments"
+              title="Total Revenue"
+              formula="Total Revenue = Online Revenue + Venue Commission + Cash Payments"
+              variables={[
+                { name: "Online Revenue", description: "Base Amount without Channel Commission + Tip Amount." },
+                { name: "Venue Commission", description: "Commission owed by venues for the selected range." },
+                { name: "Cash Payments", description: "Counter cash metrics marked as cash payment." },
+              ]}
+            />
+          }
+          value={formatMoney(totalRevenueCard, defaultCurrency)}
+          subtitle={`Online + Venue Commission + Cash`}
+          accent="#214A66"
+        />
+        <KpiCard
+          icon={<IconChartBar size={20} />}
+          label="Online Revenue"
+          info={
+            <SectionInfo
+              title="Online Revenue"
+              formula="Online Revenue = Base Amount without Channel Commission + Tip Amount"
               variables={[
                 {
                   name: "Base Amount",
@@ -626,14 +644,13 @@ const BookingsExecutiveDashboard = ({
                     "Recognized booking revenue after discounts/refunds, without applying channel commission adjustment.",
                 },
                 { name: "Tip Amount", description: "Tip collected for the booking." },
-                { name: "Cash Payments", description: "Counter cash metrics marked as cash payment." },
               ]}
               notes={[
                 "If base amount is missing, the dashboard falls back to Price Net for that row.",
               ]}
             />
           }
-          value={formatMoney(totalRevenueCard, defaultCurrency)}
+          value={formatMoney(totalRevenueNoChannelCommission, defaultCurrency)}
           subtitle={`Avg booking: ${formatMoney(averageBookingValue, defaultCurrency)}`}
           accent="#214A66"
         />
@@ -658,23 +675,6 @@ const BookingsExecutiveDashboard = ({
           accent="#2B7A78"
         />
         <KpiCard
-          icon={<IconUsersGroup size={20} />}
-          label="Bookings & People"
-          info={
-            <SectionInfo
-              title="Bookings & People"
-              formula="Bookings = Count(rows), People = Sum(row people)"
-              variables={[
-                { name: "Rows", description: "Bookings returned for the selected range and filters." },
-                { name: "Row people", description: "Participant count per booking row." },
-              ]}
-            />
-          }
-          value={`${totalBookings.toLocaleString()} / ${totalPeople.toLocaleString()}`}
-          subtitle={`Platforms: ${platformRevenue.length}`}
-          accent="#345995"
-        />
-        <KpiCard
           icon={<IconCash size={20} />}
           label="Cash + Free Tickets"
           info={
@@ -690,6 +690,23 @@ const BookingsExecutiveDashboard = ({
           value={`${formatMoney(counterInsights?.cashPaymentsTotal ?? 0, counterInsights?.currency ?? "PLN")}`}
           subtitle={`Free tickets from notes: ${(counterInsights?.freeTicketsTotal ?? 0).toLocaleString()}`}
           accent="#6B705C"
+        />
+        <KpiCard
+          icon={<IconUsersGroup size={20} />}
+          label="Bookings & People"
+          info={
+            <SectionInfo
+              title="Bookings & People"
+              formula="Bookings = Count(rows), People = Sum(row people)"
+              variables={[
+                { name: "Rows", description: "Bookings returned for the selected range and filters." },
+                { name: "Row people", description: "Participant count per booking row." },
+              ]}
+            />
+          }
+          value={`${totalBookings.toLocaleString()} / ${totalPeople.toLocaleString()}`}
+          subtitle={`Platforms: ${platformRevenue.length}`}
+          accent="#345995"
         />
       </SimpleGrid>
 

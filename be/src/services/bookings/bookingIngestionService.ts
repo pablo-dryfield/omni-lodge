@@ -229,6 +229,47 @@ const bookingStringLimits: Partial<Record<keyof BookingFieldPatch, number>> = {
   rawPayloadLocation: 512,
 };
 
+export type ScopedReprocessHint = 'tip' | 'coupon' | 'refund';
+
+const SCOPED_REPROCESS_HINT_FIELDS: Record<ScopedReprocessHint, string[]> = {
+  tip: ['tipAmount'],
+  coupon: ['discountAmount', 'discountCode', 'baseAmount', 'priceGross', 'priceNet'],
+  refund: ['refundedAmount', 'refundedCurrency', 'baseAmount', 'priceGross', 'priceNet'],
+};
+
+const VALID_SCOPED_REPROCESS_HINTS = new Set<ScopedReprocessHint>(['tip', 'coupon', 'refund']);
+
+const normalizeScopedReprocessHints = (value: unknown): ScopedReprocessHint[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const normalized = value
+    .map((entry) => String(entry ?? '').trim().toLowerCase())
+    .filter((entry): entry is ScopedReprocessHint => VALID_SCOPED_REPROCESS_HINTS.has(entry as ScopedReprocessHint));
+  return [...new Set(normalized)];
+};
+
+const filterPatchByScopedHints = (
+  patch: Record<string, unknown>,
+  scopedHints: ScopedReprocessHint[],
+): Record<string, unknown> => {
+  if (scopedHints.length === 0) {
+    return patch;
+  }
+  const allowedKeys = new Set<string>();
+  scopedHints.forEach((hint) => {
+    SCOPED_REPROCESS_HINT_FIELDS[hint].forEach((fieldName) => {
+      allowedKeys.add(fieldName);
+    });
+  });
+  return Object.entries(patch).reduce<Record<string, unknown>>((acc, [key, value]) => {
+    if (allowedKeys.has(key)) {
+      acc[key] = value;
+    }
+    return acc;
+  }, {});
+};
+
 const normalizePlatformKey = (platform: string): string =>
   platform
     .trim()
@@ -1503,12 +1544,15 @@ const findAirbnbCancellationMatch = async (
 const applyParsedEvent = async (
   email: BookingEmail,
   event: ParsedBookingEvent,
-  options: { isReprocess?: boolean } = {},
-): Promise<number> => {
-  const bookingId = await sequelize.transaction(async (transaction) => {
+  options: { isReprocess?: boolean; scopedHints?: ScopedReprocessHint[] } = {},
+): Promise<number | null> => {
+  const bookingId = await sequelize.transaction(async (transaction): Promise<number | null> => {
+    const scopedHints = normalizeScopedReprocessHints(options.scopedHints);
+    const isScopedReprocess = scopedHints.length > 0;
+    const includesScopedRefund = scopedHints.includes('refund');
     const eventOccurredAt = event.occurredAt ?? event.sourceReceivedAt ?? email.receivedAt ?? new Date();
     let priorEvent: BookingEvent | null = null;
-    if (options.isReprocess && email.messageId) {
+    if (options.isReprocess && email.messageId && !isScopedReprocess) {
       const priorEventForSameBooking = await BookingEvent.findOne({
         where: { emailMessageId: email.messageId, platform: event.platform },
         include: [
@@ -1564,6 +1608,10 @@ const applyParsedEvent = async (
       throw new Error('Unable to match Airbnb cancellation email to an existing booking');
     }
 
+    if (!booking && isScopedReprocess) {
+      return null;
+    }
+
     if (!booking) {
       booking = Booking.build({
         platform: event.platform,
@@ -1597,7 +1645,7 @@ const applyParsedEvent = async (
 
     const lastMutationAt = bookingRecord.statusChangedAt ?? bookingRecord.createdAt ?? null;
     const isOlderEvent = Boolean(lastMutationAt && eventOccurredAt < lastMutationAt);
-    if (isOlderEvent) {
+    if (isOlderEvent && !isScopedReprocess) {
       const canApplyOlderEvent = event.eventType === 'created' || event.eventType === 'amended';
       if (!canApplyOlderEvent) {
         throw new StaleBookingEventError(event.platform, bookingRecord.platformBookingId, email.messageId);
@@ -1605,13 +1653,13 @@ const applyParsedEvent = async (
     }
 
     const bookingFields = { ...(event.bookingFields ?? {}) };
-    if (bookingFields.channelId == null) {
+    if (!isScopedReprocess && bookingFields.channelId == null) {
       const inferredChannelId = await resolveChannelIdForPlatform(event.platform);
       if (inferredChannelId != null) {
         bookingFields.channelId = inferredChannelId;
       }
     }
-    if (!bookingFields.productId) {
+    if (!isScopedReprocess && !bookingFields.productId) {
       const aliasMatch = await resolveProductIdFromAliases(bookingFields, transaction);
       if (aliasMatch.productId != null) {
         bookingFields.productId = aliasMatch.productId;
@@ -1641,7 +1689,7 @@ const applyParsedEvent = async (
     delete bookingFields.partySizeAdultsDelta;
     delete bookingFields.addonsExtrasDelta;
 
-    const patch = normalizePatch(bookingFields);
+    let patch = normalizePatch(bookingFields);
     if (event.status === 'cancelled') {
       for (const [key, value] of Object.entries(patch)) {
         if (value === null) {
@@ -1649,21 +1697,27 @@ const applyParsedEvent = async (
         }
       }
     }
+    if (isScopedReprocess) {
+      patch = filterPatchByScopedHints(patch, scopedHints);
+    }
 
-    const derivedViatorStartAt = deriveViatorAmendedStartAt(bookingRecord, patch, event);
+    const derivedViatorStartAt = isScopedReprocess ? null : deriveViatorAmendedStartAt(bookingRecord, patch, event);
     if (derivedViatorStartAt) {
       patch.experienceStartAt = derivedViatorStartAt;
     }
-    const refundReconciliationOutcome = await reconcileRefundDerivedFields(bookingRecord, event, patch, {
-      priorEventPayload: priorEvent?.eventPayload ?? null,
-      eventOccurredAt,
-    });
+    const refundReconciliationOutcome =
+      !isScopedReprocess || includesScopedRefund
+        ? await reconcileRefundDerivedFields(bookingRecord, event, patch, {
+            priorEventPayload: priorEvent?.eventPayload ?? null,
+            eventOccurredAt,
+          })
+        : null;
 
     const viatorTravellerAddition = parseViatorTravellerAdditionPayload(event.rawPayload);
     const priorViatorTravellerAddition = parseViatorTravellerAdditionPayload(priorEvent?.eventPayload ?? null);
     let viatorTravellerAdditionOutcome: Record<string, unknown> | null = null;
 
-    if (event.platform === 'viator' && event.status === 'amended' && viatorTravellerAddition) {
+    if (!isScopedReprocess && event.platform === 'viator' && event.status === 'amended' && viatorTravellerAddition) {
       const addedCount = viatorTravellerAddition.addedCount;
       const names = viatorTravellerAddition.names;
       let priorAlreadyApplied = priorViatorTravellerAddition?.applied === true;
@@ -1782,8 +1836,10 @@ const applyParsedEvent = async (
       bookingRecord.setDataValue(key, next);
     };
 
-    applyDelta('partySizeTotal', partySizeTotalDelta ?? null);
-    applyDelta('partySizeAdults', partySizeAdultsDelta ?? null);
+    if (!isScopedReprocess) {
+      applyDelta('partySizeTotal', partySizeTotalDelta ?? null);
+      applyDelta('partySizeAdults', partySizeAdultsDelta ?? null);
+    }
 
     const applyExtrasDelta = (delta?: Record<string, number> | null): void => {
       if (!delta) {
@@ -1812,7 +1868,9 @@ const applyParsedEvent = async (
       bookingRecord.addonsSnapshot = snapshot;
     };
 
-    applyExtrasDelta(addonsExtrasDelta);
+    if (!isScopedReprocess) {
+      applyExtrasDelta(addonsExtrasDelta);
+    }
 
     const inferCocktailDeltaFromPartyChange = (): void => {
       if (explicitCocktailDelta) {
@@ -1838,49 +1896,57 @@ const applyParsedEvent = async (
       bookingRecord.addonsSnapshot = snapshot;
     };
 
-    inferCocktailDeltaFromPartyChange();
+    if (!isScopedReprocess) {
+      inferCocktailDeltaFromPartyChange();
+    }
 
-    const shouldUpdateStatus = !bookingRecord.statusChangedAt || eventOccurredAt >= bookingRecord.statusChangedAt;
-    if (shouldUpdateStatus) {
-      bookingRecord.status = event.status;
-      bookingRecord.statusChangedAt = eventOccurredAt;
-      if (event.status === 'cancelled') {
-        bookingRecord.cancelledAt = eventOccurredAt;
-      } else if (bookingRecord.cancelledAt) {
-        bookingRecord.cancelledAt = null;
+    if (!isScopedReprocess) {
+      const shouldUpdateStatus = !bookingRecord.statusChangedAt || eventOccurredAt >= bookingRecord.statusChangedAt;
+      if (shouldUpdateStatus) {
+        bookingRecord.status = event.status;
+        bookingRecord.statusChangedAt = eventOccurredAt;
+        if (event.status === 'cancelled') {
+          bookingRecord.cancelledAt = eventOccurredAt;
+        } else if (bookingRecord.cancelledAt) {
+          bookingRecord.cancelledAt = null;
+        }
       }
     }
 
-    if (event.paymentStatus) {
+    if (event.paymentStatus && (!isScopedReprocess || includesScopedRefund)) {
       bookingRecord.paymentStatus = event.paymentStatus;
     }
-    if (event.platformOrderId) {
+    if (!isScopedReprocess && event.platformOrderId) {
       bookingRecord.platformOrderId = event.platformOrderId;
     }
 
-    bookingRecord.lastEmailMessageId = email.messageId;
-    const nextSourceReceivedAt = event.sourceReceivedAt ?? email.receivedAt ?? null;
-    if (!bookingRecord.sourceReceivedAt && nextSourceReceivedAt) {
-      bookingRecord.sourceReceivedAt = nextSourceReceivedAt;
-    } else if (
-      event.eventType === 'created' &&
-      nextSourceReceivedAt &&
-      bookingRecord.sourceReceivedAt &&
-      nextSourceReceivedAt < bookingRecord.sourceReceivedAt
-    ) {
-      bookingRecord.sourceReceivedAt = nextSourceReceivedAt;
+    if (!isScopedReprocess) {
+      bookingRecord.lastEmailMessageId = email.messageId;
+      const nextSourceReceivedAt = event.sourceReceivedAt ?? email.receivedAt ?? null;
+      if (!bookingRecord.sourceReceivedAt && nextSourceReceivedAt) {
+        bookingRecord.sourceReceivedAt = nextSourceReceivedAt;
+      } else if (
+        event.eventType === 'created' &&
+        nextSourceReceivedAt &&
+        bookingRecord.sourceReceivedAt &&
+        nextSourceReceivedAt < bookingRecord.sourceReceivedAt
+      ) {
+        bookingRecord.sourceReceivedAt = nextSourceReceivedAt;
+      }
+      bookingRecord.processedAt = new Date();
     }
-    bookingRecord.processedAt = new Date();
-    const addonsSnapshot =
-      event.bookingFields?.addonsSnapshot ??
-      (event.addons && event.addons.length > 0 ? { items: event.addons } : null);
-    bookingRecord.addonsSnapshot = addonsSnapshot ?? bookingRecord.addonsSnapshot ?? null;
-    if (event.notes) {
-      bookingRecord.notes = event.notes;
+    if (!isScopedReprocess) {
+      const addonsSnapshot =
+        event.bookingFields?.addonsSnapshot ??
+        (event.addons && event.addons.length > 0 ? { items: event.addons } : null);
+      bookingRecord.addonsSnapshot = addonsSnapshot ?? bookingRecord.addonsSnapshot ?? null;
+      if (event.notes) {
+        bookingRecord.notes = event.notes;
+      }
     }
 
     let addonsForSync: ParsedBookingEvent['addons'] = event.addons;
-    if (event.platform === 'viator' && (!addonsForSync || addonsForSync.length === 0)) {
+    if (!isScopedReprocess && event.platform === 'viator' && (!addonsForSync || addonsForSync.length === 0)) {
       const derivedAddons = deriveNormalizedAddonsFromSnapshot(bookingRecord.addonsSnapshot);
       if (derivedAddons !== undefined) {
         addonsForSync = derivedAddons;
@@ -1889,7 +1955,7 @@ const applyParsedEvent = async (
 
     await bookingRecord.save({ transaction });
 
-    if (priorEvent) {
+    if (priorEvent && !isScopedReprocess) {
       const priorEventBookingId = priorEvent.bookingId ?? null;
       const sameBookingAsPriorEvent =
         priorEventBookingId != null && String(priorEventBookingId) === String(bookingRecord.id);
@@ -1921,39 +1987,41 @@ const applyParsedEvent = async (
       }
     }
 
-    const basePayload: Record<string, unknown> =
-      event.rawPayload && typeof event.rawPayload === 'object'
-        ? { ...(event.rawPayload as Record<string, unknown>) }
-        : event.rawPayload != null
-          ? { rawPayload: event.rawPayload }
-          : {};
-    if (viatorTravellerAdditionOutcome) {
-      basePayload.viatorTravellerAddition = viatorTravellerAdditionOutcome;
-    }
-    if (refundReconciliationOutcome) {
-      basePayload.refundConversion = refundReconciliationOutcome;
-    }
-    if (options.isReprocess) {
-      basePayload.reprocessed = true;
-      basePayload.originalEventType = event.eventType;
-    }
-    const bookingEvent = BookingEvent.build(
-      {
-        bookingId: bookingRecord.id,
-        emailId: email.id,
-        eventType: options.isReprocess ? 'replayed' : event.eventType,
-        platform: event.platform,
-        statusAfter: event.status,
-        emailMessageId: email.messageId,
-        eventPayload: Object.keys(basePayload).length > 0 ? basePayload : null,
-        occurredAt: eventOccurredAt,
-        ingestedAt: new Date(),
-        processedAt: new Date(),
-      } as BookingEvent,
-    );
-    await bookingEvent.save({ transaction });
+    if (!isScopedReprocess) {
+      const basePayload: Record<string, unknown> =
+        event.rawPayload && typeof event.rawPayload === 'object'
+          ? { ...(event.rawPayload as Record<string, unknown>) }
+          : event.rawPayload != null
+            ? { rawPayload: event.rawPayload }
+            : {};
+      if (viatorTravellerAdditionOutcome) {
+        basePayload.viatorTravellerAddition = viatorTravellerAdditionOutcome;
+      }
+      if (refundReconciliationOutcome) {
+        basePayload.refundConversion = refundReconciliationOutcome;
+      }
+      if (options.isReprocess) {
+        basePayload.reprocessed = true;
+        basePayload.originalEventType = event.eventType;
+      }
+      const bookingEvent = BookingEvent.build(
+        {
+          bookingId: bookingRecord.id,
+          emailId: email.id,
+          eventType: options.isReprocess ? 'replayed' : event.eventType,
+          platform: event.platform,
+          statusAfter: event.status,
+          emailMessageId: email.messageId,
+          eventPayload: Object.keys(basePayload).length > 0 ? basePayload : null,
+          occurredAt: eventOccurredAt,
+          ingestedAt: new Date(),
+          processedAt: new Date(),
+        } as BookingEvent,
+      );
+      await bookingEvent.save({ transaction });
 
-    await syncAddons(bookingRecord.id, bookingEvent.id, addonsForSync, transaction);
+      await syncAddons(bookingRecord.id, bookingEvent.id, addonsForSync, transaction);
+    }
 
     return bookingRecord.id;
   });
@@ -1965,8 +2033,15 @@ type ProcessResult = 'processed' | 'skipped_lower' | 'skipped_upper' | 'ignored'
 
 export const processBookingEmail = async (
   messageId: string,
-  options: { force?: boolean; receivedAfter?: Date | null; receivedBefore?: Date | null } = {},
+  options: {
+    force?: boolean;
+    receivedAfter?: Date | null;
+    receivedBefore?: Date | null;
+    scopedHints?: ScopedReprocessHint[];
+  } = {},
 ): Promise<ProcessResult> => {
+  const scopedHints = normalizeScopedReprocessHints(options.scopedHints);
+  const isScopedReprocess = scopedHints.length > 0;
   let payload: GmailMessagePayload | null = null;
   try {
     payload = await fetchMessagePayload(messageId);
@@ -2003,7 +2078,7 @@ export const processBookingEmail = async (
   const { parsed, diagnostics } = await runParsers(context);
 
   if (!parsed) {
-    if (options.force) {
+    if (options.force && !isScopedReprocess) {
       await cleanupIgnoredReprocessArtifacts(emailRecord);
     }
     await updateEmailStatus(emailRecord, 'ignored', buildIgnoredReason(diagnostics));
@@ -2019,21 +2094,30 @@ export const processBookingEmail = async (
       const spawned = current.spawnedEvents ?? [];
       const bookingId = await applyParsedEvent(emailRecord, current, {
         isReprocess: Boolean(options.force),
+        scopedHints,
       });
-      processedBookingIds.add(bookingId);
+      if (bookingId != null) {
+        processedBookingIds.add(bookingId);
+      }
       if (spawned.length > 0) {
         pendingEvents.push(...spawned);
       }
     }
     await updateEmailStatus(emailRecord, 'processed');
 
-    for (const bookingId of processedBookingIds) {
-      await syncEcwidBookingUtmByBookingId(bookingId);
+    if (!isScopedReprocess) {
+      for (const bookingId of processedBookingIds) {
+        await syncEcwidBookingUtmByBookingId(bookingId);
+      }
     }
 
     return 'processed';
   } catch (error) {
     if (error instanceof StaleBookingEventError) {
+      if (isScopedReprocess) {
+        await updateEmailStatus(emailRecord, 'processed');
+        return 'processed';
+      }
       logger.info(
         `[booking-email] Detected out-of-order event for ${error.platformBookingId}, rebuilding timeline chronologically`,
       );
