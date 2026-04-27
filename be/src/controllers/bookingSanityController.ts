@@ -461,33 +461,27 @@ const resolveEcwidComparableOmniRevenue = (
   const paymentStatus = String(externalRow.paymentStatus ?? '').trim().toUpperCase();
   const hasRefundInOmni = omniRow.refundedAmount > 0;
   const ecwidShowsRefundedStatus = ECWID_REFUND_PAYMENT_STATUSES.has(paymentStatus);
-  const ecwidHasExplicitRefundAmount = (externalRow.refundedAmount ?? 0) > DEFAULT_TOLERANCE;
 
   if (hasRefundInOmni && ecwidShowsRefundedStatus) {
-    // Ecwid behavior is inconsistent across accounts/orders:
-    // - Sometimes totals stay gross while only status changes.
-    // - Sometimes refund metadata is present and order totals are already net/coupon-adjusted.
-    // Use gross fallback only when Ecwid does not expose an explicit refunded amount.
-    if (ecwidHasExplicitRefundAmount) {
-      return {
-        value: omniRow.revenue,
-        refundAdjusted: false,
-        refundAdjustment: 0,
-      };
-    }
-    if (omniRow.priceGross > 0) {
-      const value = roundCurrency(omniRow.priceGross);
-      return {
-        value,
-        refundAdjusted: true,
-        refundAdjustment: roundCurrency(value - omniRow.revenue),
-      };
-    }
-    const value = roundCurrency(omniRow.revenue + omniRow.refundedAmount);
+    // Ecwid refund payloads are inconsistent:
+    // - some orders keep "total" as gross (before refund),
+    // - others reflect a net-like final total.
+    // Pick whichever Omni candidate is closest to Ecwid total.
+    const candidateNet = roundCurrency(omniRow.revenue);
+    const candidateGross =
+      omniRow.priceGross > 0 ? roundCurrency(omniRow.priceGross) : roundCurrency(omniRow.revenue + omniRow.refundedAmount);
+    const externalTotal = roundCurrency(externalRow.revenue);
+
+    const netDistance = Math.abs(roundCurrency(candidateNet - externalTotal));
+    const grossDistance = Math.abs(roundCurrency(candidateGross - externalTotal));
+    const useGross = grossDistance < netDistance;
+    const value = useGross ? candidateGross : candidateNet;
+    const refundAdjustment = roundCurrency(value - omniRow.revenue);
+
     return {
       value,
-      refundAdjusted: true,
-      refundAdjustment: roundCurrency(value - omniRow.revenue),
+      refundAdjusted: useGross && Math.abs(refundAdjustment) > DEFAULT_TOLERANCE,
+      refundAdjustment,
     };
   }
 
