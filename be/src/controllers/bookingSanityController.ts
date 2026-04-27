@@ -1086,6 +1086,26 @@ const collectEcwidExternalData = (
   return { orders, totals };
 };
 
+const resolveEcwidDetailedPeople = async (orderId: string): Promise<number | null> => {
+  const normalizedId = String(orderId ?? '').trim();
+  if (!normalizedId) {
+    return null;
+  }
+  const order = await getEcwidOrder(normalizedId);
+  const transformed = transformEcwidOrders([order]).orders;
+  if (transformed.length === 0) {
+    return null;
+  }
+  const people = transformed.reduce((sum, entry) => {
+    const quantity = Number(entry.quantity);
+    if (!Number.isFinite(quantity)) {
+      return sum;
+    }
+    return sum + Math.max(Math.round(quantity), 0);
+  }, 0);
+  return people > 0 ? people : null;
+};
+
 export const reprocessEcwidSanityHints = async (req: Request, res: Response): Promise<void> => {
   try {
     const body = req.body as EcwidScopedReprocessBody;
