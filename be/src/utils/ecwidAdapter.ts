@@ -437,27 +437,32 @@ const extractGenderCounts = (order: EcwidOrder, item: EcwidOrderItem): GenderCou
         ? 'women'
         : undefined;
     const optionHasGender = optionGender !== undefined;
-    const optionValues: unknown[] = [];
-    if (option.value !== undefined && option.value !== null) {
-      optionValues.push(option.value);
-    }
     const optionRecord = option as unknown as Record<string, unknown>;
-    if (Array.isArray(optionRecord.valuesArray)) {
-      optionValues.push(...(optionRecord.valuesArray as unknown[]));
-    }
-    if (optionRecord.valueTranslated && typeof optionRecord.valueTranslated === 'object') {
-      optionValues.push(...Object.values(optionRecord.valueTranslated as Record<string, unknown>));
-    }
+    const selections = Array.isArray(option.selections) ? option.selections : [];
+    const hasUsableSelectionValue = selections.some((selection) => hasUsableValue(getSelectionValue(selection)));
 
-    optionValues.forEach((value) => {
-      if (optionGender) {
-        accumulateGenderCounts(totals, value, optionGender);
-        return;
+    // Avoid double counting the same logical value that Ecwid can expose in multiple fields
+    // (value, valuesArray, valueTranslated, selections).
+    if (!hasUsableSelectionValue) {
+      const optionValues: unknown[] = [];
+      if (option.value !== undefined && option.value !== null) {
+        optionValues.push(option.value);
+      } else if (Array.isArray(optionRecord.valuesArray) && optionRecord.valuesArray.length > 0) {
+        optionValues.push(...(optionRecord.valuesArray as unknown[]));
+      } else if (optionRecord.valueTranslated && typeof optionRecord.valueTranslated === 'object') {
+        optionValues.push(...Object.values(optionRecord.valueTranslated as Record<string, unknown>));
       }
-      accumulateGenderCounts(totals, value);
-    });
 
-    option.selections?.forEach((selection: EcwidSelection) => {
+      optionValues.forEach((value) => {
+        if (optionGender) {
+          accumulateGenderCounts(totals, value, optionGender);
+          return;
+        }
+        accumulateGenderCounts(totals, value);
+      });
+    }
+
+    selections.forEach((selection: EcwidSelection) => {
       if (!selection) {
         return;
       }
