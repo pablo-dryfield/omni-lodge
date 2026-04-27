@@ -1097,13 +1097,73 @@ const resolveEcwidDetailedPeople = async (orderId: string): Promise<number | nul
     return null;
   }
   const people = transformed.reduce((sum, entry) => {
+    const men = Number.isFinite(entry.menCount) ? Math.max(entry.menCount, 0) : 0;
+    const women = Number.isFinite(entry.womenCount) ? Math.max(entry.womenCount, 0) : 0;
+    const participants = men + women;
     const quantity = Number(entry.quantity);
-    if (!Number.isFinite(quantity)) {
-      return sum;
-    }
-    return sum + Math.max(Math.round(quantity), 0);
+    const quantitySafe = Number.isFinite(quantity) ? Math.max(Math.round(quantity), 0) : 0;
+    return sum + (participants > 0 ? participants : quantitySafe);
   }, 0);
   return people > 0 ? people : null;
+};
+
+const reconcileEcwidPeopleFromDetails = async (
+  omniByKey: Map<string, OmniOrderAggregate>,
+  externalByKey: Map<string, EcwidExternalAggregate>,
+  externalTotals: OmniTotals,
+  tolerance: number,
+): Promise<void> => {
+  const candidateIds = new Set<string>();
+
+  externalByKey.forEach((externalRow, orderId) => {
+    const omniRow = omniByKey.get(orderId);
+    if (!omniRow) {
+      return;
+    }
+    if (externalRow.peopleSource !== 'quantity_fallback') {
+      return;
+    }
+    if (externalRow.people > 1) {
+      return;
+    }
+    if (omniRow.people <= externalRow.people) {
+      return;
+    }
+    if (omniRow.bookings !== externalRow.bookings) {
+      return;
+    }
+    const comparable = resolveEcwidComparableOmniRevenue(omniRow, externalRow);
+    const revenueDelta = roundCurrency(comparable.value - externalRow.revenue);
+    if (Math.abs(revenueDelta) > tolerance) {
+      return;
+    }
+    candidateIds.add(orderId);
+  });
+
+  if (candidateIds.size === 0) {
+    return;
+  }
+
+  for (const orderId of candidateIds) {
+    try {
+      const detailedPeople = await resolveEcwidDetailedPeople(orderId);
+      if (detailedPeople === null || detailedPeople <= 0) {
+        continue;
+      }
+      const externalRow = externalByKey.get(orderId);
+      if (!externalRow) {
+        continue;
+      }
+      if (detailedPeople <= externalRow.people) {
+        continue;
+      }
+      externalTotals.people += detailedPeople - externalRow.people;
+      externalRow.people = detailedPeople;
+      externalRow.peopleSource = 'participants';
+    } catch {
+      // Non-blocking fallback; keep original list-based people if detail fetch fails.
+    }
+  }
 };
 
 export const reprocessEcwidSanityHints = async (req: Request, res: Response): Promise<void> => {
@@ -1595,6 +1655,8 @@ export const getSanityCheckEcwidComparison = async (req: Request, res: Response)
     external.orders.forEach((row) => {
       externalByKey.set(row.orderId, row);
     });
+
+    await reconcileEcwidPeopleFromDetails(omniByKey, externalByKey, external.totals, tolerance);
 
     const allKeys = new Set<string>([...omniByKey.keys(), ...externalByKey.keys()]);
     const mismatches: EcwidMismatch[] = [];
