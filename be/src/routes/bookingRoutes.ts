@@ -1,6 +1,13 @@
 import { Router } from 'express';
 import authMiddleware from '../middleware/authMiddleware.js';
 import {
+  fixEcwidOrderFromSource,
+  fixEcwidOrdersFromSourceBulk,
+  getSanityCheckEcwidComparison,
+  getSanityCheckOmniSummary,
+  reprocessEcwidSanityHints,
+} from '../controllers/bookingSanityController.js';
+import {
   listBookings,
   listBookingEmails,
   listBookingMailboxEmails,
@@ -42,6 +49,11 @@ router.post('/emails/reprocess', authMiddleware, reprocessBookingEmails);
 router.post('/emails/:messageId/reprocess', authMiddleware, reprocessBookingEmail);
 router.post('/emails/backfill', authMiddleware, backfillBookingEmails);
 router.get(['/manifest', 'manifest'], authMiddleware, getManifest);
+router.get('/sanity-check/omni', authMiddleware, getSanityCheckOmniSummary);
+router.get('/sanity-check/ecwid', authMiddleware, getSanityCheckEcwidComparison);
+router.post('/sanity-check/ecwid/reprocess-hints', authMiddleware, reprocessEcwidSanityHints);
+router.post('/sanity-check/ecwid/fix-order', authMiddleware, fixEcwidOrderFromSource);
+router.post('/sanity-check/ecwid/fix-orders', authMiddleware, fixEcwidOrdersFromSourceBulk);
 router.post('/ingest-emails', authMiddleware, ingestBookingEmails);
 router.post('/import-ecwid', authMiddleware, importEcwidBooking);
 router.patch('/attendance/bulk', authMiddleware, updateBulkBookingAttendance);
