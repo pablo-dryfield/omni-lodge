@@ -92,10 +92,18 @@ export type BookingCounterInsights = {
   freeTicketEntries: Array<{ counterId: number; counterDate: string; count: number; note: string }>;
 };
 
+export type VenueCommissionCurrencyTotal = {
+  currency: string;
+  receivable: number;
+  receivableCollected: number;
+  receivableOutstanding: number;
+};
+
 type Props = {
   orders: UnifiedOrder[];
   bookingAddons: BookingAddonDashboardRow[];
   counterInsights: BookingCounterInsights | null;
+  venueCommissionTotals?: VenueCommissionCurrencyTotal[] | null;
   rangeLabel: string;
 };
 
@@ -148,8 +156,6 @@ const formatMoney = (value: number, currency = "PLN"): string => {
     return `${value.toFixed(2)} ${currency}`;
   }
 };
-
-const formatPercent = (value: number): string => `${(value * 100).toFixed(1)}%`;
 
 type SectionInfoVariable = {
   name: string;
@@ -269,9 +275,15 @@ const KpiCard = ({
   </Paper>
 );
 
-const BookingsExecutiveDashboard = ({ orders, bookingAddons, counterInsights, rangeLabel }: Props) => {
-  const bookingFinancialRows = useMemo(() => {
-    return orders.map((order) => {
+const BookingsExecutiveDashboard = ({
+  orders,
+  bookingAddons,
+  counterInsights,
+  venueCommissionTotals,
+  rangeLabel,
+}: Props) => {
+  const toFinancialRow = useMemo(
+    () => (order: UnifiedOrder) => {
       const raw = asRecord(order.rawData);
       const baseAmountValue = asNullableNumber(raw.baseAmount);
       const baseAmount = baseAmountValue ?? 0;
@@ -287,6 +299,10 @@ const BookingsExecutiveDashboard = ({ orders, bookingAddons, counterInsights, ra
       const grossRevenue = roundMoney(priceGross > 0 ? priceGross : derivedGross);
       const priceNetValue = asNullableNumber(raw.priceNet);
       const priceNet = priceNetValue ?? 0;
+      const recognizedBaseWithoutChannelCommission = baseAmountValue ?? priceNetValue ?? 0;
+      const recognizedRevenueWithoutChannelCommission = roundMoney(
+        Math.max(recognizedBaseWithoutChannelCommission + tipAmount, 0),
+      );
       const recognizedBase = baseAmountAfterChannelCommissionValue ?? baseAmountValue ?? priceNetValue ?? 0;
       const recognizedRevenue = roundMoney(Math.max(recognizedBase + tipAmount, 0));
       const commissionAmount = asNumber(raw.commissionAmount);
@@ -325,15 +341,19 @@ const BookingsExecutiveDashboard = ({ orders, bookingAddons, counterInsights, ra
         currency: financial.currency,
         grossRevenue: financial.priceGross,
         netRevenue: recognizedRevenue,
+        netRevenueNoChannelCommission: recognizedRevenueWithoutChannelCommission,
         refundedAmount: financial.refundedAmount,
         addonsRevenue: financial.addonsAmount,
         baseRevenue: roundMoney(recognizedBase),
+        baseRevenueNoChannelCommission: roundMoney(recognizedBaseWithoutChannelCommission),
         tipRevenue: financial.tipAmount,
         commissionAmount: financial.commissionAmount,
       };
-    });
-  }, [orders]);
+    },
+    [],
+  );
 
+  const bookingFinancialRows = useMemo(() => orders.map((order) => toFinancialRow(order)), [orders, toFinancialRow]);
   const orderIdSet = useMemo(() => {
     const next = new Set<number>();
     bookingFinancialRows.forEach((row) => {
@@ -362,13 +382,17 @@ const BookingsExecutiveDashboard = ({ orders, bookingAddons, counterInsights, ra
     () => roundMoney(bookingFinancialRows.reduce((acc, row) => acc + row.grossRevenue, 0)),
     [bookingFinancialRows],
   );
-  const totalRevenue = useMemo(
-    () => roundMoney(bookingFinancialRows.reduce((acc, row) => acc + row.netRevenue, 0)),
+  const totalRevenueNoChannelCommission = useMemo(
+    () => roundMoney(bookingFinancialRows.reduce((acc, row) => acc + row.netRevenueNoChannelCommission, 0)),
     [bookingFinancialRows],
   );
-  const totalRefunded = useMemo(
-    () => roundMoney(bookingFinancialRows.reduce((acc, row) => acc + row.refundedAmount, 0)),
-    [bookingFinancialRows],
+  const totalCashPayments = useMemo(
+    () => roundMoney(counterInsights?.cashPaymentsTotal ?? 0),
+    [counterInsights],
+  );
+  const totalRevenueCard = useMemo(
+    () => roundMoney(totalRevenueNoChannelCommission + totalCashPayments),
+    [totalRevenueNoChannelCommission, totalCashPayments],
   );
   const totalAddonsRevenue = useMemo(() => {
     const addonsFromBookings = bookingFinancialRows.reduce((acc, row) => acc + row.addonsRevenue, 0);
@@ -378,8 +402,25 @@ const BookingsExecutiveDashboard = ({ orders, bookingAddons, counterInsights, ra
 
   const totalPeople = useMemo(() => bookingFinancialRows.reduce((acc, row) => acc + row.people, 0), [bookingFinancialRows]);
   const totalBookings = bookingFinancialRows.length;
-  const refundRate = totalGrossRevenue > 0 ? totalRefunded / totalGrossRevenue : 0;
-  const averageBookingValue = totalBookings > 0 ? totalRevenue / totalBookings : 0;
+  const averageBookingValue = totalBookings > 0 ? totalRevenueNoChannelCommission / totalBookings : 0;
+  const venueCommissionByCurrency = useMemo(() => {
+    return (venueCommissionTotals ?? []).map((row) => ({
+      currency: String(row.currency ?? "PLN").toUpperCase(),
+      receivable: roundMoney(asNumber(row.receivable)),
+      receivableCollected: roundMoney(asNumber(row.receivableCollected)),
+      receivableOutstanding: roundMoney(asNumber(row.receivableOutstanding)),
+    }));
+  }, [venueCommissionTotals]);
+  const venueCommissionSelected = useMemo(() => {
+    if (venueCommissionByCurrency.length === 0) {
+      return null;
+    }
+    const byDefaultCurrency = venueCommissionByCurrency.find((row) => row.currency === defaultCurrency);
+    return byDefaultCurrency ?? venueCommissionByCurrency[0];
+  }, [defaultCurrency, venueCommissionByCurrency]);
+  const venueCommissionTotal = venueCommissionSelected?.receivable ?? 0;
+  const venueCommissionCurrency = venueCommissionSelected?.currency ?? defaultCurrency;
+  const venueCommissionOutstanding = venueCommissionSelected?.receivableOutstanding ?? 0;
 
   const dailyTrend = useMemo(() => {
     const map = new Map<
@@ -573,45 +614,47 @@ const BookingsExecutiveDashboard = ({ orders, bookingAddons, counterInsights, ra
       <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
         <KpiCard
           icon={<IconReceipt2 size={20} />}
-          label="Revenue (Base + Tip)"
+          label="Revenue"
           info={
             <SectionInfo
-              title="Revenue (Base + Tip)"
-              formula="Revenue = (Base Amount after Channel Commission, if configured) + Tip Amount"
+              title="Revenue"
+              formula="Revenue Card = (Base Amount without Channel Commission + Tip Amount) + Cash Payments"
               variables={[
                 {
                   name: "Base Amount",
                   description:
-                    "Recognized booking revenue after discounts/refunds, adjusted by channel commission when configured for that booking date.",
+                    "Recognized booking revenue after discounts/refunds, without applying channel commission adjustment.",
                 },
                 { name: "Tip Amount", description: "Tip collected for the booking." },
+                { name: "Cash Payments", description: "Counter cash metrics marked as cash payment." },
               ]}
               notes={[
-                "Commission adjustment uses channel_commissions valid_from/valid_to and the current summary date basis.",
                 "If base amount is missing, the dashboard falls back to Price Net for that row.",
               ]}
             />
           }
-          value={formatMoney(totalRevenue, defaultCurrency)}
+          value={formatMoney(totalRevenueCard, defaultCurrency)}
           subtitle={`Avg booking: ${formatMoney(averageBookingValue, defaultCurrency)}`}
           accent="#214A66"
         />
         <KpiCard
           icon={<IconCreditCardRefund size={20} />}
-          label="Gross Booked Value"
+          label="Venue Commission"
           info={
             <SectionInfo
-              title="Gross Booked Value"
-              formula="Gross = Price Gross (or Base + Add-ons - Discount when gross is missing)"
+              title="Venue Commission"
+              formula="Venue Commission = Sum(venueNumbers.summary.totalsByCurrency.receivable)"
               variables={[
-                { name: "Price Gross", description: "Original gross booking amount before refunds." },
-                { name: "Add-ons", description: "Add-on total attached to booking." },
-                { name: "Discount", description: "Discount amount applied to booking." },
+                { name: "receivable", description: "Commission owed by venues for the selected range." },
+                {
+                  name: "Data source",
+                  description: "Same summary endpoint used in Venue Numbers tab (/venueNumbers?tab=summary).",
+                },
               ]}
             />
           }
-          value={formatMoney(totalGrossRevenue, defaultCurrency)}
-          subtitle={`Refund rate: ${formatPercent(refundRate)}`}
+          value={formatMoney(venueCommissionTotal, venueCommissionCurrency)}
+          subtitle={`Outstanding: ${formatMoney(venueCommissionOutstanding, venueCommissionCurrency)}`}
           accent="#2B7A78"
         />
         <KpiCard
