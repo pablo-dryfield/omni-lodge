@@ -547,21 +547,27 @@ const resolveRawEcwidPeopleStats = (rawOrder: EcwidOrder): EcwidRawPeopleStats =
         : includesKeywordToken(optionLabel, ECWID_WOMEN_LABELS)
           ? 'women'
           : undefined;
-      const optionValues: unknown[] = [];
-      if (option.value !== undefined && option.value !== null) {
-        optionValues.push(option.value);
-      }
-      if (Array.isArray(option.valuesArray)) {
-        optionValues.push(...(option.valuesArray as unknown[]));
-      }
-      if (option.valueTranslated && typeof option.valueTranslated === 'object') {
-        optionValues.push(...Object.values(option.valueTranslated as Record<string, unknown>));
-      }
-      optionValues.forEach((value) => accumulateGenderValue(counters, value, optionGender));
-
       const selections = Array.isArray(option.selections)
         ? (option.selections as Array<Record<string, unknown>>)
         : [];
+      const hasUsableSelectionValue = selections.some((selection) => {
+        const selectionValue = resolveSelectionValue(selection);
+        return selectionValue !== null && selectionValue !== undefined && String(selectionValue).trim().length > 0;
+      });
+
+      // Avoid double counting the same logical value mirrored in value/valuesArray/valueTranslated/selections.
+      if (!hasUsableSelectionValue) {
+        const optionValues: unknown[] = [];
+        if (option.value !== undefined && option.value !== null) {
+          optionValues.push(option.value);
+        } else if (Array.isArray(option.valuesArray) && option.valuesArray.length > 0) {
+          optionValues.push(...(option.valuesArray as unknown[]));
+        } else if (option.valueTranslated && typeof option.valueTranslated === 'object') {
+          optionValues.push(...Object.values(option.valueTranslated as Record<string, unknown>));
+        }
+        optionValues.forEach((value) => accumulateGenderValue(counters, value, optionGender));
+      }
+
       selections.forEach((selection) => {
         const selectionLabel = resolveSelectionLabel(selection);
         if (includesKeywordToken(selectionLabel, ECWID_MEN_LABELS)) {
