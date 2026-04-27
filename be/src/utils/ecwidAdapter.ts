@@ -432,12 +432,15 @@ const extractGenderCounts = (order: EcwidOrder, item: EcwidOrderItem): GenderCou
 
     const optionLabel = normalizeLabel(option.name);
     const optionValue = option.value;
-    const optionHasGender = includesKeyword(optionLabel, MEN_LABELS) || includesKeyword(optionLabel, WOMEN_LABELS);
+    const optionGender: 'men' | 'women' | undefined = includesKeyword(optionLabel, MEN_LABELS)
+      ? 'men'
+      : includesKeyword(optionLabel, WOMEN_LABELS)
+        ? 'women'
+        : undefined;
+    const optionHasGender = optionGender !== undefined;
 
-    if (includesKeyword(optionLabel, MEN_LABELS)) {
-      accumulateGenderCounts(totals, optionValue, 'men');
-    } else if (includesKeyword(optionLabel, WOMEN_LABELS)) {
-      accumulateGenderCounts(totals, optionValue, 'women');
+    if (optionGender) {
+      accumulateGenderCounts(totals, optionValue, optionGender);
     } else {
       accumulateGenderCounts(totals, optionValue);
     }
@@ -456,6 +459,10 @@ const extractGenderCounts = (order: EcwidOrder, item: EcwidOrderItem): GenderCou
         accumulateGenderCounts(totals, selectionValue, 'men');
       } else if (includesKeyword(selectionLabel, WOMEN_LABELS)) {
         accumulateGenderCounts(totals, selectionValue, 'women');
+      } else if (optionGender) {
+        // Some Ecwid payloads store numeric selection labels (e.g. "8") under "Man"/"Woman" option names.
+        // Inherit gender from the parent option when selection label itself is not descriptive.
+        accumulateGenderCounts(totals, selectionValue, optionGender);
       } else if (!optionHasGender) {
         accumulateGenderCounts(totals, selectionValue);
       }

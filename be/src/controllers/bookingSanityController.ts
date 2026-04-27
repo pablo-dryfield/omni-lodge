@@ -419,6 +419,170 @@ const toNormalizedDate = (value: string | null | undefined): string | null => {
   return parsed.tz(STORE_TIMEZONE).format(DATE_FORMAT);
 };
 
+const ECWID_MEN_LABELS = ['men', 'man', 'male', 'boys', 'boy', 'gents', 'gent', 'guys', 'guy'];
+const ECWID_WOMEN_LABELS = ['women', 'woman', 'female', 'girls', 'girl', 'ladies', 'lady'];
+
+const normalizeKeywordValue = (value: unknown): string => String(value ?? '').trim().toLowerCase();
+
+const includesKeywordToken = (source: unknown, keywords: string[]): boolean => {
+  const normalized = normalizeKeywordValue(source);
+  if (!normalized) {
+    return false;
+  }
+  const tokens = normalized.split(/[^a-z0-9]+/g).filter(Boolean);
+  return tokens.some((token) => keywords.includes(token));
+};
+
+const countRegexMatches = (text: string, regex: RegExp): number => {
+  let total = 0;
+  for (const match of text.matchAll(regex)) {
+    const rawNumber = match[1];
+    if (!rawNumber) {
+      continue;
+    }
+    const parsed = Number.parseInt(rawNumber, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      total += parsed;
+    }
+  }
+  return total;
+};
+
+const extractGenderFromText = (rawValue: unknown): { men: number; women: number } => {
+  const text = normalizeKeywordValue(rawValue);
+  if (!text) {
+    return { men: 0, women: 0 };
+  }
+  return {
+    men: countRegexMatches(text, /(\d+)\s*(men|man|boys|boy|male)/g),
+    women: countRegexMatches(text, /(\d+)\s*(women|woman|girls|girl|female)/g),
+  };
+};
+
+const parsePositiveInteger = (rawValue: unknown): number => {
+  if (rawValue === null || rawValue === undefined) {
+    return 0;
+  }
+  if (typeof rawValue === 'number') {
+    return Number.isFinite(rawValue) && rawValue > 0 ? Math.round(rawValue) : 0;
+  }
+  const matched = String(rawValue).match(/\d+/);
+  if (!matched || !matched[0]) {
+    return 0;
+  }
+  const parsed = Number.parseInt(matched[0], 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+};
+
+const accumulateGenderValue = (
+  target: { men: number; women: number },
+  rawValue: unknown,
+  explicit?: 'men' | 'women',
+): void => {
+  if (rawValue === null || rawValue === undefined) {
+    return;
+  }
+  if (explicit) {
+    const qty = parsePositiveInteger(rawValue);
+    if (qty > 0) {
+      target[explicit] += qty;
+      return;
+    }
+  }
+  const extracted = extractGenderFromText(rawValue);
+  target.men += extracted.men;
+  target.women += extracted.women;
+};
+
+const resolveSelectionValue = (selection: Record<string, unknown>): unknown => {
+  if (selection.value !== undefined && selection.value !== null) {
+    return selection.value;
+  }
+  if (selection.selectionTitle !== undefined && selection.selectionTitle !== null) {
+    return selection.selectionTitle;
+  }
+  if (selection.name !== undefined && selection.name !== null) {
+    return selection.name;
+  }
+  return undefined;
+};
+
+const resolveSelectionLabel = (selection: Record<string, unknown>): string => {
+  const rawLabel = selection.name ?? selection.selectionTitle;
+  return normalizeKeywordValue(rawLabel);
+};
+
+type EcwidRawPeopleStats = {
+  people: number;
+  peopleSource: 'participants' | 'quantity_fallback';
+  itemCount: number;
+};
+
+const resolveRawEcwidPeopleStats = (rawOrder: EcwidOrder): EcwidRawPeopleStats => {
+  const order = rawOrder as Record<string, unknown>;
+  const items = Array.isArray(order.items) ? (order.items as Array<Record<string, unknown>>) : [];
+  if (items.length === 0) {
+    return {
+      people: 0,
+      peopleSource: 'quantity_fallback',
+      itemCount: 1,
+    };
+  }
+
+  let people = 0;
+  let hasParticipants = false;
+
+  items.forEach((item) => {
+    const counters = { men: 0, women: 0 };
+    const options = Array.isArray(item.selectedOptions)
+      ? (item.selectedOptions as Array<Record<string, unknown>>)
+      : Array.isArray(item.options)
+        ? (item.options as Array<Record<string, unknown>>)
+        : [];
+
+    options.forEach((option) => {
+      const optionLabel = normalizeKeywordValue(option.name);
+      const optionGender: 'men' | 'women' | undefined = includesKeywordToken(optionLabel, ECWID_MEN_LABELS)
+        ? 'men'
+        : includesKeywordToken(optionLabel, ECWID_WOMEN_LABELS)
+          ? 'women'
+          : undefined;
+
+      accumulateGenderValue(counters, option.value, optionGender);
+
+      const selections = Array.isArray(option.selections)
+        ? (option.selections as Array<Record<string, unknown>>)
+        : [];
+      selections.forEach((selection) => {
+        const selectionLabel = resolveSelectionLabel(selection);
+        if (includesKeywordToken(selectionLabel, ECWID_MEN_LABELS)) {
+          accumulateGenderValue(counters, resolveSelectionValue(selection), 'men');
+          return;
+        }
+        if (includesKeywordToken(selectionLabel, ECWID_WOMEN_LABELS)) {
+          accumulateGenderValue(counters, resolveSelectionValue(selection), 'women');
+          return;
+        }
+        accumulateGenderValue(counters, resolveSelectionValue(selection), optionGender);
+      });
+    });
+
+    const participants = counters.men + counters.women;
+    if (participants > 0) {
+      hasParticipants = true;
+      people += participants;
+      return;
+    }
+    people += parsePositiveInteger(item.quantity);
+  });
+
+  return {
+    people,
+    peopleSource: hasParticipants ? 'participants' : 'quantity_fallback',
+    itemCount: items.length,
+  };
+};
+
 const isDateInsideRange = (value: string | null, startDate: string, endDate: string): boolean => {
   if (!value) {
     return false;
@@ -922,6 +1086,15 @@ const collectEcwidExternalData = (
     }
     byOrderId.set(orderId, existing);
   });
+  const rawStatsByOrderId = new Map<string, EcwidRawPeopleStats>();
+  rawOrders.forEach((raw) => {
+    const rawRecord = raw as EcwidOrder & Record<string, unknown>;
+    const orderId = String(rawRecord.id ?? '').trim();
+    if (!orderId) {
+      return;
+    }
+    rawStatsByOrderId.set(orderId, resolveRawEcwidPeopleStats(raw));
+  });
 
   const paidStatuses = new Set(['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED']);
   const map = new Map<string, EcwidExternalAggregate>();
@@ -980,6 +1153,7 @@ const collectEcwidExternalData = (
 
     const items = Array.isArray(rawRecord.items) ? (rawRecord.items as Array<Record<string, unknown>>) : [];
     const fallbackItemCount = items.length > 0 ? items.length : 1;
+    const rawStats = rawStatsByOrderId.get(orderId);
     const fallbackPeopleFromQuantity = items.reduce((sum, item) => {
       const quantity = Number(item.quantity);
       if (!Number.isFinite(quantity)) {
@@ -987,13 +1161,14 @@ const collectEcwidExternalData = (
       }
       return sum + Math.max(Math.round(quantity), 0);
     }, 0);
-    const people = transformedEntry
-      ? Math.max(transformedEntry.peopleHybrid, 0)
-      : Math.max(fallbackPeopleFromQuantity, 0);
-    const peopleSource: EcwidExternalAggregate['peopleSource'] = transformedEntry
-      ? (transformedEntry.hasParticipants ? 'participants' : 'quantity_fallback')
-      : 'quantity_fallback';
-    const bookingCount = transformedEntry?.itemCount ?? fallbackItemCount;
+    const transformedPeople = transformedEntry ? Math.max(transformedEntry.peopleHybrid, 0) : 0;
+    const rawPeople = rawStats ? Math.max(rawStats.people, 0) : 0;
+    const people = Math.max(transformedPeople, rawPeople, Math.max(fallbackPeopleFromQuantity, 0));
+    const peopleSource: EcwidExternalAggregate['peopleSource'] =
+      transformedEntry?.hasParticipants || rawStats?.peopleSource === 'participants'
+        ? 'participants'
+        : 'quantity_fallback';
+    const bookingCount = Math.max(transformedEntry?.itemCount ?? 0, rawStats?.itemCount ?? 0, fallbackItemCount);
     const revenue = roundCurrency(parseMoneyLikeNumber(rawRecord.total));
     const subtotal = roundCurrency(parseMoneyLikeNumber(rawRecord.subtotal));
     const couponDiscount = roundCurrency(Math.abs(parseMoneyLikeNumber(rawRecord.couponDiscount)));
