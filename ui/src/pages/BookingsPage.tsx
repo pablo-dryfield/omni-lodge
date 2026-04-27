@@ -38,6 +38,7 @@ import { BookingsGrid } from "../components/BookingsGrid";
 import BookingsExecutiveDashboard, {
   BookingAddonDashboardRow,
   BookingCounterInsights,
+  VenueCommissionCurrencyTotal,
 } from "../components/bookings/BookingsExecutiveDashboard";
 import axiosInstance from "../utils/axiosInstance";
 import { UnifiedOrder, UnifiedProduct } from "../store/bookingPlatformsTypes";
@@ -542,6 +543,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const [orders, setOrders] = useState<UnifiedOrder[]>([]);
   const [bookingAddons, setBookingAddons] = useState<BookingAddonDashboardRow[]>([]);
   const [counterInsights, setCounterInsights] = useState<BookingCounterInsights | null>(null);
+  const [venueCommissionTotals, setVenueCommissionTotals] = useState<VenueCommissionCurrencyTotal[] | null>(null);
   const [calendarStatusFilter, setCalendarStatusFilter] = useState<BookingFilter>("active");
   const [summaryStatusFilter, setSummaryStatusFilter] = useState<BookingFilter>("all");
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>("idle");
@@ -1079,8 +1081,20 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       setErrorMessage(null);
       setBookingAddons([]);
       setCounterInsights(null);
+      setVenueCommissionTotals(null);
 
       try {
+        const venueSummaryPromise = axiosInstance
+          .get("/venueNumbers/summary", {
+            params: {
+              period: "custom",
+              startDate: startIso,
+              endDate: endIso,
+            },
+            signal: controller.signal,
+            withCredentials: true,
+          })
+          .catch(() => null);
         const response = await axiosInstance.get("/bookings", {
           params: {
             pickupFrom: startIso,
@@ -1098,6 +1112,38 @@ const BookingsPage = ({ title }: GenericPageProps) => {
           response.data?.counterInsights && typeof response.data.counterInsights === "object"
             ? response.data.counterInsights
             : null;
+        const venueSummaryResponse = await venueSummaryPromise;
+        const venueSummaryRoot =
+          Array.isArray(venueSummaryResponse?.data) && venueSummaryResponse?.data[0]
+            ? venueSummaryResponse.data[0]
+            : null;
+        const venueSummaryData = venueSummaryRoot && typeof venueSummaryRoot === "object"
+          ? (venueSummaryRoot as { data?: unknown }).data
+          : null;
+        const venueSummary =
+          Array.isArray(venueSummaryData) && venueSummaryData.length > 0
+            ? venueSummaryData[0]
+            : venueSummaryData;
+        const venueTotalsRaw =
+          venueSummary && typeof venueSummary === "object"
+            ? (venueSummary as { totalsByCurrency?: unknown }).totalsByCurrency
+            : null;
+        const venueTotalsPayload = Array.isArray(venueTotalsRaw)
+          ? venueTotalsRaw
+              .map((row) => {
+                if (!row || typeof row !== "object") {
+                  return null;
+                }
+                const raw = row as Record<string, unknown>;
+                return {
+                  currency: String(raw.currency ?? "PLN").toUpperCase(),
+                  receivable: Number(raw.receivable ?? 0),
+                  receivableCollected: Number(raw.receivableCollected ?? 0),
+                  receivableOutstanding: Number(raw.receivableOutstanding ?? 0),
+                } satisfies VenueCommissionCurrencyTotal;
+              })
+              .filter((row): row is VenueCommissionCurrencyTotal => row !== null)
+          : null;
 
         const filteredOrdersPayload = (ordersPayload as UnifiedOrder[]).filter(
           (order) => !shouldExcludeBookingsPageProductName(order.productName),
@@ -1115,6 +1161,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
         setOrders(filteredOrdersPayload);
         setBookingAddons(bookingAddonsPayload as BookingAddonDashboardRow[]);
         setCounterInsights(counterInsightsPayload as BookingCounterInsights | null);
+        setVenueCommissionTotals(venueTotalsPayload);
         setFetchStatus("success");
       } catch (error) {
         if (controller.signal.aborted) {
@@ -1122,6 +1169,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
         }
         setFetchStatus("error");
         setErrorMessage(deriveErrorMessage(error));
+        setVenueCommissionTotals(null);
       }
     };
 
@@ -1552,6 +1600,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                       orders={filteredOrders}
                       bookingAddons={filteredBookingAddons}
                       counterInsights={counterInsights}
+                      venueCommissionTotals={venueCommissionTotals}
                       rangeLabel={summaryRangeLabel}
                     />
                   )}
