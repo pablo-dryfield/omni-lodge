@@ -780,7 +780,12 @@ const BookingsExecutiveDashboard = ({
                   <Cell key={`platform-pie-${entry.platform}-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
                 ))}
               </Pie>
-              <RechartsTooltip formatter={(value: number) => formatMoney(Number(value), defaultCurrency)} />
+              <RechartsTooltip
+                formatter={(_value: number, _name: string, item: { payload?: { gross?: number; revenue?: number } }) => [
+                  formatMoney(Number(item?.payload?.gross ?? item?.payload?.revenue ?? 0), defaultCurrency),
+                  "Price without refunds",
+                ]}
+              />
               <Legend />
             </PieChart>
           </ResponsiveContainer>
@@ -806,7 +811,12 @@ const BookingsExecutiveDashboard = ({
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis type="number" />
               <YAxis type="category" dataKey="platform" width={110} />
-              <RechartsTooltip formatter={(value: number) => formatMoney(Number(value), defaultCurrency)} />
+              <RechartsTooltip
+                formatter={(_value: number, _name: string, item: { payload?: { gross?: number; revenue?: number } }) => [
+                  formatMoney(Number(item?.payload?.gross ?? item?.payload?.revenue ?? 0), defaultCurrency),
+                  "Price without refunds",
+                ]}
+              />
               <Bar dataKey="revenue" fill="#214A66" radius={[0, 6, 6, 0]} />
             </BarChart>
           </ResponsiveContainer>
