@@ -17,17 +17,28 @@ import {
   Table,
   Text,
   Title,
+  UnstyledButton,
 } from "@mantine/core";
 import { DatePickerInput } from "@mantine/dates";
 import dayjs from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
 import axios from "axios";
+import { useSearchParams } from "react-router-dom";
 
 import axiosInstance from "../../utils/axiosInstance";
 
 dayjs.extend(customParseFormat);
 
 const DATE_FORMAT = "YYYY-MM-DD";
+const DEFAULT_TOLERANCE = 0.01;
+const SANITY_QUERY_KEYS = {
+  start: "sanityStart",
+  end: "sanityEnd",
+  platform: "sanityPlatform",
+  dateField: "sanityDateField",
+  cancelled: "sanityCancelled",
+  tolerance: "sanityTolerance",
+} as const;
 
 type SanityDateField = "experience_date" | "source_received_at";
 type SanityPlatform =
@@ -190,10 +201,60 @@ type ViatorCsvSummary = {
   revenue: number;
   skippedCancelled: number;
   skippedOutOfRange: number;
+  skippedMissingOrderKey: number;
+  orderColumn: string | null;
   dateColumn: string | null;
   revenueColumn: string | null;
   peopleColumn: string | null;
 };
+
+type ViatorCsvOrderAggregate = {
+  orderKey: string;
+  bookings: number;
+  people: number;
+  revenue: number;
+  firstDate: string | null;
+};
+
+type ViatorCsvParsedData = {
+  summary: ViatorCsvSummary;
+  orders: ViatorCsvOrderAggregate[];
+};
+
+type ViatorMismatchReason = "only_omni" | "only_external" | "mismatch";
+
+type ViatorMismatchRow = {
+  reason: ViatorMismatchReason;
+  orderKey: string;
+  omniRevenue: number;
+  externalRevenue: number;
+  deltaRevenue: number;
+  omniBookings: number;
+  externalBookings: number;
+  deltaBookings: number;
+  omniPeople: number;
+  externalPeople: number;
+  deltaPeople: number;
+  omniDate: string | null;
+  externalDate: string | null;
+};
+
+type SortDirection = "asc" | "desc";
+
+type PlatformOrderSortKey = "orderKey" | "revenue" | "bookings" | "people" | "date";
+type ViatorMismatchSortKey =
+  | "reason"
+  | "orderKey"
+  | "omniRevenue"
+  | "externalRevenue"
+  | "deltaRevenue"
+  | "omniBookings"
+  | "externalBookings"
+  | "deltaBookings"
+  | "omniPeople"
+  | "externalPeople"
+  | "deltaPeople"
+  | "date";
 
 const PLATFORM_OPTIONS: Array<{ value: SanityPlatform; label: string }> = [
   { value: "ecwid", label: "Ecwid (Automatic)" },
@@ -207,6 +268,45 @@ const PLATFORM_OPTIONS: Array<{ value: SanityPlatform; label: string }> = [
   { value: "manual", label: "Manual" },
   { value: "unknown", label: "Unknown" },
 ];
+
+const SANITY_PLATFORM_VALUES = new Set<SanityPlatform>(
+  PLATFORM_OPTIONS.map((option) => option.value),
+);
+
+const parseSanityDateParam = (value?: string | null): Date | null => {
+  if (!value) {
+    return null;
+  }
+  const parsed = dayjs(value, DATE_FORMAT, true);
+  return parsed.isValid() ? parsed.toDate() : null;
+};
+
+const parseSanityPlatformParam = (value?: string | null): SanityPlatform => {
+  const normalized = String(value ?? "").trim().toLowerCase() as SanityPlatform;
+  return SANITY_PLATFORM_VALUES.has(normalized) ? normalized : "ecwid";
+};
+
+const parseSanityDateFieldParam = (value?: string | null): SanityDateField => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "source_received_at" ? "source_received_at" : "experience_date";
+};
+
+const parseSanityCancelledParam = (value?: string | null): boolean => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "include" || normalized === "true" || normalized === "1";
+};
+
+const parseSanityToleranceParam = (value?: string | null): number => {
+  const parsed = Number.parseFloat(String(value ?? "").trim());
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_TOLERANCE;
+  }
+  return parsed;
+};
+
+const areDatesEqual = (left: Date | null, right: Date | null): boolean => {
+  return (left?.getTime() ?? null) === (right?.getTime() ?? null);
+};
 
 const formatMoney = (value: number): string => {
   return new Intl.NumberFormat("en-US", {
@@ -264,6 +364,17 @@ const parseMoney = (value: unknown): number => {
 const parseInteger = (value: unknown): number => {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const compareText = (left: string, right: string): number => left.localeCompare(right);
+
+const compareNullableDate = (left: string | null | undefined, right: string | null | undefined): number => {
+  const safeLeft = String(left ?? "").trim();
+  const safeRight = String(right ?? "").trim();
+  if (!safeLeft && !safeRight) return 0;
+  if (!safeLeft) return 1;
+  if (!safeRight) return -1;
+  return safeLeft.localeCompare(safeRight);
 };
 
 const extractErrorMessage = (error: unknown): string => {
@@ -403,12 +514,12 @@ const parseFlexibleDate = (value: string): string | null => {
   return null;
 };
 
-const parseViatorCsvSummary = (
+const parseViatorCsvReport = (
   content: string,
   rangeStart: string,
   rangeEnd: string,
   dateField: SanityDateField,
-): ViatorCsvSummary => {
+): ViatorCsvParsedData => {
   const { headers, rows } = parseCsv(content);
   if (headers.length === 0) {
     throw new Error("CSV has no headers.");
@@ -416,9 +527,38 @@ const parseViatorCsvSummary = (
 
   const experienceDateColumns = ["travel date", "activity date", "experience date", "tour date", "service date"];
   const sourceDateColumns = ["booking date", "booked date", "creation date", "order date", "reservation date"];
+  const orderKeyColumns = [
+    "booking reference",
+    "viator reference",
+    "booking id",
+    "order id",
+    "reservation id",
+    "reference",
+    "transaction ref",
+    "transaction reference",
+  ];
   const revenueColumns = ["net amount", "net price", "net", "revenue", "amount", "total"];
-  const peopleColumns = ["travelers", "travellers", "pax", "party size", "participants", "guests", "people"];
+  const peopleColumns = [
+    "number of passengers",
+    "number passengers",
+    "no of passengers",
+    "passengers",
+    "traveler count",
+    "traveller count",
+    "travelers",
+    "travellers",
+    "pax",
+    "party size",
+    "participants",
+    "guests",
+    "people",
+  ];
   const statusColumns = ["status", "booking status", "reservation status"];
+
+  const orderKeyIndex = findHeaderIndex(headers, orderKeyColumns);
+  if (orderKeyIndex < 0) {
+    throw new Error("Could not detect booking/order reference column in CSV.");
+  }
 
   const dateIndex = findHeaderIndex(headers, dateField === "experience_date" ? experienceDateColumns : sourceDateColumns);
   const fallbackDateIndex =
@@ -434,6 +574,8 @@ const parseViatorCsvSummary = (
   let revenue = 0;
   let skippedCancelled = 0;
   let skippedOutOfRange = 0;
+  let skippedMissingOrderKey = 0;
+  const orderMap = new Map<string, ViatorCsvOrderAggregate>();
 
   rows.forEach((row) => {
     const statusRaw = statusIndex >= 0 ? String(row[statusIndex] ?? "") : "";
@@ -450,35 +592,85 @@ const parseViatorCsvSummary = (
       }
     }
 
+    const orderKey = String(row[orderKeyIndex] ?? "").trim();
+    if (!orderKey) {
+      skippedMissingOrderKey += 1;
+      return;
+    }
+
     const peopleValue = peopleIndex >= 0 ? parseInteger(row[peopleIndex]) : 1;
     const revenueValue = revenueIndex >= 0 ? parseMoney(row[revenueIndex]) : 0;
+    const rowDate = fallbackDateIndex >= 0 ? parseFlexibleDate(String(row[fallbackDateIndex] ?? "")) : null;
+    const normalizedPeople = peopleValue > 0 ? peopleValue : 0;
 
     bookings += 1;
-    people += peopleValue > 0 ? peopleValue : 0;
+    people += normalizedPeople;
     revenue += revenueValue;
+
+    const existing = orderMap.get(orderKey) ?? {
+      orderKey,
+      bookings: 0,
+      people: 0,
+      revenue: 0,
+      firstDate: null,
+    };
+    existing.bookings += 1;
+    existing.people += normalizedPeople;
+    existing.revenue += revenueValue;
+    if (rowDate && (!existing.firstDate || rowDate < existing.firstDate)) {
+      existing.firstDate = rowDate;
+    }
+    orderMap.set(orderKey, existing);
   });
 
-  return {
+  const summary: ViatorCsvSummary = {
     bookings,
     people,
     revenue: Math.round((revenue + Number.EPSILON) * 100) / 100,
     skippedCancelled,
     skippedOutOfRange,
+    skippedMissingOrderKey,
+    orderColumn: orderKeyIndex >= 0 ? headers[orderKeyIndex] : null,
     dateColumn: fallbackDateIndex >= 0 ? headers[fallbackDateIndex] : null,
     revenueColumn: revenueIndex >= 0 ? headers[revenueIndex] : null,
     peopleColumn: peopleIndex >= 0 ? headers[peopleIndex] : null,
   };
+
+  const orders = Array.from(orderMap.values())
+    .map((row) => ({
+      ...row,
+      revenue: Math.round((row.revenue + Number.EPSILON) * 100) / 100,
+    }))
+    .sort((a, b) => a.orderKey.localeCompare(b.orderKey));
+
+  return {
+    summary,
+    orders,
+  };
 };
 
 const BookingsSanityCheck = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const defaultRangeStart = useMemo(() => dayjs().startOf("month").toDate(), []);
+  const defaultRangeEnd = useMemo(() => dayjs().endOf("month").toDate(), []);
+
   const [dateRange, setDateRange] = useState<[Date | null, Date | null]>(() => [
-    dayjs().startOf("month").toDate(),
-    dayjs().endOf("month").toDate(),
+    parseSanityDateParam(searchParams.get(SANITY_QUERY_KEYS.start)) ?? defaultRangeStart,
+    parseSanityDateParam(searchParams.get(SANITY_QUERY_KEYS.end)) ?? defaultRangeEnd,
   ]);
-  const [dateField, setDateField] = useState<SanityDateField>("experience_date");
-  const [platform, setPlatform] = useState<SanityPlatform>("ecwid");
-  const [includeCancelled, setIncludeCancelled] = useState(false);
-  const [tolerance, setTolerance] = useState<number>(0.01);
+  const [dateField, setDateField] = useState<SanityDateField>(() =>
+    parseSanityDateFieldParam(searchParams.get(SANITY_QUERY_KEYS.dateField)),
+  );
+  const [platform, setPlatform] = useState<SanityPlatform>(() =>
+    parseSanityPlatformParam(searchParams.get(SANITY_QUERY_KEYS.platform)),
+  );
+  const [includeCancelled, setIncludeCancelled] = useState<boolean>(() =>
+    parseSanityCancelledParam(searchParams.get(SANITY_QUERY_KEYS.cancelled)),
+  );
+  const [tolerance, setTolerance] = useState<number>(() =>
+    parseSanityToleranceParam(searchParams.get(SANITY_QUERY_KEYS.tolerance)),
+  );
 
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [overviewError, setOverviewError] = useState<string | null>(null);
@@ -506,6 +698,69 @@ const BookingsSanityCheck = () => {
   const [viatorFile, setViatorFile] = useState<File | null>(null);
   const [viatorInfo, setViatorInfo] = useState<string | null>(null);
   const [viatorError, setViatorError] = useState<string | null>(null);
+  const [viatorParsed, setViatorParsed] = useState<ViatorCsvParsedData | null>(null);
+  const [platformOrderSort, setPlatformOrderSort] = useState<{ key: PlatformOrderSortKey; direction: SortDirection }>({
+    key: "date",
+    direction: "asc",
+  });
+  const [viatorMismatchSort, setViatorMismatchSort] = useState<{
+    key: ViatorMismatchSortKey;
+    direction: SortDirection;
+  }>({
+    key: "deltaRevenue",
+    direction: "desc",
+  });
+
+  useEffect(() => {
+    const nextStart = parseSanityDateParam(searchParams.get(SANITY_QUERY_KEYS.start)) ?? defaultRangeStart;
+    const nextEnd = parseSanityDateParam(searchParams.get(SANITY_QUERY_KEYS.end)) ?? defaultRangeEnd;
+    setDateRange((prev) => {
+      if (areDatesEqual(prev[0], nextStart) && areDatesEqual(prev[1], nextEnd)) {
+        return prev;
+      }
+      return [nextStart, nextEnd];
+    });
+
+    const nextDateField = parseSanityDateFieldParam(searchParams.get(SANITY_QUERY_KEYS.dateField));
+    setDateField((prev) => (prev === nextDateField ? prev : nextDateField));
+
+    const nextPlatform = parseSanityPlatformParam(searchParams.get(SANITY_QUERY_KEYS.platform));
+    setPlatform((prev) => (prev === nextPlatform ? prev : nextPlatform));
+
+    const nextIncludeCancelled = parseSanityCancelledParam(searchParams.get(SANITY_QUERY_KEYS.cancelled));
+    setIncludeCancelled((prev) => (prev === nextIncludeCancelled ? prev : nextIncludeCancelled));
+
+    const nextTolerance = parseSanityToleranceParam(searchParams.get(SANITY_QUERY_KEYS.tolerance));
+    setTolerance((prev) => (prev === nextTolerance ? prev : nextTolerance));
+  }, [defaultRangeEnd, defaultRangeStart, searchParams]);
+
+  useEffect(() => {
+    const nextParams = new URLSearchParams(searchParams);
+
+    const startValue = dayjs(dateRange[0] ?? dateRange[1] ?? defaultRangeStart).format(DATE_FORMAT);
+    const endValue = dayjs(dateRange[1] ?? dateRange[0] ?? defaultRangeEnd).format(DATE_FORMAT);
+
+    nextParams.set(SANITY_QUERY_KEYS.start, startValue);
+    nextParams.set(SANITY_QUERY_KEYS.end, endValue);
+    nextParams.set(SANITY_QUERY_KEYS.platform, platform);
+    nextParams.set(SANITY_QUERY_KEYS.dateField, dateField);
+    nextParams.set(SANITY_QUERY_KEYS.cancelled, includeCancelled ? "include" : "exclude");
+    nextParams.set(SANITY_QUERY_KEYS.tolerance, String(tolerance));
+
+    if (nextParams.toString() !== searchParams.toString()) {
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [
+    dateField,
+    dateRange,
+    defaultRangeEnd,
+    defaultRangeStart,
+    includeCancelled,
+    platform,
+    searchParams,
+    setSearchParams,
+    tolerance,
+  ]);
 
   const rangeStart = useMemo(() => {
     const source = dateRange[0] ?? dateRange[1] ?? dayjs().startOf("month").toDate();
@@ -550,6 +805,207 @@ const BookingsSanityCheck = () => {
     };
   }, [expectedBookings, expectedPeople, expectedRevenue, platformResult, tolerance]);
 
+  const viatorMismatches = useMemo(() => {
+    if (platform !== "viator" || !platformResult?.orders || !viatorParsed) {
+      return [] as ViatorMismatchRow[];
+    }
+
+    const omniByKey = new Map<string, OmniOrderAggregate>();
+    platformResult.orders.forEach((row) => {
+      const key = String(row.orderKey ?? "").trim();
+      if (key) {
+        omniByKey.set(key, row);
+      }
+    });
+
+    const externalByKey = new Map<string, ViatorCsvOrderAggregate>();
+    viatorParsed.orders.forEach((row) => {
+      const key = String(row.orderKey ?? "").trim();
+      if (key) {
+        externalByKey.set(key, row);
+      }
+    });
+
+    const allKeys = new Set<string>([...omniByKey.keys(), ...externalByKey.keys()]);
+    const rows: ViatorMismatchRow[] = [];
+
+    allKeys.forEach((key) => {
+      const omniRow = omniByKey.get(key);
+      const externalRow = externalByKey.get(key);
+
+      if (omniRow && !externalRow) {
+        rows.push({
+          reason: "only_omni",
+          orderKey: key,
+          omniRevenue: omniRow.revenue,
+          externalRevenue: 0,
+          deltaRevenue: omniRow.revenue,
+          omniBookings: omniRow.bookings,
+          externalBookings: 0,
+          deltaBookings: omniRow.bookings,
+          omniPeople: omniRow.people,
+          externalPeople: 0,
+          deltaPeople: omniRow.people,
+          omniDate: omniRow.firstDate ?? null,
+          externalDate: null,
+        });
+        return;
+      }
+
+      if (!omniRow && externalRow) {
+        rows.push({
+          reason: "only_external",
+          orderKey: key,
+          omniRevenue: 0,
+          externalRevenue: externalRow.revenue,
+          deltaRevenue: -externalRow.revenue,
+          omniBookings: 0,
+          externalBookings: externalRow.bookings,
+          deltaBookings: -externalRow.bookings,
+          omniPeople: 0,
+          externalPeople: externalRow.people,
+          deltaPeople: -externalRow.people,
+          omniDate: null,
+          externalDate: externalRow.firstDate ?? null,
+        });
+        return;
+      }
+
+      if (!omniRow || !externalRow) {
+        return;
+      }
+
+      const deltaRevenue = Math.round((omniRow.revenue - externalRow.revenue + Number.EPSILON) * 100) / 100;
+      const deltaBookings = omniRow.bookings - externalRow.bookings;
+      const deltaPeople = omniRow.people - externalRow.people;
+      if (Math.abs(deltaRevenue) <= tolerance && deltaBookings === 0 && deltaPeople === 0) {
+        return;
+      }
+
+      rows.push({
+        reason: "mismatch",
+        orderKey: key,
+        omniRevenue: omniRow.revenue,
+        externalRevenue: externalRow.revenue,
+        deltaRevenue,
+        omniBookings: omniRow.bookings,
+        externalBookings: externalRow.bookings,
+        deltaBookings,
+        omniPeople: omniRow.people,
+        externalPeople: externalRow.people,
+        deltaPeople,
+        omniDate: omniRow.firstDate ?? null,
+        externalDate: externalRow.firstDate ?? null,
+      });
+    });
+
+    return rows.sort((a, b) => {
+      const revenueDeltaCompare = Math.abs(b.deltaRevenue) - Math.abs(a.deltaRevenue);
+      if (revenueDeltaCompare !== 0) {
+        return revenueDeltaCompare;
+      }
+      const peopleDeltaCompare = Math.abs(b.deltaPeople) - Math.abs(a.deltaPeople);
+      if (peopleDeltaCompare !== 0) {
+        return peopleDeltaCompare;
+      }
+      return a.orderKey.localeCompare(b.orderKey);
+    });
+  }, [platform, platformResult?.orders, tolerance, viatorParsed]);
+
+  const viatorMismatchCounts = useMemo(() => {
+    return viatorMismatches.reduce(
+      (acc, row) => {
+        acc[row.reason] += 1;
+        return acc;
+      },
+      { only_omni: 0, only_external: 0, mismatch: 0 } as Record<ViatorMismatchReason, number>,
+    );
+  }, [viatorMismatches]);
+
+  const sortedPlatformOrders = useMemo(() => {
+    const orders = platformResult?.orders;
+    const source = Array.isArray(orders) ? [...orders] : [];
+    const factor = platformOrderSort.direction === "asc" ? 1 : -1;
+    source.sort((left, right) => {
+      switch (platformOrderSort.key) {
+        case "orderKey":
+          return compareText(left.orderKey, right.orderKey) * factor;
+        case "revenue":
+          return (left.revenue - right.revenue) * factor;
+        case "bookings":
+          return (left.bookings - right.bookings) * factor;
+        case "people":
+          return (left.people - right.people) * factor;
+        case "date":
+        default:
+          return compareNullableDate(left.firstDate, right.firstDate) * factor;
+      }
+    });
+    return source;
+  }, [platformResult?.orders, platformOrderSort]);
+
+  const sortedViatorMismatches = useMemo(() => {
+    const source = [...viatorMismatches];
+    const factor = viatorMismatchSort.direction === "asc" ? 1 : -1;
+    source.sort((left, right) => {
+      switch (viatorMismatchSort.key) {
+        case "reason":
+          return compareText(left.reason, right.reason) * factor;
+        case "orderKey":
+          return compareText(left.orderKey, right.orderKey) * factor;
+        case "omniRevenue":
+          return (left.omniRevenue - right.omniRevenue) * factor;
+        case "externalRevenue":
+          return (left.externalRevenue - right.externalRevenue) * factor;
+        case "deltaRevenue":
+          return (left.deltaRevenue - right.deltaRevenue) * factor;
+        case "omniBookings":
+          return (left.omniBookings - right.omniBookings) * factor;
+        case "externalBookings":
+          return (left.externalBookings - right.externalBookings) * factor;
+        case "deltaBookings":
+          return (left.deltaBookings - right.deltaBookings) * factor;
+        case "omniPeople":
+          return (left.omniPeople - right.omniPeople) * factor;
+        case "externalPeople":
+          return (left.externalPeople - right.externalPeople) * factor;
+        case "deltaPeople":
+          return (left.deltaPeople - right.deltaPeople) * factor;
+        case "date":
+        default: {
+          const leftDate = left.externalDate ?? left.omniDate ?? null;
+          const rightDate = right.externalDate ?? right.omniDate ?? null;
+          return compareNullableDate(leftDate, rightDate) * factor;
+        }
+      }
+    });
+    return source;
+  }, [viatorMismatchSort, viatorMismatches]);
+
+  const togglePlatformOrderSort = useCallback((key: PlatformOrderSortKey) => {
+    setPlatformOrderSort((current) => {
+      if (current.key === key) {
+        return { key, direction: current.direction === "asc" ? "desc" : "asc" };
+      }
+      return { key, direction: "asc" };
+    });
+  }, []);
+
+  const toggleViatorMismatchSort = useCallback((key: ViatorMismatchSortKey) => {
+    setViatorMismatchSort((current) => {
+      if (current.key === key) {
+        return { key, direction: current.direction === "asc" ? "desc" : "asc" };
+      }
+      return { key, direction: "asc" };
+    });
+  }, []);
+
+  const renderSortHeaderLabel = useCallback(
+    (label: string, active: boolean, direction: SortDirection): string =>
+      `${label}${active ? (direction === "asc" ? " ↑" : " ↓") : ""}`,
+    [],
+  );
+
   const visibleEcwidMismatches = useMemo(() => {
     return ecwidResult?.mismatches.slice(0, 300) ?? [];
   }, [ecwidResult]);
@@ -572,6 +1028,12 @@ const BookingsSanityCheck = () => {
       current.filter((orderId) => visibleEcwidOrderIds.includes(orderId)),
     );
   }, [visibleEcwidOrderIds]);
+
+  useEffect(() => {
+    setViatorParsed(null);
+    setViatorInfo(null);
+    setViatorError(null);
+  }, [dateField, rangeStart, rangeEnd, viatorFile]);
 
   const loadOverview = useCallback(async () => {
     setOverviewLoading(true);
@@ -785,15 +1247,19 @@ const BookingsSanityCheck = () => {
     try {
       setViatorError(null);
       const text = await viatorFile.text();
-      const summary = parseViatorCsvSummary(text, rangeStart, rangeEnd, dateField);
+      const parsed = parseViatorCsvReport(text, rangeStart, rangeEnd, dateField);
+      const summary = parsed.summary;
+      setViatorParsed(parsed);
       setExpectedBookings(summary.bookings);
       setExpectedPeople(summary.people);
       setExpectedRevenue(summary.revenue);
       setViatorInfo(
         `CSV parsed. Bookings=${summary.bookings}, People=${summary.people}, Revenue=${formatMoney(summary.revenue)}. ` +
-          `Skipped cancelled=${summary.skippedCancelled}, out-of-range=${summary.skippedOutOfRange}.`,
+          `Skipped cancelled=${summary.skippedCancelled}, out-of-range=${summary.skippedOutOfRange}, missing order key=${summary.skippedMissingOrderKey}. ` +
+          `Detected columns: order=${summary.orderColumn ?? "-"}, date=${summary.dateColumn ?? "-"}, people=${summary.peopleColumn ?? "-"}, revenue=${summary.revenueColumn ?? "-"}.`,
       );
     } catch (error) {
+      setViatorParsed(null);
       setViatorError(extractErrorMessage(error));
     }
   }, [dateField, rangeEnd, rangeStart, viatorFile]);
@@ -847,7 +1313,9 @@ const BookingsSanityCheck = () => {
               label="Tolerance"
               value={tolerance}
               onChange={(value) =>
-                setTolerance(typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0.01)
+                setTolerance(
+                  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : DEFAULT_TOLERANCE,
+                )
               }
               decimalScale={2}
               min={0}
@@ -997,6 +1465,158 @@ const BookingsSanityCheck = () => {
                 <Text>{`Delta people: ${manualComparison.deltaPeople}`}</Text>
               </Group>
             )}
+            {platform === "viator" && viatorParsed && (
+              <Stack gap="xs">
+                <Group gap="md" wrap="wrap">
+                  <Text>{`Only Omni: ${viatorMismatchCounts.only_omni}`}</Text>
+                  <Text>{`Only CSV: ${viatorMismatchCounts.only_external}`}</Text>
+                  <Text>{`Data mismatch: ${viatorMismatchCounts.mismatch}`}</Text>
+                </Group>
+                {viatorMismatches.length === 0 ? (
+                  <Alert color="teal" title="No booking mismatches">
+                    Viator CSV and Omni order-level data match for this range.
+                  </Alert>
+                ) : (
+                  <Box>
+                    <Text fw={600} size="sm" mb={6}>
+                      Booking mismatch breakdown (Omni vs Viator CSV)
+                    </Text>
+                    <Table striped highlightOnHover withColumnBorders>
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>
+                            <UnstyledButton onClick={() => toggleViatorMismatchSort("reason")}>
+                              {renderSortHeaderLabel(
+                                "Reason",
+                                viatorMismatchSort.key === "reason",
+                                viatorMismatchSort.direction,
+                              )}
+                            </UnstyledButton>
+                          </Table.Th>
+                          <Table.Th>
+                            <UnstyledButton onClick={() => toggleViatorMismatchSort("orderKey")}>
+                              {renderSortHeaderLabel(
+                                "Order key",
+                                viatorMismatchSort.key === "orderKey",
+                                viatorMismatchSort.direction,
+                              )}
+                            </UnstyledButton>
+                          </Table.Th>
+                          <Table.Th ta="right">
+                            <UnstyledButton onClick={() => toggleViatorMismatchSort("omniRevenue")}>
+                              {renderSortHeaderLabel(
+                                "Omni revenue",
+                                viatorMismatchSort.key === "omniRevenue",
+                                viatorMismatchSort.direction,
+                              )}
+                            </UnstyledButton>
+                          </Table.Th>
+                          <Table.Th ta="right">
+                            <UnstyledButton onClick={() => toggleViatorMismatchSort("externalRevenue")}>
+                              {renderSortHeaderLabel(
+                                "CSV revenue",
+                                viatorMismatchSort.key === "externalRevenue",
+                                viatorMismatchSort.direction,
+                              )}
+                            </UnstyledButton>
+                          </Table.Th>
+                          <Table.Th ta="right">
+                            <UnstyledButton onClick={() => toggleViatorMismatchSort("deltaRevenue")}>
+                              {renderSortHeaderLabel(
+                                "Delta revenue",
+                                viatorMismatchSort.key === "deltaRevenue",
+                                viatorMismatchSort.direction,
+                              )}
+                            </UnstyledButton>
+                          </Table.Th>
+                          <Table.Th ta="right">
+                            <UnstyledButton onClick={() => toggleViatorMismatchSort("omniBookings")}>
+                              {renderSortHeaderLabel(
+                                "Omni bookings",
+                                viatorMismatchSort.key === "omniBookings",
+                                viatorMismatchSort.direction,
+                              )}
+                            </UnstyledButton>
+                          </Table.Th>
+                          <Table.Th ta="right">
+                            <UnstyledButton onClick={() => toggleViatorMismatchSort("externalBookings")}>
+                              {renderSortHeaderLabel(
+                                "CSV bookings",
+                                viatorMismatchSort.key === "externalBookings",
+                                viatorMismatchSort.direction,
+                              )}
+                            </UnstyledButton>
+                          </Table.Th>
+                          <Table.Th ta="right">
+                            <UnstyledButton onClick={() => toggleViatorMismatchSort("deltaBookings")}>
+                              {renderSortHeaderLabel(
+                                "Delta bookings",
+                                viatorMismatchSort.key === "deltaBookings",
+                                viatorMismatchSort.direction,
+                              )}
+                            </UnstyledButton>
+                          </Table.Th>
+                          <Table.Th ta="right">
+                            <UnstyledButton onClick={() => toggleViatorMismatchSort("omniPeople")}>
+                              {renderSortHeaderLabel(
+                                "Omni people",
+                                viatorMismatchSort.key === "omniPeople",
+                                viatorMismatchSort.direction,
+                              )}
+                            </UnstyledButton>
+                          </Table.Th>
+                          <Table.Th ta="right">
+                            <UnstyledButton onClick={() => toggleViatorMismatchSort("externalPeople")}>
+                              {renderSortHeaderLabel(
+                                "CSV people",
+                                viatorMismatchSort.key === "externalPeople",
+                                viatorMismatchSort.direction,
+                              )}
+                            </UnstyledButton>
+                          </Table.Th>
+                          <Table.Th ta="right">
+                            <UnstyledButton onClick={() => toggleViatorMismatchSort("deltaPeople")}>
+                              {renderSortHeaderLabel(
+                                "Delta people",
+                                viatorMismatchSort.key === "deltaPeople",
+                                viatorMismatchSort.direction,
+                              )}
+                            </UnstyledButton>
+                          </Table.Th>
+                          <Table.Th>
+                            <UnstyledButton onClick={() => toggleViatorMismatchSort("date")}>
+                              {renderSortHeaderLabel(
+                                "Date",
+                                viatorMismatchSort.key === "date",
+                                viatorMismatchSort.direction,
+                              )}
+                            </UnstyledButton>
+                          </Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {sortedViatorMismatches.slice(0, 300).map((row) => (
+                          <Table.Tr key={`${row.reason}-${row.orderKey}`}>
+                            <Table.Td>{row.reason}</Table.Td>
+                            <Table.Td>{row.orderKey}</Table.Td>
+                            <Table.Td ta="right">{formatMoney(row.omniRevenue)}</Table.Td>
+                            <Table.Td ta="right">{formatMoney(row.externalRevenue)}</Table.Td>
+                            <Table.Td ta="right">{formatMoney(row.deltaRevenue)}</Table.Td>
+                            <Table.Td ta="right">{row.omniBookings}</Table.Td>
+                            <Table.Td ta="right">{row.externalBookings}</Table.Td>
+                            <Table.Td ta="right">{row.deltaBookings}</Table.Td>
+                            <Table.Td ta="right">{row.omniPeople}</Table.Td>
+                            <Table.Td ta="right">{row.externalPeople}</Table.Td>
+                            <Table.Td ta="right">{row.deltaPeople}</Table.Td>
+                            <Table.Td>{row.externalDate ?? row.omniDate ?? "-"}</Table.Td>
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  </Box>
+                )}
+              </Stack>
+            )}
             {Array.isArray(platformResult.orders) && platformResult.orders.length > 0 && (
               <Box>
                 <Text fw={600} size="sm" mb={6}>
@@ -1005,15 +1625,55 @@ const BookingsSanityCheck = () => {
                 <Table striped highlightOnHover withColumnBorders>
                   <Table.Thead>
                     <Table.Tr>
-                      <Table.Th>Order key</Table.Th>
-                      <Table.Th ta="right">Revenue</Table.Th>
-                      <Table.Th ta="right">Bookings</Table.Th>
-                      <Table.Th ta="right">People</Table.Th>
-                      <Table.Th>Date</Table.Th>
+                      <Table.Th>
+                        <UnstyledButton onClick={() => togglePlatformOrderSort("orderKey")}>
+                          {renderSortHeaderLabel(
+                            "Order key",
+                            platformOrderSort.key === "orderKey",
+                            platformOrderSort.direction,
+                          )}
+                        </UnstyledButton>
+                      </Table.Th>
+                      <Table.Th ta="right">
+                        <UnstyledButton onClick={() => togglePlatformOrderSort("revenue")}>
+                          {renderSortHeaderLabel(
+                            "Revenue",
+                            platformOrderSort.key === "revenue",
+                            platformOrderSort.direction,
+                          )}
+                        </UnstyledButton>
+                      </Table.Th>
+                      <Table.Th ta="right">
+                        <UnstyledButton onClick={() => togglePlatformOrderSort("bookings")}>
+                          {renderSortHeaderLabel(
+                            "Bookings",
+                            platformOrderSort.key === "bookings",
+                            platformOrderSort.direction,
+                          )}
+                        </UnstyledButton>
+                      </Table.Th>
+                      <Table.Th ta="right">
+                        <UnstyledButton onClick={() => togglePlatformOrderSort("people")}>
+                          {renderSortHeaderLabel(
+                            "People",
+                            platformOrderSort.key === "people",
+                            platformOrderSort.direction,
+                          )}
+                        </UnstyledButton>
+                      </Table.Th>
+                      <Table.Th>
+                        <UnstyledButton onClick={() => togglePlatformOrderSort("date")}>
+                          {renderSortHeaderLabel(
+                            "Date",
+                            platformOrderSort.key === "date",
+                            platformOrderSort.direction,
+                          )}
+                        </UnstyledButton>
+                      </Table.Th>
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
-                    {platformResult.orders.slice(0, 200).map((row) => (
+                    {sortedPlatformOrders.slice(0, 200).map((row) => (
                       <Table.Tr key={row.orderKey}>
                         <Table.Td>{row.orderKey}</Table.Td>
                         <Table.Td ta="right">{formatMoney(row.revenue)}</Table.Td>
