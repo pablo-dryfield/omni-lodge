@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import dayjs from "dayjs";
 import {
@@ -10,15 +10,21 @@ import {
   Group,
   Loader,
   Paper,
+  Select,
   Stack,
+  TextInput,
+  Textarea,
   Text,
   Title,
 } from "@mantine/core";
 import { IconArrowRight, IconRefresh } from "@tabler/icons-react";
 import {
   fetchInboxNotifications,
+  sendNotificationPushTest,
   type InboxNotification,
 } from "../api/notifications";
+import { useActiveUsers } from "../api/users";
+import { useAppSelector } from "../store/hooks";
 
 type NotificationsCenterProps = {
   title?: string;
@@ -34,15 +40,72 @@ const formatNotificationDate = (value: string) => {
 
 const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
   const navigate = useNavigate();
+  const roleSlug = useAppSelector((state) => state.session.roleSlug ?? null);
+  const { data: activeUsers = [], isLoading: activeUsersLoading } = useActiveUsers();
   const [items, setItems] = useState<InboxNotification[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [testerUserId, setTesterUserId] = useState<string | null>(null);
+  const [testerTitle, setTesterTitle] = useState("Notification Center test");
+  const [testerBody, setTesterBody] = useState("");
+  const [testerUrl, setTesterUrl] = useState("/notifications");
+  const [testerSubmitting, setTesterSubmitting] = useState(false);
+  const [testerError, setTesterError] = useState<string | null>(null);
+  const [testerSuccess, setTesterSuccess] = useState<string | null>(null);
+
+  const normalizedRoleSlug = useMemo(() => {
+    if (!roleSlug) {
+      return null;
+    }
+    const trimmed = roleSlug.trim().toLowerCase();
+    const withHyphens = trimmed.replace(/[\s_]+/g, "-");
+    const collapsed = withHyphens.replace(/-/g, "");
+    if (collapsed === "administrator") {
+      return "admin";
+    }
+    if (collapsed === "assistantmanager" || collapsed === "assistmanager") {
+      return "assistant-manager";
+    }
+    if (collapsed === "mgr") {
+      return "manager";
+    }
+    return withHyphens;
+  }, [roleSlug]);
+
+  const canUseTester = useMemo(
+    () =>
+      normalizedRoleSlug != null &&
+      new Set(["admin", "owner", "manager", "assistant-manager"]).has(normalizedRoleSlug),
+    [normalizedRoleSlug],
+  );
+
+  const activeUserOptions = useMemo(
+    () =>
+      activeUsers
+        .filter((user) => user?.status !== false)
+        .map((user) => {
+          const fullName = `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim();
+          const label = fullName || user.email?.trim() || `User #${user.id}`;
+          return {
+            value: String(user.id),
+            label: `${label} (#${user.id})`,
+          };
+        }),
+    [activeUsers],
+  );
 
   useEffect(() => {
     if (title) {
       document.title = title;
     }
   }, [title]);
+
+  useEffect(() => {
+    if (testerUserId || activeUserOptions.length === 0) {
+      return;
+    }
+    setTesterUserId(activeUserOptions[0]?.value ?? null);
+  }, [activeUserOptions, testerUserId]);
 
   const loadNotifications = useCallback(async () => {
     setLoading(true);
@@ -71,6 +134,44 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
     loadNotifications();
   }, [loadNotifications]);
 
+  const handleSendTestNotification = useCallback(async () => {
+    if (!testerUserId) {
+      setTesterError("Select a user first.");
+      return;
+    }
+    const userId = Number(testerUserId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      setTesterError("Selected user is invalid.");
+      return;
+    }
+
+    setTesterSubmitting(true);
+    setTesterError(null);
+    setTesterSuccess(null);
+    try {
+      const result = await sendNotificationPushTest({
+        userId,
+        title: testerTitle.trim(),
+        body: testerBody.trim() || undefined,
+        url: testerUrl.trim() || undefined,
+      });
+      if (!result.sent) {
+        setTesterError("Notification test was not delivered.");
+        return;
+      }
+      setTesterSuccess(
+        `Sent to user #${result.userId}. Targeted ${result.targetedDeviceCount} active device subscription(s).`,
+      );
+      loadNotifications().catch(() => undefined);
+    } catch (requestError) {
+      setTesterError(
+        requestError instanceof Error ? requestError.message : "Failed to send test notification.",
+      );
+    } finally {
+      setTesterSubmitting(false);
+    }
+  }, [loadNotifications, testerBody, testerTitle, testerUrl, testerUserId]);
+
   return (
     <Stack gap="md" p="md">
       <Group justify="space-between" align="center">
@@ -98,6 +199,83 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
         <Alert color="red" title="Unable to load notifications">
           {error}
         </Alert>
+      )}
+
+      {canUseTester && (
+        <Paper withBorder radius="lg" p="md">
+          <Stack gap="sm">
+            <Group justify="space-between" align="center">
+              <Title order={4}>Notification Tester</Title>
+              <Text size="xs" c="dimmed">
+                Sends push to all active devices for selected user.
+              </Text>
+            </Group>
+
+            <Select
+              label="User"
+              placeholder={activeUsersLoading ? "Loading users..." : "Select user"}
+              searchable
+              clearable={false}
+              data={activeUserOptions}
+              value={testerUserId}
+              onChange={(value) => setTesterUserId(value ?? null)}
+              nothingFoundMessage="No active users found"
+              disabled={activeUsersLoading || testerSubmitting}
+            />
+
+            <TextInput
+              label="Title"
+              value={testerTitle}
+              onChange={(event) => setTesterTitle(event.currentTarget.value)}
+              disabled={testerSubmitting}
+              maxLength={120}
+            />
+
+            <Textarea
+              label="Body"
+              value={testerBody}
+              onChange={(event) => setTesterBody(event.currentTarget.value)}
+              autosize
+              minRows={2}
+              maxRows={5}
+              maxLength={500}
+              placeholder="Optional custom body"
+              disabled={testerSubmitting}
+            />
+
+            <TextInput
+              label="URL"
+              value={testerUrl}
+              onChange={(event) => setTesterUrl(event.currentTarget.value)}
+              placeholder="/notifications"
+              disabled={testerSubmitting}
+              maxLength={300}
+            />
+
+            {testerError && (
+              <Alert color="red" title="Unable to send test">
+                {testerError}
+              </Alert>
+            )}
+            {testerSuccess && (
+              <Alert color="green" title="Test sent">
+                {testerSuccess}
+              </Alert>
+            )}
+
+            <Group justify="flex-end">
+              <Button
+                onClick={() => {
+                  handleSendTestNotification().catch(() => undefined);
+                }}
+                loading={testerSubmitting}
+                disabled={!testerUserId || activeUsersLoading}
+              >
+                Send Test Notification
+              </Button>
+            </Group>
+          </Stack>
+        </Paper>
       )}
 
       {loading && items.length === 0 ? (
