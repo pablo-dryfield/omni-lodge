@@ -967,6 +967,15 @@ const loadOmniBookings = async (params: CollectOmniParams): Promise<Booking[]> =
     clauses.push(sequelizeWhere(sourceDateExpression, { [Op.between]: [startDate, endDate] }));
   }
 
+  if (platform === 'getyourguide') {
+    clauses.push({
+      [Op.or]: [
+        { productName: { [Op.iLike]: '%pub crawl%' } },
+        { productName: { [Op.iLike]: '%bottomless brunch%' } },
+      ],
+    });
+  }
+
   if (clauses.length === 1) {
     Object.assign(where, clauses[0]);
   } else if (clauses.length > 1) {
