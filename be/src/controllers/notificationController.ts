@@ -2,6 +2,11 @@ import type { Response } from 'express';
 import type { FindOptions, OrderItem } from 'sequelize';
 import Notification from '../models/Notification.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
+import {
+  countActiveAmTaskPushSubscriptionsForUser,
+  isAmTaskPushEnabled,
+  sendAmTaskPushNotificationToUser,
+} from '../services/amTaskPushService.js';
 
 type NotificationListItem = {
   id: number;
@@ -11,6 +16,12 @@ type NotificationListItem = {
   body: string | null;
   url: string | null;
   sentAt: string;
+};
+
+type NotificationPushTestResponse = {
+  userId: number;
+  sent: boolean;
+  targetedDeviceCount: number;
 };
 
 const parsePositiveInt = (
@@ -25,6 +36,50 @@ const parsePositiveInt = (
   const min = bounds?.min ?? 1;
   const max = bounds?.max ?? Number.MAX_SAFE_INTEGER;
   return Math.min(Math.max(numeric, min), max);
+};
+
+const parseOptionalString = (
+  value: unknown,
+  options?: { maxLength?: number; allowEmpty?: boolean },
+): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!options?.allowEmpty && !trimmed) {
+    return null;
+  }
+  const maxLength = options?.maxLength ?? 500;
+  if (trimmed.length > maxLength) {
+    return trimmed.slice(0, maxLength);
+  }
+  return trimmed;
+};
+
+const TESTER_ALLOWED_ROLES = new Set(['admin', 'owner', 'manager', 'assistant-manager']);
+
+const normalizeRoleSlug = (value?: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim().toLowerCase();
+  const withHyphens = trimmed.replace(/[\s_]+/g, '-');
+  const collapsed = withHyphens.replace(/-/g, '');
+  if (collapsed === 'administrator') {
+    return 'admin';
+  }
+  if (collapsed === 'assistmanager' || collapsed === 'assistantmanager') {
+    return 'assistant-manager';
+  }
+  if (collapsed === 'mgr') {
+    return 'manager';
+  }
+  return withHyphens;
+};
+
+const canUseNotificationTester = (req: AuthenticatedRequest): boolean => {
+  const roleSlug = normalizeRoleSlug(req.authContext?.roleSlug ?? null);
+  return roleSlug != null && TESTER_ALLOWED_ROLES.has(roleSlug);
 };
 
 const prettifyTemplateKey = (templateKey: string): string =>
@@ -100,5 +155,114 @@ export const listMyNotifications = async (
   } catch (error) {
     console.error('Failed to list notifications', error);
     res.status(500).json([{ message: 'Failed to list notifications' }]);
+  }
+};
+
+export const sendNotificationPushTest = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = req.authContext?.id ?? null;
+    if (!actorId) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    if (!canUseNotificationTester(req)) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    const targetUserId = parsePositiveInt(
+      (req.body as { userId?: unknown } | null)?.userId,
+      0,
+    );
+    if (targetUserId <= 0) {
+      res.status(400).json([{ message: 'userId is required' }]);
+      return;
+    }
+
+    if (!isAmTaskPushEnabled()) {
+      res.status(400).json([
+        { message: 'Background push is not enabled in backend configuration' },
+      ]);
+      return;
+    }
+
+    const activeSubscriptionCount =
+      await countActiveAmTaskPushSubscriptionsForUser(targetUserId);
+    if (activeSubscriptionCount <= 0) {
+      res.status(400).json([
+        {
+          message:
+            'Selected user has no active push subscription. Ask them to open assistant manager tasks and click Enable Background.',
+        },
+      ]);
+      return;
+    }
+
+    const customTitle = parseOptionalString(
+      (req.body as { title?: unknown } | null)?.title,
+      { maxLength: 120 },
+    );
+    const customBody = parseOptionalString(
+      (req.body as { body?: unknown } | null)?.body,
+      { maxLength: 500 },
+    );
+    const customUrl = parseOptionalString(
+      (req.body as { url?: unknown } | null)?.url,
+      { maxLength: 300, allowEmpty: false },
+    );
+    const timestamp = new Date().toISOString();
+    const title = customTitle ?? 'Notification Center test';
+    const body = customBody ?? `Push notification test sent at ${timestamp}.`;
+    const tag = `notification-center-test-${targetUserId}-${Date.now()}`;
+    const sent = await sendAmTaskPushNotificationToUser({
+      userId: targetUserId,
+      payload: {
+        title,
+        body,
+        url: customUrl ?? '/notifications',
+        tag,
+        renotify: true,
+        requireInteraction: true,
+      },
+    });
+
+    if (!sent) {
+      res.status(400).json([
+        {
+          message:
+            'Push send failed. Subscription may be expired or blocked on the client device.',
+        },
+      ]);
+      return;
+    }
+
+    await Notification.create({
+      userId: targetUserId,
+      channel: 'in_app',
+      templateKey: 'notification_center_test',
+      payloadJson: {
+        title,
+        body,
+        url: customUrl ?? '/notifications',
+        tag,
+        triggeredByUserId: actorId,
+        triggeredAt: timestamp,
+      },
+      sentAt: new Date(),
+    });
+
+    const payload: NotificationPushTestResponse = {
+      userId: targetUserId,
+      sent: true,
+      targetedDeviceCount: activeSubscriptionCount,
+    };
+    res.status(200).json([{ data: payload, columns: [] }]);
+  } catch (error) {
+    console.error('Failed to send notification center push test', error);
+    res.status(500).json([{ message: 'Failed to send test notification' }]);
   }
 };
