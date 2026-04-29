@@ -11,7 +11,7 @@ const router = express.Router();
 
 router.get('/', authMiddleware, listMyNotifications);
 router.get('/push/subscriptions', authMiddleware, listNotificationPushSubscriptions);
-router.post('/push/receipt', authMiddleware, recordNotificationPushReceipt);
+router.post('/push/receipt', recordNotificationPushReceipt);
 router.post('/push/test', authMiddleware, sendNotificationPushTest);
 
 export default router;

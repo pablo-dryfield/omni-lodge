@@ -170,6 +170,25 @@ const findLatestNotificationByTag = async (
   return candidates.find((entry) => extractNotificationTag(entry) === tag) ?? null;
 };
 
+const findLatestTestNotificationByTagForUser = async (
+  userId: number,
+  tag: string,
+): Promise<Notification | null> => {
+  const notification = await findLatestNotificationByTag(userId, tag);
+  if (!notification) {
+    return null;
+  }
+  if (notification.templateKey !== 'notification_center_test') {
+    return null;
+  }
+  const ageMs = Date.now() - new Date(notification.sentAt).getTime();
+  const maxAgeMs = 7 * 24 * 60 * 60 * 1000;
+  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > maxAgeMs) {
+    return null;
+  }
+  return notification;
+};
+
 const prettifyTemplateKey = (templateKey: string): string =>
   templateKey
     .split('_')
@@ -338,6 +357,7 @@ export const sendNotificationPushTest = async (
         body,
         url: customUrl ?? '/notifications',
         tag,
+        debugUserId: targetUserId,
         triggeredByUserId: actorId,
         triggeredAt: timestamp,
       },
@@ -455,12 +475,6 @@ export const recordNotificationPushReceipt = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const actorId = req.authContext?.id ?? null;
-    if (!actorId) {
-      res.status(403).json([{ message: 'Forbidden' }]);
-      return;
-    }
-
     const body = (req.body ?? {}) as Record<string, unknown>;
     const tag = asOptionalNonEmptyString(body.tag, 200);
     const eventType = parsePushReceiptEventType(body.eventType);
@@ -469,7 +483,18 @@ export const recordNotificationPushReceipt = async (
       return;
     }
 
-    const notification = await findLatestNotificationByTag(actorId, tag);
+    const actorId = req.authContext?.id ?? null;
+    const bodyUserId = parsePositiveInt(body.userId, 0);
+    const resolvedUserId = actorId ?? (bodyUserId > 0 ? bodyUserId : null);
+    if (!resolvedUserId) {
+      res.status(400).json([{ message: 'userId is required' }]);
+      return;
+    }
+
+    const notification = await findLatestTestNotificationByTagForUser(
+      resolvedUserId,
+      tag,
+    );
     if (!notification) {
       res.status(404).json([{ message: 'Matching notification not found' }]);
       return;
