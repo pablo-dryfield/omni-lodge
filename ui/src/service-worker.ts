@@ -58,6 +58,7 @@ type PushReceiptEventType =
 
 const postPushReceipt = async (params: {
   tag?: string | null;
+  userId?: number | null;
   eventType: PushReceiptEventType;
   targetUrl?: string | null;
   error?: string | null;
@@ -75,6 +76,7 @@ const postPushReceipt = async (params: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
+        userId: params.userId ?? null,
         tag,
         eventType: params.eventType,
         targetUrl: params.targetUrl ?? null,
@@ -119,6 +121,10 @@ self.addEventListener('push', (event) => {
     typeof payload.tag === 'string' && payload.tag.trim()
       ? payload.tag.trim()
       : 'am-task-reminder';
+  const debugUserId =
+    typeof payload.debugUserId === 'number' && Number.isFinite(payload.debugUserId)
+      ? Math.trunc(payload.debugUserId)
+      : null;
   const renotify = payload.renotify === true;
   const requireInteraction = payload.requireInteraction === true;
   const silent = payload.silent === true;
@@ -127,6 +133,7 @@ self.addEventListener('push', (event) => {
     (async () => {
       await postPushReceipt({
         tag,
+        userId: debugUserId,
         eventType: 'push_received',
         targetUrl,
       });
@@ -140,6 +147,7 @@ self.addEventListener('push', (event) => {
           data: {
             targetUrl,
             tag,
+            debugUserId,
           },
           badge: `${process.env.PUBLIC_URL ?? ''}/logo192.png`,
           icon: `${process.env.PUBLIC_URL ?? ''}/logo192.png`,
@@ -147,12 +155,14 @@ self.addEventListener('push', (event) => {
         });
         await postPushReceipt({
           tag,
+          userId: debugUserId,
           eventType: 'notification_shown',
           targetUrl,
         });
       } catch (error) {
         await postPushReceipt({
           tag,
+          userId: debugUserId,
           eventType: 'notification_show_failed',
           targetUrl,
           error: error instanceof Error ? error.message : String(error),
@@ -166,7 +176,7 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const notificationData = event.notification.data as
-    | { targetUrl?: string; tag?: string }
+    | { targetUrl?: string; tag?: string; debugUserId?: number }
     | undefined;
   const targetUrl =
     notificationData?.targetUrl && notificationData.targetUrl.trim()
@@ -176,11 +186,17 @@ self.addEventListener('notificationclick', (event) => {
     typeof notificationData?.tag === 'string' && notificationData.tag.trim()
       ? notificationData.tag.trim()
       : event.notification.tag;
+  const debugUserId =
+    typeof notificationData?.debugUserId === 'number' &&
+    Number.isFinite(notificationData.debugUserId)
+      ? Math.trunc(notificationData.debugUserId)
+      : null;
 
   event.waitUntil(
     (async () => {
       await postPushReceipt({
         tag,
+        userId: debugUserId,
         eventType: 'notification_clicked',
         targetUrl,
       });
@@ -206,7 +222,7 @@ self.addEventListener('notificationclick', (event) => {
 
 self.addEventListener('notificationclose', (event) => {
   const notificationData = event.notification.data as
-    | { targetUrl?: string; tag?: string }
+    | { targetUrl?: string; tag?: string; debugUserId?: number }
     | undefined;
   const targetUrl =
     notificationData?.targetUrl && notificationData.targetUrl.trim()
@@ -216,10 +232,16 @@ self.addEventListener('notificationclose', (event) => {
     typeof notificationData?.tag === 'string' && notificationData.tag.trim()
       ? notificationData.tag.trim()
       : event.notification.tag;
+  const debugUserId =
+    typeof notificationData?.debugUserId === 'number' &&
+    Number.isFinite(notificationData.debugUserId)
+      ? Math.trunc(notificationData.debugUserId)
+      : null;
 
   event.waitUntil(
     postPushReceipt({
       tag,
+      userId: debugUserId,
       eventType: 'notification_closed',
       targetUrl,
     }),
