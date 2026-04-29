@@ -54,6 +54,23 @@ const shortenEndpoint = (value: string) => {
   return `${value.slice(0, 40)}...${value.slice(-30)}`;
 };
 
+const toPushEventLabel = (value: string) => {
+  switch (value) {
+    case "push_received":
+      return "Push received by service worker";
+    case "notification_shown":
+      return "Notification shown";
+    case "notification_show_failed":
+      return "Notification show failed";
+    case "notification_clicked":
+      return "Notification clicked";
+    case "notification_closed":
+      return "Notification dismissed";
+    default:
+      return value;
+  }
+};
+
 const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
   const navigate = useNavigate();
   const roleSlug = useAppSelector((state) => state.session.roleSlug ?? null);
@@ -413,6 +430,58 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
                           {item.lastFailureReason && (
                             <Text size="xs" c="red">
                               Failure reason: {item.lastFailureReason}
+                            </Text>
+                          )}
+                        </Stack>
+                      </Paper>
+                    ))}
+                  </Stack>
+                )}
+
+                <Title order={5} mt="xs">
+                  Recent Receipt Events
+                </Title>
+                {pushDebug.recentTestEvents.length === 0 ? (
+                  <Text size="sm" c="dimmed">
+                    No service-worker receipt events captured yet for recent tests.
+                  </Text>
+                ) : (
+                  <Stack gap="xs">
+                    {pushDebug.recentTestEvents.slice(0, 25).map((entry, index) => (
+                      <Paper
+                        key={`${entry.notificationId}-${entry.at}-${entry.eventType}-${index}`}
+                        withBorder
+                        radius="md"
+                        p="sm"
+                      >
+                        <Stack gap={3}>
+                          <Group justify="space-between" wrap="wrap">
+                            <Badge
+                              color={entry.eventType === "notification_show_failed" ? "red" : "blue"}
+                              variant="light"
+                            >
+                              {toPushEventLabel(entry.eventType)}
+                            </Badge>
+                            <Text size="xs" c="dimmed">
+                              {formatNotificationDate(entry.at)}
+                            </Text>
+                          </Group>
+                          <Text size="xs" c="dimmed">
+                            Notification #{entry.notificationId} | Tag: {entry.tag}
+                          </Text>
+                          {entry.targetUrl && (
+                            <Text size="xs" c="dimmed">
+                              Target URL: {entry.targetUrl}
+                            </Text>
+                          )}
+                          {entry.userAgent && (
+                            <Text size="xs" c="dimmed">
+                              UA: {entry.userAgent}
+                            </Text>
+                          )}
+                          {entry.error && (
+                            <Text size="xs" c="red">
+                              Error: {entry.error}
                             </Text>
                           )}
                         </Stack>

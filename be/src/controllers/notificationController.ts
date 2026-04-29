@@ -37,6 +37,25 @@ type NotificationPushSubscriptionDebugResponse = {
   totalSubscriptions: number;
   activeSubscriptions: number;
   items: AmTaskPushSubscriptionDebugItem[];
+  recentTestEvents: NotificationPushReceiptEvent[];
+};
+
+type NotificationPushReceiptEventType =
+  | 'push_received'
+  | 'notification_shown'
+  | 'notification_show_failed'
+  | 'notification_clicked'
+  | 'notification_closed';
+
+type NotificationPushReceiptEvent = {
+  notificationId: number;
+  tag: string;
+  eventType: NotificationPushReceiptEventType;
+  at: string;
+  targetUrl: string | null;
+  userAgent: string | null;
+  visibilityState: string | null;
+  error: string | null;
 };
 
 const parsePositiveInt = (
@@ -95,6 +114,60 @@ const normalizeRoleSlug = (value?: string | null): string | null => {
 const canUseNotificationTester = (req: AuthenticatedRequest): boolean => {
   const roleSlug = normalizeRoleSlug(req.authContext?.roleSlug ?? null);
   return roleSlug != null && TESTER_ALLOWED_ROLES.has(roleSlug);
+};
+
+const PUSH_RECEIPT_EVENT_TYPES = new Set<NotificationPushReceiptEventType>([
+  'push_received',
+  'notification_shown',
+  'notification_show_failed',
+  'notification_clicked',
+  'notification_closed',
+]);
+
+const parsePushReceiptEventType = (
+  value: unknown,
+): NotificationPushReceiptEventType | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase() as NotificationPushReceiptEventType;
+  return PUSH_RECEIPT_EVENT_TYPES.has(normalized) ? normalized : null;
+};
+
+const asOptionalNonEmptyString = (value: unknown, maxLength: number): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
+};
+
+const extractNotificationTag = (notification: Notification): string | null => {
+  const payload = notification.payloadJson as Record<string, unknown> | null;
+  const tagValue = payload?.tag;
+  return typeof tagValue === 'string' && tagValue.trim() ? tagValue.trim() : null;
+};
+
+const findLatestNotificationByTag = async (
+  userId: number,
+  tag: string,
+): Promise<Notification | null> => {
+  const candidates = await Notification.findAll({
+    where: {
+      userId,
+      channel: 'in_app',
+    },
+    order: [
+      ['sentAt', 'DESC'],
+      ['id', 'DESC'],
+    ],
+    limit: 150,
+  });
+
+  return candidates.find((entry) => extractNotificationTag(entry) === tag) ?? null;
 };
 
 const prettifyTemplateKey = (templateKey: string): string =>
@@ -311,16 +384,137 @@ export const listNotificationPushSubscriptions = async (
     }
 
     const items = await listAmTaskPushSubscriptionsForUser(targetUserId);
+    const testNotifications = await Notification.findAll({
+      where: {
+        userId: targetUserId,
+        channel: 'in_app',
+        templateKey: 'notification_center_test',
+      },
+      order: [
+        ['sentAt', 'DESC'],
+        ['id', 'DESC'],
+      ],
+      limit: 30,
+    });
+
+    const recentTestEvents: NotificationPushReceiptEvent[] = [];
+    for (const notification of testNotifications) {
+      const payload = notification.payloadJson as Record<string, unknown> | null;
+      const tag = extractNotificationTag(notification);
+      if (!payload || !tag) {
+        continue;
+      }
+      const pushDebug = payload.pushDebug as Record<string, unknown> | null;
+      const events = Array.isArray(pushDebug?.events) ? pushDebug?.events : [];
+      for (const event of events) {
+        if (!event || typeof event !== 'object') {
+          continue;
+        }
+        const record = event as Record<string, unknown>;
+        const eventType = parsePushReceiptEventType(record.eventType);
+        const at = asOptionalNonEmptyString(record.at, 64);
+        if (!eventType || !at) {
+          continue;
+        }
+        recentTestEvents.push({
+          notificationId: notification.id,
+          tag,
+          eventType,
+          at,
+          targetUrl: asOptionalNonEmptyString(record.targetUrl, 300),
+          userAgent: asOptionalNonEmptyString(record.userAgent, 500),
+          visibilityState: asOptionalNonEmptyString(record.visibilityState, 40),
+          error: asOptionalNonEmptyString(record.error, 500),
+        });
+      }
+    }
+
+    recentTestEvents.sort((left, right) => {
+      const leftTime = new Date(left.at).getTime();
+      const rightTime = new Date(right.at).getTime();
+      return rightTime - leftTime;
+    });
+
     const payload: NotificationPushSubscriptionDebugResponse = {
       userId: targetUserId,
       totalSubscriptions: items.length,
       activeSubscriptions: items.filter((item) => item.isActive).length,
       items,
+      recentTestEvents: recentTestEvents.slice(0, 50),
     };
 
     res.status(200).json([{ data: payload, columns: [] }]);
   } catch (error) {
     console.error('Failed to list notification push subscriptions', error);
     res.status(500).json([{ message: 'Failed to load push subscriptions' }]);
+  }
+};
+
+export const recordNotificationPushReceipt = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = req.authContext?.id ?? null;
+    if (!actorId) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const tag = asOptionalNonEmptyString(body.tag, 200);
+    const eventType = parsePushReceiptEventType(body.eventType);
+    if (!tag || !eventType) {
+      res.status(400).json([{ message: 'tag and eventType are required' }]);
+      return;
+    }
+
+    const notification = await findLatestNotificationByTag(actorId, tag);
+    if (!notification) {
+      res.status(404).json([{ message: 'Matching notification not found' }]);
+      return;
+    }
+
+    const payload = (notification.payloadJson ?? {}) as Record<string, unknown>;
+    const pushDebug =
+      payload.pushDebug && typeof payload.pushDebug === 'object'
+        ? ({ ...(payload.pushDebug as Record<string, unknown>) } as Record<string, unknown>)
+        : {};
+
+    const existingEvents = Array.isArray(pushDebug.events)
+      ? pushDebug.events.filter((entry) => entry && typeof entry === 'object')
+      : [];
+
+    const eventAt = new Date().toISOString();
+    const nextEvent = {
+      eventType,
+      at: eventAt,
+      targetUrl: asOptionalNonEmptyString(body.targetUrl, 300),
+      userAgent:
+        asOptionalNonEmptyString(
+          body.userAgent,
+          500,
+        ) ??
+        asOptionalNonEmptyString(req.get('user-agent') ?? null, 500),
+      visibilityState: asOptionalNonEmptyString(body.visibilityState, 40),
+      error: asOptionalNonEmptyString(body.error, 500),
+    };
+
+    const nextEvents = [...existingEvents, nextEvent].slice(-120);
+    pushDebug.events = nextEvents;
+    pushDebug.lastEventAt = eventAt;
+
+    const nextPayload = {
+      ...payload,
+      pushDebug,
+    };
+    notification.payloadJson = nextPayload;
+    notification.changed('payloadJson', true);
+    await notification.save();
+
+    res.status(204).send();
+  } catch (error) {
+    console.error('Failed to record notification push receipt', error);
+    res.status(500).json([{ message: 'Failed to record push receipt' }]);
   }
 };

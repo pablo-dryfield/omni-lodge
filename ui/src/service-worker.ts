@@ -49,6 +49,45 @@ self.addEventListener('message', (event) => {
   }
 });
 
+type PushReceiptEventType =
+  | 'push_received'
+  | 'notification_shown'
+  | 'notification_show_failed'
+  | 'notification_clicked'
+  | 'notification_closed';
+
+const postPushReceipt = async (params: {
+  tag?: string | null;
+  eventType: PushReceiptEventType;
+  targetUrl?: string | null;
+  error?: string | null;
+}): Promise<void> => {
+  const tag = typeof params.tag === 'string' ? params.tag.trim() : '';
+  if (!tag) {
+    return;
+  }
+
+  try {
+    await fetch('/api/notifications/push/receipt', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        tag,
+        eventType: params.eventType,
+        targetUrl: params.targetUrl ?? null,
+        error: params.error ?? null,
+        userAgent: self.navigator.userAgent ?? null,
+        visibilityState: 'service-worker',
+      }),
+    });
+  } catch {
+    // Best-effort telemetry only.
+  }
+};
+
 self.addEventListener('push', (event) => {
   const payload = (() => {
     if (!event.data) {
@@ -85,33 +124,71 @@ self.addEventListener('push', (event) => {
   const silent = payload.silent === true;
 
   event.waitUntil(
-    self.registration.showNotification(title, {
-      body,
-      tag,
-      renotify,
-      requireInteraction,
-      silent,
-      data: {
+    (async () => {
+      await postPushReceipt({
+        tag,
+        eventType: 'push_received',
         targetUrl,
-      },
-      badge: `${process.env.PUBLIC_URL ?? ''}/logo192.png`,
-      icon: `${process.env.PUBLIC_URL ?? ''}/logo192.png`,
-    }),
+      });
+      try {
+        await self.registration.showNotification(title, {
+          body,
+          tag,
+          renotify,
+          requireInteraction,
+          silent,
+          data: {
+            targetUrl,
+            tag,
+          },
+          badge: `${process.env.PUBLIC_URL ?? ''}/logo192.png`,
+          icon: `${process.env.PUBLIC_URL ?? ''}/logo192.png`,
+          vibrate: silent ? undefined : [120, 80, 120],
+        });
+        await postPushReceipt({
+          tag,
+          eventType: 'notification_shown',
+          targetUrl,
+        });
+      } catch (error) {
+        await postPushReceipt({
+          tag,
+          eventType: 'notification_show_failed',
+          targetUrl,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    })(),
   );
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const notificationData = event.notification.data as
-    | { targetUrl?: string }
+    | { targetUrl?: string; tag?: string }
     | undefined;
   const targetUrl =
     notificationData?.targetUrl && notificationData.targetUrl.trim()
       ? notificationData.targetUrl
       : '/assistant-manager-tasks?section=dashboard';
+  const tag =
+    typeof notificationData?.tag === 'string' && notificationData.tag.trim()
+      ? notificationData.tag.trim()
+      : event.notification.tag;
 
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+    (async () => {
+      await postPushReceipt({
+        tag,
+        eventType: 'notification_clicked',
+        targetUrl,
+      });
+
+      const clients = await self.clients.matchAll({
+        type: 'window',
+        includeUncontrolled: true,
+      });
       const matchingClient = clients.find((client) => {
         const url = new URL(client.url);
         return url.pathname === '/assistant-manager-tasks';
@@ -123,6 +200,28 @@ self.addEventListener('notificationclick', (event) => {
       }
 
       return self.clients.openWindow(targetUrl);
+    })(),
+  );
+});
+
+self.addEventListener('notificationclose', (event) => {
+  const notificationData = event.notification.data as
+    | { targetUrl?: string; tag?: string }
+    | undefined;
+  const targetUrl =
+    notificationData?.targetUrl && notificationData.targetUrl.trim()
+      ? notificationData.targetUrl
+      : null;
+  const tag =
+    typeof notificationData?.tag === 'string' && notificationData.tag.trim()
+      ? notificationData.tag.trim()
+      : event.notification.tag;
+
+  event.waitUntil(
+    postPushReceipt({
+      tag,
+      eventType: 'notification_closed',
+      targetUrl,
     }),
   );
 });
