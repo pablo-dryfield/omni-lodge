@@ -48,6 +48,25 @@ export type NotificationPushSubscriptionDebugResponse = {
   totalSubscriptions: number;
   activeSubscriptions: number;
   items: NotificationPushSubscriptionDebugItem[];
+  recentTestEvents: NotificationPushReceiptEvent[];
+};
+
+export type NotificationPushReceiptEventType =
+  | "push_received"
+  | "notification_shown"
+  | "notification_show_failed"
+  | "notification_clicked"
+  | "notification_closed";
+
+export type NotificationPushReceiptEvent = {
+  notificationId: number;
+  tag: string;
+  eventType: NotificationPushReceiptEventType;
+  at: string;
+  targetUrl: string | null;
+  userAgent: string | null;
+  visibilityState: string | null;
+  error: string | null;
 };
 
 const extractApiErrorMessage = (error: unknown, fallbackMessage: string) => {
@@ -225,10 +244,17 @@ export const fetchNotificationPushSubscriptions = async (
       response.data,
     );
     const rawItems = data?.items;
+    const rawEvents = data?.recentTestEvents;
     const items = Array.isArray(rawItems)
       ? rawItems.filter(
           (item): item is NotificationPushSubscriptionDebugItem =>
             Boolean(item && typeof item === "object" && "id" in item),
+        )
+      : [];
+    const recentTestEvents = Array.isArray(rawEvents)
+      ? rawEvents.filter(
+          (item): item is NotificationPushReceiptEvent =>
+            Boolean(item && typeof item === "object" && "eventType" in item && "at" in item),
         )
       : [];
 
@@ -243,6 +269,7 @@ export const fetchNotificationPushSubscriptions = async (
           ? data.activeSubscriptions
           : items.filter((item) => item.isActive).length,
       items,
+      recentTestEvents,
     };
   } catch (error) {
     throw new Error(extractApiErrorMessage(error, "Failed to load push subscriptions"));

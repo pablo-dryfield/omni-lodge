@@ -3,6 +3,7 @@ import authMiddleware from '../middleware/authMiddleware.js';
 import {
   listNotificationPushSubscriptions,
   listMyNotifications,
+  recordNotificationPushReceipt,
   sendNotificationPushTest,
 } from '../controllers/notificationController.js';
 
@@ -10,6 +11,7 @@ const router = express.Router();
 
 router.get('/', authMiddleware, listMyNotifications);
 router.get('/push/subscriptions', authMiddleware, listNotificationPushSubscriptions);
+router.post('/push/receipt', authMiddleware, recordNotificationPushReceipt);
 router.post('/push/test', authMiddleware, sendNotificationPushTest);
 
 export default router;
