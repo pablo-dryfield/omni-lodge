@@ -5,7 +5,9 @@ import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import {
   countActiveAmTaskPushSubscriptionsForUser,
   isAmTaskPushEnabled,
+  listAmTaskPushSubscriptionsForUser,
   sendAmTaskPushNotificationToUser,
+  type AmTaskPushSubscriptionDebugItem,
 } from '../services/amTaskPushService.js';
 
 type NotificationListItem = {
@@ -22,6 +24,13 @@ type NotificationPushTestResponse = {
   userId: number;
   sent: boolean;
   targetedDeviceCount: number;
+};
+
+type NotificationPushSubscriptionDebugResponse = {
+  userId: number;
+  totalSubscriptions: number;
+  activeSubscriptions: number;
+  items: AmTaskPushSubscriptionDebugItem[];
 };
 
 const parsePositiveInt = (
@@ -264,5 +273,42 @@ export const sendNotificationPushTest = async (
   } catch (error) {
     console.error('Failed to send notification center push test', error);
     res.status(500).json([{ message: 'Failed to send test notification' }]);
+  }
+};
+
+export const listNotificationPushSubscriptions = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = req.authContext?.id ?? null;
+    if (!actorId) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    if (!canUseNotificationTester(req)) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    const targetUserId = parsePositiveInt(req.query.userId, 0);
+    if (targetUserId <= 0) {
+      res.status(400).json([{ message: 'userId is required' }]);
+      return;
+    }
+
+    const items = await listAmTaskPushSubscriptionsForUser(targetUserId);
+    const payload: NotificationPushSubscriptionDebugResponse = {
+      userId: targetUserId,
+      totalSubscriptions: items.length,
+      activeSubscriptions: items.filter((item) => item.isActive).length,
+      items,
+    };
+
+    res.status(200).json([{ data: payload, columns: [] }]);
+  } catch (error) {
+    console.error('Failed to list notification push subscriptions', error);
+    res.status(500).json([{ message: 'Failed to load push subscriptions' }]);
   }
 };

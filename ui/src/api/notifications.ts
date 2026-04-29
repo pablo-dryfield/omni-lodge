@@ -24,6 +24,27 @@ export type NotificationPushTestResponse = {
   targetedDeviceCount: number;
 };
 
+export type NotificationPushSubscriptionDebugItem = {
+  id: number;
+  userId: number;
+  endpoint: string;
+  expirationTime: string | null;
+  userAgent: string | null;
+  isActive: boolean;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastFailureReason: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export type NotificationPushSubscriptionDebugResponse = {
+  userId: number;
+  totalSubscriptions: number;
+  activeSubscriptions: number;
+  items: NotificationPushSubscriptionDebugItem[];
+};
+
 const extractApiErrorMessage = (error: unknown, fallbackMessage: string) => {
   if (axios.isAxiosError(error)) {
     const payload = error.response?.data;
@@ -146,5 +167,41 @@ export const sendNotificationPushTest = async (params: {
     };
   } catch (error) {
     throw new Error(extractApiErrorMessage(error, "Failed to send test notification"));
+  }
+};
+
+export const fetchNotificationPushSubscriptions = async (
+  userId: number,
+): Promise<NotificationPushSubscriptionDebugResponse> => {
+  try {
+    const response = await axiosInstance.get("/notifications/push/subscriptions", {
+      withCredentials: true,
+      params: { userId },
+    });
+    const data = extractEnvelopeData<Partial<NotificationPushSubscriptionDebugResponse>>(
+      response.data,
+    );
+    const rawItems = data?.items;
+    const items = Array.isArray(rawItems)
+      ? rawItems.filter(
+          (item): item is NotificationPushSubscriptionDebugItem =>
+            Boolean(item && typeof item === "object" && "id" in item),
+        )
+      : [];
+
+    return {
+      userId: typeof data?.userId === "number" ? data.userId : userId,
+      totalSubscriptions:
+        typeof data?.totalSubscriptions === "number" && Number.isFinite(data.totalSubscriptions)
+          ? data.totalSubscriptions
+          : items.length,
+      activeSubscriptions:
+        typeof data?.activeSubscriptions === "number" && Number.isFinite(data.activeSubscriptions)
+          ? data.activeSubscriptions
+          : items.filter((item) => item.isActive).length,
+      items,
+    };
+  } catch (error) {
+    throw new Error(extractApiErrorMessage(error, "Failed to load push subscriptions"));
   }
 };
