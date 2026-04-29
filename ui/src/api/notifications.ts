@@ -22,6 +22,11 @@ export type NotificationPushTestResponse = {
   userId: number;
   sent: boolean;
   targetedDeviceCount: number;
+  attemptedDeviceCount: number;
+  successfulDeviceCount: number;
+  failedDeviceCount: number;
+  deactivatedDeviceCount: number;
+  failureSummaries: string[];
 };
 
 export type NotificationPushSubscriptionDebugItem = {
@@ -157,6 +162,7 @@ export const sendNotificationPushTest = async (params: {
       { withCredentials: true },
     );
     const data = extractEnvelopeData<Partial<NotificationPushTestResponse>>(response.data);
+    const rawFailureSummaries = data?.failureSummaries;
     return {
       userId: typeof data?.userId === "number" ? data.userId : params.userId,
       sent: data?.sent === true,
@@ -164,8 +170,45 @@ export const sendNotificationPushTest = async (params: {
         typeof data?.targetedDeviceCount === "number" && Number.isFinite(data.targetedDeviceCount)
           ? data.targetedDeviceCount
           : 0,
+      attemptedDeviceCount:
+        typeof data?.attemptedDeviceCount === "number" && Number.isFinite(data.attemptedDeviceCount)
+          ? data.attemptedDeviceCount
+          : 0,
+      successfulDeviceCount:
+        typeof data?.successfulDeviceCount === "number" &&
+        Number.isFinite(data.successfulDeviceCount)
+          ? data.successfulDeviceCount
+          : 0,
+      failedDeviceCount:
+        typeof data?.failedDeviceCount === "number" && Number.isFinite(data.failedDeviceCount)
+          ? data.failedDeviceCount
+          : 0,
+      deactivatedDeviceCount:
+        typeof data?.deactivatedDeviceCount === "number" &&
+        Number.isFinite(data.deactivatedDeviceCount)
+          ? data.deactivatedDeviceCount
+          : 0,
+      failureSummaries: Array.isArray(rawFailureSummaries)
+        ? rawFailureSummaries.filter((value): value is string => typeof value === "string")
+        : [],
     };
   } catch (error) {
+    if (axios.isAxiosError(error) && Array.isArray(error.response?.data)) {
+      const first = error.response?.data[0] as
+        | { message?: unknown; details?: unknown }
+        | undefined;
+      const message =
+        typeof first?.message === "string" && first.message.trim()
+          ? first.message.trim()
+          : null;
+      const rawDetails = first?.details;
+      const details = Array.isArray(rawDetails)
+        ? rawDetails.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        : [];
+      if (message && details.length > 0) {
+        throw new Error(`${message}\n${details.join("\n")}`);
+      }
+    }
     throw new Error(extractApiErrorMessage(error, "Failed to send test notification"));
   }
 };

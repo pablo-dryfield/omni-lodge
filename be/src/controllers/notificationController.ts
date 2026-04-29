@@ -6,7 +6,8 @@ import {
   countActiveAmTaskPushSubscriptionsForUser,
   isAmTaskPushEnabled,
   listAmTaskPushSubscriptionsForUser,
-  sendAmTaskPushNotificationToUser,
+  sendAmTaskPushNotificationToUserDetailed,
+  summarizeAmTaskPushFailures,
   type AmTaskPushSubscriptionDebugItem,
 } from '../services/amTaskPushService.js';
 
@@ -24,6 +25,11 @@ type NotificationPushTestResponse = {
   userId: number;
   sent: boolean;
   targetedDeviceCount: number;
+  attemptedDeviceCount: number;
+  successfulDeviceCount: number;
+  failedDeviceCount: number;
+  deactivatedDeviceCount: number;
+  failureSummaries: string[];
 };
 
 type NotificationPushSubscriptionDebugResponse = {
@@ -227,7 +233,7 @@ export const sendNotificationPushTest = async (
     const title = customTitle ?? 'Notification Center test';
     const body = customBody ?? `Push notification test sent at ${timestamp}.`;
     const tag = `notification-center-test-${targetUserId}-${Date.now()}`;
-    const sent = await sendAmTaskPushNotificationToUser({
+    const deliveryResult = await sendAmTaskPushNotificationToUserDetailed({
       userId: targetUserId,
       payload: {
         title,
@@ -238,12 +244,13 @@ export const sendNotificationPushTest = async (
         requireInteraction: true,
       },
     });
+    const sent = deliveryResult.successCount > 0;
 
     if (!sent) {
       res.status(400).json([
         {
-          message:
-            'Push send failed. Subscription may be expired or blocked on the client device.',
+          message: 'Push send failed for every active subscription.',
+          details: summarizeAmTaskPushFailures(deliveryResult.failures),
         },
       ]);
       return;
@@ -268,6 +275,11 @@ export const sendNotificationPushTest = async (
       userId: targetUserId,
       sent: true,
       targetedDeviceCount: activeSubscriptionCount,
+      attemptedDeviceCount: deliveryResult.attemptedCount,
+      successfulDeviceCount: deliveryResult.successCount,
+      failedDeviceCount: deliveryResult.failureCount,
+      deactivatedDeviceCount: deliveryResult.deactivatedCount,
+      failureSummaries: summarizeAmTaskPushFailures(deliveryResult.failures),
     };
     res.status(200).json([{ data: payload, columns: [] }]);
   } catch (error) {
