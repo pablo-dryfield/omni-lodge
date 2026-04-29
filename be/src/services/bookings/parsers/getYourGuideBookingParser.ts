@@ -154,6 +154,98 @@ const extractParticipantsAndExtras = (
   return { adults, extras, pubCrawlUpsellQuantity };
 };
 
+const extractTravelerAmendments = (
+  text: string,
+): {
+  added: { count: number; names: string[] };
+  removed: { count: number; names: string[] };
+} => {
+  if (!text) {
+    return {
+      added: { count: 0, names: [] },
+      removed: { count: 0, names: [] },
+    };
+  }
+
+  const sanitizeName = (value: string | null | undefined): string | null => {
+    if (!value) {
+      return null;
+    }
+    const normalized = value
+      .replace(/\s+/g, ' ')
+      .replace(/^[\s,.;:()\-]+|[\s,.;:()\-]+$/g, '')
+      .trim();
+    return normalized.length > 0 ? normalized : null;
+  };
+
+  const parseBucket = (action: 'added' | 'removed'): { count: number; names: string[] } => {
+    const pluralPattern = new RegExp(
+      `(\\d+)\\s+travell?ers?\\s+have\\s+been\\s+${action}(?:\\s+to|\\s+from)?\\s+this\\s+booking`,
+      'gi',
+    );
+    let pluralCount = 0;
+    for (const match of text.matchAll(pluralPattern)) {
+      const value = Number.parseInt(match[1] ?? '', 10);
+      if (Number.isFinite(value) && value > 0) {
+        pluralCount += value;
+      }
+    }
+
+    const namedPattern = new RegExp(
+      `travell?er(?:\\s+passenger)?(?:\\s+([^\\r\\n\\u2022<]{1,140}?))?\\s+has\\s+been\\s+${action}(?:\\s+to|\\s+from)?\\s+this\\s+booking`,
+      'gi',
+    );
+    const names: string[] = [];
+    let namedCount = 0;
+    for (const match of text.matchAll(namedPattern)) {
+      namedCount += 1;
+      const maybeName = sanitizeName(match[1] ?? null);
+      if (maybeName) {
+        names.push(maybeName);
+      }
+    }
+
+    if (pluralCount > 0) {
+      return { count: pluralCount, names };
+    }
+    return { count: namedCount, names };
+  };
+
+  return {
+    added: parseBucket('added'),
+    removed: parseBucket('removed'),
+  };
+};
+
+const extractParticipantCountChange = (
+  text: string,
+): { newCount: number; oldCount: number } | null => {
+  if (!text) {
+    return null;
+  }
+
+  const candidates: RegExp[] = [
+    /Number of participants\s+New\s+(\d+)\s+Old\s+(\d+)/i,
+    /Number of participants\s+New\s+(\d+)\s+(\d+)\b/i,
+    /participants\s+New\s+(\d+)\s+Old\s+(\d+)/i,
+  ];
+
+  for (const pattern of candidates) {
+    const match = text.match(pattern);
+    if (!match) {
+      continue;
+    }
+    const newCount = Number.parseInt(match[1] ?? '', 10);
+    const oldCount = Number.parseInt(match[2] ?? '', 10);
+    if (!Number.isFinite(newCount) || !Number.isFinite(oldCount) || newCount < 0 || oldCount < 0) {
+      continue;
+    }
+    return { newCount, oldCount };
+  }
+
+  return null;
+};
+
 const mergeExtrasSnapshot = (
   snapshot: Record<string, unknown> | null | undefined,
   extras: { tshirts: number; cocktails: number; photos: number },
@@ -408,6 +500,12 @@ const extractBookingFields = (text: string): BookingFieldPatch => {
   if (participantInfo.adults !== null) {
     fields.partySizeTotal = participantInfo.adults;
     fields.partySizeAdults = participantInfo.adults;
+  } else {
+    const participantChange = extractParticipantCountChange(text);
+    if (participantChange) {
+      fields.partySizeTotal = participantChange.newCount;
+      fields.partySizeAdults = participantChange.newCount;
+    }
   }
   const hasExtras = Object.values(participantInfo.extras).some((qty) => qty > 0);
   if (hasExtras) {
@@ -566,6 +664,8 @@ export class GetYourGuideBookingParser implements BookingEmailParser {
 
     const bookingFields = extractBookingFields(text);
     const participantInfo = extractParticipantsAndExtras(text);
+    const travelerChanges = extractTravelerAmendments(text);
+    const participantChange = extractParticipantCountChange(text);
 
     const money = extractPriceMoney(text);
     if (money) {
@@ -614,6 +714,34 @@ export class GetYourGuideBookingParser implements BookingEmailParser {
         )
       : null;
 
+    const rawPayload: Record<string, unknown> = {};
+    if (travelerChanges.added.count > 0) {
+      rawPayload.gygTravellerAddition = {
+        addedCount: travelerChanges.added.count,
+        names: travelerChanges.added.names,
+      };
+    }
+    if (travelerChanges.removed.count > 0) {
+      rawPayload.gygTravellerRemoval = {
+        removedCount: travelerChanges.removed.count,
+        names: travelerChanges.removed.names,
+      };
+    }
+    if (!rawPayload.gygTravellerAddition && !rawPayload.gygTravellerRemoval && participantChange) {
+      const delta = participantChange.newCount - participantChange.oldCount;
+      if (delta > 0) {
+        rawPayload.gygTravellerAddition = {
+          addedCount: delta,
+          names: [],
+        };
+      } else if (delta < 0) {
+        rawPayload.gygTravellerRemoval = {
+          removedCount: Math.abs(delta),
+          names: [],
+        };
+      }
+    }
+
     return {
       platform: 'getyourguide',
       platformBookingId: bookingId,
@@ -625,6 +753,7 @@ export class GetYourGuideBookingParser implements BookingEmailParser {
       notes: notes.length > 0 ? notes.join(' | ') : 'Parsed from GetYourGuide confirmation email.',
       occurredAt,
       sourceReceivedAt: occurredAt,
+      rawPayload: Object.keys(rawPayload).length > 0 ? rawPayload : null,
       spawnedEvents: pubCrawlSpawnedEvent ? [pubCrawlSpawnedEvent] : undefined,
     };
   }

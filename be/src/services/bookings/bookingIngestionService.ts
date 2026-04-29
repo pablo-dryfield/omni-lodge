@@ -784,6 +784,18 @@ type ViatorTravellerRemovalPayload = {
   applied?: boolean;
 };
 
+type GygTravellerAdditionPayload = {
+  addedCount: number;
+  names: string[];
+  applied?: boolean;
+};
+
+type GygTravellerRemovalPayload = {
+  removedCount: number;
+  names: string[];
+  applied?: boolean;
+};
+
 const parseViatorTravellerAdditionPayload = (
   payload: unknown,
 ): ViatorTravellerAdditionPayload | null => {
@@ -845,6 +857,80 @@ const parseViatorTravellerRemovalPayload = (
     return null;
   }
 
+  const names = Array.isArray(record.names)
+    ? record.names
+        .filter((value): value is string => typeof value === 'string')
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+    : [];
+  const applied = typeof record.applied === 'boolean' ? record.applied : undefined;
+
+  return {
+    removedCount,
+    names,
+    applied,
+  };
+};
+
+const parseGygTravellerAdditionPayload = (
+  payload: unknown,
+): GygTravellerAdditionPayload | null => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return null;
+  }
+  const root = payload as Record<string, unknown>;
+  const raw = root.gygTravellerAddition;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const addedCountRaw = record.addedCount;
+  const addedCount =
+    typeof addedCountRaw === 'number'
+      ? Math.trunc(addedCountRaw)
+      : typeof addedCountRaw === 'string'
+        ? Number.parseInt(addedCountRaw, 10)
+        : NaN;
+  if (!Number.isFinite(addedCount) || addedCount <= 0) {
+    return null;
+  }
+  const names = Array.isArray(record.names)
+    ? record.names
+        .filter((value): value is string => typeof value === 'string')
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+    : [];
+  const applied = typeof record.applied === 'boolean' ? record.applied : undefined;
+
+  return {
+    addedCount,
+    names,
+    applied,
+  };
+};
+
+const parseGygTravellerRemovalPayload = (
+  payload: unknown,
+): GygTravellerRemovalPayload | null => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return null;
+  }
+  const root = payload as Record<string, unknown>;
+  const raw = root.gygTravellerRemoval;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const removedCountRaw = record.removedCount;
+  const removedCount =
+    typeof removedCountRaw === 'number'
+      ? Math.trunc(removedCountRaw)
+      : typeof removedCountRaw === 'string'
+        ? Number.parseInt(removedCountRaw, 10)
+        : NaN;
+  if (!Number.isFinite(removedCount) || removedCount <= 0) {
+    return null;
+  }
   const names = Array.isArray(record.names)
     ? record.names
         .filter((value): value is string => typeof value === 'string')
@@ -1761,8 +1847,14 @@ const applyParsedEvent = async (
     const priorViatorTravellerAddition = parseViatorTravellerAdditionPayload(priorEvent?.eventPayload ?? null);
     const viatorTravellerRemoval = parseViatorTravellerRemovalPayload(event.rawPayload);
     const priorViatorTravellerRemoval = parseViatorTravellerRemovalPayload(priorEvent?.eventPayload ?? null);
+    const gygTravellerAddition = parseGygTravellerAdditionPayload(event.rawPayload);
+    const priorGygTravellerAddition = parseGygTravellerAdditionPayload(priorEvent?.eventPayload ?? null);
+    const gygTravellerRemoval = parseGygTravellerRemovalPayload(event.rawPayload);
+    const priorGygTravellerRemoval = parseGygTravellerRemovalPayload(priorEvent?.eventPayload ?? null);
     let viatorTravellerAdditionOutcome: Record<string, unknown> | null = null;
     let viatorTravellerRemovalOutcome: Record<string, unknown> | null = null;
+    let gygTravellerAdditionOutcome: Record<string, unknown> | null = null;
+    let gygTravellerRemovalOutcome: Record<string, unknown> | null = null;
 
     if (!isScopedReprocess && event.platform === 'viator' && event.status === 'amended' && viatorTravellerAddition) {
       const addedCount = viatorTravellerAddition.addedCount;
@@ -1976,6 +2068,196 @@ const applyParsedEvent = async (
       };
     }
 
+    if (!isScopedReprocess && event.platform === 'getyourguide' && event.status === 'amended' && gygTravellerAddition) {
+      const addedCount = gygTravellerAddition.addedCount;
+      const names = gygTravellerAddition.names;
+      let priorAlreadyApplied = priorGygTravellerAddition?.applied === true;
+      if (!priorAlreadyApplied && options.isReprocess && email.messageId) {
+        const priorEventsForEmail = await BookingEvent.findAll({
+          where: { emailMessageId: email.messageId, platform: event.platform },
+          attributes: ['eventPayload'],
+          order: [['id', 'DESC']],
+          transaction,
+        });
+        priorAlreadyApplied = priorEventsForEmail.some((candidateEvent) => {
+          const candidatePayload = parseGygTravellerAdditionPayload(candidateEvent.eventPayload ?? null);
+          return candidatePayload?.applied === true;
+        });
+      }
+      const hasExplicitPartyPatch = patch.partySizeTotal !== undefined || patch.partySizeAdults !== undefined;
+      const hasExplicitMoneyPatch =
+        patch.baseAmount !== undefined || patch.priceNet !== undefined || patch.priceGross !== undefined;
+      const noteSegment =
+        names.length > 0
+          ? `GetYourGuide traveller(s) added: ${names.join(', ')}`
+          : `GetYourGuide traveller(s) added: ${addedCount} (email ${email.messageId})`;
+
+      let applied = false;
+      let skippedReason: string | null = null;
+      let inferredPerTraveller: number | null = null;
+      let inferredAmountDelta: number | null = null;
+      let inferredAmountBefore: number | null = null;
+      let inferredPartyBefore: number | null = null;
+
+      if (priorAlreadyApplied) {
+        skippedReason = 'already_applied_for_email';
+      } else {
+        if (!hasExplicitPartyPatch) {
+          partySizeTotalDelta = (partySizeTotalDelta ?? 0) + addedCount;
+          partySizeAdultsDelta = (partySizeAdultsDelta ?? 0) + addedCount;
+          applied = true;
+        }
+
+        if (!hasExplicitMoneyPatch) {
+          const baseBefore =
+            parseDecimalNumber(bookingRecord.baseAmount) ??
+            parseDecimalNumber(bookingRecord.priceNet) ??
+            parseDecimalNumber(bookingRecord.priceGross);
+          const partyBefore =
+            bookingRecord.partySizeTotal ??
+            bookingRecord.partySizeAdults ??
+            (typeof patch.partySizeTotal === 'number' ? patch.partySizeTotal : null) ??
+            (typeof patch.partySizeAdults === 'number' ? patch.partySizeAdults : null);
+
+          if (
+            typeof baseBefore === 'number' &&
+            Number.isFinite(baseBefore) &&
+            baseBefore > 0 &&
+            typeof partyBefore === 'number' &&
+            Number.isFinite(partyBefore) &&
+            partyBefore > 0
+          ) {
+            inferredPerTraveller = roundMoney(baseBefore / partyBefore);
+            inferredAmountDelta = roundMoney(inferredPerTraveller * addedCount);
+            inferredAmountBefore = roundMoney(baseBefore);
+            inferredPartyBefore = partyBefore;
+            const inferredAmountAfter = roundMoney(baseBefore + inferredAmountDelta);
+            patch.baseAmount = normalizeDecimal(inferredAmountAfter);
+            patch.priceNet = normalizeDecimal(inferredAmountAfter);
+            patch.priceGross = normalizeDecimal(inferredAmountAfter);
+            applied = true;
+          } else if (!skippedReason) {
+            skippedReason = 'insufficient_base_or_party_for_money_inference';
+          }
+        }
+      }
+
+      patch.notes = mergeNoteSegments(bookingRecord.notes, patch.notes as string | null | undefined, noteSegment);
+
+      gygTravellerAdditionOutcome = {
+        addedCount,
+        names,
+        applied: priorAlreadyApplied || applied,
+        appliedThisRun: applied,
+        ...(skippedReason ? { skippedReason } : {}),
+        ...(inferredPerTraveller !== null
+          ? { inferredPerTraveller: normalizeDecimal(inferredPerTraveller) }
+          : {}),
+        ...(inferredAmountDelta !== null
+          ? { inferredAmountDelta: normalizeDecimal(inferredAmountDelta) }
+          : {}),
+        ...(inferredAmountBefore !== null
+          ? { inferredAmountBefore: normalizeDecimal(inferredAmountBefore) }
+          : {}),
+        ...(inferredPartyBefore !== null ? { inferredPartyBefore } : {}),
+      };
+    }
+
+    if (!isScopedReprocess && event.platform === 'getyourguide' && event.status === 'amended' && gygTravellerRemoval) {
+      const removedCount = gygTravellerRemoval.removedCount;
+      const names = gygTravellerRemoval.names;
+      let priorAlreadyApplied = priorGygTravellerRemoval?.applied === true;
+      if (!priorAlreadyApplied && options.isReprocess && email.messageId) {
+        const priorEventsForEmail = await BookingEvent.findAll({
+          where: { emailMessageId: email.messageId, platform: event.platform },
+          attributes: ['eventPayload'],
+          order: [['id', 'DESC']],
+          transaction,
+        });
+        priorAlreadyApplied = priorEventsForEmail.some((candidateEvent) => {
+          const candidatePayload = parseGygTravellerRemovalPayload(candidateEvent.eventPayload ?? null);
+          return candidatePayload?.applied === true;
+        });
+      }
+      const hasExplicitPartyPatch = patch.partySizeTotal !== undefined || patch.partySizeAdults !== undefined;
+      const hasExplicitMoneyPatch =
+        patch.baseAmount !== undefined || patch.priceNet !== undefined || patch.priceGross !== undefined;
+      const noteSegment =
+        names.length > 0
+          ? `GetYourGuide traveller(s) removed: ${names.join(', ')}`
+          : `GetYourGuide traveller(s) removed: ${removedCount} (email ${email.messageId})`;
+
+      let applied = false;
+      let skippedReason: string | null = null;
+      let inferredPerTraveller: number | null = null;
+      let inferredAmountDelta: number | null = null;
+      let inferredAmountBefore: number | null = null;
+      let inferredPartyBefore: number | null = null;
+
+      if (priorAlreadyApplied) {
+        skippedReason = 'already_applied_for_email';
+      } else {
+        if (!hasExplicitPartyPatch) {
+          partySizeTotalDelta = (partySizeTotalDelta ?? 0) - removedCount;
+          partySizeAdultsDelta = (partySizeAdultsDelta ?? 0) - removedCount;
+          applied = true;
+        }
+
+        if (!hasExplicitMoneyPatch) {
+          const baseBefore =
+            parseDecimalNumber(bookingRecord.baseAmount) ??
+            parseDecimalNumber(bookingRecord.priceNet) ??
+            parseDecimalNumber(bookingRecord.priceGross);
+          const partyBefore =
+            bookingRecord.partySizeTotal ??
+            bookingRecord.partySizeAdults ??
+            (typeof patch.partySizeTotal === 'number' ? patch.partySizeTotal : null) ??
+            (typeof patch.partySizeAdults === 'number' ? patch.partySizeAdults : null);
+
+          if (
+            typeof baseBefore === 'number' &&
+            Number.isFinite(baseBefore) &&
+            baseBefore > 0 &&
+            typeof partyBefore === 'number' &&
+            Number.isFinite(partyBefore) &&
+            partyBefore > 0
+          ) {
+            inferredPerTraveller = roundMoney(baseBefore / partyBefore);
+            inferredAmountDelta = roundMoney(inferredPerTraveller * removedCount);
+            inferredAmountBefore = roundMoney(baseBefore);
+            inferredPartyBefore = partyBefore;
+            const inferredAmountAfter = roundMoney(Math.max(0, baseBefore - inferredAmountDelta));
+            patch.baseAmount = normalizeDecimal(inferredAmountAfter);
+            patch.priceNet = normalizeDecimal(inferredAmountAfter);
+            patch.priceGross = normalizeDecimal(inferredAmountAfter);
+            applied = true;
+          } else if (!skippedReason) {
+            skippedReason = 'insufficient_base_or_party_for_money_inference';
+          }
+        }
+      }
+
+      patch.notes = mergeNoteSegments(bookingRecord.notes, patch.notes as string | null | undefined, noteSegment);
+
+      gygTravellerRemovalOutcome = {
+        removedCount,
+        names,
+        applied: priorAlreadyApplied || applied,
+        appliedThisRun: applied,
+        ...(skippedReason ? { skippedReason } : {}),
+        ...(inferredPerTraveller !== null
+          ? { inferredPerTraveller: normalizeDecimal(inferredPerTraveller) }
+          : {}),
+        ...(inferredAmountDelta !== null
+          ? { inferredAmountDelta: normalizeDecimal(inferredAmountDelta) }
+          : {}),
+        ...(inferredAmountBefore !== null
+          ? { inferredAmountBefore: normalizeDecimal(inferredAmountBefore) }
+          : {}),
+        ...(inferredPartyBefore !== null ? { inferredPartyBefore } : {}),
+      };
+    }
+
     if (Object.keys(patch).length > 0) {
       bookingRecord.set(patch);
     }
@@ -2152,6 +2434,12 @@ const applyParsedEvent = async (
       }
       if (viatorTravellerRemovalOutcome) {
         basePayload.viatorTravellerRemoval = viatorTravellerRemovalOutcome;
+      }
+      if (gygTravellerAdditionOutcome) {
+        basePayload.gygTravellerAddition = gygTravellerAdditionOutcome;
+      }
+      if (gygTravellerRemovalOutcome) {
+        basePayload.gygTravellerRemoval = gygTravellerRemovalOutcome;
       }
       if (refundReconciliationOutcome) {
         basePayload.refundConversion = refundReconciliationOutcome;
