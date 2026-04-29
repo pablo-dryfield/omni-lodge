@@ -68,6 +68,7 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
   const [testerSubmitting, setTesterSubmitting] = useState(false);
   const [testerError, setTesterError] = useState<string | null>(null);
   const [testerSuccess, setTesterSuccess] = useState<string | null>(null);
+  const [testerFailureSummaries, setTesterFailureSummaries] = useState<string[]>([]);
   const [pushDebugLoading, setPushDebugLoading] = useState(false);
   const [pushDebugError, setPushDebugError] = useState<string | null>(null);
   const [pushDebug, setPushDebug] = useState<NotificationPushSubscriptionDebugResponse | null>(
@@ -206,6 +207,7 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
     setTesterSubmitting(true);
     setTesterError(null);
     setTesterSuccess(null);
+    setTesterFailureSummaries([]);
     try {
       const result = await sendNotificationPushTest({
         userId,
@@ -218,8 +220,9 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
         return;
       }
       setTesterSuccess(
-        `Sent to user #${result.userId}. Targeted ${result.targetedDeviceCount} active device subscription(s).`,
+        `Sent to user #${result.userId}. Targeted=${result.targetedDeviceCount}, attempted=${result.attemptedDeviceCount}, successful=${result.successfulDeviceCount}, failed=${result.failedDeviceCount}, deactivated=${result.deactivatedDeviceCount}.`,
       );
+      setTesterFailureSummaries(result.failureSummaries);
       loadNotifications().catch(() => undefined);
       loadPushDebug().catch(() => undefined);
     } catch (requestError) {
@@ -313,12 +316,25 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
 
             {testerError && (
               <Alert color="red" title="Unable to send test">
-                {testerError}
+                <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
+                  {testerError}
+                </Text>
               </Alert>
             )}
             {testerSuccess && (
               <Alert color="green" title="Test sent">
                 {testerSuccess}
+              </Alert>
+            )}
+            {testerFailureSummaries.length > 0 && (
+              <Alert color="yellow" title="Some deliveries failed">
+                <Stack gap={2}>
+                  {testerFailureSummaries.map((entry, index) => (
+                    <Text key={`${entry}-${index}`} size="xs" style={{ whiteSpace: "pre-wrap" }}>
+                      {entry}
+                    </Text>
+                  ))}
+                </Stack>
               </Alert>
             )}
 

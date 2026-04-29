@@ -25,6 +25,30 @@ export type AmTaskPushNotificationPayload = {
   eventType?: 'reminder' | 'start';
 };
 
+type WebPushErrorLike = Error & {
+  statusCode?: number;
+  body?: unknown;
+};
+
+export type AmTaskPushDeliveryFailure = {
+  subscriptionId: number;
+  endpoint: string;
+  endpointHost: string | null;
+  statusCode: number | null;
+  shouldDeactivate: boolean;
+  message: string;
+  bodySnippet: string | null;
+  failureReason: string;
+};
+
+export type AmTaskPushDeliveryResult = {
+  attemptedCount: number;
+  successCount: number;
+  failureCount: number;
+  deactivatedCount: number;
+  failures: AmTaskPushDeliveryFailure[];
+};
+
 const resolveBoolean = (value: unknown, fallback: boolean): boolean => {
   if (typeof value === 'boolean') {
     return value;
@@ -61,6 +85,53 @@ const normalizeExpirationTime = (value: unknown): string | null => {
     return null;
   }
   return String(Math.trunc(numeric));
+};
+
+const truncateText = (value: string, maxLength: number): string =>
+  value.length > maxLength ? `${value.slice(0, maxLength - 3)}...` : value;
+
+const toEndpointHost = (endpoint: string): string | null => {
+  try {
+    const parsed = new URL(endpoint);
+    return parsed.host || null;
+  } catch {
+    return null;
+  }
+};
+
+const stringifyErrorBody = (body: unknown): string | null => {
+  if (body == null) {
+    return null;
+  }
+  if (typeof body === 'string') {
+    const trimmed = body.trim();
+    return trimmed ? truncateText(trimmed, 500) : null;
+  }
+  try {
+    const json = JSON.stringify(body);
+    return json && json !== '{}' ? truncateText(json, 500) : null;
+  } catch {
+    return null;
+  }
+};
+
+const buildFailureReason = (params: {
+  message: string;
+  statusCode: number | null;
+  bodySnippet: string | null;
+  shouldDeactivate: boolean;
+}): string => {
+  const segments = [params.message];
+  if (params.statusCode != null) {
+    segments.push(`status=${params.statusCode}`);
+  }
+  if (params.shouldDeactivate) {
+    segments.push('subscription-deactivated');
+  }
+  if (params.bodySnippet) {
+    segments.push(`body=${params.bodySnippet}`);
+  }
+  return truncateText(segments.join(' | '), 1000);
 };
 
 const toPushSubscription = (
@@ -252,12 +323,20 @@ export const listAmTaskPushSubscriptionsForUser = async (
   }));
 };
 
-export const sendAmTaskPushNotificationToUser = async (options: {
+export const sendAmTaskPushNotificationToUserDetailed = async (options: {
   userId: number;
   payload: AmTaskPushNotificationPayload;
-}): Promise<boolean> => {
+}): Promise<AmTaskPushDeliveryResult> => {
+  const emptyResult: AmTaskPushDeliveryResult = {
+    attemptedCount: 0,
+    successCount: 0,
+    failureCount: 0,
+    deactivatedCount: 0,
+    failures: [],
+  };
+
   if (!ensureAmTaskPushConfigured().enabled) {
-    return false;
+    return emptyResult;
   }
 
   const subscriptions = await AssistantManagerTaskPushSubscription.findAll({
@@ -268,11 +347,13 @@ export const sendAmTaskPushNotificationToUser = async (options: {
   });
 
   if (subscriptions.length === 0) {
-    return false;
+    return emptyResult;
   }
 
   const payloadJson = JSON.stringify(options.payload);
+  const failures: AmTaskPushDeliveryFailure[] = [];
   let successCount = 0;
+  let deactivatedCount = 0;
 
   for (const subscription of subscriptions) {
     try {
@@ -288,17 +369,38 @@ export const sendAmTaskPushNotificationToUser = async (options: {
         isActive: true,
       });
     } catch (error) {
-      const pushError = error as Error & { statusCode?: number; body?: unknown };
+      const pushError = error as WebPushErrorLike;
       const statusCode = Number(pushError.statusCode ?? NaN);
       const shouldDeactivate = statusCode === 404 || statusCode === 410;
       const message = pushError.message?.trim() || 'Unknown push send failure';
+      const bodySnippet = stringifyErrorBody(pushError.body);
+      const failureReason = buildFailureReason({
+        message,
+        statusCode: Number.isFinite(statusCode) ? statusCode : null,
+        bodySnippet,
+        shouldDeactivate,
+      });
+
       await subscription.update({
         lastFailureAt: new Date(),
-        lastFailureReason: message.slice(0, 1000),
+        lastFailureReason: failureReason,
         isActive: shouldDeactivate ? false : subscription.isActive,
       });
+      if (shouldDeactivate) {
+        deactivatedCount += 1;
+      }
+      failures.push({
+        subscriptionId: subscription.id,
+        endpoint: subscription.endpoint,
+        endpointHost: toEndpointHost(subscription.endpoint),
+        statusCode: Number.isFinite(statusCode) ? statusCode : null,
+        shouldDeactivate,
+        message,
+        bodySnippet,
+        failureReason,
+      });
       logger.warn(
-        `[am-task-push] Failed to send push to subscription ${subscription.id}: ${message}`,
+        `[am-task-push] Failed to send push to subscription ${subscription.id}: ${failureReason}`,
       );
     }
   }
@@ -334,5 +436,40 @@ export const sendAmTaskPushNotificationToUser = async (options: {
     }
   }
 
-  return successCount > 0;
+  const result: AmTaskPushDeliveryResult = {
+    attemptedCount: subscriptions.length,
+    successCount,
+    failureCount: failures.length,
+    deactivatedCount,
+    failures,
+  };
+
+  return result;
 };
+
+export const sendAmTaskPushNotificationToUser = async (options: {
+  userId: number;
+  payload: AmTaskPushNotificationPayload;
+}): Promise<boolean> => {
+  const result = await sendAmTaskPushNotificationToUserDetailed(options);
+
+  return result.successCount > 0;
+};
+
+export const summarizeAmTaskPushFailures = (
+  failures: AmTaskPushDeliveryFailure[],
+): string[] =>
+  failures.slice(0, 5).map((failure) => {
+    const parts = [`#${failure.subscriptionId}`];
+    if (failure.endpointHost) {
+      parts.push(failure.endpointHost);
+    }
+    if (failure.statusCode != null) {
+      parts.push(`status ${failure.statusCode}`);
+    }
+    parts.push(failure.message);
+    if (failure.shouldDeactivate) {
+      parts.push('(deactivated)');
+    }
+    return parts.join(' | ');
+  });
