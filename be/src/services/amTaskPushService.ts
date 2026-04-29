@@ -203,6 +203,55 @@ export const countActiveAmTaskPushSubscriptionsForUser = async (
     },
   });
 
+export type AmTaskPushSubscriptionDebugItem = {
+  id: number;
+  userId: number;
+  endpoint: string;
+  expirationTime: string | null;
+  userAgent: string | null;
+  isActive: boolean;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastFailureReason: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export const listAmTaskPushSubscriptionsForUser = async (
+  userId: number,
+): Promise<AmTaskPushSubscriptionDebugItem[]> => {
+  const subscriptions = await AssistantManagerTaskPushSubscription.findAll({
+    where: { userId },
+    order: [
+      ['isActive', 'DESC'],
+      ['updatedAt', 'DESC'],
+      ['id', 'DESC'],
+    ],
+  });
+
+  return subscriptions.map((subscription) => ({
+    id: subscription.id,
+    userId: subscription.userId,
+    endpoint: subscription.endpoint,
+    expirationTime: subscription.expirationTime ?? null,
+    userAgent: subscription.userAgent ?? null,
+    isActive: subscription.isActive === true,
+    lastSuccessAt: subscription.lastSuccessAt
+      ? new Date(subscription.lastSuccessAt).toISOString()
+      : null,
+    lastFailureAt: subscription.lastFailureAt
+      ? new Date(subscription.lastFailureAt).toISOString()
+      : null,
+    lastFailureReason: subscription.lastFailureReason ?? null,
+    createdAt: subscription.createdAt
+      ? new Date(subscription.createdAt).toISOString()
+      : null,
+    updatedAt: subscription.updatedAt
+      ? new Date(subscription.updatedAt).toISOString()
+      : null,
+  }));
+};
+
 export const sendAmTaskPushNotificationToUser = async (options: {
   userId: number;
   payload: AmTaskPushNotificationPayload;

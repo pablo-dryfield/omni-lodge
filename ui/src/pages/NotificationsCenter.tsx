@@ -19,9 +19,11 @@ import {
 } from "@mantine/core";
 import { IconArrowRight, IconRefresh } from "@tabler/icons-react";
 import {
+  fetchNotificationPushSubscriptions,
   fetchInboxNotifications,
   sendNotificationPushTest,
   type InboxNotification,
+  type NotificationPushSubscriptionDebugResponse,
 } from "../api/notifications";
 import { useActiveUsers } from "../api/users";
 import { useAppSelector } from "../store/hooks";
@@ -38,6 +40,20 @@ const formatNotificationDate = (value: string) => {
   return parsed.format("YYYY-MM-DD HH:mm");
 };
 
+const formatOptionalDate = (value: string | null) => {
+  if (!value) {
+    return "Never";
+  }
+  return formatNotificationDate(value);
+};
+
+const shortenEndpoint = (value: string) => {
+  if (!value || value.length <= 80) {
+    return value;
+  }
+  return `${value.slice(0, 40)}...${value.slice(-30)}`;
+};
+
 const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
   const navigate = useNavigate();
   const roleSlug = useAppSelector((state) => state.session.roleSlug ?? null);
@@ -52,6 +68,11 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
   const [testerSubmitting, setTesterSubmitting] = useState(false);
   const [testerError, setTesterError] = useState<string | null>(null);
   const [testerSuccess, setTesterSuccess] = useState<string | null>(null);
+  const [pushDebugLoading, setPushDebugLoading] = useState(false);
+  const [pushDebugError, setPushDebugError] = useState<string | null>(null);
+  const [pushDebug, setPushDebug] = useState<NotificationPushSubscriptionDebugResponse | null>(
+    null,
+  );
 
   const normalizedRoleSlug = useMemo(() => {
     if (!roleSlug) {
@@ -134,6 +155,43 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
     loadNotifications();
   }, [loadNotifications]);
 
+  const loadPushDebug = useCallback(async () => {
+    if (!canUseTester || !testerUserId) {
+      setPushDebug(null);
+      setPushDebugError(null);
+      return;
+    }
+    const userId = Number(testerUserId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      setPushDebug(null);
+      setPushDebugError("Selected user is invalid.");
+      return;
+    }
+
+    setPushDebugLoading(true);
+    setPushDebugError(null);
+    try {
+      const response = await fetchNotificationPushSubscriptions(userId);
+      setPushDebug(response);
+    } catch (requestError) {
+      setPushDebug(null);
+      setPushDebugError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Failed to load push subscriptions.",
+      );
+    } finally {
+      setPushDebugLoading(false);
+    }
+  }, [canUseTester, testerUserId]);
+
+  useEffect(() => {
+    if (!canUseTester || !testerUserId) {
+      return;
+    }
+    loadPushDebug().catch(() => undefined);
+  }, [canUseTester, loadPushDebug, testerUserId]);
+
   const handleSendTestNotification = useCallback(async () => {
     if (!testerUserId) {
       setTesterError("Select a user first.");
@@ -163,6 +221,7 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
         `Sent to user #${result.userId}. Targeted ${result.targetedDeviceCount} active device subscription(s).`,
       );
       loadNotifications().catch(() => undefined);
+      loadPushDebug().catch(() => undefined);
     } catch (requestError) {
       setTesterError(
         requestError instanceof Error ? requestError.message : "Failed to send test notification.",
@@ -170,7 +229,7 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
     } finally {
       setTesterSubmitting(false);
     }
-  }, [loadNotifications, testerBody, testerTitle, testerUrl, testerUserId]);
+  }, [loadNotifications, loadPushDebug, testerBody, testerTitle, testerUrl, testerUserId]);
 
   return (
     <Stack gap="md" p="md">
@@ -265,6 +324,16 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
 
             <Group justify="flex-end">
               <Button
+                variant="default"
+                onClick={() => {
+                  loadPushDebug().catch(() => undefined);
+                }}
+                loading={pushDebugLoading}
+                disabled={!testerUserId}
+              >
+                Refresh Devices
+              </Button>
+              <Button
                 onClick={() => {
                   handleSendTestNotification().catch(() => undefined);
                 }}
@@ -274,6 +343,69 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
                 Send Test Notification
               </Button>
             </Group>
+
+            {pushDebugError && (
+              <Alert color="red" title="Unable to load device subscriptions">
+                {pushDebugError}
+              </Alert>
+            )}
+
+            {pushDebug && (
+              <Stack gap="xs">
+                <Group gap="xs">
+                  <Badge color="blue" variant="light">
+                    Total: {pushDebug.totalSubscriptions}
+                  </Badge>
+                  <Badge color={pushDebug.activeSubscriptions > 0 ? "green" : "gray"} variant="light">
+                    Active: {pushDebug.activeSubscriptions}
+                  </Badge>
+                </Group>
+                {pushDebug.items.length === 0 ? (
+                  <Text size="sm" c="dimmed">
+                    No push subscriptions found for this user on any device/browser.
+                  </Text>
+                ) : (
+                  <Stack gap="xs">
+                    {pushDebug.items.map((item) => (
+                      <Paper key={item.id} withBorder radius="md" p="sm">
+                        <Stack gap={4}>
+                          <Group justify="space-between" wrap="wrap">
+                            <Group gap="xs">
+                              <Badge color={item.isActive ? "green" : "gray"} variant="light">
+                                {item.isActive ? "Active" : "Inactive"}
+                              </Badge>
+                              <Text size="xs" c="dimmed">
+                                Subscription #{item.id}
+                              </Text>
+                            </Group>
+                            <Text size="xs" c="dimmed">
+                              Updated: {formatOptionalDate(item.updatedAt)}
+                            </Text>
+                          </Group>
+                          <Text size="sm" fw={600}>
+                            {item.userAgent?.trim() || "Unknown device/browser"}
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            Endpoint: {shortenEndpoint(item.endpoint)}
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            Last success: {formatOptionalDate(item.lastSuccessAt)}
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            Last failure: {formatOptionalDate(item.lastFailureAt)}
+                          </Text>
+                          {item.lastFailureReason && (
+                            <Text size="xs" c="red">
+                              Failure reason: {item.lastFailureReason}
+                            </Text>
+                          )}
+                        </Stack>
+                      </Paper>
+                    ))}
+                  </Stack>
+                )}
+              </Stack>
+            )}
           </Stack>
         </Paper>
       )}
