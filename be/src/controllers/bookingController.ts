@@ -80,6 +80,7 @@ type QueryParams = {
   pickupFrom?: string;
   pickupTo?: string;
   productId?: string;
+  productTypeId?: string;
   time?: string;
   search?: string;
   dateField?: string;
@@ -1709,6 +1710,7 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
     const query = req.query as QueryParams;
     const { start, end } = resolveRange(query);
     const dateField = resolveBookingsDateField(query.dateField);
+    const productTypeId = parseOptionalInteger(query.productTypeId);
 
     const where: WhereOptions = {};
     if (dateField === 'experience_date') {
@@ -1750,7 +1752,19 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
 
     const rows = await Booking.findAll({
       where,
-      include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
+      include: [
+        {
+          model: Product,
+          as: 'product',
+          attributes: ['id', 'name'],
+          ...(productTypeId
+            ? {
+                where: { productTypeId },
+                required: true,
+              }
+            : { required: false }),
+        },
+      ],
       order,
     });
 
@@ -1767,7 +1781,7 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
     const bookingAddonsRows = bookingIds.length
       ? await BookingAddon.findAll({
           where: { bookingId: { [Op.in]: bookingIds } },
-          include: [{ model: Addon, as: 'addon', attributes: ['id', 'name'], required: false }],
+          include: [{ model: Addon, as: 'addon', attributes: ['id', 'name', 'basePrice'], required: false }],
           order: [
             ['bookingId', 'ASC'],
             ['id', 'ASC'],
@@ -1787,7 +1801,7 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
         totalPrice: string | null;
         currency: string | null;
         isIncluded: boolean;
-        addon?: { id: number; name: string } | null;
+        addon?: { id: number; name: string; basePrice: string | number | null } | null;
       };
 
       const addonName =
@@ -1805,6 +1819,7 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
         quantity: Number.isFinite(Number(plain.quantity)) ? Number(plain.quantity) : 0,
         unitPrice: roundCurrency(parseMoneyLikeNumber(plain.unitPrice)),
         totalPrice: roundCurrency(parseMoneyLikeNumber(plain.totalPrice)),
+        addonBasePrice: roundCurrency(parseMoneyLikeNumber(plain.addon?.basePrice)),
         currency: plain.currency ?? null,
         isIncluded: Boolean(plain.isIncluded),
       };
@@ -1843,10 +1858,43 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
     type FreeTicketEntryRow = { counterId: number; counterDate: string; count: number; note: string };
 
     let cashPaymentsTotal = 0;
+    let cashGuestsTotal = 0;
     let freeTicketsTotal = 0;
     const cashByChannelMap = new Map<string, CashByChannelRow>();
     const cashEntries: CashEntryRow[] = [];
     const freeTicketEntries: FreeTicketEntryRow[] = [];
+    const cashGuestMetricByCounterChannel = new Map<string, number>();
+
+    if (counters.length > 0) {
+      const counterIds = counters
+        .map((counter) => Number(counter.id))
+        .filter((value) => Number.isFinite(value) && value > 0);
+      if (counterIds.length > 0) {
+        const peopleMetrics = await CounterChannelMetric.findAll({
+          where: {
+            counterId: { [Op.in]: counterIds },
+            kind: 'people',
+            tallyType: 'attended',
+          },
+          attributes: ['counterId', 'channelId', 'qty'],
+        });
+        peopleMetrics.forEach((metric) => {
+          const plain = metric.get({ plain: true }) as { counterId?: unknown; channelId?: unknown; qty?: unknown };
+          const counterId = Number(plain.counterId);
+          const channelId = Number.isFinite(Number(plain.channelId)) ? Number(plain.channelId) : null;
+          if (!Number.isFinite(counterId) || counterId <= 0) {
+            return;
+          }
+          const qty = Math.max(0, Math.round(parseMoneyLikeNumber(plain.qty)));
+          if (qty <= 0) {
+            return;
+          }
+          const key = `${counterId}|${channelId ?? 'unknown'}`;
+          const prev = cashGuestMetricByCounterChannel.get(key) ?? 0;
+          cashGuestMetricByCounterChannel.set(key, prev + qty);
+        });
+      }
+    }
 
     counters.forEach((counter) => {
       const counterDate = String(counter.date);
@@ -1893,6 +1941,8 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
           channelName,
           amount,
         });
+        const guestMetricKey = `${counter.id}|${channelId ?? 'unknown'}`;
+        cashGuestsTotal += cashGuestMetricByCounterChannel.get(guestMetricKey) ?? 0;
         cashPaymentsTotal = roundCurrency(cashPaymentsTotal + amount);
       });
     });
@@ -1910,6 +1960,7 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
       counterInsights: {
         currency: 'PLN',
         cashPaymentsTotal: roundCurrency(cashPaymentsTotal),
+        cashGuestsTotal: Math.max(0, Math.round(cashGuestsTotal)),
         cashByChannel,
         cashEntries,
         freeTicketsTotal,
