@@ -2,7 +2,9 @@ import { Router } from 'express';
 import authMiddleware from '../middleware/authMiddleware.js';
 import {
   fixEcwidOrderFromSource,
+  fixEcwidOrderToExternal,
   fixEcwidOrdersFromSourceBulk,
+  fixEcwidOrdersToExternalBulk,
   getSanityCheckEcwidComparison,
   getSanityCheckOmniSummary,
   reprocessEcwidSanityHints,
@@ -54,6 +56,8 @@ router.get('/sanity-check/ecwid', authMiddleware, getSanityCheckEcwidComparison)
 router.post('/sanity-check/ecwid/reprocess-hints', authMiddleware, reprocessEcwidSanityHints);
 router.post('/sanity-check/ecwid/fix-order', authMiddleware, fixEcwidOrderFromSource);
 router.post('/sanity-check/ecwid/fix-orders', authMiddleware, fixEcwidOrdersFromSourceBulk);
+router.post('/sanity-check/ecwid/fix-to-ecwid', authMiddleware, fixEcwidOrderToExternal);
+router.post('/sanity-check/ecwid/fix-to-ecwid-bulk', authMiddleware, fixEcwidOrdersToExternalBulk);
 router.post('/ingest-emails', authMiddleware, ingestBookingEmails);
 router.post('/import-ecwid', authMiddleware, importEcwidBooking);
 router.patch('/attendance/bulk', authMiddleware, updateBulkBookingAttendance);

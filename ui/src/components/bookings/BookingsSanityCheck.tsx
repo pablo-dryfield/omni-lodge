@@ -195,6 +195,27 @@ type EcwidFixOrdersResponse = {
   }>;
 };
 
+type EcwidFixToOrderResponse = {
+  orderId: string;
+  message: string;
+  sourceBookingId: number;
+  sourceExperienceDate: string;
+  sourceExperienceStartAtUtc: string;
+  appliedPickupTimeUtc: string;
+  updatedItems: boolean;
+};
+
+type EcwidFixToOrdersResponse = {
+  requested: number;
+  fixed: number;
+  failed: number;
+  results: Array<{
+    orderId: string;
+    status: "ok" | "failed";
+    error?: string;
+  }>;
+};
+
 type ViatorCsvSummary = {
   bookings: number;
   people: number;
@@ -690,6 +711,10 @@ const BookingsSanityCheck = () => {
   const [ecwidFixBulkLoading, setEcwidFixBulkLoading] = useState(false);
   const [ecwidFixInfo, setEcwidFixInfo] = useState<string | null>(null);
   const [ecwidFixError, setEcwidFixError] = useState<string | null>(null);
+  const [ecwidFixToLoadingOrderId, setEcwidFixToLoadingOrderId] = useState<string | null>(null);
+  const [ecwidFixToBulkLoading, setEcwidFixToBulkLoading] = useState(false);
+  const [ecwidFixToInfo, setEcwidFixToInfo] = useState<string | null>(null);
+  const [ecwidFixToError, setEcwidFixToError] = useState<string | null>(null);
   const [selectedEcwidOrderIds, setSelectedEcwidOrderIds] = useState<string[]>([]);
 
   const [expectedBookings, setExpectedBookings] = useState<number | "">("");
@@ -1238,6 +1263,74 @@ const BookingsSanityCheck = () => {
     }
   }, [runPlatformCheck, selectedEcwidOrderIds]);
 
+  const runFixOrderToEcwid = useCallback(
+    async (orderId: string) => {
+      const trimmedOrderId = String(orderId ?? "").trim();
+      if (!trimmedOrderId) {
+        return;
+      }
+      const confirmed = window.confirm(
+        `Fix order ${trimmedOrderId} in Ecwid using Omni data? This updates Ecwid pickup/activity fields from Omni.`,
+      );
+      if (!confirmed) {
+        return;
+      }
+      setEcwidFixToLoadingOrderId(trimmedOrderId);
+      setEcwidFixToInfo(null);
+      setEcwidFixToError(null);
+      try {
+        const response = await axiosInstance.post<EcwidFixToOrderResponse>(
+          "/bookings/sanity-check/ecwid/fix-to-ecwid",
+          { orderId: trimmedOrderId },
+          { withCredentials: true },
+        );
+        setEcwidFixToInfo(
+          `Order ${response.data.orderId} pushed to Ecwid from Omni (booking ${response.data.sourceBookingId}, date ${response.data.sourceExperienceDate}).`,
+        );
+        await runPlatformCheck();
+      } catch (error) {
+        setEcwidFixToError(extractErrorMessage(error));
+      } finally {
+        setEcwidFixToLoadingOrderId(null);
+      }
+    },
+    [runPlatformCheck],
+  );
+
+  const runBulkFixOrdersToEcwid = useCallback(async () => {
+    const orderIds = selectedEcwidOrderIds
+      .map((value) => String(value ?? "").trim())
+      .filter((value) => value.length > 0);
+    if (orderIds.length === 0) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Fix ${orderIds.length} selected order(s) in Ecwid using Omni data? This updates Ecwid pickup/activity fields from Omni.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setEcwidFixToBulkLoading(true);
+    setEcwidFixToInfo(null);
+    setEcwidFixToError(null);
+    try {
+      const response = await axiosInstance.post<EcwidFixToOrdersResponse>(
+        "/bookings/sanity-check/ecwid/fix-to-ecwid-bulk",
+        { orderIds },
+        { withCredentials: true },
+      );
+      setEcwidFixToInfo(
+        `Bulk push completed. Requested=${response.data.requested}, fixed=${response.data.fixed}, failed=${response.data.failed}.`,
+      );
+      setSelectedEcwidOrderIds([]);
+      await runPlatformCheck();
+    } catch (error) {
+      setEcwidFixToError(extractErrorMessage(error));
+    } finally {
+      setEcwidFixToBulkLoading(false);
+    }
+  }, [runPlatformCheck, selectedEcwidOrderIds]);
+
   const applyViatorCsv = useCallback(async () => {
     if (!viatorFile) {
       setViatorError("Select a CSV file first.");
@@ -1726,7 +1819,7 @@ const BookingsSanityCheck = () => {
               <Button
                 variant="light"
                 loading={ecwidReprocessLoading}
-                disabled={ecwidResult.mismatches.length === 0 || ecwidFixBulkLoading}
+                disabled={ecwidResult.mismatches.length === 0 || ecwidFixBulkLoading || ecwidFixToBulkLoading}
                 onClick={runScopedHintReprocess}
               >
                 Reprocess Hint Fields
@@ -1735,11 +1828,29 @@ const BookingsSanityCheck = () => {
                 variant="light"
                 loading={ecwidFixBulkLoading}
                 disabled={
-                  selectedEcwidOrderIds.length === 0 || ecwidReprocessLoading || ecwidFixLoadingOrderId !== null
+                  selectedEcwidOrderIds.length === 0 ||
+                  ecwidReprocessLoading ||
+                  ecwidFixLoadingOrderId !== null ||
+                  ecwidFixToLoadingOrderId !== null ||
+                  ecwidFixToBulkLoading
                 }
                 onClick={runBulkFixOrdersFromEcwid}
               >
                 Fix Selected From Ecwid
+              </Button>
+              <Button
+                variant="light"
+                loading={ecwidFixToBulkLoading}
+                disabled={
+                  selectedEcwidOrderIds.length === 0 ||
+                  ecwidReprocessLoading ||
+                  ecwidFixLoadingOrderId !== null ||
+                  ecwidFixToLoadingOrderId !== null ||
+                  ecwidFixBulkLoading
+                }
+                onClick={runBulkFixOrdersToEcwid}
+              >
+                Fix Selected To Ecwid
               </Button>
               <Text size="sm" c="dimmed">{`Selected: ${selectedEcwidOrderIds.length}`}</Text>
             </Group>
@@ -1762,6 +1873,16 @@ const BookingsSanityCheck = () => {
             {ecwidFixError && (
               <Alert color="red" title="Fix from Ecwid failed">
                 {ecwidFixError}
+              </Alert>
+            )}
+            {ecwidFixToInfo && (
+              <Alert color="blue" title="Fix to Ecwid">
+                {ecwidFixToInfo}
+              </Alert>
+            )}
+            {ecwidFixToError && (
+              <Alert color="red" title="Fix to Ecwid failed">
+                {ecwidFixToError}
               </Alert>
             )}
 
@@ -1812,7 +1933,7 @@ const BookingsSanityCheck = () => {
                           selectedEcwidOrderIds.length > 0 && !allVisibleEcwidOrdersSelected
                         }
                         onChange={(event) => toggleVisibleEcwidSelection(event.currentTarget.checked)}
-                        disabled={visibleEcwidOrderIds.length === 0 || ecwidFixBulkLoading}
+                        disabled={visibleEcwidOrderIds.length === 0 || ecwidFixBulkLoading || ecwidFixToBulkLoading}
                       />
                     </Table.Th>
                     <Table.Th>Reason</Table.Th>
@@ -1836,7 +1957,7 @@ const BookingsSanityCheck = () => {
                           onChange={(event) =>
                             toggleEcwidOrderSelection(row.orderId, event.currentTarget.checked)
                           }
-                          disabled={ecwidFixBulkLoading}
+                          disabled={ecwidFixBulkLoading || ecwidFixToBulkLoading}
                         />
                       </Table.Td>
                       <Table.Td>{row.reason}</Table.Td>
@@ -1868,19 +1989,38 @@ const BookingsSanityCheck = () => {
                       </Table.Td>
                       <Table.Td>{row.externalDate ?? row.omniFirstDate ?? "-"}</Table.Td>
                       <Table.Td>
-                        <Button
-                          size="xs"
-                          variant="light"
-                          loading={ecwidFixLoadingOrderId === row.orderId}
-                          disabled={
-                            ecwidFixBulkLoading ||
-                            (ecwidFixLoadingOrderId !== null && ecwidFixLoadingOrderId !== row.orderId) ||
-                            !row.orderId
-                          }
-                          onClick={() => runFixOrderFromEcwid(row.orderId)}
-                        >
-                          Fix From Ecwid
-                        </Button>
+                        <Group gap={6} wrap="wrap">
+                          <Button
+                            size="xs"
+                            variant="light"
+                            loading={ecwidFixLoadingOrderId === row.orderId}
+                            disabled={
+                              ecwidFixBulkLoading ||
+                              ecwidFixToBulkLoading ||
+                              (ecwidFixLoadingOrderId !== null && ecwidFixLoadingOrderId !== row.orderId) ||
+                              (ecwidFixToLoadingOrderId !== null && ecwidFixToLoadingOrderId !== row.orderId) ||
+                              !row.orderId
+                            }
+                            onClick={() => runFixOrderFromEcwid(row.orderId)}
+                          >
+                            Fix From Ecwid
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="light"
+                            loading={ecwidFixToLoadingOrderId === row.orderId}
+                            disabled={
+                              ecwidFixBulkLoading ||
+                              ecwidFixToBulkLoading ||
+                              (ecwidFixLoadingOrderId !== null && ecwidFixLoadingOrderId !== row.orderId) ||
+                              (ecwidFixToLoadingOrderId !== null && ecwidFixToLoadingOrderId !== row.orderId) ||
+                              !row.orderId
+                            }
+                            onClick={() => runFixOrderToEcwid(row.orderId)}
+                          >
+                            Fix To Ecwid
+                          </Button>
+                        </Group>
                       </Table.Td>
                     </Table.Tr>
                   ))}
