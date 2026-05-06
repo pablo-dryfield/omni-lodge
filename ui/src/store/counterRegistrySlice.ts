@@ -90,6 +90,7 @@ type AttendanceUpdateInput = {
     cocktails?: number;
     photos?: number;
   };
+  markNoShowWhenAbsent?: boolean;
 };
 
 type FinalizeCounterReservationsArgs = {

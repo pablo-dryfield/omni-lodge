@@ -4231,6 +4231,13 @@ export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Respons
       orderId: preview.orderId,
     });
 
+    if (preview.orderId) {
+      await updateEcwidOrder(preview.orderId, {
+        paymentStatus: 'REFUNDED',
+        fulfillmentStatus: 'RETURNED',
+      });
+    }
+
     const now = new Date();
     const money = buildEcwidMoneySnapshot(booking);
     const fullRefundAmount = refund?.amount ? roundMoney(refund.amount / 100) : money.remaining;

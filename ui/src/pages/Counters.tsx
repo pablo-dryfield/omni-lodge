@@ -7844,6 +7844,7 @@ useEffect(() => {
           bookingId: number;
           attendedTotal: number;
           attendedExtras: OrderExtras;
+          markNoShowWhenAbsent?: boolean;
         }>;
       } = {},
     ): Promise<boolean> => {
@@ -7929,6 +7930,7 @@ useEffect(() => {
                 bookingId: row.bookingId,
                 attendedTotal: row.attendedTotal,
                 attendedExtras: row.attendedExtras,
+                markNoShowWhenAbsent: Boolean(row.markNoShowWhenAbsent),
               })),
               metrics: dirtyMetrics.length > 0 ? dirtyMetrics : undefined,
               status: statusToCommit,
@@ -8459,7 +8461,7 @@ useEffect(() => {
   const handleProceedToSummary = useCallback(async () => {
     setAdvancingToSummary(true);
     try {
-      const attendanceUpdates = Object.entries(pendingBookingAttendanceById)
+      const attendanceUpdateRows = Object.entries(pendingBookingAttendanceById)
         .map(([bookingIdKey, staged]) => {
           const bookingId = Number.parseInt(bookingIdKey, 10);
           if (!Number.isFinite(bookingId) || bookingId <= 0 || !staged) {
@@ -8473,6 +8475,7 @@ useEffect(() => {
               cocktails: Math.max(0, Math.round(Number(staged.attendedExtras?.cocktails ?? 0) || 0)),
               photos: Math.max(0, Math.round(Number(staged.attendedExtras?.photos ?? 0) || 0)),
             },
+            markNoShowWhenAbsent: false,
           };
         })
         .filter(
@@ -8482,8 +8485,35 @@ useEffect(() => {
             bookingId: number;
             attendedTotal: number;
             attendedExtras: OrderExtras;
+            markNoShowWhenAbsent: boolean;
           } => Boolean(row),
         );
+
+      const attendanceByBookingId = new Map(
+        attendanceUpdateRows.map((row) => [row.bookingId, row] as const),
+      );
+
+      onlineReservationsScoped.forEach((order) => {
+        if (normalizePlatformLookupKey(order.platform) !== 'ecwid') {
+          return;
+        }
+        const bookingId = getOrderBookingId(order);
+        if (!bookingId || attendanceByBookingId.has(bookingId)) {
+          return;
+        }
+        if (getOrderEntryAllowance(order) <= 0) {
+          return;
+        }
+
+        attendanceByBookingId.set(bookingId, {
+          bookingId,
+          attendedTotal: getOrderAttendedTotal(order),
+          attendedExtras: getOrderAttendedExtras(order),
+          markNoShowWhenAbsent: true,
+        });
+      });
+
+      const attendanceUpdates = Array.from(attendanceByBookingId.values());
 
       const saved = await flushMetrics({ status: 'final', attendanceUpdates });
       if (!saved) {
@@ -8493,7 +8523,7 @@ useEffect(() => {
     } finally {
       setAdvancingToSummary(false);
     }
-  }, [flushMetrics, pendingBookingAttendanceById]);
+  }, [flushMetrics, onlineReservationsScoped, pendingBookingAttendanceById]);
   const handleReturnToSetup = useCallback(async () => {
     const saved = await flushMetrics({ status: 'draft' });
     if (!saved) {

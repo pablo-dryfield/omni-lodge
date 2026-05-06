@@ -19,6 +19,7 @@ import NightReport from '../models/NightReport.js';
 import NightReportPhoto from '../models/NightReportPhoto.js';
 import NightReportVenue from '../models/NightReportVenue.js';
 import { deleteNightReportPhoto as removeNightReportFile } from '../services/nightReportStorageService.js';
+import { createEcwidBatchRequest, type EcwidBatchRequestItem } from '../services/ecwidService.js';
 import { type BookingAttendanceStatus, type BookingStatus } from '../constants/bookings.js';
 
 const REGISTRY_FORMAT = 'registry';
@@ -35,6 +36,57 @@ type AttendanceUpdateInput = {
   bookingId: number;
   attendedTotal?: number;
   attendedExtras?: Partial<BookingAttendanceExtras>;
+  markNoShowWhenAbsent?: boolean;
+};
+
+const normalizeEcwidOrderId = (booking: Booking): string | null => {
+  const rawOrderId = String(booking.platformOrderId ?? booking.platformBookingId ?? '').trim();
+  if (!rawOrderId) {
+    return null;
+  }
+  return rawOrderId.replace(/-\d+$/, '') || rawOrderId;
+};
+
+const scheduleEcwidDeliveredSync = (orderIds: string[]): void => {
+  if (orderIds.length === 0) {
+    return;
+  }
+
+  setImmediate(() => {
+    const chunkSize = 500;
+    const chunks: string[][] = [];
+    for (let index = 0; index < orderIds.length; index += chunkSize) {
+      chunks.push(orderIds.slice(index, index + chunkSize));
+    }
+
+    void Promise.allSettled(
+      chunks.map((chunk, chunkIndex) => {
+        const requests: EcwidBatchRequestItem[] = chunk.map((orderId, requestIndex) => ({
+          id: `${chunkIndex + 1}-${requestIndex + 1}`,
+          path: `/orders/${encodeURIComponent(orderId)}`,
+          method: 'PUT',
+          body: {
+            fulfillmentStatus: 'DELIVERED',
+          },
+        }));
+        return createEcwidBatchRequest(requests, {
+          allowParallelMode: true,
+          stopOnFirstFailure: false,
+        });
+      }),
+    )
+      .then((results) => {
+        const failed = results.filter((entry) => entry.status === 'rejected');
+        if (failed.length > 0) {
+          logger.warn(
+            `Ecwid delivered batch sync failed for ${failed.length}/${chunks.length} batch request(s)`,
+          );
+        }
+      })
+      .catch((error) => {
+        logger.warn('Ecwid delivered batch sync failed during background processing', error);
+      });
+  });
 };
 
 function requireActorId(req: AuthenticatedRequest): number {
@@ -194,6 +246,7 @@ function parseAttendanceUpdates(payload: unknown): AttendanceUpdateInput[] {
       bookingId?: unknown;
       attendedTotal?: unknown;
       attendedExtras?: unknown;
+      markNoShowWhenAbsent?: unknown;
     };
     const bookingId = Number(typed.bookingId);
     if (!Number.isInteger(bookingId) || bookingId <= 0) {
@@ -238,6 +291,13 @@ function parseAttendanceUpdates(payload: unknown): AttendanceUpdateInput[] {
       update.attendedExtras = nextExtras;
     }
 
+    if (Object.prototype.hasOwnProperty.call(typed, 'markNoShowWhenAbsent')) {
+      if (typeof typed.markNoShowWhenAbsent !== 'boolean') {
+        throw new HttpError(400, 'attendanceUpdates[].markNoShowWhenAbsent must be a boolean');
+      }
+      update.markNoShowWhenAbsent = typed.markNoShowWhenAbsent;
+    }
+
     return update;
   });
 }
@@ -279,7 +339,9 @@ async function applyBookingAttendanceUpdate(
     nextAttendedExtras.cocktails > 0 ||
     nextAttendedExtras.photos > 0;
   booking.attendedAddonsSnapshot = hasAttendedExtrasValue ? nextAttendedExtras : null;
-  const nextAttendanceStatus = resolveAttendanceStatus(booking, nextAttendedTotal, hasAttendedExtrasValue);
+  const nextAttendanceStatus = resolveAttendanceStatus(booking, nextAttendedTotal, hasAttendedExtrasValue, {
+    markNoShowWhenAbsent: Boolean(update.markNoShowWhenAbsent),
+  });
   booking.attendanceStatus = nextAttendanceStatus;
 
   const hasAttendance = nextAttendanceStatus === 'checked_in_full' || nextAttendanceStatus === 'checked_in_partial';
@@ -705,6 +767,8 @@ export const finalizeCounterReservations = async (req: AuthenticatedRequest, res
     };
 
     const attendanceUpdates = parseAttendanceUpdates(body.attendanceUpdates);
+    const shouldSyncEcwidDelivered = String(body.status ?? '').trim().toLowerCase() === 'final';
+    const ecwidOrdersToDeliver = new Set<string>();
     if (attendanceUpdates.length > 0) {
       const bookingIds = Array.from(new Set(attendanceUpdates.map((row) => row.bookingId)));
       const bookings = await Booking.findAll({
@@ -717,6 +781,16 @@ export const finalizeCounterReservations = async (req: AuthenticatedRequest, res
         const booking = bookingById.get(update.bookingId);
         if (!booking) {
           throw new HttpError(404, `Booking ${update.bookingId} not found`);
+        }
+        const currentAttendanceStatus = String(booking.attendanceStatus ?? '')
+          .trim()
+          .toLowerCase();
+        const wasPendingAttendance = currentAttendanceStatus === DEFAULT_ATTENDANCE_STATUS;
+        if (shouldSyncEcwidDelivered && booking.platform === 'ecwid' && wasPendingAttendance) {
+          const orderId = normalizeEcwidOrderId(booking);
+          if (orderId) {
+            ecwidOrdersToDeliver.add(orderId);
+          }
         }
         await applyBookingAttendanceUpdate(booking, update, actorId);
       }
@@ -740,6 +814,9 @@ export const finalizeCounterReservations = async (req: AuthenticatedRequest, res
         ? await CounterRegistryService.updateCounterMetadata(counterId, metadataUpdates, actorId)
         : await CounterRegistryService.getCounterById(counterId);
 
+    if (shouldSyncEcwidDelivered) {
+      scheduleEcwidDeliveredSync(Array.from(ecwidOrdersToDeliver));
+    }
     res.status(200).json(payload);
   } catch (error) {
     handleError(res, error);
