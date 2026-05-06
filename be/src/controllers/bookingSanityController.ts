@@ -15,6 +15,7 @@ import {
   type EcwidOrder,
 } from '../services/ecwidService.js';
 import { processBookingEmail, type ScopedReprocessHint } from '../services/bookings/bookingIngestionService.js';
+import { backfillEcwidProcessingFeesByOrderIds } from '../services/bookings/ecwidProcessingFeeSyncService.js';
 import { transformEcwidOrders } from '../utils/ecwidAdapter.js';
 import { sanitizeProductSource } from '../utils/productName.js';
 
@@ -51,6 +52,13 @@ type EcwidFixOrderBody = {
 
 type EcwidFixOrdersBody = {
   orderIds?: string[];
+};
+
+type EcwidProcessingFeeBackfillBody = {
+  startDate?: string;
+  endDate?: string;
+  dateField?: string;
+  includeCancelled?: string | boolean;
 };
 
 type OmniOrderAggregate = {
@@ -379,6 +387,19 @@ const parseTolerance = (value: string | undefined): number => {
     return DEFAULT_TOLERANCE;
   }
   return parsed;
+};
+
+const stripEcwidItemSuffix = (value: string): string => value.replace(/-\d+$/, '');
+
+const normalizeExternalTransactionIdFromOrder = (order: EcwidOrder): string | null => {
+  const candidate = (order as { externalTransactionId?: unknown }).externalTransactionId;
+  if (typeof candidate === 'string' && candidate.trim().length > 0) {
+    return candidate.trim();
+  }
+  if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+    return String(candidate);
+  }
+  return null;
 };
 
 const VALID_SCOPED_REPROCESS_HINTS = new Set<ScopedReprocessHint>(['tip', 'coupon', 'refund']);
@@ -2063,6 +2084,96 @@ export const fixEcwidOrdersToExternalBulk = async (req: Request, res: Response):
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to bulk fix Ecwid orders to external';
+    res.status(500).json({ message });
+  }
+};
+
+export const backfillEcwidSanityProcessingFees = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const body = req.body as EcwidProcessingFeeBackfillBody;
+    const { startDate, endDate } = resolveDateRange({
+      startDate: body?.startDate,
+      endDate: body?.endDate,
+    });
+    const dateField = resolveDateField(body?.dateField);
+    const includeCancelled = parseBooleanFlag(
+      typeof body?.includeCancelled === 'boolean' ? String(body.includeCancelled) : body?.includeCancelled,
+      true,
+    );
+
+    const omniRows = await loadOmniBookings({
+      startDate,
+      endDate,
+      dateField,
+      platform: 'ecwid',
+      includeCancelled,
+    });
+
+    const orderIds = Array.from(
+      new Set(
+        omniRows
+          .map((row) =>
+            stripEcwidItemSuffix(String(row.platformOrderId ?? row.platformBookingId ?? '').trim()),
+          )
+          .filter((value) => value.length > 0),
+      ),
+    );
+
+    if (orderIds.length === 0) {
+      res.status(200).json({
+        window: {
+          startDate,
+          endDate,
+          dateField,
+        },
+        includeCancelled,
+        bookingsInRange: omniRows.length,
+        uniqueOrdersInRange: 0,
+        requestedOrders: 0,
+        updatedOrders: 0,
+        updatedBookings: 0,
+        skippedNoExternalTransaction: 0,
+        unresolvedStripeMatch: 0,
+        stripeListRequests: 0,
+        stripeFallbackLookups: 0,
+      });
+      return;
+    }
+
+    const ecwidOrders = await fetchEcwidOrdersForRange(dateField, startDate, endDate);
+    const knownExternalTransactionByOrderId: Record<string, string> = {};
+    for (const rawOrder of ecwidOrders) {
+      const orderId = stripEcwidItemSuffix(String((rawOrder as { id?: unknown })?.id ?? '').trim());
+      if (!orderId) {
+        continue;
+      }
+      const externalTransactionId = normalizeExternalTransactionIdFromOrder(rawOrder);
+      if (!externalTransactionId) {
+        continue;
+      }
+      knownExternalTransactionByOrderId[orderId] = externalTransactionId;
+    }
+
+    const result = await backfillEcwidProcessingFeesByOrderIds({
+      orderIds,
+      startDate,
+      endDate,
+      knownExternalTransactionByOrderId,
+    });
+
+    res.status(200).json({
+      window: {
+        startDate,
+        endDate,
+        dateField,
+      },
+      includeCancelled,
+      bookingsInRange: omniRows.length,
+      uniqueOrdersInRange: orderIds.length,
+      ...result,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to backfill Ecwid processing fees';
     res.status(500).json({ message });
   }
 };
