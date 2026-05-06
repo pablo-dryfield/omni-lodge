@@ -31,6 +31,7 @@ import type {
 import { canonicalizeProductLabel, sanitizeProductSource } from '../../utils/productName.js';
 import { getConfigValue } from '../configService.js';
 import { syncEcwidBookingUtmByBookingId } from './ecwidUtmSyncService.js';
+import { syncEcwidBookingProcessingFeeByBookingId } from './ecwidProcessingFeeSyncService.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
@@ -204,6 +205,7 @@ const decimalKeys = new Set([
   'addonsAmount',
   'discountAmount',
   'tipAmount',
+  'processingFee',
   'refundedAmount',
   'priceGross',
   'priceNet',
@@ -223,6 +225,7 @@ const bookingStringLimits: Partial<Record<keyof BookingFieldPatch, number>> = {
   guestPhone: 64,
   hotelName: 255,
   currency: 3,
+  processingFeeCurrency: 3,
   refundedCurrency: 3,
   paymentMethod: 128,
   discountCode: 128,
@@ -2552,6 +2555,7 @@ export const processBookingEmail = async (
     if (!isScopedReprocess) {
       for (const bookingId of processedBookingIds) {
         await syncEcwidBookingUtmByBookingId(bookingId);
+        await syncEcwidBookingProcessingFeeByBookingId(bookingId);
       }
     }
 

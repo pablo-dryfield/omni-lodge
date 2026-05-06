@@ -216,6 +216,24 @@ type EcwidFixToOrdersResponse = {
   }>;
 };
 
+type EcwidProcessingFeeBackfillResponse = {
+  window: {
+    startDate: string;
+    endDate: string;
+    dateField: SanityDateField;
+  };
+  includeCancelled: boolean;
+  bookingsInRange: number;
+  uniqueOrdersInRange: number;
+  requestedOrders: number;
+  updatedOrders: number;
+  updatedBookings: number;
+  skippedNoExternalTransaction: number;
+  unresolvedStripeMatch: number;
+  stripeListRequests: number;
+  stripeFallbackLookups: number;
+};
+
 type ViatorCsvSummary = {
   bookings: number;
   people: number;
@@ -715,6 +733,9 @@ const BookingsSanityCheck = () => {
   const [ecwidFixToBulkLoading, setEcwidFixToBulkLoading] = useState(false);
   const [ecwidFixToInfo, setEcwidFixToInfo] = useState<string | null>(null);
   const [ecwidFixToError, setEcwidFixToError] = useState<string | null>(null);
+  const [ecwidFeeBackfillLoading, setEcwidFeeBackfillLoading] = useState(false);
+  const [ecwidFeeBackfillInfo, setEcwidFeeBackfillInfo] = useState<string | null>(null);
+  const [ecwidFeeBackfillError, setEcwidFeeBackfillError] = useState<string | null>(null);
   const [selectedEcwidOrderIds, setSelectedEcwidOrderIds] = useState<string[]>([]);
 
   const [expectedBookings, setExpectedBookings] = useState<number | "">("");
@@ -1331,6 +1352,39 @@ const BookingsSanityCheck = () => {
     }
   }, [runPlatformCheck, selectedEcwidOrderIds]);
 
+  const runEcwidProcessingFeeBackfill = useCallback(async () => {
+    const confirmed = window.confirm(
+      `Backfill Ecwid processing fees using Stripe for ${rangeStart} to ${rangeEnd}?`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setEcwidFeeBackfillLoading(true);
+    setEcwidFeeBackfillInfo(null);
+    setEcwidFeeBackfillError(null);
+    try {
+      const response = await axiosInstance.post<EcwidProcessingFeeBackfillResponse>(
+        "/bookings/sanity-check/ecwid/backfill-processing-fees",
+        {
+          startDate: rangeStart,
+          endDate: rangeEnd,
+          dateField,
+          includeCancelled,
+        },
+        { withCredentials: true },
+      );
+      const data = response.data;
+      setEcwidFeeBackfillInfo(
+        `Processing fee backfill completed. Orders in range=${data.uniqueOrdersInRange}, requested=${data.requestedOrders}, updated orders=${data.updatedOrders}, updated bookings=${data.updatedBookings}, Stripe list requests=${data.stripeListRequests}, Stripe fallback lookups=${data.stripeFallbackLookups}, no external tx=${data.skippedNoExternalTransaction}, unresolved=${data.unresolvedStripeMatch}.`,
+      );
+    } catch (error) {
+      setEcwidFeeBackfillError(extractErrorMessage(error));
+    } finally {
+      setEcwidFeeBackfillLoading(false);
+    }
+  }, [dateField, includeCancelled, rangeEnd, rangeStart]);
+
   const applyViatorCsv = useCallback(async () => {
     if (!viatorFile) {
       setViatorError("Select a CSV file first.");
@@ -1826,6 +1880,20 @@ const BookingsSanityCheck = () => {
               </Button>
               <Button
                 variant="light"
+                loading={ecwidFeeBackfillLoading}
+                disabled={
+                  ecwidReprocessLoading ||
+                  ecwidFixLoadingOrderId !== null ||
+                  ecwidFixToLoadingOrderId !== null ||
+                  ecwidFixBulkLoading ||
+                  ecwidFixToBulkLoading
+                }
+                onClick={runEcwidProcessingFeeBackfill}
+              >
+                Backfill Processing Fees
+              </Button>
+              <Button
+                variant="light"
                 loading={ecwidFixBulkLoading}
                 disabled={
                   selectedEcwidOrderIds.length === 0 ||
@@ -1883,6 +1951,16 @@ const BookingsSanityCheck = () => {
             {ecwidFixToError && (
               <Alert color="red" title="Fix to Ecwid failed">
                 {ecwidFixToError}
+              </Alert>
+            )}
+            {ecwidFeeBackfillInfo && (
+              <Alert color="blue" title="Processing fee backfill">
+                {ecwidFeeBackfillInfo}
+              </Alert>
+            )}
+            {ecwidFeeBackfillError && (
+              <Alert color="red" title="Processing fee backfill failed">
+                {ecwidFeeBackfillError}
               </Alert>
             )}
 

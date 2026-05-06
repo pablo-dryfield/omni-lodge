@@ -324,6 +324,20 @@ export default class Booking extends Model<Booking> {
 
   @AllowNull(true)
   @Column({
+    field: 'processing_fee',
+    type: DataType.DECIMAL(12, 2),
+  })
+  declare processingFee: string | null;
+
+  @AllowNull(true)
+  @Column({
+    field: 'processing_fee_currency',
+    type: DataType.STRING(3),
+  })
+  declare processingFeeCurrency: string | null;
+
+  @AllowNull(true)
+  @Column({
     field: 'refunded_amount',
     type: DataType.DECIMAL(12, 2),
   })
