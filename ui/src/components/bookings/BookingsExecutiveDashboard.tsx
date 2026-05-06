@@ -73,6 +73,7 @@ export type BookingAddonDashboardRow = {
   quantity: number;
   unitPrice: number;
   totalPrice: number;
+  addonBasePrice?: number | null;
   currency: string | null;
   isIncluded: boolean;
 };
@@ -80,6 +81,7 @@ export type BookingAddonDashboardRow = {
 export type BookingCounterInsights = {
   currency: string;
   cashPaymentsTotal: number;
+  cashGuestsTotal?: number;
   cashByChannel: Array<{ channelId: number | null; channelName: string; amount: number }>;
   cashEntries: Array<{
     counterId: number;
@@ -155,6 +157,34 @@ const formatMoney = (value: number, currency = "PLN"): string => {
   } catch (_error) {
     return `${value.toFixed(2)} ${currency}`;
   }
+};
+
+type CanonicalAddonKey = "cocktails" | "tshirts" | "photos";
+
+const CANONICAL_ADDON_META: Array<{ key: CanonicalAddonKey; label: string }> = [
+  { key: "cocktails", label: "Cocktails" },
+  { key: "tshirts", label: "T-Shirts" },
+  { key: "photos", label: "Photos" },
+];
+
+const resolveCanonicalAddonKey = (value?: string | null): CanonicalAddonKey | null => {
+  const normalized = String(value ?? "")
+    .toLowerCase()
+    .replace(/[_\s-]+/g, " ")
+    .trim();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.includes("cocktail")) {
+    return "cocktails";
+  }
+  if (normalized.includes("tshirt") || normalized.includes("t shirt")) {
+    return "tshirts";
+  }
+  if (normalized.includes("photo")) {
+    return "photos";
+  }
+  return null;
 };
 
 type SectionInfoVariable = {
@@ -306,7 +336,9 @@ const BookingsExecutiveDashboard = ({
       const recognizedBase = baseAmountAfterChannelCommissionValue ?? baseAmountValue ?? priceNetValue ?? 0;
       const recognizedRevenue = roundMoney(Math.max(recognizedBase + tipAmount, 0));
       const commissionAmount = asNumber(raw.commissionAmount);
-      const participants = Math.max(order.menCount + order.womenCount, Number.isFinite(order.quantity) ? order.quantity : 0);
+      const partySizeTotal = Number.isFinite(order.quantity) ? Math.max(0, Math.round(order.quantity)) : 0;
+      const fallbackBreakdownTotal = Math.max(0, (Number(order.menCount) || 0) + (Number(order.womenCount) || 0));
+      const participants = partySizeTotal > 0 ? partySizeTotal : fallbackBreakdownTotal;
 
       const financial: BookingRawFinancial = {
         bookingId: Number(order.id) || asNumber(raw.bookingId),
@@ -390,14 +422,106 @@ const BookingsExecutiveDashboard = ({
     () => roundMoney(counterInsights?.cashPaymentsTotal ?? 0),
     [counterInsights],
   );
-  const totalAddonsRevenue = useMemo(() => {
-    const addonsFromBookings = bookingFinancialRows.reduce((acc, row) => acc + row.addonsRevenue, 0);
-    const addonsFromRows = scopedAddonRows.reduce((acc, row) => acc + row.totalPrice, 0);
-    return roundMoney(Math.max(addonsFromBookings, addonsFromRows));
-  }, [bookingFinancialRows, scopedAddonRows]);
+  const addonCatalogUnitPriceByKey = useMemo(() => {
+    const map = new Map<CanonicalAddonKey, number>();
+    scopedAddonRows.forEach((row) => {
+      const key = resolveCanonicalAddonKey(row.addonName) ?? resolveCanonicalAddonKey(row.platformAddonName);
+      if (!key) {
+        return;
+      }
+      const catalogPrice = asNumber(row.addonBasePrice);
+      const unitPrice = asNumber(row.unitPrice);
+      const candidate = catalogPrice > 0 ? catalogPrice : unitPrice > 0 ? unitPrice : 0;
+      if (candidate <= 0) {
+        return;
+      }
+      const existing = map.get(key) ?? 0;
+      if (existing <= 0) {
+        map.set(key, roundMoney(candidate));
+      }
+    });
+    return map;
+  }, [scopedAddonRows]);
+  const addonKpiRows = useMemo(() => {
+    const buckets: Record<CanonicalAddonKey, { label: string; quantity: number; revenue: number; unitPrice: number }> = {
+      cocktails: { label: "Cocktails", quantity: 0, revenue: 0, unitPrice: addonCatalogUnitPriceByKey.get("cocktails") ?? 0 },
+      tshirts: { label: "T-Shirts", quantity: 0, revenue: 0, unitPrice: addonCatalogUnitPriceByKey.get("tshirts") ?? 0 },
+      photos: { label: "Photos", quantity: 0, revenue: 0, unitPrice: addonCatalogUnitPriceByKey.get("photos") ?? 0 },
+    };
+
+    const rowsByBooking = new Map<string, BookingAddonDashboardRow[]>();
+    scopedAddonRows.forEach((row) => {
+      const key = String(row.bookingId);
+      const list = rowsByBooking.get(key) ?? [];
+      list.push(row);
+      rowsByBooking.set(key, list);
+    });
+
+    orders.forEach((order) => {
+      const snapshot = order.extras ?? { cocktails: 0, tshirts: 0, photos: 0 };
+      const snapshotQty = {
+        cocktails: Math.max(0, Number(snapshot.cocktails) || 0),
+        tshirts: Math.max(0, Number(snapshot.tshirts) || 0),
+        photos: Math.max(0, Number(snapshot.photos) || 0),
+      };
+      const snapshotHasValues = snapshotQty.cocktails + snapshotQty.tshirts + snapshotQty.photos > 0;
+      if (snapshotHasValues) {
+        (Object.keys(snapshotQty) as CanonicalAddonKey[]).forEach((key) => {
+          const quantity = snapshotQty[key];
+          if (quantity <= 0) {
+            return;
+          }
+          const unitPrice = buckets[key].unitPrice;
+          buckets[key].quantity += quantity;
+          buckets[key].revenue += quantity * unitPrice;
+        });
+        return;
+      }
+
+      const bookingRows = rowsByBooking.get(String(order.id)) ?? [];
+      bookingRows.forEach((row) => {
+        const key = resolveCanonicalAddonKey(row.addonName) ?? resolveCanonicalAddonKey(row.platformAddonName);
+        if (!key) {
+          return;
+        }
+        const quantity = Math.max(0, Number(row.quantity) || 0);
+        if (quantity <= 0) {
+          return;
+        }
+        const catalogPrice = asNumber(row.addonBasePrice);
+        const rowUnitPrice = asNumber(row.unitPrice);
+        const unitPrice = catalogPrice > 0 ? catalogPrice : rowUnitPrice > 0 ? rowUnitPrice : buckets[key].unitPrice;
+        const explicitTotal = asNumber(row.totalPrice);
+        const revenue = explicitTotal > 0 ? explicitTotal : quantity * unitPrice;
+        buckets[key].unitPrice = unitPrice > 0 ? unitPrice : buckets[key].unitPrice;
+        buckets[key].quantity += quantity;
+        buckets[key].revenue += revenue;
+      });
+    });
+
+    return CANONICAL_ADDON_META.map((meta) => ({
+      key: meta.key,
+      label: meta.label,
+      quantity: Math.max(0, Math.round(buckets[meta.key].quantity)),
+      revenue: roundMoney(buckets[meta.key].revenue),
+      unitPrice: roundMoney(buckets[meta.key].unitPrice),
+    }));
+  }, [addonCatalogUnitPriceByKey, orders, scopedAddonRows]);
+  const totalAddonsRevenue = useMemo(
+    () => roundMoney(addonKpiRows.reduce((acc, row) => acc + row.revenue, 0)),
+    [addonKpiRows],
+  );
+  const totalAddonUnits = useMemo(
+    () => addonKpiRows.reduce((acc, row) => acc + row.quantity, 0),
+    [addonKpiRows],
+  );
 
   const totalPeople = useMemo(() => bookingFinancialRows.reduce((acc, row) => acc + row.people, 0), [bookingFinancialRows]);
   const totalBookings = bookingFinancialRows.length;
+  const averageGuestsPerBooking = useMemo(
+    () => (totalBookings > 0 ? roundMoney(totalPeople / totalBookings) : 0),
+    [totalBookings, totalPeople],
+  );
   const averageBookingValue = totalBookings > 0 ? totalRevenueNoChannelCommission / totalBookings : 0;
   const venueCommissionByCurrency = useMemo(() => {
     return (venueCommissionTotals ?? []).map((row) => ({
@@ -530,8 +654,12 @@ const BookingsExecutiveDashboard = ({
   const addonPerformance = useMemo(() => {
     const map = new Map<string, { addonName: string; quantity: number; revenue: number; bookings: Set<number> }>();
     scopedAddonRows.forEach((row) => {
-      const key = row.addonName || row.platformAddonName || "Unknown add-on";
-      const bucket = map.get(key) ?? { addonName: key, quantity: 0, revenue: 0, bookings: new Set<number>() };
+      const addonId = Number(row.addonId);
+      const hasMappedAddon = Number.isFinite(addonId) && addonId > 0;
+      const normalizedAddonName = String(row.addonName ?? "").trim();
+      const addonName = hasMappedAddon ? normalizedAddonName || `Add-on #${addonId}` : "Unmapped add-on";
+      const key = hasMappedAddon ? `addon:${addonId}` : `unmapped:${normalizedAddonName || "unknown"}`;
+      const bucket = map.get(key) ?? { addonName, quantity: 0, revenue: 0, bookings: new Set<number>() };
       bucket.quantity += Math.max(0, Number(row.quantity) || 0);
       bucket.revenue += Math.max(0, Number(row.totalPrice) || 0);
       bucket.bookings.add(Number(row.bookingId));
@@ -676,38 +804,120 @@ const BookingsExecutiveDashboard = ({
         />
         <KpiCard
           icon={<IconCash size={20} />}
-          label="Cash + Free Tickets"
+          label="Cash Tickets"
           info={
             <SectionInfo
-              title="Cash + Free Tickets"
-              formula="Cash = Sum(counter cash metrics), Free Tickets = Sum(extracted ticket counts from notes)"
+              title="Cash Tickets"
+              formula="Cash amount = Sum(counter cash_payment metrics), Cash guests = Sum(counter people attended metrics for cash channels), Free = Sum(extracted ticket counts from notes)"
               variables={[
                 { name: "Counter cash metrics", description: "Counter channel metrics marked as cash payment." },
+                {
+                  name: "Cash guests",
+                  description: "Attended people metrics on the same counter/channel combinations with cash payments.",
+                },
                 { name: "Free ticket counts", description: "Values parsed from counter notes using free-ticket patterns." },
               ]}
             />
           }
-          value={`${formatMoney(counterInsights?.cashPaymentsTotal ?? 0, counterInsights?.currency ?? "PLN")}`}
-          subtitle={`Free tickets from notes: ${(counterInsights?.freeTicketsTotal ?? 0).toLocaleString()}`}
+          value={`${(counterInsights?.cashGuestsTotal ?? 0).toLocaleString()} guests: ${formatMoney(counterInsights?.cashPaymentsTotal ?? 0, counterInsights?.currency ?? "PLN")}`}
+          subtitle={`Free: ${(counterInsights?.freeTicketsTotal ?? 0).toLocaleString()}`}
           accent="#6B705C"
         />
         <KpiCard
           icon={<IconUsersGroup size={20} />}
-          label="Bookings & People"
+          label="Bookings & Guests"
           info={
             <SectionInfo
-              title="Bookings & People"
+              title="Bookings & Guests"
               formula="Bookings = Count(rows), People = Sum(row people)"
               variables={[
                 { name: "Rows", description: "Bookings returned for the selected range and filters." },
-                { name: "Row people", description: "Participant count per booking row." },
+                {
+                  name: "Row people",
+                  description: "Participant count per booking row (party_size_total first, breakdown fallback).",
+                },
               ]}
             />
           }
           value={`${totalBookings.toLocaleString()} / ${totalPeople.toLocaleString()}`}
-          subtitle={`Platforms: ${platformRevenue.length}`}
+          subtitle={`AVG. Guests per Bookings: ${averageGuestsPerBooking.toLocaleString(undefined, {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 2,
+          })}`}
           accent="#345995"
         />
+        <Paper
+          withBorder
+          radius="lg"
+          p="md"
+          shadow="sm"
+          style={{
+            background: "linear-gradient(135deg, rgba(181,101,118,0.14) 0%, #ffffff 100%)",
+            borderColor: "rgba(181,101,118,0.45)",
+          }}
+        >
+          <Stack gap="sm">
+            <Group justify="space-between" align="start" wrap="nowrap">
+              <Stack gap={2}>
+                <Group gap={4} align="center" wrap="nowrap">
+                  <Text size="xs" tt="uppercase" fw={700} c="dimmed" style={{ letterSpacing: 0.5 }}>
+                    Add-Ons
+                  </Text>
+                  <SectionInfo
+                    title="Add-Ons"
+                    formula="Add-on Qty = Snapshot quantities first, fallback to booking_addons. Revenue = Qty * catalog unit price."
+                    variables={[
+                      { name: "Snapshot quantities", description: "Cocktails/T-Shirts/Photos from booking add-ons snapshot." },
+                      { name: "Fallback quantities", description: "booking_addons rows when snapshot is empty for that booking." },
+                      { name: "Catalog unit price", description: "Price resolved from add-ons catalog (base_price)." },
+                    ]}
+                  />
+                </Group>
+              </Stack>
+              <ThemeIcon size={40} radius="md" variant="light" color="dark">
+                <IconTicket size={20} />
+              </ThemeIcon>
+            </Group>
+
+            <SimpleGrid cols={2} spacing="xs">
+              <Paper withBorder radius="md" p="xs">
+                <Text size="xs" c="dimmed">
+                  Total Qty
+                </Text>
+                <Text fw={800} size="lg">
+                  {totalAddonUnits.toLocaleString()}
+                </Text>
+              </Paper>
+              <Paper withBorder radius="md" p="xs">
+                <Text size="xs" c="dimmed">
+                  Revenue
+                </Text>
+                <Text fw={800} size="lg">
+                  {formatMoney(totalAddonsRevenue, defaultCurrency)}
+                </Text>
+              </Paper>
+            </SimpleGrid>
+
+            <Stack gap={4}>
+              {addonKpiRows.every((row) => row.quantity <= 0) ? (
+                <Text size="xs" c="dimmed">
+                  No add-ons sold
+                </Text>
+              ) : (
+                addonKpiRows.map((row) => (
+                  <Group key={`addon-kpi-${row.key}`} justify="space-between" wrap="nowrap" gap="xs">
+                    <Text size="xs" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {row.label}
+                    </Text>
+                    <Text size="xs" fw={700}>
+                      {row.quantity.toLocaleString()} · {formatMoney(row.revenue, defaultCurrency)}
+                    </Text>
+                  </Group>
+                ))
+              )}
+            </Stack>
+          </Stack>
+        </Paper>
       </SimpleGrid>
 
       <SimpleGrid cols={{ base: 1, lg: 3 }} spacing="md">

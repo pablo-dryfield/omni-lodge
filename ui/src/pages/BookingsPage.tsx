@@ -70,6 +70,7 @@ type BookingFilter = "all" | "active" | "cancelled";
 type SummaryDateField = "experience_date" | "source_received_at";
 type BookingsTab = "calendar" | "summary" | "emails" | "sanity";
 type BookingsTabOption = BookingsTab | "manifest";
+type ProductTypeOption = { value: string; label: string };
 
 type BookingEmailSummary = {
   id: number;
@@ -184,6 +185,18 @@ const parseSummaryDateFieldParam = (value?: string | null): SummaryDateField => 
     return "source_received_at";
   }
   return "experience_date";
+};
+
+const parseSummaryProductTypeParam = (value?: string | null): string => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized || normalized === "all") {
+    return "all";
+  }
+  const parsed = Number.parseInt(normalized, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return "all";
+  }
+  return String(parsed);
 };
 
 const resolveEmailStatusColor = (value?: string | null): string => {
@@ -545,6 +558,10 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const [viewMode, setViewMode] = useState<ViewMode>("month");
   const [activeTab, setActiveTab] = useState<BookingsTab>("calendar");
   const [summaryDateField, setSummaryDateField] = useState<SummaryDateField>("experience_date");
+  const [summaryProductTypeFilter, setSummaryProductTypeFilter] = useState<string>("all");
+  const [summaryProductTypeOptions, setSummaryProductTypeOptions] = useState<ProductTypeOption[]>([
+    { value: "all", label: "All Product Types" },
+  ]);
   const [rangeAnchor, setRangeAnchor] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [selectedDate, setSelectedDate] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [calendarScrollDate, setCalendarScrollDate] = useState<string | null>(null);
@@ -685,6 +702,11 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   }, [searchParams]);
 
   useEffect(() => {
+    const nextProductType = parseSummaryProductTypeParam(searchParams.get("summaryProductType"));
+    setSummaryProductTypeFilter((prev) => (prev === nextProductType ? prev : nextProductType));
+  }, [searchParams]);
+
+  useEffect(() => {
     const nextFilters = {
       search: searchParams.get("emailSearch") ?? "",
       subject: searchParams.get("emailSubject") ?? "",
@@ -781,6 +803,10 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       "summaryDateField",
       summaryDateField !== "experience_date" ? summaryDateField : null,
     );
+    setOptionalParam(
+      "summaryProductType",
+      summaryProductTypeFilter !== "all" ? summaryProductTypeFilter : null,
+    );
 
     setOptionalParam("emailSearch", emailFilters.search || null);
     setOptionalParam("emailSubject", emailFilters.subject || null);
@@ -821,6 +847,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   }, [
     activeTab,
     summaryDateField,
+    summaryProductTypeFilter,
     emailDateRange,
     emailFilters,
     emailPage,
@@ -1103,6 +1130,48 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     }
 
     const controller = new AbortController();
+
+    const fetchProductTypes = async () => {
+      try {
+        const response = await axiosInstance.get("/productTypes", {
+          signal: controller.signal,
+          withCredentials: true,
+        });
+        const rows: Array<{ id?: unknown; name?: unknown }> = Array.isArray(response.data?.[0]?.data)
+          ? (response.data[0].data as Array<{ id?: unknown; name?: unknown }>)
+          : [];
+        const options = rows
+          .map((row) => {
+            const id = Number(row?.id);
+            const name = String(row?.name ?? "").trim();
+            if (!Number.isFinite(id) || id <= 0 || !name) {
+              return null;
+            }
+            return { value: String(id), label: name } satisfies ProductTypeOption;
+          })
+          .filter((row): row is ProductTypeOption => row !== null)
+          .sort((a: ProductTypeOption, b: ProductTypeOption) => a.label.localeCompare(b.label));
+        setSummaryProductTypeOptions([{ value: "all", label: "All Product Types" }, ...options]);
+      } catch {
+        if (!controller.signal.aborted) {
+          setSummaryProductTypeOptions([{ value: "all", label: "All Product Types" }]);
+        }
+      }
+    };
+
+    fetchProductTypes();
+
+    return () => {
+      controller.abort();
+    };
+  }, [modulePermissions.ready, modulePermissions.canView]);
+
+  useEffect(() => {
+    if (!modulePermissions.ready || !modulePermissions.canView) {
+      return;
+    }
+
+    const controller = new AbortController();
     const startIso = rangeStart.startOf("day").format('YYYY-MM-DD');
     const endIso = rangeEnd.endOf("day").format('YYYY-MM-DD');
 
@@ -1130,6 +1199,10 @@ const BookingsPage = ({ title }: GenericPageProps) => {
             pickupFrom: startIso,
             pickupTo: endIso,
             dateField: bookingsDateField,
+            productTypeId:
+              activeTab === "summary" && summaryProductTypeFilter !== "all"
+                ? summaryProductTypeFilter
+                : undefined,
             limit: 200,
           },
           signal: controller.signal,
@@ -1208,7 +1281,16 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     return () => {
       controller.abort();
     };
-  }, [modulePermissions.ready, modulePermissions.canView, rangeStart, rangeEnd, bookingsDateField, reloadToken]);
+  }, [
+    modulePermissions.ready,
+    modulePermissions.canView,
+    rangeStart,
+    rangeEnd,
+    bookingsDateField,
+    activeTab,
+    summaryProductTypeFilter,
+    reloadToken,
+  ]);
 
   useEffect(() => {
     if (!modulePermissions.ready || !modulePermissions.canView) {
@@ -1616,6 +1698,17 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                         { value: "source_received_at", label: "Source Received At" },
                       ]}
                       size={isMobile ? "xs" : "sm"}
+                    />
+                    <Select
+                      value={summaryProductTypeFilter}
+                      onChange={(value) =>
+                        setSummaryProductTypeFilter(parseSummaryProductTypeParam(value))
+                      }
+                      data={summaryProductTypeOptions}
+                      placeholder="All Product Types"
+                      size={isMobile ? "xs" : "sm"}
+                      w={isMobile ? "100%" : 260}
+                      checkIconPosition="right"
                     />
                   </Group>
                   {fetchStatus === "loading" && orders.length === 0 ? (
