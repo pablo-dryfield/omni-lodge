@@ -7,7 +7,13 @@ import sequelize from '../config/database.js';
 import Booking from '../models/Booking.js';
 import BookingEvent from '../models/BookingEvent.js';
 import ProductAlias from '../models/ProductAlias.js';
-import { fetchEcwidOrders, getEcwidOrder, type EcwidOrder } from '../services/ecwidService.js';
+import {
+  fetchEcwidOrders,
+  getEcwidOrder,
+  updateEcwidOrder,
+  type EcwidExtraField,
+  type EcwidOrder,
+} from '../services/ecwidService.js';
 import { processBookingEmail, type ScopedReprocessHint } from '../services/bookings/bookingIngestionService.js';
 import { transformEcwidOrders } from '../utils/ecwidAdapter.js';
 import { sanitizeProductSource } from '../utils/productName.js';
@@ -176,6 +182,157 @@ const normalizeDate = (value: string | undefined, boundary: 'start' | 'end'): st
     return null;
   }
   return (boundary === 'start' ? parsed.startOf('day') : parsed.endOf('day')).format(DATE_FORMAT);
+};
+
+const parseEcwidPickupMoment = (pickupDate: string, pickupTime: string): dayjs.Dayjs | null => {
+  const safeDate = pickupDate?.trim();
+  const safeTime = pickupTime?.trim();
+  if (!safeDate || !safeTime) {
+    return null;
+  }
+  const parsed = dayjs.tz(`${safeDate} ${safeTime}`, 'YYYY-MM-DD HH:mm', STORE_TIMEZONE);
+  if (!parsed.isValid()) {
+    return null;
+  }
+  return parsed;
+};
+
+const buildPickupExtraFieldPayload = (
+  fields: EcwidExtraField[] | undefined,
+  pickupTime: string,
+): EcwidExtraField => {
+  const candidate =
+    fields?.find((field) => field?.id === 'ecwid_order_pickup_time' || field?.name === 'ecwid_order_pickup_time') ??
+    fields?.find((field) => field?.customerInputType === 'DATETIME') ??
+    null;
+
+  return {
+    id: candidate?.id ?? 'ecwid_order_pickup_time',
+    value: pickupTime,
+    customerInputType: candidate?.customerInputType ?? 'DATETIME',
+    title: candidate?.title ?? 'Pickup date and time',
+    orderDetailsDisplaySection: candidate?.orderDetailsDisplaySection ?? 'shipping_info',
+    orderBy: candidate?.orderBy ?? '0',
+  };
+};
+
+const normalizeEcwidOptionName = (value: unknown): string =>
+  String(value ?? '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+const isActivityDateOption = (option: Record<string, unknown>): boolean => {
+  const normalizedName = normalizeEcwidOptionName(option.name);
+  if (normalizedName.includes('activity date')) {
+    return true;
+  }
+  const normalizedType = normalizeEcwidOptionName(option.type);
+  return normalizedType === 'date';
+};
+
+const updateActivityDateOptions = (
+  options: Array<Record<string, unknown>> | undefined,
+  activityDate: string,
+): { updated: Array<Record<string, unknown>> | undefined; changed: boolean } => {
+  if (!Array.isArray(options) || options.length === 0) {
+    return { updated: options, changed: false };
+  }
+
+  let changed = false;
+  const updated = options.map((raw) => {
+    const option = { ...raw };
+    if (!isActivityDateOption(option)) {
+      return option;
+    }
+
+    if (String(option.value ?? '') !== activityDate) {
+      option.value = activityDate;
+      changed = true;
+    }
+
+    const valueTranslated = option.valueTranslated as Record<string, unknown> | undefined;
+    if (valueTranslated && typeof valueTranslated === 'object') {
+      const nextTranslated = { ...valueTranslated };
+      Object.keys(nextTranslated).forEach((key) => {
+        if (String(nextTranslated[key] ?? '') !== activityDate) {
+          nextTranslated[key] = activityDate;
+          changed = true;
+        }
+      });
+      option.valueTranslated = nextTranslated;
+    }
+
+    const valuesArray = Array.isArray(option.valuesArray) ? [...(option.valuesArray as unknown[])] : null;
+    if (valuesArray && valuesArray.length > 0) {
+      const nextArray = valuesArray.map(() => activityDate);
+      if (nextArray.some((value, index) => String(valuesArray[index] ?? '') !== String(value))) {
+        changed = true;
+      }
+      option.valuesArray = nextArray;
+    }
+
+    const selections = Array.isArray(option.selections)
+      ? (option.selections as Array<Record<string, unknown>>).map((selection) => {
+          const nextSelection = { ...selection };
+          if (String(nextSelection.selectionTitle ?? '') !== activityDate) {
+            nextSelection.selectionTitle = activityDate;
+            changed = true;
+          }
+          if (String(nextSelection.value ?? '') !== activityDate) {
+            nextSelection.value = activityDate;
+            changed = true;
+          }
+          if (String(nextSelection.name ?? '') !== activityDate) {
+            nextSelection.name = activityDate;
+            changed = true;
+          }
+          return nextSelection;
+        })
+      : null;
+    if (selections) {
+      option.selections = selections;
+    }
+
+    return option;
+  });
+
+  return { updated, changed };
+};
+
+const buildEcwidItemsActivityDatePatch = (
+  items: Array<Record<string, unknown>> | undefined,
+  activityDate: string,
+): Array<Record<string, unknown>> | null => {
+  if (!Array.isArray(items) || items.length === 0) {
+    return null;
+  }
+
+  let changedAny = false;
+  const patchedItems = items.map((rawItem) => {
+    const item = { ...rawItem };
+    const selected = updateActivityDateOptions(
+      Array.isArray(item.selectedOptions) ? (item.selectedOptions as Array<Record<string, unknown>>) : undefined,
+      activityDate,
+    );
+    const legacy = updateActivityDateOptions(
+      Array.isArray(item.options) ? (item.options as Array<Record<string, unknown>>) : undefined,
+      activityDate,
+    );
+    if (selected.changed || legacy.changed) {
+      changedAny = true;
+    }
+    if (selected.updated) {
+      item.selectedOptions = selected.updated;
+    }
+    if (legacy.updated) {
+      item.options = legacy.updated;
+    }
+    return item;
+  });
+
+  return changedAny ? patchedItems : null;
 };
 
 const resolveDateRange = (
@@ -1029,7 +1186,10 @@ const fetchEcwidOrdersForRange = async (
     const payload =
       dateField === 'source_received_at'
         ? {
-            createdFrom: startDate,
+            // Ecwid createDate is returned in UTC, while sanity filtering is done in STORE_TIMEZONE.
+            // Pull one extra day at the lower bound to avoid missing midnight-crossing rows
+            // (e.g. 23:50Z previous day == 01:50 local day in Warsaw).
+            createdFrom: dayjs(startDate).subtract(1, 'day').format(DATE_FORMAT),
             createdTo: endDateExclusive,
             sortBy: 'createDate:asc',
             offset: String(offset),
@@ -1474,6 +1634,16 @@ type EcwidFixResult = {
   cancelledBookingIds: number[];
 };
 
+type EcwidFixToExternalResult = {
+  orderId: string;
+  message: string;
+  sourceBookingId: number;
+  sourceExperienceDate: string;
+  sourceExperienceStartAtUtc: string;
+  appliedPickupTimeUtc: string;
+  updatedItems: boolean;
+};
+
 const runEcwidOrderFixFromSource = async (inputOrderId: string, actorId: number | null): Promise<EcwidFixResult> => {
   const orderId = inputOrderId.replace(/-\d+$/, '');
   const ecwidOrder = await getEcwidOrder(orderId);
@@ -1751,6 +1921,148 @@ export const fixEcwidOrdersFromSourceBulk = async (req: Request, res: Response):
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to bulk fix Ecwid orders from source';
+    res.status(500).json({ message });
+  }
+};
+
+const runEcwidOrderFixToExternal = async (
+  inputOrderId: string,
+): Promise<EcwidFixToExternalResult> => {
+  const orderId = inputOrderId.replace(/-\d+$/, '');
+  const omniBookings = await Booking.findAll({
+    where: {
+      platform: 'ecwid',
+      status: { [Op.ne]: 'cancelled' },
+      [Op.or]: [
+        { platformOrderId: orderId },
+        { platformBookingId: orderId },
+        { platformBookingId: { [Op.like]: `${orderId}-%` } },
+      ],
+    },
+    order: [
+      ['experienceDate', 'ASC'],
+      ['experienceStartAt', 'ASC'],
+      ['id', 'ASC'],
+    ],
+  });
+
+  if (omniBookings.length === 0) {
+    throw new Error('No active Omni booking found for this Ecwid order');
+  }
+
+  const sourceBooking =
+    omniBookings.find((entry) => entry.experienceStartAt && !Number.isNaN(new Date(entry.experienceStartAt).getTime())) ??
+    omniBookings.find((entry) => entry.experienceDate) ??
+    omniBookings[0];
+
+  const sourceExperienceDate = String(sourceBooking.experienceDate ?? '').trim();
+  if (!sourceExperienceDate) {
+    throw new Error('Source Omni booking has no experience_date');
+  }
+
+  let sourceMoment: dayjs.Dayjs | null = null;
+  if (sourceBooking.experienceStartAt && !Number.isNaN(new Date(sourceBooking.experienceStartAt).getTime())) {
+    sourceMoment = dayjs(sourceBooking.experienceStartAt).tz(STORE_TIMEZONE);
+  }
+  if (!sourceMoment || !sourceMoment.isValid()) {
+    sourceMoment = parseEcwidPickupMoment(sourceExperienceDate, '21:00');
+  }
+  if (!sourceMoment || !sourceMoment.isValid()) {
+    throw new Error('Failed to resolve source pickup datetime from Omni booking');
+  }
+
+  const ecwidOrder = await getEcwidOrder(orderId);
+  const pickupUtc = sourceMoment.utc();
+  const ecwidPickupTime = pickupUtc.format('YYYY-MM-DD HH:mm:ss ZZ');
+  const pickupExtraField = buildPickupExtraFieldPayload(ecwidOrder.orderExtraFields, ecwidPickupTime);
+  const itemsPatch = buildEcwidItemsActivityDatePatch(
+    Array.isArray(ecwidOrder.items) ? (ecwidOrder.items as Array<Record<string, unknown>>) : undefined,
+    sourceExperienceDate,
+  );
+
+  const updatePayload: Record<string, unknown> = {
+    pickupTime: ecwidPickupTime,
+    orderExtraFields: [pickupExtraField],
+  };
+  if (itemsPatch) {
+    updatePayload.items = itemsPatch;
+  }
+
+  await updateEcwidOrder(orderId, updatePayload);
+
+  return {
+    orderId,
+    message: 'Ecwid order synchronized from Omni booking data',
+    sourceBookingId: Number(sourceBooking.id),
+    sourceExperienceDate,
+    sourceExperienceStartAtUtc: pickupUtc.toISOString(),
+    appliedPickupTimeUtc: ecwidPickupTime,
+    updatedItems: Boolean(itemsPatch),
+  };
+};
+
+export const fixEcwidOrderToExternal = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const body = req.body as EcwidFixOrderBody;
+    const inputOrderId = String(body?.orderId ?? '').trim();
+    if (!inputOrderId) {
+      res.status(400).json({ message: 'orderId is required' });
+      return;
+    }
+
+    const result = await runEcwidOrderFixToExternal(inputOrderId);
+    res.status(200).json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to fix Ecwid order to external';
+    res.status(500).json({ message });
+  }
+};
+
+export const fixEcwidOrdersToExternalBulk = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const body = req.body as EcwidFixOrdersBody;
+    const inputOrderIds = Array.isArray(body?.orderIds) ? body.orderIds : [];
+    const orderIds = Array.from(
+      new Set(
+        inputOrderIds
+          .map((value) => String(value ?? '').trim())
+          .filter((value) => value.length > 0),
+      ),
+    );
+    if (orderIds.length === 0) {
+      res.status(400).json({ message: 'orderIds is required' });
+      return;
+    }
+
+    const results: Array<{
+      orderId: string;
+      status: 'ok' | 'failed';
+      result?: EcwidFixToExternalResult;
+      error?: string;
+    }> = [];
+    let fixed = 0;
+    let failed = 0;
+
+    for (const orderId of orderIds) {
+      try {
+        const result = await runEcwidOrderFixToExternal(orderId);
+        results.push({ orderId: result.orderId, status: 'ok', result });
+        fixed += 1;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to fix Ecwid order to external';
+        results.push({ orderId, status: 'failed', error: message });
+        failed += 1;
+      }
+    }
+
+    res.status(200).json({
+      requested: orderIds.length,
+      fixed,
+      failed,
+      results,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to bulk fix Ecwid orders to external';
     res.status(500).json({ message });
   }
 };

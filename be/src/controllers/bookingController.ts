@@ -146,6 +146,128 @@ type EcwidAmendPreviewItem = {
   matchedBookingNames?: string[];
 };
 
+const normalizeEcwidOptionName = (value: unknown): string =>
+  String(value ?? '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+const isActivityDateOption = (option: Record<string, unknown>): boolean => {
+  const normalizedName = normalizeEcwidOptionName(option.name);
+  if (normalizedName.includes('activity date')) {
+    return true;
+  }
+  const normalizedType = normalizeEcwidOptionName(option.type);
+  if (normalizedType === 'date') {
+    return true;
+  }
+  return false;
+};
+
+const updateActivityDateOptions = (
+  options: Array<Record<string, unknown>> | undefined,
+  activityDate: string,
+): { updated: Array<Record<string, unknown>> | undefined; changed: boolean } => {
+  if (!Array.isArray(options) || options.length === 0) {
+    return { updated: options, changed: false };
+  }
+
+  let changed = false;
+  const updated = options.map((raw) => {
+    const option = { ...raw };
+    if (!isActivityDateOption(option)) {
+      return option;
+    }
+
+    if (String(option.value ?? '') !== activityDate) {
+      option.value = activityDate;
+      changed = true;
+    }
+
+    const valueTranslated = option.valueTranslated as Record<string, unknown> | undefined;
+    if (valueTranslated && typeof valueTranslated === 'object') {
+      const nextTranslated = { ...valueTranslated };
+      Object.keys(nextTranslated).forEach((key) => {
+        if (String(nextTranslated[key] ?? '') !== activityDate) {
+          nextTranslated[key] = activityDate;
+          changed = true;
+        }
+      });
+      option.valueTranslated = nextTranslated;
+    }
+
+    const valuesArray = Array.isArray(option.valuesArray) ? [...(option.valuesArray as unknown[])] : null;
+    if (valuesArray && valuesArray.length > 0) {
+      const nextArray = valuesArray.map((value) => activityDate);
+      if (nextArray.some((value, index) => String(valuesArray[index] ?? '') !== String(value))) {
+        changed = true;
+      }
+      option.valuesArray = nextArray;
+    }
+
+    const selections = Array.isArray(option.selections)
+      ? (option.selections as Array<Record<string, unknown>>).map((selection) => {
+          const nextSelection = { ...selection };
+          if (String(nextSelection.selectionTitle ?? '') !== activityDate) {
+            nextSelection.selectionTitle = activityDate;
+            changed = true;
+          }
+          if (String(nextSelection.value ?? '') !== activityDate) {
+            nextSelection.value = activityDate;
+            changed = true;
+          }
+          if (String(nextSelection.name ?? '') !== activityDate) {
+            nextSelection.name = activityDate;
+            changed = true;
+          }
+          return nextSelection;
+        })
+      : null;
+    if (selections) {
+      option.selections = selections;
+    }
+
+    return option;
+  });
+
+  return { updated, changed };
+};
+
+const buildEcwidItemsActivityDatePatch = (
+  items: Array<Record<string, unknown>> | undefined,
+  activityDate: string,
+): Array<Record<string, unknown>> | null => {
+  if (!Array.isArray(items) || items.length === 0) {
+    return null;
+  }
+
+  let changedAny = false;
+  const patchedItems = items.map((rawItem) => {
+    const item = { ...rawItem };
+    const selected = updateActivityDateOptions(
+      Array.isArray(item.selectedOptions) ? (item.selectedOptions as Array<Record<string, unknown>>) : undefined,
+      activityDate,
+    );
+    const legacy = updateActivityDateOptions(
+      Array.isArray(item.options) ? (item.options as Array<Record<string, unknown>>) : undefined,
+      activityDate,
+    );
+    if (selected.changed || legacy.changed) {
+      changedAny = true;
+    }
+    if (selected.updated) {
+      item.selectedOptions = selected.updated;
+    }
+    if (legacy.updated) {
+      item.options = legacy.updated;
+    }
+    return item;
+  });
+
+  return changedAny ? patchedItems : null;
+};
+
 const normalizeDate = (value?: string, boundary: RangeBoundary = 'start'): string | null => {
   if (!value) {
     return null;
@@ -3373,16 +3495,26 @@ export const amendEcwidBooking = async (req: AuthenticatedRequest, res: Response
 
     const pickupUtc = pickupMoment.utc();
     const ecwidPickupTime = pickupUtc.format('YYYY-MM-DD HH:mm:ss ZZ');
+    const activityDate = pickupMoment.format(DATE_FORMAT);
 
     const ecwidOrder = await getEcwidOrder(orderId);
     const pickupExtraField = buildPickupExtraFieldPayload(ecwidOrder.orderExtraFields, ecwidPickupTime);
+    const itemsPatch = buildEcwidItemsActivityDatePatch(
+      Array.isArray(ecwidOrder.items) ? (ecwidOrder.items as Array<Record<string, unknown>>) : undefined,
+      activityDate,
+    );
 
-    await updateEcwidOrder(orderId, {
+    const updatePayload: Record<string, unknown> = {
       pickupTime: ecwidPickupTime,
       orderExtraFields: [pickupExtraField],
-    });
+    };
+    if (itemsPatch) {
+      updatePayload.items = itemsPatch;
+    }
 
-    booking.experienceDate = pickupMoment.format(DATE_FORMAT);
+    await updateEcwidOrder(orderId, updatePayload);
+
+    booking.experienceDate = activityDate;
     booking.experienceStartAt = pickupUtc.toDate();
     booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
 
