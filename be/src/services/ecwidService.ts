@@ -168,6 +168,17 @@ export type UpdateEcwidOrderPayload = {
   [key: string]: unknown;
 };
 
+export type EcwidBatchRequestItem = {
+  id?: string;
+  path: string;
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  body?: unknown;
+};
+
+export type EcwidBatchCreateResponse = {
+  ticket: string;
+};
+
 export const updateEcwidOrder = async (
   orderId: string | number,
   payload: UpdateEcwidOrderPayload,
@@ -183,5 +194,28 @@ export const updateEcwidOrder = async (
 
   const ecwidClient = getEcwidClient();
   const response = await ecwidClient.put(`/orders/${encodeURIComponent(trimmedId)}`, payload);
+  return response.data;
+};
+
+export const createEcwidBatchRequest = async (
+  requests: EcwidBatchRequestItem[],
+  options: { allowParallelMode?: boolean; stopOnFirstFailure?: boolean } = {},
+): Promise<EcwidBatchCreateResponse> => {
+  if (!Array.isArray(requests) || requests.length === 0) {
+    throw new Error('At least one Ecwid batch request item is required');
+  }
+
+  const searchParams = new URLSearchParams();
+  if (options.allowParallelMode !== undefined) {
+    searchParams.set('allowParallelMode', options.allowParallelMode ? 'true' : 'false');
+  }
+  if (options.stopOnFirstFailure !== undefined) {
+    searchParams.set('stopOnFirstFailure', options.stopOnFirstFailure ? 'true' : 'false');
+  }
+
+  const ecwidClient = getEcwidClient();
+  const query = searchParams.toString();
+  const endpoint = `/batch${query ? `?${query}` : ''}`;
+  const response = await ecwidClient.post<EcwidBatchCreateResponse>(endpoint, requests);
   return response.data;
 };
