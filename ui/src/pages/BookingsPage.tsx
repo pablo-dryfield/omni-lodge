@@ -37,8 +37,10 @@ import { GenericPageProps } from "../types/general/GenericPageProps";
 import { BookingsGrid } from "../components/BookingsGrid";
 import BookingsExecutiveDashboard, {
   BookingAddonDashboardRow,
+  BookingCostsSummary,
   BookingCounterInsights,
   VenueCommissionCurrencyTotal,
+  VenueCommissionVenueRow,
 } from "../components/bookings/BookingsExecutiveDashboard";
 import BookingsSanityCheck from "../components/bookings/BookingsSanityCheck";
 import axiosInstance from "../utils/axiosInstance";
@@ -68,9 +70,22 @@ type FetchStatus = "idle" | "loading" | "error" | "success";
 
 type BookingFilter = "all" | "active" | "cancelled";
 type SummaryDateField = "experience_date" | "source_received_at";
+type SummaryMetricMode = "earnings" | "revenue" | "costs";
+type SummaryDatePreset =
+  | "today"
+  | "yesterday"
+  | "this_week"
+  | "last_week"
+  | "last_7_days"
+  | "last_14_days"
+  | "last_2_weeks"
+  | "this_month"
+  | "last_month"
+  | "custom";
 type BookingsTab = "calendar" | "summary" | "emails" | "sanity";
 type BookingsTabOption = BookingsTab | "manifest";
 type ProductTypeOption = { value: string; label: string };
+type BookingTabOption = { value: BookingsTabOption; label: string };
 
 type BookingEmailSummary = {
   id: number;
@@ -129,6 +144,13 @@ const DEFAULT_EMAIL_FILTERS = {
 };
 
 const DEFAULT_EMAIL_DATE_RANGE: [Date | null, Date | null] = [null, null];
+const BOOKING_TAB_OPTIONS: BookingTabOption[] = [
+  { value: "calendar", label: "Calendar" },
+  { value: "manifest", label: "Manifest" },
+  { value: "summary", label: "Summary" },
+  { value: "emails", label: "Emails" },
+  { value: "sanity", label: "Sanity Check" },
+];
 
 const parseEmailDateParam = (value?: string | null): Date | null => {
   if (!value) {
@@ -197,6 +219,43 @@ const parseSummaryProductTypeParam = (value?: string | null): string => {
     return "all";
   }
   return String(parsed);
+};
+
+const SUMMARY_DATE_PRESET_OPTIONS: Array<{ value: SummaryDatePreset; label: string }> = [
+  { value: "today", label: "Today" },
+  { value: "yesterday", label: "Yesterday" },
+  { value: "this_week", label: "This Week" },
+  { value: "last_week", label: "Last Week" },
+  { value: "last_7_days", label: "Last 7 Days" },
+  { value: "last_14_days", label: "Last 14 Days" },
+  { value: "last_2_weeks", label: "Last 2 Weeks" },
+  { value: "this_month", label: "This Month" },
+  { value: "last_month", label: "Last Month" },
+  { value: "custom", label: "Custom" },
+];
+
+const parseSummaryDatePresetParam = (value?: string | null): SummaryDatePreset => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (SUMMARY_DATE_PRESET_OPTIONS.some((option) => option.value === normalized)) {
+    return normalized as SummaryDatePreset;
+  }
+  return "this_month";
+};
+
+const parseSummaryCustomDateParam = (value?: string | null): Date | null => {
+  if (!value) {
+    return null;
+  }
+  const parsed = dayjs(value, "YYYY-MM-DD", true);
+  return parsed.isValid() ? parsed.toDate() : null;
+};
+
+const parseSummaryMetricModeParam = (value?: string | null): SummaryMetricMode => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "earnings" || normalized === "costs") {
+    return normalized;
+  }
+  return "revenue";
 };
 
 const resolveEmailStatusColor = (value?: string | null): string => {
@@ -522,18 +581,6 @@ const createDateArray = (start: Dayjs, end: Dayjs): string[] => {
   return values;
 };
 
-const formatRangeLabel = (start: Dayjs, end: Dayjs, mode: ViewMode): string => {
-  if (mode === "month") {
-    return start.format("MMMM YYYY");
-  }
-
-  if (start.isSame(end, "day")) {
-    return start.format("D MMM YYYY");
-  }
-
-  return `${start.format("D MMM")} - ${end.format("D MMM YYYY")}`;
-};
-
 const deriveErrorMessage = (error: unknown): string => {
   if (!error) {
     return "Unknown error while loading bookings.";
@@ -557,7 +604,11 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const navigate = useNavigate();
   const [viewMode, setViewMode] = useState<ViewMode>("month");
   const [activeTab, setActiveTab] = useState<BookingsTab>("calendar");
+  const [mobileTabsMenuOpen, setMobileTabsMenuOpen] = useState<string | null>(null);
   const [summaryDateField, setSummaryDateField] = useState<SummaryDateField>("experience_date");
+  const [summaryMetricMode, setSummaryMetricMode] = useState<SummaryMetricMode>("revenue");
+  const [summaryDatePreset, setSummaryDatePreset] = useState<SummaryDatePreset>("this_month");
+  const [summaryCustomDateRange, setSummaryCustomDateRange] = useState<[Date | null, Date | null]>([null, null]);
   const [summaryProductTypeFilter, setSummaryProductTypeFilter] = useState<string>("all");
   const [summaryProductTypeOptions, setSummaryProductTypeOptions] = useState<ProductTypeOption[]>([
     { value: "all", label: "All Product Types" },
@@ -568,10 +619,12 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const [products, setProducts] = useState<UnifiedProduct[]>([]);
   const [orders, setOrders] = useState<UnifiedOrder[]>([]);
   const [bookingAddons, setBookingAddons] = useState<BookingAddonDashboardRow[]>([]);
+  const [addonCatalog, setAddonCatalog] = useState<Array<{ id: number; name: string; basePrice: number }>>([]);
   const [counterInsights, setCounterInsights] = useState<BookingCounterInsights | null>(null);
   const [venueCommissionTotals, setVenueCommissionTotals] = useState<VenueCommissionCurrencyTotal[] | null>(null);
+  const [venueCommissionVenues, setVenueCommissionVenues] = useState<VenueCommissionVenueRow[] | null>(null);
+  const [costsSummary, setCostsSummary] = useState<BookingCostsSummary | null>(null);
   const [calendarStatusFilter, setCalendarStatusFilter] = useState<BookingFilter>("active");
-  const [summaryStatusFilter, setSummaryStatusFilter] = useState<BookingFilter>("all");
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [ingestStatus, setIngestStatus] = useState<FetchStatus>("idle");
@@ -707,6 +760,29 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   }, [searchParams]);
 
   useEffect(() => {
+    const nextPreset = parseSummaryDatePresetParam(searchParams.get("summaryPreset"));
+    setSummaryDatePreset((prev) => (prev === nextPreset ? prev : nextPreset));
+  }, [searchParams]);
+
+  useEffect(() => {
+    const nextCustomRange: [Date | null, Date | null] = [
+      parseSummaryCustomDateParam(searchParams.get("summaryStart")),
+      parseSummaryCustomDateParam(searchParams.get("summaryEnd")),
+    ];
+    setSummaryCustomDateRange((prev) => {
+      const sameRange =
+        (prev[0]?.getTime() ?? null) === (nextCustomRange[0]?.getTime() ?? null) &&
+        (prev[1]?.getTime() ?? null) === (nextCustomRange[1]?.getTime() ?? null);
+      return sameRange ? prev : nextCustomRange;
+    });
+  }, [searchParams]);
+
+  useEffect(() => {
+    const nextMetricMode = parseSummaryMetricModeParam(searchParams.get("summaryMetric"));
+    setSummaryMetricMode((prev) => (prev === nextMetricMode ? prev : nextMetricMode));
+  }, [searchParams]);
+
+  useEffect(() => {
     const nextFilters = {
       search: searchParams.get("emailSearch") ?? "",
       subject: searchParams.get("emailSubject") ?? "",
@@ -807,6 +883,26 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       "summaryProductType",
       summaryProductTypeFilter !== "all" ? summaryProductTypeFilter : null,
     );
+    setOptionalParam(
+      "summaryPreset",
+      summaryDatePreset !== "this_month" ? summaryDatePreset : null,
+    );
+    setOptionalParam(
+      "summaryMetric",
+      summaryMetricMode !== "revenue" ? summaryMetricMode : null,
+    );
+    setOptionalParam(
+      "summaryStart",
+      summaryDatePreset === "custom" && summaryCustomDateRange[0]
+        ? dayjs(summaryCustomDateRange[0]).format("YYYY-MM-DD")
+        : null,
+    );
+    setOptionalParam(
+      "summaryEnd",
+      summaryDatePreset === "custom" && summaryCustomDateRange[1]
+        ? dayjs(summaryCustomDateRange[1]).format("YYYY-MM-DD")
+        : null,
+    );
 
     setOptionalParam("emailSearch", emailFilters.search || null);
     setOptionalParam("emailSubject", emailFilters.subject || null);
@@ -847,6 +943,9 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   }, [
     activeTab,
     summaryDateField,
+    summaryDatePreset,
+    summaryMetricMode,
+    summaryCustomDateRange,
     summaryProductTypeFilter,
     emailDateRange,
     emailFilters,
@@ -874,13 +973,57 @@ const BookingsPage = ({ title }: GenericPageProps) => {
 
   const dateRange = useMemo(() => createDateArray(rangeStart, rangeEnd), [rangeStart, rangeEnd]);
 
-  const rangeLabel = useMemo(() => formatRangeLabel(rangeStart, rangeEnd, viewMode), [rangeStart, rangeEnd, viewMode]);
   const monthYearLabel = useMemo(() => rangeStart.format("MMMM YYYY"), [rangeStart]);
+  const summaryPresetRange = useMemo(() => {
+    const today = dayjs().startOf("day");
+    const thisMonthStart = today.startOf("month");
+    const thisMonthEnd = today.endOf("month");
+    const thisWeekStart = today.startOf("week");
+    const thisWeekEnd = today.endOf("week");
+    switch (summaryDatePreset) {
+      case "today":
+        return { start: today, end: today.endOf("day") };
+      case "yesterday": {
+        const yesterday = today.subtract(1, "day");
+        return { start: yesterday, end: yesterday.endOf("day") };
+      }
+      case "this_week":
+        return { start: thisWeekStart, end: thisWeekEnd };
+      case "last_week": {
+        const lastWeekStart = thisWeekStart.subtract(1, "week").startOf("week");
+        return { start: lastWeekStart, end: lastWeekStart.endOf("week") };
+      }
+      case "last_7_days":
+        return { start: today.subtract(6, "day"), end: today.endOf("day") };
+      case "last_14_days":
+        return { start: today.subtract(13, "day"), end: today.endOf("day") };
+      case "last_2_weeks": {
+        const lastTwoWeeksEnd = thisWeekStart.subtract(1, "day").endOf("day");
+        const lastTwoWeeksStart = thisWeekStart.subtract(2, "week").startOf("day");
+        return { start: lastTwoWeeksStart, end: lastTwoWeeksEnd };
+      }
+      case "last_month": {
+        const lastMonthStart = today.subtract(1, "month").startOf("month");
+        return { start: lastMonthStart, end: lastMonthStart.endOf("month") };
+      }
+      case "custom": {
+        const customStart = summaryCustomDateRange[0] ? dayjs(summaryCustomDateRange[0]).startOf("day") : null;
+        const customEnd = summaryCustomDateRange[1] ? dayjs(summaryCustomDateRange[1]).endOf("day") : null;
+        if (customStart && customEnd && !customEnd.isBefore(customStart, "day")) {
+          return { start: customStart, end: customEnd };
+        }
+        return { start: thisMonthStart, end: thisMonthEnd };
+      }
+      case "this_month":
+      default:
+        return { start: thisMonthStart, end: thisMonthEnd };
+    }
+  }, [summaryCustomDateRange, summaryDatePreset]);
+  const summaryRangeStart = summaryPresetRange.start;
+  const summaryRangeEnd = summaryPresetRange.end;
+  const effectiveRangeStart = activeTab === "summary" ? summaryRangeStart : rangeStart;
+  const effectiveRangeEnd = activeTab === "summary" ? summaryRangeEnd : rangeEnd;
   const bookingsDateField: SummaryDateField = activeTab === "summary" ? summaryDateField : "experience_date";
-  const summaryRangeLabel = useMemo(() => {
-    const suffix = summaryDateField === "source_received_at" ? "Source Received At" : "Experience Date";
-    return `${rangeLabel} (${suffix})`;
-  }, [rangeLabel, summaryDateField]);
 
   const selectedDateKey = selectedDate.format(DATE_FORMAT);
 
@@ -1172,15 +1315,18 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     }
 
     const controller = new AbortController();
-    const startIso = rangeStart.startOf("day").format('YYYY-MM-DD');
-    const endIso = rangeEnd.endOf("day").format('YYYY-MM-DD');
+    const startIso = effectiveRangeStart.startOf("day").format("YYYY-MM-DD");
+    const endIso = effectiveRangeEnd.endOf("day").format("YYYY-MM-DD");
 
     const fetchOrders = async () => {
       setFetchStatus("loading");
       setErrorMessage(null);
       setBookingAddons([]);
+      setAddonCatalog([]);
       setCounterInsights(null);
       setVenueCommissionTotals(null);
+      setVenueCommissionVenues(null);
+      setCostsSummary(null);
 
       try {
         const venueSummaryPromise = axiosInstance
@@ -1189,6 +1335,17 @@ const BookingsPage = ({ title }: GenericPageProps) => {
               period: "custom",
               startDate: startIso,
               endDate: endIso,
+            },
+            signal: controller.signal,
+            withCredentials: true,
+          })
+          .catch(() => null);
+        const paysSummaryPromise = axiosInstance
+          .get("/reports/getCommissionByDateRange", {
+            params: {
+              startDate: startIso,
+              endDate: endIso,
+              scope: "all",
             },
             signal: controller.signal,
             withCredentials: true,
@@ -1206,16 +1363,18 @@ const BookingsPage = ({ title }: GenericPageProps) => {
             limit: 200,
           },
           signal: controller.signal,
-          withCredentials: true,
-        });
+            withCredentials: true,
+          });
         const productsPayload = Array.isArray(response.data?.products) ? response.data.products : [];
         const ordersPayload = Array.isArray(response.data?.orders) ? response.data.orders : [];
         const bookingAddonsPayload = Array.isArray(response.data?.bookingAddons) ? response.data.bookingAddons : [];
+        const addonCatalogPayload = Array.isArray(response.data?.addonCatalog) ? response.data.addonCatalog : [];
         const counterInsightsPayload =
           response.data?.counterInsights && typeof response.data.counterInsights === "object"
             ? response.data.counterInsights
             : null;
         const venueSummaryResponse = await venueSummaryPromise;
+        const paysSummaryResponse = await paysSummaryPromise;
         const venueSummaryRoot =
           Array.isArray(venueSummaryResponse?.data) && venueSummaryResponse?.data[0]
             ? venueSummaryResponse.data[0]
@@ -1231,22 +1390,69 @@ const BookingsPage = ({ title }: GenericPageProps) => {
           venueSummary && typeof venueSummary === "object"
             ? (venueSummary as { totalsByCurrency?: unknown }).totalsByCurrency
             : null;
-        const venueTotalsPayload = Array.isArray(venueTotalsRaw)
-          ? venueTotalsRaw
-              .map((row) => {
-                if (!row || typeof row !== "object") {
-                  return null;
-                }
-                const raw = row as Record<string, unknown>;
-                return {
-                  currency: String(raw.currency ?? "PLN").toUpperCase(),
-                  receivable: Number(raw.receivable ?? 0),
-                  receivableCollected: Number(raw.receivableCollected ?? 0),
-                  receivableOutstanding: Number(raw.receivableOutstanding ?? 0),
-                } satisfies VenueCommissionCurrencyTotal;
-              })
-              .filter((row): row is VenueCommissionCurrencyTotal => row !== null)
+        const venueRowsRaw =
+          venueSummary && typeof venueSummary === "object"
+            ? (venueSummary as { venues?: unknown }).venues
+            : null;
+        const venueTotalsPayload: VenueCommissionCurrencyTotal[] | null = Array.isArray(venueTotalsRaw)
+          ? venueTotalsRaw.reduce<VenueCommissionCurrencyTotal[]>((acc, row) => {
+              if (!row || typeof row !== "object") {
+                return acc;
+              }
+              const raw = row as Record<string, unknown>;
+              acc.push({
+                currency: String(raw.currency ?? "PLN").toUpperCase(),
+                receivable: Number(raw.receivable ?? 0),
+                receivableCollected: Number(raw.receivableCollected ?? 0),
+                receivableOutstanding: Number(raw.receivableOutstanding ?? 0),
+                payable: Number(raw.payable ?? 0),
+                payableCollected: Number(raw.payableCollected ?? 0),
+                payableOutstanding: Number(raw.payableOutstanding ?? 0),
+              });
+              return acc;
+            }, [])
           : null;
+        const venueRowsPayload: VenueCommissionVenueRow[] | null = Array.isArray(venueRowsRaw)
+          ? venueRowsRaw.reduce<VenueCommissionVenueRow[]>((acc, row) => {
+              if (!row || typeof row !== "object") {
+                return acc;
+              }
+              const raw = row as Record<string, unknown>;
+              acc.push({
+                venueId: raw.venueId == null ? null : Number(raw.venueId),
+                venueName: String(raw.venueName ?? "").trim() || "Unknown Venue",
+                currency: String(raw.currency ?? "PLN").toUpperCase(),
+                receivable: Number(raw.receivable ?? 0),
+                receivableCollected: Number(raw.receivableCollected ?? 0),
+                receivableOutstanding: Number(raw.receivableOutstanding ?? 0),
+                totalPeople: Number(raw.totalPeople ?? 0),
+              });
+              return acc;
+            }, [])
+          : null;
+
+        const paysRowsRaw =
+          Array.isArray(paysSummaryResponse?.data) && paysSummaryResponse?.data[0]
+            ? (paysSummaryResponse.data[0] as { data?: unknown }).data
+            : null;
+        const paysRows = Array.isArray(paysRowsRaw) ? (paysRowsRaw as Array<Record<string, unknown>>) : [];
+        const staffPaymentsTotal = paysRows.reduce((sum, item) => {
+          const dueAmount = Number(item?.dueAmount);
+          if (Number.isFinite(dueAmount)) {
+            return sum + dueAmount;
+          }
+          const totalPayout = Number(item?.totalPayout);
+          if (Number.isFinite(totalPayout)) {
+            return sum + totalPayout;
+          }
+          const totalCommission = Number(item?.totalCommission);
+          return sum + (Number.isFinite(totalCommission) ? totalCommission : 0);
+        }, 0);
+        const venueTotalsForCosts = venueTotalsPayload ?? [];
+        const openBarPayoutsTotal = venueTotalsForCosts.reduce((sum, row) => {
+          const amount = Number(row.payable ?? 0);
+          return sum + (Number.isFinite(amount) ? amount : 0);
+        }, 0);
 
         const filteredOrdersPayload = (ordersPayload as UnifiedOrder[]).filter(
           (order) => !shouldExcludeBookingsPageProductName(order.productName),
@@ -1263,8 +1469,36 @@ const BookingsPage = ({ title }: GenericPageProps) => {
         setProducts(filteredProductsPayload);
         setOrders(filteredOrdersPayload);
         setBookingAddons(bookingAddonsPayload as BookingAddonDashboardRow[]);
+        setAddonCatalog(
+          addonCatalogPayload
+            .map((row: unknown) => {
+              const raw = row as Record<string, unknown>;
+              const id = Number(raw.id);
+              const name = String(raw.name ?? "").trim();
+              const basePrice = Number(raw.basePrice ?? 0);
+              if (!Number.isFinite(id) || id <= 0 || !name) {
+                return null;
+              }
+              return {
+                id,
+                name,
+                basePrice: Number.isFinite(basePrice) ? basePrice : 0,
+              };
+            })
+            .filter(
+              (row: { id: number; name: string; basePrice: number } | null): row is { id: number; name: string; basePrice: number } =>
+                row !== null,
+            ),
+        );
         setCounterInsights(counterInsightsPayload as BookingCounterInsights | null);
         setVenueCommissionTotals(venueTotalsPayload);
+        setVenueCommissionVenues(venueRowsPayload);
+        setCostsSummary({
+          currency: "PLN",
+          openBarPayouts: openBarPayoutsTotal,
+          staffPayments: staffPaymentsTotal,
+          miscellaneous: 3400,
+        });
         setFetchStatus("success");
       } catch (error) {
         if (controller.signal.aborted) {
@@ -1272,7 +1506,10 @@ const BookingsPage = ({ title }: GenericPageProps) => {
         }
         setFetchStatus("error");
         setErrorMessage(deriveErrorMessage(error));
+        setAddonCatalog([]);
         setVenueCommissionTotals(null);
+        setVenueCommissionVenues(null);
+        setCostsSummary(null);
       }
     };
 
@@ -1284,8 +1521,8 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   }, [
     modulePermissions.ready,
     modulePermissions.canView,
-    rangeStart,
-    rangeEnd,
+    effectiveRangeStart,
+    effectiveRangeEnd,
     bookingsDateField,
     activeTab,
     summaryProductTypeFilter,
@@ -1371,8 +1608,11 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     reloadToken,
   ]);
 
-  const activeStatusFilter: BookingFilter =
-    activeTab === "summary" ? summaryStatusFilter : calendarStatusFilter;
+  const activeStatusFilter: BookingFilter = activeTab === "summary" ? "all" : calendarStatusFilter;
+  const activeTabLabel = useMemo(() => {
+    const current = BOOKING_TAB_OPTIONS.find((tab) => tab.value === activeTab);
+    return current?.label ?? "Calendar";
+  }, [activeTab]);
 
   const filteredOrders = useMemo(() => {
     if (activeTab === "summary" && activeStatusFilter === "all") {
@@ -1571,74 +1811,100 @@ const BookingsPage = ({ title }: GenericPageProps) => {
               </Group>
             </Box>
 
-            <Group gap="sm" justify="center" wrap="nowrap" style={{ width: "100%" }}>
-              <Button
-                size="sm"
-                variant="subtle"
-                aria-label="Previous period"
-                onClick={() => handleShiftRange(-1)}
-              >
-                <IconArrowLeft size={16} />
-              </Button>
-              <Box
-                style={{
-                  minWidth: isMobile ? 180 : 240,
-                  textAlign: "center",
-                  border: "1px solid #ced4da",
-                  borderRadius: 8,
-                  padding: "8px 12px",
-                  fontWeight: 600,
-                  background: "#fff",
-                }}
-              >
-                {monthYearLabel}
-              </Box>
-              <Button
-                size="sm"
-                variant="subtle"
-                aria-label="Next period"
-                onClick={() => handleShiftRange(1)}
-              >
-                <IconArrowRight size={16} />
-              </Button>
-            </Group>
-
-            {isFilterPanelVisible && (
-              <Group gap="sm" wrap="wrap" align="center" justify="center">
-                <SegmentedControl
-                  value={viewMode}
-                  onChange={(value) => handleViewModeChange(value as ViewMode)}
-                  data={[
-                    { label: "Week", value: "week" },
-                    { label: "Month", value: "month" },
-                  ]}
-                  size="sm"
-                />
-                <SegmentedControl
-                  value={activeStatusFilter}
-                  onChange={(value) => {
-                    const next = value as BookingFilter;
-                    if (activeTab === "summary") {
-                      setSummaryStatusFilter(next);
-                      return;
-                    }
-                    setCalendarStatusFilter(next);
-                  }}
-                  data={[
-                    { label: "All", value: "all" },
-                    { label: "Has people", value: "active" },
-                    { label: "Cancelled", value: "cancelled" },
-                  ]}
-                  size="sm"
-                />
+            {activeTab !== "summary" && (
+              <Group gap="sm" justify="center" wrap="nowrap" style={{ width: "100%" }}>
                 <Button
                   size="sm"
-                  variant="light"
-                  leftSection={<IconCalendar size={16} />}
-                  onClick={handleGoToToday}
+                  variant="subtle"
+                  aria-label="Previous period"
+                  onClick={() => handleShiftRange(-1)}
                 >
-                  Today
+                  <IconArrowLeft size={16} />
                 </Button>
+                <Box
+                  style={{
+                    minWidth: isMobile ? 180 : 240,
+                    textAlign: "center",
+                    border: "1px solid #ced4da",
+                    borderRadius: 8,
+                    padding: "8px 12px",
+                    fontWeight: 600,
+                    background: "#fff",
+                  }}
+                >
+                  {monthYearLabel}
+                </Box>
+                <Button
+                  size="sm"
+                  variant="subtle"
+                  aria-label="Next period"
+                  onClick={() => handleShiftRange(1)}
+                >
+                  <IconArrowRight size={16} />
+                </Button>
+              </Group>
+            )}
+            {isFilterPanelVisible && (
+              <Group gap="sm" wrap="wrap" align="center" justify="center">
+                {activeTab !== "summary" && (
+                  <SegmentedControl
+                    value={viewMode}
+                    onChange={(value) => handleViewModeChange(value as ViewMode)}
+                    data={[
+                      { label: "Week", value: "week" },
+                      { label: "Month", value: "month" },
+                    ]}
+                    size="sm"
+                  />
+                )}
+                {activeTab !== "summary" && (
+                  <SegmentedControl
+                    value={activeStatusFilter}
+                    onChange={(value) => setCalendarStatusFilter(value as BookingFilter)}
+                    data={[
+                      { label: "All", value: "all" },
+                      { label: "Has people", value: "active" },
+                      { label: "Cancelled", value: "cancelled" },
+                    ]}
+                    size="sm"
+                  />
+                )}
+                {activeTab === "summary" && (
+                  <SegmentedControl
+                    value={summaryDateField}
+                    onChange={(value) =>
+                      setSummaryDateField(parseSummaryDateFieldParam(value))
+                    }
+                    data={[
+                      { value: "experience_date", label: "Experience Date" },
+                      { value: "source_received_at", label: "Source Received At" },
+                    ]}
+                    size={isMobile ? "xs" : "sm"}
+                  />
+                )}
+                {activeTab === "summary" && (
+                  <Select
+                    value={summaryProductTypeFilter}
+                    onChange={(value) =>
+                      setSummaryProductTypeFilter(parseSummaryProductTypeParam(value))
+                    }
+                    data={summaryProductTypeOptions}
+                    placeholder="All Product Types"
+                    size={isMobile ? "xs" : "sm"}
+                    w={isMobile ? "100%" : 260}
+                    checkIconPosition="right"
+                  />
+                )}
+                {activeTab !== "summary" && (
+                  <Button
+                    size="sm"
+                    variant="light"
+                    leftSection={<IconCalendar size={16} />}
+                    onClick={handleGoToToday}
+                  >
+                    Today
+                  </Button>
+                )}
               </Group>
             )}
 
@@ -1653,13 +1919,108 @@ const BookingsPage = ({ title }: GenericPageProps) => {
               onChange={handleBookingsTabChange}
               keepMounted={false}
             >
-              <Tabs.List>
-                <Tabs.Tab value="calendar">Calendar</Tabs.Tab>
-                <Tabs.Tab value="manifest">Manifest</Tabs.Tab>
-                <Tabs.Tab value="summary">Summary</Tabs.Tab>
-                <Tabs.Tab value="emails">Emails</Tabs.Tab>
-                <Tabs.Tab value="sanity">Sanity Check</Tabs.Tab>
-              </Tabs.List>
+              {isMobile ? (
+                <Accordion
+                  value={mobileTabsMenuOpen}
+                  onChange={setMobileTabsMenuOpen}
+                  variant="separated"
+                  radius="md"
+                >
+                  <Accordion.Item value="tabs-menu">
+                    <Accordion.Control
+                      styles={{
+                        label: { textAlign: "center", flex: 1 },
+                      }}
+                    >
+                      {activeTabLabel}
+                    </Accordion.Control>
+                    <Accordion.Panel>
+                      <Stack gap="xs">
+                        {BOOKING_TAB_OPTIONS.map((tab) => (
+                          <Button
+                            key={tab.value}
+                            variant={tab.value === activeTab ? "light" : "subtle"}
+                            justify="center"
+                            onClick={() => {
+                              handleBookingsTabChange(tab.value);
+                              setMobileTabsMenuOpen(null);
+                            }}
+                          >
+                            {tab.label}
+                          </Button>
+                        ))}
+                      </Stack>
+                    </Accordion.Panel>
+                  </Accordion.Item>
+                </Accordion>
+              ) : (
+                <Tabs.List>
+                  <Tabs.Tab value="calendar">Calendar</Tabs.Tab>
+                  <Tabs.Tab value="manifest">Manifest</Tabs.Tab>
+                  <Tabs.Tab value="summary">Summary</Tabs.Tab>
+                  <Tabs.Tab value="emails">Emails</Tabs.Tab>
+                  <Tabs.Tab value="sanity">Sanity Check</Tabs.Tab>
+                </Tabs.List>
+              )}
+              {activeTab === "summary" && (
+                <Stack gap="sm" mt="md" mx="auto" style={{ width: "100%", maxWidth: 860 }}>
+                  <Group gap="sm" wrap="wrap" align="center" justify="center">
+                    <Select
+                      value={summaryDatePreset}
+                      onChange={(value) =>
+                        setSummaryDatePreset(parseSummaryDatePresetParam(value))
+                      }
+                      data={SUMMARY_DATE_PRESET_OPTIONS}
+                      placeholder="This Month"
+                      size={isMobile ? "xs" : "sm"}
+                      w={isMobile ? "100%" : 220}
+                      checkIconPosition="right"
+                      allowDeselect={false}
+                      styles={{
+                        input: { textAlign: "center", fontWeight: 700 },
+                        dropdown: { textAlign: "center" },
+                        options: { textAlign: "center" },
+                        option: { justifyContent: "center", textAlign: "center", fontWeight: 600 },
+                      }}
+                    />
+                    {summaryDatePreset === "custom" && (
+                      <DatePickerInput
+                        type="range"
+                        value={summaryCustomDateRange}
+                        onChange={setSummaryCustomDateRange}
+                        placeholder="Select custom range"
+                        size={isMobile ? "xs" : "sm"}
+                        valueFormat="YYYY-MM-DD"
+                        clearable
+                        w={isMobile ? "100%" : 280}
+                        styles={{
+                          input: { textAlign: "center" },
+                        }}
+                      />
+                    )}
+                  </Group>
+                  <SegmentedControl
+                    value={summaryMetricMode}
+                    onChange={(value) =>
+                      setSummaryMetricMode(parseSummaryMetricModeParam(value))
+                    }
+                    data={[
+                      { value: "earnings", label: "Earnings" },
+                      { value: "revenue", label: "Revenue" },
+                      { value: "costs", label: "Costs" },
+                    ]}
+                    fullWidth
+                    radius="md"
+                    size={isMobile ? "sm" : "md"}
+                    color="blue"
+                    styles={{
+                      root: { backgroundColor: "#eef3f8", border: "1px solid #d7e3f0" },
+                      label: { fontWeight: 600, paddingTop: 8, paddingBottom: 8 },
+                      indicator: { boxShadow: "0 2px 10px rgba(24, 100, 171, 0.18)" },
+                    }}
+                  />
+                </Stack>
+              )}
 
               <Tabs.Panel value="calendar" pt="md">
                 {isLoading ? (
@@ -1687,30 +2048,6 @@ const BookingsPage = ({ title }: GenericPageProps) => {
 
               <Tabs.Panel value="summary" pt="md">
                 <Stack gap="md">
-                  <Group justify="center" align="center" wrap="wrap">
-                    <SegmentedControl
-                      value={summaryDateField}
-                      onChange={(value) =>
-                        setSummaryDateField(parseSummaryDateFieldParam(value))
-                      }
-                      data={[
-                        { value: "experience_date", label: "Experience Date" },
-                        { value: "source_received_at", label: "Source Received At" },
-                      ]}
-                      size={isMobile ? "xs" : "sm"}
-                    />
-                    <Select
-                      value={summaryProductTypeFilter}
-                      onChange={(value) =>
-                        setSummaryProductTypeFilter(parseSummaryProductTypeParam(value))
-                      }
-                      data={summaryProductTypeOptions}
-                      placeholder="All Product Types"
-                      size={isMobile ? "xs" : "sm"}
-                      w={isMobile ? "100%" : 260}
-                      checkIconPosition="right"
-                    />
-                  </Group>
                   {fetchStatus === "loading" && orders.length === 0 ? (
                     <Box style={{ minHeight: 320 }}>
                       <Loader variant="bars" />
@@ -1719,9 +2056,12 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                     <BookingsExecutiveDashboard
                       orders={filteredOrders}
                       bookingAddons={filteredBookingAddons}
+                      addonCatalog={addonCatalog}
                       counterInsights={counterInsights}
                       venueCommissionTotals={venueCommissionTotals}
-                      rangeLabel={summaryRangeLabel}
+                      venueCommissionVenues={venueCommissionVenues}
+                      metricMode={summaryMetricMode}
+                      costsSummary={costsSummary}
                     />
                   )}
                 </Stack>

@@ -32,6 +32,7 @@ import { canonicalizeProductLabel, sanitizeProductSource } from '../../utils/pro
 import { getConfigValue } from '../configService.js';
 import { syncEcwidBookingUtmByBookingId } from './ecwidUtmSyncService.js';
 import { syncEcwidBookingProcessingFeeByBookingId } from './ecwidProcessingFeeSyncService.js';
+import { syncEcwidBookingAddonPricingByBookingId } from './ecwidAddonPricingSyncService.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
@@ -2556,6 +2557,7 @@ export const processBookingEmail = async (
       for (const bookingId of processedBookingIds) {
         await syncEcwidBookingUtmByBookingId(bookingId);
         await syncEcwidBookingProcessingFeeByBookingId(bookingId);
+        await syncEcwidBookingAddonPricingByBookingId(bookingId);
       }
     }
 

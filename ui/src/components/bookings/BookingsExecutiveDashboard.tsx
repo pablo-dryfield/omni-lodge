@@ -1,8 +1,7 @@
-import { type ReactNode, useMemo } from "react";
+﻿import { type ReactNode, useMemo } from "react";
 import {
   ActionIcon,
   Alert,
-  Badge,
   Box,
   Group,
   Paper,
@@ -13,7 +12,6 @@ import {
   Table,
   Text,
   ThemeIcon,
-  Title,
 } from "@mantine/core";
 import {
   IconCash,
@@ -58,6 +56,8 @@ type BookingRawFinancial = {
   priceGross: number;
   priceNet: number;
   commissionAmount: number;
+  processingFee: number;
+  processingFeeCurrency: string | null;
   channelCommissionRate: number | null;
   channelCommissionAmount: number | null;
   baseAmountAfterChannelCommission: number | null;
@@ -78,11 +78,18 @@ export type BookingAddonDashboardRow = {
   isIncluded: boolean;
 };
 
+export type AddonCatalogPriceRow = {
+  id: number;
+  name: string;
+  basePrice: number;
+};
+
 export type BookingCounterInsights = {
   currency: string;
   cashPaymentsTotal: number;
   cashGuestsTotal?: number;
   cashByChannel: Array<{ channelId: number | null; channelName: string; amount: number }>;
+  walkInTicketBreakdown?: Array<{ ticketType: string; currency: string; guests: number; amount: number }>;
   cashEntries: Array<{
     counterId: number;
     counterDate: string;
@@ -99,14 +106,37 @@ export type VenueCommissionCurrencyTotal = {
   receivable: number;
   receivableCollected: number;
   receivableOutstanding: number;
+  payable: number;
+  payableCollected: number;
+  payableOutstanding: number;
+};
+
+export type VenueCommissionVenueRow = {
+  venueId: number | null;
+  venueName: string;
+  currency: string;
+  receivable: number;
+  receivableCollected: number;
+  receivableOutstanding: number;
+  totalPeople: number;
+};
+
+export type BookingCostsSummary = {
+  currency: string;
+  openBarPayouts: number;
+  staffPayments: number;
+  miscellaneous: number;
 };
 
 type Props = {
   orders: UnifiedOrder[];
   bookingAddons: BookingAddonDashboardRow[];
+  addonCatalog?: AddonCatalogPriceRow[];
   counterInsights: BookingCounterInsights | null;
   venueCommissionTotals?: VenueCommissionCurrencyTotal[] | null;
-  rangeLabel: string;
+  venueCommissionVenues?: VenueCommissionVenueRow[] | null;
+  metricMode?: "earnings" | "revenue" | "costs";
+  costsSummary?: BookingCostsSummary | null;
 };
 
 const CHART_COLORS = ["#214A66", "#2B7A78", "#345995", "#EF8354", "#B56576", "#6B705C", "#7D4E57", "#3D5A80"];
@@ -151,12 +181,19 @@ const asRecord = (value: unknown): Record<string, unknown> => {
 
 const roundMoney = (value: number): number => Math.round(value * 100) / 100;
 
+const formatMoneyNumber = (value: number): string => {
+  const safeValue = Number.isFinite(value) ? value : 0;
+  return safeValue.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 5,
+    useGrouping: true,
+  });
+};
+
 const formatMoney = (value: number, currency = "PLN"): string => {
-  try {
-    return new Intl.NumberFormat("pl-PL", { style: "currency", currency }).format(value);
-  } catch (_error) {
-    return `${value.toFixed(2)} ${currency}`;
-  }
+  const normalizedCurrency = String(currency ?? "PLN").trim().toUpperCase();
+  const displayCurrency = normalizedCurrency === "PLN" ? "z\u0142" : normalizedCurrency;
+  return `${formatMoneyNumber(value)} ${displayCurrency}`;
 };
 
 type CanonicalAddonKey = "cocktails" | "tshirts" | "photos";
@@ -267,9 +304,9 @@ const KpiCard = ({
   icon: ReactNode;
   label: string;
   info?: ReactNode;
-  value: string;
+  value: ReactNode;
   accent: string;
-  subtitle?: string;
+  subtitle?: ReactNode;
 }) => (
   <Paper
     withBorder
@@ -277,40 +314,46 @@ const KpiCard = ({
     p="md"
     shadow="sm"
     style={{
+      position: "relative",
       background: `linear-gradient(135deg, ${accent}16 0%, #ffffff 100%)`,
       borderColor: `${accent}66`,
     }}
   >
-    <Group justify="space-between" align="start" wrap="nowrap">
-      <Stack gap={2}>
-        <Group gap={4} align="center" wrap="nowrap">
-          <Text size="xs" tt="uppercase" fw={700} c="dimmed" style={{ letterSpacing: 0.5 }}>
-            {label}
-          </Text>
-          {info}
-        </Group>
-        <Text fw={800} size="xl">
+    <ThemeIcon
+      size={40}
+      radius="md"
+      variant="light"
+      color="dark"
+      style={{ position: "absolute", top: 16, right: 16 }}
+    >
+      {icon}
+    </ThemeIcon>
+    <Stack gap={2}>
+      <Group gap={4} align="center" justify="center" wrap="nowrap" style={{ width: "100%" }}>
+        <Text size="xs" tt="uppercase" fw={700} c="dimmed" style={{ letterSpacing: 0.5 }}>
+          {label}
+        </Text>
+        {info}
+      </Group>
+      <Group gap={6} justify="center" wrap="nowrap" style={{ width: "100%" }}>
+        <Text fw={800} size="xl" ta="center">
           {value}
         </Text>
-        {subtitle ? (
-          <Text size="xs" c="dimmed">
-            {subtitle}
-          </Text>
-        ) : null}
-      </Stack>
-      <ThemeIcon size={40} radius="md" variant="light" color="dark">
-        {icon}
-      </ThemeIcon>
-    </Group>
+      </Group>
+      {subtitle ? <Box>{subtitle}</Box> : null}
+    </Stack>
   </Paper>
 );
 
 const BookingsExecutiveDashboard = ({
   orders,
   bookingAddons,
+  addonCatalog = [],
   counterInsights,
   venueCommissionTotals,
-  rangeLabel,
+  venueCommissionVenues,
+  metricMode = "revenue",
+  costsSummary,
 }: Props) => {
   const toFinancialRow = useMemo(
     () => (order: UnifiedOrder) => {
@@ -336,6 +379,19 @@ const BookingsExecutiveDashboard = ({
       const recognizedBase = baseAmountAfterChannelCommissionValue ?? baseAmountValue ?? priceNetValue ?? 0;
       const recognizedRevenue = roundMoney(Math.max(recognizedBase + tipAmount, 0));
       const commissionAmount = asNumber(raw.commissionAmount);
+      const processingFee = Math.max(
+        0,
+        asNumber(raw.processingFee ?? raw.processing_fee ?? asRecord(order).processingFee ?? asRecord(order).processing_fee),
+      );
+      const processingFeeCurrencyRaw = String(
+        raw.processingFeeCurrency ??
+          raw.processing_fee_currency ??
+          asRecord(order).processingFeeCurrency ??
+          asRecord(order).processing_fee_currency ??
+          "",
+      )
+        .trim()
+        .toUpperCase();
       const partySizeTotal = Number.isFinite(order.quantity) ? Math.max(0, Math.round(order.quantity)) : 0;
       const fallbackBreakdownTotal = Math.max(0, (Number(order.menCount) || 0) + (Number(order.womenCount) || 0));
       const participants = partySizeTotal > 0 ? partySizeTotal : fallbackBreakdownTotal;
@@ -353,6 +409,8 @@ const BookingsExecutiveDashboard = ({
         priceGross: roundMoney(grossRevenue),
         priceNet: roundMoney(priceNet),
         commissionAmount: roundMoney(commissionAmount),
+        processingFee: roundMoney(processingFee),
+        processingFeeCurrency: processingFeeCurrencyRaw || null,
         channelCommissionRate: channelCommissionRateValue,
         channelCommissionAmount: channelCommissionAmountValue,
         baseAmountAfterChannelCommission: baseAmountAfterChannelCommissionValue,
@@ -369,6 +427,13 @@ const BookingsExecutiveDashboard = ({
         men: order.menCount,
         women: order.womenCount,
         status: order.status,
+        attendanceStatus: String(raw.attendanceStatus ?? order.attendanceStatus ?? "").toLowerCase(),
+        attendedTotal: Number.isFinite(Number(raw.attendedTotal ?? order.attendedTotal))
+          ? Math.max(0, Math.round(Number(raw.attendedTotal ?? order.attendedTotal)))
+          : null,
+        remainingTotal: Number.isFinite(Number(raw.remainingTotal ?? order.remainingTotal))
+          ? Math.max(0, Math.round(Number(raw.remainingTotal ?? order.remainingTotal)))
+          : null,
         paymentStatus: financial.paymentStatus,
         currency: financial.currency,
         grossRevenue: financial.priceGross,
@@ -380,6 +445,9 @@ const BookingsExecutiveDashboard = ({
         baseRevenueNoChannelCommission: roundMoney(recognizedBaseWithoutChannelCommission),
         tipRevenue: financial.tipAmount,
         commissionAmount: financial.commissionAmount,
+        processingFee: financial.processingFee,
+        processingFeeCurrency: financial.processingFeeCurrency,
+        discountAmount: financial.discountAmount,
       };
     },
     [],
@@ -414,16 +482,57 @@ const BookingsExecutiveDashboard = ({
     () => roundMoney(bookingFinancialRows.reduce((acc, row) => acc + row.grossRevenue, 0)),
     [bookingFinancialRows],
   );
-  const totalRevenueNoChannelCommission = useMemo(
-    () => roundMoney(bookingFinancialRows.reduce((acc, row) => acc + row.netRevenueNoChannelCommission, 0)),
+  const totalRevenueAfterChannelCommission = useMemo(
+    () => roundMoney(bookingFinancialRows.reduce((acc, row) => acc + row.netRevenue, 0)),
     [bookingFinancialRows],
   );
   const totalCashPayments = useMemo(
     () => roundMoney(counterInsights?.cashPaymentsTotal ?? 0),
     [counterInsights],
   );
+  const totalProcessingFees = useMemo(
+    () =>
+      roundMoney(
+        bookingFinancialRows.reduce((acc, row) => {
+          const fee = Number(row.processingFee ?? 0);
+          return acc + (Number.isFinite(fee) ? Math.max(0, fee) : 0);
+        }, 0),
+      ),
+    [bookingFinancialRows],
+  );
+  const totalTips = useMemo(
+    () => roundMoney(bookingFinancialRows.reduce((acc, row) => acc + Number(row.tipRevenue ?? 0), 0)),
+    [bookingFinancialRows],
+  );
+  const totalDiscounts = useMemo(
+    () => roundMoney(bookingFinancialRows.reduce((acc, row) => acc + Number(row.discountAmount ?? 0), 0)),
+    [bookingFinancialRows],
+  );
+  const totalRefunds = useMemo(
+    () => roundMoney(bookingFinancialRows.reduce((acc, row) => acc + Number(row.refundedAmount ?? 0), 0)),
+    [bookingFinancialRows],
+  );
+  const totalOnlineRevenue = useMemo(
+    () => roundMoney(Math.max(totalRevenueAfterChannelCommission - totalProcessingFees, 0)),
+    [totalRevenueAfterChannelCommission, totalProcessingFees],
+  );
   const addonCatalogUnitPriceByKey = useMemo(() => {
     const map = new Map<CanonicalAddonKey, number>();
+    addonCatalog.forEach((row) => {
+      const key = resolveCanonicalAddonKey(row.name);
+      if (!key) {
+        return;
+      }
+      const basePrice = asNumber(row.basePrice);
+      if (basePrice <= 0) {
+        return;
+      }
+      const existing = map.get(key) ?? 0;
+      if (existing <= 0) {
+        map.set(key, roundMoney(basePrice));
+      }
+    });
+
     scopedAddonRows.forEach((row) => {
       const key = resolveCanonicalAddonKey(row.addonName) ?? resolveCanonicalAddonKey(row.platformAddonName);
       if (!key) {
@@ -431,7 +540,10 @@ const BookingsExecutiveDashboard = ({
       }
       const catalogPrice = asNumber(row.addonBasePrice);
       const unitPrice = asNumber(row.unitPrice);
-      const candidate = catalogPrice > 0 ? catalogPrice : unitPrice > 0 ? unitPrice : 0;
+      const totalPrice = asNumber(row.totalPrice);
+      const quantity = Math.max(0, Number(row.quantity) || 0);
+      const derivedUnitFromTotal = quantity > 0 && totalPrice > 0 ? roundMoney(totalPrice / quantity) : 0;
+      const candidate = catalogPrice > 0 ? catalogPrice : unitPrice > 0 ? unitPrice : derivedUnitFromTotal > 0 ? derivedUnitFromTotal : 0;
       if (candidate <= 0) {
         return;
       }
@@ -441,7 +553,7 @@ const BookingsExecutiveDashboard = ({
       }
     });
     return map;
-  }, [scopedAddonRows]);
+  }, [addonCatalog, scopedAddonRows]);
   const addonKpiRows = useMemo(() => {
     const buckets: Record<CanonicalAddonKey, { label: string; quantity: number; revenue: number; unitPrice: number }> = {
       cocktails: { label: "Cocktails", quantity: 0, revenue: 0, unitPrice: addonCatalogUnitPriceByKey.get("cocktails") ?? 0 },
@@ -466,6 +578,27 @@ const BookingsExecutiveDashboard = ({
       };
       const snapshotHasValues = snapshotQty.cocktails + snapshotQty.tshirts + snapshotQty.photos > 0;
       if (snapshotHasValues) {
+        const rawAddonsAmount = roundMoney(Math.max(0, asNumber(asRecord(order.rawData).addonsAmount)));
+        const snapshotKeys = (Object.keys(snapshotQty) as CanonicalAddonKey[]).filter((key) => snapshotQty[key] > 0);
+        const knownKeys = snapshotKeys.filter((key) => buckets[key].unitPrice > 0);
+        const unknownKeys = snapshotKeys.filter((key) => buckets[key].unitPrice <= 0);
+
+        if (rawAddonsAmount > 0 && unknownKeys.length > 0) {
+          const knownAmount = knownKeys.reduce((acc, key) => acc + snapshotQty[key] * buckets[key].unitPrice, 0);
+          const remainingAmount = roundMoney(Math.max(rawAddonsAmount - knownAmount, 0));
+          const unknownQtyTotal = unknownKeys.reduce((acc, key) => acc + snapshotQty[key], 0);
+          if (remainingAmount > 0 && unknownQtyTotal > 0) {
+            const inferredUnit = roundMoney(remainingAmount / unknownQtyTotal);
+            if (inferredUnit > 0) {
+              unknownKeys.forEach((key) => {
+                if (buckets[key].unitPrice <= 0) {
+                  buckets[key].unitPrice = inferredUnit;
+                }
+              });
+            }
+          }
+        }
+
         (Object.keys(snapshotQty) as CanonicalAddonKey[]).forEach((key) => {
           const quantity = snapshotQty[key];
           if (quantity <= 0) {
@@ -518,11 +651,41 @@ const BookingsExecutiveDashboard = ({
 
   const totalPeople = useMemo(() => bookingFinancialRows.reduce((acc, row) => acc + row.people, 0), [bookingFinancialRows]);
   const totalBookings = bookingFinancialRows.length;
+  const noShowSummary = useMemo(() => {
+    return bookingFinancialRows.reduce(
+      (acc, row) => {
+        const isNoShow = row.attendanceStatus === "no_show" || String(row.status).toLowerCase() === "no_show";
+        if (isNoShow) {
+          acc.fullBookings += 1;
+          acc.fullGuests += Math.max(0, Number(row.people) || 0);
+          return acc;
+        }
+
+        if (row.attendanceStatus === "checked_in_partial") {
+          const people = Math.max(0, Number(row.people) || 0);
+          const remaining = row.remainingTotal;
+          const attended = row.attendedTotal;
+          const partialMissed =
+            Number.isFinite(Number(remaining)) && Number(remaining) >= 0
+              ? Math.min(people, Number(remaining))
+              : Number.isFinite(Number(attended))
+                ? Math.max(people - Number(attended), 0)
+                : 0;
+          if (partialMissed > 0) {
+            acc.partialBookings += 1;
+            acc.partialGuests += partialMissed;
+          }
+        }
+        return acc;
+      },
+      { fullBookings: 0, fullGuests: 0, partialBookings: 0, partialGuests: 0 },
+    );
+  }, [bookingFinancialRows]);
   const averageGuestsPerBooking = useMemo(
     () => (totalBookings > 0 ? roundMoney(totalPeople / totalBookings) : 0),
     [totalBookings, totalPeople],
   );
-  const averageBookingValue = totalBookings > 0 ? totalRevenueNoChannelCommission / totalBookings : 0;
+  const averageBookingValue = totalBookings > 0 ? roundMoney(totalOnlineRevenue / totalBookings) : 0;
   const venueCommissionByCurrency = useMemo(() => {
     return (venueCommissionTotals ?? []).map((row) => ({
       currency: String(row.currency ?? "PLN").toUpperCase(),
@@ -540,10 +703,54 @@ const BookingsExecutiveDashboard = ({
   }, [defaultCurrency, venueCommissionByCurrency]);
   const venueCommissionTotal = venueCommissionSelected?.receivable ?? 0;
   const venueCommissionCurrency = venueCommissionSelected?.currency ?? defaultCurrency;
+  const venueCommissionCollected = venueCommissionSelected?.receivableCollected ?? 0;
   const venueCommissionOutstanding = venueCommissionSelected?.receivableOutstanding ?? 0;
+  const topVenueCommissionRows = useMemo(
+    () =>
+      (venueCommissionVenues ?? [])
+        .filter((row) => String(row.currency ?? "").toUpperCase() === venueCommissionCurrency)
+        .sort((a, b) => Number(b.receivable ?? 0) - Number(a.receivable ?? 0))
+        .slice(0, 5),
+    [venueCommissionCurrency, venueCommissionVenues],
+  );
   const totalRevenueCard = useMemo(
-    () => roundMoney(totalRevenueNoChannelCommission + venueCommissionTotal + totalCashPayments),
-    [totalRevenueNoChannelCommission, venueCommissionTotal, totalCashPayments],
+    () => roundMoney(totalOnlineRevenue + venueCommissionTotal + totalCashPayments),
+    [totalOnlineRevenue, venueCommissionTotal, totalCashPayments],
+  );
+  const cashTypeBreakdown = useMemo(() => {
+    const walkInRaw = counterInsights?.walkInTicketBreakdown;
+    const walkInRows = Array.isArray(walkInRaw) ? walkInRaw : [];
+    if (walkInRows.length > 0) {
+      return walkInRows
+        .map((row) => ({
+          name: String(row.ticketType ?? "").trim() || "Walk-in",
+          currency: String(row.currency ?? "PLN").toUpperCase(),
+          amount: roundMoney(Number(row.amount ?? 0)),
+          guests: Math.max(0, Math.round(Number(row.guests ?? 0))),
+        }))
+        .filter((row) => row.amount > 0)
+        .sort(
+          (a, b) => b.amount - a.amount || a.name.localeCompare(b.name) || a.currency.localeCompare(b.currency),
+        );
+    }
+
+    return [...(counterInsights?.cashByChannel ?? [])]
+      .map((row) => ({
+        name: String(row.channelName ?? "").trim() || "Unknown",
+        currency: counterInsights?.currency ?? "PLN",
+        amount: roundMoney(Number(row.amount ?? 0)),
+        guests: null as number | null,
+      }))
+      .filter((row) => row.amount > 0)
+      .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name));
+  }, [counterInsights]);
+  const totalRevenueMixData = useMemo(
+    () => [
+      { key: "online", name: "Online", value: roundMoney(totalOnlineRevenue), color: "#214A66" },
+      { key: "venue", name: "Venue", value: roundMoney(venueCommissionTotal), color: "#2B7A78" },
+      { key: "cash", name: "Cash", value: roundMoney(totalCashPayments), color: "#6B705C" },
+    ],
+    [totalOnlineRevenue, venueCommissionTotal, totalCashPayments],
   );
 
   const dailyTrend = useMemo(() => {
@@ -699,46 +906,77 @@ const BookingsExecutiveDashboard = ({
     );
   }
 
+  const summaryCurrency = costsSummary?.currency ?? defaultCurrency;
+  const openBarPayouts = roundMoney(costsSummary?.openBarPayouts ?? 0);
+  const staffPayments = roundMoney(costsSummary?.staffPayments ?? 0);
+  const miscellaneous = roundMoney(costsSummary?.miscellaneous ?? 3400);
+  const totalCosts = roundMoney(openBarPayouts + staffPayments + miscellaneous);
+  const totalEarnings = roundMoney(totalRevenueCard - totalCosts);
+
+  if (metricMode === "earnings") {
+    return (
+      <Stack gap="md">
+        <SimpleGrid cols={{ base: 1, sm: 1, lg: 1 }} spacing="md">
+          <KpiCard
+            icon={<IconReceipt2 size={20} />}
+            label="Total Earnings"
+            value={formatMoney(totalEarnings, summaryCurrency)}
+            subtitle="Total Revenue - Total Costs"
+            accent="#214A66"
+          />
+        </SimpleGrid>
+      </Stack>
+    );
+  }
+
+  if (metricMode === "costs") {
+    
+    return (
+      <Stack gap="md">
+        <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
+          <KpiCard
+            icon={<IconReceipt2 size={20} />}
+            label="Total Costs"
+            value={formatMoney(totalCosts, summaryCurrency)}
+            subtitle="Open bar + Staff payments + Miscellaneous"
+            accent="#214A66"
+          />
+          <KpiCard
+            icon={<IconTicket size={20} />}
+            label="Open bar"
+            value={formatMoney(openBarPayouts, summaryCurrency)}
+            subtitle="Venue Numbers open bar payouts"
+            accent="#2B7A78"
+          />
+          <KpiCard
+            icon={<IconUsersGroup size={20} />}
+            label="Staff Payments"
+            value={formatMoney(staffPayments, summaryCurrency)}
+            subtitle="Pays: New earnings"
+            accent="#345995"
+          />
+          <KpiCard
+            icon={<IconCash size={20} />}
+            label="Miscellaneous"
+            value={formatMoney(miscellaneous, summaryCurrency)}
+            subtitle="Flat value (temporary)"
+            accent="#6B705C"
+          />
+        </SimpleGrid>
+      </Stack>
+    );
+  }
+
+  if (metricMode !== "revenue") {
+    return (
+      <Alert color="blue" title={`${metricMode === "earnings" ? "Earnings" : "Costs"} view`}>
+        Current KPI cards and charts are revenue-based.
+      </Alert>
+    );
+  }
+
   return (
     <Stack gap="md">
-      <Paper
-        radius="lg"
-        p="lg"
-        withBorder
-        style={{
-          background:
-            "linear-gradient(120deg, rgba(17,38,59,0.97) 0%, rgba(33,74,102,0.95) 58%, rgba(43,122,120,0.9) 100%)",
-          color: "#fff",
-          borderColor: "rgba(170, 196, 214, 0.45)",
-        }}
-      >
-        <Group justify="space-between" align="center" wrap="wrap">
-          <Stack gap={3}>
-            <Text size="xs" tt="uppercase" fw={700} style={{ letterSpacing: 0.8, opacity: 0.85 }}>
-              Executive Dashboard
-            </Text>
-            <Title order={2} style={{ lineHeight: 1.2 }}>
-              Bookings Performance Command Center
-            </Title>
-            <Text size="sm" style={{ opacity: 0.88 }}>
-              Range: {rangeLabel}
-            </Text>
-          </Stack>
-          <Group gap="xs">
-            {currencies.map((currency) => (
-              <Badge key={currency} variant="filled" color="gray">
-                Currency: {currency}
-              </Badge>
-            ))}
-            {currencies.length > 1 ? (
-              <Badge variant="filled" color="orange">
-                Mixed currencies detected
-              </Badge>
-            ) : null}
-          </Group>
-        </Group>
-      </Paper>
-
       <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
         <KpiCard
           icon={<IconReceipt2 size={20} />}
@@ -748,14 +986,54 @@ const BookingsExecutiveDashboard = ({
               title="Total Revenue"
               formula="Total Revenue = Online Revenue + Venue Commission + Cash Payments"
               variables={[
-                { name: "Online Revenue", description: "Base Amount without Channel Commission + Tip Amount." },
+                {
+                  name: "Online Revenue",
+                  description: "Base Amount after Channel Commission + Tip Amount - Processing Fees.",
+                },
                 { name: "Venue Commission", description: "Commission owed by venues for the selected range." },
                 { name: "Cash Payments", description: "Counter cash metrics marked as cash payment." },
               ]}
             />
           }
           value={formatMoney(totalRevenueCard, defaultCurrency)}
-          subtitle={`Online + Venue Commission + Cash`}
+          subtitle={
+            <Stack gap={6}>
+              <Box h={90}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={totalRevenueMixData} dataKey="value" nameKey="name" innerRadius={20} outerRadius={34}>
+                      {totalRevenueMixData.map((entry) => (
+                        <Cell key={`total-revenue-mix-${entry.key}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <RechartsTooltip
+                      formatter={(value: number) => formatMoney(Number(value), defaultCurrency)}
+                      labelFormatter={(label: string) => label}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </Box>
+              <Group gap="xs" wrap="wrap" justify="center">
+                {totalRevenueMixData.map((entry) => (
+                  <Group key={`total-revenue-legend-${entry.key}`} gap={4} wrap="nowrap">
+                    <Box
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: "50%",
+                        backgroundColor: entry.color,
+                        flexShrink: 0,
+                      }}
+                    />
+                    <Text size="xs" c="dimmed">
+                      <Text span fw={800}>{entry.name}</Text>
+                      {`: ${formatMoney(entry.value, defaultCurrency)}`}
+                    </Text>
+                  </Group>
+                ))}
+              </Group>
+            </Stack>
+          }
           accent="#214A66"
         />
         <KpiCard
@@ -764,141 +1042,301 @@ const BookingsExecutiveDashboard = ({
           info={
             <SectionInfo
               title="Online Revenue"
-              formula="Online Revenue = Base Amount without Channel Commission + Tip Amount"
+              formula="Online Revenue = Base Amount + Tip Amount - Processing Fees"
               variables={[
                 {
                   name: "Base Amount",
                   description:
-                    "Recognized booking revenue after discounts/refunds, without applying channel commission adjustment.",
+                    "Website Price - Discounts - Platform Commission - Partial Refunds",
                 },
                 { name: "Tip Amount", description: "Tip collected for the booking." },
+                { name: "Processing Fees", description: "Payment processing fees captured per booking." },
               ]}
               notes={[
                 "If base amount is missing, the dashboard falls back to Price Net for that row.",
               ]}
             />
           }
-          value={formatMoney(totalRevenueNoChannelCommission, defaultCurrency)}
-          subtitle={`Avg booking: ${formatMoney(averageBookingValue, defaultCurrency)}`}
+          value={formatMoney(totalOnlineRevenue, defaultCurrency)}
+          subtitle={
+            <Stack gap={4}>
+              <Text size="xs" c="dimmed" ta="center">
+                {`Avg booking: ${formatMoney(averageBookingValue, defaultCurrency)}`}
+              </Text>
+              <Text size="xs" fw={700} mt={8} ta="center" td="underline">
+                Breakdown
+              </Text>
+              <Stack gap={2}>
+                <Group justify="space-between" gap="xs" wrap="nowrap">
+                  <Text size="xs" c="dimmed">
+                    Discounts
+                  </Text>
+                  <Text size="xs" fw={700}>
+                    {formatMoney(totalDiscounts, defaultCurrency)}
+                  </Text>
+                </Group>
+                <Group justify="space-between" gap="xs" wrap="nowrap">
+                  <Text size="xs" c="dimmed">
+                    Tips
+                  </Text>
+                  <Text size="xs" fw={700}>
+                    {formatMoney(totalTips, defaultCurrency)}
+                  </Text>
+                </Group>
+                <Group justify="space-between" gap="xs" wrap="nowrap">
+                  <Text size="xs" c="dimmed">
+                    Refunds
+                  </Text>
+                  <Text size="xs" fw={700}>
+                    {formatMoney(totalRefunds, defaultCurrency)}
+                  </Text>
+                </Group>
+                <Group justify="space-between" gap="xs" wrap="nowrap">
+                  <Text size="xs" c="dimmed">
+                    Processing Fees (Stripe)
+                  </Text>
+                  <Text size="xs" fw={700}>
+                    {formatMoney(totalProcessingFees, defaultCurrency)}
+                  </Text>
+                </Group>
+                <Group justify="space-between" gap="xs" wrap="nowrap">
+                  <Text size="xs" c="dimmed">
+                    Platform Commission
+                  </Text>
+                  <Group gap={4} wrap="nowrap">
+                    <Text size="xs" fw={700}>
+                      No data available
+                    </Text>
+                    <Popover withArrow width={250} shadow="md" position="bottom-end">
+                      <Popover.Target>
+                        <ActionIcon variant="subtle" size="xs" color="gray" aria-label="Platform commission note">
+                          <IconInfoCircle size={12} />
+                        </ActionIcon>
+                      </Popover.Target>
+                      <Popover.Dropdown>
+                        <Text size="xs">Commission removed before Omni-Lodge ingestion</Text>
+                      </Popover.Dropdown>
+                    </Popover>
+                  </Group>
+                </Group>
+              </Stack>
+            </Stack>
+          }
           accent="#214A66"
         />
         <KpiCard
           icon={<IconCreditCardRefund size={20} />}
           label="Venue Commission"
-          info={
-            <SectionInfo
-              title="Venue Commission"
-              formula="Venue Commission = Sum(venueNumbers.summary.totalsByCurrency.receivable)"
-              variables={[
-                { name: "receivable", description: "Commission owed by venues for the selected range." },
-                {
-                  name: "Data source",
-                  description: "Same summary endpoint used in Venue Numbers tab (/venueNumbers?tab=summary).",
-                },
-              ]}
-            />
-          }
           value={formatMoney(venueCommissionTotal, venueCommissionCurrency)}
-          subtitle={`Outstanding: ${formatMoney(venueCommissionOutstanding, venueCommissionCurrency)}`}
+          subtitle={
+            <SimpleGrid cols={2} spacing={6} mt={8}>
+              <Stack gap={4} pr="xs" style={{ borderRight: "1px solid rgba(0,0,0,0.08)" }}>
+                <Text size="xs" fw={700} ta="center" td="underline">
+                  Top 5 Venues
+                </Text>
+                {topVenueCommissionRows.length === 0 ? (
+                  <Text size="xs" c="dimmed">
+                    No venue commission data
+                  </Text>
+                ) : (
+                  topVenueCommissionRows.map((row) => (
+                    <Group key={`venue-commission-top-${row.venueId ?? row.venueName}`} justify="space-between" gap="xs" wrap="nowrap">
+                      <Group gap={4} wrap="nowrap" style={{ minWidth: 0 }}>
+                        <Text size="xs" c="dimmed" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {row.venueName}
+                        </Text>
+                        <Popover withArrow width={170} shadow="md" position="bottom-start">
+                          <Popover.Target>
+                            <ActionIcon variant="subtle" size="xs" color="gray" aria-label={`Guests for ${row.venueName}`}>
+                              <IconInfoCircle size={12} />
+                            </ActionIcon>
+                          </Popover.Target>
+                          <Popover.Dropdown>
+                            <Text size="xs" ta="center" fw={700}>
+                              {`${Math.max(0, Number(row.totalPeople ?? 0)).toLocaleString()} guests`}
+                            </Text>
+                          </Popover.Dropdown>
+                        </Popover>
+                      </Group>
+                      <Text size="xs" fw={700}>
+                        {formatMoney(row.receivable, venueCommissionCurrency)}
+                      </Text>
+                    </Group>
+                  ))
+                )}
+              </Stack>
+              <Stack gap={6} pl="xs">
+                <Text size="xs" fw={700} ta="center" td="underline">
+                  Status
+                </Text>
+                <Group justify="space-between" gap="xs" wrap="nowrap">
+                  <Text size="xs" c="dimmed">
+                    Collected
+                  </Text>
+                  <Text size="xs" fw={700} style={{ whiteSpace: "nowrap" }}>
+                    {formatMoney(venueCommissionCollected, venueCommissionCurrency)}
+                  </Text>
+                </Group>
+                <Group justify="space-between" gap="xs" wrap="nowrap">
+                  <Text size="xs" c="dimmed">
+                    Outstanding
+                  </Text>
+                  <Text size="xs" fw={700} style={{ whiteSpace: "nowrap" }}>
+                    {formatMoney(venueCommissionOutstanding, venueCommissionCurrency)}
+                  </Text>
+                </Group>
+              </Stack>
+            </SimpleGrid>
+          }
           accent="#2B7A78"
         />
         <KpiCard
           icon={<IconCash size={20} />}
           label="Cash Tickets"
-          info={
-            <SectionInfo
-              title="Cash Tickets"
-              formula="Cash amount = Sum(counter cash_payment metrics), Cash guests = Sum(counter people attended metrics for cash channels), Free = Sum(extracted ticket counts from notes)"
-              variables={[
-                { name: "Counter cash metrics", description: "Counter channel metrics marked as cash payment." },
-                {
-                  name: "Cash guests",
-                  description: "Attended people metrics on the same counter/channel combinations with cash payments.",
-                },
-                { name: "Free ticket counts", description: "Values parsed from counter notes using free-ticket patterns." },
-              ]}
-            />
-          }
           value={`${(counterInsights?.cashGuestsTotal ?? 0).toLocaleString()} guests: ${formatMoney(counterInsights?.cashPaymentsTotal ?? 0, counterInsights?.currency ?? "PLN")}`}
-          subtitle={`Free: ${(counterInsights?.freeTicketsTotal ?? 0).toLocaleString()}`}
+          subtitle={
+            <Stack gap={4}>
+              <Text size="xs" fw={700} td="underline" ta="center">
+                Breakdown
+              </Text>
+              {cashTypeBreakdown.length === 0 ? (
+                <Text size="xs" c="dimmed">
+                  No cash ticket breakdown available
+                </Text>
+              ) : (
+                cashTypeBreakdown.map((row) => (
+                  <Group key={`cash-breakdown-${row.name}`} justify="space-between" gap="xs" wrap="nowrap">
+                    <Text size="xs" c="dimmed" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {row.guests !== null
+                        ? `${row.name} (${row.currency}): ${row.guests.toLocaleString()} guests`
+                        : row.name}
+                    </Text>
+                    <Text size="xs" fw={700}>
+                      {formatMoney(row.amount, row.currency)}
+                    </Text>
+                  </Group>
+                ))
+              )}
+              <Group justify="space-between" gap="xs" wrap="nowrap">
+                <Text size="xs" c="dimmed">
+                  {`Free Tickets: ${(counterInsights?.freeTicketsTotal ?? 0).toLocaleString()} guests`}
+                </Text>
+                <Text size="xs" fw={700}>
+                  {formatMoney(0, counterInsights?.currency ?? "PLN")}
+                </Text>
+              </Group>
+            </Stack>
+          }
           accent="#6B705C"
         />
         <KpiCard
           icon={<IconUsersGroup size={20} />}
           label="Bookings & Guests"
-          info={
-            <SectionInfo
-              title="Bookings & Guests"
-              formula="Bookings = Count(rows), People = Sum(row people)"
-              variables={[
-                { name: "Rows", description: "Bookings returned for the selected range and filters." },
-                {
-                  name: "Row people",
-                  description: "Participant count per booking row (party_size_total first, breakdown fallback).",
-                },
-              ]}
-            />
+          value={
+            <Group gap={4} justify="center" wrap="nowrap">
+              <Text span fw={800} size="xl">
+                {`${totalPeople.toLocaleString()} guests`}
+              </Text>
+              <Popover withArrow width={210} shadow="md" position="bottom">
+                <Popover.Target>
+                  <ActionIcon variant="subtle" size="sm" color="gray" aria-label="Guests including cash walk-ins">
+                    <IconInfoCircle size={14} />
+                  </ActionIcon>
+                </Popover.Target>
+                <Popover.Dropdown>
+                  <Text size="xs" ta="center" fw={700}>
+                    {`${(totalPeople + (counterInsights?.cashGuestsTotal ?? 0)).toLocaleString()} guests if we include cash walk-ins`}
+                  </Text>
+                </Popover.Dropdown>
+              </Popover>
+            </Group>
           }
-          value={`${totalBookings.toLocaleString()} / ${totalPeople.toLocaleString()}`}
-          subtitle={`AVG. Guests per Bookings: ${averageGuestsPerBooking.toLocaleString(undefined, {
-            minimumFractionDigits: 0,
-            maximumFractionDigits: 2,
-          })}`}
+          subtitle={
+            <Stack gap={6} mt={2}>
+              <Group justify="space-between" gap="xs" wrap="nowrap">
+                <Text size="xs" c="dimmed">
+                  Bookings
+                </Text>
+                <Text size="xs" fw={700}>
+                  {totalBookings.toLocaleString()}
+                </Text>
+              </Group>
+              <Group justify="space-between" gap="xs" wrap="nowrap">
+                <Text size="xs" c="dimmed">
+                  Avg. Guests per Booking
+                </Text>
+                <Text size="xs" fw={700}>
+                  {averageGuestsPerBooking.toLocaleString(undefined, {
+                    minimumFractionDigits: 0,
+                    maximumFractionDigits: 2,
+                  })}
+                </Text>
+              </Group>
+              <Group justify="space-between" gap="xs" wrap="nowrap">
+                <Group gap={4} wrap="nowrap">
+                  <Text size="xs" c="dimmed">
+                    Full No-Show
+                  </Text>
+                  <Popover withArrow width={220} shadow="md" position="bottom-start">
+                    <Popover.Target>
+                      <ActionIcon variant="subtle" size="xs" color="gray" aria-label="Full no-show definition">
+                        <IconInfoCircle size={12} />
+                      </ActionIcon>
+                    </Popover.Target>
+                    <Popover.Dropdown>
+                      <Text size="xs" ta="center" fw={700}>
+                        The full booking didn't show up
+                      </Text>
+                    </Popover.Dropdown>
+                  </Popover>
+                </Group>
+                <Text size="xs" fw={700}>
+                  {`${noShowSummary.fullGuests.toLocaleString()} guests (${noShowSummary.fullBookings.toLocaleString()} bookings)`}
+                </Text>
+              </Group>
+              <Group justify="space-between" gap="xs" wrap="nowrap">
+                <Group gap={4} wrap="nowrap">
+                  <Text size="xs" c="dimmed">
+                    Partial No-Show
+                  </Text>
+                  <Popover withArrow width={260} shadow="md" position="bottom-start">
+                    <Popover.Target>
+                      <ActionIcon variant="subtle" size="xs" color="gray" aria-label="Partial no-show definition">
+                        <IconInfoCircle size={12} />
+                      </ActionIcon>
+                    </Popover.Target>
+                    <Popover.Dropdown>
+                      <Text size="xs" ta="center" fw={700}>
+                        The booking showed up with some of the participants, not all of them.
+                      </Text>
+                    </Popover.Dropdown>
+                  </Popover>
+                </Group>
+                <Text size="xs" fw={700}>
+                  {`${noShowSummary.partialGuests.toLocaleString()} guests (${noShowSummary.partialBookings.toLocaleString()} bookings)`}
+                </Text>
+              </Group>
+              <Group justify="space-between" gap="xs" wrap="nowrap">
+                <Text size="xs" c="dimmed">
+                  Total No-Show
+                </Text>
+                <Text size="xs" fw={700}>
+                  {`${(noShowSummary.fullGuests + noShowSummary.partialGuests).toLocaleString()} guests (${(noShowSummary.fullBookings + noShowSummary.partialBookings).toLocaleString()} bookings)`}
+                </Text>
+              </Group>
+            </Stack>
+          }
           accent="#345995"
         />
-        <Paper
-          withBorder
-          radius="lg"
-          p="md"
-          shadow="sm"
-          style={{
-            background: "linear-gradient(135deg, rgba(181,101,118,0.14) 0%, #ffffff 100%)",
-            borderColor: "rgba(181,101,118,0.45)",
-          }}
-        >
-          <Stack gap="sm">
-            <Group justify="space-between" align="start" wrap="nowrap">
-              <Stack gap={2}>
-                <Group gap={4} align="center" wrap="nowrap">
-                  <Text size="xs" tt="uppercase" fw={700} c="dimmed" style={{ letterSpacing: 0.5 }}>
-                    Add-Ons
-                  </Text>
-                  <SectionInfo
-                    title="Add-Ons"
-                    formula="Add-on Qty = Snapshot quantities first, fallback to booking_addons. Revenue = Qty * catalog unit price."
-                    variables={[
-                      { name: "Snapshot quantities", description: "Cocktails/T-Shirts/Photos from booking add-ons snapshot." },
-                      { name: "Fallback quantities", description: "booking_addons rows when snapshot is empty for that booking." },
-                      { name: "Catalog unit price", description: "Price resolved from add-ons catalog (base_price)." },
-                    ]}
-                  />
-                </Group>
-              </Stack>
-              <ThemeIcon size={40} radius="md" variant="light" color="dark">
-                <IconTicket size={20} />
-              </ThemeIcon>
-            </Group>
-
-            <SimpleGrid cols={2} spacing="xs">
-              <Paper withBorder radius="md" p="xs">
-                <Text size="xs" c="dimmed">
-                  Total Qty
-                </Text>
-                <Text fw={800} size="lg">
-                  {totalAddonUnits.toLocaleString()}
-                </Text>
-              </Paper>
-              <Paper withBorder radius="md" p="xs">
-                <Text size="xs" c="dimmed">
-                  Revenue
-                </Text>
-                <Text fw={800} size="lg">
-                  {formatMoney(totalAddonsRevenue, defaultCurrency)}
-                </Text>
-              </Paper>
-            </SimpleGrid>
-
+        <KpiCard
+          icon={<IconTicket size={20} />}
+          label="Add-Ons"
+          value={formatMoney(totalAddonsRevenue, defaultCurrency)}
+          subtitle={
             <Stack gap={4}>
+              <Text size="xs" fw={700} td="underline" ta="center">
+                Breakdown
+              </Text>
               {addonKpiRows.every((row) => row.quantity <= 0) ? (
                 <Text size="xs" c="dimmed">
                   No add-ons sold
@@ -906,24 +1344,25 @@ const BookingsExecutiveDashboard = ({
               ) : (
                 addonKpiRows.map((row) => (
                   <Group key={`addon-kpi-${row.key}`} justify="space-between" wrap="nowrap" gap="xs">
-                    <Text size="xs" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <Text size="xs" c="dimmed" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {row.label}
                     </Text>
                     <Text size="xs" fw={700}>
-                      {row.quantity.toLocaleString()} · {formatMoney(row.revenue, defaultCurrency)}
+                      {`${row.quantity.toLocaleString()} qty - ${formatMoney(row.revenue, defaultCurrency)}`}
                     </Text>
                   </Group>
                 ))
               )}
             </Stack>
-          </Stack>
-        </Paper>
+          }
+          accent="#B56576"
+        />
       </SimpleGrid>
 
       <SimpleGrid cols={{ base: 1, lg: 3 }} spacing="md">
         <Box style={{ gridColumn: "span 2" }}>
           <ChartShell
-            title="Revenue trend (base+tip vs gross, bookings/day)"
+            title="Revenue trend (after commission + tip vs gross, bookings/day)"
             info={
               <SectionInfo
                 title="Revenue Trend"
@@ -952,7 +1391,7 @@ const BookingsExecutiveDashboard = ({
                   yAxisId="money"
                   type="monotone"
                   dataKey="revenue"
-                  name="Revenue (base+tip)"
+                  name="Revenue (after commission + tip)"
                   stroke="#214A66"
                   fill="#214A6633"
                 />
@@ -992,8 +1431,8 @@ const BookingsExecutiveDashboard = ({
               </Pie>
               <RechartsTooltip
                 formatter={(_value: number, _name: string, item: { payload?: { gross?: number; revenue?: number } }) => [
-                  formatMoney(Number(item?.payload?.gross ?? item?.payload?.revenue ?? 0), defaultCurrency),
-                  "Price without refunds",
+                  formatMoney(Number(item?.payload?.revenue ?? 0), defaultCurrency),
+                  "Revenue (after channel commission)",
                 ]}
               />
               <Legend />
@@ -1023,8 +1462,8 @@ const BookingsExecutiveDashboard = ({
               <YAxis type="category" dataKey="platform" width={110} />
               <RechartsTooltip
                 formatter={(_value: number, _name: string, item: { payload?: { gross?: number; revenue?: number } }) => [
-                  formatMoney(Number(item?.payload?.gross ?? item?.payload?.revenue ?? 0), defaultCurrency),
-                  "Price without refunds",
+                  formatMoney(Number(item?.payload?.revenue ?? 0), defaultCurrency),
+                  "Revenue (after channel commission)",
                 ]}
               />
               <Bar dataKey="revenue" fill="#214A66" radius={[0, 6, 6, 0]} />
@@ -1362,7 +1801,7 @@ const BookingsExecutiveDashboard = ({
           </Alert>
           <Alert color="teal" variant="light" title="Best day">
             {bestDay
-              ? `${bestDay.date} delivered ${formatMoney(bestDay.revenue, defaultCurrency)} in revenue (base+tip).`
+              ? `${bestDay.date} delivered ${formatMoney(bestDay.revenue, defaultCurrency)} in revenue (after commission + tip).`
               : "No daily trend data available."}
           </Alert>
           <Alert color="grape" variant="light" title="Add-ons impact">
