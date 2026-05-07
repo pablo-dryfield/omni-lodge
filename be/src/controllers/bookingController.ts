@@ -1598,6 +1598,8 @@ const bookingToUnifiedOrder = (
       priceNet: booking.priceNet,
       commissionAmount: booking.commissionAmount,
       commissionRate: booking.commissionRate,
+      processingFee: booking.processingFee,
+      processingFeeCurrency: booking.processingFeeCurrency ?? null,
       channelCommissionRate: commissionEnrichment?.channelCommissionRate ?? null,
       channelCommissionAmount: commissionEnrichment?.channelCommissionAmount ?? null,
       baseAmountAfterChannelCommission: commissionEnrichment?.baseAmountAfterChannelCommission ?? null,
@@ -1791,28 +1793,177 @@ const FREE_TICKET_REGEXES = [
   /(?:free|complimentary|comp)\s*tickets?\s*[:=-]?\s*(\d{1,4})/gi,
   /(\d{1,4})\s*(?:free|complimentary|comp)\s*tickets?/gi,
   /(?:ticket[s]?\s*free)\s*[:=-]?\s*(\d{1,4})/gi,
+  /(?:^|\b)free\s*[:=-]?\s*(\d{1,4})(?:\b|$)/gi,
+  /(?:^|\b)comp(?:limentary)?\s*[:=-]?\s*(\d{1,4})(?:\b|$)/gi,
 ];
+
+const CASH_SNAPSHOT_START = '-- CASH-SNAPSHOT START --';
+const CASH_SNAPSHOT_END = '-- CASH-SNAPSHOT END --';
+const FREE_SNAPSHOT_START = '-- FREE-SNAPSHOT START --';
+const FREE_SNAPSHOT_END = '-- FREE-SNAPSHOT END --';
+
+type WalkInTicketBreakdownRow = {
+  ticketType: string;
+  currency: string;
+  guests: number;
+  amount: number;
+};
+
+const stripSnapshotBlocksFromNote = (note: string): string => {
+  const stripBlock = (input: string, startToken: string, endToken: string): string => {
+    const escapedStart = startToken.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const escapedEnd = endToken.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const pattern = new RegExp(`${escapedStart}[\\s\\S]*?${escapedEnd}`, 'g');
+    return input.replace(pattern, '');
+  };
+
+  const withoutCash = stripBlock(note, CASH_SNAPSHOT_START, CASH_SNAPSHOT_END);
+  const withoutSnapshots = stripBlock(withoutCash, FREE_SNAPSHOT_START, FREE_SNAPSHOT_END);
+  return withoutSnapshots.trim();
+};
+
+const extractFreeSnapshotPeopleFromNote = (note: string): number => {
+  const startIndex = note.indexOf(FREE_SNAPSHOT_START);
+  if (startIndex === -1) {
+    return 0;
+  }
+  const endIndex = note.indexOf(FREE_SNAPSHOT_END, startIndex + FREE_SNAPSHOT_START.length);
+  if (endIndex === -1) {
+    return 0;
+  }
+
+  const snapshotRaw = note.slice(startIndex + FREE_SNAPSHOT_START.length, endIndex).trim();
+  if (!snapshotRaw) {
+    return 0;
+  }
+
+  try {
+    const parsed = JSON.parse(snapshotRaw) as {
+      channels?: Record<
+        string,
+        {
+          people?: { qty?: unknown } | null;
+        }
+      >;
+    };
+
+    if (!parsed || typeof parsed !== 'object' || !parsed.channels || typeof parsed.channels !== 'object') {
+      return 0;
+    }
+
+    let total = 0;
+    Object.values(parsed.channels).forEach((channel) => {
+      const qty = Math.max(0, Math.round(parseMoneyLikeNumber(channel?.people?.qty)));
+      if (Number.isFinite(qty) && qty > 0) {
+        total += qty;
+      }
+    });
+    return total;
+  } catch {
+    return 0;
+  }
+};
 
 const extractFreeTicketsFromNote = (note: string | null | undefined): number => {
   if (!note || typeof note !== 'string') {
     return 0;
   }
+  const normalizedNote = String(note);
+  const snapshotTotal = extractFreeSnapshotPeopleFromNote(normalizedNote);
+  const noteWithoutSnapshots = stripSnapshotBlocksFromNote(normalizedNote);
+
   let total = 0;
   FREE_TICKET_REGEXES.forEach((regex) => {
     regex.lastIndex = 0;
-    let match: RegExpExecArray | null = regex.exec(note);
+    let match: RegExpExecArray | null = regex.exec(noteWithoutSnapshots);
     while (match) {
       const parsed = Number.parseInt(match[1] ?? '0', 10);
       if (Number.isFinite(parsed) && parsed > 0) {
         total += parsed;
       }
-      match = regex.exec(note);
+      match = regex.exec(noteWithoutSnapshots);
     }
   });
-  if (total === 0 && /(free|complimentary|comp)\s*tickets?/i.test(note)) {
+  if (snapshotTotal > 0 && total > 0) {
+    return Math.max(snapshotTotal, total);
+  }
+  if (snapshotTotal > 0) {
+    return snapshotTotal;
+  }
+  if (total === 0 && /(free|complimentary|comp)\s*tickets?/i.test(noteWithoutSnapshots)) {
     return 1;
   }
   return total;
+};
+
+const sanitizeCashCurrency = (value: unknown): string => {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(normalized) ? normalized : 'PLN';
+};
+
+const extractWalkInTicketBreakdownFromNote = (note: string | null | undefined): WalkInTicketBreakdownRow[] => {
+  if (!note || typeof note !== 'string') {
+    return [];
+  }
+  const startIndex = note.indexOf(CASH_SNAPSHOT_START);
+  if (startIndex === -1) {
+    return [];
+  }
+  const endIndex = note.indexOf(CASH_SNAPSHOT_END, startIndex + CASH_SNAPSHOT_START.length);
+  if (endIndex === -1) {
+    return [];
+  }
+  const snapshotRaw = note.slice(startIndex + CASH_SNAPSHOT_START.length, endIndex).trim();
+  if (!snapshotRaw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(snapshotRaw) as {
+      channels?: Record<
+        string,
+        {
+          tickets?: Array<{
+            name?: unknown;
+            currencies?: Array<{
+              currency?: unknown;
+              people?: unknown;
+              cash?: unknown;
+            }>;
+          }>;
+        }
+      >;
+    };
+    const channels = parsed && typeof parsed === 'object' ? parsed.channels : null;
+    if (!channels || typeof channels !== 'object') {
+      return [];
+    }
+
+    const rows: WalkInTicketBreakdownRow[] = [];
+    Object.values(channels).forEach((channelValue) => {
+      const tickets = Array.isArray(channelValue?.tickets) ? channelValue.tickets : [];
+      tickets.forEach((ticketCandidate) => {
+        const ticketType = String(ticketCandidate?.name ?? '').trim() || 'Walk-in';
+        const currencies = Array.isArray(ticketCandidate?.currencies) ? ticketCandidate.currencies : [];
+        currencies.forEach((currencyCandidate) => {
+          const amount = roundCurrency(Math.max(0, parseMoneyLikeNumber(currencyCandidate?.cash)));
+          if (!Number.isFinite(amount) || amount <= 0) {
+            return;
+          }
+          const guests = Math.max(0, Math.round(parseMoneyLikeNumber(currencyCandidate?.people)));
+          rows.push({
+            ticketType,
+            currency: sanitizeCashCurrency(currencyCandidate?.currency),
+            guests,
+            amount,
+          });
+        });
+      });
+    });
+    return rows;
+  } catch {
+    return [];
+  }
 };
 
 const resolveCounterDateWhere = (start: string | null, end: string | null): WhereOptions => {
@@ -1911,6 +2062,12 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
         })
       : [];
 
+    const addonCatalogRows = await Addon.findAll({
+      attributes: ['id', 'name', 'basePrice'],
+      where: { isActive: true },
+      order: [['id', 'ASC']],
+    });
+
     const bookingAddons = bookingAddonsRows.map((addon) => {
       const plain = addon.get({ plain: true }) as {
         id: number;
@@ -1978,6 +2135,12 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
       amount: number;
     };
     type FreeTicketEntryRow = { counterId: number; counterDate: string; count: number; note: string };
+    type WalkInTicketBreakdownEntry = {
+      ticketType: string;
+      currency: string;
+      guests: number;
+      amount: number;
+    };
 
     let cashPaymentsTotal = 0;
     let cashGuestsTotal = 0;
@@ -1985,6 +2148,7 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
     const cashByChannelMap = new Map<string, CashByChannelRow>();
     const cashEntries: CashEntryRow[] = [];
     const freeTicketEntries: FreeTicketEntryRow[] = [];
+    const walkInTicketBreakdownMap = new Map<string, WalkInTicketBreakdownEntry>();
     const cashGuestMetricByCounterChannel = new Map<string, number>();
 
     if (counters.length > 0) {
@@ -2031,6 +2195,19 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
           note,
         });
       }
+      const walkInRows = extractWalkInTicketBreakdownFromNote(note);
+      walkInRows.forEach((row) => {
+        const key = `${row.ticketType.toLowerCase()}|${row.currency}`;
+        const existing = walkInTicketBreakdownMap.get(key) ?? {
+          ticketType: row.ticketType,
+          currency: row.currency,
+          guests: 0,
+          amount: 0,
+        };
+        existing.guests += Math.max(0, Math.round(Number(row.guests) || 0));
+        existing.amount = roundCurrency(existing.amount + Math.max(0, Number(row.amount) || 0));
+        walkInTicketBreakdownMap.set(key, existing);
+      });
 
       const metrics = (counter as unknown as { metrics?: CounterChannelMetric[] }).metrics ?? [];
       metrics.forEach((metric) => {
@@ -2072,6 +2249,13 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
     const cashByChannel = Array.from(cashByChannelMap.values())
       .map((entry) => ({ ...entry, amount: roundCurrency(entry.amount) }))
       .sort((a, b) => b.amount - a.amount || a.channelName.localeCompare(b.channelName));
+    const walkInTicketBreakdown = Array.from(walkInTicketBreakdownMap.values())
+      .map((entry) => ({
+        ...entry,
+        guests: Math.max(0, Math.round(entry.guests)),
+        amount: roundCurrency(entry.amount),
+      }))
+      .sort((a, b) => b.amount - a.amount || a.ticketType.localeCompare(b.ticketType) || a.currency.localeCompare(b.currency));
 
     res.status(200).json({
       total: orders.length,
@@ -2079,11 +2263,17 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
       products,
       orders,
       bookingAddons,
+      addonCatalog: addonCatalogRows.map((addon) => ({
+        id: Number(addon.id),
+        name: String(addon.name ?? '').trim(),
+        basePrice: roundCurrency(parseMoneyLikeNumber(addon.basePrice)),
+      })),
       counterInsights: {
         currency: 'PLN',
         cashPaymentsTotal: roundCurrency(cashPaymentsTotal),
         cashGuestsTotal: Math.max(0, Math.round(cashGuestsTotal)),
         cashByChannel,
+        walkInTicketBreakdown,
         cashEntries,
         freeTicketsTotal,
         freeTicketEntries,
