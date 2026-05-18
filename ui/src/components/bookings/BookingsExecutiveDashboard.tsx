@@ -1,5 +1,6 @@
 ﻿import { type ReactNode, useMemo } from "react";
 import {
+  Accordion,
   ActionIcon,
   Alert,
   Box,
@@ -817,7 +818,7 @@ const BookingsExecutiveDashboard = ({
       const bucket = map.get(country) ?? { country, bookings: 0, guests: 0, revenue: 0 };
       bucket.bookings += 1;
       bucket.guests += Math.max(0, Number(row.people) || 0);
-      bucket.revenue += Number(row.netRevenue) || 0;
+      bucket.revenue += (Number(row.netRevenue) || 0) - (Number(row.processingFee) || 0);
       map.set(country, bucket);
     });
     return Array.from(map.values())
@@ -836,18 +837,12 @@ const BookingsExecutiveDashboard = ({
     () => visiblePaymentCountryBreakdown.reduce((acc, row) => acc + row.bookings, 0),
     [visiblePaymentCountryBreakdown],
   );
-  const taxationAreaRevenue = useMemo(() => {
-    return visiblePaymentCountryBreakdown.reduce(
-      (acc, row) => {
-        if (EU_COUNTRY_CODES.has(row.country)) {
-          acc.eu += Number(row.revenue) || 0;
-        } else {
-          acc.nonEu += Number(row.revenue) || 0;
-        }
-        return acc;
-      },
-      { eu: 0, nonEu: 0 },
-    );
+  const taxationAreaBreakdown = useMemo(() => {
+    const euRows = visiblePaymentCountryBreakdown.filter((row) => EU_COUNTRY_CODES.has(row.country));
+    const nonEuRows = visiblePaymentCountryBreakdown.filter((row) => !EU_COUNTRY_CODES.has(row.country));
+    const euRevenue = roundMoney(euRows.reduce((acc, row) => acc + (Number(row.revenue) || 0), 0));
+    const nonEuRevenue = roundMoney(nonEuRows.reduce((acc, row) => acc + (Number(row.revenue) || 0), 0));
+    return { euRows, nonEuRows, euRevenue, nonEuRevenue };
   }, [visiblePaymentCountryBreakdown]);
 
   const dailyTrend = useMemo(() => {
@@ -1782,22 +1777,72 @@ const BookingsExecutiveDashboard = ({
             <Text size="xs" fw={700} ta="center">
               Revenue by Taxation area
             </Text>
-            <Group justify="space-between" gap="xs" wrap="nowrap">
-              <Text size="xs" c="dimmed">
-                EU
-              </Text>
-              <Text size="xs" fw={700}>
-                {formatMoney(taxationAreaRevenue.eu, defaultCurrency)}
-              </Text>
-            </Group>
-            <Group justify="space-between" gap="xs" wrap="nowrap">
-              <Text size="xs" c="dimmed">
-                Non-EU
-              </Text>
-              <Text size="xs" fw={700}>
-                {formatMoney(taxationAreaRevenue.nonEu, defaultCurrency)}
-              </Text>
-            </Group>
+            <Accordion variant="separated" radius="sm">
+              <Accordion.Item value="eu">
+                <Accordion.Control>
+                  <Group justify="space-between" gap="xs" wrap="nowrap">
+                    <Text size="xs" fw={700}>
+                      EU
+                    </Text>
+                    <Text size="xs" fw={700}>
+                      {formatMoney(taxationAreaBreakdown.euRevenue, defaultCurrency)}
+                    </Text>
+                  </Group>
+                </Accordion.Control>
+                <Accordion.Panel>
+                  {taxationAreaBreakdown.euRows.length === 0 ? (
+                    <Text size="xs" c="dimmed">
+                      No EU country revenue
+                    </Text>
+                  ) : (
+                    <Stack gap={4}>
+                      {taxationAreaBreakdown.euRows.map((row) => (
+                        <Group key={`taxation-eu-${row.country}`} justify="space-between" gap="xs" wrap="nowrap">
+                          <Text size="xs" c="dimmed">
+                            {formatCountryDisplay(row.country)}
+                          </Text>
+                          <Text size="xs" fw={700}>
+                            {formatMoney(row.revenue, defaultCurrency)}
+                          </Text>
+                        </Group>
+                      ))}
+                    </Stack>
+                  )}
+                </Accordion.Panel>
+              </Accordion.Item>
+              <Accordion.Item value="non_eu">
+                <Accordion.Control>
+                  <Group justify="space-between" gap="xs" wrap="nowrap">
+                    <Text size="xs" fw={700}>
+                      Non-EU
+                    </Text>
+                    <Text size="xs" fw={700}>
+                      {formatMoney(taxationAreaBreakdown.nonEuRevenue, defaultCurrency)}
+                    </Text>
+                  </Group>
+                </Accordion.Control>
+                <Accordion.Panel>
+                  {taxationAreaBreakdown.nonEuRows.length === 0 ? (
+                    <Text size="xs" c="dimmed">
+                      No Non-EU country revenue
+                    </Text>
+                  ) : (
+                    <Stack gap={4}>
+                      {taxationAreaBreakdown.nonEuRows.map((row) => (
+                        <Group key={`taxation-noneu-${row.country}`} justify="space-between" gap="xs" wrap="nowrap">
+                          <Text size="xs" c="dimmed">
+                            {formatCountryDisplay(row.country)}
+                          </Text>
+                          <Text size="xs" fw={700}>
+                            {formatMoney(row.revenue, defaultCurrency)}
+                          </Text>
+                        </Group>
+                      ))}
+                    </Stack>
+                  )}
+                </Accordion.Panel>
+              </Accordion.Item>
+            </Accordion>
           </Stack>
         </Paper>
       </SimpleGrid>
