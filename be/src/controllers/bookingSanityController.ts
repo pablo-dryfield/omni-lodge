@@ -15,6 +15,7 @@ import {
   type EcwidOrder,
 } from '../services/ecwidService.js';
 import { processBookingEmail, type ScopedReprocessHint } from '../services/bookings/bookingIngestionService.js';
+import { syncEcwidBookingProcessingFeeByBookingId } from '../services/bookings/ecwidProcessingFeeSyncService.js';
 import { transformEcwidOrders } from '../utils/ecwidAdapter.js';
 import { sanitizeProductSource } from '../utils/productName.js';
 
@@ -51,6 +52,10 @@ type EcwidFixOrderBody = {
 
 type EcwidFixOrdersBody = {
   orderIds?: string[];
+};
+
+type EcwidBackfillPaymentMetadataBody = SanityCheckQueryParams & {
+  maxConcurrency?: number;
 };
 
 type OmniOrderAggregate = {
@@ -2063,6 +2068,80 @@ export const fixEcwidOrdersToExternalBulk = async (req: Request, res: Response):
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to bulk fix Ecwid orders to external';
+    res.status(500).json({ message });
+  }
+};
+
+export const backfillEcwidPaymentMetadata = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const body = (req.body ?? {}) as EcwidBackfillPaymentMetadataBody;
+    const { startDate, endDate } = resolveDateRange(body);
+    const dateField = resolveDateField(body.dateField);
+    const includeCancelled = parseBooleanFlag(body.includeCancelled, false);
+    const requestedConcurrency = Number.parseInt(String(body.maxConcurrency ?? '6'), 10);
+    const maxConcurrency = Number.isFinite(requestedConcurrency)
+      ? Math.max(1, Math.min(requestedConcurrency, 20))
+      : 6;
+
+    const omni = await collectOmniData({
+      startDate,
+      endDate,
+      dateField,
+      platform: 'ecwid',
+      includeCancelled,
+    });
+
+    const orderTargets = omni.orders
+      .map((row) => ({
+        orderKey: row.orderKey,
+        bookingId: Number(row.bookingIds?.[0] ?? 0),
+      }))
+      .filter((row) => Number.isFinite(row.bookingId) && row.bookingId > 0);
+
+    const failed: Array<{ orderKey: string; bookingId: number; error: string }> = [];
+    let processedOrders = 0;
+    let cursor = 0;
+
+    const workerCount = Math.min(maxConcurrency, orderTargets.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const index = cursor;
+        cursor += 1;
+        if (index >= orderTargets.length) {
+          return;
+        }
+        const target = orderTargets[index];
+        try {
+          await syncEcwidBookingProcessingFeeByBookingId(target.bookingId);
+          processedOrders += 1;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown error';
+          failed.push({
+            orderKey: target.orderKey,
+            bookingId: target.bookingId,
+            error: message,
+          });
+        }
+      }
+    });
+
+    await Promise.all(workers);
+
+    res.status(200).json({
+      window: {
+        startDate,
+        endDate,
+        dateField,
+      },
+      includeCancelled,
+      maxConcurrency,
+      requestedOrders: orderTargets.length,
+      processedOrders,
+      failedOrders: failed.length,
+      failures: failed.slice(0, 100),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to backfill Ecwid payment metadata';
     res.status(500).json({ message });
   }
 };

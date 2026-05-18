@@ -30,6 +30,22 @@ const normalizeCurrency = (value: string | null | undefined): string | null => {
   return normalized.length > 0 ? normalized.slice(0, 3) : null;
 };
 
+const normalizeCountry = (value: string | null | undefined): string | null => {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  return normalized.length > 0 ? normalized.slice(0, 5) : null;
+};
+
+const normalizeIpAddress = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.slice(0, 45);
+};
+
 const normalizeMoney = (value: number | null): string | null => {
   if (value === null || !Number.isFinite(value)) {
     return null;
@@ -155,6 +171,8 @@ export const syncEcwidBookingProcessingFeeByBookingId = async (bookingId: number
       'platformOrderId',
       'processingFee',
       'processingFeeCurrency',
+      'paymentMethodCountry',
+      'ipAddress',
     ],
   });
   if (!booking || booking.platform !== 'ecwid') {
@@ -170,51 +188,62 @@ export const syncEcwidBookingProcessingFeeByBookingId = async (bookingId: number
   try {
     const ecwidOrder = await getEcwidOrder(orderId);
     const externalTransactionId = normalizeExternalTransactionId(ecwidOrder);
-    if (!externalTransactionId) {
-      return;
-    }
+    const orderIpAddress = normalizeIpAddress((ecwidOrder as Record<string, unknown>).ipAddress);
 
-    const stripe = getStripeClient();
-    const charge = await resolveStripeChargeFromExternalTransaction(stripe, externalTransactionId);
-    if (!charge) {
-      return;
-    }
-
-    const fee = extractFeeSnapshotFromCharge(charge);
-    if (!fee) {
-      return;
+    let paymentMethodCountry: string | null = null;
+    let fee: FeeSnapshot | null = null;
+    if (externalTransactionId) {
+      const stripe = getStripeClient();
+      const charge = await resolveStripeChargeFromExternalTransaction(stripe, externalTransactionId);
+      if (charge) {
+        paymentMethodCountry = normalizeCountry(charge.payment_method_details?.card?.country ?? null);
+        fee = extractFeeSnapshotFromCharge(charge);
+      }
     }
 
     const relatedBookings = await Booking.findAll({
       where: resolveBookingOrderWhere(orderId),
-      attributes: ['id', 'processingFee', 'processingFeeCurrency'],
+      attributes: ['id', 'processingFee', 'processingFeeCurrency', 'paymentMethodCountry', 'ipAddress'],
       order: [['id', 'ASC']],
     });
     if (relatedBookings.length === 0) {
       return;
     }
 
-    const feeCents = parseFeeToCents(fee.feeAmount);
-    if (feeCents <= 0) {
+    const canUpdateFee = Boolean(fee && parseFeeToCents(fee.feeAmount) > 0);
+    if (!canUpdateFee && paymentMethodCountry === null && orderIpAddress === null) {
       return;
     }
 
-    const baseCents = Math.floor(feeCents / relatedBookings.length);
-    const remainderCents = feeCents % relatedBookings.length;
+    const feeCents = canUpdateFee && fee ? parseFeeToCents(fee.feeAmount) : 0;
+    const baseCents = canUpdateFee ? Math.floor(feeCents / relatedBookings.length) : 0;
+    const remainderCents = canUpdateFee ? feeCents % relatedBookings.length : 0;
 
     let changed = false;
     for (let index = 0; index < relatedBookings.length; index += 1) {
       const related = relatedBookings[index];
-      const allocatedCents = baseCents + (index < remainderCents ? 1 : 0);
-      const allocatedFee = centsToMoneyString(allocatedCents);
-      if (
-        related.processingFee === allocatedFee &&
-        related.processingFeeCurrency === fee.feeCurrency
-      ) {
+      const allocatedCents = canUpdateFee ? baseCents + (index < remainderCents ? 1 : 0) : 0;
+      const allocatedFee = canUpdateFee ? centsToMoneyString(allocatedCents) : null;
+      const feeUnchanged = !canUpdateFee
+        ? true
+        : related.processingFee === allocatedFee &&
+          related.processingFeeCurrency === fee?.feeCurrency;
+      const countryUnchanged =
+        paymentMethodCountry === null || related.paymentMethodCountry === paymentMethodCountry;
+      const ipUnchanged = orderIpAddress === null || related.ipAddress === orderIpAddress;
+      if (feeUnchanged && countryUnchanged && ipUnchanged) {
         continue;
       }
-      related.processingFee = allocatedFee;
-      related.processingFeeCurrency = fee.feeCurrency;
+      if (canUpdateFee && allocatedFee !== null) {
+        related.processingFee = allocatedFee;
+        related.processingFeeCurrency = fee?.feeCurrency ?? null;
+      }
+      if (paymentMethodCountry !== null) {
+        related.paymentMethodCountry = paymentMethodCountry;
+      }
+      if (orderIpAddress !== null) {
+        related.ipAddress = orderIpAddress;
+      }
       await related.save();
       changed = true;
     }

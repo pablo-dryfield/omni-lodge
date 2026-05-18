@@ -216,6 +216,24 @@ type EcwidFixToOrdersResponse = {
   }>;
 };
 
+type EcwidBackfillPaymentMetadataResponse = {
+  window: {
+    startDate: string;
+    endDate: string;
+    dateField: SanityDateField;
+  };
+  includeCancelled: boolean;
+  maxConcurrency: number;
+  requestedOrders: number;
+  processedOrders: number;
+  failedOrders: number;
+  failures: Array<{
+    orderKey: string;
+    bookingId: number;
+    error: string;
+  }>;
+};
+
 type ViatorCsvSummary = {
   bookings: number;
   people: number;
@@ -715,6 +733,9 @@ const BookingsSanityCheck = () => {
   const [ecwidFixToBulkLoading, setEcwidFixToBulkLoading] = useState(false);
   const [ecwidFixToInfo, setEcwidFixToInfo] = useState<string | null>(null);
   const [ecwidFixToError, setEcwidFixToError] = useState<string | null>(null);
+  const [ecwidBackfillPaymentMetadataLoading, setEcwidBackfillPaymentMetadataLoading] = useState(false);
+  const [ecwidBackfillPaymentMetadataInfo, setEcwidBackfillPaymentMetadataInfo] = useState<string | null>(null);
+  const [ecwidBackfillPaymentMetadataError, setEcwidBackfillPaymentMetadataError] = useState<string | null>(null);
   const [selectedEcwidOrderIds, setSelectedEcwidOrderIds] = useState<string[]>([]);
 
   const [expectedBookings, setExpectedBookings] = useState<number | "">("");
@@ -1331,6 +1352,38 @@ const BookingsSanityCheck = () => {
     }
   }, [runPlatformCheck, selectedEcwidOrderIds]);
 
+  const runEcwidPaymentMetadataBackfill = useCallback(async () => {
+    const confirmed = window.confirm(
+      `Backfill payment_method_country and ip_address for Ecwid orders in ${rangeStart} -> ${rangeEnd}? This does not reprocess emails.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setEcwidBackfillPaymentMetadataLoading(true);
+    setEcwidBackfillPaymentMetadataInfo(null);
+    setEcwidBackfillPaymentMetadataError(null);
+    try {
+      const response = await axiosInstance.post<EcwidBackfillPaymentMetadataResponse>(
+        "/bookings/sanity-check/ecwid/backfill-payment-metadata",
+        {
+          startDate: rangeStart,
+          endDate: rangeEnd,
+          dateField,
+          includeCancelled,
+          maxConcurrency: 6,
+        },
+        { withCredentials: true },
+      );
+      setEcwidBackfillPaymentMetadataInfo(
+        `Backfill completed. Requested=${response.data.requestedOrders}, processed=${response.data.processedOrders}, failed=${response.data.failedOrders}.`,
+      );
+    } catch (error) {
+      setEcwidBackfillPaymentMetadataError(extractErrorMessage(error));
+    } finally {
+      setEcwidBackfillPaymentMetadataLoading(false);
+    }
+  }, [dateField, includeCancelled, rangeEnd, rangeStart]);
+
   const applyViatorCsv = useCallback(async () => {
     if (!viatorFile) {
       setViatorError("Select a CSV file first.");
@@ -1852,6 +1905,20 @@ const BookingsSanityCheck = () => {
               >
                 Fix Selected To Ecwid
               </Button>
+              <Button
+                variant="light"
+                loading={ecwidBackfillPaymentMetadataLoading}
+                disabled={
+                  ecwidReprocessLoading ||
+                  ecwidFixBulkLoading ||
+                  ecwidFixToBulkLoading ||
+                  ecwidFixLoadingOrderId !== null ||
+                  ecwidFixToLoadingOrderId !== null
+                }
+                onClick={runEcwidPaymentMetadataBackfill}
+              >
+                Backfill Country/IP
+              </Button>
               <Text size="sm" c="dimmed">{`Selected: ${selectedEcwidOrderIds.length}`}</Text>
             </Group>
 
@@ -1883,6 +1950,16 @@ const BookingsSanityCheck = () => {
             {ecwidFixToError && (
               <Alert color="red" title="Fix to Ecwid failed">
                 {ecwidFixToError}
+              </Alert>
+            )}
+            {ecwidBackfillPaymentMetadataInfo && (
+              <Alert color="blue" title="Ecwid payment metadata backfill">
+                {ecwidBackfillPaymentMetadataInfo}
+              </Alert>
+            )}
+            {ecwidBackfillPaymentMetadataError && (
+              <Alert color="red" title="Ecwid payment metadata backfill failed">
+                {ecwidBackfillPaymentMetadataError}
               </Alert>
             )}
             {!ecwidResult.passed && (

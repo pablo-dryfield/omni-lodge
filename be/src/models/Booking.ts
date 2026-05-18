@@ -115,6 +115,20 @@ export default class Booking extends Model<Booking> {
 
   @AllowNull(true)
   @Column({
+    field: 'payment_method_country',
+    type: DataType.STRING(5),
+  })
+  declare paymentMethodCountry: string | null;
+
+  @AllowNull(true)
+  @Column({
+    field: 'ip_address',
+    type: DataType.STRING(45),
+  })
+  declare ipAddress: string | null;
+
+  @AllowNull(true)
+  @Column({
     field: 'utm_source',
     type: DataType.STRING(255),
   })
