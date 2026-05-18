@@ -81,6 +81,9 @@ type SummaryDatePreset =
   | "last_2_weeks"
   | "this_month"
   | "last_month"
+  | "this_year"
+  | "last_year"
+  | "all_time"
   | "custom";
 type BookingsTab = "calendar" | "summary" | "emails" | "sanity";
 type BookingsTabOption = BookingsTab | "manifest";
@@ -231,6 +234,9 @@ const SUMMARY_DATE_PRESET_OPTIONS: Array<{ value: SummaryDatePreset; label: stri
   { value: "last_2_weeks", label: "Last 2 Weeks" },
   { value: "this_month", label: "This Month" },
   { value: "last_month", label: "Last Month" },
+  { value: "this_year", label: "This Year" },
+  { value: "last_year", label: "Last Year" },
+  { value: "all_time", label: "All Time" },
   { value: "custom", label: "Custom" },
 ];
 
@@ -1005,6 +1011,18 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       case "last_month": {
         const lastMonthStart = today.subtract(1, "month").startOf("month");
         return { start: lastMonthStart, end: lastMonthStart.endOf("month") };
+      }
+      case "this_year": {
+        const thisYearStart = today.startOf("year");
+        return { start: thisYearStart, end: thisYearStart.endOf("year") };
+      }
+      case "last_year": {
+        const lastYearStart = today.subtract(1, "year").startOf("year");
+        return { start: lastYearStart, end: lastYearStart.endOf("year") };
+      }
+      case "all_time": {
+        const allTimeStart = dayjs("2000-01-01").startOf("day");
+        return { start: allTimeStart, end: today.endOf("day") };
       }
       case "custom": {
         const customStart = summaryCustomDateRange[0] ? dayjs(summaryCustomDateRange[0]).startOf("day") : null;
