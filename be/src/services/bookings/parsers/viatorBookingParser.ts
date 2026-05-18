@@ -338,6 +338,29 @@ const extractRemovedTravelerAmendments = (
   return { count: namedCount, names };
 };
 
+const extractTravelDateChangedTo = (
+  input: string,
+): { fromDate: string | null; toDate: string | null } => {
+  if (!input) {
+    return { fromDate: null, toDate: null };
+  }
+
+  const match = input.match(
+    /travel\s+date\s+changed\s+from\s+(.+?)\s+to\s+(.+?)(?:\.\s|\.|booking details|booking reference|$)/i,
+  );
+  if (!match) {
+    return { fromDate: null, toDate: null };
+  }
+
+  const fromDate = (match[1] ?? '').replace(/\s+/g, ' ').trim();
+  const toDate = (match[2] ?? '').replace(/\s+/g, ' ').trim();
+
+  return {
+    fromDate: fromDate || null,
+    toDate: toDate || null,
+  };
+};
+
 const extractFallbackTourName = (text: string): string | null => {
   const headingMatch = text.match(/The following booking for\s+(.+?)\s+on\b/i);
   if (headingMatch?.[1]) {
@@ -605,9 +628,11 @@ export class ViatorBookingParser implements BookingEmailParser {
     const meetingPoint = extractField(normalizedText, 'Meeting Point:', ['Special Requirements:', 'Phone:', 'Optional:']);
     const specialRequirements = extractField(normalizedText, 'Special Requirements:', ['Phone:', 'Optional:', 'Have questions']);
     const phone = extractField(normalizedText, 'Phone:', ['Optional:', 'Have questions', 'Management Center', 'Send the customer a message.']);
+    const travelDateAmendment = extractTravelDateChangedTo(normalizedText);
 
     const timeHint = tourGrade ?? tourGradeCode ?? '';
-    const schedule = parseTravelDate(travelDate, timeHint);
+    const effectiveTravelDate = travelDateAmendment.toDate ?? travelDate;
+    const schedule = parseTravelDate(effectiveTravelDate, timeHint);
     const counts = parseTravelerCounts(travelers);
     const travelerAdditions = extractAddedTravelerAmendments(normalizedText);
     const travelerRemovals = extractRemovedTravelerAmendments(normalizedText);
@@ -699,6 +724,9 @@ export class ViatorBookingParser implements BookingEmailParser {
     } else if (status === 'amended') {
       noteParts.push('Email indicates booking was amended.');
     }
+    if (travelDateAmendment.fromDate && travelDateAmendment.toDate) {
+      noteParts.push(`Travel date amendment: ${travelDateAmendment.fromDate} -> ${travelDateAmendment.toDate}`);
+    }
     if (noteParts.length > 0) {
       bookingFields.notes = noteParts.join(' | ');
     }
@@ -721,6 +749,12 @@ export class ViatorBookingParser implements BookingEmailParser {
       rawPayload.viatorTravellerRemoval = {
         removedCount: travelerRemovals.count,
         names: travelerRemovals.names,
+      };
+    }
+    if (travelDateAmendment.fromDate && travelDateAmendment.toDate) {
+      rawPayload.viatorDateChange = {
+        fromDate: travelDateAmendment.fromDate,
+        toDate: travelDateAmendment.toDate,
       };
     }
 
