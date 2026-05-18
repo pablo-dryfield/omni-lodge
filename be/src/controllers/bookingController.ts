@@ -1600,6 +1600,8 @@ const bookingToUnifiedOrder = (
       commissionRate: booking.commissionRate,
       processingFee: booking.processingFee,
       processingFeeCurrency: booking.processingFeeCurrency ?? null,
+      paymentMethodCountry: booking.paymentMethodCountry ?? null,
+      ipAddress: booking.ipAddress ?? null,
       channelCommissionRate: commissionEnrichment?.channelCommissionRate ?? null,
       channelCommissionAmount: commissionEnrichment?.channelCommissionAmount ?? null,
       baseAmountAfterChannelCommission: commissionEnrichment?.baseAmountAfterChannelCommission ?? null,

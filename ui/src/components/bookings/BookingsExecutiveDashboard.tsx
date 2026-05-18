@@ -140,6 +140,35 @@ type Props = {
 };
 
 const CHART_COLORS = ["#214A66", "#2B7A78", "#345995", "#EF8354", "#B56576", "#6B705C", "#7D4E57", "#3D5A80"];
+const EU_COUNTRY_CODES = new Set<string>([
+  "AT",
+  "BE",
+  "BG",
+  "HR",
+  "CY",
+  "CZ",
+  "DK",
+  "EE",
+  "FI",
+  "FR",
+  "DE",
+  "GR",
+  "HU",
+  "IE",
+  "IT",
+  "LV",
+  "LT",
+  "LU",
+  "MT",
+  "NL",
+  "PL",
+  "PT",
+  "RO",
+  "SK",
+  "SI",
+  "ES",
+  "SE",
+]);
 
 const normalizePlatformLabel = (value?: string | null): string => {
   const safe = String(value ?? "unknown").trim();
@@ -194,6 +223,22 @@ const formatMoney = (value: number, currency = "PLN"): string => {
   const normalizedCurrency = String(currency ?? "PLN").trim().toUpperCase();
   const displayCurrency = normalizedCurrency === "PLN" ? "z\u0142" : normalizedCurrency;
   return `${formatMoneyNumber(value)} ${displayCurrency}`;
+};
+
+const COUNTRY_DISPLAY_NAMES =
+  typeof Intl !== "undefined" && typeof Intl.DisplayNames !== "undefined"
+    ? new Intl.DisplayNames(["en"], { type: "region" })
+    : null;
+
+const formatCountryDisplay = (countryCode?: string | null): string => {
+  const code = String(countryCode ?? "")
+    .trim()
+    .toUpperCase();
+  if (!code) {
+    return "-";
+  }
+  const label = COUNTRY_DISPLAY_NAMES?.of(code) ?? code;
+  return `${label} (${code})`;
 };
 
 type CanonicalAddonKey = "cocktails" | "tshirts" | "photos";
@@ -395,6 +440,17 @@ const BookingsExecutiveDashboard = ({
       const partySizeTotal = Number.isFinite(order.quantity) ? Math.max(0, Math.round(order.quantity)) : 0;
       const fallbackBreakdownTotal = Math.max(0, (Number(order.menCount) || 0) + (Number(order.womenCount) || 0));
       const participants = partySizeTotal > 0 ? partySizeTotal : fallbackBreakdownTotal;
+      const paymentMethodCountryRaw = String(
+        raw.paymentMethodCountry ??
+          raw.payment_method_country ??
+          asRecord(order).paymentMethodCountry ??
+          asRecord(order).payment_method_country ??
+          "",
+      )
+        .trim()
+        .toUpperCase();
+      const paymentMethodCountry =
+        paymentMethodCountryRaw.length > 0 ? paymentMethodCountryRaw.slice(0, 5) : "UNKNOWN";
 
       const financial: BookingRawFinancial = {
         bookingId: Number(order.id) || asNumber(raw.bookingId),
@@ -448,6 +504,7 @@ const BookingsExecutiveDashboard = ({
         processingFee: financial.processingFee,
         processingFeeCurrency: financial.processingFeeCurrency,
         discountAmount: financial.discountAmount,
+        paymentMethodCountry,
       };
     },
     [],
@@ -752,6 +809,46 @@ const BookingsExecutiveDashboard = ({
     ],
     [totalOnlineRevenue, venueCommissionTotal, totalCashPayments],
   );
+  const paymentCountryBreakdown = useMemo(() => {
+    const map = new Map<string, { country: string; bookings: number; guests: number; revenue: number }>();
+    bookingFinancialRows.forEach((row) => {
+      const countryRaw = String(row.paymentMethodCountry ?? "").trim().toUpperCase();
+      const country = countryRaw && countryRaw !== "NULL" ? countryRaw : "UNKNOWN";
+      const bucket = map.get(country) ?? { country, bookings: 0, guests: 0, revenue: 0 };
+      bucket.bookings += 1;
+      bucket.guests += Math.max(0, Number(row.people) || 0);
+      bucket.revenue += Number(row.netRevenue) || 0;
+      map.set(country, bucket);
+    });
+    return Array.from(map.values())
+      .map((row) => ({
+        ...row,
+        revenue: roundMoney(row.revenue),
+      }))
+      .sort((a, b) => b.revenue - a.revenue || b.bookings - a.bookings || b.guests - a.guests);
+  }, [bookingFinancialRows]);
+  const visiblePaymentCountryBreakdown = useMemo(
+    () => paymentCountryBreakdown.filter((row) => row.country !== "UNKNOWN"),
+    [paymentCountryBreakdown],
+  );
+  const paymentCountryKnownCount = visiblePaymentCountryBreakdown.length;
+  const paymentCountryKnownBookings = useMemo(
+    () => visiblePaymentCountryBreakdown.reduce((acc, row) => acc + row.bookings, 0),
+    [visiblePaymentCountryBreakdown],
+  );
+  const taxationAreaRevenue = useMemo(() => {
+    return visiblePaymentCountryBreakdown.reduce(
+      (acc, row) => {
+        if (EU_COUNTRY_CODES.has(row.country)) {
+          acc.eu += Number(row.revenue) || 0;
+        } else {
+          acc.nonEu += Number(row.revenue) || 0;
+        }
+        return acc;
+      },
+      { eu: 0, nonEu: 0 },
+    );
+  }, [visiblePaymentCountryBreakdown]);
 
   const dailyTrend = useMemo(() => {
     const map = new Map<
@@ -1629,53 +1726,79 @@ const BookingsExecutiveDashboard = ({
         <Paper withBorder radius="lg" p="md" shadow="sm">
           <Group justify="space-between" mb="xs">
             <Group gap={6} align="center" wrap="nowrap">
-              <Text fw={700}>Cash channels & free-ticket intelligence</Text>
+              <Text fw={700}>Ecwid Demography</Text>
               <SectionInfo
-                title="Cash Channels & Free Tickets"
-                formula="Cash by Channel = Sum(counter cash metrics by channel), Free Tickets = Sum(extracted note values)"
+                title="Ecwid Demography"
+                formula="Payment Country Metrics = Count(bookings), Sum(guests), Sum(revenue) grouped by payment_method_country"
                 variables={[
-                  { name: "Counter cash metrics", description: "Counter entries tagged as cash payment." },
-                  { name: "Channel", description: "Channel associated to counter metric row." },
-                  { name: "Free tickets", description: "Counts parsed from notes with free-ticket expressions." },
+                  { name: "payment_method_country", description: "Country code from payment method data." },
+                  { name: "Bookings", description: "Number of bookings for each country." },
+                  { name: "Guests", description: "Total guests from party_size_total grouping." },
+                  { name: "Revenue", description: "Sum of booking revenue (base + tip after adjustments)." },
                 ]}
               />
             </Group>
             <ThemeIcon variant="light" color="dark">
-              <IconTicket size={18} />
+              <IconUsersGroup size={18} />
             </ThemeIcon>
           </Group>
           <Stack gap="xs" mb="sm">
             <Text size="sm">
-              Cash recorded:{" "}
+              Countries tracked:{" "}
               <Text span fw={700}>
-                {formatMoney(counterInsights?.cashPaymentsTotal ?? 0, counterInsights?.currency ?? "PLN")}
+                {paymentCountryKnownCount.toLocaleString()}
               </Text>
             </Text>
             <Text size="sm">
-              Free tickets in notes:{" "}
+              Bookings with known country:{" "}
               <Text span fw={700}>
-                {(counterInsights?.freeTicketsTotal ?? 0).toLocaleString()}
+                {paymentCountryKnownBookings.toLocaleString()}
               </Text>
             </Text>
           </Stack>
-          <ScrollArea h={280}>
+          <ScrollArea h={220}>
             <Table striped highlightOnHover withColumnBorders>
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th>Channel</Table.Th>
-                  <Table.Th ta="right">Cash</Table.Th>
+                  <Table.Th>Country</Table.Th>
+                  <Table.Th ta="right">Bookings</Table.Th>
+                  <Table.Th ta="right">Guests</Table.Th>
+                  <Table.Th ta="right">Revenue</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {(counterInsights?.cashByChannel ?? []).map((row) => (
-                  <Table.Tr key={`cash-channel-${row.channelId ?? row.channelName}`}>
-                    <Table.Td>{row.channelName}</Table.Td>
-                    <Table.Td ta="right">{formatMoney(row.amount, counterInsights?.currency ?? "PLN")}</Table.Td>
+                {visiblePaymentCountryBreakdown.map((row) => (
+                  <Table.Tr key={`payment-country-${row.country}`}>
+                    <Table.Td>{formatCountryDisplay(row.country)}</Table.Td>
+                    <Table.Td ta="right">{row.bookings.toLocaleString()}</Table.Td>
+                    <Table.Td ta="right">{row.guests.toLocaleString()}</Table.Td>
+                    <Table.Td ta="right">{formatMoney(row.revenue, defaultCurrency)}</Table.Td>
                   </Table.Tr>
                 ))}
               </Table.Tbody>
             </Table>
           </ScrollArea>
+          <Stack gap={4} mt="sm">
+            <Text size="xs" fw={700} ta="center">
+              Revenue by Taxation area
+            </Text>
+            <Group justify="space-between" gap="xs" wrap="nowrap">
+              <Text size="xs" c="dimmed">
+                EU
+              </Text>
+              <Text size="xs" fw={700}>
+                {formatMoney(taxationAreaRevenue.eu, defaultCurrency)}
+              </Text>
+            </Group>
+            <Group justify="space-between" gap="xs" wrap="nowrap">
+              <Text size="xs" c="dimmed">
+                Non-EU
+              </Text>
+              <Text size="xs" fw={700}>
+                {formatMoney(taxationAreaRevenue.nonEu, defaultCurrency)}
+              </Text>
+            </Group>
+          </Stack>
         </Paper>
       </SimpleGrid>
 
