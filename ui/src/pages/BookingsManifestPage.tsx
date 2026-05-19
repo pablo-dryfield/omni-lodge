@@ -309,8 +309,10 @@ type StripeTransactionPreview = {
 type RefundPreviewResponse = {
   bookingId: number;
   orderId: string;
-  externalTransactionId: string;
-  stripe: StripeTransactionPreview;
+  externalTransactionId: string | null;
+  stripe: StripeTransactionPreview | null;
+  refundAvailable: boolean;
+  refundBlockedReason: string | null;
 };
 
 
@@ -3279,7 +3281,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     payload: EmailTemplateRenderRequestPayload;
     templateName: string | null;
   }> => {
-    if (!cancelState.order || cancelState.mode !== "ecwid_refund" || !cancelState.preview) {
+    if (!cancelState.order || cancelState.mode !== "ecwid_refund" || !cancelState.preview?.stripe) {
       throw new Error("Refund email is available only for Ecwid refund cancellations.");
     }
 
@@ -3289,7 +3291,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
 
     const baseContext = buildMailTemplateContextFromOrder(cancelState.order, customerEmail);
-    const stripePreview = cancelState.preview.stripe ?? null;
+    const stripePreview = cancelState.preview.stripe;
     const transactionAmount = stripePreview ? stripePreview.amount / 100 : 0;
     const alreadyRefundedAmount = stripePreview ? stripePreview.amountRefunded / 100 : 0;
     const currentRefundAmount = stripePreview
@@ -3514,7 +3516,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
 
     let preparedEmail: { payload: EmailTemplateRenderRequestPayload; templateName: string | null } | null = null;
-    if (cancelState.mode === "ecwid_refund") {
+    if (cancelState.mode === "ecwid_refund" && cancelState.preview?.stripe) {
       try {
         preparedEmail = await buildCancelRefundEmailPayload();
       } catch (error) {
@@ -6696,58 +6698,67 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           )}
           {cancelState.preview && cancelState.mode === "ecwid_refund" && (
             <Stack gap="sm">
-              <Table withColumnBorders>
-                <Table.Tbody>
-                  <Table.Tr>
-                    <Table.Th>Order</Table.Th>
-                    <Table.Td>{cancelState.preview.orderId}</Table.Td>
-                  </Table.Tr>
-                  <Table.Tr>
-                    <Table.Th>Transaction</Table.Th>
-                    <Table.Td>
-                      {cancelState.preview.stripe.id} (
-                      {cancelState.preview.stripe.type === "payment_intent" ? "Payment intent" : "Charge"})
-                    </Table.Td>
-                  </Table.Tr>
-                  <Table.Tr>
-                    <Table.Th>Amount</Table.Th>
-                    <Table.Td>
-                      {formatStripeAmount(
-                        cancelState.preview.stripe.amount,
-                        cancelState.preview.stripe.currency,
-                      )}
-                    </Table.Td>
-                  </Table.Tr>
-                  <Table.Tr>
-                    <Table.Th>Refunded</Table.Th>
-                    <Table.Td>
-                      {formatStripeAmount(
-                        cancelState.preview.stripe.amountRefunded,
-                        cancelState.preview.stripe.currency,
-                      )}
-                    </Table.Td>
-                  </Table.Tr>
-                  <Table.Tr>
-                    <Table.Th>Status</Table.Th>
-                    <Table.Td>
-                      <Badge color={getStripeStatusColor(cancelState.preview.stripe.status)} variant="light">
-                        {(cancelState.preview.stripe.status ?? "unknown").toUpperCase()}
-                      </Badge>
-                    </Table.Td>
-                  </Table.Tr>
-                  <Table.Tr>
-                    <Table.Th>Created</Table.Th>
-                    <Table.Td>{dayjs.unix(cancelState.preview.stripe.created).format("YYYY-MM-DD HH:mm")}</Table.Td>
-                  </Table.Tr>
-                  <Table.Tr>
-                    <Table.Th>External ID</Table.Th>
-                    <Table.Td>{cancelState.preview.externalTransactionId}</Table.Td>
-                  </Table.Tr>
-                </Table.Tbody>
-              </Table>
-              {cancelState.preview.stripe.fullyRefunded && (
-                <Alert color="yellow" title="Already refunded">
-                  This Stripe transaction is already fully refunded. Confirming will only cancel the booking in OmniLodge.
+              {cancelState.preview.stripe ? (
+                <>
+                  <Table withColumnBorders>
+                    <Table.Tbody>
+                      <Table.Tr>
+                        <Table.Th>Order</Table.Th>
+                        <Table.Td>{cancelState.preview.orderId}</Table.Td>
+                      </Table.Tr>
+                      <Table.Tr>
+                        <Table.Th>Transaction</Table.Th>
+                        <Table.Td>
+                          {cancelState.preview.stripe.id} (
+                          {cancelState.preview.stripe.type === "payment_intent" ? "Payment intent" : "Charge"})
+                        </Table.Td>
+                      </Table.Tr>
+                      <Table.Tr>
+                        <Table.Th>Amount</Table.Th>
+                        <Table.Td>
+                          {formatStripeAmount(
+                            cancelState.preview.stripe.amount,
+                            cancelState.preview.stripe.currency,
+                          )}
+                        </Table.Td>
+                      </Table.Tr>
+                      <Table.Tr>
+                        <Table.Th>Refunded</Table.Th>
+                        <Table.Td>
+                          {formatStripeAmount(
+                            cancelState.preview.stripe.amountRefunded,
+                            cancelState.preview.stripe.currency,
+                          )}
+                        </Table.Td>
+                      </Table.Tr>
+                      <Table.Tr>
+                        <Table.Th>Status</Table.Th>
+                        <Table.Td>
+                          <Badge color={getStripeStatusColor(cancelState.preview.stripe.status)} variant="light">
+                            {(cancelState.preview.stripe.status ?? "unknown").toUpperCase()}
+                          </Badge>
+                        </Table.Td>
+                      </Table.Tr>
+                      <Table.Tr>
+                        <Table.Th>Created</Table.Th>
+                        <Table.Td>{dayjs.unix(cancelState.preview.stripe.created).format("YYYY-MM-DD HH:mm")}</Table.Td>
+                      </Table.Tr>
+                      <Table.Tr>
+                        <Table.Th>External ID</Table.Th>
+                        <Table.Td>{cancelState.preview.externalTransactionId}</Table.Td>
+                      </Table.Tr>
+                    </Table.Tbody>
+                  </Table>
+                  {cancelState.preview.stripe.fullyRefunded && (
+                    <Alert color="yellow" title="Already refunded">
+                      This Stripe transaction is already fully refunded. Confirming will only cancel the booking in OmniLodge.
+                    </Alert>
+                  )}
+                </>
+              ) : (
+                <Alert color="yellow" title="No refundable Stripe transaction">
+                  {cancelState.preview.refundBlockedReason ??
+                    "This Ecwid order has no Stripe external transaction ID. You can still cancel the booking."}
                 </Alert>
               )}
             </Stack>
@@ -6762,11 +6773,13 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               This action only marks the booking as cancelled in OmniLodge. Refunds must be processed externally in Civitatis.
             </Alert>
           )}
-          {cancelState.mode === "ecwid_refund" && !String(cancelState.order?.customerEmail ?? "").trim() && (
+          {cancelState.mode === "ecwid_refund" &&
+            cancelState.preview?.stripe &&
+            !String(cancelState.order?.customerEmail ?? "").trim() && (
             <Alert color="yellow" title="Missing customer email">
               Refund confirmation email cannot be sent because this booking has no customer email.
             </Alert>
-          )}
+            )}
           {cancelState.error && (
             <Alert
               color="red"
@@ -6793,7 +6806,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                 cancelState.loading ||
                 cancelState.submitting ||
                 cancelState.mode !== "ecwid_refund" ||
-                !cancelState.preview
+                !cancelState.preview?.stripe
               }
             >
               Preview Email
@@ -6808,13 +6821,17 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                 cancelState.submitting ||
                 !cancelState.mode ||
                 (cancelState.mode === "ecwid_refund" &&
-                  (!cancelState.preview || !String(cancelState.order?.customerEmail ?? "").trim()))
+                  (cancelState.preview?.stripe
+                    ? (!cancelState.preview || !String(cancelState.order?.customerEmail ?? "").trim())
+                    : false))
               }
             >
               {cancelState.mode === "ecwid_refund"
-                ? cancelState.preview?.stripe.fullyRefunded
-                  ? "Confirm Cancel"
-                  : "Confirm Refund"
+                ? cancelState.preview?.stripe
+                  ? cancelState.preview.stripe.fullyRefunded
+                    ? "Confirm Cancel"
+                    : "Confirm Refund"
+                  : "Confirm Cancel"
                 : "Confirm Cancel"}
             </Button>
           </Box>

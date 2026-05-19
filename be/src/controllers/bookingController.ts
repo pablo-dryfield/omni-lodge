@@ -3808,8 +3808,10 @@ type StripeTransactionSummary = {
 type EcwidRefundPreview = {
   bookingId: number;
   orderId: string;
-  externalTransactionId: string;
-  stripe: StripeTransactionSummary;
+  externalTransactionId: string | null;
+  stripe: StripeTransactionSummary | null;
+  refundAvailable: boolean;
+  refundBlockedReason: string | null;
 };
 
 type PartialRefundPreview = EcwidRefundPreview & {
@@ -3959,7 +3961,10 @@ const resolveStripeTransaction = async (externalTransactionId: string): Promise<
   throw new Error('Stripe transaction not found for the provided external transaction ID.');
 };
 
-const buildEcwidRefundPreview = async (booking: Booking): Promise<EcwidRefundPreview> => {
+const buildEcwidRefundPreview = async (
+  booking: Booking,
+  options?: { allowMissingTransactionId?: boolean },
+): Promise<EcwidRefundPreview> => {
   const orderId = booking.platformBookingId?.trim();
   if (!orderId) {
     throw new Error('Booking is missing Ecwid platform reference');
@@ -3967,6 +3972,16 @@ const buildEcwidRefundPreview = async (booking: Booking): Promise<EcwidRefundPre
   const ecwidOrder = await getEcwidOrder(orderId);
   const externalTransactionId = normalizeExternalTransactionId(ecwidOrder);
   if (!externalTransactionId) {
+    if (options?.allowMissingTransactionId) {
+      return {
+        bookingId: booking.id,
+        orderId,
+        externalTransactionId: null,
+        stripe: null,
+        refundAvailable: false,
+        refundBlockedReason: 'Ecwid order is missing an external transaction ID',
+      };
+    }
     throw new Error('Ecwid order is missing an external transaction ID');
   }
   const stripeSummary = await resolveStripeTransaction(externalTransactionId);
@@ -3975,7 +3990,18 @@ const buildEcwidRefundPreview = async (booking: Booking): Promise<EcwidRefundPre
     orderId,
     externalTransactionId,
     stripe: stripeSummary,
+    refundAvailable: true,
+    refundBlockedReason: null,
   };
+};
+
+const requireStripeRefundPreview = (
+  preview: EcwidRefundPreview,
+): EcwidRefundPreview & { externalTransactionId: string; stripe: StripeTransactionSummary } => {
+  if (!preview.externalTransactionId || !preview.stripe) {
+    throw new Error('Ecwid order is missing an external transaction ID');
+  }
+  return preview as EcwidRefundPreview & { externalTransactionId: string; stripe: StripeTransactionSummary };
 };
 
 type ResolvedPartialRefundAddon = {
@@ -4417,22 +4443,24 @@ export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Respons
       return;
     }
 
-    const preview = await buildEcwidRefundPreview(booking);
-    const refund = await createStripeRefundFromSummary(preview.stripe, {
-      bookingId: booking.id,
-      orderId: preview.orderId,
-    });
+    const preview = await buildEcwidRefundPreview(booking, { allowMissingTransactionId: true });
+    const refund = preview.stripe
+      ? await createStripeRefundFromSummary(preview.stripe, {
+          bookingId: booking.id,
+          orderId: preview.orderId,
+        })
+      : null;
 
     if (preview.orderId) {
       await updateEcwidOrder(preview.orderId, {
-        paymentStatus: 'REFUNDED',
         fulfillmentStatus: 'RETURNED',
+        ...(preview.stripe ? { paymentStatus: 'REFUNDED' } : {}),
       });
     }
 
     const now = new Date();
     const money = buildEcwidMoneySnapshot(booking);
-    const fullRefundAmount = refund?.amount ? roundMoney(refund.amount / 100) : money.remaining;
+    const fullRefundAmount = refund?.amount ? roundMoney(refund.amount / 100) : 0;
     booking.status = 'cancelled';
     booking.statusChangedAt = now;
     booking.cancelledAt = now;
@@ -4441,8 +4469,10 @@ export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Respons
     money.addons = 0;
     applyEcwidMoneySnapshot(booking, money);
     booking.addonsAmount = formatMoneyValue(0);
-    booking.refundedCurrency = (booking.currency ?? preview.stripe.currency ?? '').toUpperCase() || null;
-    booking.paymentStatus = 'refunded';
+    if (refund) {
+      booking.refundedCurrency = (booking.currency ?? preview.stripe?.currency ?? '').toUpperCase() || null;
+      booking.paymentStatus = 'refunded';
+    }
     booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
 
     const sequelizeClient = Booking.sequelize;
@@ -4456,11 +4486,13 @@ export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Respons
         action: 'cancel-ecwid',
         refunded: Boolean(refund),
         refundedAmount: fullRefundAmount,
-        currency: booking.refundedCurrency ?? booking.currency ?? preview.stripe.currency ?? null,
+        currency: booking.refundedCurrency ?? booking.currency ?? preview.stripe?.currency ?? null,
         orderId: preview.orderId,
         externalTransactionId: preview.externalTransactionId,
-        stripeTransactionId: preview.stripe.id,
-        stripeTransactionType: preview.stripe.type,
+        stripeTransactionId: preview.stripe?.id ?? null,
+        stripeTransactionType: preview.stripe?.type ?? null,
+        refundAvailable: preview.refundAvailable,
+        refundBlockedReason: preview.refundBlockedReason,
       }, transaction);
     });
 
@@ -4473,6 +4505,8 @@ export const cancelEcwidBooking = async (req: AuthenticatedRequest, res: Respons
       },
       refund,
       stripe: preview.stripe,
+      refundAvailable: preview.refundAvailable,
+      refundBlockedReason: preview.refundBlockedReason,
     });
   } catch (error) {
     if (error instanceof HttpError) {
@@ -4645,7 +4679,7 @@ export const getEcwidRefundPreview = async (req: AuthenticatedRequest, res: Resp
       return;
     }
 
-    const preview = await buildEcwidRefundPreview(booking);
+    const preview = await buildEcwidRefundPreview(booking, { allowMissingTransactionId: true });
     res.status(200).json(preview);
   } catch (error) {
     if (error instanceof HttpError) {
@@ -4676,7 +4710,7 @@ export const getPartialRefundPreview = async (req: AuthenticatedRequest, res: Re
       return;
     }
 
-    const preview = await buildEcwidRefundPreview(booking);
+    const preview = requireStripeRefundPreview(await buildEcwidRefundPreview(booking));
     const remaining = Math.max(preview.stripe.amount - preview.stripe.amountRefunded, 0);
     const resolvedAddons = await resolvePartialRefundAddons(booking, preview.stripe.currency);
     const addonsTotalAmount = resolveAddonsTotalAmount(resolvedAddons);
@@ -4687,10 +4721,7 @@ export const getPartialRefundPreview = async (req: AuthenticatedRequest, res: Re
     );
 
     res.status(200).json({
-      bookingId: preview.bookingId,
-      orderId: preview.orderId,
-      externalTransactionId: preview.externalTransactionId,
-      stripe: preview.stripe,
+      ...preview,
       remainingAmount: remaining,
       people: {
         quantity: people.quantity,
@@ -4732,7 +4763,7 @@ export const partialRefundEcwidBooking = async (req: AuthenticatedRequest, res: 
       return;
     }
 
-    const preview = await buildEcwidRefundPreview(booking);
+    const preview = requireStripeRefundPreview(await buildEcwidRefundPreview(booking));
     const resolvedAddons = await resolvePartialRefundAddons(booking, preview.stripe.currency);
     const addonsTotalAmount = resolveAddonsTotalAmount(resolvedAddons);
     const people = resolvePartialRefundPeopleFromBaseAmount(
