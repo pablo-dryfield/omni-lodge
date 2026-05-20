@@ -13,6 +13,7 @@ import {
   NumberInput,
   Paper,
   ScrollArea,
+  SegmentedControl,
   Select,
   SimpleGrid,
   Stack,
@@ -27,10 +28,12 @@ import { useMediaQuery } from '@mantine/hooks';
 import { DatePickerInput } from '@mantine/dates';
 import { IconAlertCircle, IconChartBar, IconInfoCircle } from '@tabler/icons-react';
 import dayjs from 'dayjs';
+import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useSearchParams } from 'react-router-dom';
 
 import {
   fetchChannelNumbersBootstrap,
+  fetchChannelNumbersSummary,
   recordChannelCashCollection,
   fetchChannelNumbersDetails,
 } from '../../api/channelNumbers';
@@ -132,6 +135,21 @@ type DetailModalState = {
   error: string | null;
 };
 
+type AggregatedChannelMetrics = {
+  attendees: number;
+  noShow: number;
+  platformTotal: number;
+  channelTotals: Map<number, number>;
+  channelBreakdown: Map<number, { attendees: number; noShow: number; platformTotal: number }>;
+};
+
+type ChartGranularity = 'year' | 'month' | 'week';
+
+type ProductTypeLookup = {
+  byId: Map<number, string>;
+  byName: Map<string, string>;
+};
+
 const getProductColumnCount = (product: ProductGroup) =>
   product.addons.length > 0 ? product.addons.length * 2 + 2 : 2;
 
@@ -150,6 +168,164 @@ const getQuantityForProduct = (product: ProductGroup, metrics?: ChannelProductMe
   return product.addons.reduce((sum, addon) => sum + (metrics.addons[addon.key] ?? 0), 0);
 };
 
+const normalizeProductName = (value?: string | null) => (value ?? '').trim().toLowerCase();
+const isExcludedNoShowAddonName = (value?: string | null) => {
+  const normalized = (value ?? '').trim().toLowerCase();
+  return normalized.includes('photo') || normalized.includes('t-shirt') || normalized.includes('tshirt');
+};
+
+const buildProductTypeLookup = (summary: ChannelNumbersSummaryType | null): ProductTypeLookup => {
+  const byId = new Map<number, string>();
+  const byName = new Map<string, string>();
+  if (!summary) {
+    return { byId, byName };
+  }
+
+  summary.products.forEach((product) => {
+    const typeSlug = normalizeTypeName(product.productTypeName ?? 'Other');
+    byId.set(product.id, typeSlug);
+    byName.set(normalizeProductName(product.name), typeSlug);
+  });
+
+  summary.addons.forEach((addon) => {
+    const typeSlug = normalizeTypeName(addon.productTypeName ?? 'Other');
+    if (addon.productId != null && !byId.has(addon.productId)) {
+      byId.set(addon.productId, typeSlug);
+    }
+    if (addon.productName && !byName.has(normalizeProductName(addon.productName))) {
+      byName.set(normalizeProductName(addon.productName), typeSlug);
+    }
+  });
+
+  return { byId, byName };
+};
+
+const filterEntriesBySelectedTypes = (
+  entries: ChannelNumbersDetailEntry[],
+  selectedTypeSlugs: Set<string>,
+  lookup: ProductTypeLookup,
+) => {
+  if (selectedTypeSlugs.size === 0) {
+    return entries;
+  }
+  return entries.filter((entry) => {
+    if (entry.productId != null) {
+      const slug = lookup.byId.get(entry.productId);
+      return slug ? selectedTypeSlugs.has(slug) : false;
+    }
+    if (entry.productName) {
+      const slug = lookup.byName.get(normalizeProductName(entry.productName));
+      return slug ? selectedTypeSlugs.has(slug) : false;
+    }
+    return false;
+  });
+};
+
+const getDaysInYear = (year: number) =>
+  dayjs(`${year}-12-31`).diff(dayjs(`${year}-01-01`), 'day') + 1;
+
+const getWeekIndexWithinYear = (date: dayjs.Dayjs, year: number) => {
+  const start = dayjs(`${year}-01-01`).startOf('day');
+  const normalized = date.startOf('day');
+  const diffDays = normalized.diff(start, 'day');
+  if (diffDays < 0) {
+    return null;
+  }
+  const maxDays = getDaysInYear(year);
+  if (diffDays >= maxDays) {
+    return null;
+  }
+  return Math.floor(diffDays / 7) + 1;
+};
+
+const buildProductTypeSlugLookup = (summary: ChannelNumbersSummaryType) => {
+  const lookup = new Map<string, string>();
+
+  summary.products.forEach((product) => {
+    lookup.set(String(product.id), normalizeTypeName(product.productTypeName ?? 'Other'));
+  });
+
+  summary.addons.forEach((addon) => {
+    if (addon.productId != null) {
+      const productKey = String(addon.productId);
+      if (!lookup.has(productKey)) {
+        lookup.set(productKey, normalizeTypeName(addon.productTypeName ?? 'Other'));
+      }
+    }
+  });
+
+  return lookup;
+};
+
+const aggregateMetricsByProductType = (
+  summary: ChannelNumbersSummaryType | null,
+  selectedTypeSlugs: Set<string> | null,
+): AggregatedChannelMetrics => {
+  if (!summary) {
+    return {
+      attendees: 0,
+      noShow: 0,
+      platformTotal: 0,
+      channelTotals: new Map<number, number>(),
+      channelBreakdown: new Map<number, { attendees: number; noShow: number; platformTotal: number }>(),
+    };
+  }
+
+  const productTypeByProductKey = buildProductTypeSlugLookup(summary);
+  const excludedNoShowAddonKeys = new Set(
+    (summary.addons ?? [])
+      .filter((addon) => isExcludedNoShowAddonName(addon.name))
+      .map((addon) => addon.key),
+  );
+  const channelTotals = new Map<number, number>();
+  const channelBreakdown = new Map<number, { attendees: number; noShow: number; platformTotal: number }>();
+  let attendees = 0;
+  let noShow = 0;
+  let platformTotal = 0;
+
+  summary.channels.forEach((channel) => {
+    let channelAttendees = 0;
+    let channelNoShow = 0;
+    Object.entries(channel.products ?? {}).forEach(([productKey, metrics]) => {
+      const productTypeSlug = productTypeByProductKey.get(productKey) ?? normalizeTypeName('Other');
+      if (selectedTypeSlugs && !selectedTypeSlugs.has(productTypeSlug)) {
+        return;
+      }
+
+      const normal = metrics.normal ?? 0;
+      const addonNoShow = Object.entries(metrics.addonNonShow ?? {}).reduce((sum, [addonKey, value]) => {
+        if (excludedNoShowAddonKeys.has(addonKey)) {
+          return sum;
+        }
+        return sum + value;
+      }, 0);
+      const nonShowValue = (metrics.nonShow ?? 0) + addonNoShow;
+
+      attendees += normal;
+      noShow += nonShowValue;
+      channelAttendees += normal;
+      channelNoShow += nonShowValue;
+    });
+
+    const channelTotal = channelAttendees + channelNoShow;
+    channelTotals.set(channel.channelId, channelTotal);
+    channelBreakdown.set(channel.channelId, {
+      attendees: channelAttendees,
+      noShow: channelNoShow,
+      platformTotal: channelTotal,
+    });
+    platformTotal += channelTotal;
+  });
+
+  return {
+    attendees,
+    noShow,
+    platformTotal,
+    channelTotals,
+    channelBreakdown,
+  };
+};
+
 const CELL_BORDER_STYLE: CSSProperties = {
   border: '1px solid var(--mantine-color-gray-4)',
   textAlign: 'center',
@@ -163,6 +339,7 @@ const ChannelNumbersSummary = () => {
   const dispatch = useAppDispatch();
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
+  const isPortraitOrientation = useMediaQuery('(orientation: portrait)');
   const [searchParams, setSearchParams] = useSearchParams();
   const accountsState = useAppSelector(selectFinanceAccounts);
   const categoriesState = useAppSelector(selectFinanceCategories);
@@ -188,6 +365,16 @@ const ChannelNumbersSummary = () => {
   const [preset, setPreset] = useState<Preset>(initialPreset);
   const [range, setRange] = useState<[Date | null, Date | null]>(initialRange);
   const [summary, setSummary] = useState<ChannelNumbersSummaryType | null>(null);
+  const [previousYearSummary, setPreviousYearSummary] = useState<ChannelNumbersSummaryType | null>(null);
+  const [previousYearLoading, setPreviousYearLoading] = useState(false);
+  const [attendeesChartGranularity, setAttendeesChartGranularity] = useState<ChartGranularity>('month');
+  const [attendeesEntriesCurrent, setAttendeesEntriesCurrent] = useState<ChannelNumbersDetailEntry[]>([]);
+  const [attendeesEntriesPrevious, setAttendeesEntriesPrevious] = useState<ChannelNumbersDetailEntry[]>([]);
+  const [noShowEntriesCurrent, setNoShowEntriesCurrent] = useState<ChannelNumbersDetailEntry[]>([]);
+  const [noShowEntriesPrevious, setNoShowEntriesPrevious] = useState<ChannelNumbersDetailEntry[]>([]);
+  const [attendeesChartLoading, setAttendeesChartLoading] = useState(false);
+  const [platformTrendFullscreen, setPlatformTrendFullscreen] = useState(false);
+  const [showDetailedMatrixMobile, setShowDetailedMatrixMobile] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedProductTypes, setSelectedProductTypes] = useState<string[]>([]);
@@ -212,6 +399,15 @@ const ChannelNumbersSummary = () => {
     totals: null,
     error: null,
   });
+  const chartYear = useMemo(() => {
+    if (summary?.endDate) {
+      return dayjs(summary.endDate).year();
+    }
+    if (range[1]) {
+      return dayjs(range[1]).year();
+    }
+    return dayjs().year();
+  }, [summary?.endDate, range]);
 
   const handlePresetChange = useCallback((value: Preset) => {
     setPreset(value);
@@ -284,6 +480,96 @@ const ChannelNumbersSummary = () => {
       isMounted = false;
     };
   }, [fetchSummary]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const run = async () => {
+      setPreviousYearLoading(true);
+      try {
+        const response = await fetchChannelNumbersSummary({
+          startDate: dayjs(`${chartYear - 1}-01-01`).format(DATE_FORMAT),
+          endDate: dayjs(`${chartYear - 1}-12-31`).format(DATE_FORMAT),
+        });
+        if (!isMounted) {
+          return;
+        }
+        setPreviousYearSummary(response ?? null);
+      } catch {
+        if (isMounted) {
+          setPreviousYearSummary(null);
+        }
+      } finally {
+        if (isMounted) {
+          setPreviousYearLoading(false);
+        }
+      }
+    };
+
+    run();
+    return () => {
+      isMounted = false;
+    };
+  }, [chartYear]);
+
+  useEffect(() => {
+    const currentStart = dayjs(`${chartYear}-01-01`).format(DATE_FORMAT);
+    const currentEnd = dayjs(`${chartYear}-12-31`).format(DATE_FORMAT);
+    const previousStart = dayjs(`${chartYear - 1}-01-01`).format(DATE_FORMAT);
+    const previousEnd = dayjs(`${chartYear - 1}-12-31`).format(DATE_FORMAT);
+
+    let isMounted = true;
+    const run = async () => {
+      setAttendeesChartLoading(true);
+      try {
+        const [currentDetails, previousDetails, currentNoShowDetails, previousNoShowDetails] = await Promise.all([
+          fetchChannelNumbersDetails({
+            startDate: currentStart,
+            endDate: currentEnd,
+            metric: 'normal',
+          }),
+          fetchChannelNumbersDetails({
+            startDate: previousStart,
+            endDate: previousEnd,
+            metric: 'normal',
+          }),
+          fetchChannelNumbersDetails({
+            startDate: currentStart,
+            endDate: currentEnd,
+            metric: 'nonShow',
+          }),
+          fetchChannelNumbersDetails({
+            startDate: previousStart,
+            endDate: previousEnd,
+            metric: 'nonShow',
+          }),
+        ]);
+        if (!isMounted) {
+          return;
+        }
+        setAttendeesEntriesCurrent(currentDetails.entries ?? []);
+        setAttendeesEntriesPrevious(previousDetails.entries ?? []);
+        setNoShowEntriesCurrent(currentNoShowDetails.entries ?? []);
+        setNoShowEntriesPrevious(previousNoShowDetails.entries ?? []);
+      } catch {
+        if (!isMounted) {
+          return;
+        }
+        setAttendeesEntriesCurrent([]);
+        setAttendeesEntriesPrevious([]);
+        setNoShowEntriesCurrent([]);
+        setNoShowEntriesPrevious([]);
+      } finally {
+        if (isMounted) {
+          setAttendeesChartLoading(false);
+        }
+      }
+    };
+
+    run();
+    return () => {
+      isMounted = false;
+    };
+  }, [chartYear]);
 
   useEffect(() => {
     const [start, end] = range;
@@ -503,6 +789,316 @@ const ChannelNumbersSummary = () => {
     () => visibleTypeGroups.reduce((sum, group) => sum + getTypeColumnCount(group), 0),
     [visibleTypeGroups],
   );
+  const selectedTypeSlugs = useMemo(
+    () => new Set(selectedProductTypes.map((name) => normalizeTypeName(name))),
+    [selectedProductTypes],
+  );
+  const isProductTypeFilterActive = useMemo(() => {
+    if (selectedTypeSlugs.size === 0 || selectableProductTypes.length === 0) {
+      return false;
+    }
+    return selectableProductTypes.some((typeName) => !selectedTypeSlugs.has(normalizeTypeName(typeName)));
+  }, [selectableProductTypes, selectedTypeSlugs]);
+  const currentAggregates = useMemo(
+    () => aggregateMetricsByProductType(summary, selectedTypeSlugs.size > 0 ? selectedTypeSlugs : null),
+    [summary, selectedTypeSlugs],
+  );
+  const currentProductTypeLookup = useMemo(() => buildProductTypeLookup(summary), [summary]);
+  const previousProductTypeLookup = useMemo(
+    () => buildProductTypeLookup(previousYearSummary),
+    [previousYearSummary],
+  );
+  const filteredAttendeesCurrent = useMemo(
+    () =>
+      isProductTypeFilterActive
+        ? filterEntriesBySelectedTypes(attendeesEntriesCurrent, selectedTypeSlugs, currentProductTypeLookup)
+        : attendeesEntriesCurrent,
+    [attendeesEntriesCurrent, currentProductTypeLookup, isProductTypeFilterActive, selectedTypeSlugs],
+  );
+  const filteredAttendeesPrevious = useMemo(
+    () =>
+      isProductTypeFilterActive
+        ? filterEntriesBySelectedTypes(attendeesEntriesPrevious, selectedTypeSlugs, previousProductTypeLookup)
+        : attendeesEntriesPrevious,
+    [attendeesEntriesPrevious, isProductTypeFilterActive, previousProductTypeLookup, selectedTypeSlugs],
+  );
+  const filteredNoShowCurrent = useMemo(
+    () =>
+      isProductTypeFilterActive
+        ? filterEntriesBySelectedTypes(noShowEntriesCurrent, selectedTypeSlugs, currentProductTypeLookup)
+        : noShowEntriesCurrent,
+    [currentProductTypeLookup, isProductTypeFilterActive, noShowEntriesCurrent, selectedTypeSlugs],
+  );
+  const filteredNoShowPrevious = useMemo(
+    () =>
+      isProductTypeFilterActive
+        ? filterEntriesBySelectedTypes(noShowEntriesPrevious, selectedTypeSlugs, previousProductTypeLookup)
+        : noShowEntriesPrevious,
+    [isProductTypeFilterActive, noShowEntriesPrevious, previousProductTypeLookup, selectedTypeSlugs],
+  );
+  const attendeesComparisonData = useMemo(() => {
+    if (attendeesChartGranularity === 'year') {
+      const lastYearAttendees = filteredAttendeesPrevious.reduce(
+        (sum, entry) => sum + (entry.attended ?? entry.value ?? 0),
+        0,
+      );
+      const thisYearAttendees = filteredAttendeesCurrent.reduce(
+        (sum, entry) => sum + (entry.attended ?? entry.value ?? 0),
+        0,
+      );
+      const lastYearNoShow = filteredNoShowPrevious.reduce((sum, entry) => {
+        if (isExcludedNoShowAddonName(entry.addonName)) {
+          return sum;
+        }
+        return sum + (entry.value ?? entry.nonShow ?? 0);
+      }, 0);
+      const thisYearNoShow = filteredNoShowCurrent.reduce((sum, entry) => {
+        if (isExcludedNoShowAddonName(entry.addonName)) {
+          return sum;
+        }
+        return sum + (entry.value ?? entry.nonShow ?? 0);
+      }, 0);
+      return [
+        { label: String(chartYear - 1), attendees: lastYearAttendees + lastYearNoShow },
+        { label: String(chartYear), attendees: thisYearAttendees + thisYearNoShow },
+      ];
+    }
+
+    if (attendeesChartGranularity === 'month') {
+      const monthLabels = Array.from({ length: 12 }, (_, index) =>
+        dayjs().month(index).startOf('month').format('MMM'),
+      );
+      const thisYearByMonth = new Map<number, number>();
+      const lastYearByMonth = new Map<number, number>();
+
+      filteredAttendeesCurrent.forEach((entry) => {
+        const date = dayjs(entry.counterDate);
+        if (date.year() !== chartYear) {
+          return;
+        }
+        const month = date.month();
+        thisYearByMonth.set(month, (thisYearByMonth.get(month) ?? 0) + (entry.attended ?? entry.value ?? 0));
+      });
+
+      filteredAttendeesPrevious.forEach((entry) => {
+        const date = dayjs(entry.counterDate);
+        if (date.year() !== chartYear - 1) {
+          return;
+        }
+        const month = date.month();
+        lastYearByMonth.set(month, (lastYearByMonth.get(month) ?? 0) + (entry.attended ?? entry.value ?? 0));
+      });
+      filteredNoShowCurrent.forEach((entry) => {
+        if (isExcludedNoShowAddonName(entry.addonName)) {
+          return;
+        }
+        const date = dayjs(entry.counterDate);
+        if (date.year() !== chartYear) {
+          return;
+        }
+        const month = date.month();
+        thisYearByMonth.set(month, (thisYearByMonth.get(month) ?? 0) + (entry.value ?? entry.nonShow ?? 0));
+      });
+      filteredNoShowPrevious.forEach((entry) => {
+        if (isExcludedNoShowAddonName(entry.addonName)) {
+          return;
+        }
+        const date = dayjs(entry.counterDate);
+        if (date.year() !== chartYear - 1) {
+          return;
+        }
+        const month = date.month();
+        lastYearByMonth.set(month, (lastYearByMonth.get(month) ?? 0) + (entry.value ?? entry.nonShow ?? 0));
+      });
+
+      return monthLabels.map((label, month) => ({
+        label,
+        thisYear: thisYearByMonth.get(month) ?? 0,
+        lastYear: lastYearByMonth.get(month) ?? 0,
+      }));
+    }
+
+    const weekCount = Math.ceil(getDaysInYear(chartYear) / 7);
+    const thisYearByWeek = new Map<number, number>();
+    const lastYearByWeek = new Map<number, number>();
+
+    filteredAttendeesCurrent.forEach((entry) => {
+      const date = dayjs(entry.counterDate);
+      if (date.year() !== chartYear) {
+        return;
+      }
+      const weekIndex = getWeekIndexWithinYear(date, chartYear);
+      if (!weekIndex) {
+        return;
+      }
+      thisYearByWeek.set(weekIndex, (thisYearByWeek.get(weekIndex) ?? 0) + (entry.attended ?? entry.value ?? 0));
+    });
+
+    filteredAttendeesPrevious.forEach((entry) => {
+      const date = dayjs(entry.counterDate);
+      if (date.year() !== chartYear - 1) {
+        return;
+      }
+      const weekIndex = getWeekIndexWithinYear(date, chartYear - 1);
+      if (!weekIndex) {
+        return;
+      }
+      lastYearByWeek.set(weekIndex, (lastYearByWeek.get(weekIndex) ?? 0) + (entry.attended ?? entry.value ?? 0));
+    });
+    filteredNoShowCurrent.forEach((entry) => {
+      if (isExcludedNoShowAddonName(entry.addonName)) {
+        return;
+      }
+      const date = dayjs(entry.counterDate);
+      if (date.year() !== chartYear) {
+        return;
+      }
+      const weekIndex = getWeekIndexWithinYear(date, chartYear);
+      if (!weekIndex) {
+        return;
+      }
+      thisYearByWeek.set(weekIndex, (thisYearByWeek.get(weekIndex) ?? 0) + (entry.value ?? entry.nonShow ?? 0));
+    });
+    filteredNoShowPrevious.forEach((entry) => {
+      if (isExcludedNoShowAddonName(entry.addonName)) {
+        return;
+      }
+      const date = dayjs(entry.counterDate);
+      if (date.year() !== chartYear - 1) {
+        return;
+      }
+      const weekIndex = getWeekIndexWithinYear(date, chartYear - 1);
+      if (!weekIndex) {
+        return;
+      }
+      lastYearByWeek.set(weekIndex, (lastYearByWeek.get(weekIndex) ?? 0) + (entry.value ?? entry.nonShow ?? 0));
+    });
+
+    return Array.from({ length: weekCount }, (_, index) => {
+      const weekNumber = index + 1;
+      const thisYearStart = dayjs(`${chartYear}-01-01`).add((weekNumber - 1) * 7, 'day');
+      const thisYearEnd = thisYearStart.add(6, 'day').year() === chartYear
+        ? thisYearStart.add(6, 'day')
+        : dayjs(`${chartYear}-12-31`);
+      const lastYearStart = dayjs(`${chartYear - 1}-01-01`).add((weekNumber - 1) * 7, 'day');
+      const lastYearEnd = lastYearStart.add(6, 'day').year() === chartYear - 1
+        ? lastYearStart.add(6, 'day')
+        : dayjs(`${chartYear - 1}-12-31`);
+      return {
+        label: String(weekNumber),
+        weekNumber,
+        thisYearRange: `${thisYearStart.format('MMM D')} - ${thisYearEnd.format('MMM D, YYYY')}`,
+        lastYearRange: `${lastYearStart.format('MMM D')} - ${lastYearEnd.format('MMM D, YYYY')}`,
+        thisYear: thisYearByWeek.get(weekNumber) ?? 0,
+        lastYear: lastYearByWeek.get(weekNumber) ?? 0,
+      };
+    });
+  }, [
+    chartYear,
+    attendeesChartGranularity,
+    filteredAttendeesCurrent,
+    filteredAttendeesPrevious,
+    filteredNoShowCurrent,
+    filteredNoShowPrevious,
+  ]);
+  const mobileChannelRows = useMemo(() => {
+    if (!summary) {
+      return [];
+    }
+    return summary.channels
+      .map((channel) => {
+        const breakdown = currentAggregates.channelBreakdown.get(channel.channelId) ?? {
+          attendees: 0,
+          noShow: 0,
+          platformTotal: 0,
+        };
+        return {
+          channelId: channel.channelId,
+          channelName: channel.channelName,
+          ...breakdown,
+        };
+      })
+      .sort((a, b) => b.platformTotal - a.platformTotal);
+  }, [currentAggregates.channelBreakdown, summary]);
+  const chartXAxisInterval = useMemo(() => {
+    if (!isMobile) {
+      return 'preserveStartEnd' as const;
+    }
+    if (attendeesChartGranularity === 'week') {
+      return 5;
+    }
+    return 0;
+  }, [attendeesChartGranularity, isMobile]);
+  const renderPlatformTrendChart = (height: number | string, expanded = false) => {
+    const axisInterval =
+      expanded && isMobile
+        ? attendeesChartGranularity === 'week'
+          ? 5
+          : 0
+        : chartXAxisInterval;
+    return (
+      <Box h={height}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart
+            data={attendeesComparisonData}
+            margin={{ top: 8, right: expanded ? 2 : isMobile ? 4 : 12, left: 0, bottom: 0 }}
+            barCategoryGap={expanded ? '20%' : isMobile ? '28%' : '18%'}
+          >
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis
+              dataKey="label"
+              interval={axisInterval}
+              minTickGap={expanded ? 1 : isMobile ? 2 : 8}
+              tickMargin={expanded ? 8 : 4}
+              tick={{ fontSize: expanded ? 11 : isMobile ? 10 : 12 }}
+            />
+            <YAxis
+              allowDecimals={false}
+              tick={{ fontSize: expanded ? 11 : isMobile ? 10 : 12 }}
+              width={expanded ? 36 : isMobile ? 30 : 40}
+            />
+            {attendeesChartGranularity !== 'year' && (
+              <Legend wrapperStyle={{ fontSize: expanded ? 12 : isMobile ? 11 : 12 }} />
+            )}
+            <Tooltip
+              labelFormatter={(label: string | number) =>
+                attendeesChartGranularity === 'week' ? `Week ${label}` : label
+              }
+              formatter={(value: number | string, name: string, item: { payload?: Record<string, unknown> }) => {
+                const payload = item?.payload ?? {};
+                if (attendeesChartGranularity === 'week') {
+                  if (name === 'This year') {
+                    return [
+                      numberFormatter.format(Number(value) || 0),
+                      `This year (${String(payload.thisYearRange ?? '')})`,
+                    ];
+                  }
+                  if (name === 'Last year') {
+                    return [
+                      numberFormatter.format(Number(value) || 0),
+                      `Last year (${String(payload.lastYearRange ?? '')})`,
+                    ];
+                  }
+                }
+                return [
+                  numberFormatter.format(Number(value) || 0),
+                  attendeesChartGranularity === 'year' ? 'Platform total' : name,
+                ];
+              }}
+            />
+            {attendeesChartGranularity === 'year' ? (
+              <Bar dataKey="attendees" name="Platform total" fill={theme.colors.blue[6]} radius={[6, 6, 0, 0]} />
+            ) : (
+              <>
+                <Bar dataKey="lastYear" name="Last year" fill={theme.colors.gray[5]} radius={[6, 6, 0, 0]} />
+                <Bar dataKey="thisYear" name="This year" fill={theme.colors.blue[6]} radius={[6, 6, 0, 0]} />
+              </>
+            )}
+          </BarChart>
+        </ResponsiveContainer>
+      </Box>
+    );
+  };
 
   const cashSummary = summary?.cashSummary;
   const isLegacyRange = useMemo(() => {
@@ -822,23 +1418,23 @@ const ChannelNumbersSummary = () => {
           <Group justify="space-between" align={isMobile ? 'stretch' : 'flex-end'} gap="sm" wrap="wrap">
             <Stack gap={4} style={{ flex: '1 1 260px', minWidth: 0 }}>
               <Text fw={600}>Reporting period</Text>
-              <Group gap="xs" wrap="wrap">
+              <Group gap="xs" wrap="wrap" grow={isMobile}>
                 <Button
-                  size="xs"
+                  size={isMobile ? 'sm' : 'xs'}
                   variant={preset === 'thisMonth' ? 'filled' : 'light'}
                   onClick={() => handlePresetChange('thisMonth')}
                 >
                   This Month
                 </Button>
                 <Button
-                  size="xs"
+                  size={isMobile ? 'sm' : 'xs'}
                   variant={preset === 'lastMonth' ? 'filled' : 'light'}
                   onClick={() => handlePresetChange('lastMonth')}
                 >
                   Last Month
                 </Button>
                 <Button
-                  size="xs"
+                  size={isMobile ? 'sm' : 'xs'}
                   variant={preset === 'custom' ? 'filled' : 'light'}
                   onClick={() => setPreset('custom')}
                 >
@@ -875,6 +1471,7 @@ const ChannelNumbersSummary = () => {
               onChange={setSelectedProductTypes}
               placeholder="Select product types"
               clearable
+              size={isMobile ? 'sm' : 'md'}
             />
           )}
         </Stack>
@@ -890,14 +1487,43 @@ const ChannelNumbersSummary = () => {
         {summary && (
           <Stack gap="md">
             <SimpleGrid cols={{ base: 1, md: 3 }}>
-              {renderMetricCard('Pub crawl attendees', summary.totals.normal, 'blue')}
-              {renderMetricCard(
-                'Add-ons sold',
-                Object.values(summary.totals.addons).reduce((sum, v) => sum + v, 0),
-                'green',
-              )}
-              {renderMetricCard('Platform total', summary.totals.total, 'violet')}
+              {renderMetricCard('Platform total', currentAggregates.platformTotal, 'violet')}
+              {renderMetricCard('Attendees', currentAggregates.attendees, 'blue')}
+              {renderMetricCard('No-Show', currentAggregates.noShow, 'orange')}
             </SimpleGrid>
+            <Paper withBorder p="md">
+              <Stack gap="xs">
+                <Group justify="space-between">
+                  <Text fw={600}>Platform trend</Text>
+                  <Group gap="xs">
+                    {(previousYearLoading || attendeesChartLoading) && (
+                      <Text size="sm" c="dimmed">
+                        Loading...
+                      </Text>
+                    )}
+                    <Button
+                      size={isMobile ? 'sm' : 'xs'}
+                      variant="light"
+                      onClick={() => setPlatformTrendFullscreen(true)}
+                    >
+                      Full screen
+                    </Button>
+                  </Group>
+                </Group>
+                <SegmentedControl
+                  value={attendeesChartGranularity}
+                  onChange={(value) => setAttendeesChartGranularity(value as ChartGranularity)}
+                  data={[
+                    { label: 'Year by year', value: 'year' },
+                    { label: 'Month by month', value: 'month' },
+                    { label: 'Week by week', value: 'week' },
+                  ]}
+                  size={isMobile ? 'sm' : 'xs'}
+                  fullWidth={isMobile}
+                />
+                {renderPlatformTrendChart(isMobile ? 260 : 220)}
+              </Stack>
+            </Paper>
             {cashSummary && (
               <Paper withBorder p="md">
                 <Stack gap="sm">
@@ -959,7 +1585,7 @@ const ChannelNumbersSummary = () => {
                                 <td>{formatCurrencyValue(row.outstandingAmount, row.currency)}</td>
                                 <td>
                                   <Button
-                                    size="xs"
+                                    size={isMobile ? 'sm' : 'xs'}
                                     variant="light"
                                     disabled={!canCollect}
                                     onClick={() => handleOpenCashModal(row)}
@@ -1035,16 +1661,52 @@ const ChannelNumbersSummary = () => {
                 </Stack>
               </Paper>
             )}
-            <ScrollArea offsetScrollbars type="auto">
-              <Table
-                highlightOnHover
-                withColumnBorders
-                withRowBorders
-                withTableBorder
-                horizontalSpacing="sm"
-                verticalSpacing="xs"
-                style={{ borderWidth: 2, borderColor: 'var(--mantine-color-gray-5)' }}
-              >
+            {isMobile && (
+              <Paper withBorder p="sm">
+                <Stack gap="xs">
+                  <Group justify="space-between" align="center">
+                    <Text fw={600}>Channel totals</Text>
+                    <Badge variant="light">{mobileChannelRows.length}</Badge>
+                  </Group>
+                  <Text size="xs" c="dimmed">
+                    Compact view optimized for mobile. Detailed matrix is available below.
+                  </Text>
+                  {mobileChannelRows.map((row) => (
+                    <Paper key={row.channelId} withBorder p="sm" radius="md">
+                      <Group justify="space-between" align="flex-start" wrap="nowrap">
+                        <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
+                          <Text fw={600} lineClamp={1}>
+                            {row.channelName}
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            Attendees {numberFormatter.format(row.attendees)} · No-Show {numberFormatter.format(row.noShow)}
+                          </Text>
+                        </Stack>
+                        <Text fw={700}>{numberFormatter.format(row.platformTotal)}</Text>
+                      </Group>
+                    </Paper>
+                  ))}
+                  <Button
+                    fullWidth
+                    variant="light"
+                    onClick={() => setShowDetailedMatrixMobile((prev) => !prev)}
+                  >
+                    {showDetailedMatrixMobile ? 'Hide detailed matrix' : 'Show detailed matrix'}
+                  </Button>
+                </Stack>
+              </Paper>
+            )}
+            {(!isMobile || showDetailedMatrixMobile) && (
+              <ScrollArea offsetScrollbars type="auto">
+                <Table
+                  highlightOnHover
+                  withColumnBorders
+                  withRowBorders
+                  withTableBorder
+                  horizontalSpacing={isMobile ? 'xs' : 'sm'}
+                  verticalSpacing={isMobile ? 6 : 'xs'}
+                  style={{ borderWidth: 2, borderColor: 'var(--mantine-color-gray-5)', minWidth: isMobile ? 860 : undefined }}
+                >
                 <thead>
                   <tr>
                     <th
@@ -1201,133 +1863,138 @@ const ChannelNumbersSummary = () => {
                 </thead>
                 <tbody>
                   {tableHasData ? (
-                    summary.channels.map((channel) => (
-                      <tr key={channel.channelId}>
-                        <td style={mergeCellStyles({ borderRight: EMPHASIS_BORDER })}>
-                          <Text fw={600}>{channel.channelName}</Text>
-                        </td>
-                        {visibleTypeGroups.flatMap((group, groupIndex) =>
-                          group.products.flatMap((product, productIndex) => {
-                            const isLastProductInGroup = productIndex === group.products.length - 1;
-                            const productKey = getProductKey(product.id);
-                            const productMetrics = channel.products?.[productKey];
-                            const numericProductId =
-                              typeof product.id === 'number' ? product.id : productMetrics?.productId ?? undefined;
-                            const baseContextOptions = {
-                              channelId: channel.channelId,
-                              channelName: channel.channelName,
-                              productId: numericProductId,
-                              productName: product.name,
-                            };
-                            if (product.addons.length > 0) {
-                              const normalValue = productMetrics?.normal ?? 0;
-                              const nonShowValue = productMetrics?.nonShow ?? 0;
-                              const normalContext = buildDrilldownContext('normal', {
-                                ...baseContextOptions,
-                                suffix: 'Normal',
-                              });
-                              const nonShowContext = buildDrilldownContext('nonShow', {
-                                ...baseContextOptions,
-                                suffix: 'Non-Show',
-                              });
-                              return [
-                                <td
-                                  key={`normal-${group.slug}-${product.slug}-${channel.channelId}`}
-                                  style={mergeCellStyles({
-                                    fontWeight:
-                                      group.slug === MAIN_PRODUCT_TYPE_SLUG && normalValue > 0 ? 600 : undefined,
-                                    borderLeft: EMPHASIS_BORDER,
-                                  })}
-                                >
-                                  {renderValue(normalValue, normalContext)}
-                                </td>,
-                                <td
-                                  key={`nonshow-${group.slug}-${product.slug}-${channel.channelId}`}
-                                  style={mergeCellStyles(NO_LEFT_BORDER)}
-                                >
-                                  {renderValue(nonShowValue, nonShowContext)}
-                                </td>,
-                                ...product.addons.flatMap((addon, addonIndex) => [
-                                  <td
-                                    key={`addon-${group.slug}-${product.slug}-${addon.key}-${channel.channelId}`}
-                                    style={mergeCellStyles()}
-                                  >
-                                    {renderValue(
-                                      productMetrics?.addons?.[addon.key] ?? 0,
-                                      buildDrilldownContext('addon', {
-                                        ...baseContextOptions,
-                                        addonKey: addon.key,
-                                        addonName: addon.name,
-                                      }),
-                                    )}
-                                  </td>,
-                                  <td
-                                    key={`addon-nonshow-${group.slug}-${product.slug}-${addon.key}-${channel.channelId}`}
-                                    style={mergeCellStyles(
-                                      NO_LEFT_BORDER,
-                                      isLastProductInGroup &&
-                                        addonIndex === product.addons.length - 1 &&
-                                        groupIndex !== visibleTypeGroups.length - 1
-                                        ? { borderRight: EMPHASIS_BORDER }
-                                        : undefined,
-                                    )}
-                                  >
-                                    {renderValue(
-                                      productMetrics?.addonNonShow?.[addon.key] ?? 0,
-                                      buildDrilldownContext('addonNonShow', {
-                                        ...baseContextOptions,
-                                        addonKey: addon.key,
-                                        addonName: addon.name,
-                                        suffix: 'Non-Show',
-                                      }),
-                                    )}
-                                  </td>,
-                                ]),
-                              ];
-                            }
-                            const quantityContext = buildDrilldownContext('normal', {
-                              ...baseContextOptions,
-                              suffix: 'Quantity',
-                            });
-                            const productNonShowContext = buildDrilldownContext('nonShow', {
-                              ...baseContextOptions,
-                              suffix: 'Non-Show',
-                            });
-                            return [
-                              <td
-                                key={`quantity-${group.slug}-${product.slug}-${channel.channelId}`}
-                                style={mergeCellStyles(
-                                  { borderLeft: EMPHASIS_BORDER },
-                                )}
-                              >
-                                {renderValue(getQuantityForProduct(product, productMetrics), quantityContext)}
-                              </td>,
-                              <td
-                                key={`quantity-nonshow-${group.slug}-${product.slug}-${channel.channelId}`}
-                                style={mergeCellStyles(
-                                  NO_LEFT_BORDER,
-                                  isLastProductInGroup && groupIndex !== visibleTypeGroups.length - 1
-                                    ? { borderRight: EMPHASIS_BORDER }
-                                    : undefined,
-                                )}
-                              >
-                                {renderValue(productMetrics?.nonShow ?? 0, productNonShowContext)}
-                              </td>,
-                            ];
-                          }),
-                        )}
-                        <td style={mergeCellStyles({ fontWeight: 600, borderLeft: EMPHASIS_BORDER })}>
-                          {renderValue(
-                            channel.total,
-                            buildDrilldownContext('total', {
-                              channelId: channel.channelId,
-                              channelName: channel.channelName,
-                              suffix: 'Platform Total',
-                            }),
-                          )}
-                        </td>
-                      </tr>
-                    ))
+                    summary.channels.map((channel) => {
+                      const filteredChannelTotal = currentAggregates.channelTotals.get(channel.channelId) ?? 0;
+                      return (
+                        <tr key={channel.channelId}>
+                          <td style={mergeCellStyles({ borderRight: EMPHASIS_BORDER })}>
+                            <Text fw={600}>{channel.channelName}</Text>
+                          </td>
+                              {visibleTypeGroups.flatMap((group, groupIndex) =>
+                                group.products.flatMap((product, productIndex) => {
+                                  const isLastProductInGroup = productIndex === group.products.length - 1;
+                                  const productKey = getProductKey(product.id);
+                                  const productMetrics = channel.products?.[productKey];
+                                  const numericProductId =
+                                    typeof product.id === 'number' ? product.id : productMetrics?.productId ?? undefined;
+                                  const baseContextOptions = {
+                                    channelId: channel.channelId,
+                                    channelName: channel.channelName,
+                                    productId: numericProductId,
+                                    productName: product.name,
+                                  };
+                                  if (product.addons.length > 0) {
+                                    const normalValue = productMetrics?.normal ?? 0;
+                                    const nonShowValue = productMetrics?.nonShow ?? 0;
+                                    const normalContext = buildDrilldownContext('normal', {
+                                      ...baseContextOptions,
+                                      suffix: 'Normal',
+                                    });
+                                    const nonShowContext = buildDrilldownContext('nonShow', {
+                                      ...baseContextOptions,
+                                      suffix: 'Non-Show',
+                                    });
+                                    return [
+                                      <td
+                                        key={`normal-${group.slug}-${product.slug}-${channel.channelId}`}
+                                        style={mergeCellStyles({
+                                          fontWeight:
+                                            group.slug === MAIN_PRODUCT_TYPE_SLUG && normalValue > 0 ? 600 : undefined,
+                                          borderLeft: EMPHASIS_BORDER,
+                                        })}
+                                      >
+                                        {renderValue(normalValue, normalContext)}
+                                      </td>,
+                                      <td
+                                        key={`nonshow-${group.slug}-${product.slug}-${channel.channelId}`}
+                                        style={mergeCellStyles(NO_LEFT_BORDER)}
+                                      >
+                                        {renderValue(nonShowValue, nonShowContext)}
+                                      </td>,
+                                      ...product.addons.flatMap((addon, addonIndex) => [
+                                        <td
+                                          key={`addon-${group.slug}-${product.slug}-${addon.key}-${channel.channelId}`}
+                                          style={mergeCellStyles()}
+                                        >
+                                          {renderValue(
+                                            productMetrics?.addons?.[addon.key] ?? 0,
+                                            buildDrilldownContext('addon', {
+                                              ...baseContextOptions,
+                                              addonKey: addon.key,
+                                              addonName: addon.name,
+                                            }),
+                                          )}
+                                        </td>,
+                                        <td
+                                          key={`addon-nonshow-${group.slug}-${product.slug}-${addon.key}-${channel.channelId}`}
+                                          style={mergeCellStyles(
+                                            NO_LEFT_BORDER,
+                                            isLastProductInGroup &&
+                                              addonIndex === product.addons.length - 1 &&
+                                              groupIndex !== visibleTypeGroups.length - 1
+                                              ? { borderRight: EMPHASIS_BORDER }
+                                              : undefined,
+                                          )}
+                                        >
+                                          {renderValue(
+                                            productMetrics?.addonNonShow?.[addon.key] ?? 0,
+                                            buildDrilldownContext('addonNonShow', {
+                                              ...baseContextOptions,
+                                              addonKey: addon.key,
+                                              addonName: addon.name,
+                                              suffix: 'Non-Show',
+                                            }),
+                                          )}
+                                        </td>,
+                                      ]),
+                                    ];
+                                  }
+                                  const quantityContext = buildDrilldownContext('normal', {
+                                    ...baseContextOptions,
+                                    suffix: 'Quantity',
+                                  });
+                                  const productNonShowContext = buildDrilldownContext('nonShow', {
+                                    ...baseContextOptions,
+                                    suffix: 'Non-Show',
+                                  });
+                                  return [
+                                    <td
+                                      key={`quantity-${group.slug}-${product.slug}-${channel.channelId}`}
+                                      style={mergeCellStyles(
+                                        { borderLeft: EMPHASIS_BORDER },
+                                      )}
+                                    >
+                                      {renderValue(getQuantityForProduct(product, productMetrics), quantityContext)}
+                                    </td>,
+                                    <td
+                                      key={`quantity-nonshow-${group.slug}-${product.slug}-${channel.channelId}`}
+                                      style={mergeCellStyles(
+                                        NO_LEFT_BORDER,
+                                        isLastProductInGroup && groupIndex !== visibleTypeGroups.length - 1
+                                          ? { borderRight: EMPHASIS_BORDER }
+                                          : undefined,
+                                      )}
+                                    >
+                                      {renderValue(productMetrics?.nonShow ?? 0, productNonShowContext)}
+                                    </td>,
+                                  ];
+                                }),
+                              )}
+                          <td style={mergeCellStyles({ fontWeight: 600, borderLeft: EMPHASIS_BORDER })}>
+                            {renderValue(
+                              filteredChannelTotal,
+                              !isProductTypeFilterActive
+                                ? buildDrilldownContext('total', {
+                                  channelId: channel.channelId,
+                                  channelName: channel.channelName,
+                                  suffix: 'Platform Total',
+                                })
+                                : undefined,
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
                   ) : (
                     <tr>
                       <td
@@ -1466,17 +2133,20 @@ const ChannelNumbersSummary = () => {
                       )}
                       <td style={mergeCellStyles({ borderLeft: EMPHASIS_BORDER, borderTop: EMPHASIS_BORDER })}>
                         {renderValue(
-                          summary.totals.total,
-                          buildDrilldownContext('total', {
-                            suffix: 'Grand Total',
-                          }),
+                          currentAggregates.platformTotal,
+                          !isProductTypeFilterActive
+                            ? buildDrilldownContext('total', {
+                              suffix: 'Grand Total',
+                            })
+                            : undefined,
                         )}
                       </td>
                     </tr>
                   </tfoot>
                 )}
-              </Table>
-            </ScrollArea>
+                </Table>
+              </ScrollArea>
+            )}
           </Stack>
         )}
         {!loading && !summary && !error && (
@@ -1488,7 +2158,46 @@ const ChannelNumbersSummary = () => {
           </Stack>
         )}
       </Paper>
-      <Modal opened={cashModal.open} onClose={handleCloseCashModal} title="Record cash collection" centered>
+      <Modal
+        opened={platformTrendFullscreen}
+        onClose={() => setPlatformTrendFullscreen(false)}
+        title="Platform trend"
+        fullScreen
+        radius={0}
+        styles={{
+          content: { height: '100dvh', overflow: 'hidden' },
+          body: { height: 'calc(100dvh - 60px)', overflow: 'hidden' },
+        }}
+      >
+        <Box style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, overflow: 'hidden' }}>
+          <SegmentedControl
+            value={attendeesChartGranularity}
+            onChange={(value) => setAttendeesChartGranularity(value as ChartGranularity)}
+            data={[
+              { label: 'Year by year', value: 'year' },
+              { label: 'Month by month', value: 'month' },
+              { label: 'Week by week', value: 'week' },
+            ]}
+            size={isMobile ? 'sm' : 'md'}
+            fullWidth
+          />
+          {isMobile && isPortraitOrientation && (
+            <Alert color="blue" variant="light">
+              Rotate your phone to landscape for the best full-screen chart view.
+            </Alert>
+          )}
+          <Box style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            {renderPlatformTrendChart('100%', true)}
+          </Box>
+        </Box>
+      </Modal>
+      <Modal
+        opened={cashModal.open}
+        onClose={handleCloseCashModal}
+        title="Record cash collection"
+        centered
+        fullScreen={isMobile}
+      >
         <Stack gap="sm">
           {cashModal.channel && (
             <Stack gap={0}>
@@ -1563,7 +2272,8 @@ const ChannelNumbersSummary = () => {
         opened={detailModal.open}
         onClose={handleCloseDetailModal}
         title={detailModal.context?.label ?? 'Metric details'}
-        size="xl"
+        size={isMobile ? '100%' : 'xl'}
+        fullScreen={isMobile}
         centered
         radius="lg"
         scrollAreaComponent={ScrollArea.Autosize}
