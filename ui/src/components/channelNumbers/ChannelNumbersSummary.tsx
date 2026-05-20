@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   Alert,
@@ -28,7 +28,7 @@ import { useMediaQuery } from '@mantine/hooks';
 import { DatePickerInput } from '@mantine/dates';
 import { IconAlertCircle, IconChartBar, IconInfoCircle } from '@tabler/icons-react';
 import dayjs from 'dayjs';
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, Legend, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useSearchParams } from 'react-router-dom';
 
 import {
@@ -335,6 +335,17 @@ const NO_LEFT_BORDER: CSSProperties = { borderLeft: '0' };
 const mergeCellStyles = (...styles: Array<CSSProperties | undefined>) =>
   Object.assign({}, CELL_BORDER_STYLE, ...styles.filter(Boolean));
 
+const extractActiveLabel = (value: unknown): string | number | null => {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const candidate = (value as { activeLabel?: unknown }).activeLabel;
+  if (typeof candidate === 'string' || typeof candidate === 'number') {
+    return candidate;
+  }
+  return null;
+};
+
 const ChannelNumbersSummary = () => {
   const dispatch = useAppDispatch();
   const theme = useMantineTheme();
@@ -374,7 +385,10 @@ const ChannelNumbersSummary = () => {
   const [noShowEntriesPrevious, setNoShowEntriesPrevious] = useState<ChannelNumbersDetailEntry[]>([]);
   const [attendeesChartLoading, setAttendeesChartLoading] = useState(false);
   const [platformTrendFullscreen, setPlatformTrendFullscreen] = useState(false);
+  const [activeTrendLabel, setActiveTrendLabel] = useState<string | number | null>(null);
+  const [suppressTrendTooltip, setSuppressTrendTooltip] = useState(false);
   const [showDetailedMatrixMobile, setShowDetailedMatrixMobile] = useState(false);
+  const fullscreenTrendChartAreaRef = useRef<HTMLDivElement | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedProductTypes, setSelectedProductTypes] = useState<string[]>([]);
@@ -1029,43 +1043,159 @@ const ChannelNumbersSummary = () => {
     }
     return 0;
   }, [attendeesChartGranularity, isMobile]);
+
+  useEffect(() => {
+    setActiveTrendLabel(null);
+    setSuppressTrendTooltip(false);
+  }, [attendeesChartGranularity, platformTrendFullscreen]);
+
+  useEffect(() => {
+    if (!platformTrendFullscreen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const chartArea = fullscreenTrendChartAreaRef.current;
+      const target = event.target;
+      if (!chartArea || !(target instanceof Node)) {
+        return;
+      }
+      if (!chartArea.contains(target)) {
+        setActiveTrendLabel((prev) => (prev === null ? prev : null));
+        setSuppressTrendTooltip((prev) => (prev ? prev : true));
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+    };
+  }, [platformTrendFullscreen]);
+
   const usePseudoLandscapeFullscreen = isMobile && isPortraitOrientation;
-  const renderPlatformTrendChart = (height: number | string, expanded = false) => {
+  const renderPlatformTrendChart = (
+    height: number | string,
+    expanded = false,
+    forceLandscapeLayout = false,
+  ) => {
     const axisInterval =
       expanded && isMobile
         ? attendeesChartGranularity === 'week'
           ? 5
           : 0
         : chartXAxisInterval;
+    const useTouchTooltipMode = isMobile && expanded;
+    const useGroupedTooltip = attendeesChartGranularity !== 'year';
+    const useHorizontalBars = forceLandscapeLayout;
+    const weekCategoryInterval = attendeesChartGranularity === 'week' ? (isMobile ? 1 : 0) : 0;
     return (
-      <Box h={height}>
+      <Box h={height} style={{ position: 'relative', overflow: 'visible' }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={attendeesComparisonData}
+            layout={useHorizontalBars ? 'vertical' : 'horizontal'}
+            onMouseMove={(eventState: unknown) => {
+              if (useTouchTooltipMode || !useGroupedTooltip) {
+                return;
+              }
+              const nextLabel = extractActiveLabel(eventState);
+              setActiveTrendLabel(nextLabel);
+              if (nextLabel !== null) {
+                setSuppressTrendTooltip((prev) => (prev ? false : prev));
+              }
+            }}
+            onMouseLeave={() => {
+              if (!useTouchTooltipMode) {
+                setActiveTrendLabel(null);
+                setSuppressTrendTooltip((prev) => (prev ? prev : true));
+              }
+            }}
+            onClick={(eventState: unknown) => {
+              if (!useGroupedTooltip) {
+                return;
+              }
+              const nextLabel = extractActiveLabel(eventState);
+              if (nextLabel !== null) {
+                setActiveTrendLabel(nextLabel);
+                setSuppressTrendTooltip((prev) => (prev ? false : prev));
+              }
+            }}
             margin={
               expanded
-                ? { top: 12, right: 12, left: 8, bottom: 16 }
+                ? useHorizontalBars
+                  ? { top: 8, right: 12, left: 4, bottom: 8 }
+                  : { top: 12, right: 12, left: 8, bottom: 16 }
                 : { top: 8, right: isMobile ? 4 : 12, left: 0, bottom: 0 }
             }
-            barCategoryGap={expanded ? '20%' : isMobile ? '28%' : '18%'}
+            barCategoryGap={expanded ? (useHorizontalBars ? '22%' : '20%') : isMobile ? '28%' : '18%'}
           >
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis
-              dataKey="label"
-              interval={axisInterval}
-              minTickGap={expanded ? 1 : isMobile ? 2 : 8}
-              tickMargin={expanded ? 10 : 4}
-              tick={{ fontSize: expanded ? 11 : isMobile ? 10 : 12 }}
-            />
-            <YAxis
-              allowDecimals={false}
-              tick={{ fontSize: expanded ? 11 : isMobile ? 10 : 12 }}
-              width={expanded ? 40 : isMobile ? 30 : 40}
-            />
+            {useHorizontalBars ? (
+              <>
+                <XAxis
+                  type="number"
+                  orientation="top"
+                  allowDecimals={false}
+                  tick={{ fontSize: expanded ? 11 : isMobile ? 10 : 12 }}
+                  tickMargin={8}
+                />
+                <YAxis
+                  type="category"
+                  dataKey="label"
+                  interval={weekCategoryInterval}
+                  tick={{ fontSize: expanded ? 11 : isMobile ? 10 : 12 }}
+                  tickMargin={6}
+                  width={attendeesChartGranularity === 'week' ? 28 : 36}
+                />
+              </>
+            ) : (
+              <>
+                <XAxis
+                  dataKey="label"
+                  interval={axisInterval}
+                  minTickGap={expanded ? 1 : isMobile ? 2 : 8}
+                  tickMargin={expanded ? 10 : 4}
+                  tick={{ fontSize: expanded ? 11 : isMobile ? 10 : 12 }}
+                />
+                <YAxis
+                  allowDecimals={false}
+                  tick={{ fontSize: expanded ? 11 : isMobile ? 10 : 12 }}
+                  width={expanded ? 40 : isMobile ? 30 : 40}
+                />
+              </>
+            )}
             {attendeesChartGranularity !== 'year' && (
               <Legend wrapperStyle={{ fontSize: expanded ? 12 : isMobile ? 11 : 12 }} />
             )}
+            {useGroupedTooltip && activeTrendLabel !== null && (
+              useHorizontalBars ? (
+                <ReferenceArea
+                  y1={activeTrendLabel}
+                  y2={activeTrendLabel}
+                  ifOverflow="extendDomain"
+                  fill={theme.colors.blue[3]}
+                  fillOpacity={0.5}
+                  strokeOpacity={0}
+                />
+              ) : (
+                <ReferenceArea
+                  x1={activeTrendLabel}
+                  x2={activeTrendLabel}
+                  ifOverflow="extendDomain"
+                  fill={theme.colors.blue[3]}
+                  fillOpacity={0.5}
+                  strokeOpacity={0}
+                />
+              )
+            )}
             <Tooltip
+              trigger={useTouchTooltipMode ? 'click' : 'hover'}
+              active={suppressTrendTooltip ? false : undefined}
+              shared={useGroupedTooltip}
+              cursor={false}
+              isAnimationActive={false}
+              allowEscapeViewBox={{ x: true, y: true }}
+              wrapperStyle={{ pointerEvents: 'none', zIndex: 1000 }}
               labelFormatter={(label: string | number) =>
                 attendeesChartGranularity === 'week' ? `Week ${label}` : label
               }
@@ -1092,11 +1222,29 @@ const ChannelNumbersSummary = () => {
               }}
             />
             {attendeesChartGranularity === 'year' ? (
-              <Bar dataKey="attendees" name="Platform total" fill={theme.colors.blue[6]} radius={[6, 6, 0, 0]} />
+              <Bar
+                dataKey="attendees"
+                name="Platform total"
+                fill={theme.colors.blue[6]}
+                radius={useHorizontalBars ? [0, 6, 6, 0] : [6, 6, 0, 0]}
+                isAnimationActive={false}
+              />
             ) : (
               <>
-                <Bar dataKey="lastYear" name="Last year" fill={theme.colors.gray[5]} radius={[6, 6, 0, 0]} />
-                <Bar dataKey="thisYear" name="This year" fill={theme.colors.blue[6]} radius={[6, 6, 0, 0]} />
+                <Bar
+                  dataKey="lastYear"
+                  name="Last year"
+                  fill={theme.colors.gray[5]}
+                  radius={useHorizontalBars ? [0, 6, 6, 0] : [6, 6, 0, 0]}
+                  isAnimationActive={false}
+                />
+                <Bar
+                  dataKey="thisYear"
+                  name="This year"
+                  fill={theme.colors.blue[6]}
+                  radius={useHorizontalBars ? [0, 6, 6, 0] : [6, 6, 0, 0]}
+                  isAnimationActive={false}
+                />
               </>
             )}
           </BarChart>
@@ -2181,53 +2329,72 @@ const ChannelNumbersSummary = () => {
         }}
       >
         {usePseudoLandscapeFullscreen ? (
-          <Box style={{ height: '100%', minHeight: 0, overflow: 'hidden', position: 'relative' }}>
-            <Box
-              style={{
-                position: 'absolute',
-                top: '50%',
-                left: '50%',
-                width: 'calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 28px)',
-                height: 'calc(100dvw - env(safe-area-inset-left) - env(safe-area-inset-right) - 28px)',
-                transform: 'translate(-50%, -50%) rotate(90deg)',
-                transformOrigin: 'center center',
-                overflow: 'hidden',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-                boxSizing: 'border-box',
-                padding: 6,
-              }}
-            >
-              <Group justify="center" align="center" style={{ position: 'relative', minHeight: 28 }}>
-                <Text fw={700} ta="center" style={{ width: '100%' }}>
-                  Platform trend
-                </Text>
+          <Box style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0, overflow: 'hidden' }}>
+            <Group justify="center" align="center" style={{ position: 'relative', minHeight: 32 }}>
+              <Text fw={700} ta="center" style={{ width: '100%' }}>
+                Platform trend
+              </Text>
+              <Button
+                size="xs"
+                variant="default"
+                px={8}
+                style={{ position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)' }}
+                onClick={() => setPlatformTrendFullscreen(false)}
+                aria-label="Close full screen"
+              >
+                x
+              </Button>
+            </Group>
+            <Box style={{ flex: 1, minHeight: 0, overflow: 'visible', display: 'flex', gap: 8 }}>
+              <Box
+                ref={fullscreenTrendChartAreaRef}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  minHeight: 0,
+                  overflow: 'visible',
+                  touchAction: 'manipulation',
+                  position: 'relative',
+                  zIndex: 3,
+                }}
+              >
+                {renderPlatformTrendChart('100%', true, true)}
+              </Box>
+              <Stack
+                gap="xs"
+                style={{
+                  width: 112,
+                  minWidth: 112,
+                  justifyContent: 'center',
+                  position: 'relative',
+                  zIndex: 1,
+                }}
+              >
                 <Button
                   size="xs"
-                  variant="default"
-                  px={8}
-                  style={{ position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)' }}
-                  onClick={() => setPlatformTrendFullscreen(false)}
-                  aria-label="Close full screen"
+                  variant={attendeesChartGranularity === 'year' ? 'filled' : 'light'}
+                  onClick={() => setAttendeesChartGranularity('year')}
+                  fullWidth
                 >
-                  x
+                  Year by year
                 </Button>
-              </Group>
-              <SegmentedControl
-                value={attendeesChartGranularity}
-                onChange={(value) => setAttendeesChartGranularity(value as ChartGranularity)}
-                data={[
-                  { label: 'Year by year', value: 'year' },
-                  { label: 'Month by month', value: 'month' },
-                  { label: 'Week by week', value: 'week' },
-                ]}
-                size="sm"
-                fullWidth
-              />
-              <Box style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-                {renderPlatformTrendChart('100%', true)}
-              </Box>
+                <Button
+                  size="xs"
+                  variant={attendeesChartGranularity === 'month' ? 'filled' : 'light'}
+                  onClick={() => setAttendeesChartGranularity('month')}
+                  fullWidth
+                >
+                  Month by month
+                </Button>
+                <Button
+                  size="xs"
+                  variant={attendeesChartGranularity === 'week' ? 'filled' : 'light'}
+                  onClick={() => setAttendeesChartGranularity('week')}
+                  fullWidth
+                >
+                  Week by week
+                </Button>
+              </Stack>
             </Box>
           </Box>
         ) : (
@@ -2258,7 +2425,10 @@ const ChannelNumbersSummary = () => {
               size={isMobile ? 'sm' : 'md'}
               fullWidth
             />
-            <Box style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            <Box
+              ref={fullscreenTrendChartAreaRef}
+              style={{ flex: 1, minHeight: 0, overflow: 'hidden', touchAction: 'manipulation' }}
+            >
               {renderPlatformTrendChart('100%', true)}
             </Box>
           </Box>
