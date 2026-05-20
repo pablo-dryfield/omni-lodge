@@ -1029,6 +1029,7 @@ const ChannelNumbersSummary = () => {
     }
     return 0;
   }, [attendeesChartGranularity, isMobile]);
+  const usePseudoLandscapeFullscreen = isMobile && isPortraitOrientation;
   const renderPlatformTrendChart = (height: number | string, expanded = false) => {
     const axisInterval =
       expanded && isMobile
@@ -1041,7 +1042,11 @@ const ChannelNumbersSummary = () => {
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={attendeesComparisonData}
-            margin={{ top: 8, right: expanded ? 2 : isMobile ? 4 : 12, left: 0, bottom: 0 }}
+            margin={
+              expanded
+                ? { top: 12, right: 12, left: 8, bottom: 16 }
+                : { top: 8, right: isMobile ? 4 : 12, left: 0, bottom: 0 }
+            }
             barCategoryGap={expanded ? '20%' : isMobile ? '28%' : '18%'}
           >
             <CartesianGrid strokeDasharray="3 3" />
@@ -1049,13 +1054,13 @@ const ChannelNumbersSummary = () => {
               dataKey="label"
               interval={axisInterval}
               minTickGap={expanded ? 1 : isMobile ? 2 : 8}
-              tickMargin={expanded ? 8 : 4}
+              tickMargin={expanded ? 10 : 4}
               tick={{ fontSize: expanded ? 11 : isMobile ? 10 : 12 }}
             />
             <YAxis
               allowDecimals={false}
               tick={{ fontSize: expanded ? 11 : isMobile ? 10 : 12 }}
-              width={expanded ? 36 : isMobile ? 30 : 40}
+              width={expanded ? 40 : isMobile ? 30 : 40}
             />
             {attendeesChartGranularity !== 'year' && (
               <Legend wrapperStyle={{ fontSize: expanded ? 12 : isMobile ? 11 : 12 }} />
@@ -2161,35 +2166,103 @@ const ChannelNumbersSummary = () => {
       <Modal
         opened={platformTrendFullscreen}
         onClose={() => setPlatformTrendFullscreen(false)}
-        title="Platform trend"
+        title=""
+        withCloseButton={false}
         fullScreen
         radius={0}
         styles={{
           content: { height: '100dvh', overflow: 'hidden' },
-          body: { height: 'calc(100dvh - 60px)', overflow: 'hidden' },
+          header: { display: 'none' },
+          body: {
+            height: '100dvh',
+            padding: 8,
+            overflow: 'hidden',
+          },
         }}
       >
-        <Box style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, overflow: 'hidden' }}>
-          <SegmentedControl
-            value={attendeesChartGranularity}
-            onChange={(value) => setAttendeesChartGranularity(value as ChartGranularity)}
-            data={[
-              { label: 'Year by year', value: 'year' },
-              { label: 'Month by month', value: 'month' },
-              { label: 'Week by week', value: 'week' },
-            ]}
-            size={isMobile ? 'sm' : 'md'}
-            fullWidth
-          />
-          {isMobile && isPortraitOrientation && (
-            <Alert color="blue" variant="light">
-              Rotate your phone to landscape for the best full-screen chart view.
-            </Alert>
-          )}
-          <Box style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-            {renderPlatformTrendChart('100%', true)}
+        {usePseudoLandscapeFullscreen ? (
+          <Box style={{ height: '100%', minHeight: 0, overflow: 'hidden', position: 'relative' }}>
+            <Box
+              style={{
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                width: 'calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 28px)',
+                height: 'calc(100dvw - env(safe-area-inset-left) - env(safe-area-inset-right) - 28px)',
+                transform: 'translate(-50%, -50%) rotate(90deg)',
+                transformOrigin: 'center center',
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                boxSizing: 'border-box',
+                padding: 6,
+              }}
+            >
+              <Group justify="center" align="center" style={{ position: 'relative', minHeight: 28 }}>
+                <Text fw={700} ta="center" style={{ width: '100%' }}>
+                  Platform trend
+                </Text>
+                <Button
+                  size="xs"
+                  variant="default"
+                  px={8}
+                  style={{ position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)' }}
+                  onClick={() => setPlatformTrendFullscreen(false)}
+                  aria-label="Close full screen"
+                >
+                  x
+                </Button>
+              </Group>
+              <SegmentedControl
+                value={attendeesChartGranularity}
+                onChange={(value) => setAttendeesChartGranularity(value as ChartGranularity)}
+                data={[
+                  { label: 'Year by year', value: 'year' },
+                  { label: 'Month by month', value: 'month' },
+                  { label: 'Week by week', value: 'week' },
+                ]}
+                size="sm"
+                fullWidth
+              />
+              <Box style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                {renderPlatformTrendChart('100%', true)}
+              </Box>
+            </Box>
           </Box>
-        </Box>
+        ) : (
+          <Box style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, overflow: 'hidden' }}>
+            <Group justify="center" align="center" style={{ position: 'relative', minHeight: 32 }}>
+              <Text fw={700} ta="center" style={{ width: '100%' }}>
+                Platform trend
+              </Text>
+              <Button
+                size={isMobile ? 'sm' : 'xs'}
+                variant="default"
+                px={8}
+                style={{ position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)' }}
+                onClick={() => setPlatformTrendFullscreen(false)}
+                aria-label="Close full screen"
+              >
+                x
+              </Button>
+            </Group>
+            <SegmentedControl
+              value={attendeesChartGranularity}
+              onChange={(value) => setAttendeesChartGranularity(value as ChartGranularity)}
+              data={[
+                { label: 'Year by year', value: 'year' },
+                { label: 'Month by month', value: 'month' },
+                { label: 'Week by week', value: 'week' },
+              ]}
+              size={isMobile ? 'sm' : 'md'}
+              fullWidth
+            />
+            <Box style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              {renderPlatformTrendChart('100%', true)}
+            </Box>
+          </Box>
+        )}
       </Modal>
       <Modal
         opened={cashModal.open}
