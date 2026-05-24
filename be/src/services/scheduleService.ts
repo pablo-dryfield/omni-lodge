@@ -1167,6 +1167,186 @@ export async function listShiftTypes(): Promise<ShiftType[]> {
   });
 }
 
+const normalizeShiftTypeKey = (value: string): string =>
+  value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+
+const toShiftTypePlainWithProducts = async (
+  shiftType: ShiftType,
+  transaction?: Transaction,
+): Promise<ShiftType> => {
+  const links = await ShiftTypeProduct.findAll({
+    attributes: ['productId'],
+    where: { shiftTypeId: shiftType.id },
+    transaction,
+  });
+  const plain = shiftType.get({ plain: true }) as ShiftType & { productIds?: number[] };
+  plain.productIds = links.map((link) => link.productId);
+  return plain as ShiftType;
+};
+
+export async function createShiftType(
+  payload: { key?: string; name: string; description?: string | null; productIds?: number[] },
+  actorId: number | null,
+): Promise<ShiftType> {
+  const name = payload.name?.trim();
+  if (!name) {
+    throw new HttpError(400, 'Shift type name is required');
+  }
+
+  const normalizedKey = normalizeShiftTypeKey(payload.key && payload.key.trim().length > 0 ? payload.key : name);
+  if (!normalizedKey) {
+    throw new HttpError(400, 'Shift type key is required');
+  }
+
+  const normalizedProductIds = Array.from(
+    new Set(
+      (payload.productIds ?? [])
+        .map((value) => Number(value))
+        .filter((value): value is number => Number.isInteger(value) && value > 0),
+    ),
+  );
+
+  return sequelize.transaction(async (transaction) => {
+    const existing = await ShiftType.findOne({ where: { key: normalizedKey }, transaction });
+    if (existing) {
+      throw new HttpError(409, 'Shift type key already exists');
+    }
+
+    if (normalizedProductIds.length > 0) {
+      const count = await Product.count({
+        where: { id: { [Op.in]: normalizedProductIds } },
+        transaction,
+      });
+      if (count !== normalizedProductIds.length) {
+        throw new HttpError(400, 'One or more products do not exist');
+      }
+    }
+
+    const shiftType = await ShiftType.create(
+      {
+        key: normalizedKey,
+        name,
+        description: payload.description?.trim() ? payload.description.trim() : null,
+      },
+      { transaction },
+    );
+
+    if (normalizedProductIds.length > 0) {
+      await ShiftTypeProduct.bulkCreate(
+        normalizedProductIds.map((productId) => ({ shiftTypeId: shiftType.id, productId })),
+        { transaction },
+      );
+    }
+
+    await logAudit({
+      actorId,
+      action: 'schedule.shift-type.create',
+      entity: 'shift_type',
+      entityId: String(shiftType.id),
+      meta: { key: normalizedKey, productIds: normalizedProductIds },
+    });
+
+    return toShiftTypePlainWithProducts(shiftType, transaction);
+  });
+}
+
+export async function updateShiftType(
+  shiftTypeId: number,
+  payload: { key?: string; name?: string; description?: string | null },
+  actorId: number | null,
+): Promise<ShiftType> {
+  return sequelize.transaction(async (transaction) => {
+    const shiftType = await ShiftType.findByPk(shiftTypeId, { transaction });
+    if (!shiftType) {
+      throw new HttpError(404, 'Shift type not found');
+    }
+
+    const nextName = payload.name !== undefined ? payload.name.trim() : shiftType.name;
+    if (!nextName) {
+      throw new HttpError(400, 'Shift type name is required');
+    }
+
+    const rawKey = payload.key !== undefined ? payload.key : shiftType.key;
+    const normalizedKey = normalizeShiftTypeKey(rawKey);
+    if (!normalizedKey) {
+      throw new HttpError(400, 'Shift type key is required');
+    }
+
+    const duplicate = await ShiftType.findOne({
+      where: {
+        key: normalizedKey,
+        id: { [Op.ne]: shiftTypeId },
+      },
+      transaction,
+    });
+    if (duplicate) {
+      throw new HttpError(409, 'Shift type key already exists');
+    }
+
+    await shiftType.update(
+      {
+        key: normalizedKey,
+        name: nextName,
+        description:
+          payload.description !== undefined
+            ? payload.description?.trim()
+              ? payload.description.trim()
+              : null
+            : shiftType.description,
+      },
+      { transaction },
+    );
+
+    await logAudit({
+      actorId,
+      action: 'schedule.shift-type.update',
+      entity: 'shift_type',
+      entityId: String(shiftType.id),
+      meta: { key: normalizedKey },
+    });
+
+    return toShiftTypePlainWithProducts(shiftType, transaction);
+  });
+}
+
+export async function deleteShiftType(shiftTypeId: number, actorId: number | null): Promise<void> {
+  await sequelize.transaction(async (transaction) => {
+    const shiftType = await ShiftType.findByPk(shiftTypeId, { transaction });
+    if (!shiftType) {
+      throw new HttpError(404, 'Shift type not found');
+    }
+
+    const [templateCount, instanceCount, availabilityCount] = await Promise.all([
+      ShiftTemplate.count({ where: { shiftTypeId }, transaction }),
+      ShiftInstance.count({ where: { shiftTypeId }, transaction }),
+      Availability.count({ where: { shiftTypeId }, transaction }),
+    ]);
+
+    if (templateCount > 0 || instanceCount > 0 || availabilityCount > 0) {
+      throw new HttpError(
+        400,
+        'Cannot delete shift type because it is already in use. Remove linked templates/instances/availability first.',
+      );
+    }
+
+    await ShiftTypeProduct.destroy({ where: { shiftTypeId }, transaction });
+    await shiftType.destroy({ transaction });
+
+    await logAudit({
+      actorId,
+      action: 'schedule.shift-type.delete',
+      entity: 'shift_type',
+      entityId: String(shiftTypeId),
+      meta: { key: shiftType.key },
+    });
+  });
+}
+
 export async function updateShiftTypeProducts(
   shiftTypeId: number,
   productIds: number[],
