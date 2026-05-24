@@ -465,11 +465,18 @@ const isPubCrawlShiftInstance = (instance: ShiftInstance) => {
   const typeKey = instance.shiftType?.key?.toLowerCase() ?? "";
   const typeName = instance.shiftType?.name?.toLowerCase() ?? "";
   const templateName = instance.template?.name?.toLowerCase() ?? "";
-  return (
-    typeKey.includes("pub_crawl") ||
-    typeName.includes("pub crawl") ||
-    templateName.includes("pub crawl")
-  );
+  if (typeKey === "private_pub_crawl") {
+    return false;
+  }
+  if (typeKey === "pub_crawl") {
+    return true;
+  }
+
+  if (typeName.includes("private pub crawl") || templateName.includes("private pub crawl")) {
+    return false;
+  }
+
+  return typeName.includes("pub crawl") || templateName.includes("pub crawl");
 };
 
 type ShiftTimeBucket = {

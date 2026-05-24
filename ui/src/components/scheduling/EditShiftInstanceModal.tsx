@@ -14,6 +14,20 @@ export interface EditShiftInstanceModalProps {
   shiftRoles: ShiftRole[];
 }
 
+const normalizeTimeForInput = (value: string | null | undefined): string => {
+  if (!value) {
+    return "";
+  }
+
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) {
+    return "";
+  }
+
+  const [, hours, minutes] = match;
+  return `${hours.padStart(2, "0")}:${minutes}`;
+};
+
 type RoleEntry = {
   id: string;
   role: string;
@@ -63,8 +77,8 @@ const EditShiftInstanceModal = ({
     }
     const initialRoles = instance.requiredRoles ?? instance.template?.defaultRoles ?? [];
     setDate(dayjs(instance.date).toDate());
-    setTimeStart(instance.timeStart ?? "");
-    setTimeEnd(instance.timeEnd ?? "");
+    setTimeStart(normalizeTimeForInput(instance.timeStart));
+    setTimeEnd(normalizeTimeForInput(instance.timeEnd));
     setCapacity(instance.capacity ?? undefined);
     setMeta(instance.meta ? JSON.stringify(instance.meta, null, 2) : "");
     setMetaError(null);
@@ -133,8 +147,8 @@ const EditShiftInstanceModal = ({
     try {
       const data: Partial<ShiftInstancePayload> = {
         date: dayjs(date).format("YYYY-MM-DD"),
-        timeStart,
-        timeEnd: timeEnd ? timeEnd : null,
+        timeStart: normalizeTimeForInput(timeStart),
+        timeEnd: timeEnd ? normalizeTimeForInput(timeEnd) : null,
         capacity: typeof capacity === "number" ? capacity : null,
         meta: parsedMeta,
       };
