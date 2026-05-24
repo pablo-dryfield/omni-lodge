@@ -57,6 +57,7 @@ import ReviewCounterMonthlyApproval from "../models/ReviewCounterMonthlyApproval
 import AssistantManagerTaskLog, { type AssistantManagerTaskStatus } from "../models/AssistantManagerTaskLog.js";
 import { fetchLeaderNightReportStats, type NightReportStatsMap } from "../services/nightReportMetricsService.js";
 import Product from "../models/Product.js";
+import Addon from "../models/Addon.js";
 import FinanceTransaction, {
   type FinanceTransactionStatus,
 } from "../finance/models/FinanceTransaction.js";
@@ -334,6 +335,10 @@ const resolveCounterManagerId = (
 const COMMISSION_RATE_PER_ATTENDEE = 0;
 const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-01");
 const REVIEW_MINIMUM_THRESHOLD = 15;
+const isExcludedNoShowAddonName = (value?: string | null): boolean => {
+  const normalized = value?.toLowerCase() ?? "";
+  return normalized.includes("photo") || normalized.includes("t-shirt") || normalized.includes("tshirt");
+};
 const resolvePayoutCurrency = (): string =>
   String(getConfigValue('FINANCE_BASE_CURRENCY') ?? 'PLN')
     .trim()
@@ -4332,33 +4337,89 @@ const computePlatformGuestTotals = async (counterIds: number[]): Promise<Platfor
     return { totalGuests: 0, totalBooked: 0, totalAttended: 0 };
   }
 
-  const rows = await CounterChannelMetric.findAll({
-    attributes: ["tallyType", [Sequelize.fn("SUM", Sequelize.col("qty")), "totalQty"]],
-    where: {
-      counterId: { [Op.in]: counterIds },
-      kind: "people",
-      tallyType: { [Op.in]: ["booked", "attended"] },
-    },
-    group: ["tallyType"],
+  const counterRows = await Counter.findAll({
+    where: { id: { [Op.in]: counterIds } },
+    attributes: ["id", "productId"],
+  });
+  const productIdByCounter = new Map<number, number | null>();
+  counterRows.forEach((counter) => {
+    productIdByCounter.set(counter.id, counter.productId ?? null);
   });
 
-  let totalBooked = 0;
-  let totalAttended = 0;
+  const rows = await CounterChannelMetric.findAll({
+    attributes: [
+      "counterId",
+      "channelId",
+      "kind",
+      "addonId",
+      "tallyType",
+      [Sequelize.fn("SUM", Sequelize.col("qty")), "totalQty"],
+    ],
+    where: {
+      counterId: { [Op.in]: counterIds },
+      kind: { [Op.in]: ["people", "addon"] },
+      tallyType: { [Op.in]: ["booked", "attended"] },
+    },
+    group: ["counterId", "channelId", "kind", "addonId", "tallyType"],
+  });
+
+  const addonIds = new Set<number>();
   rows.forEach((row) => {
+    const kind = row.getDataValue("kind") as string;
+    const addonId = Number(row.getDataValue("addonId") ?? 0);
+    if (kind === "addon" && Number.isFinite(addonId) && addonId > 0) {
+      addonIds.add(addonId);
+    }
+  });
+
+  const excludedAddonIds = new Set<number>();
+  if (addonIds.size > 0) {
+    const addons = await Addon.findAll({
+      where: { id: { [Op.in]: Array.from(addonIds) } },
+      attributes: ["id", "name"],
+    });
+    addons.forEach((addon) => {
+      if (isExcludedNoShowAddonName(addon.name ?? null)) {
+        excludedAddonIds.add(addon.id);
+      }
+    });
+  }
+
+  const bucketTotals = new Map<string, { booked: number; attended: number }>();
+  rows.forEach((row) => {
+    const counterId = Number(row.getDataValue("counterId") ?? 0);
+    const channelId = Number(row.getDataValue("channelId") ?? 0);
+    const kind = row.getDataValue("kind") as string;
+    const addonId = Number(row.getDataValue("addonId") ?? 0);
+    if (kind === "addon" && excludedAddonIds.has(addonId)) {
+      return;
+    }
+    const productId = productIdByCounter.get(counterId) ?? null;
     const tallyType = row.getDataValue("tallyType") as string;
     const qty = Number(row.get("totalQty") ?? 0);
     if (!Number.isFinite(qty) || qty <= 0) {
       return;
     }
+    const bucketKey = `${productId ?? "null"}|${channelId}|${kind}|${addonId || "null"}`;
+    const bucket = bucketTotals.get(bucketKey) ?? { booked: 0, attended: 0 };
     if (tallyType === "booked") {
-      totalBooked += qty;
+      bucket.booked += qty;
     } else if (tallyType === "attended") {
-      totalAttended += qty;
+      bucket.attended += qty;
     }
+    bucketTotals.set(bucketKey, bucket);
   });
 
-  const noShows = Math.max(totalBooked - totalAttended, 0);
-  const totalGuests = totalAttended + noShows;
+  let totalBooked = 0;
+  let totalAttended = 0;
+  let totalNoShow = 0;
+  bucketTotals.forEach((bucket) => {
+    totalBooked += bucket.booked;
+    totalAttended += bucket.attended;
+    totalNoShow += Math.max(bucket.booked - bucket.attended, 0);
+  });
+
+  const totalGuests = totalAttended + totalNoShow;
   return {
     totalGuests,
     totalBooked,
