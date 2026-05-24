@@ -330,6 +330,58 @@ export const useUpdateShiftTypeProducts = () => {
   });
 };
 
+export const useCreateShiftType = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: {
+      key?: string;
+      name: string;
+      description?: string | null;
+      productIds?: number[];
+    }) => {
+      const response = await axiosInstance.post("/schedules/shift-types", payload);
+      return response.data as ShiftType;
+    },
+    onSuccess: () => {
+      invalidateQuery(queryClient, schedulingKeys.shiftTypes);
+    },
+  });
+};
+
+export const useUpdateShiftType = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: {
+      shiftTypeId: number;
+      key?: string;
+      name?: string;
+      description?: string | null;
+    }) => {
+      const response = await axiosInstance.patch(`/schedules/shift-types/${payload.shiftTypeId}`, {
+        key: payload.key,
+        name: payload.name,
+        description: payload.description,
+      });
+      return response.data as ShiftType;
+    },
+    onSuccess: () => {
+      invalidateQuery(queryClient, schedulingKeys.shiftTypes);
+    },
+  });
+};
+
+export const useDeleteShiftType = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (shiftTypeId: number) => {
+      await axiosInstance.delete(`/schedules/shift-types/${shiftTypeId}`);
+    },
+    onSuccess: () => {
+      invalidateQuery(queryClient, schedulingKeys.shiftTypes);
+    },
+  });
+};
+
 export const useUpsertShiftTemplate = () => {
   const queryClient = useQueryClient();
   return useMutation({

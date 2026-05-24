@@ -11,6 +11,9 @@ import {
   reopenWeek,
   listShiftTemplates,
   listShiftTypes,
+  createShiftType,
+  updateShiftType,
+  deleteShiftType,
   updateShiftTypeProducts,
   upsertShiftTemplate,
   deleteShiftTemplate,
@@ -182,6 +185,64 @@ router.get('/shift-types', authMiddleware, requireRoles(MANAGER_ROLES), async (_
   try {
     const types = await listShiftTypes();
     res.json(types);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.post('/shift-types', authMiddleware, requireRoles(MANAGER_ROLES), async (req, res) => {
+  try {
+    const payload = await createShiftType(
+      {
+        key: typeof req.body?.key === 'string' ? req.body.key : undefined,
+        name: typeof req.body?.name === 'string' ? req.body.name : '',
+        description: typeof req.body?.description === 'string' ? req.body.description : null,
+        productIds: Array.isArray(req.body?.productIds)
+          ? (req.body.productIds as Array<number | string>)
+              .map((value) => Number(value))
+              .filter((value) => Number.isFinite(value) && value > 0)
+          : [],
+      },
+      getActorId(req),
+    );
+    res.status(201).json(payload);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.patch('/shift-types/:id', authMiddleware, requireRoles(MANAGER_ROLES), async (req, res) => {
+  try {
+    const shiftTypeId = Number(req.params.id);
+    if (!Number.isFinite(shiftTypeId) || shiftTypeId <= 0) {
+      res.status(400).json({ error: 'Valid shift type id is required.' });
+      return;
+    }
+
+    const payload = await updateShiftType(
+      shiftTypeId,
+      {
+        key: typeof req.body?.key === 'string' ? req.body.key : undefined,
+        name: typeof req.body?.name === 'string' ? req.body.name : undefined,
+        description: typeof req.body?.description === 'string' ? req.body.description : undefined,
+      },
+      getActorId(req),
+    );
+    res.json(payload);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.delete('/shift-types/:id', authMiddleware, requireRoles(MANAGER_ROLES), async (req, res) => {
+  try {
+    const shiftTypeId = Number(req.params.id);
+    if (!Number.isFinite(shiftTypeId) || shiftTypeId <= 0) {
+      res.status(400).json({ error: 'Valid shift type id is required.' });
+      return;
+    }
+    await deleteShiftType(shiftTypeId, getActorId(req));
+    res.status(204).send();
   } catch (error) {
     res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
   }
