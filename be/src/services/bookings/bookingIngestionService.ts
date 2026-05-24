@@ -2385,7 +2385,11 @@ const applyParsedEvent = async (
     }
 
     let addonsForSync: ParsedBookingEvent['addons'] = event.addons;
-    if (!isScopedReprocess && event.platform === 'viator' && (!addonsForSync || addonsForSync.length === 0)) {
+    if (
+      !isScopedReprocess &&
+      (event.platform === 'viator' || event.platform === 'getyourguide') &&
+      (!addonsForSync || addonsForSync.length === 0)
+    ) {
       const derivedAddons = deriveNormalizedAddonsFromSnapshot(bookingRecord.addonsSnapshot);
       if (derivedAddons !== undefined) {
         addonsForSync = derivedAddons;

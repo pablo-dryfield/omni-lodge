@@ -65,7 +65,8 @@ const hasTransactionalBodyMarker = (text: string): boolean =>
   TRANSACTIONAL_BODY_MARKERS.some((pattern) => pattern.test(text));
 
 const addonKeywordMatchers: Array<{ test: RegExp; field: 'tshirts' | 'cocktails' | 'photos' }> = [
-  { test: /cocktail|open\s+bar|vip entry/i, field: 'cocktails' },
+  // For GYG, count cocktail addon only when explicitly listed as an Unlimited Cocktails line item.
+  { test: /unlimited\s+(?:crafted\s+)?cocktails?/i, field: 'cocktails' },
   { test: /instant\s+photos?/i, field: 'photos' },
   { test: /t-?shirts?|pub\s+crawl\s+t-?shirt/i, field: 'tshirts' },
 ];
