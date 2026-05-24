@@ -293,6 +293,12 @@ const aggregateMetricsByProductType = (
       }
 
       const normal = metrics.normal ?? 0;
+      const addonAttendees = Object.entries(metrics.addons ?? {}).reduce((sum, [addonKey, value]) => {
+        if (excludedNoShowAddonKeys.has(addonKey)) {
+          return sum;
+        }
+        return sum + value;
+      }, 0);
       const addonNoShow = Object.entries(metrics.addonNonShow ?? {}).reduce((sum, [addonKey, value]) => {
         if (excludedNoShowAddonKeys.has(addonKey)) {
           return sum;
@@ -300,10 +306,11 @@ const aggregateMetricsByProductType = (
         return sum + value;
       }, 0);
       const nonShowValue = (metrics.nonShow ?? 0) + addonNoShow;
+      const attendeeValue = normal + addonAttendees;
 
-      attendees += normal;
+      attendees += attendeeValue;
       noShow += nonShowValue;
-      channelAttendees += normal;
+      channelAttendees += attendeeValue;
       channelNoShow += nonShowValue;
     });
 
@@ -381,8 +388,12 @@ const ChannelNumbersSummary = () => {
   const [attendeesChartGranularity, setAttendeesChartGranularity] = useState<ChartGranularity>('month');
   const [attendeesEntriesCurrent, setAttendeesEntriesCurrent] = useState<ChannelNumbersDetailEntry[]>([]);
   const [attendeesEntriesPrevious, setAttendeesEntriesPrevious] = useState<ChannelNumbersDetailEntry[]>([]);
+  const [addonAttendeesEntriesCurrent, setAddonAttendeesEntriesCurrent] = useState<ChannelNumbersDetailEntry[]>([]);
+  const [addonAttendeesEntriesPrevious, setAddonAttendeesEntriesPrevious] = useState<ChannelNumbersDetailEntry[]>([]);
   const [noShowEntriesCurrent, setNoShowEntriesCurrent] = useState<ChannelNumbersDetailEntry[]>([]);
   const [noShowEntriesPrevious, setNoShowEntriesPrevious] = useState<ChannelNumbersDetailEntry[]>([]);
+  const [addonNoShowEntriesCurrent, setAddonNoShowEntriesCurrent] = useState<ChannelNumbersDetailEntry[]>([]);
+  const [addonNoShowEntriesPrevious, setAddonNoShowEntriesPrevious] = useState<ChannelNumbersDetailEntry[]>([]);
   const [attendeesChartLoading, setAttendeesChartLoading] = useState(false);
   const [platformTrendFullscreen, setPlatformTrendFullscreen] = useState(false);
   const [activeTrendLabel, setActiveTrendLabel] = useState<string | number | null>(null);
@@ -422,6 +433,13 @@ const ChannelNumbersSummary = () => {
     }
     return dayjs().year();
   }, [summary?.endDate, range]);
+  const trendAddonKeys = useMemo(
+    () =>
+      (summary?.addons ?? [])
+        .filter((addon) => !isExcludedNoShowAddonName(addon.name))
+        .map((addon) => addon.key),
+    [summary?.addons],
+  );
 
   const handlePresetChange = useCallback((value: Preset) => {
     setPreset(value);
@@ -532,10 +550,40 @@ const ChannelNumbersSummary = () => {
     const previousEnd = dayjs(`${chartYear - 1}-12-31`).format(DATE_FORMAT);
 
     let isMounted = true;
+    const fetchAddonMetricEntries = async (
+      startDate: string,
+      endDate: string,
+      metric: 'addon' | 'addonNonShow',
+    ) => {
+      if (trendAddonKeys.length === 0) {
+        return [] as ChannelNumbersDetailEntry[];
+      }
+      const responses = await Promise.all(
+        trendAddonKeys.map((addonKey) =>
+          fetchChannelNumbersDetails({
+            startDate,
+            endDate,
+            metric,
+            addonKey,
+          }),
+        ),
+      );
+      return responses.flatMap((response) => response.entries ?? []);
+    };
+
     const run = async () => {
       setAttendeesChartLoading(true);
       try {
-        const [currentDetails, previousDetails, currentNoShowDetails, previousNoShowDetails] = await Promise.all([
+        const [
+          currentDetails,
+          previousDetails,
+          currentNoShowDetails,
+          previousNoShowDetails,
+          currentAddonAttendeesDetails,
+          previousAddonAttendeesDetails,
+          currentAddonNoShowDetails,
+          previousAddonNoShowDetails,
+        ] = await Promise.all([
           fetchChannelNumbersDetails({
             startDate: currentStart,
             endDate: currentEnd,
@@ -556,22 +604,34 @@ const ChannelNumbersSummary = () => {
             endDate: previousEnd,
             metric: 'nonShow',
           }),
+          fetchAddonMetricEntries(currentStart, currentEnd, 'addon'),
+          fetchAddonMetricEntries(previousStart, previousEnd, 'addon'),
+          fetchAddonMetricEntries(currentStart, currentEnd, 'addonNonShow'),
+          fetchAddonMetricEntries(previousStart, previousEnd, 'addonNonShow'),
         ]);
         if (!isMounted) {
           return;
         }
         setAttendeesEntriesCurrent(currentDetails.entries ?? []);
         setAttendeesEntriesPrevious(previousDetails.entries ?? []);
+        setAddonAttendeesEntriesCurrent(currentAddonAttendeesDetails);
+        setAddonAttendeesEntriesPrevious(previousAddonAttendeesDetails);
         setNoShowEntriesCurrent(currentNoShowDetails.entries ?? []);
         setNoShowEntriesPrevious(previousNoShowDetails.entries ?? []);
+        setAddonNoShowEntriesCurrent(currentAddonNoShowDetails);
+        setAddonNoShowEntriesPrevious(previousAddonNoShowDetails);
       } catch {
         if (!isMounted) {
           return;
         }
         setAttendeesEntriesCurrent([]);
         setAttendeesEntriesPrevious([]);
+        setAddonAttendeesEntriesCurrent([]);
+        setAddonAttendeesEntriesPrevious([]);
         setNoShowEntriesCurrent([]);
         setNoShowEntriesPrevious([]);
+        setAddonNoShowEntriesCurrent([]);
+        setAddonNoShowEntriesPrevious([]);
       } finally {
         if (isMounted) {
           setAttendeesChartLoading(false);
@@ -583,7 +643,7 @@ const ChannelNumbersSummary = () => {
     return () => {
       isMounted = false;
     };
-  }, [chartYear]);
+  }, [chartYear, trendAddonKeys]);
 
   useEffect(() => {
     const [start, end] = range;
@@ -850,23 +910,83 @@ const ChannelNumbersSummary = () => {
         : noShowEntriesPrevious,
     [isProductTypeFilterActive, noShowEntriesPrevious, previousProductTypeLookup, selectedTypeSlugs],
   );
+  const filteredAddonAttendeesCurrent = useMemo(
+    () =>
+      isProductTypeFilterActive
+        ? filterEntriesBySelectedTypes(
+            addonAttendeesEntriesCurrent,
+            selectedTypeSlugs,
+            currentProductTypeLookup,
+          )
+        : addonAttendeesEntriesCurrent,
+    [addonAttendeesEntriesCurrent, currentProductTypeLookup, isProductTypeFilterActive, selectedTypeSlugs],
+  );
+  const filteredAddonAttendeesPrevious = useMemo(
+    () =>
+      isProductTypeFilterActive
+        ? filterEntriesBySelectedTypes(
+            addonAttendeesEntriesPrevious,
+            selectedTypeSlugs,
+            previousProductTypeLookup,
+          )
+        : addonAttendeesEntriesPrevious,
+    [addonAttendeesEntriesPrevious, isProductTypeFilterActive, previousProductTypeLookup, selectedTypeSlugs],
+  );
+  const filteredAddonNoShowCurrent = useMemo(
+    () =>
+      isProductTypeFilterActive
+        ? filterEntriesBySelectedTypes(
+            addonNoShowEntriesCurrent,
+            selectedTypeSlugs,
+            currentProductTypeLookup,
+          )
+        : addonNoShowEntriesCurrent,
+    [addonNoShowEntriesCurrent, currentProductTypeLookup, isProductTypeFilterActive, selectedTypeSlugs],
+  );
+  const filteredAddonNoShowPrevious = useMemo(
+    () =>
+      isProductTypeFilterActive
+        ? filterEntriesBySelectedTypes(
+            addonNoShowEntriesPrevious,
+            selectedTypeSlugs,
+            previousProductTypeLookup,
+          )
+        : addonNoShowEntriesPrevious,
+    [addonNoShowEntriesPrevious, isProductTypeFilterActive, previousProductTypeLookup, selectedTypeSlugs],
+  );
+  const filteredTotalNoShowCurrent = useMemo(
+    () => [...filteredNoShowCurrent, ...filteredAddonNoShowCurrent],
+    [filteredAddonNoShowCurrent, filteredNoShowCurrent],
+  );
+  const filteredTotalNoShowPrevious = useMemo(
+    () => [...filteredNoShowPrevious, ...filteredAddonNoShowPrevious],
+    [filteredAddonNoShowPrevious, filteredNoShowPrevious],
+  );
+  const filteredTotalAttendeesCurrent = useMemo(
+    () => [...filteredAttendeesCurrent, ...filteredAddonAttendeesCurrent],
+    [filteredAddonAttendeesCurrent, filteredAttendeesCurrent],
+  );
+  const filteredTotalAttendeesPrevious = useMemo(
+    () => [...filteredAttendeesPrevious, ...filteredAddonAttendeesPrevious],
+    [filteredAddonAttendeesPrevious, filteredAttendeesPrevious],
+  );
   const attendeesComparisonData = useMemo(() => {
     if (attendeesChartGranularity === 'year') {
-      const lastYearAttendees = filteredAttendeesPrevious.reduce(
+      const lastYearAttendees = filteredTotalAttendeesPrevious.reduce(
         (sum, entry) => sum + (entry.attended ?? entry.value ?? 0),
         0,
       );
-      const thisYearAttendees = filteredAttendeesCurrent.reduce(
+      const thisYearAttendees = filteredTotalAttendeesCurrent.reduce(
         (sum, entry) => sum + (entry.attended ?? entry.value ?? 0),
         0,
       );
-      const lastYearNoShow = filteredNoShowPrevious.reduce((sum, entry) => {
+      const lastYearNoShow = filteredTotalNoShowPrevious.reduce((sum, entry) => {
         if (isExcludedNoShowAddonName(entry.addonName)) {
           return sum;
         }
         return sum + (entry.value ?? entry.nonShow ?? 0);
       }, 0);
-      const thisYearNoShow = filteredNoShowCurrent.reduce((sum, entry) => {
+      const thisYearNoShow = filteredTotalNoShowCurrent.reduce((sum, entry) => {
         if (isExcludedNoShowAddonName(entry.addonName)) {
           return sum;
         }
@@ -885,7 +1005,7 @@ const ChannelNumbersSummary = () => {
       const thisYearByMonth = new Map<number, number>();
       const lastYearByMonth = new Map<number, number>();
 
-      filteredAttendeesCurrent.forEach((entry) => {
+      filteredTotalAttendeesCurrent.forEach((entry) => {
         const date = dayjs(entry.counterDate);
         if (date.year() !== chartYear) {
           return;
@@ -894,7 +1014,7 @@ const ChannelNumbersSummary = () => {
         thisYearByMonth.set(month, (thisYearByMonth.get(month) ?? 0) + (entry.attended ?? entry.value ?? 0));
       });
 
-      filteredAttendeesPrevious.forEach((entry) => {
+      filteredTotalAttendeesPrevious.forEach((entry) => {
         const date = dayjs(entry.counterDate);
         if (date.year() !== chartYear - 1) {
           return;
@@ -902,7 +1022,7 @@ const ChannelNumbersSummary = () => {
         const month = date.month();
         lastYearByMonth.set(month, (lastYearByMonth.get(month) ?? 0) + (entry.attended ?? entry.value ?? 0));
       });
-      filteredNoShowCurrent.forEach((entry) => {
+      filteredTotalNoShowCurrent.forEach((entry) => {
         if (isExcludedNoShowAddonName(entry.addonName)) {
           return;
         }
@@ -913,7 +1033,7 @@ const ChannelNumbersSummary = () => {
         const month = date.month();
         thisYearByMonth.set(month, (thisYearByMonth.get(month) ?? 0) + (entry.value ?? entry.nonShow ?? 0));
       });
-      filteredNoShowPrevious.forEach((entry) => {
+      filteredTotalNoShowPrevious.forEach((entry) => {
         if (isExcludedNoShowAddonName(entry.addonName)) {
           return;
         }
@@ -936,7 +1056,7 @@ const ChannelNumbersSummary = () => {
     const thisYearByWeek = new Map<number, number>();
     const lastYearByWeek = new Map<number, number>();
 
-    filteredAttendeesCurrent.forEach((entry) => {
+    filteredTotalAttendeesCurrent.forEach((entry) => {
       const date = dayjs(entry.counterDate);
       if (date.year() !== chartYear) {
         return;
@@ -948,7 +1068,7 @@ const ChannelNumbersSummary = () => {
       thisYearByWeek.set(weekIndex, (thisYearByWeek.get(weekIndex) ?? 0) + (entry.attended ?? entry.value ?? 0));
     });
 
-    filteredAttendeesPrevious.forEach((entry) => {
+    filteredTotalAttendeesPrevious.forEach((entry) => {
       const date = dayjs(entry.counterDate);
       if (date.year() !== chartYear - 1) {
         return;
@@ -959,7 +1079,7 @@ const ChannelNumbersSummary = () => {
       }
       lastYearByWeek.set(weekIndex, (lastYearByWeek.get(weekIndex) ?? 0) + (entry.attended ?? entry.value ?? 0));
     });
-    filteredNoShowCurrent.forEach((entry) => {
+    filteredTotalNoShowCurrent.forEach((entry) => {
       if (isExcludedNoShowAddonName(entry.addonName)) {
         return;
       }
@@ -973,7 +1093,7 @@ const ChannelNumbersSummary = () => {
       }
       thisYearByWeek.set(weekIndex, (thisYearByWeek.get(weekIndex) ?? 0) + (entry.value ?? entry.nonShow ?? 0));
     });
-    filteredNoShowPrevious.forEach((entry) => {
+    filteredTotalNoShowPrevious.forEach((entry) => {
       if (isExcludedNoShowAddonName(entry.addonName)) {
         return;
       }
@@ -1010,10 +1130,10 @@ const ChannelNumbersSummary = () => {
   }, [
     chartYear,
     attendeesChartGranularity,
-    filteredAttendeesCurrent,
-    filteredAttendeesPrevious,
-    filteredNoShowCurrent,
-    filteredNoShowPrevious,
+    filteredTotalAttendeesCurrent,
+    filteredTotalAttendeesPrevious,
+    filteredTotalNoShowCurrent,
+    filteredTotalNoShowPrevious,
   ]);
   const mobileChannelRows = useMemo(() => {
     if (!summary) {
