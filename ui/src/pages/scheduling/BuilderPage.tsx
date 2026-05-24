@@ -21,6 +21,7 @@ import {
   Title,
   Tooltip,
 } from "@mantine/core";
+import { DatePickerInput } from "@mantine/dates";
 import {
   IconAlertTriangle,
   IconCalendarPlus,
@@ -634,6 +635,30 @@ const parseIsoWeekStart = (value: string | Dayjs | null | undefined): Dayjs | nu
   return parsed.isValid() ? parsed.startOf("isoWeek") : null;
 };
 
+const getIsoWeeksInDateRange = (startDate: Date, endDate: Date): string[] => {
+  const parsedStart = dayjs(startDate);
+  const parsedEnd = dayjs(endDate);
+  if (!parsedStart.isValid() || !parsedEnd.isValid()) {
+    return [];
+  }
+
+  const from = parsedStart.startOf("day");
+  const to = parsedEnd.startOf("day");
+  const rangeStart = from.isBefore(to) ? from : to;
+  const rangeEnd = from.isAfter(to) ? from : to;
+
+  const weekValues: string[] = [];
+  let cursor = rangeStart.startOf("isoWeek");
+  const lastWeek = rangeEnd.startOf("isoWeek");
+
+  while (cursor.isBefore(lastWeek) || cursor.isSame(lastWeek, "day")) {
+    weekValues.push(ensureIsoWeekString(cursor));
+    cursor = cursor.add(1, "week");
+  }
+
+  return weekValues;
+};
+
 type MonthSegment = { label: string; span: number; key: string };
 
 const buildMonthSegments = (days: Dayjs[]): MonthSegment[] => {
@@ -769,6 +794,12 @@ const BuilderPage = () => {
   const [publishWarningsAcknowledged, setPublishWarningsAcknowledged] = useState(false);
   const [ensureWeeksLoading, setEnsureWeeksLoading] = useState(false);
   const [ensureWeeksAlert, setEnsureWeeksAlert] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [createWeeksModalOpen, setCreateWeeksModalOpen] = useState(false);
+  const [createWeeksRange, setCreateWeeksRange] = useState<[Date | null, Date | null]>([
+    dayjs().startOf("isoWeek").toDate(),
+    dayjs().add(1, "week").endOf("isoWeek").toDate(),
+  ]);
+  const [createWeeksError, setCreateWeeksError] = useState<string | null>(null);
 
   const selectCanAccessBuilder = useMemo(
     () => makeSelectIsModuleActionAllowed("scheduling-builder", "view"),
@@ -851,12 +882,37 @@ const BuilderPage = () => {
     [],
   );
 
-  const handleEnsureCurrentAndNextWeeks = useCallback(async () => {
+  const handleOpenCreateWeeksModal = useCallback(() => {
+    setCreateWeeksError(null);
+    setCreateWeeksModalOpen(true);
+  }, []);
+
+  const handleCloseCreateWeeksModal = useCallback(() => {
     if (ensureWeeksLoading) {
       return;
     }
-    const targetWeeks = [ensureIsoWeekString(dayjs()), ensureIsoWeekString(dayjs().add(1, "week"))];
+    setCreateWeeksModalOpen(false);
+    setCreateWeeksError(null);
+  }, [ensureWeeksLoading]);
+
+  const handleCreateWeeksSubmit = useCallback(async () => {
+    if (ensureWeeksLoading) {
+      return;
+    }
+    const [startDate, endDate] = createWeeksRange;
+    if (!startDate || !endDate) {
+      setCreateWeeksError("Please select both start and end dates.");
+      return;
+    }
+
+    const targetWeeks = getIsoWeeksInDateRange(startDate, endDate);
+    if (targetWeeks.length === 0) {
+      setCreateWeeksError("No valid ISO weeks found for the selected date range.");
+      return;
+    }
+
     setEnsureWeeksLoading(true);
+    setCreateWeeksError(null);
     setEnsureWeeksAlert(null);
     try {
       const results: Array<{ week: string; created: boolean }> = [];
@@ -866,18 +922,21 @@ const BuilderPage = () => {
       }
       await scheduleWeeksQuery.refetch();
       const createdLabels = results.filter((entry) => entry.created).map((entry) => formatWeekValue(entry.week));
-      const message =
-        createdLabels.length > 0
-          ? `Created ${createdLabels.join(" and ")}.`
-          : "Current and next schedule weeks already exist.";
+      const alreadyExistingCount = results.length - createdLabels.length;
+      const message = createdLabels.length
+        ? `Created ${createdLabels.length} week(s): ${createdLabels.join(", ")}${
+            alreadyExistingCount > 0 ? `. ${alreadyExistingCount} already existed.` : "."
+          }`
+        : `All selected weeks already existed (${results.length}).`;
       setEnsureWeeksAlert({ type: "success", message });
+      setCreateWeeksModalOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to ensure schedule weeks.";
-      setEnsureWeeksAlert({ type: "error", message });
+      setCreateWeeksError(message);
     } finally {
       setEnsureWeeksLoading(false);
     }
-  }, [ensureWeekExists, ensureWeeksLoading, scheduleWeeksQuery]);
+  }, [createWeeksRange, ensureWeekExists, ensureWeeksLoading, scheduleWeeksQuery]);
 
   const assignMutation = useAssignShifts();
   const deleteAssignmentMutation = useDeleteAssignment();
@@ -3594,7 +3653,7 @@ const BuilderPage = () => {
       </Alert>
     ) : null}
       {ensureWeeksAlert ? (
-        <Alert color={ensureWeeksAlert.type === "success" ? "teal" : "red"} title="Week generation">
+        <Alert color={ensureWeeksAlert.type === "success" ? "teal" : "red"} title="Week creation">
           <Text size="sm">{ensureWeeksAlert.message}</Text>
         </Alert>
       ) : null}
@@ -3656,11 +3715,11 @@ const BuilderPage = () => {
               variant="white"
               color="yellow"
               leftSection={<IconCalendarPlus size={16} />}
-              onClick={handleEnsureCurrentAndNextWeeks}
+              onClick={handleOpenCreateWeeksModal}
               loading={ensureWeeksLoading}
               fullWidth={isMobile}
             >
-              Ensure current & next week
+              Create Weeks
             </Button>
             <Button
               variant="white"
@@ -3960,6 +4019,39 @@ const BuilderPage = () => {
           {rosterPanel}
         </Group>
       )}
+
+      <Modal opened={createWeeksModalOpen} onClose={handleCloseCreateWeeksModal} title="Create schedule weeks">
+        <Stack>
+          <Text size="sm">
+            Select a date range. All ISO weeks intersecting this range will be created if they do not already exist.
+          </Text>
+          <DatePickerInput
+            label="Start date"
+            value={createWeeksRange[0]}
+            onChange={(value) => setCreateWeeksRange((current) => [value, current[1]])}
+            required
+          />
+          <DatePickerInput
+            label="End date"
+            value={createWeeksRange[1]}
+            onChange={(value) => setCreateWeeksRange((current) => [current[0], value])}
+            required
+          />
+          {createWeeksError ? (
+            <Alert color="red" title="Unable to create weeks">
+              <Text size="sm">{createWeeksError}</Text>
+            </Alert>
+          ) : null}
+          <Group justify="flex-end">
+            <Button variant="default" onClick={handleCloseCreateWeeksModal} disabled={ensureWeeksLoading}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateWeeksSubmit} loading={ensureWeeksLoading}>
+              Create weeks
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <Modal
         opened={generateInstancesModalOpen}
