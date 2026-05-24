@@ -15,6 +15,20 @@ export interface AddShiftInstanceModalProps {
   templates: ShiftTemplate[];
 }
 
+const normalizeTimeForInput = (value: string | null | undefined): string => {
+  if (!value) {
+    return "";
+  }
+
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) {
+    return "";
+  }
+
+  const [, hours, minutes] = match;
+  return `${hours.padStart(2, "0")}:${minutes}`;
+};
+
 const AddShiftInstanceModal = ({
   opened,
   onClose,
@@ -40,8 +54,8 @@ const AddShiftInstanceModal = ({
     setTemplateId(value);
     const template = templates.find((item) => item.id === Number(value));
     if (template) {
-      setTimeStart(template.defaultStartTime ?? "");
-      setTimeEnd(template.defaultEndTime ?? "");
+      setTimeStart(normalizeTimeForInput(template.defaultStartTime));
+      setTimeEnd(normalizeTimeForInput(template.defaultEndTime));
       setCapacity(template.defaultCapacity ?? undefined);
       setMeta(JSON.stringify(template.defaultMeta ?? {}, null, 2));
     } else {
@@ -63,8 +77,8 @@ const AddShiftInstanceModal = ({
         shiftTypeId: selectedTemplate.shiftTypeId,
         shiftTemplateId: selectedTemplate.id,
         date: dayjs(date).format("YYYY-MM-DD"),
-        timeStart,
-        timeEnd: timeEnd ? timeEnd : null,
+        timeStart: normalizeTimeForInput(timeStart),
+        timeEnd: timeEnd ? normalizeTimeForInput(timeEnd) : null,
         capacity: capacity ?? null,
         requiredRoles: selectedTemplate.defaultRoles ?? null,
         meta: meta ? JSON.parse(meta) : null,

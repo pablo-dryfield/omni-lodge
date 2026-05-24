@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Alert, Box, Button, Card, Center, Group, Loader, Stack, Text, Title } from "@mantine/core";
 import { IconAlertTriangle, IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
@@ -237,11 +237,18 @@ const isPubCrawlShiftInstance = (instance: ShiftInstance) => {
   const typeKey = instance.shiftType?.key?.toLowerCase() ?? "";
   const typeName = instance.shiftType?.name?.toLowerCase() ?? "";
   const templateName = instance.template?.name?.toLowerCase() ?? "";
-  return (
-    typeKey.includes("pub_crawl") ||
-    typeName.includes("pub crawl") ||
-    templateName.includes("pub crawl")
-  );
+  if (typeKey === "private_pub_crawl") {
+    return false;
+  }
+  if (typeKey === "pub_crawl") {
+    return true;
+  }
+
+  if (typeName.includes("private pub crawl") || templateName.includes("private pub crawl")) {
+    return false;
+  }
+
+  return typeName.includes("pub crawl") || templateName.includes("pub crawl");
 };
 
 type ShiftTimeBucket = {
@@ -444,6 +451,8 @@ const formatWeekValue = (value: string | null | undefined) => {
 const ScheduleOverviewPage = () => {
   const isMobile = useMediaQuery("(max-width: 768px)");
   const [selectedWeek, setSelectedWeek] = useState<string>("");
+  const todayMobileCardRef = useRef<HTMLDivElement | null>(null);
+  const mobileAutoScrolledRef = useRef(false);
   const scheduleWeeksQuery = useScheduleWeeks({ limit: 120 });
   const weekOptions = useMemo(() => {
     const existingWeeks = (scheduleWeeksQuery.data ?? []) as ScheduleWeek[];
@@ -482,6 +491,8 @@ const ScheduleOverviewPage = () => {
 
   const ensureWeekQuery = useEnsureWeek(selectedWeek || null, { allowGenerate: false, enabled: Boolean(selectedWeek) });
   const weekId = ensureWeekQuery.data?.week?.id ?? null;
+  const currentWeekValue = useMemo(() => ensureIsoWeekString(dayjs()), []);
+  const todayIsoDate = useMemo(() => dayjs().format("YYYY-MM-DD"), []);
   const shiftInstancesQuery = useShiftInstances(weekId);
   const shiftInstances = useMemo(() => shiftInstancesQuery.data ?? [], [shiftInstancesQuery.data]);
   const weekIndex = useMemo(
@@ -653,6 +664,35 @@ const ScheduleOverviewPage = () => {
   const loading = ensureWeekQuery.isLoading || shiftInstancesQuery.isLoading;
   const error = ensureWeekQuery.isError ? ensureWeekQuery.error : shiftInstancesQuery.error;
   const hasWeek = Boolean(weekId);
+
+  useEffect(() => {
+    mobileAutoScrolledRef.current = false;
+  }, [selectedWeek]);
+
+  useEffect(() => {
+    if (!isMobile) {
+      return;
+    }
+    if (loading || !hasWeek) {
+      return;
+    }
+    if (selectedWeek !== currentWeekValue) {
+      return;
+    }
+    if (mobileAutoScrolledRef.current) {
+      return;
+    }
+
+    const target = todayMobileCardRef.current;
+    if (!target) {
+      return;
+    }
+
+    mobileAutoScrolledRef.current = true;
+    window.requestAnimationFrame(() => {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [currentWeekValue, hasWeek, isMobile, loading, selectedWeek, shiftInstances.length]);
 
   const renderAssignmentGroupCard = (
     groupAssignments: ShiftAssignment[],
@@ -965,12 +1005,14 @@ const ScheduleOverviewPage = () => {
         return (
           <Card
             key={`mobile-day-${isoDate}`}
+            ref={selectedWeek === currentWeekValue && isoDate === todayIsoDate ? todayMobileCardRef : undefined}
             radius="lg"
             shadow="xl"
             padding="lg"
             withBorder
             style={{
               width: "100%",
+              scrollMarginTop: 88,
               backgroundColor: "#ffffff",
               borderColor: palette.border,
               boxShadow: MOBILE_CARD_SHADOW,
