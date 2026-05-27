@@ -35,6 +35,14 @@ export type LockedComponentRequirement =
       extraUnits: number;
       extraAmount: number;
       extraDays?: string[];
+    }
+  | {
+      type: 'performance_tier';
+      progressRatio: number;
+      progressPercent: number;
+      multiplier: number;
+      deductedAmount: number;
+      matchedTierLabel?: string | null;
     };
 
 export type PayReimbursementEntry = {

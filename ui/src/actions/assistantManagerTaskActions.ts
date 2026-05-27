@@ -285,6 +285,124 @@ export type ClearAmTaskLogsResponse = {
   deletedCount: number;
 };
 
+export type AmTaskCerebroKnowledgeOption = {
+  id: number;
+  slug: string;
+  title: string;
+  kind: 'faq' | 'tutorial' | 'playbook' | 'policy';
+};
+
+export type AmTaskCerebroPolicyOption = {
+  id: number;
+  slug: string;
+  title: string;
+  policyVersion: string | null;
+};
+
+export type AmTaskCerebroQuizOption = {
+  id: number;
+  slug: string;
+  title: string;
+  entryId: number | null;
+};
+
+export type AmTaskCerebroLinkOptionsResponse = {
+  knowledgeEntries: AmTaskCerebroKnowledgeOption[];
+  policyEntries: AmTaskCerebroPolicyOption[];
+  quizzes: AmTaskCerebroQuizOption[];
+};
+
+export type AmTaskCerebroLinkItemType = 'knowledge' | 'policy' | 'quiz';
+
+export type AmTaskCerebroLinkMediaItem = {
+  type: 'image' | 'gif';
+  url: string;
+  caption?: string | null;
+  alt?: string | null;
+};
+
+export type AmTaskCerebroLinkEntryDetail = {
+  type: 'knowledge' | 'policy';
+  id: number;
+  slug: string;
+  title: string;
+  kind: 'faq' | 'tutorial' | 'playbook' | 'policy';
+  summary: string | null;
+  body: string;
+  category: string | null;
+  checklistItems: string[];
+  media: AmTaskCerebroLinkMediaItem[];
+  requiresAcknowledgement: boolean;
+  policyVersion: string | null;
+};
+
+export type AmTaskCerebroLinkQuizQuestionOption = {
+  id: string;
+  label: string;
+};
+
+export type AmTaskCerebroLinkQuizQuestion = {
+  id: string;
+  prompt: string;
+  options: AmTaskCerebroLinkQuizQuestionOption[];
+  correctOptionId: string;
+  explanation?: string | null;
+};
+
+export type AmTaskCerebroLinkQuizDetail = {
+  type: 'quiz';
+  id: number;
+  slug: string;
+  title: string;
+  description: string | null;
+  passingScore: number;
+  questions: AmTaskCerebroLinkQuizQuestion[];
+  entryId: number | null;
+  entryTitle: string | null;
+};
+
+export type AmTaskCerebroLinkItemDetail = AmTaskCerebroLinkEntryDetail | AmTaskCerebroLinkQuizDetail;
+
+export const fetchAmTaskCerebroLinkOptions = async (): Promise<AmTaskCerebroLinkOptionsResponse> => {
+  try {
+    const response = await axiosInstance.get('/assistantManagerTasks/cerebro-links/options', {
+      withCredentials: true,
+    });
+    const data = extractEnvelopeData<Partial<AmTaskCerebroLinkOptionsResponse>>(response.data);
+    const knowledgeEntries = Array.isArray(data?.knowledgeEntries) ? data?.knowledgeEntries ?? [] : [];
+    const policyEntries = Array.isArray(data?.policyEntries) ? data?.policyEntries ?? [] : [];
+    const quizzes = Array.isArray(data?.quizzes) ? data?.quizzes ?? [] : [];
+    return {
+      knowledgeEntries,
+      policyEntries,
+      quizzes,
+    };
+  } catch (error) {
+    throw new Error(extractApiErrorMessage(error, 'Failed to load Cerebro link options'));
+  }
+};
+
+export const fetchAmTaskCerebroLinkItemDetail = async (
+  params: { type: AmTaskCerebroLinkItemType; id: number },
+): Promise<AmTaskCerebroLinkItemDetail> => {
+  try {
+    const response = await axiosInstance.get('/assistantManagerTasks/cerebro-links/item', {
+      withCredentials: true,
+      params: {
+        type: params.type,
+        id: params.id,
+      },
+    });
+    const data = extractEnvelopeData<AmTaskCerebroLinkItemDetail>(response.data);
+    if (!data) {
+      throw new Error('Item not found');
+    }
+    return data;
+  } catch (error) {
+    throw new Error(extractApiErrorMessage(error, 'Failed to load Cerebro item'));
+  }
+};
+
 export const previewAmTaskLogsForRange = async (
   params: { startDate: string; endDate: string; templateId?: number | null },
 ): Promise<PreviewAmTaskLogsResponse> => {

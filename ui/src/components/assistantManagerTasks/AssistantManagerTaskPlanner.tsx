@@ -13,6 +13,9 @@ import {
   Checkbox,
   Divider,
   Group,
+  Image,
+  Loader,
+  MultiSelect,
   Modal,
   Popover,
   Paper,
@@ -59,6 +62,8 @@ import {
   bulkCreateAmTaskAssignments,
   clearAmTaskLogsForRange,
   createAmTaskAssignment,
+  fetchAmTaskCerebroLinkOptions,
+  fetchAmTaskCerebroLinkItemDetail,
   createAmTaskTemplate,
   createManualAmTaskLog,
   deleteAmTaskAssignment,
@@ -70,6 +75,9 @@ import {
   removeAmTaskPushSubscription,
   saveAmTaskPushSubscription,
   syncAmTaskLogsWithTemplateConfig,
+  type AmTaskCerebroLinkOptionsResponse,
+  type AmTaskCerebroLinkItemDetail,
+  type AmTaskCerebroLinkItemType,
   type ClearAmTaskLogsResponse,
   type GenerateAmTaskLogsResponse,
   type PreviewAmTaskLogsResponse,
@@ -125,6 +133,9 @@ type TemplateFormState = {
   reminderMinutesBeforeStart: string;
   notifyAtStart: boolean;
   evidenceRules: EvidenceRuleDraft[];
+  linkedKnowledgeEntryIds: string[];
+  linkedPolicyEntryIds: string[];
+  linkedQuizIds: string[];
 };
 
 type AssignmentFormState = {
@@ -235,6 +246,9 @@ const defaultTemplateFormState: TemplateFormState = {
   reminderMinutesBeforeStart: '',
   notifyAtStart: true,
   evidenceRules: [],
+  linkedKnowledgeEntryIds: [],
+  linkedPolicyEntryIds: [],
+  linkedQuizIds: [],
 };
 
 const defaultAssignmentFormState: AssignmentFormState = {
@@ -601,6 +615,45 @@ const buildEvidenceRuleDrafts = (template?: AssistantManagerTaskTemplate | null)
     }),
   );
 
+const CEREBRO_LINKS_CONFIG_KEY = 'cerebroLinks';
+
+type TemplateCerebroLinks = {
+  knowledgeEntryIds: number[];
+  policyEntryIds: number[];
+  quizIds: number[];
+};
+
+const normalizeNumberIdArray = (value: unknown): number[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => Number(entry))
+    .filter((entry) => Number.isInteger(entry) && entry > 0);
+};
+
+const getTemplateCerebroLinks = (
+  template?: AssistantManagerTaskTemplate | null,
+): TemplateCerebroLinks => {
+  const scheduleConfig = (template?.scheduleConfig ?? {}) as Record<string, unknown>;
+  const rawConfig = scheduleConfig[CEREBRO_LINKS_CONFIG_KEY];
+  if (!rawConfig || typeof rawConfig !== 'object') {
+    return {
+      knowledgeEntryIds: [],
+      policyEntryIds: [],
+      quizIds: [],
+    };
+  }
+
+  const links = rawConfig as Record<string, unknown>;
+  return {
+    knowledgeEntryIds: normalizeNumberIdArray(links.knowledgeEntryIds ?? links.knowledgeIds),
+    policyEntryIds: normalizeNumberIdArray(links.policyEntryIds ?? links.policyIds),
+    quizIds: normalizeNumberIdArray(links.quizIds),
+  };
+};
+
 const getAdvancedScheduleConfigText = (template?: AssistantManagerTaskTemplate | null) => {
   const nextConfig = { ...(template?.scheduleConfig ?? {}) } as Record<string, unknown>;
   delete nextConfig.time;
@@ -612,6 +665,7 @@ const getAdvancedScheduleConfigText = (template?: AssistantManagerTaskTemplate |
   delete nextConfig.requireScheduledShift;
   delete nextConfig.timesPerWeekPerAssignedUser;
   delete nextConfig.evidenceRules;
+  delete nextConfig[CEREBRO_LINKS_CONFIG_KEY];
   return JSON.stringify(nextConfig, null, 2);
 };
 
@@ -2815,6 +2869,13 @@ const AssistantManagerTaskPlanner = () => {
   const [editingTemplate, setEditingTemplate] =
     useState<AssistantManagerTaskTemplate | null>(null);
   const [templateSubmitting, setTemplateSubmitting] = useState(false);
+  const [cerebroLinkOptions, setCerebroLinkOptions] = useState<AmTaskCerebroLinkOptionsResponse>({
+    knowledgeEntries: [],
+    policyEntries: [],
+    quizzes: [],
+  });
+  const [cerebroLinkOptionsLoading, setCerebroLinkOptionsLoading] = useState(false);
+  const [cerebroLinkOptionsError, setCerebroLinkOptionsError] = useState<string | null>(null);
   const [templateReorderBusyKey, setTemplateReorderBusyKey] = useState<string | null>(null);
   const [templateReorderDirection, setTemplateReorderDirection] = useState<'up' | 'down' | null>(null);
 
@@ -2929,6 +2990,10 @@ const AssistantManagerTaskPlanner = () => {
   const initializedEvidenceModesLogIdRef = useRef<number | null>(null);
   const [commentDraft, setCommentDraft] = useState('');
   const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [activeCerebroItem, setActiveCerebroItem] = useState<AmTaskCerebroLinkItemDetail | null>(null);
+  const [cerebroItemModalOpen, setCerebroItemModalOpen] = useState(false);
+  const [cerebroItemLoading, setCerebroItemLoading] = useState(false);
+  const [cerebroItemError, setCerebroItemError] = useState<string | null>(null);
 
   const selectedLogComments = useMemo(
     () =>
@@ -2941,6 +3006,66 @@ const AssistantManagerTaskPlanner = () => {
     () => getTemplateEvidenceRules(selectedLog ? templateMap.get(selectedLog.templateId) : null),
     [selectedLog, templateMap],
   );
+  const templateKnowledgeOptions = useMemo(
+    () =>
+      cerebroLinkOptions.knowledgeEntries.map((entry) => ({
+        value: String(entry.id),
+        label: entry.title,
+      })),
+    [cerebroLinkOptions.knowledgeEntries],
+  );
+  const templatePolicyOptions = useMemo(
+    () =>
+      cerebroLinkOptions.policyEntries.map((entry) => ({
+        value: String(entry.id),
+        label: entry.title,
+      })),
+    [cerebroLinkOptions.policyEntries],
+  );
+  const templateQuizOptions = useMemo(
+    () =>
+      cerebroLinkOptions.quizzes.map((quiz) => ({
+        value: String(quiz.id),
+        label: quiz.title,
+      })),
+    [cerebroLinkOptions.quizzes],
+  );
+  const selectedLogTemplate = useMemo(
+    () => (selectedLog ? templateMap.get(selectedLog.templateId) ?? null : null),
+    [selectedLog, templateMap],
+  );
+  const selectedLogCerebroLinks = useMemo(() => {
+    const templateLinks = getTemplateCerebroLinks(selectedLogTemplate);
+    const knowledgeById = new Map(cerebroLinkOptions.knowledgeEntries.map((entry) => [entry.id, entry]));
+    const policyById = new Map(cerebroLinkOptions.policyEntries.map((entry) => [entry.id, entry]));
+    const quizById = new Map(cerebroLinkOptions.quizzes.map((quiz) => [quiz.id, quiz]));
+
+    const knowledge = templateLinks.knowledgeEntryIds.map((id) => {
+      const entry = knowledgeById.get(id);
+      return {
+        id,
+        title: entry?.title ?? `Knowledge #${id}`,
+      };
+    });
+
+    const policies = templateLinks.policyEntryIds.map((id) => {
+      const entry = policyById.get(id);
+      return {
+        id,
+        title: entry?.title ?? `Policy #${id}`,
+      };
+    });
+
+    const quizzes = templateLinks.quizIds.map((id) => {
+      const quiz = quizById.get(id);
+      return {
+        id,
+        title: quiz?.title ?? `Quiz #${id}`,
+      };
+    });
+
+    return { knowledge, policies, quizzes };
+  }, [cerebroLinkOptions, selectedLogTemplate]);
   const selectedLogImageEvidenceItems = useMemo(() => {
     if (!selectedLog || selectedLogEvidenceRules.length === 0) {
       return [];
@@ -3025,6 +3150,36 @@ const AssistantManagerTaskPlanner = () => {
   useEffect(() => {
     dispatch(fetchAmTaskTemplates());
   }, [dispatch]);
+
+  useEffect(() => {
+    let isActive = true;
+    setCerebroLinkOptionsLoading(true);
+    setCerebroLinkOptionsError(null);
+
+    fetchAmTaskCerebroLinkOptions()
+      .then((options) => {
+        if (!isActive) {
+          return;
+        }
+        setCerebroLinkOptions(options);
+      })
+      .catch((error) => {
+        if (!isActive) {
+          return;
+        }
+        setCerebroLinkOptionsError(getErrorMessage(error, 'Failed to load Cerebro links'));
+      })
+      .finally(() => {
+        if (!isActive) {
+          return;
+        }
+        setCerebroLinkOptionsLoading(false);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   useEffect(() => {
     dispatch(fetchUserTypes()).catch((error) =>
@@ -3664,6 +3819,7 @@ const AssistantManagerTaskPlanner = () => {
     if (template) {
       const defaults = resolveTemplateDefaults(template);
       const taxonomy = normalizeTemplateCategory(template);
+      const cerebroLinks = getTemplateCerebroLinks(template);
       setEditingTemplate(template);
       setTemplateFormState({
         name: template.name,
@@ -3691,6 +3847,9 @@ const AssistantManagerTaskPlanner = () => {
             : '',
         notifyAtStart: defaults.notifyAtStart,
         evidenceRules: buildEvidenceRuleDrafts(template),
+        linkedKnowledgeEntryIds: cerebroLinks.knowledgeEntryIds.map(String),
+        linkedPolicyEntryIds: cerebroLinks.policyEntryIds.map(String),
+        linkedQuizIds: cerebroLinks.quizIds.map(String),
       });
     } else {
       setEditingTemplate(null);
@@ -3732,6 +3891,15 @@ const AssistantManagerTaskPlanner = () => {
       const categoryOrderNumeric = Number(templateFormState.categoryOrder);
       const subgroupOrderNumeric = Number(templateFormState.subgroupOrder);
       const templateOrderNumeric = Number(templateFormState.templateOrder);
+      const linkedKnowledgeEntryIds = templateFormState.linkedKnowledgeEntryIds
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0);
+      const linkedPolicyEntryIds = templateFormState.linkedPolicyEntryIds
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0);
+      const linkedQuizIds = templateFormState.linkedQuizIds
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0);
 
       if (
         !Number.isInteger(categoryOrderNumeric) ||
@@ -3875,6 +4043,20 @@ const AssistantManagerTaskPlanner = () => {
         nextScheduleConfig.evidenceRules = evidenceRules;
       } else {
         delete nextScheduleConfig.evidenceRules;
+      }
+
+      if (
+        linkedKnowledgeEntryIds.length > 0 ||
+        linkedPolicyEntryIds.length > 0 ||
+        linkedQuizIds.length > 0
+      ) {
+        nextScheduleConfig[CEREBRO_LINKS_CONFIG_KEY] = {
+          knowledgeEntryIds: linkedKnowledgeEntryIds,
+          policyEntryIds: linkedPolicyEntryIds,
+          quizIds: linkedQuizIds,
+        };
+      } else {
+        delete nextScheduleConfig[CEREBRO_LINKS_CONFIG_KEY];
       }
 
       const payload = {
@@ -4559,6 +4741,32 @@ const AssistantManagerTaskPlanner = () => {
     }
   }, []);
 
+  const handleCloseCerebroItemModal = useCallback(() => {
+    setCerebroItemModalOpen(false);
+    setCerebroItemLoading(false);
+    setCerebroItemError(null);
+    setActiveCerebroItem(null);
+  }, []);
+
+  const handleOpenCerebroItem = useCallback(
+    async (type: AmTaskCerebroLinkItemType, id: number) => {
+      setCerebroItemModalOpen(true);
+      setCerebroItemLoading(true);
+      setCerebroItemError(null);
+      setActiveCerebroItem(null);
+
+      try {
+        const detail = await fetchAmTaskCerebroLinkItemDetail({ type, id });
+        setActiveCerebroItem(detail);
+      } catch (error) {
+        setCerebroItemError(getErrorMessage(error, 'Failed to load Cerebro item'));
+      } finally {
+        setCerebroItemLoading(false);
+      }
+    },
+    [],
+  );
+
   const closeLogDetailModal = useCallback(() => {
     if (logDetailSubmitting || commentSubmitting) {
       return;
@@ -4576,7 +4784,15 @@ const AssistantManagerTaskPlanner = () => {
     setEvidenceRuleEditModes({});
     setCommentDraft('');
     handleCloseEvidenceImagePreview();
-  }, [commentSubmitting, handleCloseEvidenceImagePreview, logDetailSubmitting, searchParams, setSearchParams]);
+    handleCloseCerebroItemModal();
+  }, [
+    commentSubmitting,
+    handleCloseCerebroItemModal,
+    handleCloseEvidenceImagePreview,
+    logDetailSubmitting,
+    searchParams,
+    setSearchParams,
+  ]);
 
   const handleEvidenceRuleDraftChange = useCallback(
     (
@@ -6428,6 +6644,69 @@ const AssistantManagerTaskPlanner = () => {
           <Paper withBorder radius="xl" p="md">
             <Stack gap="md">
               <Stack gap={2}>
+                <Text fw={700}>Cerebro Links</Text>
+                <Text size="sm" c="dimmed">
+                  Attach related knowledge, policies, and quizzes so staff can open them from task details.
+                </Text>
+              </Stack>
+              {cerebroLinkOptionsError ? (
+                <Alert color="red" title="Cerebro Links">
+                  {cerebroLinkOptionsError}
+                </Alert>
+              ) : null}
+              <MultiSelect
+                label="Knowledge"
+                placeholder={cerebroLinkOptionsLoading ? 'Loading knowledge...' : 'Select knowledge articles'}
+                data={templateKnowledgeOptions}
+                value={templateFormState.linkedKnowledgeEntryIds}
+                onChange={(value) =>
+                  setTemplateFormState((prev) => ({
+                    ...prev,
+                    linkedKnowledgeEntryIds: value,
+                  }))
+                }
+                searchable
+                clearable
+                disabled={cerebroLinkOptionsLoading}
+                nothingFoundMessage="No knowledge entries found"
+              />
+              <MultiSelect
+                label="Policies"
+                placeholder={cerebroLinkOptionsLoading ? 'Loading policies...' : 'Select policies'}
+                data={templatePolicyOptions}
+                value={templateFormState.linkedPolicyEntryIds}
+                onChange={(value) =>
+                  setTemplateFormState((prev) => ({
+                    ...prev,
+                    linkedPolicyEntryIds: value,
+                  }))
+                }
+                searchable
+                clearable
+                disabled={cerebroLinkOptionsLoading}
+                nothingFoundMessage="No policies found"
+              />
+              <MultiSelect
+                label="Quizzes"
+                placeholder={cerebroLinkOptionsLoading ? 'Loading quizzes...' : 'Select quizzes'}
+                data={templateQuizOptions}
+                value={templateFormState.linkedQuizIds}
+                onChange={(value) =>
+                  setTemplateFormState((prev) => ({
+                    ...prev,
+                    linkedQuizIds: value,
+                  }))
+                }
+                searchable
+                clearable
+                disabled={cerebroLinkOptionsLoading}
+                nothingFoundMessage="No quizzes found"
+              />
+            </Stack>
+          </Paper>
+          <Paper withBorder radius="xl" p="md">
+            <Stack gap="md">
+              <Stack gap={2}>
                 <Text fw={700}>Advanced</Text>
                 <Text size="sm" c="dimmed">
                   Optional cadence-specific JSON like `daysOfWeek`, `dayOfMonth`, or tags.
@@ -7278,6 +7557,78 @@ const AssistantManagerTaskPlanner = () => {
                     </Stack>
                   </Paper>
                 </SimpleGrid>
+
+                {(selectedLogCerebroLinks.knowledge.length > 0 ||
+                  selectedLogCerebroLinks.policies.length > 0 ||
+                  selectedLogCerebroLinks.quizzes.length > 0) && (
+                  <Paper withBorder radius="lg" p="sm">
+                    <Stack gap="xs">
+                      <Text size="xs" tt="uppercase" fw={700} c="dimmed" ta="center">
+                        Cerebro
+                      </Text>
+                      {selectedLogCerebroLinks.knowledge.length > 0 && (
+                        <Group gap="xs" wrap="wrap" justify="center">
+                          <Text size="xs" c="dimmed">
+                            Knowledge:
+                          </Text>
+                          {selectedLogCerebroLinks.knowledge.map((item) => (
+                            <Button
+                              key={`log-cerebro-knowledge-${item.id}`}
+                              size="xs"
+                              variant="light"
+                              color="blue"
+                              onClick={() => {
+                                void handleOpenCerebroItem('knowledge', item.id);
+                              }}
+                            >
+                              {item.title}
+                            </Button>
+                          ))}
+                        </Group>
+                      )}
+                      {selectedLogCerebroLinks.policies.length > 0 && (
+                        <Group gap="xs" wrap="wrap" justify="center">
+                          <Text size="xs" c="dimmed">
+                            Policies:
+                          </Text>
+                          {selectedLogCerebroLinks.policies.map((item) => (
+                            <Button
+                              key={`log-cerebro-policy-${item.id}`}
+                              size="xs"
+                              variant="light"
+                              color="teal"
+                              onClick={() => {
+                                void handleOpenCerebroItem('policy', item.id);
+                              }}
+                            >
+                              {item.title}
+                            </Button>
+                          ))}
+                        </Group>
+                      )}
+                      {selectedLogCerebroLinks.quizzes.length > 0 && (
+                        <Group gap="xs" wrap="wrap" justify="center">
+                          <Text size="xs" c="dimmed">
+                            Quizzes:
+                          </Text>
+                          {selectedLogCerebroLinks.quizzes.map((item) => (
+                            <Button
+                              key={`log-cerebro-quiz-${item.id}`}
+                              size="xs"
+                              variant="light"
+                              color="orange"
+                              onClick={() => {
+                                void handleOpenCerebroItem('quiz', item.id);
+                              }}
+                            >
+                              {item.title}
+                            </Button>
+                          ))}
+                        </Group>
+                      )}
+                    </Stack>
+                  </Paper>
+                )}
               </Stack>
             </Paper>
 
@@ -7809,6 +8160,131 @@ const AssistantManagerTaskPlanner = () => {
             Select a task to view details.
           </Text>
         )}
+      </Modal>
+
+      <Modal
+        opened={cerebroItemModalOpen}
+        onClose={handleCloseCerebroItemModal}
+        fullScreen
+        title={activeCerebroItem?.title ?? 'Cerebro'}
+      >
+        <Stack gap="md">
+          {cerebroItemLoading ? (
+            <Center py="xl">
+              <Loader size="sm" />
+            </Center>
+          ) : cerebroItemError ? (
+            <Alert color="red" title="Cerebro">
+              {cerebroItemError}
+            </Alert>
+          ) : activeCerebroItem ? (
+            activeCerebroItem.type === 'quiz' ? (
+              <Stack gap="md">
+                <Group gap="xs" wrap="wrap">
+                  <Badge variant="light" color="orange">
+                    Quiz
+                  </Badge>
+                  <Badge variant="outline">
+                    Pass {activeCerebroItem.passingScore}%
+                  </Badge>
+                  <Badge variant="outline">
+                    {activeCerebroItem.questions.length} question
+                    {activeCerebroItem.questions.length === 1 ? '' : 's'}
+                  </Badge>
+                </Group>
+                {activeCerebroItem.description && (
+                  <Alert color="blue">
+                    {activeCerebroItem.description}
+                  </Alert>
+                )}
+                {activeCerebroItem.entryTitle && (
+                  <Text size="sm" c="dimmed">
+                    Linked article: {activeCerebroItem.entryTitle}
+                  </Text>
+                )}
+                <Stack gap="sm">
+                  {activeCerebroItem.questions.map((question, index) => (
+                    <Paper key={`${activeCerebroItem.id}-${question.id}`} withBorder radius="md" p="md">
+                      <Stack gap="xs">
+                        <Text fw={600}>
+                          {index + 1}. {question.prompt}
+                        </Text>
+                        <Stack gap={4}>
+                          {question.options.map((option) => (
+                            <Text key={`${question.id}-${option.id}`} size="sm">
+                              • {option.label}
+                            </Text>
+                          ))}
+                        </Stack>
+                        {question.explanation && (
+                          <Text size="sm" c="dimmed">
+                            {question.explanation}
+                          </Text>
+                        )}
+                      </Stack>
+                    </Paper>
+                  ))}
+                </Stack>
+              </Stack>
+            ) : (
+              <Stack gap="md">
+                <Group gap="xs" wrap="wrap">
+                  <Badge variant="light" color={activeCerebroItem.type === 'policy' ? 'teal' : 'blue'}>
+                    {activeCerebroItem.type === 'policy' ? 'Policy' : activeCerebroItem.kind}
+                  </Badge>
+                  {activeCerebroItem.category && (
+                    <Badge variant="outline">{activeCerebroItem.category}</Badge>
+                  )}
+                  {activeCerebroItem.type === 'policy' && (
+                    <Badge variant="outline">
+                      Version {activeCerebroItem.policyVersion ?? 'current'}
+                    </Badge>
+                  )}
+                </Group>
+                {activeCerebroItem.summary && (
+                  <Alert color="blue">
+                    {activeCerebroItem.summary}
+                  </Alert>
+                )}
+                <Text style={{ whiteSpace: 'pre-wrap' }}>
+                  {activeCerebroItem.body}
+                </Text>
+                {activeCerebroItem.checklistItems.length > 0 && (
+                  <Paper withBorder radius="md" p="md">
+                    <Stack gap={6}>
+                      <Text fw={600}>Checklist</Text>
+                      {activeCerebroItem.checklistItems.map((item) => (
+                        <Text key={`${activeCerebroItem.id}-${item}`} size="sm">
+                          • {item}
+                        </Text>
+                      ))}
+                    </Stack>
+                  </Paper>
+                )}
+                {activeCerebroItem.media.length > 0 && (
+                  <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+                    {activeCerebroItem.media.map((mediaItem, index) => (
+                      <Paper key={`${activeCerebroItem.id}-media-${index}`} withBorder radius="md" p="sm">
+                        <Stack gap="xs">
+                          <Image src={mediaItem.url} alt={mediaItem.alt ?? activeCerebroItem.title} radius="md" />
+                          {mediaItem.caption && (
+                            <Text size="sm" c="dimmed">
+                              {mediaItem.caption}
+                            </Text>
+                          )}
+                        </Stack>
+                      </Paper>
+                    ))}
+                  </SimpleGrid>
+                )}
+              </Stack>
+            )
+          ) : (
+            <Text size="sm" c="dimmed">
+              Select a linked Cerebro item.
+            </Text>
+          )}
+        </Stack>
       </Modal>
 
       <Modal

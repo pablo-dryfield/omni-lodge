@@ -4,6 +4,8 @@ import authMiddleware from '../middleware/authMiddleware.js';
 import { requireRoles } from '../middleware/authorizationMiddleware.js';
 import {
   listTaskTemplates,
+  getTaskCerebroLinkOptions,
+  getTaskCerebroLinkItemDetail,
   createTaskTemplate,
   updateTaskTemplate,
   deleteTaskTemplate,
@@ -35,6 +37,8 @@ const managerGuard = requireRoles(['admin', 'owner', 'manager', 'assistant-manag
 const upload = multer({ storage: multer.memoryStorage() });
 
 router.get('/templates', authMiddleware, managerGuard, listTaskTemplates);
+router.get('/cerebro-links/options', authMiddleware, managerGuard, getTaskCerebroLinkOptions);
+router.get('/cerebro-links/item', authMiddleware, managerGuard, getTaskCerebroLinkItemDetail);
 router.post('/templates', authMiddleware, managerGuard, createTaskTemplate);
 router.put('/templates/:id', authMiddleware, managerGuard, updateTaskTemplate);
 router.delete('/templates/:id', authMiddleware, managerGuard, deleteTaskTemplate);

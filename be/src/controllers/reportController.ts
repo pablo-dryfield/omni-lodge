@@ -126,6 +126,14 @@ type LockedComponentRequirement =
       extraUnits: number;
       extraAmount: number;
       extraDays?: string[];
+    }
+  | {
+      type: "performance_tier";
+      progressRatio: number;
+      progressPercent: number;
+      multiplier: number;
+      deductedAmount: number;
+      matchedTierLabel?: string | null;
     };
 
 type LockedComponentEntry = {
@@ -1951,8 +1959,14 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     });
     const requiresTaskScores = typedComponents.some(
       (component) =>
-        component.calculationMethod === "task_score" &&
-        (component.assignments?.some((assignment) => assignment.isActive) ?? false),
+        (component.assignments?.some(
+          (assignment) =>
+            assignment.isActive &&
+            (component.calculationMethod === "task_score" ||
+              hasPerformanceTierConfig(component.config ?? {}) ||
+              hasPerformanceTierConfig(assignment.config ?? {})),
+        ) ??
+          false),
     );
     const taskScoreLookup: TaskScoreLookup = requiresTaskScores
       ? await buildTaskScoreLookup(start, end)
@@ -4491,6 +4505,11 @@ type TaskLogStatusBucket = {
   waived: number;
   missed: number;
   pending: number;
+  totalPoints: number;
+  completedPoints: number;
+  waivedPoints: number;
+  missedPoints: number;
+  pendingPoints: number;
 };
 
 type TaskLogSummary = {
@@ -4530,9 +4549,10 @@ const computeAssignmentAmount = (
   rangeEnd: dayjs.Dayjs,
 ): ComponentComputationResult => {
   const reviewRequirement = resolveReviewTargetRequirement(component, assignment);
+  const performanceTierSettings = resolvePerformanceTierSettings(component, assignment);
   const totalEligibleReviews = summary.reviewTotals?.totalEligibleReviews ?? 0;
   const totalTrackedReviews = summary.reviewTotals?.totalTrackedReviews ?? totalEligibleReviews;
-  const applyReviewRequirement = (
+  const applyCompensationGates = (
     amount: number,
     baseDaysCount?: number,
     baseDays?: string[],
@@ -4555,16 +4575,39 @@ const computeAssignmentAmount = (
       });
       return { amount: 0 };
     }
+
+    if (performanceTierSettings) {
+      const outcome = resolvePerformanceTierOutcome(summary, taskScoreLookup, performanceTierSettings);
+      const adjustedAmount = amount * outcome.multiplier;
+
+      if (amount > 0 && adjustedAmount < amount) {
+        recordLockedComponent(summary, component, amount - adjustedAmount, {
+          type: "performance_tier",
+          progressRatio: outcome.progressRatio,
+          progressPercent: outcome.progressPercent,
+          multiplier: outcome.multiplier,
+          deductedAmount: amount - adjustedAmount,
+          matchedTierLabel: outcome.matchedTierLabel,
+        });
+      }
+
+      return {
+        amount: adjustedAmount,
+        baseDaysCount,
+        baseDays,
+      };
+    }
+
     return { amount, baseDaysCount, baseDays };
   };
 
   if (component.calculationMethod === "task_score") {
-    return applyReviewRequirement(
+    return applyCompensationGates(
       computeTaskScorePayout(component, assignment, summary, taskScoreLookup),
     );
   }
   if (component.calculationMethod === "night_report") {
-    return applyReviewRequirement(
+    return applyCompensationGates(
       computeNightReportIncentive(
         component,
         assignment,
@@ -4578,12 +4621,12 @@ const computeAssignmentAmount = (
 
   const reviewSettings = resolveReviewPayoutSettings(component, assignment);
   if (reviewSettings) {
-    return applyReviewRequirement(computeReviewPayoutAmount(summary, reviewSettings));
+    return applyCompensationGates(computeReviewPayoutAmount(summary, reviewSettings));
   }
 
   const platformGuestSettings = resolvePlatformGuestSettings(component, assignment);
   if (platformGuestSettings) {
-    return applyReviewRequirement(
+    return applyCompensationGates(
       computePlatformGuestPayout(summary, platformGuestSettings, component.id),
     );
   }
@@ -4596,7 +4639,7 @@ const computeAssignmentAmount = (
       rangeStart,
       rangeEnd,
     );
-    return applyReviewRequirement(proratedAmount, creditedUnits, creditedDates);
+    return applyCompensationGates(proratedAmount, creditedUnits, creditedDates);
   }
   if (component.calculationMethod === "per_unit" && monthlyBaseSettings?.mode === "shift_quota") {
     const {
@@ -4636,7 +4679,7 @@ const computeAssignmentAmount = (
         });
       }
     }
-    return applyReviewRequirement(baseAmount, baseUnits, baseDates);
+    return applyCompensationGates(baseAmount, baseUnits, baseDates);
   }
 
   const baseAmount = Number(assignment.baseAmount ?? 0);
@@ -4651,7 +4694,7 @@ const computeAssignmentAmount = (
     }
   }
 
-  return applyReviewRequirement(total);
+  return applyCompensationGates(total);
 };
 
 const applyCompensationComponents = (
@@ -4712,7 +4755,11 @@ const applyCompensationComponents = (
         { amount: 0 },
       );
 
-      if (aggregate.amount !== 0) {
+      const hasBaseDayMetadata =
+        aggregate.baseDaysCount !== undefined ||
+        (aggregate.baseDays !== undefined && aggregate.baseDays.length > 0);
+
+      if (aggregate.amount !== 0 || hasBaseDayMetadata) {
         summary.componentTotals.push({
           componentId: component.id,
           name: component.name,
@@ -4724,10 +4771,13 @@ const applyCompensationComponents = (
             ? { baseDays: [...aggregate.baseDays].sort((a, b) => a.localeCompare(b)) }
             : {}),
         });
-        summary.bucketTotals[component.category] = (summary.bucketTotals[component.category] ?? 0) + aggregate.amount;
-        summary.totalPayout += aggregate.amount;
+        if (aggregate.amount !== 0) {
+          summary.bucketTotals[component.category] =
+            (summary.bucketTotals[component.category] ?? 0) + aggregate.amount;
+          summary.totalPayout += aggregate.amount;
+        }
 
-        if (component.category === "commission" && summary.totalCommission > 0) {
+        if (aggregate.amount > 0 && component.category === "commission" && summary.totalCommission > 0) {
           const userBuckets = productBucketsByUser.get(summary.userId);
           if (userBuckets) {
             const positiveBuckets = Array.from(userBuckets.values()).filter(
@@ -4776,24 +4826,61 @@ type TaskScoreSettings = {
   treatPendingAsComplete: boolean;
 };
 
+type PerformanceTierRule = {
+  minProgress: number;
+  maxProgress: number | null;
+  multiplier: number;
+  label: string | null;
+};
+
+type PerformanceTierSettings = {
+  templateIds?: number[];
+  treatWaivedAsComplete: boolean;
+  treatPendingAsComplete: boolean;
+  defaultProgressRatio: number;
+  defaultMultiplier: number;
+  tiers: PerformanceTierRule[];
+};
+
+type PerformanceTierOutcome = {
+  multiplier: number;
+  progressRatio: number;
+  progressPercent: number;
+  matchedTierLabel: string | null;
+};
+
 const createStatusBucket = (): TaskLogStatusBucket => ({
   total: 0,
   completed: 0,
   waived: 0,
   missed: 0,
   pending: 0,
+  totalPoints: 0,
+  completedPoints: 0,
+  waivedPoints: 0,
+  missedPoints: 0,
+  pendingPoints: 0,
 });
 
-const incrementStatusBucket = (bucket: TaskLogStatusBucket, status: AssistantManagerTaskStatus) => {
+const incrementStatusBucket = (
+  bucket: TaskLogStatusBucket,
+  status: AssistantManagerTaskStatus,
+  points: number,
+) => {
   bucket.total += 1;
+  bucket.totalPoints += points;
   if (status === "completed") {
     bucket.completed += 1;
+    bucket.completedPoints += points;
   } else if (status === "waived") {
     bucket.waived += 1;
+    bucket.waivedPoints += points;
   } else if (status === "missed") {
     bucket.missed += 1;
+    bucket.missedPoints += points;
   } else {
     bucket.pending += 1;
+    bucket.pendingPoints += points;
   }
 };
 
@@ -4816,6 +4903,11 @@ const selectTaskBucket = (
       aggregate.waived += bucket.waived;
       aggregate.missed += bucket.missed;
       aggregate.pending += bucket.pending;
+      aggregate.totalPoints += bucket.totalPoints;
+      aggregate.completedPoints += bucket.completedPoints;
+      aggregate.waivedPoints += bucket.waivedPoints;
+      aggregate.missedPoints += bucket.missedPoints;
+      aggregate.pendingPoints += bucket.pendingPoints;
     }
   });
   if (aggregate.total === 0) {
@@ -5253,6 +5345,269 @@ const resolveTaskScoreSettings = (
   return merged;
 };
 
+const normalizeProgressThreshold = (value: number | undefined): number | undefined => {
+  if (value === undefined || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const scaled = value > 1 ? value / 100 : value;
+  return Math.min(Math.max(scaled, 0), 1);
+};
+
+const parsePerformanceTierRules = (value: unknown): PerformanceTierRule[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const rules: PerformanceTierRule[] = [];
+  value.forEach((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const candidate = entry as Record<string, unknown>;
+    const multiplier =
+      readNumeric(
+        candidate.multiplier ??
+          candidate.payoutMultiplier ??
+          candidate.payout_multiplier ??
+          candidate.amountMultiplier ??
+          candidate.amount_multiplier,
+      ) ?? undefined;
+
+    if (multiplier === undefined || !Number.isFinite(multiplier)) {
+      return;
+    }
+
+    const minProgress = normalizeProgressThreshold(
+      readNumeric(
+        candidate.minProgress ??
+          candidate.min_progress ??
+          candidate.minPercent ??
+          candidate.min_percent ??
+          candidate.from,
+      ),
+    );
+    const maxProgress = normalizeProgressThreshold(
+      readNumeric(
+        candidate.maxProgress ??
+          candidate.max_progress ??
+          candidate.maxPercent ??
+          candidate.max_percent ??
+          candidate.to,
+      ),
+    );
+
+    const normalizedMin = minProgress ?? 0;
+    const normalizedMax = maxProgress ?? null;
+    if (normalizedMax !== null && normalizedMax < normalizedMin) {
+      return;
+    }
+
+    const label =
+      typeof candidate.label === "string" && candidate.label.trim().length > 0
+        ? candidate.label.trim()
+        : null;
+
+    rules.push({
+      minProgress: normalizedMin,
+      maxProgress: normalizedMax,
+      multiplier: multiplier < 0 ? 0 : multiplier,
+      label,
+    });
+  });
+
+  rules.sort((left, right) => {
+    if (left.minProgress !== right.minProgress) {
+      return right.minProgress - left.minProgress;
+    }
+    const leftMax = left.maxProgress ?? 1;
+    const rightMax = right.maxProgress ?? 1;
+    return rightMax - leftMax;
+  });
+
+  return rules;
+};
+
+const normalizePerformanceTierSettings = (config: unknown): Partial<PerformanceTierSettings> => {
+  if (!config || typeof config !== "object") {
+    return {};
+  }
+  const record = config as Record<string, unknown>;
+  const candidate =
+    typeof record.performanceTier === "object"
+      ? (record.performanceTier as Record<string, unknown>)
+      : typeof record.performance_tier === "object"
+      ? (record.performance_tier as Record<string, unknown>)
+      : record;
+
+  if (!candidate || typeof candidate !== "object") {
+    return {};
+  }
+
+  const tiers = parsePerformanceTierRules(candidate.tiers ?? candidate.rules ?? candidate.levels);
+  const templateIds = readNumericArray(candidate.templateIds ?? candidate.template_ids)?.filter(
+    (id) => Number.isInteger(id) && id > 0,
+  );
+  const treatWaivedAsComplete =
+    readBoolean(
+      candidate.treatWaivedAsComplete ??
+        candidate.waivedCountsAsComplete ??
+        candidate.includeWaived,
+    ) ?? undefined;
+  const treatPendingAsComplete =
+    readBoolean(
+      candidate.treatPendingAsComplete ??
+        candidate.pendingCountsAsComplete ??
+        candidate.includePending,
+    ) ?? undefined;
+  const defaultProgressRatio = normalizeProgressThreshold(
+    readNumeric(candidate.defaultProgressRatio ?? candidate.default_progress_ratio),
+  );
+  const defaultMultiplier =
+    readNumeric(
+      candidate.defaultMultiplier ??
+        candidate.default_multiplier ??
+        candidate.fallbackMultiplier ??
+        candidate.fallback_multiplier,
+    ) ?? undefined;
+
+  const settings: Partial<PerformanceTierSettings> = {};
+  if (tiers.length > 0) {
+    settings.tiers = tiers;
+  }
+  if (templateIds && templateIds.length > 0) {
+    settings.templateIds = templateIds;
+  }
+  if (treatWaivedAsComplete !== undefined) {
+    settings.treatWaivedAsComplete = treatWaivedAsComplete;
+  }
+  if (treatPendingAsComplete !== undefined) {
+    settings.treatPendingAsComplete = treatPendingAsComplete;
+  }
+  if (defaultProgressRatio !== undefined) {
+    settings.defaultProgressRatio = defaultProgressRatio;
+  }
+  if (defaultMultiplier !== undefined) {
+    settings.defaultMultiplier = defaultMultiplier;
+  }
+
+  return settings;
+};
+
+const resolvePerformanceTierSettings = (
+  component: CompensationComponent,
+  assignment: CompensationComponentAssignment,
+): PerformanceTierSettings | null => {
+  const componentSettings = normalizePerformanceTierSettings(component.config ?? {});
+  const assignmentSettings = normalizePerformanceTierSettings(assignment.config ?? {});
+
+  const tiers = assignmentSettings.tiers ?? componentSettings.tiers;
+  if (!tiers || tiers.length === 0) {
+    return null;
+  }
+
+  const merged: PerformanceTierSettings = {
+    tiers,
+    templateIds: assignmentSettings.templateIds ?? componentSettings.templateIds,
+    treatWaivedAsComplete:
+      assignmentSettings.treatWaivedAsComplete ??
+      componentSettings.treatWaivedAsComplete ??
+      true,
+    treatPendingAsComplete:
+      assignmentSettings.treatPendingAsComplete ??
+      componentSettings.treatPendingAsComplete ??
+      false,
+    defaultProgressRatio:
+      assignmentSettings.defaultProgressRatio ??
+      componentSettings.defaultProgressRatio ??
+      1,
+    defaultMultiplier:
+      assignmentSettings.defaultMultiplier ??
+      componentSettings.defaultMultiplier ??
+      1,
+  };
+
+  if (!Number.isFinite(merged.defaultProgressRatio)) {
+    merged.defaultProgressRatio = 1;
+  }
+  merged.defaultProgressRatio = Math.min(Math.max(merged.defaultProgressRatio, 0), 1);
+
+  if (!Number.isFinite(merged.defaultMultiplier) || merged.defaultMultiplier < 0) {
+    merged.defaultMultiplier = 1;
+  }
+
+  if (!merged.templateIds || merged.templateIds.length === 0) {
+    merged.templateIds = undefined;
+  }
+
+  return merged;
+};
+
+const hasPerformanceTierConfig = (config: unknown): boolean => {
+  if (!config || typeof config !== "object") {
+    return false;
+  }
+  const record = config as Record<string, unknown>;
+  const candidate =
+    (record.performanceTier as unknown) ?? (record.performance_tier as unknown) ?? config;
+  if (!candidate || typeof candidate !== "object") {
+    return false;
+  }
+  const typedCandidate = candidate as Record<string, unknown>;
+  const tiers = typedCandidate.tiers ?? typedCandidate.rules ?? typedCandidate.levels;
+  return Array.isArray(tiers) && tiers.length > 0;
+};
+
+const resolveTaskProgressByPoints = (
+  summary: TaskLogSummary | undefined,
+  settings: Pick<PerformanceTierSettings, "templateIds" | "treatWaivedAsComplete" | "treatPendingAsComplete">,
+): number | null => {
+  const bucket = selectTaskBucket(summary, settings.templateIds);
+  if (!bucket) {
+    return null;
+  }
+
+  const denominator = bucket.totalPoints > 0 ? bucket.totalPoints : bucket.total;
+  if (denominator <= 0) {
+    return null;
+  }
+
+  const numerator =
+    bucket.completedPoints +
+    (settings.treatWaivedAsComplete ? bucket.waivedPoints : 0) +
+    (settings.treatPendingAsComplete ? bucket.pendingPoints : 0);
+
+  const ratio = numerator / denominator;
+  return Math.min(Math.max(ratio, 0), 1);
+};
+
+const resolvePerformanceTierOutcome = (
+  summary: CommissionSummary,
+  taskScoreLookup: TaskScoreLookup,
+  settings: PerformanceTierSettings,
+): PerformanceTierOutcome => {
+  const userTaskSummary = taskScoreLookup.get(summary.userId);
+  const resolvedProgress =
+    resolveTaskProgressByPoints(userTaskSummary, settings) ?? settings.defaultProgressRatio;
+
+  const matchedRule = settings.tiers.find((rule) => {
+    if (resolvedProgress < rule.minProgress) {
+      return false;
+    }
+    if (rule.maxProgress !== null && resolvedProgress > rule.maxProgress) {
+      return false;
+    }
+    return true;
+  });
+
+  const multiplier = matchedRule?.multiplier ?? settings.defaultMultiplier;
+  return {
+    multiplier,
+    progressRatio: resolvedProgress,
+    progressPercent: Math.round(resolvedProgress * 10000) / 100,
+    matchedTierLabel: matchedRule?.label ?? null,
+  };
+};
+
 const clampValue = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
 
@@ -5299,12 +5654,25 @@ const computeTaskScorePayout = (
   return total;
 };
 
+const resolveTaskLogPoints = (metaValue: unknown): number => {
+  if (!metaValue || typeof metaValue !== "object") {
+    return 1;
+  }
+  const meta = metaValue as Record<string, unknown>;
+  const candidate =
+    readNumeric(meta.points ?? meta.pointValue ?? meta.point_value ?? meta.score) ?? 1;
+  if (!Number.isFinite(candidate) || candidate <= 0) {
+    return 1;
+  }
+  return candidate;
+};
+
 const buildTaskScoreLookup = async (
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
 ): Promise<TaskScoreLookup> => {
   const logs = await AssistantManagerTaskLog.findAll({
-    attributes: ["userId", "templateId", "status"],
+    attributes: ["userId", "templateId", "status", "meta"],
     where: {
       taskDate: {
         [Op.between]: [rangeStart.format("YYYY-MM-DD"), rangeEnd.format("YYYY-MM-DD")],
@@ -5321,6 +5689,7 @@ const buildTaskScoreLookup = async (
     }
     const templateId = log.getDataValue("templateId");
     const status = log.getDataValue("status") as AssistantManagerTaskStatus;
+    const points = resolveTaskLogPoints(log.getDataValue("meta"));
 
     let userSummary = summaryByUser.get(userId);
     if (!userSummary) {
@@ -5331,14 +5700,14 @@ const buildTaskScoreLookup = async (
       summaryByUser.set(userId, userSummary);
     }
 
-    incrementStatusBucket(userSummary.overall, status);
+    incrementStatusBucket(userSummary.overall, status, points);
     if (templateId) {
       let templateSummary = userSummary.byTemplate.get(templateId);
       if (!templateSummary) {
         templateSummary = createStatusBucket();
         userSummary.byTemplate.set(templateId, templateSummary);
       }
-      incrementStatusBucket(templateSummary, status);
+      incrementStatusBucket(templateSummary, status, points);
     }
   });
 
