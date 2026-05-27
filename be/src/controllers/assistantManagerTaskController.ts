@@ -12,6 +12,8 @@ import ShiftAssignment from '../models/ShiftAssignment.js';
 import ShiftInstance from '../models/ShiftInstance.js';
 import ShiftRole from '../models/ShiftRole.js';
 import UserShiftRole from '../models/UserShiftRole.js';
+import CerebroEntry from '../models/CerebroEntry.js';
+import CerebroQuiz from '../models/CerebroQuiz.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import HttpError from '../errors/HttpError.js';
 import logger from '../utils/logger.js';
@@ -1990,6 +1992,166 @@ export const listTaskTemplates = async (req: AuthenticatedRequest, res: Response
   } catch (error) {
     console.error('Failed to list assistant manager task templates', error);
     res.status(500).json([{ message: 'Failed to list assistant manager tasks' }]);
+  }
+};
+
+export const getTaskCerebroLinkOptions = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!canViewAllTaskLogs(req)) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    const [entries, quizzes] = await Promise.all([
+      CerebroEntry.findAll({
+        where: { status: true },
+        attributes: ['id', 'slug', 'title', 'kind', 'requiresAcknowledgement', 'policyVersion', 'sortOrder'],
+        order: [['sortOrder', 'ASC'], ['title', 'ASC']],
+      }),
+      CerebroQuiz.findAll({
+        where: { status: true },
+        attributes: ['id', 'slug', 'title', 'entryId', 'sortOrder'],
+        order: [['sortOrder', 'ASC'], ['title', 'ASC']],
+      }),
+    ]);
+
+    const knowledgeEntries = entries
+      .filter((entry) => entry.kind !== 'policy')
+      .map((entry) => ({
+        id: entry.id,
+        slug: entry.slug,
+        title: entry.title,
+        kind: entry.kind,
+      }));
+
+    const policyEntries = entries
+      .filter((entry) => entry.kind === 'policy' || entry.requiresAcknowledgement)
+      .map((entry) => ({
+        id: entry.id,
+        slug: entry.slug,
+        title: entry.title,
+        policyVersion: entry.policyVersion ?? null,
+      }));
+
+    const quizOptions = quizzes.map((quiz) => ({
+      id: quiz.id,
+      slug: quiz.slug,
+      title: quiz.title,
+      entryId: quiz.entryId ?? null,
+    }));
+
+    res.status(200).json([{
+      data: {
+        knowledgeEntries,
+        policyEntries,
+        quizzes: quizOptions,
+      },
+    }]);
+  } catch (error) {
+    logger.error('Failed to list Cerebro link options for assistant manager tasks', error);
+    res.status(500).json([{ message: 'Failed to load Cerebro link options' }]);
+  }
+};
+
+export const getTaskCerebroLinkItemDetail = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!canViewAllTaskLogs(req)) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    const type = typeof req.query.type === 'string' ? req.query.type.trim().toLowerCase() : '';
+    const id = Number(req.query.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json([{ message: 'A valid item id is required' }]);
+      return;
+    }
+    if (type !== 'knowledge' && type !== 'policy' && type !== 'quiz') {
+      res.status(400).json([{ message: 'A valid item type is required' }]);
+      return;
+    }
+
+    if (type === 'quiz') {
+      const quiz = await CerebroQuiz.findOne({
+        where: { id, status: true },
+        attributes: ['id', 'slug', 'title', 'description', 'passingScore', 'questions', 'entryId'],
+      });
+      if (!quiz) {
+        res.status(404).json([{ message: 'Quiz not found' }]);
+        return;
+      }
+
+      const linkedEntry = quiz.entryId
+        ? await CerebroEntry.findByPk(quiz.entryId, { attributes: ['id', 'title'] })
+        : null;
+
+      res.status(200).json([{
+        data: {
+          type: 'quiz',
+          id: quiz.id,
+          slug: quiz.slug,
+          title: quiz.title,
+          description: quiz.description ?? null,
+          passingScore: quiz.passingScore,
+          questions: Array.isArray(quiz.questions) ? quiz.questions : [],
+          entryId: quiz.entryId ?? null,
+          entryTitle: linkedEntry?.title ?? null,
+        },
+      }]);
+      return;
+    }
+
+    const entry = await CerebroEntry.findOne({
+      where: { id, status: true },
+      attributes: [
+        'id',
+        'slug',
+        'title',
+        'kind',
+        'summary',
+        'body',
+        'category',
+        'checklistItems',
+        'media',
+        'requiresAcknowledgement',
+        'policyVersion',
+      ],
+    });
+
+    if (!entry) {
+      res.status(404).json([{ message: 'Cerebro entry not found' }]);
+      return;
+    }
+
+    const isPolicy = entry.kind === 'policy' || entry.requiresAcknowledgement;
+    if (type === 'knowledge' && isPolicy) {
+      res.status(400).json([{ message: 'This item is a policy, not a knowledge article' }]);
+      return;
+    }
+    if (type === 'policy' && !isPolicy) {
+      res.status(400).json([{ message: 'This item is not a policy' }]);
+      return;
+    }
+
+    res.status(200).json([{
+      data: {
+        type,
+        id: entry.id,
+        slug: entry.slug,
+        title: entry.title,
+        kind: entry.kind,
+        summary: entry.summary ?? null,
+        body: entry.body ?? '',
+        category: entry.category ?? null,
+        checklistItems: Array.isArray(entry.checklistItems) ? entry.checklistItems : [],
+        media: Array.isArray(entry.media) ? entry.media : [],
+        requiresAcknowledgement: Boolean(entry.requiresAcknowledgement),
+        policyVersion: entry.policyVersion ?? null,
+      },
+    }]);
+  } catch (error) {
+    logger.error('Failed to load Cerebro link item detail for assistant manager tasks', error);
+    res.status(500).json([{ message: 'Failed to load Cerebro link item detail' }]);
   }
 };
 

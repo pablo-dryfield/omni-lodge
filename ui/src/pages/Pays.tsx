@@ -219,13 +219,11 @@ const ComponentListItem: React.FC<ComponentListItemProps> = ({
   platformGuestTotals,
 }) => {
   const [showBaseDays, setShowBaseDays] = useState(false);
-  const isBaseComponent = component.category === 'base';
-  const explicitBaseDays =
-    isBaseComponent && Array.isArray(component.baseDays) ? component.baseDays.filter(Boolean) : [];
+  const explicitBaseDays = Array.isArray(component.baseDays) ? component.baseDays.filter(Boolean) : [];
   const computedBaseDayCount =
-    isBaseComponent && explicitBaseDays.length > 0
+    explicitBaseDays.length > 0
       ? explicitBaseDays.length
-      : isBaseComponent && typeof component.baseDaysCount === 'number' && component.baseDaysCount > 0
+      : typeof component.baseDaysCount === 'number' && component.baseDaysCount > 0
       ? component.baseDaysCount
       : null;
   const formattedBaseDays =
@@ -364,6 +362,8 @@ const renderComponentList = (
             const requirement = entry.requirement;
             const reviewRequirement = requirement?.type === 'review_target' ? requirement : null;
             const baseRequirement = requirement?.type === 'base_override' ? requirement : null;
+            const performanceRequirement =
+              requirement?.type === 'performance_tier' ? requirement : null;
             const isBaseOverride = Boolean(baseRequirement);
             const staffHasCanonicalRange = staff?.rangeIsCanonical !== false;
             const canApproveBaseOverride =
@@ -389,6 +389,16 @@ const renderComponentList = (
                 <Text component="span" size="xs" c="dimmed">
                   (quota {baseRequirement.allowedUnits} days, worked {baseRequirement.workedUnits} days; extra{' '}
                   {baseRequirement.extraUnits})
+                </Text>
+              );
+            } else if (performanceRequirement) {
+              requirementDetails = (
+                <Text component="span" size="xs" c="dimmed">
+                  (completed {performanceRequirement.progressPercent.toFixed(2)}%, multiplier{' '}
+                  {performanceRequirement.multiplier.toFixed(2)}x
+                  {performanceRequirement.matchedTierLabel
+                    ? `, tier ${performanceRequirement.matchedTierLabel}`
+                    : ''})
                 </Text>
               );
             }
@@ -1321,6 +1331,8 @@ const renderProductTotals = (
                         {lockedForProduct.map((entry, lockedIdx) => {
                           const requirement = entry.requirement;
                           const reviewRequirement = requirement?.type === 'review_target' ? requirement : null;
+                          const performanceRequirement =
+                            requirement?.type === 'performance_tier' ? requirement : null;
                           return (
                           <Group key={`${entry.componentId}-locked-${lockedIdx}`} justify="space-between">
                             <Group gap={6}>
@@ -1332,6 +1344,12 @@ const renderProductTotals = (
                                 {reviewRequirement && (
                                   <Text component="span" size="xs" c="dimmed">
                                     (needs {reviewRequirement.minReviews} reviews, current {reviewRequirement.actualReviews})
+                                  </Text>
+                                )}
+                                {performanceRequirement && (
+                                  <Text component="span" size="xs" c="dimmed">
+                                    (completed {performanceRequirement.progressPercent.toFixed(2)}%, multiplier{' '}
+                                    {performanceRequirement.multiplier.toFixed(2)}x)
                                   </Text>
                                 )}
                               </Text>
