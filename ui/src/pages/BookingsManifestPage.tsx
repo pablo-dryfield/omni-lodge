@@ -34,9 +34,6 @@ import { IconArrowLeft, IconArrowRight, IconEye, IconEyeOff, IconKey, IconRefres
 
 import dayjs, { Dayjs } from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
-
-dayjs.extend(customParseFormat);
-
 import { useSearchParams } from "react-router-dom";
 
 import { useAppDispatch } from "../store/hooks";
@@ -61,6 +58,8 @@ import {
   PlatformBreakdownEntry,
   BookingStatus,
 } from "../store/bookingPlatformsTypes";
+
+dayjs.extend(customParseFormat);
 
 
 

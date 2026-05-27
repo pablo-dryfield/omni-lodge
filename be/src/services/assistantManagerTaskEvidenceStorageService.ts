@@ -1,6 +1,7 @@
 import path from 'path';
 import dayjs from 'dayjs';
-import { ensureFolderPath, uploadBuffer } from './googleDrive.js';
+import { Readable } from 'stream';
+import { ensureFolderPath, getDriveClient, uploadBuffer } from './googleDrive.js';
 
 const ROOT_FOLDER = 'Assistant Manager Task Evidence';
 const DRIVE_PREFIX = 'drive:';
@@ -21,6 +22,16 @@ export type StoreAssistantManagerTaskEvidenceImageResult = {
   originalName: string;
   mimeType: string;
   fileSize: number;
+};
+
+type OpenAssistantManagerTaskEvidenceImageStreamParams = {
+  storagePath?: string | null;
+  driveFileId?: string | null;
+};
+
+type OpenAssistantManagerTaskEvidenceImageStreamResult = {
+  stream: Readable;
+  mimeType: string;
 };
 
 const extensionFromMime = (mimeType: string): string | null => {
@@ -57,13 +68,14 @@ export async function storeAssistantManagerTaskEvidenceImage(
   const evidenceDate = parsedDate.isValid() ? parsedDate : dayjs();
   const year = evidenceDate.format('YYYY');
   const month = evidenceDate.format('MMMM');
+  const day = evidenceDate.format('DD');
   const dateStamp = evidenceDate.format('YYYYMMDD');
   const ext = path.extname(originalName) || extensionFromMime(mimeType) || '.jpg';
   const normalizedExt = ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`;
   const safeRuleKey = ruleKey.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
   const safeOriginalName = path.basename(originalName).replace(/\s+/g, '-');
   const fileName = `am_task_${logId}_${safeRuleKey}_${dateStamp}_${Date.now()}_${safeOriginalName || `evidence${normalizedExt}`}`;
-  const folder = await ensureFolderPath(`${ROOT_FOLDER}/${year}/${month}`);
+  const folder = await ensureFolderPath(`${ROOT_FOLDER}/${year}/${month}/${day}`);
 
   const upload = await uploadBuffer({
     name: fileName.endsWith(normalizedExt) ? fileName : `${fileName}${normalizedExt}`,
@@ -79,5 +91,72 @@ export async function storeAssistantManagerTaskEvidenceImage(
     originalName,
     mimeType,
     fileSize: data.length,
+  };
+}
+
+const isDriveStorage = (storagePath: string): boolean => storagePath.startsWith(DRIVE_PREFIX);
+
+const getDriveFileIdFromStoragePath = (storagePath: string): string =>
+  storagePath.replace(DRIVE_PREFIX, '').trim();
+
+export async function deleteAssistantManagerTaskEvidenceImage(params: {
+  storagePath?: string | null;
+  driveFileId?: string | null;
+}): Promise<void> {
+  const fromStoragePath =
+    typeof params.storagePath === 'string' && isDriveStorage(params.storagePath)
+      ? getDriveFileIdFromStoragePath(params.storagePath)
+      : '';
+  const fileId =
+    (typeof params.driveFileId === 'string' ? params.driveFileId.trim() : '') || fromStoragePath;
+
+  if (!fileId) {
+    return;
+  }
+
+  try {
+    const drive = await getDriveClient();
+    await drive.files.delete({
+      fileId,
+      supportsAllDrives: true,
+    });
+  } catch (error) {
+    const code = (error as { code?: number })?.code;
+    if (code === 404) {
+      return;
+    }
+    throw error;
+  }
+}
+
+export async function openAssistantManagerTaskEvidenceImageStream(
+  params: OpenAssistantManagerTaskEvidenceImageStreamParams,
+): Promise<OpenAssistantManagerTaskEvidenceImageStreamResult> {
+  const fromStoragePath =
+    typeof params.storagePath === 'string' && isDriveStorage(params.storagePath)
+      ? getDriveFileIdFromStoragePath(params.storagePath)
+      : '';
+  const fileId =
+    (typeof params.driveFileId === 'string' ? params.driveFileId.trim() : '') || fromStoragePath;
+
+  if (!fileId) {
+    throw new Error('Missing evidence Drive file id');
+  }
+
+  const drive = await getDriveClient();
+  const metadata = await drive.files.get({
+    fileId,
+    fields: 'mimeType',
+    supportsAllDrives: true,
+  });
+  const mimeType = metadata.data.mimeType ?? 'application/octet-stream';
+  const response = await drive.files.get(
+    { fileId, alt: 'media' },
+    { responseType: 'stream' },
+  );
+
+  return {
+    stream: response.data as unknown as Readable,
+    mimeType,
   };
 }

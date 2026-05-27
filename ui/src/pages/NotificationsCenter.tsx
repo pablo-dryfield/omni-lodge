@@ -19,6 +19,11 @@ import {
 } from "@mantine/core";
 import { IconArrowRight, IconRefresh } from "@tabler/icons-react";
 import {
+  fetchAmTaskPushConfig,
+  removeAmTaskPushSubscription,
+  saveAmTaskPushSubscription,
+} from "../actions/assistantManagerTaskActions";
+import {
   fetchNotificationPushSubscriptions,
   fetchInboxNotifications,
   sendNotificationPushTest,
@@ -71,9 +76,21 @@ const toPushEventLabel = (value: string) => {
   }
 };
 
+const decodeBase64UrlToUint8Array = (value: string): Uint8Array => {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  const binary = window.atob(padded);
+  const output = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    output[index] = binary.charCodeAt(index);
+  }
+  return output;
+};
+
 const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
   const navigate = useNavigate();
   const roleSlug = useAppSelector((state) => state.session.roleSlug ?? null);
+  const loggedUserId = useAppSelector((state) => state.session.loggedUserId ?? null);
   const { data: activeUsers = [], isLoading: activeUsersLoading } = useActiveUsers();
   const [items, setItems] = useState<InboxNotification[]>([]);
   const [loading, setLoading] = useState(false);
@@ -91,6 +108,24 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
   const [pushDebug, setPushDebug] = useState<NotificationPushSubscriptionDebugResponse | null>(
     null,
   );
+  const notificationsSupported = typeof window !== "undefined" && "Notification" in window;
+  const pushSupported =
+    typeof window !== "undefined" &&
+    "serviceWorker" in navigator &&
+    "PushManager" in window;
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
+    () => {
+      if (typeof window === "undefined" || !("Notification" in window)) {
+        return "denied";
+      }
+      return window.Notification.permission;
+    },
+  );
+  const [pushPublicKey, setPushPublicKey] = useState<string | null>(null);
+  const [pushEnabledInBackend, setPushEnabledInBackend] = useState(false);
+  const [pushSubscriptionReady, setPushSubscriptionReady] = useState(false);
+  const [pushSyncBusy, setPushSyncBusy] = useState(false);
+  const [pushSyncError, setPushSyncError] = useState<string | null>(null);
 
   const normalizedRoleSlug = useMemo(() => {
     if (!roleSlug) {
@@ -117,6 +152,12 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
       new Set(["admin", "owner", "manager", "assistant-manager"]).has(normalizedRoleSlug),
     [normalizedRoleSlug],
   );
+  const backendPushConfigured =
+    notificationPermission === "granted" &&
+    pushSupported &&
+    pushEnabledInBackend &&
+    Boolean(pushPublicKey);
+  const backgroundPushActive = backendPushConfigured && pushSubscriptionReady;
 
   const activeUserOptions = useMemo(
     () =>
@@ -140,11 +181,142 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
   }, [title]);
 
   useEffect(() => {
+    if (!notificationsSupported) {
+      return;
+    }
+
+    const syncPermission = () => {
+      setNotificationPermission(window.Notification.permission);
+    };
+
+    syncPermission();
+    window.addEventListener("focus", syncPermission);
+    document.addEventListener("visibilitychange", syncPermission);
+
+    return () => {
+      window.removeEventListener("focus", syncPermission);
+      document.removeEventListener("visibilitychange", syncPermission);
+    };
+  }, [notificationsSupported]);
+
+  useEffect(() => {
+    if (!loggedUserId) {
+      setPushPublicKey(null);
+      setPushEnabledInBackend(false);
+      setPushSubscriptionReady(false);
+      setPushSyncError(null);
+      return;
+    }
+
+    fetchAmTaskPushConfig()
+      .then((config) => {
+        setPushPublicKey(config.publicKey);
+        setPushEnabledInBackend(config.enabled);
+        if (!config.enabled || !config.publicKey) {
+          setPushSubscriptionReady(false);
+        }
+        setPushSyncError(null);
+      })
+      .catch((requestError) => {
+        console.error("Failed to load task push notification config", requestError);
+        setPushEnabledInBackend(false);
+        setPushPublicKey(null);
+        setPushSubscriptionReady(false);
+        setPushSyncError("Could not load push notification config.");
+      });
+  }, [loggedUserId]);
+
+  useEffect(() => {
     if (testerUserId || activeUserOptions.length === 0) {
       return;
     }
     setTesterUserId(activeUserOptions[0]?.value ?? null);
   }, [activeUserOptions, testerUserId]);
+
+  const syncPushSubscription = useCallback(async () => {
+    if (
+      !pushSupported ||
+      notificationPermission !== "granted" ||
+      !pushEnabledInBackend ||
+      !pushPublicKey
+    ) {
+      setPushSubscriptionReady(false);
+      return false;
+    }
+
+    setPushSyncBusy(true);
+    try {
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (!registration) {
+        setPushSubscriptionReady(false);
+        setPushSyncError(
+          "Background push requires the app service worker (available on installed/production app).",
+        );
+        return false;
+      }
+      let subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: decodeBase64UrlToUint8Array(pushPublicKey),
+        });
+      }
+
+      await saveAmTaskPushSubscription(subscription.toJSON());
+      setPushSubscriptionReady(true);
+      setPushSyncError(null);
+      return true;
+    } catch (requestError) {
+      console.error("Failed to sync task push subscription", requestError);
+      setPushSubscriptionReady(false);
+      setPushSyncError("Background push subscription failed. Browser permission may be blocked.");
+      return false;
+    } finally {
+      setPushSyncBusy(false);
+    }
+  }, [notificationPermission, pushEnabledInBackend, pushPublicKey, pushSupported]);
+
+  const removePushSubscription = useCallback(async () => {
+    if (!pushSupported) {
+      setPushSubscriptionReady(false);
+      return;
+    }
+    try {
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (!registration) {
+        return;
+      }
+      const subscription = await registration.pushManager.getSubscription();
+      if (subscription) {
+        const endpoint = subscription.endpoint;
+        await subscription.unsubscribe().catch(() => undefined);
+        if (endpoint) {
+          await removeAmTaskPushSubscription(endpoint).catch(() => undefined);
+        }
+      }
+    } catch (requestError) {
+      console.error("Failed to remove task push subscription", requestError);
+    } finally {
+      setPushSubscriptionReady(false);
+    }
+  }, [pushSupported]);
+
+  const handleEnableTaskNotifications = useCallback(async () => {
+    if (!notificationsSupported) {
+      return;
+    }
+    try {
+      const permission = await window.Notification.requestPermission();
+      setNotificationPermission(permission);
+      if (permission === "granted") {
+        await syncPushSubscription();
+      } else if (permission === "denied") {
+        await removePushSubscription();
+      }
+    } catch (requestError) {
+      console.error("Failed to request browser notification permission", requestError);
+    }
+  }, [notificationsSupported, removePushSubscription, syncPushSubscription]);
 
   const loadNotifications = useCallback(async () => {
     setLoading(true);
@@ -209,6 +381,21 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
     }
     loadPushDebug().catch(() => undefined);
   }, [canUseTester, loadPushDebug, testerUserId]);
+
+  useEffect(() => {
+    if (notificationPermission !== "granted") {
+      setPushSubscriptionReady(false);
+      if (notificationPermission === "denied") {
+        removePushSubscription().catch((requestError) =>
+          console.error("Failed to clear push subscription after deny", requestError),
+        );
+      }
+      return;
+    }
+    syncPushSubscription().catch((requestError) =>
+      console.error("Failed to auto-sync push subscription", requestError),
+    );
+  }, [notificationPermission, removePushSubscription, syncPushSubscription]);
 
   const handleSendTestNotification = useCallback(async () => {
     if (!testerUserId) {
@@ -279,6 +466,68 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
           {error}
         </Alert>
       )}
+
+      <Paper withBorder radius="lg" p="md">
+        <Stack gap="sm">
+          <Group justify="space-between" align="flex-start" wrap="wrap">
+            <Stack gap={2}>
+              <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
+                Task Notifications
+              </Text>
+              <Text fw={600}>
+                {!notificationsSupported
+                  ? "Not supported on this browser"
+                  : notificationPermission === "denied"
+                    ? "Blocked in browser settings"
+                    : backgroundPushActive
+                      ? "Enabled (background)"
+                      : notificationPermission === "granted"
+                        ? "Enabled (session only)"
+                        : "Not enabled"}
+              </Text>
+              <Text size="sm" c="dimmed">
+                {backgroundPushActive
+                  ? "Background push is active and notifications can fire while the app is closed."
+                  : backendPushConfigured
+                    ? "Background push is configured in backend. Finish enabling browser subscription for closed-app notifications."
+                    : notificationPermission === "granted"
+                      ? "Notifications are active while the app is open."
+                      : "Uses assistant manager task reminders plus task start-time notifications for your pending tasks."}
+              </Text>
+              {notificationPermission === "granted" &&
+                pushSupported &&
+                (!pushEnabledInBackend || !pushPublicKey) && (
+                  <Text size="xs" c="orange.7">
+                    Background push is not configured in backend yet (missing VAPID keys).
+                  </Text>
+                )}
+              {pushSyncError && (
+                <Text size="xs" c="red.7">
+                  {pushSyncError}
+                </Text>
+              )}
+            </Stack>
+            <Group gap="xs" justify="flex-end">
+              {notificationsSupported &&
+                (notificationPermission !== "granted" ||
+                  (backendPushConfigured && !pushSubscriptionReady)) && (
+                  <Button
+                    size="xs"
+                    variant="light"
+                    loading={pushSyncBusy}
+                    onClick={() => {
+                      handleEnableTaskNotifications().catch((requestError) =>
+                        console.error("Failed to enable task notifications", requestError),
+                      );
+                    }}
+                  >
+                    {notificationPermission === "granted" ? "Enable Background" : "Enable"}
+                  </Button>
+                )}
+            </Group>
+          </Group>
+        </Stack>
+      </Paper>
 
       {canUseTester && (
         <Paper withBorder radius="lg" p="md">

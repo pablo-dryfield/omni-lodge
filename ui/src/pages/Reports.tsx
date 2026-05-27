@@ -43,8 +43,6 @@ import { DatePickerInput } from "@mantine/dates";
 import { useDebouncedValue, useMediaQuery } from "@mantine/hooks";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
-
-dayjs.extend(isoWeek);
 import {
   IconAdjustments,
   IconAlertTriangle,
@@ -156,6 +154,8 @@ import {
   type ReportTemplateListResponse,
   type SaveReportTemplateRequest,
 } from "../api/reports";
+
+dayjs.extend(isoWeek);
 
 const PAGE_SLUG = PAGE_SLUGS.reports;
 const DERIVED_FIELD_SENTINEL = "__derived__";

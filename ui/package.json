@@ -58,7 +58,11 @@
     "start:prod": "npm run start",
     "start:dev": "cross-env PORT=3000 npm run start",
     "build": "craco build",
+    "check": "run-p typecheck lint:quiet",
+    "lint": "eslint --ext .js,.jsx,.ts,.tsx src",
+    "lint:quiet": "npm run lint -- --quiet",
     "test": "craco test",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {
@@ -91,6 +95,7 @@
     "autoprefixer": "^10.4.19",
     "cross-env": "^7.0.3",
     "eslint-plugin-react-hooks": "^4.6.0",
+    "npm-run-all": "^4.1.5",
     "postcss": "^8.4.38",
     "postcss-preset-mantine": "^1.14.4",
     "postcss-simple-vars": "^7.0.1",

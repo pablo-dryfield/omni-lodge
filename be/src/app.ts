@@ -71,6 +71,7 @@ import { startScheduleJobs } from './jobs/schedules.cron.js';
 import { startDbBackupJob } from './jobs/dbBackup.cron.js';
 import { startBookingEmailIngestionJob } from './jobs/bookingEmailIngestion.cron.js';
 import { startAmTaskPushNotificationsJob } from './jobs/amTaskPushNotifications.cron.js';
+import { startDailyMidnightClosureJob } from './jobs/dailyMidnightClosure.cron.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -114,6 +115,11 @@ const resolveBoolean = (value: unknown, fallback: boolean): boolean => {
   }
   return fallback;
 };
+
+// Temporarily disable scheduling cron automation without removing job code.
+const ENABLE_SCHEDULING_CRON_JOBS = false;
+// Temporarily disable assistant manager task push cron automation.
+const ENABLE_AM_TASK_PUSH_CRON_JOBS = false;
 
 // API Requests limiter
 const apiLimiter = rateLimit({
@@ -273,19 +279,29 @@ async function bootstrap(): Promise<void> {
       app.listen(PORT, '127.0.0.1', () => {
         logger.info(`backend listening on http://127.0.0.1:${PORT}`);
         startFinanceRecurringJob();
-        startScheduleJobs();
+        if (ENABLE_SCHEDULING_CRON_JOBS) {
+          startScheduleJobs();
+        }
         startDbBackupJob();
         startBookingEmailIngestionJob();
-        startAmTaskPushNotificationsJob();
+        if (ENABLE_AM_TASK_PUSH_CRON_JOBS) {
+          startAmTaskPushNotificationsJob();
+        }
+        startDailyMidnightClosureJob();
       });
     } else {
       app.listen(PORT, '0.0.0.0', () => {
         logger.info(`Server is running on port ${PORT}`);
         startFinanceRecurringJob();
-        startScheduleJobs();
+        if (ENABLE_SCHEDULING_CRON_JOBS) {
+          startScheduleJobs();
+        }
         startDbBackupJob();
         startBookingEmailIngestionJob();
-        startAmTaskPushNotificationsJob();
+        if (ENABLE_AM_TASK_PUSH_CRON_JOBS) {
+          startAmTaskPushNotificationsJob();
+        }
+        startDailyMidnightClosureJob();
       });
     }
   } catch (err) {

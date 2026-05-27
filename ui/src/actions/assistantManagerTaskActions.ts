@@ -249,6 +249,157 @@ export type SyncAmTaskLogsWithTemplateConfigResponse = {
   skippedInvalidDateCount: number;
 };
 
+export type GenerateAmTaskLogsResponse = {
+  startDate: string;
+  endDate: string;
+  templateId: number | null;
+  assignmentCount: number;
+  expectedLogCount: number;
+  createdCount: number;
+  updatedCount: number;
+  unchangedCount: number;
+};
+
+export type PreviewAmTaskLogsTemplate = {
+  templateId: number;
+  templateName: string;
+  cadence: string;
+  expectedTaskCount: number;
+  newTaskCount: number;
+  existingTaskCount: number;
+};
+
+export type PreviewAmTaskLogsResponse = {
+  startDate: string;
+  endDate: string;
+  templateId: number | null;
+  assignmentCount: number;
+  expectedLogCount: number;
+  templates: PreviewAmTaskLogsTemplate[];
+};
+
+export type ClearAmTaskLogsResponse = {
+  startDate: string;
+  endDate: string;
+  totalCount: number;
+  deletedCount: number;
+};
+
+export const previewAmTaskLogsForRange = async (
+  params: { startDate: string; endDate: string; templateId?: number | null },
+): Promise<PreviewAmTaskLogsResponse> => {
+  try {
+    const response = await axiosInstance.post(
+      '/assistantManagerTasks/logs/generate-preview',
+      {
+        startDate: params.startDate,
+        endDate: params.endDate,
+        templateId: params.templateId ?? null,
+      },
+      { withCredentials: true },
+    );
+    const data = extractEnvelopeData<Partial<PreviewAmTaskLogsResponse>>(response.data);
+    const templates = Array.isArray(data?.templates) ? (data?.templates ?? []) : [];
+    const templateId =
+      data && typeof data.templateId === 'number' ? data.templateId : params.templateId ?? null;
+    return {
+      startDate:
+        typeof data?.startDate === 'string' ? data.startDate : params.startDate,
+      endDate: typeof data?.endDate === 'string' ? data.endDate : params.endDate,
+      templateId,
+      assignmentCount:
+        typeof data?.assignmentCount === 'number' ? data.assignmentCount : 0,
+      expectedLogCount:
+        typeof data?.expectedLogCount === 'number' ? data.expectedLogCount : 0,
+      templates: templates.map((template) => ({
+        templateId:
+          typeof template?.templateId === 'number' ? template.templateId : 0,
+        templateName:
+          typeof template?.templateName === 'string' ? template.templateName : 'Unknown template',
+        cadence:
+          typeof template?.cadence === 'string' ? template.cadence : 'daily',
+        expectedTaskCount:
+          typeof template?.expectedTaskCount === 'number' ? template.expectedTaskCount : 0,
+        newTaskCount:
+          typeof template?.newTaskCount === 'number' ? template.newTaskCount : 0,
+        existingTaskCount:
+          typeof template?.existingTaskCount === 'number' ? template.existingTaskCount : 0,
+      })),
+    };
+  } catch (error) {
+    throw new Error(
+      extractApiErrorMessage(error, 'Failed to preview weekly tasks'),
+    );
+  }
+};
+
+export const generateAmTaskLogsForRange = async (
+  params: { startDate: string; endDate: string; templateId?: number | null },
+): Promise<GenerateAmTaskLogsResponse> => {
+  try {
+    const response = await axiosInstance.post(
+      '/assistantManagerTasks/logs/generate',
+      {
+        startDate: params.startDate,
+        endDate: params.endDate,
+        templateId: params.templateId ?? null,
+      },
+      { withCredentials: true },
+    );
+    const data = extractEnvelopeData<Partial<GenerateAmTaskLogsResponse>>(response.data);
+    return {
+      startDate:
+        typeof data?.startDate === 'string' ? data.startDate : params.startDate,
+      endDate: typeof data?.endDate === 'string' ? data.endDate : params.endDate,
+      templateId:
+        typeof data?.templateId === 'number' ? data.templateId : params.templateId ?? null,
+      assignmentCount:
+        typeof data?.assignmentCount === 'number' ? data.assignmentCount : 0,
+      expectedLogCount:
+        typeof data?.expectedLogCount === 'number' ? data.expectedLogCount : 0,
+      createdCount:
+        typeof data?.createdCount === 'number' ? data.createdCount : 0,
+      updatedCount:
+        typeof data?.updatedCount === 'number' ? data.updatedCount : 0,
+      unchangedCount:
+        typeof data?.unchangedCount === 'number' ? data.unchangedCount : 0,
+    };
+  } catch (error) {
+    throw new Error(
+      extractApiErrorMessage(error, 'Failed to generate weekly tasks'),
+    );
+  }
+};
+
+export const clearAmTaskLogsForRange = async (
+  params: { startDate: string; endDate: string },
+): Promise<ClearAmTaskLogsResponse> => {
+  try {
+    const response = await axiosInstance.post(
+      '/assistantManagerTasks/logs/clear',
+      {
+        startDate: params.startDate,
+        endDate: params.endDate,
+      },
+      { withCredentials: true },
+    );
+    const data = extractEnvelopeData<Partial<ClearAmTaskLogsResponse>>(response.data);
+    return {
+      startDate:
+        typeof data?.startDate === 'string' ? data.startDate : params.startDate,
+      endDate: typeof data?.endDate === 'string' ? data.endDate : params.endDate,
+      totalCount:
+        typeof data?.totalCount === 'number' ? data.totalCount : 0,
+      deletedCount:
+        typeof data?.deletedCount === 'number' ? data.deletedCount : 0,
+    };
+  } catch (error) {
+    throw new Error(
+      extractApiErrorMessage(error, 'Failed to clear weekly tasks'),
+    );
+  }
+};
+
 export const syncAmTaskLogsWithTemplateConfig = async (
   params: { startDate: string; endDate: string; templateId?: number | null },
 ): Promise<SyncAmTaskLogsWithTemplateConfigResponse> => {

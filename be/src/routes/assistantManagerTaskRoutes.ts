@@ -13,9 +13,13 @@ import {
   updateTaskAssignment,
   deleteTaskAssignment,
   listTaskLogs,
+  generateTaskLogsForRange,
+  previewTaskLogsForRange,
+  clearTaskLogsForRange,
   syncTaskLogsWithCurrentTemplateConfig,
   updateTaskLogStatus,
   createManualTaskLog,
+  downloadTaskLogEvidenceImage,
   updateTaskLogMeta,
   uploadTaskLogEvidenceImage,
 } from '../controllers/assistantManagerTaskController.js';
@@ -42,11 +46,15 @@ router.put('/templates/:id/assignments/:assignmentId', authMiddleware, managerGu
 router.delete('/templates/:id/assignments/:assignmentId', authMiddleware, managerGuard, deleteTaskAssignment);
 
 router.get('/logs', authMiddleware, managerGuard, listTaskLogs);
+router.post('/logs/generate-preview', authMiddleware, managerGuard, previewTaskLogsForRange);
+router.post('/logs/generate', authMiddleware, managerGuard, generateTaskLogsForRange);
+router.post('/logs/clear', authMiddleware, managerGuard, clearTaskLogsForRange);
 router.post('/logs/sync-template-config', authMiddleware, managerGuard, syncTaskLogsWithCurrentTemplateConfig);
 router.put('/logs/:id', authMiddleware, managerGuard, updateTaskLogStatus);
 router.post('/logs/manual', authMiddleware, managerGuard, createManualTaskLog);
 router.patch('/logs/:id/meta', authMiddleware, managerGuard, updateTaskLogMeta);
 router.post('/logs/:id/evidence-files', authMiddleware, managerGuard, upload.single('file'), uploadTaskLogEvidenceImage);
+router.get('/logs/:id/evidence-files/:itemId/download', authMiddleware, managerGuard, downloadTaskLogEvidenceImage);
 
 router.get('/push/config', authMiddleware, managerGuard, getTaskPushConfig);
 router.put('/push/subscription', authMiddleware, managerGuard, upsertTaskPushSubscription);

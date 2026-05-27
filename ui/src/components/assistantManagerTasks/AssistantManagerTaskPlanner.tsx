@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, type WheelEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import {
   Accordion,
@@ -13,10 +13,9 @@ import {
   Checkbox,
   Divider,
   Group,
-  Loader,
   Modal,
+  Popover,
   Paper,
-  Progress,
   ScrollArea,
   SegmentedControl,
   Select,
@@ -33,6 +32,7 @@ import {
 import { DatePickerInput } from '@mantine/dates';
 import { useMediaQuery } from '@mantine/hooks';
 import { useSearchParams } from 'react-router-dom';
+import axiosInstance from '../../utils/axiosInstance';
 import {
   IconArrowDown,
   IconArrowUp,
@@ -41,16 +41,23 @@ import {
   IconBolt,
   IconCalendar,
   IconCheck,
+  IconChevronLeft,
+  IconChevronRight,
+  IconDeviceFloppy,
   IconCircleX,
   IconMessageCircle2,
+  IconMinus,
+  IconInfoCircle,
   IconPaperclip,
   IconPencil,
   IconPlus,
   IconRefresh,
+  IconTrash,
   IconX,
 } from '@tabler/icons-react';
 import {
   bulkCreateAmTaskAssignments,
+  clearAmTaskLogsForRange,
   createAmTaskAssignment,
   createAmTaskTemplate,
   createManualAmTaskLog,
@@ -58,10 +65,14 @@ import {
   fetchAmTaskPushConfig,
   fetchAmTaskLogs,
   fetchAmTaskTemplates,
+  generateAmTaskLogsForRange,
+  previewAmTaskLogsForRange,
   removeAmTaskPushSubscription,
-  sendAmTaskPushTestNotification,
   saveAmTaskPushSubscription,
   syncAmTaskLogsWithTemplateConfig,
+  type ClearAmTaskLogsResponse,
+  type GenerateAmTaskLogsResponse,
+  type PreviewAmTaskLogsResponse,
   type SyncAmTaskLogsWithTemplateConfigResponse,
   uploadAmTaskEvidenceImage,
   updateAmTaskAssignment,
@@ -93,6 +104,7 @@ import type {
 import type { UserType } from '../../types/userTypes/UserType';
 
 type PlannerPriority = 'high' | 'medium' | 'low';
+type PlannerDateWindowMode = 'day' | 'week' | 'custom';
 
 type TemplateFormState = {
   name: string;
@@ -195,6 +207,13 @@ type PlannerDisplayTask = {
   column: number;
   columnCount: number;
   source: AssistantManagerTaskLog;
+};
+
+type TaskEvidenceImagePreview = {
+  src: string;
+  name: string;
+  capturedAt: string | null;
+  downloadHref: string | null;
 };
 
 const defaultTemplateFormState: TemplateFormState = {
@@ -367,6 +386,9 @@ const STATUS_COLORS: Record<AssistantManagerTaskLog['status'], string> = {
   missed: 'red',
   waived: 'yellow',
 };
+
+const EVIDENCE_PREVIEW_MIN_ZOOM = 0.5;
+const EVIDENCE_PREVIEW_MAX_ZOOM = 4;
 
 const EVIDENCE_RULE_PRESETS: EvidenceRulePreset[] = [
   {
@@ -698,6 +720,22 @@ const applyUploadedEvidenceItem = (
   return [...remainingItems, nextItem];
 };
 
+const hasEvidenceItemContent = (item: AssistantManagerTaskEvidenceItem) => {
+  if (item.type === 'link') {
+    return Boolean(item.value?.trim());
+  }
+  return Boolean(item.fileName || item.driveWebViewLink || item.driveFileId || item.fileSize);
+};
+
+const replaceRuleItems = (
+  items: AssistantManagerTaskEvidenceItem[],
+  rule: AssistantManagerTaskEvidenceRule,
+  nextRuleItems: AssistantManagerTaskEvidenceItem[],
+) => {
+  const remainingItems = items.filter((item) => !(item.ruleKey === rule.key && item.type === rule.type));
+  return [...remainingItems, ...nextRuleItems];
+};
+
 const formatEvidenceFileSize = (value?: number | null) => {
   if (!value || value <= 0) {
     return null;
@@ -825,18 +863,19 @@ const normalizeRoleSlug = (value?: string | null): string | null => {
 const PLANNER_START_HOUR = 6;
 const PLANNER_END_HOUR = 22;
 const PLANNER_SLOT_HEIGHT = 56;
-const PLANNER_DAYS = 7;
+const DEFAULT_PLANNER_DAYS = 7;
 const TIME_INPUT_FORMATS = ['HH:mm', 'H:mm', 'HH:mm:ss', 'h:mm A', 'h A'];
 
-const decodeBase64UrlToUint8Array = (value: string): Uint8Array => {
+const decodeBase64UrlToArrayBuffer = (value: string): ArrayBuffer => {
   const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
   const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
   const binary = window.atob(padded);
-  const output = new Uint8Array(binary.length);
+  const buffer = new ArrayBuffer(binary.length);
+  const output = new Uint8Array(buffer);
   for (let index = 0; index < binary.length; index += 1) {
     output[index] = binary.charCodeAt(index);
   }
-  return output;
+  return buffer;
 };
 
 const startOfPlannerWeek = (value: Date | string | dayjs.Dayjs) => {
@@ -862,6 +901,25 @@ const buildLogDetailFormStateFromLog = (log: AssistantManagerTaskLog): LogDetail
     points: meta.points != null ? String(meta.points) : '1',
     evidenceItems: getNormalizedEvidenceItems(meta),
   };
+};
+
+const getLogPoints = (
+  log: AssistantManagerTaskLog,
+  templateMap: Map<number, AssistantManagerTaskTemplate>,
+): number => {
+  const template = templateMap.get(log.templateId);
+  const meta = (log.meta ?? {}) as AssistantManagerTaskLogMeta;
+  const scheduleConfig = (template?.scheduleConfig ?? {}) as Record<string, unknown>;
+  const pointsValue =
+    typeof meta.points === 'number'
+      ? meta.points
+      : Number(meta.points ?? scheduleConfig.points ?? resolveTemplateDefaults(template).points ?? 1);
+
+  if (!Number.isFinite(pointsValue) || pointsValue < 0) {
+    return 1;
+  }
+
+  return pointsValue;
 };
 
 const formatTaskDetailTimeRange = (time: string, durationHours: string) => {
@@ -1208,11 +1266,13 @@ const compareLogsByTime = (
 const buildPlannerTasks = ({
   logs,
   templateMap,
-  weekStart,
+  rangeStart,
+  dayCount,
 }: {
   logs: AssistantManagerTaskLog[];
   templateMap: Map<number, AssistantManagerTaskTemplate>;
-  weekStart: dayjs.Dayjs;
+  rangeStart: dayjs.Dayjs;
+  dayCount: number;
 }) => {
   const baseTasks: PlannerDisplayTask[] = [];
 
@@ -1221,9 +1281,9 @@ const buildPlannerTasks = ({
     const meta = (log.meta ?? {}) as AssistantManagerTaskLogMeta;
     const scheduleConfig = (template?.scheduleConfig ?? {}) as Record<string, unknown>;
     const day = dayjs(log.taskDate);
-    const dayIndex = day.diff(weekStart, 'day');
+    const dayIndex = day.diff(rangeStart, 'day');
 
-    if (dayIndex < 0 || dayIndex >= PLANNER_DAYS) {
+    if (dayIndex < 0 || dayIndex >= dayCount) {
       return;
     }
 
@@ -1295,7 +1355,7 @@ const buildPlannerTasks = ({
     });
   });
 
-  const tasksByDay = Array.from({ length: PLANNER_DAYS }, (_, dayIndex) =>
+  const tasksByDay = Array.from({ length: dayCount }, (_, dayIndex) =>
     baseTasks
       .filter((task) => task.dayIndex === dayIndex)
       .sort((left, right) =>
@@ -1414,48 +1474,165 @@ const getAssignmentScopeMeta = (assignment: AssistantManagerTaskAssignment) => {
 const PlannerStatCard = ({
   label,
   value,
-  hint,
   icon,
   accent,
 }: {
   label: string;
   value: string;
-  hint: string;
   icon: ReactNode;
   accent: string;
 }) => (
   <Paper
     withBorder
     radius="xl"
-    p="md"
+    p="sm"
     style={{
       height: '100%',
       background: accent,
       borderColor: 'rgba(15, 23, 42, 0.08)',
     }}
   >
-    <Group justify="space-between" align="flex-start" wrap="nowrap">
-      <Stack gap={4}>
+    <Box
+      style={{
+        position: 'relative',
+        minHeight: 56,
+        height: '100%',
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingLeft: 44,
+        paddingRight: 44,
+      }}
+    >
+      <Stack gap={2} align="center" justify="center" style={{ width: '100%' }}>
         <Text size="xs" tt="uppercase" fw={700} c="dimmed">
           {label}
         </Text>
-        <Text fz={28} fw={700} lh={1}>
+        <Text fz={24} fw={700} lh={1}>
           {value}
-        </Text>
-        <Text size="sm" c="dimmed">
-          {hint}
         </Text>
       </Stack>
       <ThemeIcon
-        size={42}
+        size={38}
         radius="xl"
         variant="light"
         color="dark"
-        style={{ backgroundColor: 'rgba(15, 23, 42, 0.07)', color: '#0f172a' }}
+        style={{
+          position: 'absolute',
+          top: '50%',
+          right: 0,
+          transform: 'translateY(-50%)',
+          backgroundColor: 'rgba(15, 23, 42, 0.07)',
+          color: '#0f172a',
+        }}
       >
         {icon}
       </ThemeIcon>
-    </Group>
+    </Box>
+  </Paper>
+);
+
+const PlannerCompletionByOwnerCard = ({
+  value,
+}: {
+  value: string;
+}) => (
+  <Paper
+    withBorder
+    radius="xl"
+    p="sm"
+    style={{
+      height: '100%',
+      background: 'linear-gradient(180deg, rgba(254, 226, 226, 0.9) 0%, rgba(255, 255, 255, 1) 100%)',
+      borderColor: 'rgba(15, 23, 42, 0.08)',
+    }}
+  >
+    <Box
+      style={{
+        position: 'relative',
+        minHeight: 56,
+        height: '100%',
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingLeft: 44,
+        paddingRight: 44,
+      }}
+    >
+      <Stack gap={2} align="center" justify="center" style={{ width: '100%' }}>
+        <Text size="xs" tt="uppercase" fw={700} c="dimmed">
+          Progress
+        </Text>
+        <Text fz={24} fw={700} lh={1}>
+          {value}
+        </Text>
+      </Stack>
+      <ThemeIcon
+        size={38}
+        radius="xl"
+        variant="light"
+        color="dark"
+        style={{
+          position: 'absolute',
+          top: '50%',
+          right: 0,
+          transform: 'translateY(-50%)',
+          backgroundColor: 'rgba(15, 23, 42, 0.07)',
+          color: '#0f172a',
+        }}
+      >
+        <IconBolt size={20} />
+      </ThemeIcon>
+    </Box>
+  </Paper>
+);
+
+const PlannerActionsCard = ({
+  onGenerate,
+  onClear,
+  generateLoading,
+  clearLoading,
+}: {
+  onGenerate: () => void;
+  onClear: () => void;
+  generateLoading: boolean;
+  clearLoading: boolean;
+}) => (
+  <Paper
+    withBorder
+    radius="xl"
+    p="sm"
+    style={{
+      height: '100%',
+      background: 'linear-gradient(180deg, rgba(239, 246, 255, 0.88) 0%, rgba(255, 255, 255, 1) 100%)',
+      borderColor: 'rgba(15, 23, 42, 0.08)',
+    }}
+  >
+    <Stack gap="xs" align="center" justify="center" style={{ height: '100%' }} ta="center">
+      <Button
+        variant="light"
+        leftSection={<IconBolt size={16} />}
+        radius="xl"
+        fullWidth
+        loading={generateLoading}
+        onClick={onGenerate}
+      >
+        Generate Week
+      </Button>
+      <Button
+        variant="light"
+        color="red"
+        leftSection={<IconCircleX size={16} />}
+        radius="xl"
+        fullWidth
+        loading={clearLoading}
+        onClick={onClear}
+      >
+        Clear Week
+      </Button>
+    </Stack>
   </Paper>
 );
 
@@ -1849,24 +2026,34 @@ const PlannerTaskCard = ({
 const MobilePlannerDayCard = ({
   date,
   tasks,
+  progressPercent,
   onSelectLog,
 }: {
   date: dayjs.Dayjs;
   tasks: PlannerDisplayTask[];
+  progressPercent: number;
   onSelectLog?: (log: AssistantManagerTaskLog) => void;
 }) => (
   <Paper withBorder radius="xl" p="md">
-    <Stack gap="sm">
-      <Group justify="space-between" align="flex-start">
-        <Stack gap={2}>
-          <Text fw={700}>{date.format('dddd')}</Text>
-          <Text size="sm" c="dimmed">
-            {date.format('MMM D')}
-          </Text>
-        </Stack>
-        <Badge variant="outline">
-          {tasks.length} task{tasks.length === 1 ? '' : 's'}
-        </Badge>
+    <Stack gap="xs">
+      <Group gap={8} align="baseline" justify="center" wrap="nowrap">
+        <Text fw={700} lh={1.1}>
+          {date.format('dddd')}
+        </Text>
+        <Text size="sm" c="dimmed" lh={1.1}>
+          {date.format('MMM D')}
+        </Text>
+      </Group>
+      <Group align="center" wrap="nowrap">
+        <Box style={{ flex: 1 }} />
+        <Text fw={800} size="lg" ta="center" style={{ flex: 1, lineHeight: 1 }}>
+          {progressPercent}%
+        </Text>
+        <Group justify="flex-end" style={{ flex: 1 }}>
+          <Badge variant="outline">
+            {tasks.length} task{tasks.length === 1 ? '' : 's'}
+          </Badge>
+        </Group>
       </Group>
 
       {tasks.length > 0 ? (
@@ -1940,10 +2127,12 @@ const MobilePlannerDayCard = ({
 const DesktopOwnerGroupedDayColumn = ({
   date,
   tasks,
+  progressPercent,
   onSelectLog,
 }: {
   date: dayjs.Dayjs;
   tasks: PlannerDisplayTask[];
+  progressPercent: number;
   onSelectLog?: (log: AssistantManagerTaskLog) => void;
 }) => {
   const groupedTasks = tasks.reduce<Map<string, PlannerDisplayTask[]>>((map, task) => {
@@ -1964,17 +2153,25 @@ const DesktopOwnerGroupedDayColumn = ({
 
   return (
     <Paper withBorder radius="xl" p="md" style={{ minWidth: 280, background: '#ffffff' }}>
-      <Stack gap="md">
-        <Group justify="space-between" align="flex-start">
-          <Stack gap={2}>
-            <Text fw={700}>{date.format('dddd')}</Text>
-            <Text size="sm" c="dimmed">
-              {date.format('MMM D')}
-            </Text>
-          </Stack>
-          <Badge variant="outline">
-            {tasks.length} task{tasks.length === 1 ? '' : 's'}
-          </Badge>
+      <Stack gap="sm">
+        <Group gap={8} align="baseline" justify="center" wrap="nowrap">
+          <Text fw={700} lh={1.1}>
+            {date.format('dddd')}
+          </Text>
+          <Text size="sm" c="dimmed" lh={1.1}>
+            {date.format('MMM D')}
+          </Text>
+        </Group>
+        <Group align="center" wrap="nowrap">
+          <Box style={{ flex: 1 }} />
+          <Text fw={800} size="lg" ta="center" style={{ flex: 1, lineHeight: 1 }}>
+            {progressPercent}%
+          </Text>
+          <Group justify="flex-end" style={{ flex: 1 }}>
+            <Badge variant="outline">
+              {tasks.length} task{tasks.length === 1 ? '' : 's'}
+            </Badge>
+          </Group>
         </Group>
 
         {ownerGroups.length > 0 ? (
@@ -2073,15 +2270,198 @@ const DesktopOwnerGroupedDayColumn = ({
   );
 };
 
+const DayTaskBucketsBoard = ({
+  logs,
+  templates,
+  onSelectLog,
+}: {
+  logs: AssistantManagerTaskLog[];
+  templates: AssistantManagerTaskTemplate[];
+  onSelectLog?: (log: AssistantManagerTaskLog) => void;
+}) => {
+  const templateMap = useMemo(
+    () => new Map(templates.map((template) => [template.id, template])),
+    [templates],
+  );
+
+  const buckets = useMemo(() => {
+    const pending: AssistantManagerTaskLog[] = [];
+    const completed: AssistantManagerTaskLog[] = [];
+    const missed: AssistantManagerTaskLog[] = [];
+
+    logs.forEach((log) => {
+      if (log.status === 'pending') {
+        pending.push(log);
+        return;
+      }
+      if (log.status === 'completed') {
+        completed.push(log);
+        return;
+      }
+      missed.push(log);
+    });
+
+    const sortByTime = (left: AssistantManagerTaskLog, right: AssistantManagerTaskLog) =>
+      compareLogsByTime(left, right, templateMap);
+
+    return {
+      pending: pending.sort(sortByTime),
+      completed: completed.sort(sortByTime),
+      missed: missed.sort(sortByTime),
+    };
+  }, [logs, templateMap]);
+
+  const renderBucket = (
+    title: string,
+    color: string,
+    headerBackground: string,
+    entries: AssistantManagerTaskLog[],
+    emptyText: string,
+    showCount: boolean,
+  ) => (
+    <Paper
+      withBorder
+      radius="xl"
+      style={{ height: '100%', overflow: 'hidden', borderColor: 'rgba(15, 23, 42, 0.08)' }}
+    >
+      <Stack gap={0} style={{ height: '100%' }}>
+        <Box
+          px="md"
+          py="sm"
+          style={{
+            background: headerBackground,
+            borderBottom: '1px solid rgba(15, 23, 42, 0.08)',
+          }}
+        >
+          <Group justify="center" align="center" wrap="wrap">
+            <Text fw={700} ta="center">
+              {title}
+            </Text>
+            {showCount && (
+              <Badge color={color} variant="light">
+                {entries.length}
+              </Badge>
+            )}
+          </Group>
+        </Box>
+
+        <Box p="md" pt="sm" style={{ flex: 1 }}>
+          {entries.length === 0 ? (
+            <Center style={{ height: '100%' }}>
+              <Text size="sm" c="dimmed">
+                {emptyText}
+              </Text>
+            </Center>
+          ) : (
+            <Stack gap="xs">
+              {entries.map((log) => {
+                const owner = log.userName ?? `User #${log.userId}`;
+                const template = templateMap.get(log.templateId);
+                const scheduleConfig = (template?.scheduleConfig ?? {}) as Record<string, unknown>;
+                const meta = (log.meta ?? {}) as AssistantManagerTaskLogMeta;
+                const priority = normalizePriority(meta.priority ?? scheduleConfig.priority);
+                const startHour = getLogStartHour(log, templateMap);
+                const durationValue =
+                  typeof meta.durationHours === 'number'
+                    ? meta.durationHours
+                    : Number(meta.durationHours ?? scheduleConfig.durationHours ?? 1);
+                const durationHours =
+                  Number.isFinite(durationValue) && durationValue > 0 ? durationValue : 1;
+                const startHourInt = Math.floor(startHour);
+                const startMinutes = Math.round((startHour - startHourInt) * 60);
+                const startDateTime = dayjs()
+                  .startOf('day')
+                  .hour(startHourInt)
+                  .minute(startMinutes);
+                const startTime = startDateTime.format('h:mm A');
+                const endTime = startDateTime
+                  .add(Math.round(durationHours * 60), 'minute')
+                  .format('h:mm A');
+
+                return (
+                  <Paper
+                    key={log.id}
+                    withBorder
+                    radius="md"
+                    p="sm"
+                    onClick={onSelectLog ? () => onSelectLog(log) : undefined}
+                    style={{
+                      cursor: onSelectLog ? 'pointer' : 'default',
+                      borderColor: 'rgba(15, 23, 42, 0.08)',
+                    }}
+                  >
+                    <Stack gap={4}>
+                      <Group justify="space-between" align="flex-start" wrap="nowrap">
+                        <Text fw={600} size="sm" lineClamp={2} style={{ flex: 1 }}>
+                          {log.templateName ?? `Template #${log.templateId}`}
+                        </Text>
+                        <Badge size="xs" color={STATUS_COLORS[log.status]} variant="light">
+                          {log.status}
+                        </Badge>
+                      </Group>
+                      <Group gap={6} wrap="wrap">
+                        <Badge size="xs" variant="outline">
+                          {`${startTime} - ${endTime}`}
+                        </Badge>
+                        <Badge size="xs" color={PRIORITY_META[priority].color} variant="light">
+                          {PRIORITY_META[priority].label}
+                        </Badge>
+                        <Text size="xs" c="dimmed">
+                          {owner}
+                        </Text>
+                      </Group>
+                    </Stack>
+                  </Paper>
+                );
+              })}
+            </Stack>
+          )}
+        </Box>
+      </Stack>
+    </Paper>
+  );
+
+  return (
+    <SimpleGrid cols={{ base: 1, md: 3 }} spacing="md">
+      {renderBucket(
+        'Pending Tasks',
+        'blue',
+        'linear-gradient(180deg, rgba(219, 234, 254, 0.9) 0%, rgba(255, 255, 255, 0.8) 100%)',
+        buckets.pending,
+        'No pending tasks',
+        false,
+      )}
+      {renderBucket(
+        'Completed Tasks',
+        'teal',
+        'linear-gradient(180deg, rgba(209, 250, 229, 0.9) 0%, rgba(255, 255, 255, 0.8) 100%)',
+        buckets.completed,
+        'No completed tasks',
+        false,
+      )}
+      {renderBucket(
+        'Missed / Not Completed',
+        'red',
+        'linear-gradient(180deg, rgba(254, 226, 226, 0.92) 0%, rgba(255, 255, 255, 0.82) 100%)',
+        buckets.missed,
+        'No missed tasks',
+        true,
+      )}
+    </SimpleGrid>
+  );
+};
+
 const WeeklyTaskPlannerBoard = ({
   logs,
   templates,
   rangeStart,
+  rangeEnd,
   onSelectLog,
 }: {
   logs: AssistantManagerTaskLog[];
   templates: AssistantManagerTaskTemplate[];
   rangeStart: Date | null;
+  rangeEnd: Date | null;
   onSelectLog?: (log: AssistantManagerTaskLog) => void;
 }) => {
   const theme = useMantineTheme();
@@ -2090,31 +2470,64 @@ const WeeklyTaskPlannerBoard = ({
     () => new Map(templates.map((template) => [template.id, template])),
     [templates],
   );
-  const weekStart = useMemo(
-    () => startOfPlannerWeek(rangeStart ?? new Date()),
-    [rangeStart],
-  );
+  const visibleRangeStart = useMemo(() => {
+    if (rangeStart) {
+      return dayjs(rangeStart).startOf('day');
+    }
+    return startOfPlannerWeek(new Date());
+  }, [rangeStart]);
+  const visibleDayCount = useMemo(() => {
+    if (!rangeStart || !rangeEnd) {
+      return DEFAULT_PLANNER_DAYS;
+    }
+    const start = dayjs(rangeStart).startOf('day');
+    const end = dayjs(rangeEnd).startOf('day');
+    if (!start.isValid() || !end.isValid() || end.isBefore(start, 'day')) {
+      return DEFAULT_PLANNER_DAYS;
+    }
+    return Math.max(1, end.diff(start, 'day') + 1);
+  }, [rangeEnd, rangeStart]);
   const days = useMemo(
-    () => Array.from({ length: PLANNER_DAYS }, (_, index) => weekStart.add(index, 'day')),
-    [weekStart],
+    () => Array.from({ length: visibleDayCount }, (_, index) => visibleRangeStart.add(index, 'day')),
+    [visibleDayCount, visibleRangeStart],
   );
   const totalGridHeight = (PLANNER_END_HOUR - PLANNER_START_HOUR) * PLANNER_SLOT_HEIGHT;
 
   const plannerTasks = useMemo(
-    () => buildPlannerTasks({ logs, templateMap, weekStart }),
-    [logs, templateMap, weekStart],
+    () => buildPlannerTasks({ logs, templateMap, rangeStart: visibleRangeStart, dayCount: visibleDayCount }),
+    [logs, templateMap, visibleDayCount, visibleRangeStart],
   );
 
   const tasksByDay = useMemo(
     () =>
-      Array.from({ length: PLANNER_DAYS }, (_, dayIndex) =>
+      Array.from({ length: visibleDayCount }, (_, dayIndex) =>
         plannerTasks
           .filter((task) => task.dayIndex === dayIndex)
           .sort((left, right) =>
             left.startHour === right.startHour ? left.id - right.id : left.startHour - right.startHour,
           ),
       ),
-    [plannerTasks],
+    [plannerTasks, visibleDayCount],
+  );
+  const dayProgressByIndex = useMemo(
+    () =>
+      tasksByDay.map((dayTasks) => {
+        const totalPoints = dayTasks.reduce((sum, task) => {
+          const points = Number.isFinite(task.points) && task.points >= 0 ? task.points : 1;
+          return sum + points;
+        }, 0);
+        if (totalPoints <= 0) {
+          return 0;
+        }
+        const completedPoints = dayTasks
+          .filter((task) => task.status === 'completed')
+          .reduce((sum, task) => {
+            const points = Number.isFinite(task.points) && task.points >= 0 ? task.points : 1;
+            return sum + points;
+          }, 0);
+        return Math.round((completedPoints / totalPoints) * 100);
+      }),
+    [tasksByDay],
   );
   const ownerCount = useMemo(
     () => new Set(plannerTasks.map((task) => task.ownerName)).size,
@@ -2129,28 +2542,13 @@ const WeeklyTaskPlannerBoard = ({
   if (isMobile) {
     return (
       <Stack gap="md">
-        <Group justify="space-between" align="flex-start">
-          <Stack gap={2}>
-            <Text fw={700}>Weekly Agenda</Text>
-            <Text size="sm" c="dimmed">
-              Mobile view prioritizes the daily flow and keeps actions readable with one thumb.
-            </Text>
-          </Stack>
-          <Group gap={6} wrap="wrap" justify="flex-end">
-            {(['high', 'medium', 'low'] as PlannerPriority[]).map((priority) => (
-              <Badge key={priority} color={PRIORITY_META[priority].color} variant="light">
-                {PRIORITY_META[priority].label}
-              </Badge>
-            ))}
-          </Group>
-        </Group>
-
         <Stack gap="md">
           {days.map((date, dayIndex) => (
             <MobilePlannerDayCard
               key={date.toString()}
               date={date}
               tasks={tasksByDay[dayIndex]}
+              progressPercent={dayProgressByIndex[dayIndex] ?? 0}
               onSelectLog={onSelectLog}
             />
           ))}
@@ -2162,31 +2560,14 @@ const WeeklyTaskPlannerBoard = ({
   if (shouldUseDesktopAgendaLayout) {
     return (
       <Stack gap="md">
-        <Group justify="space-between" align="flex-start">
-          <Stack gap={2}>
-            <Text fw={700}>Weekly Workload</Text>
-            <Text size="sm" c="dimmed">
-              {ownerCount > 1
-                ? 'Multiple assignees are visible, so tasks are grouped by day and owner instead of being stacked into a single time grid.'
-                : ''}
-            </Text>
-          </Stack>
-          <Group gap="xs">
-            {(['high', 'medium', 'low'] as PlannerPriority[]).map((priority) => (
-              <Badge key={priority} color={PRIORITY_META[priority].color} variant="light">
-                {PRIORITY_META[priority].label}
-              </Badge>
-            ))}
-          </Group>
-        </Group>
-
         <ScrollArea offsetScrollbars type="auto">
-          <Group align="stretch" gap="md" wrap="nowrap" style={{ minWidth: PLANNER_DAYS * 280 }}>
+          <Group align="stretch" gap="md" wrap="nowrap" style={{ minWidth: visibleDayCount * 280 }}>
             {days.map((date, dayIndex) => (
               <DesktopOwnerGroupedDayColumn
                 key={date.toString()}
                 date={date}
                 tasks={tasksByDay[dayIndex]}
+                progressPercent={dayProgressByIndex[dayIndex] ?? 0}
                 onSelectLog={onSelectLog}
               />
             ))}
@@ -2198,39 +2579,31 @@ const WeeklyTaskPlannerBoard = ({
 
   return (
     <Stack gap="md">
-      <Group justify="space-between" align="flex-start">
-        <Stack gap={2}>
-          <Text fw={700}>Weekly Calendar</Text>
-          <Text size="sm" c="dimmed">
-            Calendar view surfaces overlaps, off-shift conflicts, and workload balance across the week.
-          </Text>
-        </Stack>
-        <Group gap="xs">
-          {(['high', 'medium', 'low'] as PlannerPriority[]).map((priority) => (
-            <Badge key={priority} color={PRIORITY_META[priority].color} variant="light">
-              {PRIORITY_META[priority].label}
-            </Badge>
-          ))}
-        </Group>
-      </Group>
-
       <ScrollArea offsetScrollbars type="auto">
-        <Box style={{ minWidth: 1080, border: '1px solid rgba(15, 23, 42, 0.08)', borderRadius: 24, overflow: 'hidden' }}>
+        <Box
+          style={{
+            minWidth: Math.max(1080, 88 + visibleDayCount * 170),
+            border: '1px solid rgba(15, 23, 42, 0.08)',
+            borderRadius: 24,
+            overflow: 'hidden',
+          }}
+        >
           <Box
             style={{
               display: 'grid',
-              gridTemplateColumns: '88px repeat(7, minmax(0, 1fr))',
+              gridTemplateColumns: `88px repeat(${visibleDayCount}, minmax(0, 1fr))`,
               background:
                 'linear-gradient(180deg, rgba(248, 250, 252, 1) 0%, rgba(241, 245, 249, 0.92) 100%)',
               borderBottom: '1px solid rgba(15, 23, 42, 0.08)',
             }}
           >
             <Box />
-            {days.map((date) => (
+            {days.map((date, dayIndex) => (
               <Box key={date.toString()} style={{ padding: '14px 0', textAlign: 'center' }}>
                 <Text size="sm" fw={700}>
                   {date.format('ddd')}
                 </Text>
+                <Text fw={700}>{dayProgressByIndex[dayIndex] ?? 0}%</Text>
                 <Text size="xs" c="dimmed">
                   {date.format('MMM D')}
                 </Text>
@@ -2238,7 +2611,7 @@ const WeeklyTaskPlannerBoard = ({
             ))}
           </Box>
 
-          <Box style={{ display: 'grid', gridTemplateColumns: '88px repeat(7, minmax(0, 1fr))' }}>
+          <Box style={{ display: 'grid', gridTemplateColumns: `88px repeat(${visibleDayCount}, minmax(0, 1fr))` }}>
             <Box
               style={{
                 borderRight: '1px solid rgba(15, 23, 42, 0.08)',
@@ -2311,142 +2684,10 @@ const WeeklyTaskPlannerBoard = ({
   );
 };
 
-const TaskLogRow = ({
-  log,
-  templateMap,
-  canManage,
-  onStatusChange,
-  onSelect,
-}: {
-  log: AssistantManagerTaskLog;
-  templateMap: Map<number, AssistantManagerTaskTemplate>;
-  canManage: boolean;
-  onStatusChange: (
-    log: AssistantManagerTaskLog,
-    status: AssistantManagerTaskLog['status'],
-  ) => void;
-  onSelect: (log: AssistantManagerTaskLog) => void;
-}) => {
-  const template = templateMap.get(log.templateId);
-  const defaults = resolveTemplateDefaults(template);
-  const priority = normalizePriority(log.meta?.priority ?? defaults.priority);
-  const metaTags =
-    Array.isArray(log.meta?.tags) && log.meta.tags.length > 0
-      ? log.meta.tags
-      : defaults.tags;
-  const hasConflict =
-    Boolean(log.meta?.scheduleConflict) ||
-    (log.meta?.requireShift !== false && log.meta?.onShift === false);
-  const scheduleTime = formatTimeValue(
-    typeof log.meta?.time === 'string'
-      ? log.meta.time
-      : typeof log.meta?.shiftTimeStart === 'string'
-        ? log.meta.shiftTimeStart
-        : defaults.time,
-  );
-
-  return (
-    <Paper withBorder radius="lg" p="md" bg="#ffffff">
-      <Stack gap="sm">
-        <Group justify="space-between" align="flex-start" wrap="nowrap">
-          <Stack gap={4} style={{ flex: 1 }}>
-            <Group gap="xs" wrap="wrap">
-              <Text fw={700}>{log.templateName ?? template?.name ?? `Template #${log.templateId}`}</Text>
-              <Badge color={STATUS_COLORS[log.status]} variant="light">
-                {log.status}
-              </Badge>
-              {log.meta?.manual && (
-                <Badge color="grape" variant="light">
-                  Manual
-                </Badge>
-              )}
-              {hasConflict && (
-                <Badge color="red" variant="light">
-                  Needs attention
-                </Badge>
-              )}
-            </Group>
-            <Text size="sm" c="dimmed">
-              {log.userName ?? `User #${log.userId}`}
-              {scheduleTime ? ` - ${scheduleTime}` : ''}
-              {log.meta?.durationHours ? ` - ${log.meta.durationHours}h` : ''}
-            </Text>
-          </Stack>
-          <Badge color={PRIORITY_META[priority].color} variant="outline">
-            {PRIORITY_META[priority].label}
-          </Badge>
-        </Group>
-
-        {log.notes && (
-          <Text size="sm" c="dimmed">
-            {log.notes}
-          </Text>
-        )}
-
-        <Group gap="xs" wrap="wrap">
-          <Badge size="sm" variant="outline" leftSection={<IconBolt size={12} />}>
-            {log.meta?.points ?? defaults.points ?? 1} pts
-          </Badge>
-          {metaTags.slice(0, 4).map((tag) => (
-            <Badge key={`${log.id}-${tag}`} size="sm" variant="outline">
-              {tag}
-            </Badge>
-          ))}
-          {Array.isArray(log.meta?.comments) && (
-            <Badge size="sm" variant="outline" leftSection={<IconMessageCircle2 size={12} />}>
-              {log.meta.comments.length}
-            </Badge>
-          )}
-          {Array.isArray(log.meta?.evidence) && (
-            <Badge size="sm" variant="outline" leftSection={<IconPaperclip size={12} />}>
-              {log.meta.evidence.length}
-            </Badge>
-          )}
-        </Group>
-
-        <Group justify="space-between" gap="sm" wrap="wrap">
-          <Button variant="subtle" onClick={() => onSelect(log)}>
-            Open details
-          </Button>
-          {canManage && (
-            <Group gap="xs" wrap="wrap">
-              <Button
-                size="xs"
-                leftSection={<IconCheck size={14} />}
-                variant={log.status === 'completed' ? 'filled' : 'outline'}
-                onClick={() => onStatusChange(log, 'completed')}
-              >
-                Complete
-              </Button>
-              <Button
-                size="xs"
-                variant={log.status === 'missed' ? 'filled' : 'outline'}
-                color="red"
-                onClick={() => onStatusChange(log, 'missed')}
-              >
-                Missed
-              </Button>
-              <Button
-                size="xs"
-                variant={log.status === 'waived' ? 'filled' : 'outline'}
-                color="yellow"
-                onClick={() => onStatusChange(log, 'waived')}
-              >
-                Waive
-              </Button>
-            </Group>
-          )}
-        </Group>
-      </Stack>
-    </Paper>
-  );
-};
-
 const AssistantManagerTaskPlanner = () => {
   const dispatch = useAppDispatch();
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
-  const isTablet = useMediaQuery(`(max-width: ${theme.breakpoints.lg})`);
   const [searchParams, setSearchParams] = useSearchParams();
 
   const sessionRoleSlug = useAppSelector((state) => state.session.roleSlug);
@@ -2600,10 +2841,42 @@ const AssistantManagerTaskPlanner = () => {
   const [syncExistingTasksTemplate, setSyncExistingTasksTemplate] =
     useState<AssistantManagerTaskTemplate | null>(null);
 
-  const [logDateRange, setLogDateRange] = useState<[Date | null, Date | null]>([
-    new Date(),
-    dayjs().add(6, 'day').toDate(),
-  ]);
+  const getThisWeekRange = useCallback((): [Date, Date] => {
+    const weekStart = startOfPlannerWeek(new Date());
+    const effectiveStart =
+      plannerStartDate && weekStart.isBefore(plannerStartDate, 'day')
+        ? plannerStartDate.clone()
+        : weekStart;
+    return [effectiveStart.toDate(), effectiveStart.add(6, 'day').toDate()];
+  }, [plannerStartDate]);
+  const getTodayRange = useCallback((): [Date, Date] => {
+    const today = dayjs().startOf('day');
+    const effectiveDay =
+      plannerStartDate && today.isBefore(plannerStartDate, 'day')
+        ? plannerStartDate.clone()
+        : today;
+    return [effectiveDay.toDate(), effectiveDay.toDate()];
+  }, [plannerStartDate]);
+  const [logDateWindowMode, setLogDateWindowMode] =
+    useState<PlannerDateWindowMode>(canViewAllTasks ? 'week' : 'day');
+  const [logDateRange, setLogDateRange] = useState<[Date | null, Date | null]>(() => {
+    const [start, end] = canViewAllTasks ? getThisWeekRange() : getTodayRange();
+    return [start, end];
+  });
+  const [generateWeeklyTasksSubmitting, setGenerateWeeklyTasksSubmitting] =
+    useState(false);
+  const [generateWeeklyTasksError, setGenerateWeeklyTasksError] = useState<string | null>(null);
+  const [generateWeeklyTasksSummary, setGenerateWeeklyTasksSummary] =
+    useState<GenerateAmTaskLogsResponse | null>(null);
+  const [generatePreviewModalOpen, setGeneratePreviewModalOpen] = useState(false);
+  const [generatePreviewLoading, setGeneratePreviewLoading] = useState(false);
+  const [generatePreviewError, setGeneratePreviewError] = useState<string | null>(null);
+  const [generatePreviewSummary, setGeneratePreviewSummary] =
+    useState<PreviewAmTaskLogsResponse | null>(null);
+  const [clearWeekSubmitting, setClearWeekSubmitting] = useState(false);
+  const [clearWeekError, setClearWeekError] = useState<string | null>(null);
+  const [clearWeekSummary, setClearWeekSummary] =
+    useState<ClearAmTaskLogsResponse | null>(null);
   const [logScope, setLogScope] = useState<'self' | 'all'>('all');
   const [logFilterStatus, setLogFilterStatus] =
     useState<TaskStatusFilterValue>('all');
@@ -2621,9 +2894,21 @@ const AssistantManagerTaskPlanner = () => {
   const [logDetailFormState, setLogDetailFormState] =
     useState<LogDetailFormState>(defaultLogDetailFormState);
   const [logDetailSubmitting, setLogDetailSubmitting] = useState(false);
+  const [logDetailCompleting, setLogDetailCompleting] = useState(false);
+  const [logDetailReopening, setLogDetailReopening] = useState(false);
   const [logDetailError, setLogDetailError] = useState<string | null>(null);
   const [evidenceUploadingRuleKey, setEvidenceUploadingRuleKey] = useState<string | null>(null);
+  const [evidencePreviewLoadingItemId, setEvidencePreviewLoadingItemId] = useState<string | null>(null);
+  const [activeEvidenceImagePreview, setActiveEvidenceImagePreview] =
+    useState<TaskEvidenceImagePreview | null>(null);
+  const [evidenceImageZoom, setEvidenceImageZoom] = useState(1);
+  const evidencePreviewObjectUrlRef = useRef<string | null>(null);
+  const [evidenceImageThumbs, setEvidenceImageThumbs] = useState<Record<string, string>>({});
+  const [evidenceImageThumbErrors, setEvidenceImageThumbErrors] = useState<Record<string, boolean>>({});
+  const evidenceImageThumbObjectUrlsRef = useRef<Record<string, string>>({});
+  const evidenceImageThumbRequestedRef = useRef<Set<string>>(new Set());
   const [linkInputCounts, setLinkInputCounts] = useState<Record<string, number>>({});
+  const [evidenceRuleEditModes, setEvidenceRuleEditModes] = useState<Record<string, boolean>>({});
   const notificationsSupported = typeof window !== 'undefined' && 'Notification' in window;
   const pushSupported =
     typeof window !== 'undefined' &&
@@ -2640,20 +2925,8 @@ const AssistantManagerTaskPlanner = () => {
   const [pushPublicKey, setPushPublicKey] = useState<string | null>(null);
   const [pushEnabledInBackend, setPushEnabledInBackend] = useState(false);
   const [pushSubscriptionReady, setPushSubscriptionReady] = useState(false);
-  const [pushSyncBusy, setPushSyncBusy] = useState(false);
-  const [pushSyncError, setPushSyncError] = useState<string | null>(null);
-  const [pushTestModalOpen, setPushTestModalOpen] = useState(false);
-  const [pushTestUserId, setPushTestUserId] = useState<string | null>(null);
-  const [pushTestSubmitting, setPushTestSubmitting] = useState(false);
-  const [pushTestError, setPushTestError] = useState<string | null>(null);
-  const [pushTestSuccess, setPushTestSuccess] = useState<string | null>(null);
-  const backendPushConfigured =
-    notificationPermission === 'granted' &&
-    pushSupported &&
-    pushEnabledInBackend &&
-    Boolean(pushPublicKey);
-  const backgroundPushActive = backendPushConfigured && pushSubscriptionReady;
   const notificationTimeoutsRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+  const initializedEvidenceModesLogIdRef = useRef<number | null>(null);
   const [commentDraft, setCommentDraft] = useState('');
   const [commentSubmitting, setCommentSubmitting] = useState(false);
 
@@ -2668,6 +2941,82 @@ const AssistantManagerTaskPlanner = () => {
     () => getTemplateEvidenceRules(selectedLog ? templateMap.get(selectedLog.templateId) : null),
     [selectedLog, templateMap],
   );
+  const selectedLogImageEvidenceItems = useMemo(() => {
+    if (!selectedLog || selectedLogEvidenceRules.length === 0) {
+      return [];
+    }
+
+    const items: AssistantManagerTaskEvidenceItem[] = [];
+    for (const rule of selectedLogEvidenceRules) {
+      if (rule.type !== 'image') {
+        continue;
+      }
+      const ruleItems = getRuleItems(logDetailFormState.evidenceItems, rule).filter((item) =>
+        hasEvidenceItemContent(item),
+      );
+      items.push(...ruleItems);
+    }
+    return items;
+  }, [logDetailFormState.evidenceItems, selectedLog, selectedLogEvidenceRules]);
+  const selectedLogIsCurrentDay = useMemo(() => {
+    if (!selectedLog?.taskDate) {
+      return false;
+    }
+    const taskDay = dayjs(selectedLog.taskDate);
+    return taskDay.isValid() && taskDay.isSame(dayjs(), 'day');
+  }, [selectedLog]);
+  const selectedLogIsPastDay = useMemo(() => {
+    if (!selectedLog?.taskDate) {
+      return false;
+    }
+    const taskDay = dayjs(selectedLog.taskDate);
+    return taskDay.isValid() && taskDay.isBefore(dayjs(), 'day');
+  }, [selectedLog]);
+  const selectedLogEvidenceReadOnly = Boolean(
+    !selectedLog || selectedLog.status === 'completed' || !selectedLogIsCurrentDay,
+  );
+  const selectedLogCanComplete = Boolean(
+    selectedLog && selectedLog.status !== 'completed' && selectedLogIsCurrentDay,
+  );
+  const selectedLogCanReopen = Boolean(
+    selectedLog && selectedLog.status === 'completed' && selectedLogIsCurrentDay,
+  );
+  const selectedLogCompletionLocked = Boolean(
+    selectedLog && selectedLog.status !== 'completed' && selectedLogIsPastDay,
+  );
+  const selectedLogMissingRequiredEvidenceLabels = useMemo(() => {
+    if (!selectedLog || selectedLogEvidenceRules.length === 0) {
+      return [];
+    }
+
+    const missingRules: string[] = [];
+
+    for (const rule of selectedLogEvidenceRules) {
+      const minimumRequiredItems = Math.max(rule.required === false ? 0 : 1, rule.minItems ?? 0);
+      if (minimumRequiredItems <= 0) {
+        continue;
+      }
+
+      const ruleItems = getRuleItems(logDetailFormState.evidenceItems, rule);
+      const validItemCount =
+        rule.type === 'link'
+          ? ruleItems.filter((item) => {
+              const value = item.value?.trim() ?? '';
+              if (!value) {
+                return false;
+              }
+              return validateEvidenceLinkValue(rule, value) == null;
+            }).length
+          : ruleItems.filter((item) => hasEvidenceItemContent(item)).length;
+
+      if (validItemCount < minimumRequiredItems) {
+        missingRules.push(rule.label);
+      }
+    }
+
+    return missingRules;
+  }, [logDetailFormState.evidenceItems, selectedLog, selectedLogEvidenceRules]);
+  const selectedLogRequiredEvidenceSatisfied = selectedLogMissingRequiredEvidenceLabels.length === 0;
   const selectedTemplates = useMemo(
     () => templates.filter((template) => selectedTemplateIds.includes(template.id)),
     [selectedTemplateIds, templates],
@@ -2715,6 +3064,18 @@ const AssistantManagerTaskPlanner = () => {
   }, [plannerStartDate]);
 
   useEffect(() => {
+    if (logDateWindowMode === 'week') {
+      const [start, end] = getThisWeekRange();
+      setLogDateRange([start, end]);
+      return;
+    }
+    if (logDateWindowMode === 'day') {
+      const [start, end] = getTodayRange();
+      setLogDateRange([start, end]);
+    }
+  }, [getThisWeekRange, getTodayRange, logDateWindowMode]);
+
+  useEffect(() => {
     if (!notificationsSupported) {
       return;
     }
@@ -2738,7 +3099,6 @@ const AssistantManagerTaskPlanner = () => {
       setPushPublicKey(null);
       setPushEnabledInBackend(false);
       setPushSubscriptionReady(false);
-      setPushSyncError(null);
       return;
     }
 
@@ -2749,14 +3109,12 @@ const AssistantManagerTaskPlanner = () => {
         if (!config.enabled || !config.publicKey) {
           setPushSubscriptionReady(false);
         }
-        setPushSyncError(null);
       })
       .catch((error) => {
         console.error('Failed to load task push notification config', error);
         setPushEnabledInBackend(false);
         setPushPublicKey(null);
         setPushSubscriptionReady(false);
-        setPushSyncError('Could not load push notification config');
       });
   }, [loggedUserId]);
 
@@ -2780,8 +3138,25 @@ const AssistantManagerTaskPlanner = () => {
         setLogDetailFormState(defaultLogDetailFormState);
         setLogDetailError(null);
         setEvidenceUploadingRuleKey(null);
+        setEvidencePreviewLoadingItemId(null);
         setLinkInputCounts({});
+        setEvidenceRuleEditModes({});
         setCommentDraft('');
+        setActiveEvidenceImagePreview(null);
+        setEvidenceImageZoom(1);
+        setEvidenceImageThumbs({});
+        setEvidenceImageThumbErrors({});
+        evidenceImageThumbRequestedRef.current.clear();
+        Object.values(evidenceImageThumbObjectUrlsRef.current).forEach((url) => {
+          if (url) {
+            URL.revokeObjectURL(url);
+          }
+        });
+        evidenceImageThumbObjectUrlsRef.current = {};
+        if (evidencePreviewObjectUrlRef.current) {
+          URL.revokeObjectURL(evidencePreviewObjectUrlRef.current);
+          evidencePreviewObjectUrlRef.current = null;
+        }
       }
       return;
     }
@@ -2799,10 +3174,176 @@ const AssistantManagerTaskPlanner = () => {
     setLogDetailFormState(buildLogDetailFormStateFromLog(matchingLog));
     setLogDetailError(null);
     setEvidenceUploadingRuleKey(null);
+    setEvidencePreviewLoadingItemId(null);
     setLinkInputCounts({});
+    setEvidenceRuleEditModes({});
     setCommentDraft('');
     setLogDetailModalOpen(true);
+    setActiveEvidenceImagePreview(null);
+    setEvidenceImageZoom(1);
+    setEvidenceImageThumbs({});
+    setEvidenceImageThumbErrors({});
+    evidenceImageThumbRequestedRef.current.clear();
+    Object.values(evidenceImageThumbObjectUrlsRef.current).forEach((url) => {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    });
+    evidenceImageThumbObjectUrlsRef.current = {};
+    if (evidencePreviewObjectUrlRef.current) {
+      URL.revokeObjectURL(evidencePreviewObjectUrlRef.current);
+      evidencePreviewObjectUrlRef.current = null;
+    }
   }, [logDetailModalOpen, logs, requestedTaskId, selectedLog]);
+
+  const selectedLogId = selectedLog?.id ?? null;
+
+  useEffect(() => {
+    if (!selectedLogId || !selectedLog) {
+      initializedEvidenceModesLogIdRef.current = null;
+      setEvidenceRuleEditModes({});
+      return;
+    }
+
+    if (
+      initializedEvidenceModesLogIdRef.current === selectedLogId &&
+      Object.keys(evidenceRuleEditModes).length > 0
+    ) {
+      return;
+    }
+
+    const savedItems = getNormalizedEvidenceItems(selectedLog.meta);
+    const nextModes: Record<string, boolean> = {};
+    for (const rule of selectedLogEvidenceRules) {
+      const hasSavedData = getRuleItems(savedItems, rule).some(hasEvidenceItemContent);
+      nextModes[rule.key] = !hasSavedData;
+    }
+    initializedEvidenceModesLogIdRef.current = selectedLogId;
+    setEvidenceRuleEditModes(nextModes);
+  }, [evidenceRuleEditModes, selectedLog, selectedLogEvidenceRules, selectedLogId]);
+
+  useEffect(
+    () => () => {
+      Object.values(evidenceImageThumbObjectUrlsRef.current).forEach((url) => {
+        if (url) {
+          URL.revokeObjectURL(url);
+        }
+      });
+      evidenceImageThumbObjectUrlsRef.current = {};
+      evidenceImageThumbRequestedRef.current.clear();
+      if (evidencePreviewObjectUrlRef.current) {
+        URL.revokeObjectURL(evidencePreviewObjectUrlRef.current);
+        evidencePreviewObjectUrlRef.current = null;
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const currentIds = new Set(selectedLogImageEvidenceItems.map((item) => item.id));
+
+    setEvidenceImageThumbs((prev) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+      Object.entries(prev).forEach(([itemId, objectUrl]) => {
+        if (currentIds.has(itemId)) {
+          next[itemId] = objectUrl;
+          return;
+        }
+        changed = true;
+        if (objectUrl) {
+          URL.revokeObjectURL(objectUrl);
+        }
+        delete evidenceImageThumbObjectUrlsRef.current[itemId];
+        evidenceImageThumbRequestedRef.current.delete(itemId);
+      });
+      return changed ? next : prev;
+    });
+
+    setEvidenceImageThumbErrors((prev) => {
+      let changed = false;
+      const next: Record<string, boolean> = {};
+      Object.entries(prev).forEach(([itemId, hasError]) => {
+        if (currentIds.has(itemId)) {
+          next[itemId] = hasError;
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [selectedLogImageEvidenceItems]);
+
+  useEffect(() => {
+    if (!selectedLogId || selectedLogImageEvidenceItems.length === 0) {
+      return undefined;
+    }
+
+    let isActive = true;
+    const pendingItems = selectedLogImageEvidenceItems.filter((item) => {
+      if (!item.id) {
+        return false;
+      }
+      if (evidenceImageThumbRequestedRef.current.has(item.id)) {
+        return false;
+      }
+      if (evidenceImageThumbs[item.id] || evidenceImageThumbErrors[item.id]) {
+        return false;
+      }
+      return true;
+    });
+
+    if (pendingItems.length === 0) {
+      return () => {
+        isActive = false;
+      };
+    }
+
+    pendingItems.forEach((item) => {
+      evidenceImageThumbRequestedRef.current.add(item.id);
+      const downloadUrl = `/assistantManagerTasks/logs/${selectedLogId}/evidence-files/${encodeURIComponent(
+        item.id,
+      )}/download`;
+
+      axiosInstance
+        .get(downloadUrl, { responseType: 'blob', withCredentials: true })
+        .then((response) => {
+          if (!isActive) {
+            return;
+          }
+
+          const objectUrl = URL.createObjectURL(response.data);
+
+          setEvidenceImageThumbErrors((prev) => {
+            if (!prev[item.id]) {
+              return prev;
+            }
+            const next = { ...prev };
+            delete next[item.id];
+            return next;
+          });
+
+          setEvidenceImageThumbs((prev) => {
+            const previousObjectUrl = prev[item.id];
+            if (previousObjectUrl && previousObjectUrl !== objectUrl) {
+              URL.revokeObjectURL(previousObjectUrl);
+            }
+            evidenceImageThumbObjectUrlsRef.current[item.id] = objectUrl;
+            return { ...prev, [item.id]: objectUrl };
+          });
+        })
+        .catch(() => {
+          if (!isActive) {
+            return;
+          }
+          setEvidenceImageThumbErrors((prev) => ({ ...prev, [item.id]: true }));
+        });
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, [evidenceImageThumbErrors, evidenceImageThumbs, selectedLogId, selectedLogImageEvidenceItems]);
 
   const handleSectionChange = useCallback(
     (value: string) => {
@@ -2815,6 +3356,71 @@ const AssistantManagerTaskPlanner = () => {
     [canViewAllTasks, searchParams, setSearchParams],
   );
 
+  const handleDateWindowModeChange = useCallback(
+    (value: string) => {
+      const nextMode = (value as PlannerDateWindowMode) ?? 'week';
+      setLogDateWindowMode(nextMode);
+      if (nextMode === 'week') {
+        const [start, end] = getThisWeekRange();
+        setLogDateRange([start, end]);
+        return;
+      }
+      if (nextMode === 'day') {
+        const [start, end] = getTodayRange();
+        setLogDateRange([start, end]);
+      }
+    },
+    [getThisWeekRange, getTodayRange],
+  );
+
+  const handleLogDateRangeChange = useCallback((value: [Date | null, Date | null]) => {
+    setLogDateRange(value);
+    setLogDateWindowMode('custom');
+  }, []);
+
+  const canMoveToPreviousPeriod = useMemo(() => {
+    if (!plannerStartDate) {
+      return true;
+    }
+    const [start] = logDateRange;
+    if (!start) {
+      return false;
+    }
+    return dayjs(start).startOf('day').isAfter(plannerStartDate, 'day');
+  }, [logDateRange, plannerStartDate]);
+
+  const shiftLogDateRange = useCallback(
+    (direction: 'previous' | 'next') => {
+      const [start, end] = logDateRange;
+      if (!start || !end) {
+        return;
+      }
+
+      const currentStart = dayjs(start).startOf('day');
+      const currentEnd = dayjs(end).startOf('day');
+      const customSpanDays = Math.max(1, currentEnd.diff(currentStart, 'day') + 1);
+      const stepDays =
+        logDateWindowMode === 'day'
+          ? 1
+          : logDateWindowMode === 'week'
+            ? 7
+            : customSpanDays;
+      const shift = direction === 'previous' ? -stepDays : stepDays;
+
+      let nextStart = currentStart.add(shift, 'day');
+      let nextEnd = currentEnd.add(shift, 'day');
+
+      if (plannerStartDate && nextStart.isBefore(plannerStartDate, 'day')) {
+        const clampShift = plannerStartDate.diff(nextStart, 'day');
+        nextStart = nextStart.add(clampShift, 'day');
+        nextEnd = nextEnd.add(clampShift, 'day');
+      }
+
+      setLogDateRange([nextStart.toDate(), nextEnd.toDate()]);
+    },
+    [logDateRange, logDateWindowMode, plannerStartDate],
+  );
+
   const syncPushSubscription = useCallback(async () => {
     if (
       !pushSupported ||
@@ -2825,36 +3431,27 @@ const AssistantManagerTaskPlanner = () => {
       setPushSubscriptionReady(false);
       return false;
     }
-
-    setPushSyncBusy(true);
     try {
       const registration = await navigator.serviceWorker.getRegistration();
       if (!registration) {
         setPushSubscriptionReady(false);
-        setPushSyncError(
-          'Background push requires the app service worker (available on installed/production app).',
-        );
         return false;
       }
       let subscription = await registration.pushManager.getSubscription();
       if (!subscription) {
         subscription = await registration.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey: decodeBase64UrlToUint8Array(pushPublicKey),
+          applicationServerKey: decodeBase64UrlToArrayBuffer(pushPublicKey),
         });
       }
 
       await saveAmTaskPushSubscription(subscription.toJSON());
       setPushSubscriptionReady(true);
-      setPushSyncError(null);
       return true;
     } catch (error) {
       console.error('Failed to sync task push subscription', error);
       setPushSubscriptionReady(false);
-      setPushSyncError('Background push subscription failed. Browser permission may be blocked.');
       return false;
-    } finally {
-      setPushSyncBusy(false);
     }
   }, [
     notificationPermission,
@@ -2887,71 +3484,6 @@ const AssistantManagerTaskPlanner = () => {
       setPushSubscriptionReady(false);
     }
   }, [pushSupported]);
-
-  const handleEnableTaskNotifications = useCallback(async () => {
-    if (!notificationsSupported) {
-      return;
-    }
-    try {
-      const permission = await window.Notification.requestPermission();
-      setNotificationPermission(permission);
-      if (permission === 'granted') {
-        await syncPushSubscription();
-      } else if (permission === 'denied') {
-        await removePushSubscription();
-      }
-    } catch (error) {
-      console.error('Failed to request browser notification permission', error);
-    }
-  }, [
-    notificationsSupported,
-    removePushSubscription,
-    syncPushSubscription,
-  ]);
-
-  const openPushTestModal = useCallback(() => {
-    setPushTestUserId((current) => current ?? activeUserOptions[0]?.value ?? null);
-    setPushTestError(null);
-    setPushTestSuccess(null);
-    setPushTestModalOpen(true);
-  }, [activeUserOptions]);
-
-  const closePushTestModal = useCallback(() => {
-    if (pushTestSubmitting) {
-      return;
-    }
-    setPushTestModalOpen(false);
-    setPushTestError(null);
-    setPushTestSuccess(null);
-  }, [pushTestSubmitting]);
-
-  const handleSendPushTestNotification = useCallback(async () => {
-    if (!pushTestUserId) {
-      setPushTestError('Select a user first');
-      return;
-    }
-    const userId = Number(pushTestUserId);
-    if (!Number.isInteger(userId) || userId <= 0) {
-      setPushTestError('Selected user is invalid');
-      return;
-    }
-
-    setPushTestSubmitting(true);
-    setPushTestError(null);
-    setPushTestSuccess(null);
-    try {
-      const response = await sendAmTaskPushTestNotification(userId);
-      if (response.sent) {
-        setPushTestSuccess(`Test notification sent to user #${response.userId}.`);
-      } else {
-        setPushTestError('Push test could not be delivered.');
-      }
-    } catch (error) {
-      setPushTestError(getErrorMessage(error, 'Failed to send test notification'));
-    } finally {
-      setPushTestSubmitting(false);
-    }
-  }, [pushTestUserId]);
 
   useEffect(() => {
     if (notificationPermission !== 'granted') {
@@ -2990,6 +3522,16 @@ const AssistantManagerTaskPlanner = () => {
   useEffect(() => {
     refreshLogs().catch((error) => console.error('Failed to refresh task logs', error));
   }, [refreshLogs]);
+
+  useEffect(() => {
+    setGenerateWeeklyTasksError(null);
+    setGenerateWeeklyTasksSummary(null);
+    setGeneratePreviewError(null);
+    setGeneratePreviewSummary(null);
+    setGeneratePreviewModalOpen(false);
+    setClearWeekError(null);
+    setClearWeekSummary(null);
+  }, [logDateRange]);
 
   useEffect(() => {
     notificationTimeoutsRef.current.forEach((timerId) => {
@@ -3068,7 +3610,6 @@ const AssistantManagerTaskPlanner = () => {
           const notification = new window.Notification(event.title, {
             body: event.body,
             tag: `am-task-${log.id}-${event.type}`,
-            renotify: false,
             requireInteraction: false,
           });
           notification.onclick = () => {
@@ -3741,6 +4282,139 @@ const AssistantManagerTaskPlanner = () => {
     }
   }, [refreshLogs, syncExistingTasksDateRange, syncExistingTasksTemplate?.id]);
 
+  const openGenerateWeeklyTasksPreview = useCallback(async () => {
+    const [startDate, endDate] = logDateRange;
+    if (!startDate || !endDate) {
+      setGeneratePreviewError('Select a start and end date');
+      setGeneratePreviewSummary(null);
+      setGeneratePreviewModalOpen(true);
+      return;
+    }
+
+    const start = dayjs(startDate).startOf('day');
+    const end = dayjs(endDate).endOf('day');
+    if (!start.isValid() || !end.isValid() || end.isBefore(start, 'day')) {
+      setGeneratePreviewError('Choose a valid date range');
+      setGeneratePreviewSummary(null);
+      setGeneratePreviewModalOpen(true);
+      return;
+    }
+
+    setGeneratePreviewModalOpen(true);
+    setGeneratePreviewLoading(true);
+    setGeneratePreviewError(null);
+    setGeneratePreviewSummary(null);
+    setGenerateWeeklyTasksError(null);
+    setClearWeekError(null);
+    setClearWeekSummary(null);
+
+    try {
+      const summary = await previewAmTaskLogsForRange({
+        startDate: start.format('YYYY-MM-DD'),
+        endDate: end.format('YYYY-MM-DD'),
+      });
+      setGeneratePreviewSummary(summary);
+    } catch (error) {
+      setGeneratePreviewError(
+        getErrorMessage(error, 'Failed to preview weekly tasks'),
+      );
+      setGeneratePreviewSummary(null);
+    } finally {
+      setGeneratePreviewLoading(false);
+    }
+  }, [logDateRange]);
+
+  const closeGeneratePreviewModal = useCallback(() => {
+    if (generatePreviewLoading || generateWeeklyTasksSubmitting) {
+      return;
+    }
+
+    setGeneratePreviewModalOpen(false);
+    setGeneratePreviewError(null);
+  }, [generatePreviewLoading, generateWeeklyTasksSubmitting]);
+
+  const handleGenerateWeeklyTasks = useCallback(async () => {
+    const [startDate, endDate] = logDateRange;
+    if (!startDate || !endDate) {
+      setGeneratePreviewError('Select a start and end date');
+      return;
+    }
+
+    const start = dayjs(startDate).startOf('day');
+    const end = dayjs(endDate).endOf('day');
+    if (!start.isValid() || !end.isValid() || end.isBefore(start, 'day')) {
+      setGeneratePreviewError('Choose a valid date range');
+      return;
+    }
+
+    setGenerateWeeklyTasksSubmitting(true);
+    setGenerateWeeklyTasksError(null);
+    setGeneratePreviewError(null);
+
+    try {
+      const summary = await generateAmTaskLogsForRange({
+        startDate: start.format('YYYY-MM-DD'),
+        endDate: end.format('YYYY-MM-DD'),
+      });
+      setGenerateWeeklyTasksSummary(summary);
+      setGeneratePreviewModalOpen(false);
+      await refreshLogs();
+    } catch (error) {
+      setGenerateWeeklyTasksError(
+        getErrorMessage(error, 'Failed to generate weekly tasks'),
+      );
+      setGeneratePreviewError(
+        getErrorMessage(error, 'Failed to generate weekly tasks'),
+      );
+      setGenerateWeeklyTasksSummary(null);
+    } finally {
+      setGenerateWeeklyTasksSubmitting(false);
+    }
+  }, [logDateRange, refreshLogs]);
+
+  const handleClearWeek = useCallback(async () => {
+    const [startDate, endDate] = logDateRange;
+    if (!startDate || !endDate) {
+      setClearWeekError('Select a start and end date');
+      setClearWeekSummary(null);
+      return;
+    }
+
+    const start = dayjs(startDate).startOf('day');
+    const end = dayjs(endDate).endOf('day');
+    if (!start.isValid() || !end.isValid() || end.isBefore(start, 'day')) {
+      setClearWeekError('Choose a valid date range');
+      setClearWeekSummary(null);
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Clear all task logs from ${start.format('MMM D, YYYY')} to ${end.format('MMM D, YYYY')}? This removes generated, manual, completed, and pending tasks in the selected window.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setClearWeekSubmitting(true);
+    setClearWeekError(null);
+    setGenerateWeeklyTasksError(null);
+
+    try {
+      const summary = await clearAmTaskLogsForRange({
+        startDate: start.format('YYYY-MM-DD'),
+        endDate: end.format('YYYY-MM-DD'),
+      });
+      setClearWeekSummary(summary);
+      setGenerateWeeklyTasksSummary(null);
+      await refreshLogs();
+    } catch (error) {
+      setClearWeekError(getErrorMessage(error, 'Failed to clear weekly tasks'));
+      setClearWeekSummary(null);
+    } finally {
+      setClearWeekSubmitting(false);
+    }
+  }, [logDateRange, refreshLogs]);
+
   const handleAssignmentDateChange = useCallback(
     (key: 'effectiveStart' | 'effectiveEnd', date: Date | null) => {
       setAssignmentFormState((prev) => ({
@@ -3765,18 +4439,6 @@ const AssistantManagerTaskPlanner = () => {
       }
     },
     [dispatch],
-  );
-
-  const handleLogStatusChange = useCallback(
-    async (log: AssistantManagerTaskLog, status: AssistantManagerTaskLog['status']) => {
-      try {
-        await dispatch(updateAmTaskLogStatus({ logId: log.id, payload: { status } })).unwrap();
-        await refreshLogs();
-      } catch (error) {
-        console.error('Failed to update log', error);
-      }
-    },
-    [dispatch, refreshLogs],
   );
 
   const openManualModal = useCallback(() => {
@@ -3887,6 +4549,16 @@ const AssistantManagerTaskPlanner = () => {
     setSearchParams(nextParams, { replace: false });
   }, [searchParams, setSearchParams]);
 
+  const handleCloseEvidenceImagePreview = useCallback(() => {
+    setActiveEvidenceImagePreview(null);
+    setEvidenceImageZoom(1);
+    setEvidencePreviewLoadingItemId(null);
+    if (evidencePreviewObjectUrlRef.current) {
+      URL.revokeObjectURL(evidencePreviewObjectUrlRef.current);
+      evidencePreviewObjectUrlRef.current = null;
+    }
+  }, []);
+
   const closeLogDetailModal = useCallback(() => {
     if (logDetailSubmitting || commentSubmitting) {
       return;
@@ -3901,8 +4573,10 @@ const AssistantManagerTaskPlanner = () => {
     setLogDetailError(null);
     setEvidenceUploadingRuleKey(null);
     setLinkInputCounts({});
+    setEvidenceRuleEditModes({});
     setCommentDraft('');
-  }, [commentSubmitting, logDetailSubmitting, searchParams, setSearchParams]);
+    handleCloseEvidenceImagePreview();
+  }, [commentSubmitting, handleCloseEvidenceImagePreview, logDetailSubmitting, searchParams, setSearchParams]);
 
   const handleEvidenceRuleDraftChange = useCallback(
     (
@@ -4025,6 +4699,10 @@ const AssistantManagerTaskPlanner = () => {
                 }
               : prev,
           );
+          setEvidenceRuleEditModes((prev) => ({
+            ...prev,
+            [rule.key]: false,
+          }));
         }
 
         await refreshLogs();
@@ -4047,6 +4725,7 @@ const AssistantManagerTaskPlanner = () => {
     };
 
     setLogDetailSubmitting(true);
+    setLogDetailCompleting(true);
     setLogDetailError(null);
 
     try {
@@ -4070,12 +4749,248 @@ const AssistantManagerTaskPlanner = () => {
         setLogDetailFormState(buildLogDetailFormStateFromLog(completedLog));
       }
       await refreshLogs();
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('task');
+      setSearchParams(nextParams, { replace: false });
+      setLogDetailModalOpen(false);
+      setSelectedLog(null);
+      setLogDetailFormState(defaultLogDetailFormState);
+      setLogDetailError(null);
+      setEvidenceUploadingRuleKey(null);
+      setLinkInputCounts({});
+      setEvidenceRuleEditModes({});
+      setCommentDraft('');
     } catch (error) {
       setLogDetailError(getErrorMessage(error, 'Failed to update task'));
     } finally {
+      setLogDetailCompleting(false);
       setLogDetailSubmitting(false);
     }
-  }, [dispatch, logDetailFormState.evidenceItems, refreshLogs, selectedLog]);
+  }, [dispatch, logDetailFormState.evidenceItems, refreshLogs, searchParams, selectedLog, setSearchParams]);
+
+  const handleLogDetailReopen = useCallback(async () => {
+    if (!selectedLog || !selectedLogCanReopen) {
+      return;
+    }
+
+    setLogDetailSubmitting(true);
+    setLogDetailReopening(true);
+    setLogDetailError(null);
+
+    try {
+      const statusResponse = (await dispatch(
+        updateAmTaskLogStatus({ logId: selectedLog.id, payload: { status: 'pending' } }),
+      ).unwrap()) as ServerResponse<AssistantManagerTaskLog>;
+      const reopenedLog = (statusResponse?.[0]?.data as AssistantManagerTaskLog[] | undefined)?.[0];
+
+      if (reopenedLog) {
+        setSelectedLog(reopenedLog);
+        setLogDetailFormState(buildLogDetailFormStateFromLog(reopenedLog));
+      }
+
+      await refreshLogs();
+    } catch (error) {
+      setLogDetailError(getErrorMessage(error, 'Failed to reopen task'));
+    } finally {
+      setLogDetailReopening(false);
+      setLogDetailSubmitting(false);
+    }
+  }, [dispatch, refreshLogs, selectedLog, selectedLogCanReopen]);
+
+  const handleLogEvidenceSaveRule = useCallback(async (rule: AssistantManagerTaskEvidenceRule) => {
+    if (!selectedLog || selectedLogEvidenceReadOnly) {
+      return;
+    }
+
+    const savedItems = getNormalizedEvidenceItems(selectedLog.meta);
+    const currentRuleItems = getRuleItems(logDetailFormState.evidenceItems, rule);
+    const payload: TaskLogMetaUpdatePayload = {
+      evidenceItems: replaceRuleItems(savedItems, rule, currentRuleItems),
+    };
+
+    setLogDetailSubmitting(true);
+    setLogDetailError(null);
+
+    try {
+      const metaResponse = (await dispatch(
+        updateAmTaskLogMeta({ logId: selectedLog.id, payload }),
+      ).unwrap()) as ServerResponse<AssistantManagerTaskLog>;
+      const metaUpdatedLog = (metaResponse?.[0]?.data as AssistantManagerTaskLog[] | undefined)?.[0];
+
+      if (metaUpdatedLog) {
+        setSelectedLog(metaUpdatedLog);
+        setLogDetailFormState(buildLogDetailFormStateFromLog(metaUpdatedLog));
+        const savedRuleItems = getRuleItems(getNormalizedEvidenceItems(metaUpdatedLog.meta), rule);
+        const hasSavedData = savedRuleItems.some(hasEvidenceItemContent);
+        setEvidenceRuleEditModes((prev) => ({
+          ...prev,
+          [rule.key]: !hasSavedData,
+        }));
+      }
+
+      await refreshLogs();
+    } catch (error) {
+      setLogDetailError(getErrorMessage(error, 'Failed to save evidence'));
+    } finally {
+      setLogDetailSubmitting(false);
+    }
+  }, [dispatch, logDetailFormState.evidenceItems, refreshLogs, selectedLog, selectedLogEvidenceReadOnly]);
+
+  const handleEvidenceRuleEditStart = useCallback((ruleKey: string) => {
+    setEvidenceRuleEditModes((prev) => ({
+      ...prev,
+      [ruleKey]: true,
+    }));
+    setLogDetailError(null);
+  }, []);
+
+  const handleEvidenceRuleEditCancel = useCallback(
+    (rule: AssistantManagerTaskEvidenceRule) => {
+      if (!selectedLog) {
+        return;
+      }
+
+      const savedItems = getNormalizedEvidenceItems(selectedLog.meta);
+      const savedRuleItems = getRuleItems(savedItems, rule);
+      const hasSavedData = savedRuleItems.some(hasEvidenceItemContent);
+
+      setLogDetailFormState((prev) => ({
+        ...prev,
+        evidenceItems: replaceRuleItems(prev.evidenceItems, rule, savedRuleItems),
+      }));
+      setEvidenceRuleEditModes((prev) => ({
+        ...prev,
+        [rule.key]: !hasSavedData,
+      }));
+      setLogDetailError(null);
+    },
+    [selectedLog],
+  );
+
+  const handleEvidenceImageDelete = useCallback(
+    async (rule: AssistantManagerTaskEvidenceRule, itemId: string) => {
+      if (!selectedLog || selectedLogEvidenceReadOnly) {
+        return;
+      }
+
+      const savedItems = getNormalizedEvidenceItems(selectedLog.meta);
+      const savedRuleItems = getRuleItems(savedItems, rule).filter((item) => item.id !== itemId);
+      const payload: TaskLogMetaUpdatePayload = {
+        evidenceItems: replaceRuleItems(savedItems, rule, savedRuleItems),
+      };
+
+      setLogDetailSubmitting(true);
+      setLogDetailError(null);
+
+      try {
+        const metaResponse = (await dispatch(
+          updateAmTaskLogMeta({ logId: selectedLog.id, payload }),
+        ).unwrap()) as ServerResponse<AssistantManagerTaskLog>;
+        const metaUpdatedLog = (metaResponse?.[0]?.data as AssistantManagerTaskLog[] | undefined)?.[0];
+
+        if (metaUpdatedLog) {
+          setSelectedLog(metaUpdatedLog);
+          setLogDetailFormState(buildLogDetailFormStateFromLog(metaUpdatedLog));
+          const hasSavedData = getRuleItems(
+            getNormalizedEvidenceItems(metaUpdatedLog.meta),
+            rule,
+          ).some(hasEvidenceItemContent);
+          setEvidenceRuleEditModes((prev) => ({
+            ...prev,
+            [rule.key]: !hasSavedData,
+          }));
+        }
+
+        await refreshLogs();
+      } catch (error) {
+        setLogDetailError(getErrorMessage(error, 'Failed to delete evidence image'));
+      } finally {
+        setLogDetailSubmitting(false);
+      }
+    },
+    [dispatch, refreshLogs, selectedLog, selectedLogEvidenceReadOnly],
+  );
+
+  const handleEvidenceImagePreviewOpen = useCallback(
+    async (item: AssistantManagerTaskEvidenceItem) => {
+      if (!selectedLog) {
+        return;
+      }
+
+      const downloadHref = `/assistantManagerTasks/logs/${selectedLog.id}/evidence-files/${encodeURIComponent(
+        item.id,
+      )}/download`;
+      const cachedThumb = evidenceImageThumbs[item.id];
+      if (cachedThumb) {
+        setActiveEvidenceImagePreview({
+          src: cachedThumb,
+          name: item.fileName ?? 'Uploaded image',
+          capturedAt: item.uploadedAt ?? null,
+          downloadHref: item.driveWebViewLink ?? downloadHref,
+        });
+        setEvidenceImageZoom(1);
+        return;
+      }
+      setEvidencePreviewLoadingItemId(item.id);
+      setLogDetailError(null);
+
+      try {
+        const response = await axiosInstance.get(downloadHref, {
+          responseType: 'blob',
+          withCredentials: true,
+        });
+        const objectUrl = URL.createObjectURL(response.data);
+
+        if (evidencePreviewObjectUrlRef.current) {
+          URL.revokeObjectURL(evidencePreviewObjectUrlRef.current);
+        }
+        evidencePreviewObjectUrlRef.current = objectUrl;
+
+        setActiveEvidenceImagePreview({
+          src: objectUrl,
+          name: item.fileName ?? 'Uploaded image',
+          capturedAt: item.uploadedAt ?? null,
+          downloadHref: item.driveWebViewLink ?? downloadHref,
+        });
+        setEvidenceImageZoom(1);
+      } catch (error) {
+        if (item.driveWebViewLink) {
+          setActiveEvidenceImagePreview({
+            src: item.driveWebViewLink,
+            name: item.fileName ?? 'Uploaded image',
+            capturedAt: item.uploadedAt ?? null,
+            downloadHref: item.driveWebViewLink,
+          });
+          setEvidenceImageZoom(1);
+        } else {
+          setLogDetailError(getErrorMessage(error, 'Unable to open this image preview'));
+        }
+      } finally {
+        setEvidencePreviewLoadingItemId(null);
+      }
+    },
+    [evidenceImageThumbs, selectedLog],
+  );
+
+  const handleEvidenceZoomIn = useCallback(() => {
+    setEvidenceImageZoom((prev) => Math.min(EVIDENCE_PREVIEW_MAX_ZOOM, prev + 0.1));
+  }, []);
+
+  const handleEvidenceZoomOut = useCallback(() => {
+    setEvidenceImageZoom((prev) => Math.max(EVIDENCE_PREVIEW_MIN_ZOOM, prev - 0.1));
+  }, []);
+
+  const handleEvidenceZoomReset = useCallback(() => {
+    setEvidenceImageZoom(1);
+  }, []);
+
+  const handleEvidencePreviewWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const delta = event.deltaY > 0 ? -0.1 : 0.1;
+    setEvidenceImageZoom((prev) =>
+      Math.min(EVIDENCE_PREVIEW_MAX_ZOOM, Math.max(EVIDENCE_PREVIEW_MIN_ZOOM, prev + delta)),
+    );
+  }, []);
 
   const handleCommentSubmit = useCallback(async () => {
     if (!selectedLog || !commentDraft.trim()) {
@@ -4300,14 +5215,11 @@ const AssistantManagerTaskPlanner = () => {
     const completedCount = orderedLogs.filter((log) => log.status === 'completed').length;
     const pendingCount = orderedLogs.filter((log) => log.status === 'pending').length;
     const manualCount = orderedLogs.filter((log) => Boolean(log.meta?.manual)).length;
-    const attentionCount = orderedLogs.filter(
-      (log) =>
-        log.status === 'missed' ||
-        Boolean(log.meta?.scheduleConflict) ||
-        (log.meta?.requireShift !== false && log.meta?.onShift === false),
-    ).length;
-    const completionRate =
-      orderedLogs.length > 0 ? Math.round((completedCount / orderedLogs.length) * 100) : 0;
+    const totalPoints = orderedLogs.reduce((sum, log) => sum + getLogPoints(log, templateMap), 0);
+    const completedPoints = orderedLogs
+      .filter((log) => log.status === 'completed')
+      .reduce((sum, log) => sum + getLogPoints(log, templateMap), 0);
+    const completionRate = totalPoints > 0 ? Math.round((completedPoints / totalPoints) * 100) : 0;
 
     const nextPendingLog =
       orderedLogs.find((log) => log.status === 'pending') ?? null;
@@ -4325,12 +5237,11 @@ const AssistantManagerTaskPlanner = () => {
       completedCount,
       pendingCount,
       manualCount,
-      attentionCount,
       completionRate,
       nextPendingLog,
       busiestDay,
     };
-  }, [groupedLogs, orderedLogs]);
+  }, [groupedLogs, orderedLogs, templateMap]);
 
   const setupSummary = useMemo(() => {
     const shiftAwareTemplates = templates.filter(
@@ -4350,106 +5261,276 @@ const AssistantManagerTaskPlanner = () => {
     };
   }, [assignmentCount, groupedTemplates, templates]);
 
-  const windowLabel = useMemo(() => {
-    const [start, end] = logDateRange;
-    if (!start || !end) {
-      return 'Select a date range';
-    }
-
-    return `${dayjs(start).format('MMM D')} - ${dayjs(end).format('MMM D, YYYY')}`;
-  }, [logDateRange]);
-
-  const nextPendingLabel = useMemo(() => {
-    if (!dashboardSummary.nextPendingLog) {
-      return 'No pending tasks in range';
-    }
-
-    const log = dashboardSummary.nextPendingLog;
-    return `${dayjs(log.taskDate).format('ddd, MMM D')} - ${
-      formatTimeValue(
-        typeof log.meta?.time === 'string'
-          ? log.meta.time
-          : typeof log.meta?.shiftTimeStart === 'string'
-            ? log.meta.shiftTimeStart
-            : resolveTemplateDefaults(templateMap.get(log.templateId)).time,
-      ) ?? 'Flexible time'
-    }`;
-  }, [dashboardSummary.nextPendingLog, templateMap]);
-
   return (
-    <Stack gap="xl">
+    <Stack gap="md">
       <Paper
         withBorder
         radius="xl"
-        p={isMobile ? 'md' : 'xl'}
+        px={isMobile ? 'md' : 'xl'}
+        py="md"
         style={{
           background:
             'radial-gradient(circle at top left, rgba(14, 165, 233, 0.12), transparent 34%), radial-gradient(circle at top right, rgba(245, 158, 11, 0.12), transparent 28%), linear-gradient(180deg, #f8fafc 0%, #ffffff 100%)',
           borderColor: 'rgba(15, 23, 42, 0.08)',
         }}
       >
-        <Stack gap="lg">
+        <Stack gap="sm">
           <Group justify="space-between" align="flex-start" wrap="wrap">
             <Stack gap="md" style={{ flex: 1, minWidth: isMobile ? 0 : 320 }}>
-              <Badge
-                size="lg"
-                radius="xl"
-                variant="light"
-                color="dark"
-                style={{ width: 'fit-content' }}
-              >
-                Operations Planner
-              </Badge>
-              <Stack gap={6}>
-                <Text fz={isMobile ? 28 : 38} fw={800} lh={1.05}>
-                  Assistant Manager Task Planner
-                </Text>
-                <Text size={isMobile ? 'sm' : 'md'} c="dimmed" maw={760}>
-                  A clearer weekly workspace for planning recurring duties, managing templates,
-                  and closing the loop on task execution. The layout is tuned for daily use on
-                  desktop and for one-handed review on mobile.
-                </Text>
-              </Stack>
-
               <Group gap="sm" wrap="wrap" align="center">
-                <SegmentedControl
-                  value={activeSection}
-                  onChange={handleSectionChange}
-                  data={
-                    canViewAllTasks
-                      ? [
+                {canViewAllTasks && (
+                  <Paper
+                    withBorder
+                    radius="xl"
+                    px="xs"
+                    py="xs"
+                    style={{
+                      background:
+                        'linear-gradient(135deg, rgba(255, 255, 255, 0.96) 0%, rgba(241, 245, 249, 0.96) 100%)',
+                      borderColor: 'rgba(15, 23, 42, 0.08)',
+                      boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05)',
+                    }}
+                  >
+                    <Group gap="xs" wrap="wrap" align="center">
+                      <SegmentedControl
+                        value={activeSection}
+                        onChange={handleSectionChange}
+                        data={[
                           { label: 'Dashboard', value: 'dashboard' },
                           { label: 'Setup', value: 'setup' },
-                        ]
-                      : [{ label: 'My Tasks', value: 'dashboard' }]
-                  }
-                  fullWidth={isMobile}
-                  aria-label="Task planner view"
-                />
-                {activeSection === 'dashboard' && (
-                  <Tooltip label="Refresh task logs">
-                    <ActionIcon
-                      size="lg"
-                      radius="xl"
-                      variant="light"
-                      onClick={() => {
-                        refreshLogs().catch((error) =>
-                          console.error('Failed to refresh task logs', error),
-                        );
-                      }}
-                    >
-                      <IconRefresh size={18} />
-                    </ActionIcon>
-                  </Tooltip>
+                        ]}
+                        aria-label="Task planner view"
+                      />
+                      {canCreateManualTasks && activeSection === 'dashboard' && (
+                        <Button
+                          leftSection={<IconPlus size={16} />}
+                          radius="xl"
+                          onClick={openManualModal}
+                        >
+                          New Task
+                        </Button>
+                      )}
+                    </Group>
+                  </Paper>
                 )}
-                {canCreateManualTasks && activeSection === 'dashboard' && (
-                  <Button
-                    leftSection={<IconPlus size={16} />}
+                {activeSection === 'dashboard' && (
+                  <Paper
+                    withBorder
                     radius="xl"
-                    onClick={openManualModal}
+                    px="sm"
+                    py="xs"
+                    style={{
+                      flex: isMobile ? '1 1 100%' : '1 1 720px',
+                      minWidth: 0,
+                      maxWidth: '100%',
+                      background:
+                        'linear-gradient(135deg, rgba(255, 255, 255, 0.96) 0%, rgba(241, 245, 249, 0.96) 100%)',
+                      borderColor: 'rgba(15, 23, 42, 0.08)',
+                      boxShadow: '0 10px 24px rgba(15, 23, 42, 0.05)',
+                    }}
                   >
-                    New Task
-                  </Button>
+                    <Group
+                      gap="xs"
+                      wrap={isMobile ? 'wrap' : 'nowrap'}
+                      align="center"
+                      justify="center"
+                    >
+                      <Group
+                        gap="xs"
+                        wrap={isMobile ? 'wrap' : 'nowrap'}
+                        align="center"
+                        justify="center"
+                        style={{ width: isMobile ? '100%' : 'auto', flexShrink: 0 }}
+                      >
+                        <Group gap="xs" wrap="wrap" align="center" justify="center">
+                          <ThemeIcon
+                            size={30}
+                            radius="xl"
+                            variant="light"
+                            color="blue"
+                            style={{ flexShrink: 0 }}
+                          >
+                            <IconCalendar size={16} />
+                          </ThemeIcon>
+                          <SegmentedControl
+                            size="xs"
+                            value={logDateWindowMode}
+                            onChange={handleDateWindowModeChange}
+                            data={[
+                              { label: 'Day', value: 'day' },
+                              { label: 'Week', value: 'week' },
+                              { label: 'Custom', value: 'custom' },
+                            ]}
+                            aria-label="Date window mode"
+                            styles={{
+                              root: {
+                                flexShrink: 0,
+                              },
+                              label: {
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                              },
+                            }}
+                          />
+                          <Tooltip label="Refresh task logs">
+                            <ActionIcon
+                              size="lg"
+                              radius="xl"
+                              variant="light"
+                              onClick={() => {
+                                refreshLogs().catch((error) =>
+                                  console.error('Failed to refresh task logs', error),
+                                );
+                              }}
+                            >
+                              <IconRefresh size={18} />
+                            </ActionIcon>
+                          </Tooltip>
+                        </Group>
+                        <Group
+                          gap="xs"
+                          wrap="nowrap"
+                          align="center"
+                          justify="center"
+                          style={{ width: isMobile ? '100%' : 'auto' }}
+                        >
+                          <ActionIcon
+                            variant="light"
+                            radius="xl"
+                            size="sm"
+                            onClick={() => shiftLogDateRange('previous')}
+                            disabled={!canMoveToPreviousPeriod}
+                            aria-label="Previous period"
+                          >
+                            <IconChevronLeft size={14} />
+                          </ActionIcon>
+                          <DatePickerInput
+                            type="range"
+                            value={logDateRange}
+                            onChange={handleLogDateRangeChange}
+                            valueFormat={isMobile ? 'MMM D, YY' : 'MMM D, YYYY'}
+                            minDate={plannerStartDate ? plannerStartDate.toDate() : undefined}
+                            placeholder="Select date range"
+                            aria-label="Current window date range"
+                            allowSingleDateInRange
+                            clearable={false}
+                            disabled={logDateWindowMode !== 'custom'}
+                            style={{
+                              flex: isMobile ? '1 1 auto' : '0 0 auto',
+                              width: isMobile
+                                ? 'auto'
+                                : logDateWindowMode === 'day'
+                                  ? 280
+                                  : 330,
+                              minWidth: isMobile ? 210 : 240,
+                              maxWidth: isMobile ? 'none' : 360,
+                            }}
+                            styles={{
+                              input: {
+                                minHeight: 34,
+                                height: 34,
+                                paddingLeft: 12,
+                                paddingRight: 12,
+                                fontSize: isMobile ? '0.8rem' : '0.9rem',
+                                fontWeight: 700,
+                                color: 'var(--mantine-color-dark-7)',
+                                textAlign: 'center',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                background: 'rgba(255, 255, 255, 0.94)',
+                                border: '1px solid rgba(15, 23, 42, 0.08)',
+                                boxShadow: '0 2px 10px rgba(15, 23, 42, 0.04)',
+                                cursor: logDateWindowMode !== 'custom' ? 'default' : 'pointer',
+                              },
+                            }}
+                          />
+                          <ActionIcon
+                            variant="light"
+                            radius="xl"
+                            size="sm"
+                            onClick={() => shiftLogDateRange('next')}
+                            aria-label="Next period"
+                          >
+                            <IconChevronRight size={14} />
+                          </ActionIcon>
+                        </Group>
+                      </Group>
+                      {canViewAllTasks && logDateWindowMode !== 'day' ? (
+                        <Select
+                          data={[
+                            { value: 'all', label: 'All task owners' },
+                            { value: 'self', label: 'My tasks only' },
+                          ]}
+                          value={logScope}
+                          onChange={(value) =>
+                            setLogScope((value as 'self' | 'all') ?? 'all')
+                          }
+                          aria-label="Task scope"
+                        placeholder="Scope"
+                        checkIconPosition="right"
+                        style={{
+                          flex: isMobile ? '1 1 calc(50% - 4px)' : '0 0 180px',
+                          minWidth: isMobile ? 160 : 180,
+                        }}
+                          styles={{
+                            input: {
+                              minHeight: 34,
+                              height: 34,
+                              fontSize: '0.9rem',
+                              fontWeight: 600,
+                              textAlign: 'center',
+                              paddingLeft: 32,
+                              paddingRight: 32,
+                              background: 'rgba(255, 255, 255, 0.94)',
+                              border: '1px solid rgba(15, 23, 42, 0.08)',
+                              boxShadow: '0 2px 10px rgba(15, 23, 42, 0.04)',
+                            },
+                            option: {
+                              display: 'flex',
+                              justifyContent: 'center',
+                              textAlign: 'center',
+                            },
+                          }}
+                        />
+                      ) : null}
+                      {logDateWindowMode !== 'day' && (
+                        <Select
+                          data={STATUS_FILTER_OPTIONS}
+                          value={logFilterStatus}
+                          onChange={(value) =>
+                            setLogFilterStatus((value as TaskStatusFilterValue) ?? 'all')
+                          }
+                          aria-label="Task status"
+                          placeholder="Status"
+                          checkIconPosition="right"
+                          style={{
+                            flex: isMobile ? '1 1 calc(50% - 4px)' : '0 0 170px',
+                            minWidth: isMobile ? 160 : 170,
+                          }}
+                          styles={{
+                            input: {
+                              minHeight: 34,
+                              height: 34,
+                              fontSize: '0.9rem',
+                              fontWeight: 600,
+                              textAlign: 'center',
+                              paddingLeft: 32,
+                              paddingRight: 32,
+                              background: 'rgba(255, 255, 255, 0.94)',
+                              border: '1px solid rgba(15, 23, 42, 0.08)',
+                              boxShadow: '0 2px 10px rgba(15, 23, 42, 0.04)',
+                            },
+                            option: {
+                              display: 'flex',
+                              justifyContent: 'center',
+                              textAlign: 'center',
+                            },
+                          }}
+                        />
+                      )}
+                    </Group>
+                  </Paper>
                 )}
                 {canManage && activeSection === 'setup' && (
                   <Group gap="sm" wrap="wrap">
@@ -4492,387 +5573,92 @@ const AssistantManagerTaskPlanner = () => {
               </Group>
             </Stack>
 
-            <Paper
-              withBorder
-              radius="xl"
-              p="md"
-              style={{
-                width: isMobile ? '100%' : 320,
-                background: 'rgba(255, 255, 255, 0.88)',
-                backdropFilter: 'blur(10px)',
-              }}
-            >
-              <Stack gap="sm">
-                <Text size="xs" tt="uppercase" fw={700} c="dimmed">
-                  Current window
-                </Text>
-                <Text fw={700}>{windowLabel}</Text>
-                <Divider />
-                <Group justify="space-between">
-                  <Text size="sm" c="dimmed">
-                    Visible tasks
-                  </Text>
-                  <Text fw={700}>{dashboardSummary.totalTasks}</Text>
-                </Group>
-                <Group justify="space-between">
-                  <Text size="sm" c="dimmed">
-                    Completion rate
-                  </Text>
-                  <Text fw={700}>{dashboardSummary.completionRate}%</Text>
-                </Group>
-                <Group justify="space-between">
-                  <Text size="sm" c="dimmed">
-                    Next pending
-                  </Text>
-                  <Text size="sm" fw={600} ta="right" maw={180}>
-                    {nextPendingLabel}
-                  </Text>
-                </Group>
-              </Stack>
-            </Paper>
           </Group>
 
-          <SimpleGrid cols={{ base: 1, sm: 2, xl: 4 }} spacing="md">
+          <SimpleGrid
+            cols={{ base: 1, sm: 2, lg: canManage && activeSection === 'dashboard' ? 4 : 3 }}
+            spacing="sm"
+            style={{ width: '100%' }}
+          >
             <PlannerStatCard
-              label="Scheduled"
-              value={String(dashboardSummary.totalTasks)}
-              hint="Tasks in the selected date window."
+              label="Pending"
+              value={String(dashboardSummary.pendingCount)}
               icon={<IconCalendar size={20} />}
-              accent="linear-gradient(180deg, rgba(226, 232, 240, 0.72) 0%, rgba(255, 255, 255, 1) 100%)"
+              accent="linear-gradient(180deg, rgba(219, 234, 254, 0.9) 0%, rgba(255, 255, 255, 0.8) 100%)"
             />
             <PlannerStatCard
               label="Completed"
               value={String(dashboardSummary.completedCount)}
-              hint={`${dashboardSummary.completionRate}% completion across visible work.`}
               icon={<IconCheck size={20} />}
               accent="linear-gradient(180deg, rgba(209, 250, 229, 0.8) 0%, rgba(255, 255, 255, 1) 100%)"
             />
-            <PlannerStatCard
-              label="Needs Attention"
-              value={String(dashboardSummary.attentionCount)}
-              hint="Missed, off-shift, or conflict-heavy items."
-              icon={<IconAlertTriangle size={20} />}
-              accent="linear-gradient(180deg, rgba(254, 226, 226, 0.9) 0%, rgba(255, 255, 255, 1) 100%)"
-            />
-            <PlannerStatCard
-              label="Templates"
-              value={String(setupSummary.templateCount)}
-              hint={`${setupSummary.assignmentCount} active assignment relationships.`}
-              icon={<IconAdjustments size={20} />}
-              accent="linear-gradient(180deg, rgba(219, 234, 254, 0.9) 0%, rgba(255, 255, 255, 1) 100%)"
-            />
+            <PlannerCompletionByOwnerCard value={`${dashboardSummary.completionRate}%`} />
+            {canManage && activeSection === 'dashboard' && (
+              <PlannerActionsCard
+                onGenerate={openGenerateWeeklyTasksPreview}
+                onClear={handleClearWeek}
+                generateLoading={generatePreviewLoading || generateWeeklyTasksSubmitting}
+                clearLoading={clearWeekSubmitting}
+              />
+            )}
           </SimpleGrid>
         </Stack>
       </Paper>
 
       {activeSection === 'dashboard' ? (
-        <Stack gap="lg">
+        <Stack gap="sm">
           {logState.error && (
             <Alert color="red" title="Logs">
               {logState.error}
             </Alert>
           )}
+          {generateWeeklyTasksError && (
+            <Alert color="red" title="Weekly Generation">
+              {generateWeeklyTasksError}
+            </Alert>
+          )}
+          {clearWeekError && (
+            <Alert color="red" title="Clear Week">
+              {clearWeekError}
+            </Alert>
+          )}
+          {generateWeeklyTasksSummary && (
+            <Alert color="teal" title="Weekly Generation">
+              Created {generateWeeklyTasksSummary.createdCount} tasks, updated{' '}
+              {generateWeeklyTasksSummary.updatedCount}, and left{' '}
+              {generateWeeklyTasksSummary.unchangedCount} already in place across{' '}
+              {generateWeeklyTasksSummary.expectedLogCount} expected tasks.
+            </Alert>
+          )}
+          {clearWeekSummary && (
+            <Alert color="orange" title="Clear Week">
+              Removed {clearWeekSummary.deletedCount} task
+              {clearWeekSummary.deletedCount === 1 ? '' : 's'} from the selected window.
+            </Alert>
+          )}
 
-          <Stack gap="md">
-            <SimpleGrid cols={{ base: 1, xl: 2 }} spacing="md">
-              <Paper withBorder radius="xl" p="md">
-                <Stack gap="md">
-                  <Group justify="space-between" align="flex-start">
-                    <Stack gap={2}>
-                      <Text fw={700}>Planning Controls</Text>
-                      <Text size="sm" c="dimmed">
-                        Filters stay grouped so the week view and task stream always match.
-                      </Text>
-                    </Stack>
-                    <ActionIcon
-                      variant="light"
-                      radius="xl"
-                      onClick={() => {
-                        refreshLogs().catch((error) =>
-                          console.error('Failed to refresh task logs', error),
-                        );
-                      }}
-                    >
-                      <IconRefresh size={16} />
-                    </ActionIcon>
-                  </Group>
-
-                  <DatePickerInput
-                    type="range"
-                    label="Date range"
-                    description={
-                      plannerStartDate
-                        ? `Planner history starts on ${plannerStartDate.format('YYYY-MM-DD')}`
-                        : undefined
-                    }
-                    value={logDateRange}
-                    onChange={setLogDateRange}
-                    valueFormat="YYYY-MM-DD"
-                    minDate={plannerStartDate ? plannerStartDate.toDate() : undefined}
-                  />
-
-                  <Paper withBorder radius="lg" p="sm" bg="gray.0">
-                    <Group justify="space-between" align="flex-start" wrap="wrap">
-                      <Stack gap={2}>
-                        <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-                          Task Notifications
-                        </Text>
-                        <Text fw={600}>
-                          {!notificationsSupported
-                            ? 'Not supported on this browser'
-                            : notificationPermission === 'denied'
-                              ? 'Blocked in browser settings'
-                              : backgroundPushActive
-                                ? 'Enabled (background)'
-                                : notificationPermission === 'granted'
-                                  ? 'Enabled (session only)'
-                                  : 'Not enabled'}
-                        </Text>
-                        <Text size="sm" c="dimmed">
-                          {backgroundPushActive
-                            ? 'Background push is active and notifications can fire while the app is closed.'
-                            : backendPushConfigured
-                              ? 'Background push is configured in backend. Finish enabling browser subscription for closed-app notifications.'
-                            : notificationPermission === 'granted'
-                              ? 'Notifications are active while the app is open.'
-                              : 'Uses template reminder minutes plus task start-time notifications for your pending tasks.'}
-                        </Text>
-                        {notificationPermission === 'granted' &&
-                          pushSupported &&
-                          (!pushEnabledInBackend || !pushPublicKey) && (
-                            <Text size="xs" c="orange.7">
-                              Background push is not configured in backend yet (missing VAPID keys).
-                            </Text>
-                          )}
-                        {pushSyncError && (
-                          <Text size="xs" c="red.7">
-                            {pushSyncError}
-                          </Text>
-                        )}
-                      </Stack>
-                      <Group gap="xs" justify="flex-end">
-                        {notificationsSupported &&
-                          (notificationPermission !== 'granted' ||
-                            (backendPushConfigured && !pushSubscriptionReady)) && (
-                          <Button
-                            size="xs"
-                            variant="light"
-                            loading={pushSyncBusy}
-                            onClick={() => {
-                              handleEnableTaskNotifications().catch((error) =>
-                                console.error('Failed to enable task notifications', error),
-                              );
-                            }}
-                          >
-                            {notificationPermission === 'granted'
-                              ? 'Enable Background'
-                              : 'Enable'}
-                          </Button>
-                        )}
-                        {canViewAllTasks && (
-                          <Button
-                            size="xs"
-                            variant="default"
-                            onClick={openPushTestModal}
-                          >
-                            Send Test
-                          </Button>
-                        )}
-                      </Group>
-                    </Group>
-                  </Paper>
-
-                  <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-                    {canViewAllTasks ? (
-                      <Select
-                        label="Scope"
-                        data={[
-                          { value: 'all', label: 'All task owners' },
-                          { value: 'self', label: 'My tasks only' },
-                        ]}
-                        value={logScope}
-                        onChange={(value) =>
-                          setLogScope((value as 'self' | 'all') ?? 'all')
-                        }
-                      />
-                    ) : (
-                      <Paper withBorder radius="lg" p="sm" bg="gray.0">
-                        <Text size="xs" c="dimmed">
-                          Scope
-                        </Text>
-                        <Text fw={600}>My tasks only</Text>
-                        <Text size="sm" c="dimmed">
-                          This view only shows work assigned to your user.
-                        </Text>
-                      </Paper>
-                    )}
-                    <Select
-                      label="Status"
-                      data={STATUS_FILTER_OPTIONS}
-                      value={logFilterStatus}
-                      onChange={(value) =>
-                        setLogFilterStatus((value as TaskStatusFilterValue) ?? 'all')
-                      }
-                    />
-                  </SimpleGrid>
-
-                  <Divider />
-
-                  <Stack gap="xs">
-                    <Group justify="space-between">
-                      <Text size="sm" c="dimmed">
-                        Completion progress
-                      </Text>
-                      <Text size="sm" fw={700}>
-                        {dashboardSummary.completionRate}%
-                      </Text>
-                    </Group>
-                    <Progress value={dashboardSummary.completionRate} radius="xl" size="lg" />
-                    <Text size="sm" c="dimmed">
-                      {dashboardSummary.completedCount} completed, {dashboardSummary.pendingCount}{' '}
-                      still pending.
-                    </Text>
-                  </Stack>
-                </Stack>
-              </Paper>
-
-              <Paper withBorder radius="xl" p="md">
-                <Stack gap="md">
-                  <Text fw={700}>Week Snapshot</Text>
-
-                  <Paper withBorder radius="lg" p="sm" bg="gray.0">
-                    <Text size="xs" c="dimmed">
-                      Next pending
-                    </Text>
-                    <Text fw={600}>
-                      {dashboardSummary.nextPendingLog
-                        ? dashboardSummary.nextPendingLog.templateName ??
-                          `Template #${dashboardSummary.nextPendingLog.templateId}`
-                        : 'Everything is clear'}
-                    </Text>
-                    <Text size="sm" c="dimmed">
-                      {nextPendingLabel}
-                    </Text>
-                  </Paper>
-
-                  <Paper withBorder radius="lg" p="sm" bg="gray.0">
-                    <Text size="xs" c="dimmed">
-                      Busiest day
-                    </Text>
-                    <Text fw={600}>
-                      {dashboardSummary.busiestDay.date
-                        ? dayjs(dashboardSummary.busiestDay.date).format('dddd, MMM D')
-                        : 'No workload'}
-                    </Text>
-                    <Text size="sm" c="dimmed">
-                      {dashboardSummary.busiestDay.count} scheduled task
-                      {dashboardSummary.busiestDay.count === 1 ? '' : 's'}
-                    </Text>
-                  </Paper>
-
-                  <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="sm">
-                    <Paper withBorder radius="lg" p="sm" bg="#faf5ff">
-                      <Text size="xs" c="dimmed">
-                        Manual
-                      </Text>
-                      <Text fw={700}>{dashboardSummary.manualCount}</Text>
-                    </Paper>
-                    <Paper withBorder radius="lg" p="sm" bg="#fff7ed">
-                      <Text size="xs" c="dimmed">
-                        Attention
-                      </Text>
-                      <Text fw={700}>{dashboardSummary.attentionCount}</Text>
-                    </Paper>
-                    <Paper withBorder radius="lg" p="sm" bg="#eff6ff">
-                      <Text size="xs" c="dimmed">
-                        Templates
-                      </Text>
-                      <Text fw={700}>{setupSummary.templateCount}</Text>
-                    </Paper>
-                  </SimpleGrid>
-                </Stack>
-              </Paper>
-            </SimpleGrid>
-
+          <Stack gap="xs">
             <Paper withBorder radius="xl" p={isMobile ? 'md' : 'lg'}>
-              {orderedLogs.length > 0 ? (
-                <WeeklyTaskPlannerBoard
-                  logs={orderedLogs}
-                  templates={templates}
-                  rangeStart={logDateRange[0]}
-                  onSelectLog={handleLogSelect}
-                />
-              ) : (
-                <EmptyPlannerState
-                  title="No tasks in this window"
-                  description="Adjust the date range or status filter, or add a manual task to seed the planner."
-                  action={
-                    canCreateManualTasks ? (
-                      <Button radius="xl" onClick={openManualModal}>
-                        Add manual task
-                      </Button>
-                    ) : undefined
-                  }
-                />
-              )}
+              <Stack gap="md">
+                {logDateWindowMode === 'day' ? (
+                  <DayTaskBucketsBoard
+                    logs={orderedLogs}
+                    templates={templates}
+                    onSelectLog={handleLogSelect}
+                  />
+                ) : (
+                  <WeeklyTaskPlannerBoard
+                    logs={orderedLogs}
+                    templates={templates}
+                    rangeStart={logDateRange[0]}
+                    rangeEnd={logDateRange[1]}
+                    onSelectLog={handleLogSelect}
+                  />
+                )}
+              </Stack>
             </Paper>
           </Stack>
 
-          <Paper withBorder radius="xl" p={isMobile ? 'md' : 'lg'}>
-            <Stack gap="md">
-              <Group justify="space-between" align="flex-start">
-                <Stack gap={2}>
-                  <Text fw={700}>Task Stream</Text>
-                  <Text size="sm" c="dimmed">
-                    Detailed daily list for quick status updates and context checks.
-                  </Text>
-                </Stack>
-                {logState.loading && <Loader size="sm" />}
-              </Group>
-
-              {!logState.loading && groupedLogs.length === 0 ? (
-                <Text size="sm" c="dimmed">
-                  No tasks scheduled for this range.
-                </Text>
-              ) : (
-                <Stack gap="md">
-                  {groupedLogs.map(([date, dailyLogs]) => (
-                    <Paper
-                      key={date}
-                      withBorder
-                      radius="xl"
-                      p="md"
-                      bg="linear-gradient(180deg, #f8fafc 0%, #ffffff 100%)"
-                    >
-                      <Stack gap="md">
-                        <Group justify="space-between" align="center">
-                          <Stack gap={0}>
-                            <Text fw={700}>{dayjs(date).format('dddd, MMM D')}</Text>
-                            <Text size="sm" c="dimmed">
-                              {dailyLogs.length} task{dailyLogs.length === 1 ? '' : 's'}
-                            </Text>
-                          </Stack>
-                          <Badge variant="outline">{dailyLogs.length}</Badge>
-                        </Group>
-                        <Stack gap="sm">
-                          {dailyLogs.map((log) => (
-                            <TaskLogRow
-                              key={log.id}
-                              log={log}
-                              templateMap={templateMap}
-                              canManage={canManage}
-                              onStatusChange={handleLogStatusChange}
-                              onSelect={handleLogSelect}
-                            />
-                          ))}
-                        </Stack>
-                      </Stack>
-                    </Paper>
-                  ))}
-                </Stack>
-              )}
-            </Stack>
-          </Paper>
         </Stack>
       ) : (
         <Stack gap="lg">
@@ -4886,28 +5672,24 @@ const AssistantManagerTaskPlanner = () => {
             <PlannerStatCard
               label="Templates"
               value={String(setupSummary.templateCount)}
-              hint="Recurring work blueprints available to planners."
               icon={<IconAdjustments size={20} />}
               accent="linear-gradient(180deg, rgba(219, 234, 254, 0.9) 0%, rgba(255, 255, 255, 1) 100%)"
             />
             <PlannerStatCard
               label="Assignments"
               value={String(setupSummary.assignmentCount)}
-              hint="How many template-to-user or template-to-role links are active."
               icon={<IconCalendar size={20} />}
               accent="linear-gradient(180deg, rgba(226, 232, 240, 0.72) 0%, rgba(255, 255, 255, 1) 100%)"
             />
             <PlannerStatCard
               label="Groups"
               value={String(setupSummary.subgroupCount)}
-              hint={`${setupSummary.categoryCount} categories organizing the library.`}
               icon={<IconBolt size={20} />}
               accent="linear-gradient(180deg, rgba(224, 231, 255, 0.92) 0%, rgba(255, 255, 255, 1) 100%)"
             />
             <PlannerStatCard
               label="Shift-aware"
               value={String(setupSummary.shiftAwareTemplates)}
-              hint="Templates that respect shift availability."
               icon={<IconAlertTriangle size={20} />}
               accent="linear-gradient(180deg, rgba(255, 237, 213, 0.92) 0%, rgba(255, 255, 255, 1) 100%)"
             />
@@ -6037,54 +6819,122 @@ const AssistantManagerTaskPlanner = () => {
       </Modal>
 
       <Modal
-        opened={pushTestModalOpen}
-        onClose={closePushTestModal}
-        title="Send Test Notification"
+        opened={generatePreviewModalOpen}
+        onClose={closeGeneratePreviewModal}
+        title="Generate Weekly Tasks"
         centered
-        size="sm"
+        size="lg"
+        fullScreen={Boolean(isMobile)}
       >
         <Stack gap="md">
-          <Select
-            label="User"
-            placeholder={activeUsersLoading ? 'Loading active users...' : 'Select user'}
-            searchable
-            clearable={false}
-            data={activeUserOptions}
-            value={pushTestUserId}
-            onChange={(value) => setPushTestUserId(value ?? null)}
-            disabled={activeUsersLoading || pushTestSubmitting}
-            nothingFoundMessage="No active users found"
-          />
+          <Paper withBorder radius="xl" p="md">
+            <Stack gap="xs">
+              <Text size="xs" tt="uppercase" fw={700} c="dimmed">
+                Selected Window
+              </Text>
+              <Text fw={700}>
+                {logDateRange[0] ? dayjs(logDateRange[0]).format('MMM D, YYYY') : 'Start not set'} -{' '}
+                {logDateRange[1] ? dayjs(logDateRange[1]).format('MMM D, YYYY') : 'End not set'}
+              </Text>
+              {generatePreviewSummary && (
+                <Group gap="xs" wrap="wrap">
+                  <Badge variant="light" color="blue">
+                    {generatePreviewSummary.templates.length} template
+                    {generatePreviewSummary.templates.length === 1 ? '' : 's'}
+                  </Badge>
+                  <Badge variant="light" color="teal">
+                    {generatePreviewSummary.expectedLogCount} planned task
+                    {generatePreviewSummary.expectedLogCount === 1 ? '' : 's'}
+                  </Badge>
+                </Group>
+              )}
+            </Stack>
+          </Paper>
 
-          {pushTestError && (
-            <Alert color="red" title="Unable to send test">
-              {pushTestError}
+          {generatePreviewError && (
+            <Alert color="red" title="Preview">
+              {generatePreviewError}
             </Alert>
           )}
-          {pushTestSuccess && (
-            <Alert color="green" title="Test sent">
-              {pushTestSuccess}
-            </Alert>
-          )}
+
+          {generatePreviewLoading ? (
+            <Paper withBorder radius="xl" p="lg">
+              <Text c="dimmed">Loading templates for this week...</Text>
+            </Paper>
+          ) : generatePreviewSummary ? (
+            generatePreviewSummary.templates.length > 0 ? (
+              <Paper withBorder radius="xl" p="md">
+                <Stack gap="md">
+                  <Stack gap={2}>
+                    <Text fw={700}>Templates to Generate</Text>
+                    <Text size="sm" c="dimmed">
+                      Review the templates and counts before creating the week's tasks.
+                    </Text>
+                  </Stack>
+                  <ScrollArea.Autosize mah={360} offsetScrollbars>
+                    <Stack gap="sm">
+                      {generatePreviewSummary.templates.map((template) => (
+                        <Paper
+                          key={`generate-preview-template-${template.templateId}`}
+                          withBorder
+                          radius="lg"
+                          p="sm"
+                          style={{ background: 'rgba(248, 250, 252, 0.72)' }}
+                        >
+                          <Group justify="space-between" align="flex-start" wrap="wrap">
+                            <Stack gap={2} style={{ flex: 1, minWidth: 220 }}>
+                              <Text fw={700}>{template.templateName}</Text>
+                              <Text size="sm" c="dimmed">
+                                {CADENCE_LABELS[template.cadence as AssistantManagerTaskCadence] ?? template.cadence}
+                              </Text>
+                            </Stack>
+                            <Group gap="xs" wrap="wrap" justify="flex-end">
+                              <Badge color="teal" variant="light">
+                                {template.expectedTaskCount} total
+                              </Badge>
+                              <Badge color="blue" variant="light">
+                                {template.newTaskCount} new
+                              </Badge>
+                              <Badge color="gray" variant="light">
+                                {template.existingTaskCount} existing
+                              </Badge>
+                            </Group>
+                          </Group>
+                        </Paper>
+                      ))}
+                    </Stack>
+                  </ScrollArea.Autosize>
+                </Stack>
+              </Paper>
+            ) : (
+              <Paper withBorder radius="xl" p="lg">
+                <Text fw={700}>No templates will generate tasks in this window.</Text>
+                <Text size="sm" c="dimmed">
+                  Check the date range, assignments, and template cadence rules.
+                </Text>
+              </Paper>
+            )
+          ) : null}
 
           <Group justify="flex-end" gap="sm" wrap="wrap">
             <Button
               variant="default"
-              onClick={closePushTestModal}
-              disabled={pushTestSubmitting}
+              onClick={closeGeneratePreviewModal}
+              disabled={generatePreviewLoading || generateWeeklyTasksSubmitting}
             >
               Cancel
             </Button>
             <Button
-              onClick={() => {
-                handleSendPushTestNotification().catch((error) =>
-                  console.error('Failed to send push test notification', error),
-                );
-              }}
-              loading={pushTestSubmitting}
-              disabled={!pushTestUserId || activeUsersLoading}
+              leftSection={<IconBolt size={16} />}
+              onClick={handleGenerateWeeklyTasks}
+              loading={generateWeeklyTasksSubmitting}
+              disabled={
+                generatePreviewLoading ||
+                !generatePreviewSummary ||
+                generatePreviewSummary.templates.length === 0
+              }
             >
-              Send Test Notification
+              Generate
             </Button>
           </Group>
         </Stack>
@@ -6342,7 +7192,7 @@ const AssistantManagerTaskPlanner = () => {
             <Paper withBorder radius="xl" p="lg" bg="gray.0">
               <Stack gap="md">
                 <Group justify="space-between" align="flex-start" wrap="wrap">
-                  <Stack gap={4} align="center" style={{ flex: 1, textAlign: 'center' }}>
+                  <Stack gap={10} align="center" style={{ flex: 1, textAlign: 'center' }}>
                     <Box w="100%" pos="relative">
                       <Group gap="xs" wrap="wrap" justify="center">
                         <Badge color={STATUS_COLORS[selectedLog.status]}>{selectedLog.status}</Badge>
@@ -6435,7 +7285,20 @@ const AssistantManagerTaskPlanner = () => {
             {selectedLogEvidenceRules.length > 0 ? (
               <Stack gap="sm">
                 {selectedLogEvidenceRules.map((rule) => {
+                  const isImageRule = rule.type === 'image';
                   const ruleItems = getRuleItems(logDetailFormState.evidenceItems, rule);
+                  const savedRuleItems = selectedLog
+                    ? getRuleItems(getNormalizedEvidenceItems(selectedLog.meta), rule)
+                    : [];
+                  const hasSavedRuleData = savedRuleItems.some(hasEvidenceItemContent);
+                  const isRuleEditing = selectedLogEvidenceReadOnly
+                    ? false
+                    : (evidenceRuleEditModes[rule.key] ?? !hasSavedRuleData);
+                  const showRuleActions = !selectedLogEvidenceReadOnly && !isImageRule;
+                  const ruleReadOnly =
+                    selectedLogEvidenceReadOnly ||
+                    (isImageRule ? hasSavedRuleData : hasSavedRuleData && !isRuleEditing);
+                  const ruleLockedWithValue = hasSavedRuleData && ruleReadOnly;
                   const minimumInputCount = Math.max(
                     rule.required === false ? 0 : 1,
                     rule.minItems ?? 0,
@@ -6459,96 +7322,264 @@ const AssistantManagerTaskPlanner = () => {
                   if (rule.type === 'link' && (rule.match?.contains?.length ?? 0) > 0) {
                     helperParts.push(`Keywords: ${(rule.match?.contains ?? []).join(', ')}`);
                   }
+                  if (rule.type === 'link' && rule.match?.regex) {
+                    helperParts.push(`Pattern: ${rule.match.regex}`);
+                  }
 
                   return (
-                    <Paper key={rule.key} withBorder radius="lg" p="md">
+                    <Paper
+                      key={rule.key}
+                      withBorder
+                      radius="lg"
+                      p="md"
+                      bg={ruleLockedWithValue ? 'gray.0' : undefined}
+                    >
                       <Stack gap="sm">
-                        <Group justify="space-between" align="flex-start" wrap="wrap">
-                          <Stack gap={4}>
-                            <Group gap="xs" wrap="wrap">
-                              <Text fw={600}>{rule.label}</Text>
-                              <Badge variant="light" color={rule.type === 'link' ? 'blue' : 'grape'}>
-                                {rule.type}
-                              </Badge>
-                              <Badge variant="outline" color={rule.required === false ? 'gray' : 'red'}>
-                                {rule.required === false ? 'Optional' : 'Required'}
-                              </Badge>
-                              {rule.multiple && (
-                                <Badge variant="outline" color="dark">
-                                  Multiple
-                                </Badge>
-                              )}
+                        <Stack gap={4} style={{ width: '100%' }}>
+                          <Box
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: 8,
+                              width: '100%',
+                              position: 'relative',
+                            }}
+                          >
+                            <Group
+                              gap="xs"
+                              wrap="wrap"
+                              style={{
+                                minWidth: 0,
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                                maxWidth: showRuleActions ? 'calc(100% - 88px)' : '100%',
+                              }}
+                            >
+                              <Stack gap={4} align="center" style={{ minWidth: 0 }}>
+                                <Group gap={6} wrap="nowrap" justify="center">
+                                  <Text
+                                    fw={600}
+                                    ta="center"
+                                    style={{
+                                      minWidth: 0,
+                                      whiteSpace: 'nowrap',
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      maxWidth: '100%',
+                                    }}
+                                  >
+                                    {rule.label}
+                                  </Text>
+                                  {helperParts.length > 0 && (
+                                    <Popover width={340} position="bottom" withArrow shadow="md">
+                                      <Popover.Target>
+                                        <ActionIcon
+                                          variant="subtle"
+                                          color="gray"
+                                          size="sm"
+                                          aria-label={`Show evidence hint for ${rule.label}`}
+                                        >
+                                          <IconInfoCircle size={14} />
+                                        </ActionIcon>
+                                      </Popover.Target>
+                                      <Popover.Dropdown>
+                                        <Stack gap={4}>
+                                          {helperParts.map((part) => (
+                                            <Text key={`${rule.key}-${part}`} size="xs" c="dimmed">
+                                              {part}
+                                            </Text>
+                                          ))}
+                                        </Stack>
+                                      </Popover.Dropdown>
+                                    </Popover>
+                                  )}
+                                </Group>
+                                <Group gap={6} wrap="nowrap" justify="center">
+                                  <Badge size="xs" variant="light" color={rule.type === 'link' ? 'blue' : 'grape'}>
+                                    {rule.type}
+                                  </Badge>
+                                  <Badge size="xs" variant="outline" color={rule.required === false ? 'gray' : 'red'}>
+                                    {rule.required === false ? 'Optional' : 'Required'}
+                                  </Badge>
+                                  {rule.multiple && (
+                                    <Badge size="xs" variant="outline" color="dark">
+                                      Multiple
+                                    </Badge>
+                                  )}
+                                </Group>
+                              </Stack>
                             </Group>
-                            {helperParts.length > 0 && (
-                              <Text size="xs" c="dimmed">
-                                {helperParts.join(' | ')}
-                              </Text>
+                            {showRuleActions && (
+                              <Box
+                                style={{
+                                  position: 'absolute',
+                                  right: 0,
+                                  top: '50%',
+                                  transform: 'translateY(-50%)',
+                                }}
+                              >
+                                {!hasSavedRuleData ? (
+                                <Tooltip label="Save evidence">
+                                  <ActionIcon
+                                    variant="light"
+                                    color="blue"
+                                    size="sm"
+                                    aria-label={`Save evidence for ${rule.label}`}
+                                    onClick={() => {
+                                      void handleLogEvidenceSaveRule(rule);
+                                    }}
+                                    disabled={logDetailSubmitting}
+                                  >
+                                    <IconDeviceFloppy size={14} />
+                                  </ActionIcon>
+                                </Tooltip>
+                              ) : isRuleEditing ? (
+                                <Group gap={6} wrap="nowrap">
+                                  <Tooltip label="Save evidence">
+                                    <ActionIcon
+                                      variant="light"
+                                      color="green"
+                                      size="sm"
+                                      aria-label={`Save evidence for ${rule.label}`}
+                                      onClick={() => {
+                                        void handleLogEvidenceSaveRule(rule);
+                                      }}
+                                      disabled={logDetailSubmitting}
+                                    >
+                                      <IconCheck size={14} />
+                                    </ActionIcon>
+                                  </Tooltip>
+                                  <Tooltip label="Cancel editing">
+                                    <ActionIcon
+                                      variant="light"
+                                      color="red"
+                                      size="sm"
+                                      aria-label={`Cancel editing evidence for ${rule.label}`}
+                                      onClick={() => handleEvidenceRuleEditCancel(rule)}
+                                      disabled={logDetailSubmitting}
+                                    >
+                                      <IconX size={14} />
+                                    </ActionIcon>
+                                  </Tooltip>
+                                </Group>
+                              ) : (
+                                <Tooltip label="Edit evidence">
+                                  <ActionIcon
+                                    variant="light"
+                                    color="blue"
+                                    size="sm"
+                                    aria-label={`Edit evidence for ${rule.label}`}
+                                    onClick={() => handleEvidenceRuleEditStart(rule.key)}
+                                    disabled={logDetailSubmitting}
+                                  >
+                                    <IconPencil size={14} />
+                                  </ActionIcon>
+                                </Tooltip>
+                              )}
+                              </Box>
                             )}
-                          </Stack>
-                        </Group>
+                          </Box>
+                        </Stack>
 
                         {rule.type === 'link' ? (
                           <Stack gap="xs">
-                            {Array.from({ length: displayInputCount }).map((_, index) => {
-                              const item = ruleItems[index];
-                              const linkError = item?.value
-                                ? validateEvidenceLinkValue(rule, item.value ?? '')
-                                : null;
-                              const minimumDisplayCount = Math.max(minimumInputCount, 1);
-                              const canRemoveEmptyRow =
-                                !item && displayInputCount > minimumDisplayCount;
+                            {ruleReadOnly ? (
+                              ruleItems.filter((item) => Boolean(item.value?.trim())).length > 0 ? (
+                                ruleItems
+                                  .filter((item) => Boolean(item.value?.trim()))
+                                  .map((item) => (
+                                    <Paper key={item.id} withBorder radius="md" p="sm">
+                                      <Text
+                                        size="sm"
+                                        c="blue"
+                                        style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                                      >
+                                        <a
+                                          href={item.value ?? '#'}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          style={{
+                                            display: 'inline-block',
+                                            maxWidth: '100%',
+                                            overflowWrap: 'anywhere',
+                                            wordBreak: 'break-word',
+                                          }}
+                                        >
+                                          {item.value}
+                                        </a>
+                                      </Text>
+                                    </Paper>
+                                  ))
+                              ) : (
+                                <Text size="sm" c="dimmed" ta="center">
+                                  No links added yet.
+                                </Text>
+                              )
+                            ) : (
+                              <>
+                                {Array.from({ length: displayInputCount }).map((_, index) => {
+                                  const item = ruleItems[index];
+                                  const linkError = item?.value
+                                    ? validateEvidenceLinkValue(rule, item.value ?? '')
+                                    : null;
+                                  const minimumDisplayCount = Math.max(minimumInputCount, 1);
+                                  const canRemoveEmptyRow =
+                                    !item && displayInputCount > minimumDisplayCount;
 
-                              return (
-                                <Group key={`${rule.key}-${index}`} gap="xs" align="flex-end" wrap="nowrap">
-                                  <TextInput
-                                    style={{ flex: 1 }}
-                                    label={displayInputCount > 1 ? `Link ${index + 1}` : undefined}
-                                    placeholder="https://"
-                                    value={item?.value ?? ''}
-                                    error={linkError}
-                                    onChange={(event) =>
-                                      handleLinkEvidenceChange(rule, index, event.currentTarget.value)
-                                    }
-                                  />
-                                  {(rule.multiple && item) || canRemoveEmptyRow ? (
-                                    <ActionIcon
-                                      mb={linkError ? 24 : 0}
-                                      color="red"
-                                      variant="subtle"
-                                      aria-label={`Remove ${rule.label} item ${index + 1}`}
-                                      onClick={() => {
-                                        if (item) {
-                                          handleLinkEvidenceRemove(item.id);
-                                          return;
+                                  return (
+                                    <Group key={`${rule.key}-${index}`} gap="xs" align="flex-end" wrap="nowrap">
+                                      <TextInput
+                                        style={{ flex: 1 }}
+                                        label={displayInputCount > 1 ? `Link ${index + 1}` : undefined}
+                                        placeholder="https://"
+                                        value={item?.value ?? ''}
+                                        error={linkError}
+                                        onChange={(event) =>
+                                          handleLinkEvidenceChange(rule, index, event.currentTarget.value)
                                         }
-                                        setLinkInputCounts((prev) => ({
-                                          ...prev,
-                                          [rule.key]: Math.max(
-                                            minimumDisplayCount,
-                                            (prev[rule.key] ?? displayInputCount) - 1,
-                                          ),
-                                        }));
-                                      }}
+                                      />
+                                      {(rule.multiple && item) || canRemoveEmptyRow ? (
+                                        <ActionIcon
+                                          mb={linkError ? 24 : 0}
+                                          color="red"
+                                          variant="subtle"
+                                          aria-label={`Remove ${rule.label} item ${index + 1}`}
+                                          onClick={() => {
+                                            if (item) {
+                                              handleLinkEvidenceRemove(item.id);
+                                              return;
+                                            }
+                                            setLinkInputCounts((prev) => ({
+                                              ...prev,
+                                              [rule.key]: Math.max(
+                                                minimumDisplayCount,
+                                                (prev[rule.key] ?? displayInputCount) - 1,
+                                              ),
+                                            }));
+                                          }}
+                                        >
+                                          <IconX size={16} />
+                                        </ActionIcon>
+                                      ) : null}
+                                    </Group>
+                                  );
+                                })}
+                                {canAddMoreLinks && (
+                                  <Group justify="center">
+                                    <Button
+                                      variant="default"
+                                      size="xs"
+                                      leftSection={<IconPlus size={14} />}
+                                      onClick={() =>
+                                        handleAddLinkEvidenceInput(rule.key, displayInputCount + 1)
+                                      }
                                     >
-                                      <IconX size={16} />
-                                    </ActionIcon>
-                                  ) : null}
-                                </Group>
-                              );
-                            })}
-                            {canAddMoreLinks && (
-                              <Group justify="center">
-                                <Button
-                                  variant="default"
-                                  size="xs"
-                                  leftSection={<IconPlus size={14} />}
-                                  onClick={() =>
-                                    handleAddLinkEvidenceInput(rule.key, displayInputCount + 1)
-                                  }
-                                >
-                                  Add Link
-                                </Button>
-                              </Group>
+                                      Add Link
+                                    </Button>
+                                  </Group>
+                                )}
+                              </>
                             )}
                           </Stack>
                         ) : (
@@ -6556,8 +7587,59 @@ const AssistantManagerTaskPlanner = () => {
                             {ruleItems.length > 0 ? (
                               ruleItems.map((item) => (
                                 <Paper key={item.id} withBorder radius="md" p="sm">
-                                  <Stack gap={4}>
-                                    <Text size="sm" fw={600}>
+                                  <Stack gap="sm">
+                                    <Box
+                                      style={{
+                                        width: '100%',
+                                        height: 180,
+                                        borderRadius: 8,
+                                        backgroundColor: '#f3f4f6',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        overflow: 'hidden',
+                                        border: '1px solid #d1d5db',
+                                        position: 'relative',
+                                      }}
+                                    >
+                                      {evidenceImageThumbs[item.id] ? (
+                                        <img
+                                          src={evidenceImageThumbs[item.id]}
+                                          alt={item.fileName ?? 'Uploaded image'}
+                                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                        />
+                                      ) : evidenceImageThumbErrors[item.id] ? (
+                                        <Text size="xs" c="dimmed" ta="center" px="md">
+                                          Preview unavailable
+                                        </Text>
+                                      ) : (
+                                        <Text size="xs" c="dimmed">
+                                          Loading preview...
+                                        </Text>
+                                      )}
+                                      {!selectedLogEvidenceReadOnly && (
+                                        <Tooltip label="Delete image">
+                                          <ActionIcon
+                                            variant="filled"
+                                            color="red"
+                                            size="sm"
+                                            aria-label={`Delete image evidence for ${rule.label}`}
+                                            onClick={() => {
+                                              void handleEvidenceImageDelete(rule, item.id);
+                                            }}
+                                            disabled={logDetailSubmitting}
+                                            style={{
+                                              position: 'absolute',
+                                              top: 8,
+                                              right: 8,
+                                            }}
+                                          >
+                                            <IconTrash size={14} />
+                                          </ActionIcon>
+                                        </Tooltip>
+                                      )}
+                                    </Box>
+                                    <Text size="sm" fw={600} style={{ minWidth: 0 }}>
                                       {item.fileName ?? 'Uploaded image'}
                                     </Text>
                                     <Group gap="xs" wrap="wrap">
@@ -6572,44 +7654,46 @@ const AssistantManagerTaskPlanner = () => {
                                         </Badge>
                                       )}
                                     </Group>
-                                    {item.driveWebViewLink && (
-                                      <Text size="sm" c="blue">
-                                        <a
-                                          href={item.driveWebViewLink}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                        >
-                                          Open uploaded image
-                                        </a>
-                                      </Text>
-                                    )}
+                                    <Button
+                                      size="xs"
+                                      variant="default"
+                                      loading={evidencePreviewLoadingItemId === item.id}
+                                      onClick={() => {
+                                        void handleEvidenceImagePreviewOpen(item);
+                                      }}
+                                      disabled={
+                                        !item.driveWebViewLink &&
+                                        !evidenceImageThumbs[item.id] &&
+                                        Boolean(evidenceImageThumbErrors[item.id])
+                                      }
+                                    >
+                                      View Full Size
+                                    </Button>
                                   </Stack>
                                 </Paper>
                               ))
-                            ) : (
-                              <Text size="sm" c="dimmed" ta="center">
-                                No image uploaded yet.
-                              </Text>
+                            ) : null}
+                            {!ruleReadOnly && (
+                              <Group justify="center">
+                                <Button
+                                  component="label"
+                                  variant="default"
+                                  loading={evidenceUploadingRuleKey === rule.key}
+                                >
+                                  {rule.multiple && ruleItems.length > 0 ? 'Upload Another Image' : 'Upload Image'}
+                                  <input
+                                    hidden
+                                    type="file"
+                                    accept="image/*"
+                                    onChange={(event) => {
+                                      const nextFile = event.currentTarget.files?.[0] ?? null;
+                                      void handleEvidenceImageSelected(rule, nextFile);
+                                      event.currentTarget.value = '';
+                                    }}
+                                  />
+                                </Button>
+                              </Group>
                             )}
-                            <Group justify="center">
-                              <Button
-                                component="label"
-                                variant="default"
-                                loading={evidenceUploadingRuleKey === rule.key}
-                              >
-                                {rule.multiple && ruleItems.length > 0 ? 'Upload Another Image' : 'Upload Image'}
-                                <input
-                                  hidden
-                                  type="file"
-                                  accept="image/*"
-                                  onChange={(event) => {
-                                    const nextFile = event.currentTarget.files?.[0] ?? null;
-                                    void handleEvidenceImageSelected(rule, nextFile);
-                                    event.currentTarget.value = '';
-                                  }}
-                                />
-                              </Button>
-                            </Group>
                           </Stack>
                         )}
                       </Stack>
@@ -6628,10 +7712,36 @@ const AssistantManagerTaskPlanner = () => {
               </Alert>
             )}
             <Group justify="center" gap="sm" wrap="wrap">
-              <Button onClick={handleLogDetailSave} loading={logDetailSubmitting}>
-                Complete Task
-              </Button>
+              {selectedLogCanComplete ? (
+                <Button
+                  onClick={handleLogDetailSave}
+                  loading={logDetailCompleting}
+                  disabled={logDetailCompleting || !selectedLogRequiredEvidenceSatisfied}
+                >
+                  Complete Task
+                </Button>
+              ) : selectedLogCanReopen ? (
+                <Button
+                  variant="default"
+                  onClick={handleLogDetailReopen}
+                  loading={logDetailReopening}
+                  disabled={logDetailReopening}
+                >
+                  Open Task
+                </Button>
+              ) : selectedLogCompletionLocked ? (
+                <Paper withBorder radius="lg" px="md" py="xs" bg="red.0">
+                  <Text fw={700} c="red.7">
+                    Task Not Completed
+                  </Text>
+                </Paper>
+              ) : null}
             </Group>
+            {selectedLogCanComplete && !selectedLogRequiredEvidenceSatisfied && (
+              <Text size="sm" c="dimmed" ta="center">
+                Complete all required evidence first: {selectedLogMissingRequiredEvidenceLabels.join(', ')}.
+              </Text>
+            )}
 
             <Divider label="Comments" labelPosition="center" />
 
@@ -6700,9 +7810,122 @@ const AssistantManagerTaskPlanner = () => {
           </Text>
         )}
       </Modal>
+
+      <Modal
+        opened={Boolean(activeEvidenceImagePreview)}
+        onClose={handleCloseEvidenceImagePreview}
+        fullScreen
+        withCloseButton={false}
+        padding={0}
+        styles={{
+          content: { backgroundColor: '#000' },
+          body: { height: '100%', padding: 0 },
+        }}
+      >
+        {activeEvidenceImagePreview && (
+          <Box
+            style={{
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              backgroundColor: '#000',
+              color: '#fff',
+            }}
+          >
+            <Group justify="space-between" align="center" px="md" py="sm">
+              <Stack gap={2}>
+                <Text c="white" fw={600}>
+                  {activeEvidenceImagePreview.name}
+                </Text>
+                {activeEvidenceImagePreview.capturedAt && (
+                  <Text size="sm" c="gray.4">
+                    {dayjs(activeEvidenceImagePreview.capturedAt).format('MMM D, YYYY h:mm A')}
+                  </Text>
+                )}
+              </Stack>
+              <ActionIcon
+                onClick={handleCloseEvidenceImagePreview}
+                aria-label="Close image preview"
+                variant="light"
+                color="gray"
+              >
+                <IconX size={18} />
+              </ActionIcon>
+            </Group>
+
+            <Box
+              onWheel={handleEvidencePreviewWheel}
+              style={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                overflow: 'auto',
+                padding: 24,
+              }}
+            >
+              <img
+                src={activeEvidenceImagePreview.src}
+                alt={activeEvidenceImagePreview.name}
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  objectFit: 'contain',
+                  transform: `scale(${evidenceImageZoom})`,
+                  transformOrigin: 'center',
+                  transition: 'transform 120ms ease',
+                  userSelect: 'none',
+                }}
+              />
+            </Box>
+
+            <Group justify="space-between" align="center" px="md" py="sm">
+              <Group gap="xs">
+                <Tooltip label="Zoom out">
+                  <ActionIcon
+                    onClick={handleEvidenceZoomOut}
+                    disabled={evidenceImageZoom <= EVIDENCE_PREVIEW_MIN_ZOOM + 0.001}
+                    variant="light"
+                    color="gray"
+                  >
+                    <IconMinus size={16} />
+                  </ActionIcon>
+                </Tooltip>
+                <Text c="white" fw={600}>
+                  {Math.round(evidenceImageZoom * 100)}%
+                </Text>
+                <Tooltip label="Zoom in">
+                  <ActionIcon
+                    onClick={handleEvidenceZoomIn}
+                    disabled={evidenceImageZoom >= EVIDENCE_PREVIEW_MAX_ZOOM - 0.001}
+                    variant="light"
+                    color="gray"
+                  >
+                    <IconPlus size={16} />
+                  </ActionIcon>
+                </Tooltip>
+                <Button variant="subtle" color="gray" onClick={handleEvidenceZoomReset}>
+                  Reset
+                </Button>
+              </Group>
+              {activeEvidenceImagePreview.downloadHref && (
+                <Button
+                  component="a"
+                  href={activeEvidenceImagePreview.downloadHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  variant="light"
+                  color="blue"
+                >
+                  Download
+                </Button>
+              )}
+            </Group>
+          </Box>
+        )}
+      </Modal>
     </Stack>
   );
 };
 
 export default AssistantManagerTaskPlanner;
-

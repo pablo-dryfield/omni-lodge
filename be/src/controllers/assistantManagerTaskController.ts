@@ -16,7 +16,9 @@ import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import HttpError from '../errors/HttpError.js';
 import logger from '../utils/logger.js';
 import {
+  deleteAssistantManagerTaskEvidenceImage,
   ensureAssistantManagerTaskEvidenceStorage,
+  openAssistantManagerTaskEvidenceImageStream,
   storeAssistantManagerTaskEvidenceImage,
 } from '../services/assistantManagerTaskEvidenceStorageService.js';
 import { getConfigValue } from '../services/configService.js';
@@ -116,6 +118,13 @@ type ScheduledShiftCandidate = {
   staffType: string | null;
   livesInAccom: boolean | null;
   shiftInfo: ShiftDayInfo;
+};
+
+type PlannedGeneratedLog = {
+  template: AssistantManagerTaskTemplate;
+  assignment: AssistantManagerTaskAssignment;
+  candidate: ScheduledShiftCandidate;
+  taskDate: string;
 };
 
 const buildTaskLogKey = (templateId: number, userId: number, taskDate: string) =>
@@ -1139,6 +1148,17 @@ const formatLog = (
 
 const getActorId = (req: AuthenticatedRequest) => req.authContext?.id ?? null;
 
+const isTaskLogOnCurrentDay = (
+  log: Pick<AssistantManagerTaskLog, 'taskDate'>,
+): boolean => {
+  const taskDay = dayjs(log.taskDate);
+  return taskDay.isValid() && taskDay.isSame(dayjs(), 'day');
+};
+
+const canEditTaskLogEvidence = (
+  log: Pick<AssistantManagerTaskLog, 'taskDate' | 'status'>,
+): boolean => log.status !== 'completed' && isTaskLogOnCurrentDay(log);
+
 const syncTemplateGroupOrderValues = async (
   template: AssistantManagerTaskTemplate,
   actorId: number | null,
@@ -1639,19 +1659,18 @@ const findTemplateAssignmentConflict = async ({
   return null;
 };
 
-const generateLogsForAssignments = async (
+const planGeneratedLogsForAssignments = async (
   assignments: AssistantManagerTaskAssignment[],
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
-  actorId: number | null,
 ) => {
-  const expectedLogKeys = new Set<string>();
+  const plannedEntries = new Map<string, PlannedGeneratedLog>();
   const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(
     rangeStart,
     rangeEnd,
   );
 
-  const upsertGeneratedLog = async ({
+  const queueGeneratedLog = ({
     template,
     assignment,
     candidate,
@@ -1662,64 +1681,13 @@ const generateLogsForAssignments = async (
     candidate: ScheduledShiftCandidate;
     taskDate: string;
   }) => {
-    const requireShift = getRequireShiftFlag(template);
-    const shiftInfo = candidate.shiftInfo;
-    expectedLogKeys.add(buildTaskLogKey(template.id, candidate.userId, taskDate));
-    const shiftTime = shiftInfo?.timeStart ? normalizeTimeValue(shiftInfo.timeStart) : null;
-    const scheduleMeta = sanitizeScheduleConfigMeta(template.scheduleConfig ?? {}, shiftTime);
-    const baseMeta: Record<string, unknown> = {
-      manual: false,
-      ...scheduleMeta,
-    };
-    if (!Object.prototype.hasOwnProperty.call(baseMeta, 'priority')) {
-      baseMeta.priority = 'medium';
-    }
-    if (!Object.prototype.hasOwnProperty.call(baseMeta, 'points')) {
-      baseMeta.points = 1;
-    }
-    if (!Object.prototype.hasOwnProperty.call(baseMeta, 'durationHours')) {
-      baseMeta.durationHours = 1;
-    }
-    if (!Object.prototype.hasOwnProperty.call(baseMeta, 'time') && shiftTime) {
-      baseMeta.time = shiftTime;
-    }
-    const shiftMeta = buildShiftMeta(shiftInfo, requireShift);
-    Object.assign(baseMeta, shiftMeta);
-    const [log, created] = await AssistantManagerTaskLog.findOrCreate({
-      where: {
-        templateId: template.id,
-        userId: candidate.userId,
-        taskDate,
-      },
-      defaults: {
-        assignmentId: assignment.id,
-        status: 'pending',
-        meta: baseMeta,
-        createdBy: actorId,
-        updatedBy: actorId,
-      },
+    const key = buildTaskLogKey(template.id, candidate.userId, taskDate);
+    plannedEntries.set(key, {
+      template,
+      assignment,
+      candidate,
+      taskDate,
     });
-    if (!created) {
-      const existingMeta = (log.meta ?? {}) as Record<string, unknown>;
-      let shouldUpdateMeta = false;
-      Object.entries(shiftMeta).forEach(([key, value]) => {
-        if (existingMeta[key] !== value) {
-          existingMeta[key] = value;
-          shouldUpdateMeta = true;
-        }
-      });
-      const updatePayload: Partial<AssistantManagerTaskLog> = {};
-      if (shouldUpdateMeta) {
-        updatePayload.meta = existingMeta;
-      }
-      if (log.assignmentId !== assignment.id) {
-        updatePayload.assignmentId = assignment.id;
-      }
-      if (Object.keys(updatePayload).length > 0) {
-        updatePayload.updatedBy = actorId;
-        await AssistantManagerTaskLog.update(updatePayload, { where: { id: log.id } });
-      }
-    }
   };
 
   for (const assignment of assignments) {
@@ -1783,7 +1751,7 @@ const generateLogsForAssignments = async (
             .slice(0, weeklyQuota);
 
           for (const candidate of selectedCandidates) {
-            await upsertGeneratedLog({
+            queueGeneratedLog({
               template,
               assignment,
               candidate,
@@ -1816,7 +1784,7 @@ const generateLogsForAssignments = async (
       }
 
       for (const candidate of uniqueCandidatesForDate) {
-        await upsertGeneratedLog({
+        queueGeneratedLog({
           template,
           assignment,
           candidate,
@@ -1826,7 +1794,178 @@ const generateLogsForAssignments = async (
     }
   }
 
-  return expectedLogKeys;
+  return Array.from(plannedEntries.values()).sort((left, right) => {
+    if (left.taskDate !== right.taskDate) {
+      return left.taskDate.localeCompare(right.taskDate);
+    }
+    if (left.template.id !== right.template.id) {
+      return left.template.id - right.template.id;
+    }
+    return left.candidate.userId - right.candidate.userId;
+  });
+};
+
+const summarizePlannedLogsForRange = async (
+  plannedEntries: PlannedGeneratedLog[],
+  rangeStart: dayjs.Dayjs,
+  rangeEnd: dayjs.Dayjs,
+) => {
+  const templateIds = Array.from(
+    new Set(plannedEntries.map((entry) => entry.template.id)),
+  );
+  const summaries = new Map<
+    number,
+    {
+      templateId: number;
+      templateName: string;
+      cadence: AssistantManagerTaskCadence;
+      expectedTaskCount: number;
+      newTaskCount: number;
+      existingTaskCount: number;
+    }
+  >();
+
+  let existingKeySet = new Set<string>();
+  if (templateIds.length > 0) {
+    const existingLogs = await AssistantManagerTaskLog.findAll({
+      where: {
+        templateId: { [Op.in]: templateIds },
+        taskDate: {
+          [Op.between]: [rangeStart.format('YYYY-MM-DD'), rangeEnd.format('YYYY-MM-DD')],
+        },
+      },
+      attributes: ['templateId', 'userId', 'taskDate'],
+    });
+
+    existingKeySet = new Set(
+      existingLogs.map((log) => buildTaskLogKey(log.templateId, log.userId, log.taskDate)),
+    );
+  }
+
+  plannedEntries.forEach((entry) => {
+    const templateId = entry.template.id;
+    const current =
+      summaries.get(templateId) ??
+      {
+        templateId,
+        templateName: entry.template.name,
+        cadence: entry.template.cadence,
+        expectedTaskCount: 0,
+        newTaskCount: 0,
+        existingTaskCount: 0,
+      };
+
+    current.expectedTaskCount += 1;
+    if (existingKeySet.has(buildTaskLogKey(templateId, entry.candidate.userId, entry.taskDate))) {
+      current.existingTaskCount += 1;
+    } else {
+      current.newTaskCount += 1;
+    }
+    summaries.set(templateId, current);
+  });
+
+  return Array.from(summaries.values()).sort((left, right) => {
+    if (right.expectedTaskCount !== left.expectedTaskCount) {
+      return right.expectedTaskCount - left.expectedTaskCount;
+    }
+    return left.templateName.localeCompare(right.templateName);
+  });
+};
+
+const generateLogsForAssignments = async (
+  assignments: AssistantManagerTaskAssignment[],
+  rangeStart: dayjs.Dayjs,
+  rangeEnd: dayjs.Dayjs,
+  actorId: number | null,
+) => {
+  const plannedEntries = await planGeneratedLogsForAssignments(
+    assignments,
+    rangeStart,
+    rangeEnd,
+  );
+  const expectedLogKeys = new Set(
+    plannedEntries.map((entry) =>
+      buildTaskLogKey(entry.template.id, entry.candidate.userId, entry.taskDate),
+    ),
+  );
+  let createdCount = 0;
+  let updatedCount = 0;
+  let unchangedCount = 0;
+
+  for (const entry of plannedEntries) {
+    const { template, assignment, candidate, taskDate } = entry;
+    const requireShift = getRequireShiftFlag(template);
+    const shiftInfo = candidate.shiftInfo;
+    const shiftTime = shiftInfo?.timeStart ? normalizeTimeValue(shiftInfo.timeStart) : null;
+    const scheduleMeta = sanitizeScheduleConfigMeta(template.scheduleConfig ?? {}, shiftTime);
+    const baseMeta: Record<string, unknown> = {
+      manual: false,
+      ...scheduleMeta,
+    };
+    if (!Object.prototype.hasOwnProperty.call(baseMeta, 'priority')) {
+      baseMeta.priority = 'medium';
+    }
+    if (!Object.prototype.hasOwnProperty.call(baseMeta, 'points')) {
+      baseMeta.points = 1;
+    }
+    if (!Object.prototype.hasOwnProperty.call(baseMeta, 'durationHours')) {
+      baseMeta.durationHours = 1;
+    }
+    if (!Object.prototype.hasOwnProperty.call(baseMeta, 'time') && shiftTime) {
+      baseMeta.time = shiftTime;
+    }
+    const shiftMeta = buildShiftMeta(shiftInfo, requireShift);
+    Object.assign(baseMeta, shiftMeta);
+    const [log, created] = await AssistantManagerTaskLog.findOrCreate({
+      where: {
+        templateId: template.id,
+        userId: candidate.userId,
+        taskDate,
+      },
+      defaults: {
+        assignmentId: assignment.id,
+        status: 'pending',
+        meta: baseMeta,
+        createdBy: actorId,
+        updatedBy: actorId,
+      },
+    });
+    if (created) {
+      createdCount += 1;
+      continue;
+    }
+
+    const existingMeta = (log.meta ?? {}) as Record<string, unknown>;
+    let shouldUpdateMeta = false;
+    Object.entries(shiftMeta).forEach(([key, value]) => {
+      if (existingMeta[key] !== value) {
+        existingMeta[key] = value;
+        shouldUpdateMeta = true;
+      }
+    });
+    const updatePayload: Partial<AssistantManagerTaskLog> = {};
+    if (shouldUpdateMeta) {
+      updatePayload.meta = existingMeta;
+    }
+    if (log.assignmentId !== assignment.id) {
+      updatePayload.assignmentId = assignment.id;
+    }
+    if (Object.keys(updatePayload).length > 0) {
+      updatePayload.updatedBy = actorId;
+      await AssistantManagerTaskLog.update(updatePayload, { where: { id: log.id } });
+      updatedCount += 1;
+      continue;
+    }
+
+    unchangedCount += 1;
+  }
+
+  return {
+    expectedLogKeys,
+    createdCount,
+    updatedCount,
+    unchangedCount,
+  };
 };
 
 export const listTaskTemplates = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -2160,6 +2299,267 @@ export const syncTaskLogsWithCurrentTemplateConfig = async (
   }
 };
 
+export const generateTaskLogsForRange = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    if (!canViewAllTaskLogs(req)) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    const startDate = sanitizeTaskDate(req.body?.startDate);
+    const endDate = sanitizeTaskDate(req.body?.endDate);
+    const templateId = parsePositiveInt(req.body?.templateId);
+    if (!startDate || !endDate) {
+      res.status(400).json([{ message: 'startDate and endDate are required (YYYY-MM-DD)' }]);
+      return;
+    }
+
+    const start = dayjs(startDate).startOf('day');
+    const end = dayjs(endDate).endOf('day');
+    if (!start.isValid() || !end.isValid() || end.isBefore(start, 'day')) {
+      res.status(400).json([{ message: 'Invalid date range provided' }]);
+      return;
+    }
+
+    const plannerStartDate = resolvePlannerStartDate();
+    const effectiveStart =
+      plannerStartDate && start.isBefore(plannerStartDate, 'day')
+        ? plannerStartDate
+        : start;
+    if (end.isBefore(effectiveStart, 'day')) {
+      res.status(200).json([
+        {
+          data: {
+            startDate: effectiveStart.format('YYYY-MM-DD'),
+            endDate: end.format('YYYY-MM-DD'),
+            templateId: templateId ?? null,
+            assignmentCount: 0,
+            expectedLogCount: 0,
+            createdCount: 0,
+            updatedCount: 0,
+            unchangedCount: 0,
+          },
+          columns: [],
+        },
+      ]);
+      return;
+    }
+
+    if (templateId) {
+      const template = await AssistantManagerTaskTemplate.findByPk(templateId, {
+        attributes: ['id'],
+      });
+      if (!template) {
+        res.status(404).json([{ message: 'Task template not found' }]);
+        return;
+      }
+    }
+
+    const assignments = await AssistantManagerTaskAssignment.findAll({
+      where: {
+        isActive: true,
+        ...(templateId ? { templateId } : {}),
+      },
+      include: [{ model: AssistantManagerTaskTemplate, as: 'template', where: { isActive: true }, required: true }],
+    });
+
+    const actorId = getActorId(req);
+    const generationSummary = await generateLogsForAssignments(
+      assignments,
+      effectiveStart,
+      end,
+      actorId,
+    );
+
+    res.status(200).json([
+      {
+        data: {
+          startDate: effectiveStart.format('YYYY-MM-DD'),
+          endDate: end.format('YYYY-MM-DD'),
+          templateId: templateId ?? null,
+          assignmentCount: assignments.length,
+          expectedLogCount: generationSummary.expectedLogKeys.size,
+          createdCount: generationSummary.createdCount,
+          updatedCount: generationSummary.updatedCount,
+          unchangedCount: generationSummary.unchangedCount,
+        },
+        columns: [],
+      },
+    ]);
+  } catch (error) {
+    console.error('Failed to generate assistant manager task logs', error);
+    res.status(500).json([{ message: 'Failed to generate weekly tasks' }]);
+  }
+};
+
+export const previewTaskLogsForRange = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    if (!canViewAllTaskLogs(req)) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    const startDate = sanitizeTaskDate(req.body?.startDate);
+    const endDate = sanitizeTaskDate(req.body?.endDate);
+    const templateId = parsePositiveInt(req.body?.templateId);
+    if (!startDate || !endDate) {
+      res.status(400).json([{ message: 'startDate and endDate are required (YYYY-MM-DD)' }]);
+      return;
+    }
+
+    const start = dayjs(startDate).startOf('day');
+    const end = dayjs(endDate).endOf('day');
+    if (!start.isValid() || !end.isValid() || end.isBefore(start, 'day')) {
+      res.status(400).json([{ message: 'Invalid date range provided' }]);
+      return;
+    }
+
+    const plannerStartDate = resolvePlannerStartDate();
+    const effectiveStart =
+      plannerStartDate && start.isBefore(plannerStartDate, 'day')
+        ? plannerStartDate
+        : start;
+    if (end.isBefore(effectiveStart, 'day')) {
+      res.status(200).json([
+        {
+          data: {
+            startDate: effectiveStart.format('YYYY-MM-DD'),
+            endDate: end.format('YYYY-MM-DD'),
+            templateId: templateId ?? null,
+            assignmentCount: 0,
+            expectedLogCount: 0,
+            templates: [],
+          },
+          columns: [],
+        },
+      ]);
+      return;
+    }
+
+    if (templateId) {
+      const template = await AssistantManagerTaskTemplate.findByPk(templateId, {
+        attributes: ['id'],
+      });
+      if (!template) {
+        res.status(404).json([{ message: 'Task template not found' }]);
+        return;
+      }
+    }
+
+    const assignments = await AssistantManagerTaskAssignment.findAll({
+      where: {
+        isActive: true,
+        ...(templateId ? { templateId } : {}),
+      },
+      include: [{ model: AssistantManagerTaskTemplate, as: 'template', where: { isActive: true }, required: true }],
+    });
+
+    const plannedEntries = await planGeneratedLogsForAssignments(
+      assignments,
+      effectiveStart,
+      end,
+    );
+    const templates = await summarizePlannedLogsForRange(
+      plannedEntries,
+      effectiveStart,
+      end,
+    );
+
+    res.status(200).json([
+      {
+        data: {
+          startDate: effectiveStart.format('YYYY-MM-DD'),
+          endDate: end.format('YYYY-MM-DD'),
+          templateId: templateId ?? null,
+          assignmentCount: assignments.length,
+          expectedLogCount: plannedEntries.length,
+          templates,
+        },
+        columns: [],
+      },
+    ]);
+  } catch (error) {
+    console.error('Failed to preview assistant manager task logs', error);
+    res.status(500).json([{ message: 'Failed to preview weekly tasks' }]);
+  }
+};
+
+export const clearTaskLogsForRange = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    if (!canViewAllTaskLogs(req)) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    const startDate = sanitizeTaskDate(req.body?.startDate);
+    const endDate = sanitizeTaskDate(req.body?.endDate);
+    if (!startDate || !endDate) {
+      res.status(400).json([{ message: 'startDate and endDate are required (YYYY-MM-DD)' }]);
+      return;
+    }
+
+    const start = dayjs(startDate).startOf('day');
+    const end = dayjs(endDate).endOf('day');
+    if (!start.isValid() || !end.isValid() || end.isBefore(start, 'day')) {
+      res.status(400).json([{ message: 'Invalid date range provided' }]);
+      return;
+    }
+
+    const plannerStartDate = resolvePlannerStartDate();
+    const effectiveStart =
+      plannerStartDate && start.isBefore(plannerStartDate, 'day')
+        ? plannerStartDate
+        : start;
+    if (end.isBefore(effectiveStart, 'day')) {
+      res.status(200).json([
+        {
+          data: {
+            startDate: effectiveStart.format('YYYY-MM-DD'),
+            endDate: end.format('YYYY-MM-DD'),
+            totalCount: 0,
+            deletedCount: 0,
+          },
+          columns: [],
+        },
+      ]);
+      return;
+    }
+
+    const where = {
+      taskDate: {
+        [Op.between]: [effectiveStart.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')],
+      },
+    };
+
+    const totalCount = await AssistantManagerTaskLog.count({ where });
+    const deletedCount = await AssistantManagerTaskLog.destroy({ where });
+
+    res.status(200).json([
+      {
+        data: {
+          startDate: effectiveStart.format('YYYY-MM-DD'),
+          endDate: end.format('YYYY-MM-DD'),
+          totalCount,
+          deletedCount,
+        },
+        columns: [],
+      },
+    ]);
+  } catch (error) {
+    console.error('Failed to clear assistant manager task logs', error);
+    res.status(500).json([{ message: 'Failed to clear weekly tasks' }]);
+  }
+};
+
 export const listTaskAssignments = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!canViewAllTaskLogs(req)) {
@@ -2480,17 +2880,6 @@ export const listTaskLogs = async (req: AuthenticatedRequest, res: Response): Pr
       res.status(403).json([{ message: 'Forbidden' }]);
       return;
     }
-    const assignments = await AssistantManagerTaskAssignment.findAll({
-      where: { isActive: true },
-      include: [{ model: AssistantManagerTaskTemplate, as: 'template', where: { isActive: true }, required: true }],
-    });
-
-    const expectedLogKeys = await generateLogsForAssignments(
-      assignments,
-      effectiveStart,
-      effectiveEnd,
-      actorId,
-    );
 
     const where: WhereOptions = {
       taskDate: {
@@ -2521,21 +2910,9 @@ export const listTaskLogs = async (req: AuthenticatedRequest, res: Response): Pr
       ],
     });
 
-    const today = dayjs().startOf('day');
-    const visibleLogs = logs.filter((log) => {
-      const isManual = Boolean((log.meta ?? {})['manual']);
-      if (isManual) {
-        return true;
-      }
-      if (dayjs(log.taskDate).isBefore(today, 'day')) {
-        return true;
-      }
-      return expectedLogKeys.has(buildTaskLogKey(log.templateId, log.userId, log.taskDate));
-    });
-
     res.status(200).json([
       {
-        data: visibleLogs.map((log) =>
+        data: logs.map((log) =>
           formatLog(log as AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null; user?: User | null }),
         ),
         columns: [],
@@ -2579,6 +2956,10 @@ export const updateTaskLogStatus = async (req: AuthenticatedRequest, res: Respon
     const nextMeta = { ...(log.meta ?? {}) } as Record<string, unknown>;
     if (status) {
       if (status === 'completed') {
+        if (!isTaskLogOnCurrentDay(log)) {
+          res.status(400).json([{ message: 'Task can only be completed on its scheduled day' }]);
+          return;
+        }
         const { normalizedItems } = ensureEvidenceRequirementsSatisfied(log.template, nextMeta);
         nextMeta.evidenceItems = normalizedItems;
         payload.meta = nextMeta;
@@ -2740,6 +3121,9 @@ export const uploadTaskLogEvidenceImage = async (
     if (!canViewAllTaskLogs(req) && actorId !== log.userId) {
       throw new HttpError(403, 'Forbidden');
     }
+    if (!canEditTaskLogEvidence(log)) {
+      throw new HttpError(400, 'Evidence can only be edited for pending tasks on the current day');
+    }
 
     const file = req.file;
     if (!file) {
@@ -2837,6 +3221,82 @@ export const uploadTaskLogEvidenceImage = async (
   }
 };
 
+export const downloadTaskLogEvidenceImage = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const logId = Number(req.params.id);
+    const itemId =
+      typeof req.params.itemId === 'string' ? req.params.itemId.trim() : '';
+
+    if (!Number.isInteger(logId) || logId <= 0) {
+      throw new HttpError(400, 'Invalid task log id');
+    }
+    if (!itemId) {
+      throw new HttpError(400, 'Invalid evidence item id');
+    }
+
+    const log = await AssistantManagerTaskLog.findByPk(logId, {
+      include: [
+        { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'cadence', 'scheduleConfig', 'isActive'] },
+        { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
+      ],
+    });
+
+    if (!log) {
+      res.status(404).json([{ message: 'Task log not found' }]);
+      return;
+    }
+
+    const actorId = getActorId(req);
+    if (!canViewAllTaskLogs(req) && actorId !== log.userId) {
+      throw new HttpError(403, 'Forbidden');
+    }
+
+    const evidenceItems = sanitizeEvidenceItems((log.meta ?? {})['evidenceItems']);
+    const item = evidenceItems.find((entry) => entry.id === itemId && entry.type === 'image');
+    if (!item) {
+      res.status(404).json([{ message: 'Evidence image not found' }]);
+      return;
+    }
+
+    const streamResult = await openAssistantManagerTaskEvidenceImageStream({
+      storagePath: item.storagePath ?? null,
+      driveFileId: item.driveFileId ?? null,
+    });
+
+    res.setHeader('Content-Type', item.mimeType || streamResult.mimeType);
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(item.fileName || `evidence-${item.id}.jpg`)}"`,
+    );
+
+    streamResult.stream.on('error', (error) => {
+      logger.error('Failed to stream assistant manager task evidence image', error);
+      if (!res.headersSent) {
+        res.status(500).json([{ message: 'Failed to stream evidence image' }]);
+      } else {
+        res.end();
+      }
+    });
+
+    streamResult.stream.pipe(res);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      if (!res.headersSent) {
+        res.status(error.status).json([{ message: error.message }]);
+      }
+      return;
+    }
+
+    logger.error('Failed to download assistant manager task evidence image', error);
+    if (!res.headersSent) {
+      res.status(500).json([{ message: 'Failed to download evidence image' }]);
+    }
+  }
+};
+
 export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const logId = Number(req.params.id);
@@ -2866,6 +3326,12 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
       res.status(400).json([{ message: error instanceof Error ? error.message : 'Invalid payload' }]);
       return;
     }
+    const isEvidenceUpdate = Object.prototype.hasOwnProperty.call(payload.metaPatch, 'evidenceItems');
+    if (isEvidenceUpdate && !canEditTaskLogEvidence(log)) {
+      res.status(400).json([{ message: 'Evidence can only be edited for pending tasks on the current day' }]);
+      return;
+    }
+    const previousEvidenceItems = sanitizeEvidenceItems((log.meta ?? {})['evidenceItems']);
     const meta = { ...(log.meta ?? {}) } as Record<string, unknown>;
     Object.assign(meta, payload.metaPatch);
     const { errors, normalizedItems } = validateEvidenceItemsAgainstRules(
@@ -2878,6 +3344,30 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
       return;
     }
     meta['evidenceItems'] = normalizedItems;
+    const nextImageIds = new Set(
+      normalizedItems.filter((item) => item.type === 'image').map((item) => item.id),
+    );
+    const nextImageDriveIds = new Set(
+      normalizedItems
+        .filter((item) => item.type === 'image' && typeof item.driveFileId === 'string')
+        .map((item) => (item.driveFileId as string).trim())
+        .filter(Boolean),
+    );
+    const removedImageEvidenceItems = isEvidenceUpdate
+      ? previousEvidenceItems.filter((item) => {
+          if (item.type !== 'image') {
+            return false;
+          }
+          const hasStoredFile = Boolean(item.storagePath || item.driveFileId);
+          if (!hasStoredFile) {
+            return false;
+          }
+          const stillPresentById = item.id ? nextImageIds.has(item.id) : false;
+          const driveId = typeof item.driveFileId === 'string' ? item.driveFileId.trim() : '';
+          const stillPresentByDriveId = driveId ? nextImageDriveIds.has(driveId) : false;
+          return !stillPresentById && !stillPresentByDriveId;
+        })
+      : [];
     let nextTaskDate = log.taskDate;
     if (payload.taskDate) {
       nextTaskDate = payload.taskDate;
@@ -2919,6 +3409,16 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
       updatePayload.notes = payload.notes;
     }
     await AssistantManagerTaskLog.update(updatePayload, { where: { id: logId } });
+    if (removedImageEvidenceItems.length > 0) {
+      await Promise.all(
+        removedImageEvidenceItems.map((item) =>
+          deleteAssistantManagerTaskEvidenceImage({
+            storagePath: item.storagePath ?? null,
+            driveFileId: item.driveFileId ?? null,
+          }),
+        ),
+      );
+    }
     const refreshed = await AssistantManagerTaskLog.findByPk(logId, {
       include: [
         { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'cadence'] },
