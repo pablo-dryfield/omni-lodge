@@ -20,6 +20,7 @@ import {
   clearTaskLogsForRange,
   syncTaskLogsWithCurrentTemplateConfig,
   updateTaskLogStatus,
+  deleteTaskLog,
   createManualTaskLog,
   downloadTaskLogEvidenceImage,
   updateTaskLogMeta,
@@ -55,6 +56,7 @@ router.post('/logs/generate', authMiddleware, managerGuard, generateTaskLogsForR
 router.post('/logs/clear', authMiddleware, managerGuard, clearTaskLogsForRange);
 router.post('/logs/sync-template-config', authMiddleware, managerGuard, syncTaskLogsWithCurrentTemplateConfig);
 router.put('/logs/:id', authMiddleware, managerGuard, updateTaskLogStatus);
+router.delete('/logs/:id', authMiddleware, managerGuard, deleteTaskLog);
 router.post('/logs/manual', authMiddleware, managerGuard, createManualTaskLog);
 router.patch('/logs/:id/meta', authMiddleware, managerGuard, updateTaskLogMeta);
 router.post('/logs/:id/evidence-files', authMiddleware, managerGuard, upload.single('file'), uploadTaskLogEvidenceImage);

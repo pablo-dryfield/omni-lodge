@@ -67,6 +67,7 @@ import {
   createAmTaskTemplate,
   createManualAmTaskLog,
   deleteAmTaskAssignment,
+  deleteAmTaskLog,
   fetchAmTaskPushConfig,
   fetchAmTaskLogs,
   fetchAmTaskTemplates,
@@ -1961,9 +1962,15 @@ const SetupTemplateCard = ({
 const PlannerTaskCard = ({
   task,
   onSelect,
+  canDelete,
+  deleting,
+  onDelete,
 }: {
   task: PlannerDisplayTask;
   onSelect?: () => void;
+  canDelete?: boolean;
+  deleting?: boolean;
+  onDelete?: (task: PlannerDisplayTask) => void;
 }) => {
   const priorityMeta = PRIORITY_META[task.priority];
   const topOffset = (task.startHour - PLANNER_START_HOUR) * PLANNER_SLOT_HEIGHT + 6;
@@ -2014,9 +2021,28 @@ const PlannerTaskCard = ({
             <Badge size="xs" color={priorityMeta.color} variant="light">
               {priorityMeta.label}
             </Badge>
-            <Badge size="xs" color={STATUS_COLORS[task.status]} variant="outline">
-              {task.status}
-            </Badge>
+            <Group gap={6} align="center" wrap="nowrap">
+              <Badge size="xs" color={STATUS_COLORS[task.status]} variant="outline">
+                {task.status}
+              </Badge>
+              {canDelete && onDelete && (
+                <Tooltip label="Delete task">
+                  <ActionIcon
+                    size="sm"
+                    variant="light"
+                    color="red"
+                    loading={Boolean(deleting)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDelete(task);
+                    }}
+                    aria-label={`Delete task ${task.templateName}`}
+                  >
+                    <IconTrash size={14} />
+                  </ActionIcon>
+                </Tooltip>
+              )}
+            </Group>
           </Stack>
         </Group>
 
@@ -2082,11 +2108,17 @@ const MobilePlannerDayCard = ({
   tasks,
   progressPercent,
   onSelectLog,
+  canDeleteLogs,
+  deletingLogId,
+  onDeleteLog,
 }: {
   date: dayjs.Dayjs;
   tasks: PlannerDisplayTask[];
   progressPercent: number;
   onSelectLog?: (log: AssistantManagerTaskLog) => void;
+  canDeleteLogs?: boolean;
+  deletingLogId?: number | null;
+  onDeleteLog?: (log: AssistantManagerTaskLog) => void;
 }) => (
   <Paper withBorder radius="xl" p="md">
     <Stack gap="xs">
@@ -2132,9 +2164,26 @@ const MobilePlannerDayCard = ({
                         {task.ownerName}
                       </Text>
                     </Stack>
-                    <Badge color={STATUS_COLORS[task.status]} variant="light">
-                      {task.status}
-                    </Badge>
+                    <Group gap={6} align="center" wrap="nowrap">
+                      <Badge color={STATUS_COLORS[task.status]} variant="light">
+                        {task.status}
+                      </Badge>
+                      {canDeleteLogs && onDeleteLog && (
+                        <ActionIcon
+                          size="sm"
+                          variant="light"
+                          color="red"
+                          loading={deletingLogId === task.source.id}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onDeleteLog(task.source);
+                          }}
+                          aria-label={`Delete task ${task.templateName}`}
+                        >
+                          <IconTrash size={14} />
+                        </ActionIcon>
+                      )}
+                    </Group>
                   </Group>
 
                   <Group gap="xs" wrap="wrap">
@@ -2183,11 +2232,17 @@ const DesktopOwnerGroupedDayColumn = ({
   tasks,
   progressPercent,
   onSelectLog,
+  canDeleteLogs,
+  deletingLogId,
+  onDeleteLog,
 }: {
   date: dayjs.Dayjs;
   tasks: PlannerDisplayTask[];
   progressPercent: number;
   onSelectLog?: (log: AssistantManagerTaskLog) => void;
+  canDeleteLogs?: boolean;
+  deletingLogId?: number | null;
+  onDeleteLog?: (log: AssistantManagerTaskLog) => void;
 }) => {
   const groupedTasks = tasks.reduce<Map<string, PlannerDisplayTask[]>>((map, task) => {
     const key = task.ownerName;
@@ -2272,13 +2327,30 @@ const DesktopOwnerGroupedDayColumn = ({
                               <Text fw={600} size="sm" style={{ flex: 1 }} lineClamp={2}>
                                 {task.templateName}
                               </Text>
-                              <Badge
-                                size="xs"
-                                color={STATUS_COLORS[task.status]}
-                                variant="light"
-                              >
-                                {task.status}
-                              </Badge>
+                              <Group gap={6} align="center" wrap="nowrap">
+                                <Badge
+                                  size="xs"
+                                  color={STATUS_COLORS[task.status]}
+                                  variant="light"
+                                >
+                                  {task.status}
+                                </Badge>
+                                {canDeleteLogs && onDeleteLog && (
+                                  <ActionIcon
+                                    size="sm"
+                                    variant="light"
+                                    color="red"
+                                    loading={deletingLogId === task.source.id}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      onDeleteLog(task.source);
+                                    }}
+                                    aria-label={`Delete task ${task.templateName}`}
+                                  >
+                                    <IconTrash size={14} />
+                                  </ActionIcon>
+                                )}
+                              </Group>
                             </Group>
 
                             <Group gap={6} wrap="wrap">
@@ -2328,10 +2400,16 @@ const DayTaskBucketsBoard = ({
   logs,
   templates,
   onSelectLog,
+  canDeleteLogs,
+  deletingLogId,
+  onDeleteLog,
 }: {
   logs: AssistantManagerTaskLog[];
   templates: AssistantManagerTaskTemplate[];
   onSelectLog?: (log: AssistantManagerTaskLog) => void;
+  canDeleteLogs?: boolean;
+  deletingLogId?: number | null;
+  onDeleteLog?: (log: AssistantManagerTaskLog) => void;
 }) => {
   const templateMap = useMemo(
     () => new Map(templates.map((template) => [template.id, template])),
@@ -2449,9 +2527,26 @@ const DayTaskBucketsBoard = ({
                         <Text fw={600} size="sm" lineClamp={2} style={{ flex: 1 }}>
                           {log.templateName ?? `Template #${log.templateId}`}
                         </Text>
-                        <Badge size="xs" color={STATUS_COLORS[log.status]} variant="light">
-                          {log.status}
-                        </Badge>
+                        <Group gap={6} align="center" wrap="nowrap">
+                          <Badge size="xs" color={STATUS_COLORS[log.status]} variant="light">
+                            {log.status}
+                          </Badge>
+                          {canDeleteLogs && onDeleteLog && (
+                            <ActionIcon
+                              size="sm"
+                              variant="light"
+                              color="red"
+                              loading={deletingLogId === log.id}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onDeleteLog(log);
+                              }}
+                              aria-label={`Delete task ${log.templateName ?? `Template #${log.templateId}`}`}
+                            >
+                              <IconTrash size={14} />
+                            </ActionIcon>
+                          )}
+                        </Group>
                       </Group>
                       <Group gap={6} wrap="wrap">
                         <Badge size="xs" variant="outline">
@@ -2511,12 +2606,18 @@ const WeeklyTaskPlannerBoard = ({
   rangeStart,
   rangeEnd,
   onSelectLog,
+  canDeleteLogs,
+  deletingLogId,
+  onDeleteLog,
 }: {
   logs: AssistantManagerTaskLog[];
   templates: AssistantManagerTaskTemplate[];
   rangeStart: Date | null;
   rangeEnd: Date | null;
   onSelectLog?: (log: AssistantManagerTaskLog) => void;
+  canDeleteLogs?: boolean;
+  deletingLogId?: number | null;
+  onDeleteLog?: (log: AssistantManagerTaskLog) => void;
 }) => {
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
@@ -2604,6 +2705,9 @@ const WeeklyTaskPlannerBoard = ({
               tasks={tasksByDay[dayIndex]}
               progressPercent={dayProgressByIndex[dayIndex] ?? 0}
               onSelectLog={onSelectLog}
+              canDeleteLogs={canDeleteLogs}
+              deletingLogId={deletingLogId}
+              onDeleteLog={onDeleteLog}
             />
           ))}
         </Stack>
@@ -2623,6 +2727,9 @@ const WeeklyTaskPlannerBoard = ({
                 tasks={tasksByDay[dayIndex]}
                 progressPercent={dayProgressByIndex[dayIndex] ?? 0}
                 onSelectLog={onSelectLog}
+                canDeleteLogs={canDeleteLogs}
+                deletingLogId={deletingLogId}
+                onDeleteLog={onDeleteLog}
               />
             ))}
           </Group>
@@ -2719,6 +2826,9 @@ const WeeklyTaskPlannerBoard = ({
                       key={task.id}
                       task={task}
                       onSelect={onSelectLog ? () => onSelectLog(task.source) : undefined}
+                      canDelete={canDeleteLogs}
+                      deleting={deletingLogId === task.source.id}
+                      onDelete={(nextTask) => onDeleteLog?.(nextTask.source)}
                     />
                   ))}
                   {dayTasks.length === 0 && (
@@ -2850,6 +2960,7 @@ const AssistantManagerTaskPlanner = () => {
     return normalizedSessionRole != null && GLOBAL_TASK_VIEWER_ROLES.has(normalizedSessionRole);
   }, [normalizedSessionRole]);
   const canManage = canViewAllTasks && (access.canCreate || access.canUpdate || access.canDelete);
+  const canDeleteTaskLogs = canViewAllTasks && access.canDelete;
   const canCreateManualTasks = canViewAllTasks && access.canCreate;
   const requestedSectionParam = searchParams.get('section');
   const requestedSection =
@@ -2952,6 +3063,7 @@ const AssistantManagerTaskPlanner = () => {
 
   const [selectedLog, setSelectedLog] = useState<AssistantManagerTaskLog | null>(null);
   const [logDetailModalOpen, setLogDetailModalOpen] = useState(false);
+  const [logDeletePendingId, setLogDeletePendingId] = useState<number | null>(null);
   const [logDetailFormState, setLogDetailFormState] =
     useState<LogDetailFormState>(defaultLogDetailFormState);
   const [logDetailSubmitting, setLogDetailSubmitting] = useState(false);
@@ -4794,6 +4906,41 @@ const AssistantManagerTaskPlanner = () => {
     setSearchParams,
   ]);
 
+  const handleTaskLogDelete = useCallback(
+    async (log: AssistantManagerTaskLog) => {
+      if (!canDeleteTaskLogs) {
+        return;
+      }
+
+      const taskName = log.templateName ?? `Template #${log.templateId}`;
+      const taskDateLabel = dayjs(log.taskDate).isValid()
+        ? dayjs(log.taskDate).format('MMM D, YYYY')
+        : String(log.taskDate);
+      const confirmed = window.confirm(
+        `Delete "${taskName}" on ${taskDateLabel}? This also removes all saved evidence files/images from storage.`,
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      setLogDeletePendingId(log.id);
+      setLogDetailError(null);
+
+      try {
+        await dispatch(deleteAmTaskLog(log.id)).unwrap();
+        await refreshLogs();
+        if (selectedLog?.id === log.id) {
+          closeLogDetailModal();
+        }
+      } catch (error) {
+        setLogDetailError(getErrorMessage(error, 'Failed to delete task'));
+      } finally {
+        setLogDeletePendingId((prev) => (prev === log.id ? null : prev));
+      }
+    },
+    [canDeleteTaskLogs, closeLogDetailModal, dispatch, refreshLogs, selectedLog?.id],
+  );
+
   const handleEvidenceRuleDraftChange = useCallback(
     (
       draftId: string,
@@ -5861,6 +6008,11 @@ const AssistantManagerTaskPlanner = () => {
                     logs={orderedLogs}
                     templates={templates}
                     onSelectLog={handleLogSelect}
+                    canDeleteLogs={canDeleteTaskLogs}
+                    deletingLogId={logDeletePendingId}
+                    onDeleteLog={(log) => {
+                      void handleTaskLogDelete(log);
+                    }}
                   />
                 ) : (
                   <WeeklyTaskPlannerBoard
@@ -5869,6 +6021,11 @@ const AssistantManagerTaskPlanner = () => {
                     rangeStart={logDateRange[0]}
                     rangeEnd={logDateRange[1]}
                     onSelectLog={handleLogSelect}
+                    canDeleteLogs={canDeleteTaskLogs}
+                    deletingLogId={logDeletePendingId}
+                    onDeleteLog={(log) => {
+                      void handleTaskLogDelete(log);
+                    }}
                   />
                 )}
               </Stack>
@@ -7492,17 +7649,40 @@ const AssistantManagerTaskPlanner = () => {
                           </Badge>
                         )}
                       </Group>
-                      <ActionIcon
-                        pos="absolute"
-                        top={0}
-                        right={0}
-                        variant="subtle"
-                        color="gray"
-                        onClick={closeLogDetailModal}
-                        aria-label="Close task details"
+                      <Group
+                        gap={6}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          right: 0,
+                        }}
                       >
-                        <IconX size={18} />
-                      </ActionIcon>
+                        {canDeleteTaskLogs && (
+                          <Tooltip label="Delete task">
+                            <ActionIcon
+                              variant="subtle"
+                              color="red"
+                              onClick={() => {
+                                if (selectedLog) {
+                                  void handleTaskLogDelete(selectedLog);
+                                }
+                              }}
+                              loading={logDeletePendingId === selectedLog.id}
+                              aria-label="Delete task"
+                            >
+                              <IconTrash size={18} />
+                            </ActionIcon>
+                          </Tooltip>
+                        )}
+                        <ActionIcon
+                          variant="subtle"
+                          color="gray"
+                          onClick={closeLogDetailModal}
+                          aria-label="Close task details"
+                        >
+                          <IconX size={18} />
+                        </ActionIcon>
+                      </Group>
                     </Box>
                     <Text fw={700} size="lg">
                       {selectedLog.templateName ?? `Template #${selectedLog.templateId}`}
