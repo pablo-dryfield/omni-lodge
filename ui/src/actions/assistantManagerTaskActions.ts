@@ -576,6 +576,22 @@ export const updateAmTaskLogStatus = createAsyncThunk(
   },
 );
 
+export const deleteAmTaskLog = createAsyncThunk(
+  'assistantManagerTasks/deleteLog',
+  async (logId: number, { rejectWithValue }) => {
+    try {
+      await axiosInstance.delete(`/assistantManagerTasks/logs/${logId}`, {
+        withCredentials: true,
+      });
+      return logId;
+    } catch (error) {
+      return rejectWithValue(
+        extractApiErrorMessage(error, 'Failed to delete task log'),
+      );
+    }
+  },
+);
+
 export const createManualAmTaskLog = createAsyncThunk(
   'assistantManagerTasks/createManualLog',
   async (payload: ManualAssistantManagerTaskPayload, { rejectWithValue }) => {

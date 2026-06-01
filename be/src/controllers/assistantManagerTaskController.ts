@@ -3151,6 +3151,70 @@ export const updateTaskLogStatus = async (req: AuthenticatedRequest, res: Respon
   }
 };
 
+export const deleteTaskLog = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const logId = Number(req.params.id);
+    if (!Number.isInteger(logId) || logId <= 0) {
+      res.status(400).json([{ message: 'Invalid task log id' }]);
+      return;
+    }
+
+    // Delete permission is intentionally stricter than the route guard:
+    // assistant-managers can access the planner, but only admin/owner/manager can delete tasks.
+    if (!canViewAllTaskLogs(req)) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    const log = await AssistantManagerTaskLog.findByPk(logId, {
+      attributes: ['id', 'meta'],
+    });
+    if (!log) {
+      res.status(404).json([{ message: 'Task log not found' }]);
+      return;
+    }
+
+    const evidenceItems = sanitizeEvidenceItems((log.meta ?? {})['evidenceItems']);
+    const imageEvidenceWithStorage = evidenceItems.filter(
+      (item) => item.type === 'image' && Boolean(item.storagePath || item.driveFileId),
+    );
+
+    const uniqueDeleteTargets = new Map<string, { storagePath?: string | null; driveFileId?: string | null }>();
+    imageEvidenceWithStorage.forEach((item) => {
+      const driveFileId = typeof item.driveFileId === 'string' ? item.driveFileId.trim() : '';
+      const storagePath = typeof item.storagePath === 'string' ? item.storagePath.trim() : '';
+      const dedupeKey = `${driveFileId}::${storagePath}`;
+      if (!uniqueDeleteTargets.has(dedupeKey)) {
+        uniqueDeleteTargets.set(dedupeKey, {
+          storagePath: storagePath || null,
+          driveFileId: driveFileId || null,
+        });
+      }
+    });
+
+    if (uniqueDeleteTargets.size > 0) {
+      await Promise.all(
+        Array.from(uniqueDeleteTargets.values()).map((target) =>
+          deleteAssistantManagerTaskEvidenceImage({
+            storagePath: target.storagePath ?? null,
+            driveFileId: target.driveFileId ?? null,
+          }),
+        ),
+      );
+    }
+
+    await AssistantManagerTaskLog.destroy({ where: { id: logId } });
+    res.status(204).send();
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    console.error('Failed to delete task log', error);
+    res.status(500).json([{ message: 'Failed to delete task log' }]);
+  }
+};
+
 export const createManualTaskLog = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!canViewAllTaskLogs(req)) {
