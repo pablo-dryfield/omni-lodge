@@ -115,6 +115,7 @@ import type { UserType } from '../../types/userTypes/UserType';
 
 type PlannerPriority = 'high' | 'medium' | 'low';
 type PlannerDateWindowMode = 'day' | 'week' | 'custom';
+type TaskCompletionWindowMode = 'day' | 'strict';
 
 type TemplateFormState = {
   name: string;
@@ -130,6 +131,7 @@ type TemplateFormState = {
   defaultTime: string;
   defaultDuration: string;
   defaultPriority: PlannerPriority;
+  completionWindowMode: TaskCompletionWindowMode;
   defaultPoints: string;
   requireShift: boolean;
   reminderMinutesBeforeStart: string;
@@ -248,6 +250,7 @@ const defaultTemplateFormState: TemplateFormState = {
   defaultTime: '',
   defaultDuration: '',
   defaultPriority: 'medium',
+  completionWindowMode: 'day',
   defaultPoints: '',
   requireShift: false,
   reminderMinutesBeforeStart: '',
@@ -670,6 +673,7 @@ const getAdvancedScheduleConfigText = (template?: AssistantManagerTaskTemplate |
   delete nextConfig.points;
   delete nextConfig.requireShift;
   delete nextConfig.requireScheduledShift;
+  delete nextConfig.completionWindowMode;
   delete nextConfig.timesPerWeekPerAssignedUser;
   delete nextConfig.evidenceRules;
   delete nextConfig[CEREBRO_LINKS_CONFIG_KEY];
@@ -926,6 +930,10 @@ const PLANNER_END_HOUR = 22;
 const PLANNER_SLOT_HEIGHT = 56;
 const DEFAULT_PLANNER_DAYS = 7;
 const TIME_INPUT_FORMATS = ['HH:mm', 'H:mm', 'HH:mm:ss', 'h:mm A', 'h A'];
+const TASK_COMPLETION_WINDOW_MODE_LABELS: Record<TaskCompletionWindowMode, string> = {
+  day: 'End of day',
+  strict: 'Strict to schedule',
+};
 
 const decodeBase64UrlToArrayBuffer = (value: string): ArrayBuffer => {
   const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
@@ -981,6 +989,72 @@ const getLogPoints = (
   }
 
   return pointsValue;
+};
+
+const normalizeTaskCompletionWindowMode = (value: unknown): TaskCompletionWindowMode =>
+  value === 'strict' ? 'strict' : 'day';
+
+const resolveTaskCompletionWindowMode = (
+  template?: AssistantManagerTaskTemplate | null,
+  meta?: AssistantManagerTaskLogMeta | null,
+): TaskCompletionWindowMode => {
+  const metaValue = typeof meta?.completionWindowMode === 'string' ? meta.completionWindowMode.trim().toLowerCase() : '';
+  if (metaValue === 'strict' || metaValue === 'day') {
+    return metaValue;
+  }
+
+  const scheduleConfig = (template?.scheduleConfig ?? {}) as Record<string, unknown>;
+  return normalizeTaskCompletionWindowMode(
+    typeof scheduleConfig.completionWindowMode === 'string'
+      ? scheduleConfig.completionWindowMode.trim().toLowerCase()
+      : '',
+  );
+};
+
+const getLogDurationHours = (
+  log: AssistantManagerTaskLog,
+  templateMap: Map<number, AssistantManagerTaskTemplate>,
+): number | null => {
+  const template = templateMap.get(log.templateId);
+  const meta = (log.meta ?? {}) as AssistantManagerTaskLogMeta;
+  const scheduleConfig = (template?.scheduleConfig ?? {}) as Record<string, unknown>;
+  const durationValue =
+    typeof meta.durationHours === 'number'
+      ? meta.durationHours
+      : Number(meta.durationHours ?? scheduleConfig.durationHours ?? NaN);
+
+  if (!Number.isFinite(durationValue) || durationValue <= 0) {
+    return null;
+  }
+
+  return durationValue;
+};
+
+const getStrictTaskCompletionDeadline = (
+  log: AssistantManagerTaskLog,
+  templateMap: Map<number, AssistantManagerTaskTemplate>,
+): dayjs.Dayjs | null => {
+  const template = templateMap.get(log.templateId);
+  if (resolveTaskCompletionWindowMode(template, log.meta) !== 'strict') {
+    return null;
+  }
+
+  const startAt = parseTaskStartDateTime(log, templateMap);
+  const durationHours = getLogDurationHours(log, templateMap);
+  if (!startAt || durationHours == null) {
+    return null;
+  }
+
+  return startAt.add(Math.round(durationHours * 60), 'minute');
+};
+
+const isTaskCompletionWindowExpired = (
+  log: AssistantManagerTaskLog,
+  templateMap: Map<number, AssistantManagerTaskTemplate>,
+  now = dayjs(),
+): boolean => {
+  const deadline = getStrictTaskCompletionDeadline(log, templateMap);
+  return Boolean(deadline && now.isAfter(deadline));
 };
 
 const formatTaskDetailTimeRange = (time: string, durationHours: string) => {
@@ -1082,6 +1156,7 @@ const resolveTemplateDefaults = (template?: AssistantManagerTaskTemplate | null)
     time: timeValue,
     durationHours: Number.isFinite(durationValue) ? durationValue : null,
     points: Number.isFinite(pointsValue) ? pointsValue : null,
+    completionWindowMode: normalizeTaskCompletionWindowMode(config.completionWindowMode),
     timesPerWeekPerAssignedUser: Number.isInteger(timesPerWeekPerAssignedUserValue) &&
       timesPerWeekPerAssignedUserValue > 0
       ? timesPerWeekPerAssignedUserValue
@@ -2426,8 +2501,13 @@ const DayTaskBucketsBoard = ({
     const pending: AssistantManagerTaskLog[] = [];
     const completed: AssistantManagerTaskLog[] = [];
     const missed: AssistantManagerTaskLog[] = [];
+    const now = dayjs();
 
     logs.forEach((log) => {
+      if (log.status === 'pending' && isTaskCompletionWindowExpired(log, templateMap, now)) {
+        missed.push(log);
+        return;
+      }
       if (log.status === 'pending') {
         pending.push(log);
         return;
@@ -3230,17 +3310,31 @@ const AssistantManagerTaskPlanner = () => {
     const taskDay = dayjs(selectedLog.taskDate);
     return taskDay.isValid() && taskDay.isBefore(dayjs(), 'day');
   }, [selectedLog]);
+  const selectedLogStrictCompletionExpired = useMemo(() => {
+    if (!selectedLog || selectedLog.status === 'completed') {
+      return false;
+    }
+    return isTaskCompletionWindowExpired(selectedLog, templateMap);
+  }, [selectedLog, templateMap]);
   const selectedLogEvidenceReadOnly = Boolean(
     !selectedLog || selectedLog.status === 'completed' || !selectedLogIsCurrentDay,
   );
   const selectedLogCanComplete = Boolean(
-    selectedLog && selectedLog.status !== 'completed' && selectedLogIsCurrentDay,
+    selectedLog &&
+      selectedLog.status !== 'completed' &&
+      selectedLogIsCurrentDay &&
+      !selectedLogStrictCompletionExpired,
   );
   const selectedLogCanReopen = Boolean(
-    selectedLog && selectedLog.status === 'completed' && selectedLogIsCurrentDay,
+    selectedLog &&
+      selectedLog.status === 'completed' &&
+      selectedLogIsCurrentDay &&
+      !isTaskCompletionWindowExpired(selectedLog, templateMap),
   );
   const selectedLogCompletionLocked = Boolean(
-    selectedLog && selectedLog.status !== 'completed' && selectedLogIsPastDay,
+    selectedLog &&
+      selectedLog.status !== 'completed' &&
+      (selectedLogIsPastDay || selectedLogStrictCompletionExpired),
   );
   const selectedLogMissingRequiredEvidenceLabels = useMemo(() => {
     if (!selectedLog || selectedLogEvidenceRules.length === 0) {
@@ -3972,6 +4066,7 @@ const AssistantManagerTaskPlanner = () => {
         defaultDuration:
           defaults.durationHours != null ? String(defaults.durationHours) : '',
         defaultPriority: defaults.priority,
+        completionWindowMode: defaults.completionWindowMode,
         defaultPoints: defaults.points != null ? String(defaults.points) : '',
         requireShift: defaults.requireShift,
         reminderMinutesBeforeStart:
@@ -4065,6 +4160,15 @@ const AssistantManagerTaskPlanner = () => {
       nextScheduleConfig.priority = templateFormState.defaultPriority;
       nextScheduleConfig.requireShift = templateFormState.requireShift;
       nextScheduleConfig.notifyAtStart = templateFormState.notifyAtStart;
+      nextScheduleConfig.completionWindowMode = templateFormState.completionWindowMode;
+
+      if (
+        templateFormState.completionWindowMode === 'strict' &&
+        (!trimmedTime || !Number.isFinite(durationNumeric) || durationNumeric <= 0)
+      ) {
+        setTemplateFormError('Strict-to-schedule tasks require both a default start time and duration.');
+        return;
+      }
 
       if (
         templateFormState.defaultPoints.trim() &&
@@ -5857,8 +5961,11 @@ const AssistantManagerTaskPlanner = () => {
   );
 
   const dashboardSummary = useMemo(() => {
+    const now = dayjs();
     const completedCount = orderedLogs.filter((log) => log.status === 'completed').length;
-    const pendingCount = orderedLogs.filter((log) => log.status === 'pending').length;
+    const pendingCount = orderedLogs.filter(
+      (log) => log.status === 'pending' && !isTaskCompletionWindowExpired(log, templateMap, now),
+    ).length;
     const manualCount = orderedLogs.filter((log) => Boolean(log.meta?.manual)).length;
     const totalPoints = orderedLogs.reduce((sum, log) => sum + getLogPoints(log, templateMap), 0);
     const completedPoints = orderedLogs
@@ -5867,7 +5974,9 @@ const AssistantManagerTaskPlanner = () => {
     const completionRate = totalPoints > 0 ? Math.round((completedPoints / totalPoints) * 100) : 0;
 
     const nextPendingLog =
-      orderedLogs.find((log) => log.status === 'pending') ?? null;
+      orderedLogs.find(
+        (log) => log.status === 'pending' && !isTaskCompletionWindowExpired(log, templateMap, now),
+      ) ?? null;
     const busiestDay = groupedLogs.reduce<{
       date: string | null;
       count: number;
@@ -6770,6 +6879,21 @@ const AssistantManagerTaskPlanner = () => {
                   setTemplateFormState((prev) => ({
                     ...prev,
                     cadence: (value as AssistantManagerTaskCadence) ?? prev.cadence,
+                  }))
+                }
+              />
+              <Select
+                label="Completion Window"
+                description="Choose whether the task can be completed until end of day or only until its scheduled end time."
+                data={Object.entries(TASK_COMPLETION_WINDOW_MODE_LABELS).map(([value, label]) => ({
+                  value,
+                  label,
+                }))}
+                value={templateFormState.completionWindowMode}
+                onChange={(value) =>
+                  setTemplateFormState((prev) => ({
+                    ...prev,
+                    completionWindowMode: normalizeTaskCompletionWindowMode(value),
                   }))
                 }
               />
@@ -7911,8 +8035,17 @@ const AssistantManagerTaskPlanner = () => {
               <Stack gap="md">
                 <Group justify="space-between" align="flex-start" wrap="wrap">
                   <Stack gap={10} align="center" style={{ flex: 1, textAlign: 'center' }}>
-                    <Box w="100%" pos="relative">
-                      <Group gap="xs" wrap="wrap" justify="center">
+                    <Box
+                      style={{
+                        width: '100%',
+                        display: 'grid',
+                        gridTemplateColumns: '1fr auto 1fr',
+                        alignItems: 'center',
+                        columnGap: 8,
+                      }}
+                    >
+                      <Box />
+                      <Group gap="xs" wrap="nowrap" justify="center" style={{ minWidth: 0 }}>
                         <Badge color={STATUS_COLORS[selectedLog.status]}>{selectedLog.status}</Badge>
                         <Badge color={PRIORITY_META[logDetailFormState.priority].color} variant="light">
                           {PRIORITY_META[logDetailFormState.priority].label}
@@ -7931,14 +8064,7 @@ const AssistantManagerTaskPlanner = () => {
                           </Badge>
                         )}
                       </Group>
-                      <Group
-                        gap={6}
-                        style={{
-                          position: 'absolute',
-                          top: 0,
-                          right: 0,
-                        }}
-                      >
+                      <Group justify="flex-end" gap={6} wrap="nowrap">
                         {canDeleteTaskLogs && (
                           <Tooltip label="Delete task">
                             <ActionIcon
@@ -8551,7 +8677,7 @@ const AssistantManagerTaskPlanner = () => {
               ) : selectedLogCompletionLocked ? (
                 <Paper withBorder radius="lg" px="md" py="xs" bg="red.0">
                   <Text fw={700} c="red.7">
-                    Task Not Completed
+                    {selectedLogStrictCompletionExpired ? 'Time Window Expired' : 'Task Not Completed'}
                   </Text>
                 </Paper>
               ) : null}
