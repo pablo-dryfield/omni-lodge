@@ -465,6 +465,20 @@ const sanitizeTemplatePayload = (body: Record<string, unknown>) => {
   }
   if (body.scheduleConfig != null) {
     next.scheduleConfig = toScheduleConfig(body.scheduleConfig);
+    if ('time' in next.scheduleConfig) {
+      const normalizedTime = normalizeTimeValue(next.scheduleConfig.time);
+      if (next.scheduleConfig.time != null && next.scheduleConfig.time !== '' && !normalizedTime) {
+        throw new HttpError(400, 'scheduleConfig.time is invalid');
+      }
+      if (normalizedTime) {
+        next.scheduleConfig.time = normalizedTime;
+      } else {
+        delete next.scheduleConfig.time;
+      }
+    }
+    if ('hour' in next.scheduleConfig) {
+      delete next.scheduleConfig.hour;
+    }
     if ('evidenceRules' in next.scheduleConfig) {
       next.scheduleConfig.evidenceRules = sanitizeEvidenceRules(next.scheduleConfig.evidenceRules);
     }
