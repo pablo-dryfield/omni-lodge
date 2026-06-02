@@ -3087,6 +3087,7 @@ const AssistantManagerTaskPlanner = () => {
   const [cameraCaptureError, setCameraCaptureError] = useState<string | null>(null);
   const [cameraCaptureLoading, setCameraCaptureLoading] = useState(false);
   const [cameraCaptureSubmitting, setCameraCaptureSubmitting] = useState(false);
+  const [cameraPreviewReady, setCameraPreviewReady] = useState(false);
   const [evidenceImageZoom, setEvidenceImageZoom] = useState(1);
   const evidencePreviewObjectUrlRef = useRef<string | null>(null);
   const [cameraVideoElement, setCameraVideoElement] = useState<HTMLVideoElement | null>(null);
@@ -4891,6 +4892,28 @@ const AssistantManagerTaskPlanner = () => {
     }
   }, [cameraVideoElement]);
 
+  const attachCameraStreamToVideo = useCallback(
+    async (stream?: MediaStream | null, video?: HTMLVideoElement | null) => {
+      const targetStream = stream ?? cameraStreamRef.current;
+      const targetVideo = video ?? cameraVideoElement;
+
+      if (!targetStream || !targetVideo) {
+        return;
+      }
+
+      if (targetVideo.srcObject !== targetStream) {
+        targetVideo.srcObject = targetStream;
+      }
+
+      try {
+        await targetVideo.play();
+      } catch {
+        setCameraCaptureError('Unable to start the camera preview.');
+      }
+    },
+    [cameraVideoElement],
+  );
+
   const closeCameraCaptureModal = useCallback(() => {
     stopCameraCaptureStream();
     setCameraCaptureState({
@@ -4900,6 +4923,7 @@ const AssistantManagerTaskPlanner = () => {
     setCameraCaptureError(null);
     setCameraCaptureLoading(false);
     setCameraCaptureSubmitting(false);
+    setCameraPreviewReady(false);
   }, [stopCameraCaptureStream]);
 
   const openCameraCaptureModal = useCallback((rule: AssistantManagerTaskEvidenceRule) => {
@@ -4908,6 +4932,7 @@ const AssistantManagerTaskPlanner = () => {
       rule,
     });
     setCameraCaptureError(null);
+    setCameraPreviewReady(false);
   }, []);
 
   const handleOpenCerebroItem = useCallback(
@@ -5195,6 +5220,7 @@ const AssistantManagerTaskPlanner = () => {
     const openCamera = async () => {
       setCameraCaptureLoading(true);
       setCameraCaptureError(null);
+      setCameraPreviewReady(false);
 
       timeoutId = setTimeout(() => {
         if (!cancelled) {
@@ -5219,6 +5245,7 @@ const AssistantManagerTaskPlanner = () => {
         }
 
         cameraStreamRef.current = stream;
+        await attachCameraStreamToVideo(stream);
       } catch (error) {
         if (!cancelled) {
           setCameraCaptureError(getErrorMessage(error, 'Unable to access the device camera'));
@@ -5242,19 +5269,29 @@ const AssistantManagerTaskPlanner = () => {
       }
       stopCameraCaptureStream();
     };
-  }, [cameraCaptureState.opened, cameraCaptureState.rule, cameraCaptureSupported, stopCameraCaptureStream]);
+  }, [
+    attachCameraStreamToVideo,
+    cameraCaptureState.opened,
+    cameraCaptureState.rule,
+    cameraCaptureSupported,
+    stopCameraCaptureStream,
+  ]);
 
   useEffect(() => {
-    if (!cameraCaptureState.opened || !cameraVideoElement || !cameraStreamRef.current) {
+    if (!cameraCaptureState.opened || !cameraVideoElement) {
       return;
     }
 
-    cameraVideoElement.srcObject = cameraStreamRef.current;
-    void cameraVideoElement.play().catch(() => undefined);
-  }, [cameraCaptureState.opened, cameraVideoElement]);
+    void attachCameraStreamToVideo(undefined, cameraVideoElement);
+  }, [attachCameraStreamToVideo, cameraCaptureState.opened, cameraVideoElement]);
 
   const handleCapturePhoto = useCallback(async () => {
     if (!cameraCaptureState.rule || !cameraVideoElement || !cameraCanvasRef.current) {
+      return;
+    }
+
+    if (!cameraPreviewReady) {
+      setCameraCaptureError('Camera preview is not ready yet.');
       return;
     }
 
@@ -5303,7 +5340,13 @@ const AssistantManagerTaskPlanner = () => {
     } finally {
       setCameraCaptureSubmitting(false);
     }
-  }, [cameraCaptureState.rule, cameraVideoElement, closeCameraCaptureModal, handleEvidenceImageSelected]);
+  }, [
+    cameraCaptureState.rule,
+    cameraPreviewReady,
+    cameraVideoElement,
+    closeCameraCaptureModal,
+    handleEvidenceImageSelected,
+  ]);
 
   const handleTakePhotoClick = useCallback(
     (rule: AssistantManagerTaskEvidenceRule) => {
@@ -8749,6 +8792,15 @@ const AssistantManagerTaskPlanner = () => {
                   autoPlay
                   muted
                   playsInline
+                  onLoadedMetadata={() => {
+                    setCameraPreviewReady(true);
+                  }}
+                  onCanPlay={() => {
+                    setCameraPreviewReady(true);
+                  }}
+                  onPlaying={() => {
+                    setCameraPreviewReady(true);
+                  }}
                   style={{
                     width: '100%',
                     height: '100%',
@@ -8783,7 +8835,7 @@ const AssistantManagerTaskPlanner = () => {
                 void handleCapturePhoto();
               }}
               loading={cameraCaptureSubmitting}
-              disabled={cameraCaptureLoading || !cameraCaptureState.rule}
+              disabled={cameraCaptureLoading || !cameraCaptureState.rule || !cameraPreviewReady}
             >
               Use Photo
             </Button>
