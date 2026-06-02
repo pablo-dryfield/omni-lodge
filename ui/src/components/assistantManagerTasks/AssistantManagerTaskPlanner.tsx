@@ -229,11 +229,6 @@ type TaskEvidenceImagePreview = {
   downloadHref: string | null;
 };
 
-type CameraCaptureState = {
-  opened: boolean;
-  rule: AssistantManagerTaskEvidenceRule | null;
-};
-
 const defaultTemplateFormState: TemplateFormState = {
   name: '',
   description: '',
@@ -3080,19 +3075,8 @@ const AssistantManagerTaskPlanner = () => {
   const [evidencePreviewLoadingItemId, setEvidencePreviewLoadingItemId] = useState<string | null>(null);
   const [activeEvidenceImagePreview, setActiveEvidenceImagePreview] =
     useState<TaskEvidenceImagePreview | null>(null);
-  const [cameraCaptureState, setCameraCaptureState] = useState<CameraCaptureState>({
-    opened: false,
-    rule: null,
-  });
-  const [cameraCaptureError, setCameraCaptureError] = useState<string | null>(null);
-  const [cameraCaptureLoading, setCameraCaptureLoading] = useState(false);
-  const [cameraCaptureSubmitting, setCameraCaptureSubmitting] = useState(false);
   const [evidenceImageZoom, setEvidenceImageZoom] = useState(1);
   const evidencePreviewObjectUrlRef = useRef<string | null>(null);
-  const [cameraVideoElement, setCameraVideoElement] = useState<HTMLVideoElement | null>(null);
-  const cameraCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const cameraStreamRef = useRef<MediaStream | null>(null);
-  const nativeCameraInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [evidenceImageThumbs, setEvidenceImageThumbs] = useState<Record<string, string>>({});
   const [evidenceImageThumbErrors, setEvidenceImageThumbErrors] = useState<Record<string, boolean>>({});
   const evidenceImageThumbObjectUrlsRef = useRef<Record<string, string>>({});
@@ -3123,10 +3107,6 @@ const AssistantManagerTaskPlanner = () => {
   const [cerebroItemModalOpen, setCerebroItemModalOpen] = useState(false);
   const [cerebroItemLoading, setCerebroItemLoading] = useState(false);
   const [cerebroItemError, setCerebroItemError] = useState<string | null>(null);
-  const cameraCaptureSupported =
-    typeof navigator !== 'undefined' &&
-    typeof navigator.mediaDevices !== 'undefined' &&
-    typeof navigator.mediaDevices.getUserMedia === 'function';
 
   const selectedLogComments = useMemo(
     () =>
@@ -4881,36 +4861,6 @@ const AssistantManagerTaskPlanner = () => {
     setActiveCerebroItem(null);
   }, []);
 
-  const stopCameraCaptureStream = useCallback(() => {
-    const stream = cameraStreamRef.current;
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-      cameraStreamRef.current = null;
-    }
-    if (cameraVideoElement) {
-      cameraVideoElement.srcObject = null;
-    }
-  }, [cameraVideoElement]);
-
-  const closeCameraCaptureModal = useCallback(() => {
-    stopCameraCaptureStream();
-    setCameraCaptureState({
-      opened: false,
-      rule: null,
-    });
-    setCameraCaptureError(null);
-    setCameraCaptureLoading(false);
-    setCameraCaptureSubmitting(false);
-  }, [stopCameraCaptureStream]);
-
-  const openCameraCaptureModal = useCallback((rule: AssistantManagerTaskEvidenceRule) => {
-    setCameraCaptureState({
-      opened: true,
-      rule,
-    });
-    setCameraCaptureError(null);
-  }, []);
-
   const handleOpenCerebroItem = useCallback(
     async (type: AmTaskCerebroLinkItemType, id: number) => {
       setCerebroItemModalOpen(true);
@@ -4948,10 +4898,8 @@ const AssistantManagerTaskPlanner = () => {
     setCommentDraft('');
     handleCloseEvidenceImagePreview();
     handleCloseCerebroItemModal();
-    closeCameraCaptureModal();
   }, [
     commentSubmitting,
-    closeCameraCaptureModal,
     handleCloseCerebroItemModal,
     handleCloseEvidenceImagePreview,
     logDetailSubmitting,
@@ -5138,135 +5086,47 @@ const AssistantManagerTaskPlanner = () => {
     [handleEvidenceImageSelected],
   );
 
-  useEffect(() => {
-    if (!cameraCaptureState.opened || !cameraCaptureState.rule) {
-      return undefined;
-    }
+  const openNativeImageFilePicker = useCallback(
+    (
+      rule: AssistantManagerTaskEvidenceRule,
+      options?: {
+        capture?: boolean;
+      },
+    ) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.style.position = 'fixed';
+      input.style.left = '-9999px';
+      input.style.top = '-9999px';
 
-    if (!cameraCaptureSupported) {
-      setCameraCaptureError('Camera capture is not supported in this browser.');
-      return undefined;
-    }
-
-    let cancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-
-    const openCamera = async () => {
-      setCameraCaptureLoading(true);
-      setCameraCaptureError(null);
-
-      timeoutId = setTimeout(() => {
-        if (!cancelled) {
-          setCameraCaptureError(
-            'Camera access is taking too long. If no permission prompt appeared, use "Take Photo" instead.',
-          );
-          setCameraCaptureLoading(false);
-        }
-      }, 8000);
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-          },
-          audio: false,
-        });
-
-        if (cancelled) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-
-        cameraStreamRef.current = stream;
-      } catch (error) {
-        if (!cancelled) {
-          setCameraCaptureError(
-            getErrorMessage(error, 'Unable to access the device camera'),
-          );
-        }
-      } finally {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
-        if (!cancelled) {
-          setCameraCaptureLoading(false);
-        }
-      }
-    };
-
-    openCamera().catch(() => undefined);
-
-    return () => {
-      cancelled = true;
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      stopCameraCaptureStream();
-    };
-  }, [cameraCaptureState.opened, cameraCaptureState.rule, cameraCaptureSupported, stopCameraCaptureStream]);
-
-  useEffect(() => {
-    if (!cameraCaptureState.opened || !cameraVideoElement || !cameraStreamRef.current) {
-      return;
-    }
-
-    cameraVideoElement.srcObject = cameraStreamRef.current;
-    cameraVideoElement.play().catch(() => undefined);
-  }, [cameraCaptureState.opened, cameraVideoElement]);
-
-  const handleCapturePhoto = useCallback(async () => {
-    if (!cameraCaptureState.rule || !cameraVideoElement || !cameraCanvasRef.current) {
-      return;
-    }
-
-    const video = cameraVideoElement;
-    const canvas = cameraCanvasRef.current;
-    const width = video.videoWidth;
-    const height = video.videoHeight;
-
-    if (!width || !height) {
-      setCameraCaptureError('Camera preview is not ready yet.');
-      return;
-    }
-
-    const context = canvas.getContext('2d');
-    if (!context) {
-      setCameraCaptureError('Unable to prepare image capture.');
-      return;
-    }
-
-    setCameraCaptureSubmitting(true);
-    setCameraCaptureError(null);
-
-    try {
-      canvas.width = width;
-      canvas.height = height;
-      context.drawImage(video, 0, 0, width, height);
-
-      const blob = await new Promise<Blob | null>((resolve) => {
-        canvas.toBlob(resolve, 'image/jpeg', 0.92);
-      });
-
-      if (!blob) {
-        throw new Error('Unable to capture image from camera');
+      if (options?.capture) {
+        input.setAttribute('capture', 'environment');
       }
 
-      const timestamp = dayjs().format('YYYYMMDD_HHmmss');
-      const file = new File([blob], `task_evidence_${timestamp}.jpg`, {
-        type: 'image/jpeg',
-        lastModified: Date.now(),
-      });
+      const cleanup = () => {
+        input.removeEventListener('change', handleChange);
+        if (input.parentNode) {
+          input.parentNode.removeChild(input);
+        }
+      };
 
-      await handleEvidenceImageSelected(cameraCaptureState.rule, file);
-      closeCameraCaptureModal();
-    } catch (error) {
-      setCameraCaptureError(getErrorMessage(error, 'Failed to capture photo'));
-    } finally {
-      setCameraCaptureSubmitting(false);
-    }
-  }, [cameraCaptureState.rule, cameraVideoElement, closeCameraCaptureModal, handleEvidenceImageSelected]);
+      const handleChange = () => {
+        const nextFile = input.files?.[0] ?? null;
+        if (options?.capture) {
+          handleNativeCameraFileSelected(rule, nextFile);
+        } else {
+          void handleEvidenceImageSelected(rule, nextFile);
+        }
+        cleanup();
+      };
+
+      input.addEventListener('change', handleChange, { once: true });
+      document.body.appendChild(input);
+      input.click();
+    },
+    [handleEvidenceImageSelected, handleNativeCameraFileSelected],
+  );
 
   const handleLogDetailSave = useCallback(async () => {
     if (!selectedLog) {
@@ -8398,53 +8258,26 @@ const AssistantManagerTaskPlanner = () => {
                               <Group justify="center">
                                 <Group gap="sm" justify="center" wrap="wrap">
                                   <Button
-                                    component="label"
+                                    type="button"
                                     variant="default"
                                     loading={evidenceUploadingRuleKey === rule.key}
+                                    onClick={() => {
+                                      openNativeImageFilePicker(rule);
+                                    }}
                                   >
                                     {rule.multiple && ruleItems.length > 0 ? 'Upload Another Image' : 'Upload Image'}
-                                    <input
-                                      hidden
-                                      type="file"
-                                      accept="image/*"
-                                      onChange={(event) => {
-                                        const nextFile = event.currentTarget.files?.[0] ?? null;
-                                        void handleEvidenceImageSelected(rule, nextFile);
-                                        event.currentTarget.value = '';
-                                      }}
-                                    />
                                   </Button>
                                   <Button
-                                    component="label"
+                                    type="button"
                                     variant="light"
                                     leftSection={<IconCamera size={16} />}
                                     disabled={evidenceUploadingRuleKey === rule.key}
+                                    onClick={() => {
+                                      openNativeImageFilePicker(rule, { capture: true });
+                                    }}
                                   >
                                     Take Photo
-                                    <input
-                                      hidden
-                                      ref={(node) => {
-                                        nativeCameraInputRefs.current[rule.key] = node;
-                                      }}
-                                      type="file"
-                                      accept="image/*"
-                                      capture="environment"
-                                      onChange={(event) => {
-                                        const nextFile = event.currentTarget.files?.[0] ?? null;
-                                        handleNativeCameraFileSelected(rule, nextFile);
-                                        event.currentTarget.value = '';
-                                      }}
-                                    />
                                   </Button>
-                                  {cameraCaptureSupported && (
-                                    <Button
-                                      variant="subtle"
-                                      onClick={() => openCameraCaptureModal(rule)}
-                                      disabled={evidenceUploadingRuleKey === rule.key}
-                                    >
-                                      Open Live Camera
-                                    </Button>
-                                  )}
                                 </Group>
                               </Group>
                             )}
@@ -8687,85 +8520,6 @@ const AssistantManagerTaskPlanner = () => {
               Select a linked Cerebro item.
             </Text>
           )}
-        </Stack>
-      </Modal>
-
-      <Modal
-        opened={cameraCaptureState.opened}
-        onClose={closeCameraCaptureModal}
-        centered
-        size="lg"
-        fullScreen={Boolean(isMobile)}
-        title={cameraCaptureState.rule ? `Take Photo: ${cameraCaptureState.rule.label}` : 'Take Photo'}
-      >
-        <Stack gap="md">
-          {cameraCaptureError && (
-            <Alert color="red" title="Camera">
-              {cameraCaptureError}
-            </Alert>
-          )}
-          <Paper withBorder radius="lg" p="md">
-            <Stack gap="sm">
-              <Text size="sm" c="dimmed" ta="center">
-                Capture evidence directly from the device camera. On supported Android, iPhone, iPad, and desktop browsers this opens the live camera feed.
-              </Text>
-              <Box
-                style={{
-                  width: '100%',
-                  aspectRatio: '4 / 3',
-                  borderRadius: 12,
-                  overflow: 'hidden',
-                  backgroundColor: '#0f172a',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  position: 'relative',
-                }}
-              >
-                <video
-                  ref={setCameraVideoElement}
-                  autoPlay
-                  muted
-                  playsInline
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    objectFit: 'cover',
-                    opacity: cameraCaptureLoading ? 0.2 : 1,
-                  }}
-                />
-                {cameraCaptureLoading && (
-                  <Box
-                    style={{
-                      position: 'absolute',
-                      inset: 0,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Loader size="sm" color="white" />
-                  </Box>
-                )}
-              </Box>
-              <canvas ref={cameraCanvasRef} style={{ display: 'none' }} />
-            </Stack>
-          </Paper>
-          <Group justify="center" gap="sm" wrap="wrap">
-            <Button variant="default" onClick={closeCameraCaptureModal} disabled={cameraCaptureSubmitting}>
-              Cancel
-            </Button>
-            <Button
-              leftSection={<IconCamera size={16} />}
-              onClick={() => {
-                void handleCapturePhoto();
-              }}
-              loading={cameraCaptureSubmitting}
-              disabled={cameraCaptureLoading || !cameraCaptureState.rule}
-            >
-              Capture Photo
-            </Button>
-          </Group>
         </Stack>
       </Modal>
 
