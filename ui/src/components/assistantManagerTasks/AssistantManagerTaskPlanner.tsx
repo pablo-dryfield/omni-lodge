@@ -3089,9 +3089,10 @@ const AssistantManagerTaskPlanner = () => {
   const [cameraCaptureSubmitting, setCameraCaptureSubmitting] = useState(false);
   const [evidenceImageZoom, setEvidenceImageZoom] = useState(1);
   const evidencePreviewObjectUrlRef = useRef<string | null>(null);
-  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [cameraVideoElement, setCameraVideoElement] = useState<HTMLVideoElement | null>(null);
   const cameraCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
+  const nativeCameraInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [evidenceImageThumbs, setEvidenceImageThumbs] = useState<Record<string, string>>({});
   const [evidenceImageThumbErrors, setEvidenceImageThumbErrors] = useState<Record<string, boolean>>({});
   const evidenceImageThumbObjectUrlsRef = useRef<Record<string, string>>({});
@@ -4886,10 +4887,10 @@ const AssistantManagerTaskPlanner = () => {
       stream.getTracks().forEach((track) => track.stop());
       cameraStreamRef.current = null;
     }
-    if (cameraVideoRef.current) {
-      cameraVideoRef.current.srcObject = null;
+    if (cameraVideoElement) {
+      cameraVideoElement.srcObject = null;
     }
-  }, []);
+  }, [cameraVideoElement]);
 
   const closeCameraCaptureModal = useCallback(() => {
     stopCameraCaptureStream();
@@ -5130,6 +5131,13 @@ const AssistantManagerTaskPlanner = () => {
     [dispatch, refreshLogs, selectedLog],
   );
 
+  const handleNativeCameraFileSelected = useCallback(
+    (rule: AssistantManagerTaskEvidenceRule, file: File | null) => {
+      void handleEvidenceImageSelected(rule, file);
+    },
+    [handleEvidenceImageSelected],
+  );
+
   useEffect(() => {
     if (!cameraCaptureState.opened || !cameraCaptureState.rule) {
       return undefined;
@@ -5141,10 +5149,20 @@ const AssistantManagerTaskPlanner = () => {
     }
 
     let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     const openCamera = async () => {
       setCameraCaptureLoading(true);
       setCameraCaptureError(null);
+
+      timeoutId = setTimeout(() => {
+        if (!cancelled) {
+          setCameraCaptureError(
+            'Camera access is taking too long. If no permission prompt appeared, use "Take Photo" instead.',
+          );
+          setCameraCaptureLoading(false);
+        }
+      }, 8000);
 
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -5162,10 +5180,6 @@ const AssistantManagerTaskPlanner = () => {
         }
 
         cameraStreamRef.current = stream;
-        if (cameraVideoRef.current) {
-          cameraVideoRef.current.srcObject = stream;
-          await cameraVideoRef.current.play().catch(() => undefined);
-        }
       } catch (error) {
         if (!cancelled) {
           setCameraCaptureError(
@@ -5173,6 +5187,9 @@ const AssistantManagerTaskPlanner = () => {
           );
         }
       } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
         if (!cancelled) {
           setCameraCaptureLoading(false);
         }
@@ -5183,16 +5200,28 @@ const AssistantManagerTaskPlanner = () => {
 
     return () => {
       cancelled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       stopCameraCaptureStream();
     };
   }, [cameraCaptureState.opened, cameraCaptureState.rule, cameraCaptureSupported, stopCameraCaptureStream]);
 
-  const handleCapturePhoto = useCallback(async () => {
-    if (!cameraCaptureState.rule || !cameraVideoRef.current || !cameraCanvasRef.current) {
+  useEffect(() => {
+    if (!cameraCaptureState.opened || !cameraVideoElement || !cameraStreamRef.current) {
       return;
     }
 
-    const video = cameraVideoRef.current;
+    cameraVideoElement.srcObject = cameraStreamRef.current;
+    cameraVideoElement.play().catch(() => undefined);
+  }, [cameraCaptureState.opened, cameraVideoElement]);
+
+  const handleCapturePhoto = useCallback(async () => {
+    if (!cameraCaptureState.rule || !cameraVideoElement || !cameraCanvasRef.current) {
+      return;
+    }
+
+    const video = cameraVideoElement;
     const canvas = cameraCanvasRef.current;
     const width = video.videoWidth;
     const height = video.videoHeight;
@@ -5237,7 +5266,7 @@ const AssistantManagerTaskPlanner = () => {
     } finally {
       setCameraCaptureSubmitting(false);
     }
-  }, [cameraCaptureState.rule, closeCameraCaptureModal, handleEvidenceImageSelected]);
+  }, [cameraCaptureState.rule, cameraVideoElement, closeCameraCaptureModal, handleEvidenceImageSelected]);
 
   const handleLogDetailSave = useCallback(async () => {
     if (!selectedLog) {
@@ -8386,13 +8415,36 @@ const AssistantManagerTaskPlanner = () => {
                                     />
                                   </Button>
                                   <Button
+                                    component="label"
                                     variant="light"
                                     leftSection={<IconCamera size={16} />}
-                                    onClick={() => openCameraCaptureModal(rule)}
-                                    disabled={!cameraCaptureSupported || evidenceUploadingRuleKey === rule.key}
+                                    disabled={evidenceUploadingRuleKey === rule.key}
                                   >
                                     Take Photo
+                                    <input
+                                      hidden
+                                      ref={(node) => {
+                                        nativeCameraInputRefs.current[rule.key] = node;
+                                      }}
+                                      type="file"
+                                      accept="image/*"
+                                      capture="environment"
+                                      onChange={(event) => {
+                                        const nextFile = event.currentTarget.files?.[0] ?? null;
+                                        handleNativeCameraFileSelected(rule, nextFile);
+                                        event.currentTarget.value = '';
+                                      }}
+                                    />
                                   </Button>
+                                  {cameraCaptureSupported && (
+                                    <Button
+                                      variant="subtle"
+                                      onClick={() => openCameraCaptureModal(rule)}
+                                      disabled={evidenceUploadingRuleKey === rule.key}
+                                    >
+                                      Open Live Camera
+                                    </Button>
+                                  )}
                                 </Group>
                               </Group>
                             )}
@@ -8667,22 +8719,33 @@ const AssistantManagerTaskPlanner = () => {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
+                  position: 'relative',
                 }}
               >
-                {cameraCaptureLoading ? (
-                  <Loader size="sm" color="white" />
-                ) : (
-                  <video
-                    ref={cameraVideoRef}
-                    autoPlay
-                    muted
-                    playsInline
+                <video
+                  ref={setCameraVideoElement}
+                  autoPlay
+                  muted
+                  playsInline
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover',
+                    opacity: cameraCaptureLoading ? 0.2 : 1,
+                  }}
+                />
+                {cameraCaptureLoading && (
+                  <Box
                     style={{
-                      width: '100%',
-                      height: '100%',
-                      objectFit: 'cover',
+                      position: 'absolute',
+                      inset: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
                     }}
-                  />
+                  >
+                    <Loader size="sm" color="white" />
+                  </Box>
                 )}
               </Box>
               <canvas ref={cameraCanvasRef} style={{ display: 'none' }} />
