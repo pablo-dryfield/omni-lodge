@@ -2,6 +2,9 @@ import { randomUUID } from 'crypto';
 import { Op, type Transaction, type WhereOptions } from 'sequelize';
 import type { Response } from 'express';
 import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat.js';
+import timezone from 'dayjs/plugin/timezone.js';
+import utc from 'dayjs/plugin/utc.js';
 import AssistantManagerTaskTemplate, { type AssistantManagerTaskCadence } from '../models/AssistantManagerTaskTemplate.js';
 import AssistantManagerTaskAssignment, { type AssistantManagerTaskAssignmentScope } from '../models/AssistantManagerTaskAssignment.js';
 import AssistantManagerTaskLog, { type AssistantManagerTaskStatus } from '../models/AssistantManagerTaskLog.js';
@@ -24,6 +27,10 @@ import {
   storeAssistantManagerTaskEvidenceImage,
 } from '../services/assistantManagerTaskEvidenceStorageService.js';
 import { getConfigValue } from '../services/configService.js';
+
+dayjs.extend(customParseFormat);
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 const CADENCE_VALUES = new Set<AssistantManagerTaskCadence>(['daily', 'weekly', 'biweekly', 'every_two_weeks', 'monthly']);
 const STATUS_VALUES = new Set<AssistantManagerTaskStatus>(['pending', 'completed', 'missed', 'waived']);
@@ -104,6 +111,8 @@ const canViewAllTaskLogs = (req: AuthenticatedRequest): boolean => {
 };
 const PRIORITY_VALUES = new Set(['high', 'medium', 'low']);
 const TIME_INPUT_FORMATS = ['HH:mm', 'H:mm', 'HH:mm:ss', 'h:mm A', 'h A'];
+const TASK_COMPLETION_WINDOW_MODE_VALUES = new Set(['day', 'strict']);
+const DEFAULT_TASK_TIMEZONE = 'Europe/Warsaw';
 
 type ShiftDayInfo = {
   shiftInstanceId: number;
@@ -625,6 +634,78 @@ const normalizeTimeValue = (value: unknown): string | null => {
     }
   }
   return null;
+};
+
+const resolveTaskPlannerTimezone = (): string =>
+  (getConfigValue('SCHED_TZ') as string) ?? DEFAULT_TASK_TIMEZONE;
+
+const normalizeTaskCompletionWindowMode = (value: unknown): 'day' | 'strict' => {
+  if (typeof value !== 'string') {
+    return 'day';
+  }
+  const normalized = value.trim().toLowerCase();
+  return TASK_COMPLETION_WINDOW_MODE_VALUES.has(normalized) && normalized === 'strict'
+    ? 'strict'
+    : 'day';
+};
+
+const resolveTaskCompletionWindowMode = (
+  template?: Pick<AssistantManagerTaskTemplate, 'scheduleConfig'> | null,
+  meta?: Record<string, unknown> | null,
+): 'day' | 'strict' => {
+  const metaValue = meta?.completionWindowMode;
+  if (typeof metaValue === 'string') {
+    const normalized = metaValue.trim().toLowerCase();
+    if (TASK_COMPLETION_WINDOW_MODE_VALUES.has(normalized)) {
+      return normalizeTaskCompletionWindowMode(normalized);
+    }
+  }
+
+  const scheduleConfig = toScheduleConfig(template?.scheduleConfig);
+  return normalizeTaskCompletionWindowMode(scheduleConfig.completionWindowMode);
+};
+
+const resolveTaskLogDurationHours = (
+  log: Pick<AssistantManagerTaskLog, 'meta'> & { template?: Pick<AssistantManagerTaskTemplate, 'scheduleConfig'> | null },
+): number | null => {
+  const meta = (log.meta ?? {}) as Record<string, unknown>;
+  const scheduleConfig = toScheduleConfig(log.template?.scheduleConfig);
+  const durationValue =
+    typeof meta.durationHours === 'number'
+      ? meta.durationHours
+      : Number(meta.durationHours ?? scheduleConfig.durationHours ?? NaN);
+
+  if (!Number.isFinite(durationValue) || durationValue <= 0) {
+    return null;
+  }
+
+  return durationValue;
+};
+
+const getTaskLogStrictCompletionDeadline = (
+  log: Pick<AssistantManagerTaskLog, 'taskDate' | 'meta'> & { template?: Pick<AssistantManagerTaskTemplate, 'scheduleConfig'> | null },
+  timezoneName = resolveTaskPlannerTimezone(),
+): dayjs.Dayjs | null => {
+  if (resolveTaskCompletionWindowMode(log.template, (log.meta ?? {}) as Record<string, unknown>) !== 'strict') {
+    return null;
+  }
+
+  const meta = (log.meta ?? {}) as Record<string, unknown>;
+  const scheduleConfig = toScheduleConfig(log.template?.scheduleConfig);
+  const normalizedTime = normalizeTimeValue(
+    meta.time ?? meta.shiftTimeStart ?? scheduleConfig.time ?? scheduleConfig.hour,
+  );
+  const durationHours = resolveTaskLogDurationHours(log);
+  if (!normalizedTime || durationHours == null) {
+    return null;
+  }
+
+  const startAt = dayjs.tz(`${log.taskDate} ${normalizedTime}`, 'YYYY-MM-DD HH:mm', timezoneName);
+  if (!startAt.isValid()) {
+    return null;
+  }
+
+  return startAt.add(Math.round(durationHours * 60), 'minute');
 };
 
 const parseOptionalTime = (value: unknown, fieldName: string): string | null | undefined => {
@@ -1152,9 +1233,11 @@ const getActorId = (req: AuthenticatedRequest) => req.authContext?.id ?? null;
 
 const isTaskLogOnCurrentDay = (
   log: Pick<AssistantManagerTaskLog, 'taskDate'>,
+  timezoneName = resolveTaskPlannerTimezone(),
 ): boolean => {
-  const taskDay = dayjs(log.taskDate);
-  return taskDay.isValid() && taskDay.isSame(dayjs(), 'day');
+  const taskDay = dayjs.tz(log.taskDate, 'YYYY-MM-DD', timezoneName);
+  const today = dayjs().tz(timezoneName);
+  return taskDay.isValid() && taskDay.isSame(today, 'day');
 };
 
 const canEditTaskLogEvidence = (
@@ -3114,12 +3197,18 @@ export const updateTaskLogStatus = async (req: AuthenticatedRequest, res: Respon
       res.status(400).json([{ message: 'Invalid status provided' }]);
       return;
     }
+    const timezoneName = resolveTaskPlannerTimezone();
     const payload: Partial<AssistantManagerTaskLog> = {};
     const nextMeta = { ...(log.meta ?? {}) } as Record<string, unknown>;
     if (status) {
       if (status === 'completed') {
-        if (!isTaskLogOnCurrentDay(log)) {
+        if (!isTaskLogOnCurrentDay(log, timezoneName)) {
           res.status(400).json([{ message: 'Task can only be completed on its scheduled day' }]);
+          return;
+        }
+        const strictDeadline = getTaskLogStrictCompletionDeadline(log, timezoneName);
+        if (strictDeadline && dayjs().tz(timezoneName).isAfter(strictDeadline)) {
+          res.status(400).json([{ message: 'Task can no longer be completed after its scheduled end time' }]);
           return;
         }
         const { normalizedItems } = ensureEvidenceRequirementsSatisfied(log.template, nextMeta);
