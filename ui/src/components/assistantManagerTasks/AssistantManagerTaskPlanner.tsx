@@ -1074,6 +1074,16 @@ const formatTaskDetailTimeRange = (time: string, durationHours: string) => {
   return `${parsedTime.format('HH:mm')} to ${endTime.format('HH:mm')} (${durationHours}h)`;
 };
 
+const normalizeTemplateTimeInput = (value: string): string | null => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const parsed = dayjs(trimmed, TIME_INPUT_FORMATS, true);
+  return parsed.isValid() ? parsed.format('HH:mm') : null;
+};
+
 const parseHourValue = (input: unknown): number | null => {
   if (typeof input === 'number' && Number.isFinite(input)) {
     return input;
@@ -4112,6 +4122,7 @@ const AssistantManagerTaskPlanner = () => {
       const scheduleConfig = JSON.parse(templateFormState.scheduleConfigText || '{}');
       const nextScheduleConfig: Record<string, unknown> = { ...scheduleConfig };
       const trimmedTime = templateFormState.defaultTime.trim();
+      const normalizedDefaultTime = normalizeTemplateTimeInput(trimmedTime);
       const durationNumeric = Number(templateFormState.defaultDuration);
       const pointsNumeric = Number(templateFormState.defaultPoints);
       const timesPerWeekNumeric = Number(templateFormState.timesPerWeekPerAssignedUser);
@@ -4141,8 +4152,13 @@ const AssistantManagerTaskPlanner = () => {
         return;
       }
 
-      if (trimmedTime) {
-        nextScheduleConfig.time = trimmedTime;
+      if (trimmedTime && !normalizedDefaultTime) {
+        setTemplateFormError('Default start time must be a valid time like 08:00 or 8:00 AM');
+        return;
+      }
+
+      if (normalizedDefaultTime) {
+        nextScheduleConfig.time = normalizedDefaultTime;
       } else {
         delete nextScheduleConfig.time;
       }
@@ -4164,7 +4180,7 @@ const AssistantManagerTaskPlanner = () => {
 
       if (
         templateFormState.completionWindowMode === 'strict' &&
-        (!trimmedTime || !Number.isFinite(durationNumeric) || durationNumeric <= 0)
+        (!normalizedDefaultTime || !Number.isFinite(durationNumeric) || durationNumeric <= 0)
       ) {
         setTemplateFormError('Strict-to-schedule tasks require both a default start time and duration.');
         return;
