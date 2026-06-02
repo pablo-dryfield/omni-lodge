@@ -6832,46 +6832,50 @@ const AssistantManagerTaskPlanner = () => {
                 label="Name"
                 required
                 value={templateFormState.name}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const value = event.currentTarget.value;
                   setTemplateFormState((prev) => ({
                     ...prev,
-                    name: event.currentTarget.value,
-                  }))
-                }
+                    name: value,
+                  }));
+                }}
               />
               <Textarea
                 label="Description"
                 minRows={3}
                 value={templateFormState.description}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const value = event.currentTarget.value;
                   setTemplateFormState((prev) => ({
                     ...prev,
-                    description: event.currentTarget.value,
-                  }))
-                }
+                    description: value,
+                  }));
+                }}
               />
               <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
                 <TextInput
                   label="Category"
                   description="Top-level library grouping."
                   value={templateFormState.category}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
                     setTemplateFormState((prev) => ({
                       ...prev,
-                      category: event.currentTarget.value,
-                    }))
-                  }
+                      category: value,
+                    }));
+                  }}
                 />
                 <TextInput
                   label="Subgroup"
                   description="Section inside the category."
                   value={templateFormState.subgroup}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
                     setTemplateFormState((prev) => ({
                       ...prev,
-                      subgroup: event.currentTarget.value,
-                    }))
-                  }
+                      subgroup: value,
+                    }));
+                  }}
                 />
               </SimpleGrid>
             </Stack>
@@ -6918,47 +6922,51 @@ const AssistantManagerTaskPlanner = () => {
                 placeholder="2"
                 description="For weekly/biweekly person-based tasks, generate the task on each matched user's first N scheduled workdays of the week."
                 value={templateFormState.timesPerWeekPerAssignedUser}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const value = event.currentTarget.value;
                   setTemplateFormState((prev) => ({
                     ...prev,
-                    timesPerWeekPerAssignedUser: event.currentTarget.value,
-                  }))
-                }
+                    timesPerWeekPerAssignedUser: value,
+                  }));
+                }}
               />
               <TextInput
                 label="Reminder Minutes Before Start"
                 placeholder="30"
                 description="Send a reminder notification this many minutes before the task start time."
                 value={templateFormState.reminderMinutesBeforeStart}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const value = event.currentTarget.value;
                   setTemplateFormState((prev) => ({
                     ...prev,
-                    reminderMinutesBeforeStart: event.currentTarget.value,
-                  }))
-                }
+                    reminderMinutesBeforeStart: value,
+                  }));
+                }}
               />
               <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
                 <TextInput
                   label="Default Start Time"
                   placeholder="08:00"
                   value={templateFormState.defaultTime}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
                     setTemplateFormState((prev) => ({
                       ...prev,
-                      defaultTime: event.currentTarget.value,
-                    }))
-                  }
+                      defaultTime: value,
+                    }));
+                  }}
                 />
                 <TextInput
                   label="Default Duration (hours)"
                   placeholder="1.5"
                   value={templateFormState.defaultDuration}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
                     setTemplateFormState((prev) => ({
                       ...prev,
-                      defaultDuration: event.currentTarget.value,
-                    }))
-                  }
+                      defaultDuration: value,
+                    }));
+                  }}
                 />
               </SimpleGrid>
               <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
@@ -6980,33 +6988,36 @@ const AssistantManagerTaskPlanner = () => {
                   label="Default Points"
                   placeholder="1"
                   value={templateFormState.defaultPoints}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
                     setTemplateFormState((prev) => ({
                       ...prev,
-                      defaultPoints: event.currentTarget.value,
-                    }))
-                  }
+                      defaultPoints: value,
+                    }));
+                  }}
                 />
               </SimpleGrid>
               <Switch
                 label="Notify again at task start time"
                 checked={templateFormState.notifyAtStart}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const checked = event.currentTarget.checked;
                   setTemplateFormState((prev) => ({
                     ...prev,
-                    notifyAtStart: event.currentTarget.checked,
-                  }))
-                }
+                    notifyAtStart: checked,
+                  }));
+                }}
               />
               <Switch
                 label="Require staff to be on shift by default"
                 checked={templateFormState.requireShift}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const checked = event.currentTarget.checked;
                   setTemplateFormState((prev) => ({
                     ...prev,
-                    requireShift: event.currentTarget.checked,
-                  }))
-                }
+                    requireShift: checked,
+                  }));
+                }}
               />
             </Stack>
           </Paper>
@@ -7295,12 +7306,13 @@ const AssistantManagerTaskPlanner = () => {
                 label="Schedule Config (JSON)"
                 minRows={4}
                 value={templateFormState.scheduleConfigText}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const value = event.currentTarget.value;
                   setTemplateFormState((prev) => ({
                     ...prev,
-                    scheduleConfigText: event.currentTarget.value,
-                  }))
-                }
+                    scheduleConfigText: value,
+                  }));
+                }}
               />
             </Stack>
           </Paper>
