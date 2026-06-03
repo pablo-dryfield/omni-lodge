@@ -9,7 +9,6 @@ import { useMediaQuery } from "@mantine/hooks";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import {
   formatScheduleWeekLabel,
-  getUpcomingWeeks,
   useEnsureWeek,
   useShiftInstances,
   useScheduleWeeks,
@@ -249,18 +248,6 @@ const isPubCrawlShiftInstance = (instance: ShiftInstance) => {
   }
 
   return typeName.includes("pub crawl") || templateName.includes("pub crawl");
-};
-
-type ShiftTimeBucket = {
-  label: string;
-  instancesByDate: Map<string, ShiftInstance[]>;
-};
-
-type ShiftGroup = {
-  key: string;
-  shiftTypeName: string;
-  heading: string;
-  timeBuckets: ShiftTimeBucket[];
 };
 
 const createShiftGroupKey = (instance: ShiftInstance) => {

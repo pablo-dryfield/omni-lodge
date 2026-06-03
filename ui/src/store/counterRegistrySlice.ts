@@ -13,7 +13,6 @@ import type {
   MetricKind,
   MetricPeriod,
   MetricTallyType,
-  StaffOption,
 } from '../types/counters/CounterRegistry';
 import type { RootState } from './store';
 
@@ -422,8 +421,6 @@ export const flushDirtyMetrics = createAsyncThunk<
       return nextQty > 0;
     })
     .map((metric) => {
-      const key = buildMetricKey(metric);
-      const persisted = state.persistedMetricsByKey[key];
       const nextQty = Math.max(0, Number(metric.qty) || 0);
       return {
         channelId: metric.channelId,

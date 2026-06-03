@@ -17,8 +17,6 @@ import {
   Card,
   CardContent,
   CircularProgress,
-  Divider,
-  MenuItem,
   Paper,
   Stack,
   ThemeProvider,
@@ -29,18 +27,13 @@ import {
   TableRow,
   TableCell,
   TableContainer,
-  TextField,
-  Switch,
 } from "@mui/material";
-import RefreshIcon from "@mui/icons-material/Refresh";
-import { styled, alpha } from "@mui/material/styles";
+import { styled } from "@mui/material/styles";
 import { createTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
-import { GridStack } from "gridstack";
-import "gridstack/dist/gridstack.min.css";
 import { GenericPageProps } from "../types/general/GenericPageProps";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { navigateToPage } from "../actions/navigationActions";
@@ -90,32 +83,6 @@ const DEFAULT_CARD_LAYOUT = {
   w: 6,
   h: 4,
 };
-const buildGridStackColumnStyles = (columns: number): string => {
-  const columnWidth = 100 / columns;
-  const rules = [`.gs-${columns} > .grid-stack-item { width: ${columnWidth.toFixed(6)}%; }`];
-  for (let i = 0; i <= columns; i += 1) {
-    const width = (columnWidth * i).toFixed(6);
-    rules.push(`.gs-${columns} > .grid-stack-item[gs-w="${i}"] { width: ${width}%; }`);
-    rules.push(`.gs-${columns} > .grid-stack-item[gs-x="${i}"] { left: ${width}%; }`);
-  }
-  return rules.join("\n");
-};
-
-const buildHomeGridCss = (columns: number): string => `
-${buildGridStackColumnStyles(columns)}
-.home-dashboard-grid .grid-stack-item-content {
-  display: flex;
-  align-items: stretch;
-  justify-content: stretch;
-  height: 100%;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  box-shadow: none;
-  padding: 0;
-  cursor: default;
-}
-`;
 
 const AUTO_REFRESH_INTERVAL_MS = 60 * 1000;
 
@@ -605,12 +572,6 @@ type CardHydrationDescriptor =
 type PreviewPeriodValue = DashboardPreviewPeriodPreset | "custom";
 type SpotlightPeriodSelection = DashboardPreviewPeriodPreset | "custom";
 type VisualPeriodSelection = DashboardPreviewPeriodPreset | "custom";
-
-const PERIOD_OPTIONS: Array<{ value: PreviewPeriodValue; label: string }> = [
-  { value: "this_month", label: "This month" },
-  { value: "last_month", label: "Last month" },
-  { value: "custom", label: "Custom range" },
-];
 
 const SPOTLIGHT_PERIOD_OPTIONS: Array<{ value: DashboardPreviewPeriodPreset; label: string }> = [
   { value: "today", label: "Today" },
@@ -1729,11 +1690,6 @@ const Home = (props: GenericPageProps) => {
   const gridColumns =
     layoutMode === "mobile" ? HOME_LAYOUT_SOURCE_COLUMNS_MOBILE : HOME_LAYOUT_SOURCE_COLUMNS_DESKTOP;
   const gridRowHeight = HOME_GRID_ROW_HEIGHT_PX;
-  const gridGapPx = 0;
-  const homeGridSize = Math.max(12, Math.floor(gridRowHeight / 8));
-  const homeGridCss = useMemo(() => buildHomeGridCss(gridColumns), [gridColumns]);
-  const dashboardGridRef = useRef<HTMLDivElement | null>(null);
-  const dashboardGridInstanceRef = useRef<GridStack | null>(null);
   const gridLayoutCards = useMemo(() => {
     return orderedActiveCards.map((card) => {
       const layout = resolveDashboardLayout(card.layout, layoutMode, gridColumns);
@@ -1759,73 +1715,12 @@ const Home = (props: GenericPageProps) => {
     });
   }, [gridColumns, gridRowHeight, layoutMode, orderedActiveCards]);
   const shouldHydrateLiveData = canUseDashboards && effectiveViewMode === "dashboard";
-
-  useEffect(() => {
-    const container = dashboardGridRef.current;
-    if (!container) {
-      return;
-    }
-    if (gridLayoutCards.length === 0) {
-      if (dashboardGridInstanceRef.current) {
-        dashboardGridInstanceRef.current.destroy(false);
-        dashboardGridInstanceRef.current = null;
-      }
-      return;
-    }
-    if (dashboardGridInstanceRef.current) {
-      dashboardGridInstanceRef.current.destroy(false);
-      dashboardGridInstanceRef.current = null;
-    }
-    const grid = GridStack.init(
-      {
-        column: gridColumns,
-        cellHeight: gridRowHeight,
-        margin: gridGapPx,
-        float: true,
-        disableOneColumnMode: true,
-        staticGrid: true,
-      },
-      container,
-    );
-    dashboardGridInstanceRef.current = grid;
-    return () => {
-      grid.destroy(false);
-      dashboardGridInstanceRef.current = null;
-    };
-  }, [gridColumns, gridGapPx, gridLayoutCards.length, gridRowHeight]);
-
-  useEffect(() => {
-    const container = dashboardGridRef.current;
-    const grid = dashboardGridInstanceRef.current;
-    if (!container || !grid) {
-      return;
-    }
-    const layoutById = new Map(
-      gridLayoutCards.map((entry) => [
-        entry.card.id,
-        { x: entry.gridX, y: entry.gridY, w: entry.columnSpan, h: entry.rowSpan },
-      ]),
-    );
-    grid.batchUpdate();
-    grid.removeAll(false);
-    container.querySelectorAll<HTMLElement>(".grid-stack-item").forEach((element) => {
-      const cardId = element.getAttribute("gs-id") ?? element.getAttribute("data-gs-id");
-      const layout = cardId ? layoutById.get(cardId) : null;
-      if (cardId && layout) {
-        grid.makeWidget(element, { ...layout, id: cardId });
-        return;
-      }
-      grid.makeWidget(element);
-    });
-    grid.batchUpdate(false);
-  }, [gridLayoutCards]);
   const cardsSupportPeriod = useMemo(
     () => orderedActiveCards.some((card) => cardSupportsPeriodOverride((card.viewConfig as DashboardCardViewConfig) ?? null)),
     [orderedActiveCards],
   );
-  const [globalPeriodSelection, setGlobalPeriodSelection] = useState<PreviewPeriodValue>("this_month");
-  const [globalCustomInputs, setGlobalCustomInputs] = useState<{ from: string; to: string }>({ from: "", to: "" });
-  const [globalCustomAppliedRange, setGlobalCustomAppliedRange] = useState<{ from: string; to: string } | null>(null);
+  const [globalPeriodSelection] = useState<PreviewPeriodValue>("this_month");
+  const [globalCustomAppliedRange] = useState<{ from: string; to: string } | null>(null);
   const [globalSegmentValue, setGlobalSegmentValue] = useState<string | null>(null);
   const [linkedCardStates, setLinkedCardStates] = useState<Record<string, boolean>>({});
   const globalPeriodOverride = useMemo<DashboardPreviewPeriodPreset | DashboardPreviewPeriodOverride | null>(() => {
@@ -1854,9 +1749,9 @@ const Home = (props: GenericPageProps) => {
       return next;
     });
   }, [orderedActiveCards]);
-  const [refreshMode, setRefreshMode] = useState<"manual" | "auto">("manual");
+  const [refreshMode] = useState<"manual" | "auto">("manual");
   const [refreshNonce, setRefreshNonce] = useState(0);
-  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
+  const [, setLastRefreshedAt] = useState<string | null>(null);
   const bulkResultsCacheRef = useRef(new Map<string, ReportBulkQueryResultEntry>());
   const [bulkCacheVersion, setBulkCacheVersion] = useState(0);
   const [refreshTargetIds, setRefreshTargetIds] = useState<string[]>([]);
@@ -3072,56 +2967,6 @@ const Home = (props: GenericPageProps) => {
       spotlightPeriodSelectionsByField,
     ],
   );
-  const handleGlobalPresetSelection = useCallback(
-    (value: PreviewPeriodValue) => {
-      setGlobalPeriodSelection(value);
-      if (value !== "custom") {
-        setGlobalCustomAppliedRange(null);
-      }
-    },
-    [],
-  );
-  const handleGlobalCustomInputChange = useCallback((key: "from" | "to", value: string) => {
-    setGlobalCustomInputs((current) => ({
-      ...current,
-      [key]: value ?? "",
-    }));
-  }, []);
-  const handleGlobalApplyCustomRange = useCallback(() => {
-    const from = globalCustomInputs.from.trim();
-    const to = globalCustomInputs.to.trim();
-    if (!from || !to) {
-      return;
-    }
-    setGlobalPeriodSelection("custom");
-    setGlobalCustomAppliedRange({
-      from,
-      to,
-    });
-  }, [globalCustomInputs.from, globalCustomInputs.to]);
-  const globalAppliedRangeLabel = useMemo(() => {
-    if (!globalPeriodOverride) {
-      return null;
-    }
-    if (typeof globalPeriodOverride === "string") {
-      const now = dayjs();
-      if (globalPeriodOverride === "this_month") {
-        return `Applied range: ${now.startOf("month").format("MMM D, YYYY")} - ${now
-          .endOf("month")
-          .format("MMM D, YYYY")}`;
-      }
-      const ref = now.subtract(1, "month");
-      return `Applied range: ${ref.startOf("month").format("MMM D, YYYY")} - ${ref
-        .endOf("month")
-        .format("MMM D, YYYY")}`;
-    }
-    if (globalPeriodOverride.mode === "custom") {
-      const from = formatDisplayDate(globalPeriodOverride.from);
-      const to = formatDisplayDate(globalPeriodOverride.to);
-      return from && to ? `Applied range: ${from} - ${to}` : null;
-    }
-    return null;
-  }, [globalPeriodOverride]);
   useEffect(() => {
     if (!shouldHydrateLiveData || !activeDashboardId) {
       return;
@@ -3148,16 +2993,6 @@ const Home = (props: GenericPageProps) => {
     }
     triggerRefresh();
   }, [globalPeriodOverride, shouldHydrateLiveData, triggerRefresh]);
-
-  const globalPeriodStatusText = useMemo(() => {
-    if (!cardsSupportPeriod) {
-      return "Add a date filter to a dashboard card to enable period overrides.";
-    }
-    if (globalPeriodSelection === "custom" && !globalCustomAppliedRange) {
-      return "Select start and end dates, then click Apply.";
-    }
-    return globalAppliedRangeLabel ?? "Select a period to apply to all preview tables.";
-  }, [globalAppliedRangeLabel, globalCustomAppliedRange, globalPeriodSelection, cardsSupportPeriod]);
 
   const cardHydrationDescriptors = useMemo<CardHydrationDescriptor[]>(() => {
     if (!shouldHydrateLiveData || activeCards.length === 0) {
@@ -3718,105 +3553,6 @@ const Home = (props: GenericPageProps) => {
     </Card>
   );
 
-  const renderDashboardControls = () => {
-    const isCustom = globalPeriodSelection === "custom";
-    const lastUpdatedLabel = lastRefreshedAt ? dayjs(lastRefreshedAt).format("DD/MM/YYYY, HH:mm:ss") : "Never refreshed";
-    const hasSegments = globalSegmentOptions.length > 0;
-    return (
-      <Stack gap={isCustom ? 1.5 : 1} alignItems="center" justifyContent="center">
-        <Stack direction={{ xs: "column", md: "row" }} gap={2} alignItems="center" justifyContent="center">
-          <Button
-            variant="contained"
-            startIcon={<RefreshIcon fontSize="small" />}
-            onClick={triggerRefresh}
-            disabled={!shouldHydrateLiveData}
-          >
-            Refresh data
-          </Button>
-          <Stack direction="row" gap={1} alignItems="center">
-            <Switch
-              checked={refreshMode === "auto"}
-              onChange={(event) => setRefreshMode(event.target.checked ? "auto" : "manual")}
-            />
-            <Typography variant="body2">{refreshMode === "auto" ? "Automatic refresh" : "Idle mode"}</Typography>
-          </Stack>
-          <Typography variant="body2" color="textSecondary">
-            Last updated {lastUpdatedLabel}
-          </Typography>
-        </Stack>
-        {hasSegments && (
-          <Stack direction={{ xs: "column", md: "row" }} gap={1} alignItems="center" justifyContent="center">
-            <TextField
-              select
-              size="small"
-              label="Focus segment"
-              value={globalSegmentValue ?? ""}
-              onChange={(event) => setGlobalSegmentValue(event.target.value.length > 0 ? event.target.value : null)}
-              sx={{ minWidth: 220 }}
-            >
-              <MenuItem value="">All segments</MenuItem>
-              {globalSegmentOptions.map((option) => (
-                <MenuItem key={option} value={option}>
-                  {option}
-                </MenuItem>
-              ))}
-            </TextField>
-            {globalSegmentValue && (
-              <Chip size="small" color="info" label={`Focused on ${globalSegmentValue}`} variant="outlined" />
-            )}
-          </Stack>
-        )}
-        {cardsSupportPeriod && (
-          <>
-            <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="center">
-              {PERIOD_OPTIONS.map((option) => (
-                <Button
-                  key={option.value}
-                  size="small"
-                  variant={globalPeriodSelection === option.value ? "contained" : "outlined"}
-                  onClick={() => handleGlobalPresetSelection(option.value)}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </Stack>
-            {isCustom && (
-              <Stack direction={{ xs: "column", sm: "row" }} gap={1} alignItems="center" justifyContent="center">
-                <TextField
-                  type="date"
-                  size="small"
-                  label="Start"
-                  value={globalCustomInputs.from}
-                  onChange={(event) => handleGlobalCustomInputChange("from", event.target.value)}
-                  InputLabelProps={{ shrink: true }}
-                />
-                <TextField
-                  type="date"
-                  size="small"
-                  label="End"
-                  value={globalCustomInputs.to}
-                  onChange={(event) => handleGlobalCustomInputChange("to", event.target.value)}
-                  InputLabelProps={{ shrink: true }}
-                />
-                <Button
-                  size="small"
-                  variant="contained"
-                  onClick={handleGlobalApplyCustomRange}
-                  disabled={globalCustomInputs.from.trim().length === 0 || globalCustomInputs.to.trim().length === 0}
-                >
-                  Apply
-                </Button>
-              </Stack>
-            )}
-            <CardSubtitle variant="caption" sx={{ textAlign: "center" }}>
-              {globalPeriodStatusText}
-            </CardSubtitle>
-          </>
-        )}
-      </Stack>
-    );
-  };
-
   const renderDashboardSummary = () => {
     if (!canUseDashboards) {
       return (
@@ -3861,9 +3597,11 @@ const Home = (props: GenericPageProps) => {
     }
     return (
       <Box
-        ref={dashboardGridRef}
-        className="grid-stack home-dashboard-grid"
+        className="home-dashboard-grid"
         sx={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`,
+          gridAutoRows: `${gridRowHeight}px`,
           width: "100%",
           height: { xs: "calc(100vh - 96px)", md: "calc(100vh - 120px)" },
           minHeight: { xs: "calc(100vh - 96px)", md: "calc(100vh - 120px)" },
@@ -3876,7 +3614,6 @@ const Home = (props: GenericPageProps) => {
           overflow: "hidden",
         }}
       >
-        <style>{homeGridCss}</style>
         {gridLayoutCards.map(({ card, gridX, gridY, columnSpan, rowSpan, approxHeightPx }) => {
           const spotlightConfig = spotlightPeriodConfigById.get(card.id);
           const visualPeriodConfig = visualPeriodConfigById.get(card.id) ?? null;
@@ -3885,16 +3622,27 @@ const Home = (props: GenericPageProps) => {
           return (
             <Box
               key={card.id}
-              className="grid-stack-item"
-              data-gs-id={card.id}
-              data-gs-x={gridX}
-              data-gs-y={gridY}
-              data-gs-w={columnSpan}
-              data-gs-h={rowSpan}
-              data-gs-width={columnSpan}
-              data-gs-height={rowSpan}
+              sx={{
+                gridColumn: `${gridX + 1} / span ${columnSpan}`,
+                gridRow: `${gridY + 1} / span ${rowSpan}`,
+                minWidth: 0,
+                minHeight: 0,
+              }}
             >
-              <div className="grid-stack-item-content">
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "stretch",
+                  justifyContent: "stretch",
+                  height: "100%",
+                  background: "transparent",
+                  border: "none",
+                  borderRadius: 0,
+                  boxShadow: "none",
+                  padding: 0,
+                  cursor: "default",
+                }}
+              >
                 <DashboardCard
                   card={card}
                   liveState={liveCardSamples.get(card.id)}
@@ -3927,7 +3675,7 @@ const Home = (props: GenericPageProps) => {
                   onToggleLink={handleToggleCardLink}
                   segmentFilter={globalSegmentValue}
                 />
-              </div>
+              </Box>
             </Box>
           );
         })}
@@ -4210,9 +3958,7 @@ const VisualDashboardCard = ({
   );
   const activeDateField =
     selectedDateFieldOptions[0] ?? resolveActiveDateFilter(config, dateFieldSelection);
-  const showDateFieldRow = false;
   const dateFieldLabel = activeDateField ? buildDateFilterOptionLabel(activeDateField) : null;
-  const infoDateFieldLabel = dateFieldLabel;
   const dateFieldMenuOptions = dateFieldOptions.map((option) => ({
     value: option.id,
     label: buildDateFilterOptionLabel(option),
@@ -4363,7 +4109,6 @@ const SpotlightDashboardCard = ({
   );
   const activeDateField =
     selectedDateFieldOptions[0] ?? resolveActiveDateFilter(config, dateFieldSelection);
-  const showDateFieldRow = false;
   const dateFieldLabel = activeDateField ? buildDateFilterOptionLabel(activeDateField) : null;
   const infoDateFieldLabel = dateFieldLabel;
   const dateFieldMenuOptions = dateFieldOptions.map((option) => ({
@@ -4514,8 +4259,6 @@ const PreviewTableDashboardCard = ({
   const columns = columnOrder.length > 0 ? columnOrder : sample?.columns ?? [];
   const columnAliases = sample?.columnAliases ?? config.columnAliases ?? {};
   const rawRows = sample?.rows ?? [];
-  const canOverridePeriod = Boolean(config.dateFilter);
-  const effectivePeriodOverride = canOverridePeriod ? periodOverride : null;
   const [page, setPage] = useState(0);
   const rowsPerPage = 10;
   useEffect(() => {
@@ -4687,7 +4430,7 @@ const PreviewTableDashboardCard = ({
   );
 };
 
-const HeroSpotlightRow = ({
+export const HeroSpotlightRow = ({
   cards,
   liveCardSamples,
   spotlightPeriodConfigById,

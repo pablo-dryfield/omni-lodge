@@ -1,6 +1,6 @@
 
 import { useMemo, useState } from "react";
-import { Button, Group, Modal, NumberInput, Select, Stack, TextInput, Textarea } from "@mantine/core";
+import { Button, Group, Modal, NumberInput, Select, Stack, Textarea } from "@mantine/core";
 import { DatePickerInput, TimeInput } from "@mantine/dates";
 import dayjs from "dayjs";
 import type { ShiftInstancePayload, ShiftTemplate } from "../../types/scheduling";

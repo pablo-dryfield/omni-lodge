@@ -6,7 +6,6 @@ import {
   Box,
   Badge,
   Button,
-  Card,
   Divider,
   Flex,
   Group,

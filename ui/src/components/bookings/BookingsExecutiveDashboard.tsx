@@ -1,4 +1,4 @@
-﻿import { type ReactNode, useMemo } from "react";
+import { type ReactNode, useMemo } from "react";
 import {
   Accordion,
   ActionIcon,
@@ -536,10 +536,6 @@ const BookingsExecutiveDashboard = ({
 
   const defaultCurrency = currencies[0] ?? "PLN";
 
-  const totalGrossRevenue = useMemo(
-    () => roundMoney(bookingFinancialRows.reduce((acc, row) => acc + row.grossRevenue, 0)),
-    [bookingFinancialRows],
-  );
   const totalRevenueAfterChannelCommission = useMemo(
     () => roundMoney(bookingFinancialRows.reduce((acc, row) => acc + row.netRevenue, 0)),
     [bookingFinancialRows],
@@ -702,11 +698,6 @@ const BookingsExecutiveDashboard = ({
     () => roundMoney(addonKpiRows.reduce((acc, row) => acc + row.revenue, 0)),
     [addonKpiRows],
   );
-  const totalAddonUnits = useMemo(
-    () => addonKpiRows.reduce((acc, row) => acc + row.quantity, 0),
-    [addonKpiRows],
-  );
-
   const totalPeople = useMemo(() => bookingFinancialRows.reduce((acc, row) => acc + row.people, 0), [bookingFinancialRows]);
   const totalBookings = bookingFinancialRows.length;
   const noShowSummary = useMemo(() => {

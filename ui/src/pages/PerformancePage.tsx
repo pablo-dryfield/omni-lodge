@@ -125,7 +125,6 @@ const formatDuration = (value: number): string => {
 const formatPercent = (value: number): string => `${formatMetricNumber(value, value < 10 ? 2 : 1)}%`;
 const formatTimestamp = (value: string): string => dayjs(value).format("DD/MM/YYYY HH:mm:ss");
 const formatChartTimestamp = (value: string): string => dayjs(value).format("DD/MM HH:mm");
-const formatDateOnly = (value: Date | string): string => dayjs(value).format("DD/MM/YYYY");
 const formatUserIdentity = (user: {
   firstName?: string | null;
   lastName?: string | null;
@@ -274,8 +273,6 @@ const generateDiagnostics = (
     latestHistory && earliestHistory ? latestHistory.heapUsedMb - earliestHistory.heapUsedMb : 0;
   const rssGrowth =
     latestHistory && earliestHistory ? latestHistory.rssMb - earliestHistory.rssMb : 0;
-  const p95Growth =
-    latestHistory && earliestHistory ? latestHistory.p95ResponseMs - earliestHistory.p95ResponseMs : 0;
   const topRoute = snapshot.topRoutes[0];
   const topQuery = snapshot.database.queries.topQueries[0];
   const topQueryRoute = snapshot.database.queries.routeCorrelations[0];

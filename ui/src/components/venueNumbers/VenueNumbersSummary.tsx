@@ -415,7 +415,7 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
     } finally {
       setBootstrapLoading(false);
     }
-  }, [accounts, canFetch, categories, clients, customRange, dispatch, period, resolveRangeForPeriod, summary, summaryKey, vendors]);
+  }, [canFetch, customRange, dispatch, period, resolveRangeForPeriod, summaryKey]);
 
   useEffect(() => {
     if (!active || !canFetch) {

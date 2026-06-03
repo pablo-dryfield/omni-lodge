@@ -132,8 +132,6 @@ const formatDisplayRange = (range: DateRangeValue): string => {
   return startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`;
 };
 
-const formatSeriesDate = (value: string): string => dayjs(value).format("DD MMM");
-
 const formatCompactNumber = (value: number): string => {
   if (Math.abs(value) >= 1000) {
     return `${(value / 1000).toFixed(1)}k`;

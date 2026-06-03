@@ -2158,7 +2158,9 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                               variant="light"
                               color="orange"
                               onClick={handleOpenBackfill}
-                              disabled={emailDateRange[0] === null && emailDateRange[1] === null || backfillLoading}
+                              disabled={
+                                (emailDateRange[0] === null && emailDateRange[1] === null) || backfillLoading
+                              }
                             >
                               Backfill date range
                             </Button>

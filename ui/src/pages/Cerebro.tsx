@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Badge,
@@ -42,7 +42,15 @@ import {
   useCerebroBootstrap,
 } from "../api/cerebro";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
+import { CerebroRichTextContent } from "../components/cerebro/CerebroRichTextContent";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
+import { richTextToSearchableText } from "../utils/cerebroRichText";
+
+const CerebroRichTextEditor = lazy(() =>
+  import("../components/cerebro/CerebroRichTextEditor").then((module) => ({
+    default: module.CerebroRichTextEditor,
+  })),
+);
 
 const PAGE_SLUG = PAGE_SLUGS.cerebro;
 
@@ -224,7 +232,7 @@ const Cerebro = () => {
       if (!query) {
         return true;
       }
-      return [entry.title, entry.summary ?? "", entry.body, entry.category ?? ""]
+      return [entry.title, entry.summary ?? "", richTextToSearchableText(entry.body), entry.category ?? ""]
         .join(" ")
         .toLowerCase()
         .includes(query);
@@ -530,7 +538,7 @@ const Cerebro = () => {
                     {data.canManage ? <Button variant="light" onClick={() => openEntryEditor(selectedEntry)}>Edit</Button> : null}
                   </Group>
                   {selectedEntry.summary ? <Alert color="blue">{selectedEntry.summary}</Alert> : null}
-                  <Text style={{ whiteSpace: "pre-wrap" }}>{selectedEntry.body}</Text>
+                  <CerebroRichTextContent value={selectedEntry.body} />
                   {selectedEntry.checklistItems.length > 0 ? (
                     <Card withBorder radius="md" p="md">
                       <Group gap="xs" mb="xs">
@@ -625,7 +633,7 @@ const Cerebro = () => {
                       </div>
                       <Badge color={accepted ? "teal" : "orange"} variant="light">{accepted ? "Accepted" : "Pending"}</Badge>
                     </Group>
-                    <Text style={{ whiteSpace: "pre-wrap" }}>{entry.body}</Text>
+                    <CerebroRichTextContent value={entry.body} />
                     <Group justify="space-between">
                       <Text size="sm" c="dimmed">
                         {accepted && acknowledgement ? `Accepted ${new Date(acknowledgement.acceptedAt).toLocaleString()}` : `Version ${entry.policyVersion ?? "current"}`}
@@ -730,7 +738,12 @@ const Cerebro = () => {
           <TextInput label="Category" value={entryForm.category} onChange={(event) => setEntryForm((prev) => ({ ...prev, category: event.currentTarget.value }))} />
           <Select label="Kind" value={entryForm.kind} data={[{ value: "faq", label: "FAQ" }, { value: "tutorial", label: "Tutorial" }, { value: "playbook", label: "Playbook" }, { value: "policy", label: "Policy" }]} onChange={(value) => setEntryForm((prev) => ({ ...prev, kind: (value as EntryKind) ?? "faq" }))} />
           <Textarea label="Summary" minRows={2} value={entryForm.summary} onChange={(event) => setEntryForm((prev) => ({ ...prev, summary: event.currentTarget.value }))} />
-          <Textarea label="Body" minRows={8} value={entryForm.body} onChange={(event) => setEntryForm((prev) => ({ ...prev, body: event.currentTarget.value }))} />
+          <Suspense fallback={<Loader size="sm" />}>
+            <CerebroRichTextEditor
+              value={entryForm.body}
+              onChange={(value) => setEntryForm((prev) => ({ ...prev, body: value }))}
+            />
+          </Suspense>
           <Textarea label="Media lines" description="One per line: image|https://...|Caption" minRows={3} value={entryForm.mediaLines} onChange={(event) => setEntryForm((prev) => ({ ...prev, mediaLines: event.currentTarget.value }))} />
           <Textarea label="Checklist lines" description="One item per line" minRows={3} value={entryForm.checklistLines} onChange={(event) => setEntryForm((prev) => ({ ...prev, checklistLines: event.currentTarget.value }))} />
           <MultiSelect label="Target roles" data={roleOptions} value={entryForm.targetUserTypeIds} onChange={(value) => setEntryForm((prev) => ({ ...prev, targetUserTypeIds: value }))} searchable clearable />

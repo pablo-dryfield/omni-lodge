@@ -53,7 +53,6 @@ import {
   IconCalendarStats,
   IconChartHistogram,
   IconCheck,
-  IconClock,
   IconCopy,
   IconDatabase,
   IconFileText,
@@ -673,12 +672,10 @@ const detachChildTokenFromGroup = (
   if (updated || targetGroupId) {
     return next;
   }
-  let fallbackUpdated = false;
   return groups.map((group) => {
     if (!group.childOrder.includes(childToken)) {
       return group;
     }
-    fallbackUpdated = true;
     return {
       ...group,
       childOrder: group.childOrder.filter((token) => token !== childToken),
@@ -922,23 +919,6 @@ const deserializeTemplateFilters = (
   normalizedNodes.forEach((node) => visitNode(node, ROOT_FILTER_GROUP_ID));
   return { filters, filterGroups: Array.from(groupMap.values()), rawSql };
 };
-
-const serializeFilterClause = (filter: ReportFilter): PreviewFilterClausePayload => ({
-  leftModelId: filter.leftModelId,
-  leftFieldId: filter.leftFieldId,
-  operator: filter.operator,
-  rightType: filter.rightType,
-  rightModelId: filter.rightModelId,
-  rightFieldId: filter.rightFieldId,
-  value: filter.rightType === "value" ? filter.value ?? null : undefined,
-  valueKind: filter.valueKind,
-  range: filter.range
-    ? {
-        from: filter.range.from ?? undefined,
-        to: filter.range.to ?? undefined,
-      }
-    : undefined,
-});
 
 const serializeFiltersToPreviewNodes = (
   clauses: Map<string, PreviewFilterClausePayload>,
@@ -1726,14 +1706,6 @@ const recordsShallowEqual = <T,>(first: Record<string, T>, second: Record<string
   return firstKeys.every((key) => Object.prototype.hasOwnProperty.call(second, key) && first[key] === second[key]);
 };
 
-const omitRecordKey = <T,>(record: Record<string, T>, key: string) => {
-  if (!Object.prototype.hasOwnProperty.call(record, key)) {
-    return record;
-  }
-  const { [key]: _omitted, ...rest } = record;
-  return rest;
-};
-
 const humanizeAlias = (alias: string) => {
   const [, field = alias] = alias.split("__");
   return humanizeName(field);
@@ -1747,7 +1719,7 @@ const coerceNumber = (value: unknown): number | null => {
     return value;
   }
   if (typeof value === "string") {
-    const numeric = Number(value.replace(/[^0-9.\-]+/g, ""));
+    const numeric = Number(value.replace(/[^0-9.-]+/g, ""));
     return Number.isFinite(numeric) ? numeric : null;
   }
   if (value instanceof Date) {
@@ -1956,11 +1928,7 @@ const getValueKindForFieldType = (type: DataField["type"]): FilterValueKind => {
 const getOperatorOptionsForFieldType = (type: DataField["type"]) =>
   FILTER_OPERATOR_LIBRARY.filter((operator) => operator.types.includes(type));
 
-const escapeSqlLiteral = (value: string) => value.replace(/'/g, "''");
-
 const buildFilterOptionKey = (modelId: string, fieldId: string) => `${modelId}::${fieldId}`;
-
-const quoteIdentifier = (value: string) => `"${value.replace(/"/g, '""')}"`;
 
 const formatTimestamp = () =>
   new Date().toLocaleString("en-US", {
@@ -4157,7 +4125,7 @@ const getColumnLabel = useCallback(
           return;
         }
         if (typeof value === "string") {
-          const numericCandidate = Number(value.replace(/[^0-9.\-]+/g, ""));
+          const numericCandidate = Number(value.replace(/[^0-9.-]+/g, ""));
           if (Number.isFinite(numericCandidate) && value.trim().length > 0) {
             hasNumeric = true;
           }
@@ -5902,37 +5870,6 @@ const getColumnLabel = useCallback(
     setAddModelId(null);
     setAddModelPopoverOpen(false);
   }, [addModelId, handleToggleModel]);
-
-  const handleFieldAliasChange = (modelId: string, fieldId: string, alias: string) => {
-    const aliasKey = toColumnAlias(modelId, fieldId);
-    const trimmed = alias.trim();
-    setDraft((current) => {
-      const hasExistingAlias = Object.prototype.hasOwnProperty.call(current.columnAliases, aliasKey);
-      if (trimmed.length === 0) {
-        if (!hasExistingAlias) {
-          return current;
-        }
-        const nextAliases = omitRecordKey(current.columnAliases, aliasKey);
-        if (nextAliases === current.columnAliases) {
-          return current;
-        }
-        return {
-          ...current,
-          columnAliases: nextAliases,
-        };
-      }
-      if (hasExistingAlias && current.columnAliases[aliasKey] === trimmed) {
-        return current;
-      }
-      return {
-        ...current,
-        columnAliases: {
-          ...current.columnAliases,
-          [aliasKey]: trimmed,
-        },
-      };
-    });
-  };
 
   const handleToggleDerivedFieldVisibility = useCallback(
     (fieldId: string, enabled: boolean) => {
@@ -8379,13 +8316,6 @@ const getColumnLabel = useCallback(
 
     setManualJoinDraft((current) => createManualJoinDraft(current.joinType));
   }, [draft.joins, handleAddJoin, manualJoinDraft, modelMap]);
-
-  const handleRemoveJoin = (joinId: string) => {
-    setDraft((current) => ({
-      ...current,
-      joins: current.joins.filter((join) => join.id !== joinId),
-    }));
-  };
 
   const handleGroupFieldSelectionChange = useCallback(
     (groupId: string, selectedValues: string[]) => {
