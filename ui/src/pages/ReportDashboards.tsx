@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDebouncedValue, useMediaQuery } from "@mantine/hooks";
 import { useQueryClient } from "@tanstack/react-query";
@@ -60,13 +60,16 @@ import {
   type DashboardExportResponse,
 } from "../api/reports";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
-import { GraphicCard } from "../components/dashboard/GraphicCard";
 import { SpotlightCard } from "../components/dashboard/SpotlightCardParts";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
 
 dayjs.extend(isoWeek);
+
+const GraphicCard = lazy(() =>
+  import("../components/dashboard/GraphicCard").then((module) => ({ default: module.GraphicCard })),
+);
 
 type GridStackInstance = import("gridstack").GridStack;
 
@@ -1363,20 +1366,22 @@ const DashboardLayoutEditor = ({
                 }))
               : undefined;
           content = (
-            <GraphicCard
-              title={card.title || "Untitled card"}
-              config={viewConfig}
-              rows={viewConfig.sample?.rows ?? []}
-              infoLabel={infoLabel ?? "Date range not set"}
-              periodRows={periodRows}
-              dateFieldLabel={dateFieldLabel ?? undefined}
-              dateFieldOptions={dateFieldMenuOptions}
-              activeDateField={activeDateField?.id}
-              onSelectDateField={(value) => handleDateFieldSelection(card.id, value)}
-              periodLabel={periodLabel ?? undefined}
-              periodOptions={periodOptions}
-              activePeriod={defaultPreset ?? undefined}
-            />
+            <Suspense fallback={<Group justify="center" py="xl"><Loader /></Group>}>
+              <GraphicCard
+                title={card.title || "Untitled card"}
+                config={viewConfig}
+                rows={viewConfig.sample?.rows ?? []}
+                infoLabel={infoLabel ?? "Date range not set"}
+                periodRows={periodRows}
+                dateFieldLabel={dateFieldLabel ?? undefined}
+                dateFieldOptions={dateFieldMenuOptions}
+                activeDateField={activeDateField?.id}
+                onSelectDateField={(value) => handleDateFieldSelection(card.id, value)}
+                periodLabel={periodLabel ?? undefined}
+                periodOptions={periodOptions}
+                activePeriod={defaultPreset ?? undefined}
+              />
+            </Suspense>
           );
         }
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, useLocation } from "react-router-dom";
 import {
@@ -13,18 +13,33 @@ import {
   useMantineTheme,
 } from "@mantine/core";
 import { useDisclosure, useMediaQuery } from "@mantine/hooks";
-import MainTabs from "./components/main/MainTabs";
-import Routes from "./components/main/Routes"; // your route switch
-import Login from "./pages/Login";
 import { useAppDispatch, useAppSelector } from "./store/hooks";
 import { fetchSession } from "./actions/sessionActions";
 import { fetchAccessSnapshot } from "./actions/accessControlActions";
 import { getNavbarSettings } from "./utils/getNavbarSettings";
-import { NavBarRouter } from "./components/main/NavBarRouter";
 import axiosInstance from "./utils/axiosInstance";
-import ServerDownOverlay from "./components/offline/ServerDownOverlay";
+
+const MainTabs = lazy(() => import("./components/main/MainTabs"));
+const Routes = lazy(() => import("./components/main/Routes"));
+const Login = lazy(() => import("./pages/Login"));
+const ServerDownOverlay = lazy(() => import("./components/offline/ServerDownOverlay"));
+const NavBarRouter = lazy(() =>
+  import("./components/main/NavBarRouter").then((module) => ({ default: module.NavBarRouter })),
+);
 
 const queryClient = new QueryClient();
+
+const FullscreenLoader = () => (
+  <Center style={{ height: "100vh" }}>
+    <Loader variant="dots" />
+  </Center>
+);
+
+const SectionLoader = () => (
+  <Center py="xl">
+    <Loader variant="dots" />
+  </Center>
+);
 
 const AppContent = () => {
   const location = useLocation();
@@ -195,14 +210,16 @@ const AppContent = () => {
   return (
     <>
       {showOverlay && (
-        <ServerDownOverlay
-          mode={overlayMode}
-          status={serverDownStatus}
-          onRetry={serverDown ? checkServer : undefined}
-          isChecking={checkingServer}
-          onClose={!serverDown ? () => setShowMiniGame(false) : undefined}
-          isAuthenticated={authenticated}
-        />
+        <Suspense fallback={<FullscreenLoader />}>
+          <ServerDownOverlay
+            mode={overlayMode}
+            status={serverDownStatus}
+            onRetry={serverDown ? checkServer : undefined}
+            isChecking={checkingServer}
+            onClose={!serverDown ? () => setShowMiniGame(false) : undefined}
+            isAuthenticated={authenticated}
+          />
+        </Suspense>
       )}
       {authenticated ? (
         <AppShell
@@ -217,11 +234,13 @@ const AppContent = () => {
           }}
         >
           <AppShell.Header>
-            <MainTabs
-              hasSidebar={Boolean(rawNavbarSettings)}
-              onSidebarToggle={toggleSidebar}
-              sidebarOpened={sidebarOpened}
-            />
+            <Suspense fallback={<SectionLoader />}>
+              <MainTabs
+                hasSidebar={Boolean(rawNavbarSettings)}
+                onSidebarToggle={toggleSidebar}
+                sidebarOpened={sidebarOpened}
+              />
+            </Suspense>
           </AppShell.Header>
           {rawNavbarSettings && (
             <AppShell.Navbar
@@ -233,7 +252,9 @@ const AppContent = () => {
               }}
             >
               <ScrollArea style={{ height: "100%" }} type="hover" offsetScrollbars>
-                <NavBarRouter currentPage={currentPage} />
+                <Suspense fallback={<SectionLoader />}>
+                  <NavBarRouter currentPage={currentPage} />
+                </Suspense>
               </ScrollArea>
             </AppShell.Navbar>
           )}
@@ -255,12 +276,16 @@ const AppContent = () => {
                   </Stack>
                 </Alert>
               )}
-              <Routes />
+              <Suspense fallback={<SectionLoader />}>
+                <Routes />
+              </Suspense>
             </Stack>
           </AppShell.Main>
         </AppShell>
       ) : (
-        <Login />
+        <Suspense fallback={<FullscreenLoader />}>
+          <Login />
+        </Suspense>
       )}
     </>
   );

@@ -1,8 +1,7 @@
-import { Center, Tabs, Title } from '@mantine/core';
-import { useEffect, useMemo, useState } from 'react';
+import { Center, Loader, Tabs, Title } from '@mantine/core';
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import VenueNumbersList from '../components/venueNumbers/VenueNumbersList';
-import VenueNumbersSummary from '../components/venueNumbers/VenueNumbersSummary';
 import { GenericPageProps } from '../types/general/GenericPageProps';
 import { useAppDispatch } from '../store/hooks';
 import { navigateToPage } from '../actions/navigationActions';
@@ -10,6 +9,7 @@ import { PageAccessGuard } from '../components/access/PageAccessGuard';
 import { PAGE_SLUGS } from '../constants/pageSlugs';
 
 const PAGE_SLUG = PAGE_SLUGS.venueNumbers;
+const VenueNumbersSummary = lazy(() => import('../components/venueNumbers/VenueNumbersSummary'));
 
 const VenueNumbers = (props: GenericPageProps) => {
   const dispatch = useAppDispatch();
@@ -49,7 +49,9 @@ const VenueNumbers = (props: GenericPageProps) => {
             <VenueNumbersList active={tab === 'entries'} />
           </Tabs.Panel>
           <Tabs.Panel value="summary" pt="md">
-            <VenueNumbersSummary active={tab === 'summary'} />
+            <Suspense fallback={<Center py="xl"><Loader /></Center>}>
+              <VenueNumbersSummary active={tab === 'summary'} />
+            </Suspense>
           </Tabs.Panel>
         </Tabs>
       </div>

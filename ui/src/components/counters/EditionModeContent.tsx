@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Typography, Paper, Box, IconButton, MenuItem, Select } from '@mui/material';
+import { Button, Typography, Paper, Box, IconButton, MenuItem, Select, TextField } from '@mui/material';
 import Grid from '@mui/material/GridLegacy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CloseIcon from '@mui/icons-material/Close';
-import { DatePicker, DateValidationError, PickerChangeHandlerContext } from '@mui/x-date-pickers';
 import dayjs, { Dayjs } from 'dayjs';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { fetchProducts } from '../../actions/productActions';
@@ -316,11 +315,13 @@ const EditionModeContent: React.FC<CounterProductModalProps> = ({ table, row }) 
             <Button variant="outlined" onClick={handleAddUser} sx={{ mt: 2 }}>Add Staff</Button>
         </Box>
         <Box sx={{ mt: 2 }}>
-            <DatePicker
+            <TextField
                 label="Counter Date"
-                format="DD/MM/YYYY"
-                value={counterDate}
-                onChange={(newValue: Dayjs | null, context: PickerChangeHandlerContext<DateValidationError>) => setCounterDate(newValue)}
+                type="date"
+                value={counterDate ? counterDate.format('YYYY-MM-DD') : ''}
+                onChange={(event) => setCounterDate(event.target.value ? dayjs(event.target.value) : null)}
+                fullWidth
+                InputLabelProps={{ shrink: true }}
             />
         </Box>
         <Box sx={{ mt: 2, borderBottom: '1px solid white', pb: 3 }}>

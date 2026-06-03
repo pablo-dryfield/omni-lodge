@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Badge,
@@ -35,16 +35,6 @@ import {
 import { isAxiosError } from "axios";
 import dayjs from "dayjs";
 import duration from "dayjs/plugin/duration";
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  Line,
-  ResponsiveContainer,
-  Tooltip as RechartsTooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { navigateToPage } from "../actions/navigationActions";
 import { useAppDispatch } from "../store/hooks";
@@ -62,6 +52,7 @@ import {
 dayjs.extend(duration);
 
 const PAGE_SLUG = PAGE_SLUGS.performance;
+const PerformanceHistoryCharts = lazy(() => import("../components/performance/PerformanceHistoryCharts"));
 const POLL_INTERVAL_MS = 10_000;
 const HISTORY_RANGE_OPTIONS = [
   { label: "Whole Session", value: "session" },
@@ -124,7 +115,6 @@ const formatDuration = (value: number): string => {
 
 const formatPercent = (value: number): string => `${formatMetricNumber(value, value < 10 ? 2 : 1)}%`;
 const formatTimestamp = (value: string): string => dayjs(value).format("DD/MM/YYYY HH:mm:ss");
-const formatChartTimestamp = (value: string): string => dayjs(value).format("DD/MM HH:mm");
 const formatUserIdentity = (user: {
   firstName?: string | null;
   lastName?: string | null;
@@ -720,49 +710,9 @@ const SectionCard = ({
   </Paper>
 );
 
-const ChartTooltip = ({
-  active,
-  payload,
-  label,
-}: {
-  active?: boolean;
-  payload?: Array<{ name?: string; value?: number; color?: string }>;
-  label?: string;
-}) => {
-  if (!active || !payload?.length || !label) {
-    return null;
-  }
-
-  return (
-    <Paper withBorder shadow="md" radius="md" p="sm">
-      <Stack gap={4}>
-        <Text fw={900} size="sm">
-          {formatChartTimestamp(label)}
-        </Text>
-        {payload.map((entry) => (
-          <Group key={`${entry.name}-${entry.color}`} gap={8} justify="space-between" wrap="nowrap">
-            <Text fw={800} size="sm" c={entry.color || "dark"}>
-              {entry.name}
-            </Text>
-            <Text size="sm">
-              {entry.name?.toLowerCase().includes("rate") || entry.name?.toLowerCase().includes("utilization")
-                ? formatPercent(entry.value ?? 0)
-                : entry.name?.toLowerCase().includes("count")
-                  ? formatMetricNumber(entry.value ?? 0, 0)
-                  : entry.name?.toLowerCase().includes("ms")
-                    ? formatDuration(entry.value ?? 0)
-                    : `${formatMetricNumber(entry.value ?? 0, 2)} MB`}
-            </Text>
-          </Group>
-        ))}
-      </Stack>
-    </Paper>
-  );
-};
-
 const PerformancePage = ({ title }: GenericPageProps) => {
   const dispatch = useAppDispatch();
-  const isMobile = useMediaQuery("(max-width: 48em)");
+  const isMobile = useMediaQuery("(max-width: 48em)") ?? false;
   const [snapshot, setSnapshot] = useState<PerformanceSnapshotResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1513,111 +1463,22 @@ const PerformancePage = ({ title }: GenericPageProps) => {
             </SectionCard>
 
             <SimpleGrid cols={{ base: 1, xl: 2 }} spacing="lg">
-              <SectionCard icon={<IconChartLine size={20} />} title="Latency Drift">
-                <Stack gap="sm">
-                  <Group justify="space-between">
-                    <Text c="dimmed" size="sm">
-                      Tracks whether request latency or error rate drifts upward as the process stays online.
-                    </Text>
-                    <Badge variant="light" color="gray">
-                      {history.length} samples in {historyRange}
-                    </Badge>
-                  </Group>
-                  <div style={{ width: "100%", height: isMobile ? 260 : 320 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={requestHistory} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#d7dde5" vertical={false} />
-                        <XAxis dataKey="timestamp" hide />
-                        <YAxis width={48} tickFormatter={(value) => `${Math.round(Number(value))}`} />
-                        <YAxis yAxisId="right" orientation="right" width={44} tickFormatter={(value) => `${Math.round(Number(value))}%`} />
-                        <RechartsTooltip content={<ChartTooltip />} />
-                        <Area
-                          type="monotone"
-                          dataKey="p95Ms"
-                          stroke="#2563eb"
-                          fill="rgba(37,99,235,0.16)"
-                          strokeWidth={3}
-                          name="P95 latency"
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="avgMs"
-                          stroke="#0f766e"
-                          strokeWidth={2.5}
-                          dot={false}
-                          name="Average latency"
-                        />
-                        <Line
-                          type="monotone"
-                          yAxisId="right"
-                          dataKey="errorRate"
-                          stroke="#dc2626"
-                          strokeWidth={2.5}
-                          dot={false}
-                          name="Error rate"
-                        />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                </Stack>
-              </SectionCard>
-
-              <SectionCard icon={<IconServer size={20} />} title="Resource Pressure">
-                <Stack gap="sm">
-                  <Group justify="space-between">
-                    <Text c="dimmed" size="sm">
-                      Memory growth, CPU usage, and event loop delay usually expose leaks or request backlog first.
-                    </Text>
-                    <Badge variant="light" color="gray">
-                      Window {historyRange}
-                    </Badge>
-                  </Group>
-                  <div style={{ width: "100%", height: isMobile ? 260 : 320 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={resourceHistory} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#d7dde5" vertical={false} />
-                        <XAxis dataKey="timestamp" hide />
-                        <YAxis width={48} tickFormatter={(value) => `${Math.round(Number(value))}`} />
-                        <YAxis yAxisId="right" orientation="right" width={44} tickFormatter={(value) => `${Math.round(Number(value))}%`} />
-                        <RechartsTooltip content={<ChartTooltip />} />
-                        <Area
-                          type="monotone"
-                          dataKey="rssMb"
-                          stroke="#334155"
-                          fill="rgba(51,65,85,0.12)"
-                          strokeWidth={2.5}
-                          name="RSS"
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="heapMb"
-                          stroke="#7c3aed"
-                          fill="rgba(124,58,237,0.12)"
-                          strokeWidth={2.5}
-                          name="Heap"
-                        />
-                        <Line
-                          type="monotone"
-                          yAxisId="right"
-                          dataKey="cpuPercent"
-                          stroke="#f59e0b"
-                          strokeWidth={2.5}
-                          dot={false}
-                          name="CPU"
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="eventLoopLagMs"
-                          stroke="#dc2626"
-                          strokeWidth={2.5}
-                          dot={false}
-                          name="Lag ms"
-                        />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                </Stack>
-              </SectionCard>
+              <Suspense fallback={<Group justify="center" py="xl"><Loader /></Group>}>
+                <PerformanceHistoryCharts
+                  historyCount={history.length}
+                  historyRange={historyRange}
+                  isMobile={isMobile}
+                  renderSectionCard={({ children, icon, title: cardTitle }) => (
+                    <SectionCard icon={icon} title={cardTitle}>
+                      {children}
+                    </SectionCard>
+                  )}
+                  requestHistory={requestHistory}
+                  resourceHistory={resourceHistory}
+                  resourceIcon={<IconChartLine size={20} />}
+                  resourceTitleIcon={<IconServer size={20} />}
+                />
+              </Suspense>
             </SimpleGrid>
 
             <SimpleGrid cols={{ base: 1, xl: 2 }} spacing="lg">

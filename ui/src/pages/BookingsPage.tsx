@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionIcon,
   Alert,
@@ -35,7 +35,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { navigateToPage } from "../actions/navigationActions";
 import { GenericPageProps } from "../types/general/GenericPageProps";
 import { BookingsGrid } from "../components/BookingsGrid";
-import BookingsExecutiveDashboard, {
+import type {
   BookingAddonDashboardRow,
   BookingCostsSummary,
   BookingCounterInsights,
@@ -52,6 +52,7 @@ import { useModuleAccess } from "../hooks/useModuleAccess";
 
 const DATE_FORMAT = "YYYY-MM-DD";
 const EXCLUDED_BOOKINGS_PRODUCT_PATTERNS = ["food tour"];
+const BookingsExecutiveDashboard = lazy(() => import("../components/bookings/BookingsExecutiveDashboard"));
 
 const shouldExcludeBookingsPageProductName = (value?: string | null): boolean => {
   const normalized = String(value ?? "")
@@ -2071,16 +2072,18 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                       <Loader variant="bars" />
                     </Box>
                   ) : (
-                    <BookingsExecutiveDashboard
-                      orders={filteredOrders}
-                      bookingAddons={filteredBookingAddons}
-                      addonCatalog={addonCatalog}
-                      counterInsights={counterInsights}
-                      venueCommissionTotals={venueCommissionTotals}
-                      venueCommissionVenues={venueCommissionVenues}
-                      metricMode={summaryMetricMode}
-                      costsSummary={costsSummary}
-                    />
+                    <Suspense fallback={<Box style={{ minHeight: 320 }}><Loader variant="bars" /></Box>}>
+                      <BookingsExecutiveDashboard
+                        orders={filteredOrders}
+                        bookingAddons={filteredBookingAddons}
+                        addonCatalog={addonCatalog}
+                        counterInsights={counterInsights}
+                        venueCommissionTotals={venueCommissionTotals}
+                        venueCommissionVenues={venueCommissionVenues}
+                        metricMode={summaryMetricMode}
+                        costsSummary={costsSummary}
+                      />
+                    </Suspense>
                   )}
                 </Stack>
               </Tabs.Panel>

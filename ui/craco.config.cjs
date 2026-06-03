@@ -35,26 +35,9 @@ const cracoConfig = {
         });
       });
 
-      // @zxing/browser points to TS sourcemaps that are not published.
-      // Ignore only those source-map-loader warnings.
       const existingIgnoreWarnings = webpackConfig.ignoreWarnings ?? [];
       webpackConfig.ignoreWarnings = [
         ...existingIgnoreWarnings,
-        (warning) => {
-          const text = [
-            typeof warning === 'string' ? warning : '',
-            warning?.message ?? '',
-            warning?.details ?? '',
-            warning?.module?.resource ?? '',
-          ]
-            .join('\n')
-            .toLowerCase();
-          return (
-            text.includes('failed to parse source map') &&
-            text.includes('node_modules') &&
-            text.includes('@zxing')
-          );
-        },
         (warning) => {
           const text = [
             typeof warning === 'string' ? warning : '',

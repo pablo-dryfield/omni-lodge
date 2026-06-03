@@ -4,12 +4,12 @@ import { fetchActiveProducts } from '../../actions/productActions';
 import { fetchActiveUsers } from '../../actions/userActions';
 import { Product } from '../../types/products/Product';
 import { User } from '../../types/users/User';
-import { Button, Typography, Paper, Box, IconButton, MenuItem, Select } from '@mui/material';
+import { Button, Typography, Paper, Box, IconButton, MenuItem, Select, TextField } from '@mui/material';
 import Grid from '@mui/material/GridLegacy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CloseIcon from '@mui/icons-material/Close';
-import { DatePicker, DateValidationError, PickerChangeHandlerContext } from '@mui/x-date-pickers';
 import { Dayjs } from 'dayjs';
+import dayjs from 'dayjs';
 import { fetchCounters, createCounter } from '../../actions/counterActions';
 import { fetchCounterProducts, createBulkCounterProduct } from '../../actions/counterProductActions';
 import { fetchCounterUsers, createBulkCounterUser } from '../../actions/counterUserActions';
@@ -226,11 +226,13 @@ const CreationModeContent: React.FC<CounterProductModalProps> = ({ table, row })
             <Button variant="outlined" onClick={handleAddUser} sx={{ mt: 2 }}>Add Staff</Button>
         </Box>
         <Box sx={{ mt: 2 }}>
-            <DatePicker
+            <TextField
                 label="Counter Date"
-                format="YYYY-MM-DD"
-                value={counterDate}
-                onChange={(newValue: Dayjs | null, context: PickerChangeHandlerContext<DateValidationError>) => setCounterDate(newValue)}
+                type="date"
+                value={counterDate ? dayjs(counterDate).format('YYYY-MM-DD') : ''}
+                onChange={(event) => setCounterDate(event.target.value ? dayjs(event.target.value) : null)}
+                fullWidth
+                InputLabelProps={{ shrink: true }}
             />
         </Box>
         <Box sx={{ mt: 2, borderBottom: '1px solid white', pb: 3 }}>

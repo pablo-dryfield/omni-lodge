@@ -21,8 +21,6 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
-import { LocalizationProvider } from "@mui/x-date-pickers";
 import { ArrowBack, Add, Close, Delete, Edit, Save, Send, UploadFile, Visibility } from "@mui/icons-material";
 import dayjs from "dayjs";
 import { ChangeEvent, Fragment, SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -2445,7 +2443,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   );
 
   return (
-    <LocalizationProvider dateAdapter={AdapterDayjs}>
+    <>
       <Stack spacing={2}>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
           <Button variant="text" startIcon={<ArrowBack />} onClick={() => navigate(-1)}>
@@ -2694,7 +2692,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
         <DialogContent dividers sx={{ p: { xs: 2, sm: 3 } }}>{detailContent}</DialogContent>
       </Dialog>
       <NightReportPhotoPreviewDialog preview={activePhotoPreview} onClose={handleClosePhotoPreview} />
-    </LocalizationProvider>
+    </>
   );
 };
 
