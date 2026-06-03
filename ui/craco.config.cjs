@@ -1,11 +1,38 @@
 const cracoConfig = {
   webpack: {
     configure: (webpackConfig) => {
-      // Keep existing CSS minimizer workaround.
-      webpackConfig.optimization?.minimizer?.forEach((minimizer) => {
-        if (minimizer?.constructor?.name === 'CssMinimizerPlugin') {
-          minimizer.options.exclude = /mantine-react-table\/styles\.css/;
+      const sourceMapLoaderExclude = /node_modules[\\/]fast-equals[\\/]/;
+
+      webpackConfig.module?.rules?.forEach((rule) => {
+        if (!Array.isArray(rule?.oneOf)) {
+          return;
         }
+
+        rule.oneOf.forEach((oneOfRule) => {
+          const uses = Array.isArray(oneOfRule?.use) ? oneOfRule.use : oneOfRule?.use ? [oneOfRule.use] : [];
+          const usesSourceMapLoader = uses.some((loaderEntry) => {
+            if (typeof loaderEntry === 'string') {
+              return loaderEntry.includes('source-map-loader');
+            }
+            return typeof loaderEntry?.loader === 'string' && loaderEntry.loader.includes('source-map-loader');
+          });
+
+          if (!usesSourceMapLoader) {
+            return;
+          }
+
+          if (!oneOfRule.exclude) {
+            oneOfRule.exclude = sourceMapLoaderExclude;
+            return;
+          }
+
+          if (Array.isArray(oneOfRule.exclude)) {
+            oneOfRule.exclude = [...oneOfRule.exclude, sourceMapLoaderExclude];
+            return;
+          }
+
+          oneOfRule.exclude = [oneOfRule.exclude, sourceMapLoaderExclude];
+        });
       });
 
       // @zxing/browser points to TS sourcemaps that are not published.
@@ -45,6 +72,27 @@ const cracoConfig = {
 
       return webpackConfig;
     },
+  },
+  devServer: (devServerConfig) => {
+    const beforeSetup = devServerConfig.onBeforeSetupMiddleware;
+    const afterSetup = devServerConfig.onAfterSetupMiddleware;
+
+    devServerConfig.setupMiddlewares = (middlewares, devServer) => {
+      if (typeof beforeSetup === 'function') {
+        beforeSetup(devServer);
+      }
+
+      if (typeof afterSetup === 'function') {
+        afterSetup(devServer);
+      }
+
+      return middlewares;
+    };
+
+    delete devServerConfig.onBeforeSetupMiddleware;
+    delete devServerConfig.onAfterSetupMiddleware;
+
+    return devServerConfig;
   },
 };
 

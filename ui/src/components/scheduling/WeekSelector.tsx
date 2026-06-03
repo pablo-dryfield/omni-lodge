@@ -1,7 +1,7 @@
-import { Select, SelectProps, Stack, Text } from "@mantine/core";
+import { Select, SelectProps, Stack } from "@mantine/core";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
-import { formatScheduleWeekLabel, getUpcomingWeeks } from "../../api/scheduling";
+import { getUpcomingWeeks } from "../../api/scheduling";
 
 dayjs.extend(isoWeek);
 
@@ -28,13 +28,6 @@ const WeekSelector = ({
     value: week.value,
     label: week.label,
   }));
-
-  const formatted = value
-    ? (() => {
-        const [year, weekPart] = value.split("-W");
-        return formatScheduleWeekLabel(Number(year), Number(weekPart));
-      })()
-    : null;
 
   const { styles: injectedStyles, searchable: searchableOverride, ...restSelectProps } = selectProps ?? {};
 

@@ -1,0 +1,24 @@
+/**
+   * match-sorter-utils
+   *
+   * Copyright (c) TanStack
+   *
+   * This source code is licensed under the MIT license found in the
+   * LICENSE.md file in the root directory of this source tree.
+   *
+   * @license MIT
+   */
+
+/**
+ * @license @tabler/icons-react v3.2.0 - MIT
+ *
+ * This source code is licensed under the MIT license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
+
+/**
+ * @name match-sorter
+ * @license MIT license.
+ * @copyright (c) 2099 Kent C. Dodds
+ * @author Kent C. Dodds <me@kentcdodds.com> (https://kentcdodds.com)
+ */

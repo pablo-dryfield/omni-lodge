@@ -93,6 +93,7 @@ import {
 import { fetchUserTypes } from '../../actions/userTypeActions';
 import { useShiftRoles } from '../../api/shiftRoles';
 import { useActiveUsers } from '../../api/users';
+import { CerebroRichTextContent } from '../cerebro/CerebroRichTextContent';
 import { useConfigEntry } from '../../api/config';
 import { useModuleAccess } from '../../hooks/useModuleAccess';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
@@ -8868,9 +8869,7 @@ const AssistantManagerTaskPlanner = () => {
                     {activeCerebroItem.summary}
                   </Alert>
                 )}
-                <Text style={{ whiteSpace: 'pre-wrap' }}>
-                  {activeCerebroItem.body}
-                </Text>
+                <CerebroRichTextContent value={activeCerebroItem.body} />
                 {activeCerebroItem.checklistItems.length > 0 && (
                   <Paper withBorder radius="md" p="md">
                     <Stack gap={6}>

@@ -1,5 +1,3 @@
-import heic2any from "heic2any";
-
 type ImageCompressionOptions = {
   maxWidth?: number;
   maxHeight?: number;
@@ -57,6 +55,7 @@ const HEIC_MIME_TYPES = new Set([
 
 const convertHeicToJpeg = async (file: File): Promise<File> => {
   try {
+    const { default: heic2any } = await import("heic2any");
     const converted = (await heic2any({
       blob: file,
       toType: "image/jpeg",

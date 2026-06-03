@@ -1,14 +1,10 @@
 import type { DerivedFieldExpressionAst } from "../api/reports";
 
-type LiteralValueType = "number" | "string" | "boolean";
-
 type ParseResult = {
   ast: DerivedFieldExpressionAst;
   referencedModels: string[];
   referencedFields: Record<string, string[]>;
 };
-
-const FUNCTION_NAMES = new Set(["abs", "ceil", "coalesce", "floor", "greatest", "least", "round"]);
 
 class ExpressionParser {
   private index = 0;

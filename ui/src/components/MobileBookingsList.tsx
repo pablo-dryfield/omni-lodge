@@ -245,8 +245,6 @@ export const MobileBookingsList: React.FC<MobileBookingsListProps> = ({
         const { weekday, day, month } = formatDateLabel(date);
         const active = date === selectedDate;
         const entryHasBookings = entry.totalSlots > 0;
-        const firstSlot = entry.slots[0];
-
         return (
           <div key={date} ref={(node) => { dateRefs.current[date] = node; }} style={{ scrollMarginTop: 96 }}>
             <Stack gap="xs">

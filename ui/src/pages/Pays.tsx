@@ -1,4 +1,4 @@
-﻿import React, { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Paper,
   Container,
@@ -180,15 +180,7 @@ const humanizeErrorMessage = (rawMessage?: string | null): { title: string; desc
 
 const calculatePresetRange = (preset: DatePreset, reference: Dayjs = dayjs()): { start: Dayjs; end: Dayjs } => {
   const today = reference.endOf('day');
-  const startOfToday = today.startOf('day');
   const clampStart = (value: Dayjs) => (value.isBefore(EARLIEST_DATA_DATE) ? EARLIEST_DATA_DATE.startOf('day') : value);
-
-  const getLastWeekRange = () => {
-    const daysSinceMonday = (today.day() + 6) % 7;
-    const start = today.subtract(daysSinceMonday + 7, 'day').startOf('day');
-    const end = start.add(6, 'day').endOf('day');
-    return { start, end };
-  };
 
   switch (preset) {
     case 'last_month': {
@@ -1727,7 +1719,6 @@ const resolveStaffCounterpartyDefaults = useCallback(
         });
         return;
       }
-      const outstanding = staff.closingBalance ?? staff.payouts?.payableOutstanding ?? 0;
       const defaults = resolveStaffCounterpartyDefaults(staff);
       const currency = staff.payouts?.currency ?? DEFAULT_CURRENCY;
       const rangeStartValue =

@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDebouncedValue, useMediaQuery } from "@mantine/hooks";
 import { useQueryClient } from "@tanstack/react-query";
-import { GridStack } from "gridstack";
-import "gridstack/dist/gridstack.min.css";
 import {
   ActionIcon,
   Badge,
@@ -69,6 +67,8 @@ import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
 
 dayjs.extend(isoWeek);
+
+type GridStackInstance = import("gridstack").GridStack;
 
 type DashboardCardLayout = {
   x: number;
@@ -904,7 +904,7 @@ const DashboardLayoutEditor = ({
   layoutMode: LayoutMode;
 }) => {
   const gridRef = useRef<HTMLDivElement | null>(null);
-  const gridInstanceRef = useRef<GridStack | null>(null);
+  const gridInstanceRef = useRef<GridStackInstance | null>(null);
   const layoutCommitRef = useRef(onLayoutCommit);
   const isSyncingRef = useRef(false);
   const ignoreChangeRef = useRef(true);
@@ -1039,7 +1039,7 @@ const DashboardLayoutEditor = ({
       const engine = grid.engine as { maxRow?: number };
       engine.maxRow = undefined;
     }
-    const gridWithUpdate = grid as GridStack & { _updateContainerHeight?: () => void };
+    const gridWithUpdate = grid as GridStackInstance & { _updateContainerHeight?: () => void };
     gridWithUpdate._updateContainerHeight?.();
   }, [layoutMode]);
 
@@ -1052,77 +1052,98 @@ const DashboardLayoutEditor = ({
     if (!container) {
       return;
     }
-    let grid = gridInstanceRef.current;
-    if (grid) {
-      grid.destroy(false);
-      gridInstanceRef.current = null;
-    }
-    [LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP, LAYOUT_EDITOR_COLUMN_COUNT_MOBILE].forEach((count) => {
-      container.classList.remove(`gs-${count}`);
-    });
-    grid = GridStack.init(
-      {
-        column: columnCount,
-        cellHeight: LAYOUT_EDITOR_CELL_HEIGHT,
-        margin: "0px 0px",
-        float: true,
-        disableOneColumnMode: true,
-        draggable: {
-          handle: ".grid-stack-item-content",
-        },
-        resizable: {
-          handles: "all",
-          autoHide: true,
-        },
-      },
-      container,
-    );
-    delete lastMinRowByModeRef.current[layoutMode];
-    [LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP, LAYOUT_EDITOR_COLUMN_COUNT_MOBILE].forEach((count) => {
-      container.classList.remove(`gs-${count}`);
-    });
-    container.classList.add(`gs-${columnCount}`);
-    const gridWithResize = grid as GridStack & { resize?: () => void };
-    const handleChange = () => {
-      if (isSyncingRef.current || ignoreChangeRef.current || !userInteractedRef.current) {
+    let activeGrid: GridStackInstance | null = null;
+    let cancelled = false;
+
+    const initGrid = async () => {
+      const existingGrid = gridInstanceRef.current;
+      if (existingGrid) {
+        existingGrid.destroy(false);
+        gridInstanceRef.current = null;
+      }
+
+      const [{ GridStack }] = await Promise.all([
+        import("gridstack"),
+        import("gridstack/dist/gridstack.min.css"),
+      ]);
+
+      if (cancelled) {
         return;
       }
-      const nodes = grid?.engine?.nodes ?? [];
-      const nextLayout = nodes
-        .map((node) => ({
-          id: String(node.id ?? node.el?.getAttribute("gs-id") ?? node.el?.getAttribute("data-gs-id") ?? ""),
-          x: node.x ?? 0,
-          y: node.y ?? 0,
-          w: node.w ?? 1,
-          h: node.h ?? 1,
-        }))
-        .filter((node) => node.id.length > 0);
-      if (nextLayout.length > 0) {
-        layoutCommitRef.current(nextLayout, layoutMode);
-      }
+
+      [LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP, LAYOUT_EDITOR_COLUMN_COUNT_MOBILE].forEach((count) => {
+        container.classList.remove(`gs-${count}`);
+      });
+      const grid = GridStack.init(
+        {
+          column: columnCount,
+          cellHeight: LAYOUT_EDITOR_CELL_HEIGHT,
+          margin: "0px 0px",
+          float: true,
+          disableOneColumnMode: true,
+          draggable: {
+            handle: ".grid-stack-item-content",
+          },
+          resizable: {
+            handles: "all",
+            autoHide: true,
+          },
+        },
+        container,
+      );
+      activeGrid = grid;
+      delete lastMinRowByModeRef.current[layoutMode];
+      [LAYOUT_EDITOR_COLUMN_COUNT_DESKTOP, LAYOUT_EDITOR_COLUMN_COUNT_MOBILE].forEach((count) => {
+        container.classList.remove(`gs-${count}`);
+      });
+      container.classList.add(`gs-${columnCount}`);
+      const gridWithResize = grid as GridStackInstance & { resize?: () => void };
+      const handleChange = () => {
+        if (isSyncingRef.current || ignoreChangeRef.current || !userInteractedRef.current) {
+          return;
+        }
+        const nodes = grid.engine?.nodes ?? [];
+        const nextLayout = nodes
+          .map((node) => ({
+            id: String(node.id ?? node.el?.getAttribute("gs-id") ?? node.el?.getAttribute("data-gs-id") ?? ""),
+            x: node.x ?? 0,
+            y: node.y ?? 0,
+            w: node.w ?? 1,
+            h: node.h ?? 1,
+          }))
+          .filter((node) => node.id.length > 0);
+        if (nextLayout.length > 0) {
+          layoutCommitRef.current(nextLayout, layoutMode);
+        }
+      };
+      grid.on("change", handleChange);
+      grid.on("dragstart", () => {
+        userInteractedRef.current = true;
+      });
+      grid.on("resizestart", () => {
+        userInteractedRef.current = true;
+      });
+      gridInstanceRef.current = grid;
+      gridWithResize.resize?.();
+      updateGridMinRows();
+      requestAnimationFrame(() => updateGridMinRows());
+      ignoreChangeRef.current = true;
+      userInteractedRef.current = false;
+      requestAnimationFrame(() => {
+        ignoreChangeRef.current = false;
+      });
     };
-    grid.on("change", handleChange);
-    grid.on("dragstart", () => {
-      userInteractedRef.current = true;
-    });
-    grid.on("resizestart", () => {
-      userInteractedRef.current = true;
-    });
-    gridInstanceRef.current = grid;
-    gridWithResize.resize?.();
-    updateGridMinRows();
-    requestAnimationFrame(() => updateGridMinRows());
-    ignoreChangeRef.current = true;
-    userInteractedRef.current = false;
-    requestAnimationFrame(() => {
-      ignoreChangeRef.current = false;
-    });
-    const activeGrid = grid;
+
+    void initGrid();
+
     return () => {
-      activeGrid.off("change");
-      activeGrid.off("dragstart");
-      activeGrid.off("resizestart");
-      activeGrid.destroy(false);
+      cancelled = true;
+      if (activeGrid) {
+        activeGrid.off("change");
+        activeGrid.off("dragstart");
+        activeGrid.off("resizestart");
+        activeGrid.destroy(false);
+      }
       gridInstanceRef.current = null;
     };
   }, [columnCount, layoutMode, updateGridMinRows]);
@@ -1441,7 +1462,6 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
   const layoutEditorHeaderHeight = isMobile ? 56 : 68;
   const layoutEditorPaddingX = isMobile ? 16 : 24;
-  const layoutEditorPaddingY = isMobile ? 12 : 20;
   const layoutEditorGridPaddingX = isMobile ? 8 : 12;
   const layoutEditorGridPaddingY = isMobile ? 8 : 12;
 

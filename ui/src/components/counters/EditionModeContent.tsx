@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Button, Typography, Paper, Box, IconButton, MenuItem, Select } from '@mui/material';
 import Grid from '@mui/material/GridLegacy';
-import RemoveIcon from '@mui/icons-material/Remove';
-import AddIcon from '@mui/icons-material/Add';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CloseIcon from '@mui/icons-material/Close';
 import { DatePicker, DateValidationError, PickerChangeHandlerContext } from '@mui/x-date-pickers';

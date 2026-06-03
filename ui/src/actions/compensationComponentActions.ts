@@ -2,7 +2,6 @@ import { createAsyncThunk } from '@reduxjs/toolkit';
 import axiosInstance from '../utils/axiosInstance';
 import type {
   CompensationComponent,
-  CompensationComponentAssignment,
   CompensationComponentAssignmentPayload,
   CompensationComponentPayload,
 } from '../types/compensation/CompensationComponent';

@@ -841,8 +841,8 @@ const sanitizeSyncErrorMessage = (message: string): string => {
     return "Failed to sync drink issue.";
   }
 
-  const noWrappedJson = trimmed.replace(/\s*\(\s*[\[{][\s\S]*$/, "").trim();
-  const noInlineJson = noWrappedJson.replace(/\s+[\[{][\s\S]*$/, "").trim();
+  const noWrappedJson = trimmed.replace(/\s*\(\s*[[{][\s\S]*$/, "").trim();
+  const noInlineJson = noWrappedJson.replace(/\s+[[{][\s\S]*$/, "").trim();
   return noInlineJson || "Failed to sync drink issue.";
 };
 
@@ -1215,9 +1215,6 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
   const bartenderLaunchIsStaffDrinkRef = useRef<boolean>(false);
   const syncingDrinkIssueIdsRef = useRef<Set<string>>(new Set());
 
-  const [sessionName, setSessionName] = useState<string>(`Open Bar ${dayjs().format("YYYY-MM-DD")}`);
-  const [sessionVenueId, setSessionVenueId] = useState<string>("");
-  const [sessionNotes, setSessionNotes] = useState<string>("");
   const [selectedSessionId, setSelectedSessionId] = useState<string>("");
 
   const [ingredientName, setIngredientName] = useState<string>("");
@@ -1524,10 +1521,6 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
     }
     return dayjs(launchNow).valueOf() >= endAt.valueOf();
   }, [activeSession?.expectedEndAt, launchNow]);
-  const venuesQuery = {
-    data: { venues: bootstrapQuery.data?.venues ?? [] },
-    isLoading: bootstrapQuery.isLoading,
-  };
   const sessionIssuesQuery = { data: { issues: bootstrapQuery.data?.sessionIssues ?? [] } };
   const deliveriesQuery = { data: { deliveries: bootstrapQuery.data?.deliveries ?? [] } };
 
@@ -2017,12 +2010,6 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
         .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name)),
     [sessionTypesCatalogQuery.data?.sessionTypes],
   );
-
-  const venueOptions = useMemo(() => {
-    return (venuesQuery.data?.venues ?? [])
-      .map((venue) => ({ value: String(venue.id), label: venue.name }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [venuesQuery.data?.venues]);
 
   const allIngredientCategoryOptions = useMemo(
     () =>
@@ -3107,21 +3094,6 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
 
   const closeCreateIngredientModal = () => {
     setCreateIngredientOpen(false);
-  };
-
-  const handleCreateSession = async () => {
-    try {
-      await createSessionMutation.mutateAsync({
-        sessionName,
-        businessDate,
-        venueId: sessionVenueId ? Number(sessionVenueId) : null,
-        notes: sessionNotes || null,
-      });
-      setSuccess("Session created.");
-      await invalidateOpenBar();
-    } catch (error) {
-      setError(extractApiMessage(error, "Failed to create session."));
-    }
   };
 
   const handleStartSession = async (sessionId: number) => {
@@ -4678,7 +4650,6 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
                   }
                   const next = dayjs(dateValue).format("YYYY-MM-DD");
                   setBusinessDate(next);
-                  setSessionName(`Open Bar ${next}`);
                 }}
               />
             </Group>

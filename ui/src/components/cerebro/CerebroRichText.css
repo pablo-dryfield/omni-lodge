@@ -1,0 +1,96 @@
+.cerebro-rich-text {
+  color: inherit;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.cerebro-rich-text > :first-child {
+  margin-top: 0;
+}
+
+.cerebro-rich-text > :last-child {
+  margin-bottom: 0;
+}
+
+.cerebro-rich-text p,
+.cerebro-rich-text ul,
+.cerebro-rich-text ol,
+.cerebro-rich-text blockquote,
+.cerebro-rich-text pre,
+.cerebro-rich-text h1,
+.cerebro-rich-text h2,
+.cerebro-rich-text h3,
+.cerebro-rich-text h4 {
+  margin: 0 0 0.9rem;
+}
+
+.cerebro-rich-text ul,
+.cerebro-rich-text ol {
+  padding-left: 1.4rem;
+}
+
+.cerebro-rich-text blockquote {
+  border-left: 4px solid var(--mantine-color-blue-4);
+  padding-left: 1rem;
+  color: var(--mantine-color-dimmed);
+}
+
+.cerebro-rich-text a {
+  color: var(--mantine-color-blue-6);
+  text-decoration: underline;
+}
+
+.cerebro-rich-text img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+  margin: 1rem 0;
+}
+
+.cerebro-rich-text pre {
+  white-space: pre-wrap;
+  padding: 0.875rem 1rem;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.92);
+  color: #f8fafc;
+  overflow-x: auto;
+}
+
+.cerebro-rich-text code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+}
+
+.cerebro-editor-shell {
+  border: 1px solid var(--mantine-color-gray-3);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--mantine-color-body);
+}
+
+.cerebro-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--mantine-color-gray-3);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.92));
+}
+
+.cerebro-editor-content {
+  min-height: 280px;
+  padding: 1rem;
+}
+
+.cerebro-editor-content .ProseMirror {
+  min-height: 248px;
+  outline: none;
+}
+
+.cerebro-editor-content .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--mantine-color-gray-5);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}

@@ -1,4 +1,4 @@
-﻿import { useEffect } from "react";
+import { useEffect } from "react";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { Badge, Button, Group, Stack, Text, Title, useMantineTheme } from "@mantine/core";
 import { useAppDispatch } from "../../store/hooks";

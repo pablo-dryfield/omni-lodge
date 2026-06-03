@@ -287,13 +287,6 @@ const formatUserFullName = (user: Partial<User> | StaffOption | undefined): stri
   return `${first} ${last}`.trim() || fallback;
 };
 
-const getManagerLabel = (counter: Counter | undefined): string => {
-  if (!counter?.manager) {
-    return "";
-  }
-  return formatUserFullName(counter.manager as Partial<User>);
-};
-
 const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
@@ -458,14 +451,6 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   );
   const isPubCrawlProduct = openBarMode === "pubCrawl";
   const isBottomlessBrunchProduct = openBarMode === "bottomlessBrunch";
-  const activePhotoCapturedAtLabel = useMemo(
-    () =>
-      activePhotoPreview?.capturedAt
-        ? dayjs(activePhotoPreview.capturedAt).format("MMM D, YYYY h:mm A")
-        : null,
-    [activePhotoPreview?.capturedAt],
-  );
-
   useEffect(() => {
     if (selectedReportId == null) {
       return;
@@ -566,7 +551,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     } finally {
       setBootstrapLoading(false);
     }
-  }, [dispatch, counters]);
+  }, [dispatch]);
 
   useEffect(() => {
     if (!active) {
@@ -1627,15 +1612,6 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                     typeof venue.totalPeople === "number" && Number.isFinite(venue.totalPeople)
                       ? venue.totalPeople
                       : null;
-                  const computedOpenBarTotal =
-                    venue.isOpenBar && openBarTiles.length > 0
-                      ? computeOpenBarTotal(normalValue ?? 0, cocktailsValue ?? 0, brunchValue ?? 0, openBarMode)
-                      : null;
-                  const displayTotalValue =
-                    venue.isOpenBar && computedOpenBarTotal != null
-                      ? computedOpenBarTotal
-                      : venueTotalRaw;
-
                   const metricCard = (
                     label: string,
                     value: number | null,

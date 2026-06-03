@@ -8,7 +8,6 @@ import {
   Box,
   Button,
   Divider,
-  Flex,
   Group,
   Loader,
   Modal,
@@ -381,17 +380,6 @@ const manifestToOptions = (groups: ManifestGroup[]): SelectOption[] => {
   return options;
 };
 
-const PLATFORM_COLORS: Record<string, string> = {
-  ecwid: "orange",
-  fareharbor: "blue",
-  viator: "teal",
-  getyourguide: "grape",
-  freetour: "gray",
-  xperiencepoland: "red",
-  airbnb: "pink",
-  unknown: "dark",
-};
-
 const PLATFORM_LABELS: Record<string, string> = {
   ecwid: "Ecwid",
   fareharbor: "FareHarbor",
@@ -428,14 +416,6 @@ const BOOKING_BREAKDOWN_BADGE_STYLES = {
   undefined: { backgroundColor: "#eceff4", color: "#3f4b5a", borderColor: "#cdd5df" },
 };
 
-const normalizePlatformKey = (value?: string | null): string => {
-  if (!value) {
-    return "unknown";
-  }
-  const key = value.toLowerCase().trim();
-  return PLATFORM_COLORS[key] ? key : "unknown";
-};
-
 const formatPlatformLabel = (value?: string | null): string => {
   const key = String(value ?? "")
     .trim()
@@ -449,11 +429,6 @@ const formatPlatformLabel = (value?: string | null): string => {
     .filter(Boolean)
     .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
     .join(" ");
-};
-
-const resolvePlatformColor = (value?: string | null): string => {
-  const key = normalizePlatformKey(value);
-  return PLATFORM_COLORS[key] ?? PLATFORM_COLORS.unknown;
 };
 
 const PLATFORM_BOOKING_LINKS: Record<string, (bookingId: string) => string> = {
@@ -517,34 +492,6 @@ const ATTENDANCE_TRACKED_BOOKING_STATUSES = new Set<BookingStatus>([
   "amended",
   "rebooked",
 ]);
-
-const createStatusCountsFromOrders = (orders: UnifiedOrder[]): Record<BookingStatus, number> => {
-  return orders.reduce((acc, order) => {
-    const rawStatus = order.status ?? "unknown";
-    if (rawStatus !== "completed" && rawStatus !== "no_show") {
-      acc[rawStatus] = (acc[rawStatus] ?? 0) + 1;
-    }
-
-    if (!ATTENDANCE_TRACKED_BOOKING_STATUSES.has(rawStatus)) {
-      return acc;
-    }
-
-    const attendanceStatus = String(order.attendanceStatus ?? "")
-      .trim()
-      .toLowerCase();
-
-    if (attendanceStatus === "checked_in_full" || attendanceStatus === "checked_in_partial") {
-      acc.completed = (acc.completed ?? 0) + 1;
-      return acc;
-    }
-
-    if (attendanceStatus === "no_show") {
-      acc.no_show = (acc.no_show ?? 0) + 1;
-    }
-
-    return acc;
-  }, createEmptyStatusCounts());
-};
 
 const getOrderPeopleCount = (order: UnifiedOrder): number => {
   const men = Number.isFinite(order.menCount) ? order.menCount : 0;
@@ -703,57 +650,6 @@ const PartialStatusPopoverContent = ({ order }: { order: UnifiedOrder }) => {
   );
 };
 
-const StatusBadge = ({
-  status,
-  attendanceStatus,
-  order,
-}: {
-  status?: BookingStatus | null;
-  attendanceStatus?: string | null;
-  order?: UnifiedOrder;
-}) => {
-  const statusDisplayKey = resolveOrderStatusDisplayKey(status, attendanceStatus);
-  const presentation = ORDER_STATUS_APPEARANCE[statusDisplayKey];
-  const badgeNode = (
-    <Badge
-      variant="filled"
-      style={{
-        backgroundColor: presentation.backgroundColor,
-        color: presentation.textColor,
-      }}
-    >
-      {presentation.label}
-    </Badge>
-  );
-
-  if (statusDisplayKey !== "partial" || !order) {
-    return badgeNode;
-  }
-
-  return (
-    <Popover withArrow position="top" shadow="md" width={220}>
-      <Popover.Target>
-        <Box
-          component="button"
-          type="button"
-          style={{
-            padding: 0,
-            border: 0,
-            background: "transparent",
-            cursor: "pointer",
-          }}
-          aria-label="Show partial attendance details"
-        >
-          {badgeNode}
-        </Box>
-      </Popover.Target>
-      <Popover.Dropdown p="xs">
-        <PartialStatusPopoverContent order={order} />
-      </Popover.Dropdown>
-    </Popover>
-  );
-};
-
 const buildPlatformBreakdown = (groups: ManifestGroup[]): PlatformBreakdownEntry[] => {
   const map = new Map<string, PlatformBreakdownEntry>();
   groups.forEach((group) => {
@@ -880,46 +776,6 @@ const applyBookingFilterToManifest = (groups: ManifestGroup[], filter: BookingFi
       };
     })
     .filter((group): group is ManifestGroup => Boolean(group));
-};
-
-const OrderPlatformBadge = ({ platform }: { platform?: string }) => {
-  if (!platform) {
-    return null;
-  }
-  return (
-    <Badge size="sm" variant="light" color={resolvePlatformColor(platform)}>
-      {formatPlatformLabel(platform)}
-    </Badge>
-  );
-};
-
-const PlatformBadges = ({
-  entries,
-  prefix,
-  withMargin = true,
-}: {
-  entries?: PlatformBreakdownEntry[];
-  prefix: string;
-  withMargin?: boolean;
-}) => {
-  if (!entries || entries.length === 0) {
-    return null;
-  }
-  return (
-    <Group gap="xs" wrap="wrap" mt={withMargin ? 4 : 0}>
-      {entries.map((entry) => (
-        <Badge
-          key={`${prefix}-${entry.platform}`}
-          variant="light"
-          color={resolvePlatformColor(entry.platform)}
-        >
-          {`${formatPlatformLabel(entry.platform)}: ${entry.totalPeople} (${entry.orderCount} ${
-            entry.orderCount === 1 ? "order" : "orders"
-          })`}
-        </Badge>
-      ))}
-    </Group>
-  );
 };
 
 const SUMMARY_CHIP_TONES = {
@@ -1184,10 +1040,6 @@ const ProductSummaryPanels = ({
       }
     />
   );
-};
-
-const formatAddonValue = (value?: number): string => {
-  return value && value > 0 ? String(value) : '';
 };
 
 const normalizeExtrasSnapshot = (extras?: OrderExtras): OrderExtras => ({
@@ -4849,10 +4701,6 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     filteredSummary.men,
     filteredSummary.women,
   );
-  const showAddonColumns =
-    filteredSummary.extras.tshirts > 0 ||
-    filteredSummary.extras.cocktails > 0 ||
-    filteredSummary.extras.photos > 0;
   const platformSummaryEntries = filteredSummary.platformBreakdown ?? [];
   const detailsPreviewHtml = detailsState.previewData?.htmlBody ?? null;
   const detailsPreviewBody =
@@ -5338,7 +5186,6 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
               <Stack gap="lg">
                 {activeGroups.map((group) => {
-                  const bookingsLabel = `${group.orders.length} booking${group.orders.length === 1 ? "" : "s"}`;
                   const undefinedGroupCount = getUndefinedGenreCount(group.totalPeople, group.men, group.women);
                   const sortedOrders = [...group.orders].sort((a, b) => {
                     const platformA = (a.platform ?? "").toLowerCase();

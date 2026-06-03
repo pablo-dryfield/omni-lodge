@@ -43,7 +43,6 @@ import { useAppSelector } from "../../store/hooks";
 import { makeSelectIsModuleActionAllowed } from "../../selectors/accessControlSelectors";
 import {
   formatScheduleWeekLabel,
-  getUpcomingWeeks,
   useAssignShifts,
   useAutoAssignWeek,
   useClearShiftInstances,
@@ -478,18 +477,6 @@ const isPubCrawlShiftInstance = (instance: ShiftInstance) => {
   }
 
   return typeName.includes("pub crawl") || templateName.includes("pub crawl");
-};
-
-type ShiftTimeBucket = {
-  label: string;
-  instancesByDate: Map<string, ShiftInstance[]>;
-};
-
-type ShiftGroup = {
-  key: string;
-  shiftTypeName: string;
-  heading: string;
-  timeBuckets: ShiftTimeBucket[];
 };
 
 const createShiftGroupKey = (instance: ShiftInstance) => {
@@ -2872,7 +2859,6 @@ const BuilderPage = () => {
         {sorted.map((instance) => {
           const assignments = instance.assignments ?? [];
           const grouped = groupAssignmentsByUser(assignments);
-          const templateRoles = instance.requiredRoles ?? instance.template?.defaultRoles ?? [];
           const dropActive = dragHoverInstanceId === instance.id;
           const highlightStyles = getInstanceHighlightStyles(instance);
 

@@ -1,5 +1,4 @@
 import dayjs from "dayjs";
-import { MRT_ColumnDef } from "mantine-react-table";
 import { ResponseModifications } from "../../types/general/ResponseModifications";
 import { ProductAddon } from "../../types/productAddons/ProductAddon";
 import CustomEditSelect, { EditSelectOption } from "../../utils/CustomEditSelect";

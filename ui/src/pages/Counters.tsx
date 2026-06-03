@@ -67,7 +67,6 @@ import type { Exception as ZXingException, Result as ZXingResult } from '@zxing/
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { deleteCounter, fetchCounters } from '../actions/counterActions';
 import { createNightReport, fetchNightReports, submitNightReport, updateNightReport } from '../actions/nightReportActions';
-import { navigateToPage } from '../actions/navigationActions';
 import { GenericPageProps } from '../types/general/GenericPageProps';
 import { loadCatalog, selectCatalog } from '../store/catalogSlice';
 import { fetchScheduledStaffForProduct } from '../api/scheduling';
@@ -2326,7 +2325,7 @@ const Counters = (props: GenericPageProps) => {
   const [cashEditingChannelId, setCashEditingChannelId] = useState<number | null>(null);
   const [cashEditingValue, setCashEditingValue] = useState<string>('');
   const [cashCurrencyByChannel, setCashCurrencyByChannel] = useState<Record<number, CashCurrency>>({});
-  const [shouldRefreshCounterList, setShouldRefreshCounterList] = useState(false);
+  const [, setShouldRefreshCounterList] = useState(false);
   const [expandedCounterId, setExpandedCounterId] = useState<number | null>(null);
   const [summaryPreviewOpen, setSummaryPreviewOpen] = useState(false);
   const [summaryPreviewLoading, setSummaryPreviewLoading] = useState(false);
@@ -4832,18 +4831,6 @@ const loadCounterById = useCallback(
     return Array.from(ids);
   }, [mergedMetrics]);
 
-  const hasBookedBeforeMetrics = useMemo(
-    () =>
-      mergedMetrics.some(
-        (metric) =>
-          (metric.kind === 'people' || metric.kind === 'addon') &&
-          metric.tallyType === 'booked' &&
-          metric.period === 'before_cutoff' &&
-          metric.qty > 0,
-      ),
-    [mergedMetrics],
-  );
-
   const savedAfterCutoffChannelIds = useMemo(() => {
     const ids = new Set<number>();
     mergedMetrics.forEach((metric) => {
@@ -6125,39 +6112,6 @@ const handleCounterListSelect = useCallback(
     });
   },
   [setActiveRegistryStep],
-);
-
-const handleCounterSelect = useCallback(
-  (counterSummary: Partial<Counter>) => {
-    const nextCounterId = counterSummary.id ?? null;
-
-    window.setTimeout(() => {
-      startTransition(() => {
-        setCounterListError(null);
-        fetchCounterRequestRef.current = null;
-
-        const nextUserId = counterSummary.userId ?? null;
-        if (nextUserId) {
-          setSelectedManagerId(nextUserId);
-        }
-
-        if (counterSummary.date) {
-          const parsed = dayjs(counterSummary.date);
-          if (parsed.isValid()) {
-            setSelectedDate(parsed);
-          }
-        }
-
-        setSelectedCounterId(nextCounterId);
-        setActiveRegistryStep('details');
-
-        if (nextCounterId) {
-          void loadCounterById(nextCounterId);
-        }
-      });
-    }, 0);
-  },
-  [loadCounterById, setActiveRegistryStep],
 );
 
   const handleViewSummary = useCallback(
@@ -7657,49 +7611,6 @@ useEffect(() => {
   const computedCounterNotes = useMemo(() => buildCounterNotes(), [buildCounterNotes]);
   const currentCounterNotes = counterNotes;
   const noteNeedsUpdate = registry.counter ? computedCounterNotes !== currentCounterNotes : false;
-
-  const platformRecordedTotal = useMemo(() => {
-    if (effectiveSelectedChannelIds.length === 0) {
-      return 0;
-    }
-    let total = 0;
-    mergedMetrics.forEach((metric) => {
-      if (
-        metric.kind === 'people' &&
-        metric.tallyType === 'booked' &&
-        metric.period === 'before_cutoff' &&
-        effectiveSelectedChannelIds.includes(metric.channelId)
-      ) {
-        total += metric.qty;
-      }
-    });
-    return total;
-  }, [effectiveSelectedChannelIds, mergedMetrics]);
-
-  const reservationsRecordedTotal = useMemo(() => {
-    if (effectiveSelectedChannelIds.length === 0 && effectiveAfterCutoffIds.length === 0) {
-      return 0;
-    }
-    let total = 0;
-    mergedMetrics.forEach((metric) => {
-      if (
-        metric.kind === 'people' &&
-        metric.tallyType === 'attended' &&
-        effectiveSelectedChannelIds.includes(metric.channelId)
-      ) {
-        total += metric.qty;
-      }
-      if (
-        metric.kind === 'people' &&
-        metric.tallyType === 'booked' &&
-        metric.period === 'after_cutoff' &&
-        effectiveAfterCutoffIds.includes(metric.channelId)
-      ) {
-        total += metric.qty;
-      }
-    });
-    return total;
-  }, [effectiveAfterCutoffIds, effectiveSelectedChannelIds, mergedMetrics]);
 
   const freePeopleTotalsByChannel = useMemo(() => {
     const map = new Map<number, number>();
