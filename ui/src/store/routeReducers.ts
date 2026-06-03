@@ -204,6 +204,9 @@ export const loadAssistantManagerTaskReducers = async (): Promise<DynamicReducer
 };
 
 export const loadReviewCountersReducers = async (): Promise<DynamicReducersMap> => {
-  const [{ default: reviewCounters }] = await Promise.all([import("../reducers/reviewCounterReducer")]);
-  return { reviewCounters };
+  const [{ default: reviewCounters }, { default: reviews }] = await Promise.all([
+    import("../reducers/reviewCounterReducer"),
+    import("../reducers/reviewsReducer"),
+  ]);
+  return { reviewCounters, reviews };
 };
