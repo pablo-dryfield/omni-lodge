@@ -3,6 +3,10 @@ import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import Image from '@tiptap/extension-image';
+import { Table } from '@tiptap/extension-table';
+import TableCell from '@tiptap/extension-table-cell';
+import TableHeader from '@tiptap/extension-table-header';
+import TableRow from '@tiptap/extension-table-row';
 import {
   ActionIcon,
   Box,
@@ -27,6 +31,12 @@ import {
   IconTrash,
   IconArrowBackUp,
   IconArrowForwardUp,
+  IconTable,
+  IconRowInsertBottom,
+  IconRowRemove,
+  IconColumnInsertRight,
+  IconColumnRemove,
+  IconTableMinus,
 } from '@tabler/icons-react';
 import { normalizeCerebroRichText } from '../../utils/cerebroRichText';
 import './CerebroRichText.css';
@@ -59,6 +69,12 @@ export const CerebroRichTextEditor = ({
         inline: false,
         allowBase64: false,
       }),
+      Table.configure({
+        resizable: true,
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
     ],
     content: normalizeCerebroRichText(value),
     immediatelyRender: false,
@@ -110,6 +126,54 @@ export const CerebroRichTextEditor = ({
     editor.chain().focus().setImage({ src: nextUrl.trim() }).run();
   };
 
+  const insertTable = () => {
+    if (!editor) {
+      return;
+    }
+    editor.commands.focus();
+    editor.commands.insertTable({ rows: 3, cols: 3, withHeaderRow: true });
+  };
+
+  const deleteCurrentTable = () => {
+    if (!editor) {
+      return;
+    }
+    editor.commands.focus();
+    editor.commands.deleteTable();
+  };
+
+  const addRowAfter = () => {
+    if (!editor) {
+      return;
+    }
+    editor.commands.focus();
+    editor.commands.addRowAfter();
+  };
+
+  const deleteCurrentRow = () => {
+    if (!editor) {
+      return;
+    }
+    editor.commands.focus();
+    editor.commands.deleteRow();
+  };
+
+  const addColumnAfter = () => {
+    if (!editor) {
+      return;
+    }
+    editor.commands.focus();
+    editor.commands.addColumnAfter();
+  };
+
+  const deleteCurrentColumn = () => {
+    if (!editor) {
+      return;
+    }
+    editor.commands.focus();
+    editor.commands.deleteColumn();
+  };
+
   const actions: ToolbarAction[] = editor
     ? [
         { label: 'Bold', icon: IconBold, active: editor.isActive('bold'), onClick: () => editor.chain().focus().toggleBold().run() },
@@ -123,6 +187,12 @@ export const CerebroRichTextEditor = ({
         { label: 'Code block', icon: IconCode, active: editor.isActive('codeBlock'), onClick: () => editor.chain().focus().toggleCodeBlock().run() },
         { label: 'Link', icon: IconLink, active: editor.isActive('link'), onClick: promptForLink },
         { label: 'Image or GIF', icon: IconPhotoPlus, onClick: promptForImage },
+        { label: 'Insert table', icon: IconTable, active: editor.isActive('table'), onClick: insertTable },
+        { label: 'Add row', icon: IconRowInsertBottom, disabled: !editor.isActive('table'), onClick: addRowAfter },
+        { label: 'Remove row', icon: IconRowRemove, disabled: !editor.isActive('table'), onClick: deleteCurrentRow },
+        { label: 'Add column', icon: IconColumnInsertRight, disabled: !editor.isActive('table'), onClick: addColumnAfter },
+        { label: 'Remove column', icon: IconColumnRemove, disabled: !editor.isActive('table'), onClick: deleteCurrentColumn },
+        { label: 'Delete table', icon: IconTableMinus, disabled: !editor.isActive('table'), onClick: deleteCurrentTable },
         { label: 'Clear formatting', icon: IconTrash, onClick: () => editor.chain().focus().unsetAllMarks().clearNodes().run() },
         { label: 'Undo', icon: IconArrowBackUp, disabled: !editor.can().chain().focus().undo().run(), onClick: () => editor.chain().focus().undo().run() },
         { label: 'Redo', icon: IconArrowForwardUp, disabled: !editor.can().chain().focus().redo().run(), onClick: () => editor.chain().focus().redo().run() },
@@ -157,7 +227,7 @@ export const CerebroRichTextEditor = ({
         </Box>
       </Box>
       <Text size="xs" c="dimmed">
-        Add formatting, links, and hosted image or GIF URLs directly into the article body.
+        Add formatting, links, tables, and hosted image or GIF URLs directly into the article body.
       </Text>
     </Stack>
   );
