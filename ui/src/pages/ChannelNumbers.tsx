@@ -1,14 +1,14 @@
-import { Center, Title } from '@mantine/core';
-import { useEffect } from 'react';
+import { Center, Loader, Title } from '@mantine/core';
+import { Suspense, lazy, useEffect } from 'react';
 
 import { PageAccessGuard } from '../components/access/PageAccessGuard';
-import ChannelNumbersSummary from '../components/channelNumbers/ChannelNumbersSummary';
 import { navigateToPage } from '../actions/navigationActions';
 import { useAppDispatch } from '../store/hooks';
 import { PAGE_SLUGS } from '../constants/pageSlugs';
 import { GenericPageProps } from '../types/general/GenericPageProps';
 
 const PAGE_SLUG = PAGE_SLUGS.channelNumbers;
+const ChannelNumbersSummary = lazy(() => import('../components/channelNumbers/ChannelNumbersSummary'));
 
 const ChannelNumbers = ({ title }: GenericPageProps) => {
   const dispatch = useAppDispatch();
@@ -23,7 +23,9 @@ const ChannelNumbers = ({ title }: GenericPageProps) => {
         <Center>
           <Title order={2}>{title}</Title>
         </Center>
-        <ChannelNumbersSummary />
+        <Suspense fallback={<Center py="xl"><Loader /></Center>}>
+          <ChannelNumbersSummary />
+        </Suspense>
       </div>
     </PageAccessGuard>
   );

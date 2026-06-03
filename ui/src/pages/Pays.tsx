@@ -1,4 +1,4 @@
-import React, { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Paper,
   Container,
@@ -61,22 +61,11 @@ import {
 } from '../selectors/financeSelectors';
 import type { FinanceVendor, FinanceCategory } from '../types/finance';
 import type { ServerResponse } from '../types/general/ServerResponse';
-import {
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-} from 'recharts';
 import { IconTrash } from '@tabler/icons-react';
 
 const EARLIEST_DATA_DATE = dayjs('2020-01-01');
 const DEFAULT_CURRENCY = 'PLN';
+const PaysCharts = lazy(() => import('../components/pays/PaysCharts'));
 
 type DatePreset = 'this_month' | 'last_month' | 'custom';
 
@@ -2270,94 +2259,16 @@ const renderLedgerSnapshot = (staff: Pay) => {
       return null;
     }
     return (
-      <SimpleGrid cols={{ base: 1, md: 2 }}>
-        <Card withBorder padding="md">
-          <Group justify="space-between" mb="sm">
-            <Text fw={600}>Bucket distribution</Text>
-            <Badge>{aggregatedBucketData.length} buckets</Badge>
-          </Group>
-          {aggregatedBucketData.length === 0 ? (
-            <Text size="sm" c="dimmed">
-              No bucket adjustments recorded for this range.
-            </Text>
-          ) : (
-            <ResponsiveContainer width="100%" height={260}>
-              <PieChart>
-                <Tooltip
-                  formatter={(value: number, name: string) => [formatCurrency(value), name]}
-                  labelFormatter={(label) => label}
-                />
-                <Pie
-                  data={aggregatedBucketData}
-                  dataKey="amount"
-                  nameKey="bucket"
-                  outerRadius={90}
-                  innerRadius={40}
-                  labelLine={false}
-                  label={(entry) => `${entry.bucket} ${(entry.amount / (totalPayout || 1) * 100).toFixed(1)}%`}
-                >
-                  {aggregatedBucketData.map((entry, index) => (
-                    <Cell
-                      key={entry.bucket}
-                      fill={
-                        bucketChartColors[index] ??
-                        theme.colors[getComponentColor(entry.bucket) as keyof typeof theme.colors]?.[6] ??
-                        theme.colors.gray[5]
-                      }
-                    />
-                  ))}
-                </Pie>
-              </PieChart>
-            </ResponsiveContainer>
-          )}
-        </Card>
-
-        <Card withBorder padding="md">
-          <Group justify="space-between" mb="sm">
-            <Text fw={600}>Daily trend</Text>
-            <Badge>{dailyTrendData.length} days</Badge>
-          </Group>
-          {dailyTrendData.length === 0 ? (
-            <Text size="sm" c="dimmed">
-              No daily breakdown available for this range.
-            </Text>
-          ) : (
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={dailyTrendData} margin={{ top: 5, right: 16, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" tickFormatter={(value) => dayjs(value).format('MM/DD')} />
-                <YAxis tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} />
-                <Tooltip
-                  formatter={(value: number, name: string) => [formatCurrency(value), name]}
-                  labelFormatter={(value) => dayjs(value).format('MMM D, YYYY')}
-                />
-                <Bar dataKey="commission" name="Commission" fill={theme.colors.green[6]} />
-                <Bar dataKey="payout" name="Total payout" fill={theme.colors.blue[6]} />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </Card>
-        {aggregatedComponentData.length > 0 && (
-          <Card withBorder padding="md">
-            <Group justify="space-between" mb="sm">
-              <Text fw={600}>Top components</Text>
-              <Badge>{aggregatedComponentData.length}</Badge>
-            </Group>
-            <Stack gap="xs">
-              {aggregatedComponentData.map((component) => (
-                <Group key={component.name} justify="space-between">
-                  <Group gap="xs">
-                    <Badge variant="light" color="violet">
-                      {component.name}
-                    </Badge>
-                  </Group>
-                  <Text fw={600}>{formatCurrency(component.amount)}</Text>
-                </Group>
-              ))}
-            </Stack>
-          </Card>
-        )}
-      </SimpleGrid>
+      <Suspense fallback={<Center py="xl"><Loader /></Center>}>
+        <PaysCharts
+          aggregatedBucketData={aggregatedBucketData}
+          aggregatedComponentData={aggregatedComponentData}
+          bucketChartColors={bucketChartColors}
+          dailyTrendData={dailyTrendData}
+          formatCurrency={formatCurrency}
+          totalPayout={totalPayout}
+        />
+      </Suspense>
     );
   };
 

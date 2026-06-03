@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Card,
@@ -16,18 +16,7 @@ import { DatePickerInput } from "@mantine/dates";
 import dayjs from "dayjs";
 import axiosInstance from "../../utils/axiosInstance";
 import { isAxiosError } from "axios";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+const FinanceReportsChart = lazy(() => import("../../components/finance/FinanceReportsChart"));
 
 type ProfitLossMonthlyPoint = {
   month: string;
@@ -123,6 +112,7 @@ type FinanceReportsResponse = {
 type DatePreset = "six_months" | "ytd" | "custom";
 
 const FinanceReports = () => {
+  const [activeTab, setActiveTab] = useState("pl");
   const [preset, setPreset] = useState<DatePreset>("six_months");
   const [customRange, setCustomRange] = useState<[Date | null, Date | null]>([null, null]);
   const [data, setData] = useState<FinanceReportsResponse | null>(null);
@@ -261,7 +251,7 @@ const FinanceReports = () => {
       )}
 
       {!loading && data && (
-        <Tabs defaultValue="pl">
+        <Tabs value={activeTab} onChange={(value) => setActiveTab(value ?? "pl")} keepMounted={false}>
           <Tabs.List>
             <Tabs.Tab value="pl">Profit &amp; Loss</Tabs.Tab>
             <Tabs.Tab value="cf">Cash Flow</Tabs.Tab>
@@ -298,28 +288,13 @@ const FinanceReports = () => {
                     No transactions recorded in this range.
                   </Text>
                 ) : (
-                  <ResponsiveContainer width="100%" height={320}>
-                    <BarChart data={monthlyPnL}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="label" />
-                      <YAxis />
-                      <Tooltip
-                        formatter={(value: number) => formatCurrency(value)}
-                        labelFormatter={(label) => label}
-                      />
-                      <Legend />
-                      <Bar dataKey="income" name="Income" fill="#2f9e44" />
-                      <Bar dataKey="expense" name="Expenses" fill="#f03e3e" />
-                      <Line
-                        type="monotone"
-                        dataKey="net"
-                        name="Net"
-                        stroke="#1c7ed6"
-                        strokeWidth={2}
-                        dot={false}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <Suspense fallback={<Group justify="center" my="lg"><Loader /></Group>}>
+                    <FinanceReportsChart
+                      variant="profitLoss"
+                      data={monthlyPnL}
+                      formatCurrency={formatCurrency}
+                    />
+                  </Suspense>
                 )}
               </Card>
               <Card withBorder padding="lg">
@@ -371,32 +346,13 @@ const FinanceReports = () => {
                     No cash movements in this range.
                   </Text>
                 ) : (
-                  <ResponsiveContainer width="100%" height={320}>
-                    <LineChart data={cashFlowTimeline}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="label" />
-                      <YAxis />
-                      <Tooltip
-                        formatter={(value: number) => formatCurrency(value)}
-                        labelFormatter={(label) => label}
-                      />
-                      <Legend />
-                      <Line
-                        type="monotone"
-                        dataKey="inflow"
-                        name="Inflow"
-                        stroke="#2f9e44"
-                        strokeWidth={2}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="outflow"
-                        name="Outflow"
-                        stroke="#f03e3e"
-                        strokeWidth={2}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
+                  <Suspense fallback={<Group justify="center" my="lg"><Loader /></Group>}>
+                    <FinanceReportsChart
+                      variant="cashFlow"
+                      data={cashFlowTimeline}
+                      formatCurrency={formatCurrency}
+                    />
+                  </Suspense>
                 )}
               </Card>
             </Stack>
@@ -412,17 +368,13 @@ const FinanceReports = () => {
                     No budgets or actuals recorded in this range.
                   </Text>
                 ) : (
-                  <ResponsiveContainer width="100%" height={320}>
-                    <BarChart data={budgetRows}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="categoryName" />
-                      <YAxis />
-                      <Tooltip formatter={(value: number) => formatCurrency(value)} />
-                      <Legend />
-                      <Bar dataKey="budget" name="Budget" fill="#1c7ed6" />
-                      <Bar dataKey="actual" name="Actual" fill="#f59f00" />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <Suspense fallback={<Group justify="center" my="lg"><Loader /></Group>}>
+                    <FinanceReportsChart
+                      variant="budgetVsActual"
+                      data={budgetRows}
+                      formatCurrency={formatCurrency}
+                    />
+                  </Suspense>
                 )}
               </Card>
               {budgetRows.length > 0 && (

@@ -1,0 +1,1027 @@
+{
+  "results": [
+    {
+      "bundleName": "build/static/js/1650.00995fb0.chunk.js",
+      "totalBytes": 45071,
+      "mappedBytes": 50603,
+      "eolBytes": 2,
+      "sourceMapCommentBytes": 67,
+      "files": {
+        "actions/assistantManagerTaskActions.ts": {
+          "size": 2193
+        },
+        "actions/userTypeActions.ts": {
+          "size": 406
+        },
+        "api/config.ts": {
+          "size": 618
+        },
+        "api/shiftRoles.ts": {
+          "size": 366
+        },
+        "api/users.ts": {
+          "size": 392
+        },
+        "components/access/PageAccessGuard.tsx": {
+          "size": 657
+        },
+        "components/cerebro/cerebroRichTextSanitize.ts": {
+          "size": 235
+        },
+        "components/cerebro/CerebroRichTextContent.tsx": {
+          "size": 184
+        },
+        "hooks/useModuleAccess.ts": {
+          "size": 630
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconMessageCircle2.ts": {
+          "size": 139
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconPaperclip.ts": {
+          "size": 200
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconCamera.ts": {
+          "size": 248
+        },
+        "components/assistantManagerTasks/AssistantManagerTaskPlanner.tsx": {
+          "size": 34743
+        },
+        "pages/AssistantManagerTasks.tsx": {
+          "size": 183
+        },
+        "selectors/accessControlSelectors.ts": {
+          "size": 475
+        },
+        "utils/cerebroRichText.ts": {
+          "size": 346
+        },
+        "utils/imageCompression.ts": {
+          "size": 1335
+        },
+        "../node_modules/@mantine/core/src/components/Avatar/AvatarGroup/AvatarGroup.context.ts": {
+          "size": 240
+        },
+        "../node_modules/@mantine/core/src/components/Avatar/AvatarGroup/AvatarGroup.tsx": {
+          "size": 451
+        },
+        "../node_modules/@mantine/core/src/components/Avatar/AvatarPlaceholderIcon.tsx": {
+          "size": 609
+        },
+        "../node_modules/@mantine/core/src/components/Avatar/Avatar.tsx": {
+          "size": 906
+        },
+        "../node_modules/@mantine/core/src/components/Checkbox/CheckboxGroup.context.ts": {
+          "size": 203
+        },
+        "../node_modules/@mantine/core/src/components/Checkbox/CheckboxGroup/CheckboxGroup.tsx": {
+          "size": 593
+        },
+        "../node_modules/@mantine/core/src/components/Checkbox/Checkbox.tsx": {
+          "size": 1244
+        },
+        "../node_modules/@mantine/core/src/components/ThemeIcon/ThemeIcon.tsx": {
+          "size": 454
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconAlertTriangle.ts": {
+          "size": 227
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconArrowDown.ts": {
+          "size": 167
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconArrowUp.ts": {
+          "size": 166
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconBolt.ts": {
+          "size": 153
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconCalendar.ts": {
+          "size": 210
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconCheck.ts": {
+          "size": 142
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconChevronLeft.ts": {
+          "size": 148
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconChevronRight.ts": {
+          "size": 149
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconCircleX.ts": {
+          "size": 177
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconDeviceFloppy.ts": {
+          "size": 211
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconInfoCircle.ts": {
+          "size": 183
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconMinus.ts": {
+          "size": 138
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconPencil.ts": {
+          "size": 182
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconRefresh.ts": {
+          "size": 181
+        },
+        "../node_modules/@tabler/icons-react/src/icons/IconX.ts": {
+          "size": 119
+        },
+        "[sourceMappingURL]": {
+          "size": 67
+        },
+        "[EOLs]": {
+          "size": 2
+        }
+      }
+    },
+    {
+      "bundleName": "build/static/js/1705.d0db23ce.chunk.js",
+      "totalBytes": 60137,
+      "mappedBytes": 85742,
+      "eolBytes": 2,
+      "sourceMapCommentBytes": 67,
+      "files": {
+        "../node_modules/dayjs/plugin/isBetween.js": {
+          "size": 205
+        },
+        "../node_modules/dayjs/plugin/isSameOrAfter.js": {
+          "size": 130
+        },
+        "../node_modules/dayjs/plugin/isSameOrBefore.js": {
+          "size": 131
+        },
+        "../node_modules/dayjs/plugin/localeData.js": {
+          "size": 615
+        },
+        "../node_modules/dayjs/plugin/localizedFormat.js": {
+          "size": 362
+        },
+        "../node_modules/dayjs/plugin/minMax.js": {
+          "size": 281
+        },
+        "../node_modules/dayjs/plugin/utc.js": {
+          "size": 888
+        },
+        "../node_modules/invariant/browser.js": {
+          "size": 282
+        },
+        "../node_modules/moment/moment.js": {
+          "size": 19357
+        },
+        "../node_modules/prop-types/factoryWithThrowingShims.js": {
+          "size": 409
+        },
+        "../node_modules/prop-types/index.js": {
+          "size": 65
+        },
+        "../node_modules/prop-types/lib/ReactPropTypesSecret.js": {
+          "size": 163
+        },
+        "../node_modules/@babel/runtime/helpers/esm/classCallCheck.js": {
+          "size": 118
+        },
+        "../node_modules/@babel/runtime/helpers/esm/createClass.js": {
+          "size": 218
+        },
+        "../node_modules/@babel/runtime/helpers/esm/inherits.js": {
+          "size": 214
+        },
+        "../node_modules/@babel/runtime/helpers/esm/getPrototypeOf.js": {
+          "size": 104
+        },
+        "../node_modules/@babel/runtime/helpers/esm/isNativeReflectConstruct.js": {
+          "size": 146
+        },
+        "../node_modules/@babel/runtime/helpers/esm/createSuper.js": {
+          "size": 159
+        },
+        "../node_modules/@babel/runtime/helpers/esm/possibleConstructorReturn.js": {
+          "size": 161
+        },
+        "../node_modules/@babel/runtime/helpers/esm/arrayWithHoles.js": {
+          "size": 59
+        },
+        "../node_modules/@babel/runtime/helpers/esm/arrayLikeToArray.js": {
+          "size": 111
+        },
+        "../node_modules/@babel/runtime/helpers/esm/unsupportedIterableToArray.js": {
+          "size": 223
+        },
+        "../node_modules/@babel/runtime/helpers/esm/nonIterableRest.js": {
+          "size": 152
+        },
+        "../node_modules/@babel/runtime/helpers/esm/slicedToArray.js": {
+          "size": 118
+        },
+        "../node_modules/@babel/runtime/helpers/esm/iterableToArrayLimit.js": {
+          "size": 277
+        },
+        "../node_modules/uncontrollable/lib/esm/utils.js": {
+          "size": 364
+        },
+        "../node_modules/react-lifecycles-compat/react-lifecycles-compat.es.js": {
+          "size": 929
+        },
+        "../node_modules/react-big-calendar/node_modules/clsx/dist/clsx.m.js": {
+          "size": 241
+        },
+        "../node_modules/date-arithmetic/index.js": {
+          "size": 1044
+        },
+        "../node_modules/@babel/runtime/helpers/esm/iterableToArray.js": {
+          "size": 117
+        },
+        "../node_modules/@babel/runtime/helpers/esm/toConsumableArray.js": {
+          "size": 97
+        },
+        "../node_modules/@babel/runtime/helpers/esm/arrayWithoutHoles.js": {
+          "size": 58
+        },
+        "../node_modules/@babel/runtime/helpers/esm/nonIterableSpread.js": {
+          "size": 148
+        },
+        "../node_modules/lodash-es/_baseSlice.js": {
+          "size": 150
+        },
+        "../node_modules/lodash-es/eq.js": {
+          "size": 71
+        },
+        "../node_modules/lodash-es/_freeGlobal.js": {
+          "size": 67
+        },
+        "../node_modules/lodash-es/_root.js": {
+          "size": 106
+        },
+        "../node_modules/lodash-es/_Symbol.js": {
+          "size": 39
+        },
+        "../node_modules/lodash-es/_getRawTag.js": {
+          "size": 187
+        },
+        "../node_modules/lodash-es/_objectToString.js": {
+          "size": 93
+        },
+        "../node_modules/lodash-es/_baseGetTag.js": {
+          "size": 144
+        },
+        "../node_modules/lodash-es/isObject.js": {
+          "size": 93
+        },
+        "../node_modules/lodash-es/isFunction.js": {
+          "size": 120
+        },
+        "../node_modules/lodash-es/isLength.js": {
+          "size": 101
+        },
+        "../node_modules/lodash-es/isArrayLike.js": {
+          "size": 79
+        },
+        "../node_modules/lodash-es/_isIndex.js": {
+          "size": 165
+        },
+        "../node_modules/lodash-es/_isIterateeCall.js": {
+          "size": 137
+        },
+        "../node_modules/lodash-es/_trimmedEndIndex.js": {
+          "size": 104
+        },
+        "../node_modules/lodash-es/_baseTrim.js": {
+          "size": 100
+        },
+        "../node_modules/lodash-es/isObjectLike.js": {
+          "size": 77
+        },
+        "../node_modules/lodash-es/isSymbol.js": {
+          "size": 95
+        },
+        "../node_modules/lodash-es/toNumber.js": {
+          "size": 245
+        },
+        "../node_modules/lodash-es/toFinite.js": {
+          "size": 123
+        },
+        "../node_modules/lodash-es/toInteger.js": {
+          "size": 83
+        },
+        "../node_modules/lodash-es/chunk.js": {
+          "size": 180
+        },
+        "../node_modules/dom-helpers/esm/ownerDocument.js": {
+          "size": 65
+        },
+        "../node_modules/dom-helpers/esm/getComputedStyle.js": {
+          "size": 90
+        },
+        "../node_modules/dom-helpers/esm/ownerWindow.js": {
+          "size": 76
+        },
+        "../node_modules/dom-helpers/esm/hyphenate.js": {
+          "size": 111
+        },
+        "../node_modules/dom-helpers/esm/hyphenateStyle.js": {
+          "size": 99
+        },
+        "../node_modules/dom-helpers/esm/isTransform.js": {
+          "size": 154
+        },
+        "../node_modules/dom-helpers/esm/css.js": {
+          "size": 279
+        },
+        "../node_modules/dom-helpers/esm/contains.js": {
+          "size": 110
+        },
+        "../node_modules/dom-helpers/esm/isWindow.js": {
+          "size": 148
+        },
+        "../node_modules/dom-helpers/esm/isDocument.js": {
+          "size": 117
+        },
+        "../node_modules/dom-helpers/esm/getScrollAccessor.js": {
+          "size": 141
+        },
+        "../node_modules/dom-helpers/esm/scrollLeft.js": {
+          "size": 47
+        },
+        "../node_modules/dom-helpers/esm/scrollTop.js": {
+          "size": 41
+        },
+        "../node_modules/dom-helpers/esm/offset.js": {
+          "size": 194
+        },
+        "../node_modules/dom-helpers/esm/offsetParent.js": {
+          "size": 211
+        },
+        "../node_modules/dom-helpers/esm/position.js": {
+          "size": 369
+        },
+        "../node_modules/dom-helpers/esm/canUseDOM.js": {
+          "size": 87
+        },
+        "../node_modules/dom-helpers/esm/animationFrame.js": {
+          "size": 302
+        },
+        "../node_modules/@restart/hooks/esm/useCallbackRef.js": {
+          "size": 61
+        },
+        "../node_modules/@restart/hooks/esm/useMergedRefs.js": {
+          "size": 164
+        },
+        "../node_modules/@restart/hooks/esm/useSafeState.js": {
+          "size": 202
+        },
+        "../node_modules/@restart/hooks/esm/useMounted.js": {
+          "size": 112
+        },
+        "../node_modules/react-overlays/esm/popper.js": {
+          "size": 86
+        },
+        "../node_modules/react-overlays/esm/usePopper.js": {
+          "size": 932
+        },
+        "../node_modules/dom-helpers/esm/addEventListener.js": {
+          "size": 268
+        },
+        "../node_modules/dom-helpers/esm/removeEventListener.js": {
+          "size": 129
+        },
+        "../node_modules/dom-helpers/esm/listen.js": {
+          "size": 68
+        },
+        "../node_modules/@restart/hooks/esm/useCommittedRef.js": {
+          "size": 101
+        },
+        "../node_modules/@restart/hooks/esm/useEventCallback.js": {
+          "size": 133
+        },
+        "../node_modules/react-overlays/esm/ownerDocument.js": {
+          "size": 77
+        },
+        "../node_modules/react-overlays/esm/safeFindDOMNode.js": {
+          "size": 86
+        },
+        "../node_modules/react-overlays/esm/useRootClose.js": {
+          "size": 596
+        },
+        "../node_modules/react-overlays/esm/useWaitForDOMRef.js": {
+          "size": 254
+        },
+        "../node_modules/react-overlays/esm/mergeOptionsWithPopperConfig.js": {
+          "size": 451
+        },
+        "../node_modules/react-overlays/esm/Overlay.js": {
+          "size": 869
+        },
+        "../node_modules/lodash-es/_listCacheClear.js": {
+          "size": 67
+        },
+        "../node_modules/lodash-es/_assocIndexOf.js": {
+          "size": 98
+        },
+        "../node_modules/lodash-es/_listCacheDelete.js": {
+          "size": 146
+        },
+        "../node_modules/lodash-es/_listCacheGet.js": {
+          "size": 96
+        },
+        "../node_modules/lodash-es/_listCacheHas.js": {
+          "size": 72
+        },
+        "../node_modules/lodash-es/_listCacheSet.js": {
+          "size": 117
+        },
+        "../node_modules/lodash-es/_ListCache.js": {
+          "size": 160
+        },
+        "../node_modules/lodash-es/_stackClear.js": {
+          "size": 71
+        },
+        "../node_modules/lodash-es/_stackDelete.js": {
+          "size": 95
+        },
+        "../node_modules/lodash-es/_stackGet.js": {
+          "size": 70
+        },
+        "../node_modules/lodash-es/_stackHas.js": {
+          "size": 70
+        },
+        "../node_modules/lodash-es/_coreJsData.js": {
+          "size": 54
+        },
+        "../node_modules/lodash-es/_isMasked.js": {
+          "size": 148
+        },
+        "../node_modules/lodash-es/_toSource.js": {
+          "size": 126
+        },
+        "../node_modules/lodash-es/_baseIsNative.js": {
+          "size": 257
+        },
+        "../node_modules/lodash-es/_getValue.js": {
+          "size": 71
+        },
+        "../node_modules/lodash-es/_getNative.js": {
+          "size": 75
+        },
+        "../node_modules/lodash-es/_Map.js": {
+          "size": 42
+        },
+        "../node_modules/lodash-es/_nativeCreate.js": {
+          "size": 49
+        },
+        "../node_modules/lodash-es/_hashClear.js": {
+          "size": 79
+        },
+        "../node_modules/lodash-es/_hashDelete.js": {
+          "size": 103
+        },
+        "../node_modules/lodash-es/_hashGet.js": {
+          "size": 161
+        },
+        "../node_modules/lodash-es/_hashHas.js": {
+          "size": 129
+        },
+        "../node_modules/lodash-es/_hashSet.js": {
+          "size": 135
+        },
+        "../node_modules/lodash-es/_Hash.js": {
+          "size": 161
+        },
+        "../node_modules/lodash-es/_mapCacheClear.js": {
+          "size": 100
+        },
+        "../node_modules/lodash-es/_isKeyable.js": {
+          "size": 115
+        },
+        "../node_modules/lodash-es/_getMapData.js": {
+          "size": 107
+        },
+        "../node_modules/lodash-es/_mapCacheDelete.js": {
+          "size": 92
+        },
+        "../node_modules/lodash-es/_mapCacheGet.js": {
+          "size": 67
+        },
+        "../node_modules/lodash-es/_mapCacheHas.js": {
+          "size": 67
+        },
+        "../node_modules/lodash-es/_mapCacheSet.js": {
+          "size": 98
+        },
+        "../node_modules/lodash-es/_MapCache.js": {
+          "size": 156
+        },
+        "../node_modules/lodash-es/_stackSet.js": {
+          "size": 157
+        },
+        "../node_modules/lodash-es/_Stack.js": {
+          "size": 132
+        },
+        "../node_modules/lodash-es/_setCacheAdd.js": {
+          "size": 94
+        },
+        "../node_modules/lodash-es/_setCacheHas.js": {
+          "size": 70
+        },
+        "../node_modules/lodash-es/_SetCache.js": {
+          "size": 139
+        },
+        "../node_modules/lodash-es/_arraySome.js": {
+          "size": 108
+        },
+        "../node_modules/lodash-es/_cacheHas.js": {
+          "size": 60
+        },
+        "../node_modules/lodash-es/_equalArrays.js": {
+          "size": 314
+        },
+        "../node_modules/lodash-es/_Uint8Array.js": {
+          "size": 43
+        },
+        "../node_modules/lodash-es/_mapToArray.js": {
+          "size": 107
+        },
+        "../node_modules/lodash-es/_setToArray.js": {
+          "size": 101
+        },
+        "../node_modules/lodash-es/_equalByTag.js": {
+          "size": 404
+        },
+        "../node_modules/lodash-es/_arrayPush.js": {
+          "size": 98
+        },
+        "../node_modules/lodash-es/isArray.js": {
+          "size": 39
+        },
+        "../node_modules/lodash-es/_baseGetAllKeys.js": {
+          "size": 83
+        },
+        "../node_modules/lodash-es/_arrayFilter.js": {
+          "size": 124
+        },
+        "../node_modules/lodash-es/stubArray.js": {
+          "size": 50
+        },
+        "../node_modules/lodash-es/_getSymbols.js": {
+          "size": 155
+        },
+        "../node_modules/lodash-es/_baseTimes.js": {
+          "size": 93
+        },
+        "../node_modules/lodash-es/_baseIsArguments.js": {
+          "size": 82
+        },
+        "../node_modules/lodash-es/isArguments.js": {
+          "size": 157
+        },
+        "../node_modules/lodash-es/stubFalse.js": {
+          "size": 50
+        },
+        "../node_modules/lodash-es/isBuffer.js": {
+          "size": 152
+        },
+        "../node_modules/lodash-es/_baseIsTypedArray.js": {
+          "size": 251
+        },
+        "../node_modules/lodash-es/_baseUnary.js": {
+          "size": 59
+        },
+        "../node_modules/lodash-es/_nodeUtil.js": {
+          "size": 196
+        },
+        "../node_modules/lodash-es/isTypedArray.js": {
+          "size": 69
+        },
+        "../node_modules/lodash-es/_arrayLikeKeys.js": {
+          "size": 245
+        },
+        "../node_modules/lodash-es/_isPrototype.js": {
+          "size": 115
+        },
+        "../node_modules/lodash-es/_overArg.js": {
+          "size": 64
+        },
+        "../node_modules/lodash-es/_nativeKeys.js": {
+          "size": 47
+        },
+        "../node_modules/lodash-es/_baseKeys.js": {
+          "size": 149
+        },
+        "../node_modules/lodash-es/keys.js": {
+          "size": 67
+        },
+        "../node_modules/lodash-es/_getAllKeys.js": {
+          "size": 61
+        },
+        "../node_modules/lodash-es/_equalObjects.js": {
+          "size": 392
+        },
+        "../node_modules/lodash-es/_DataView.js": {
+          "size": 47
+        },
+        "../node_modules/lodash-es/_Promise.js": {
+          "size": 46
+        },
+        "../node_modules/lodash-es/_Set.js": {
+          "size": 42
+        },
+        "../node_modules/lodash-es/_WeakMap.js": {
+          "size": 46
+        },
+        "../node_modules/lodash-es/_getTag.js": {
+          "size": 310
+        },
+        "../node_modules/lodash-es/_baseIsEqualDeep.js": {
+          "size": 332
+        },
+        "../node_modules/lodash-es/_baseIsEqual.js": {
+          "size": 112
+        },
+        "../node_modules/lodash-es/isEqual.js": {
+          "size": 55
+        },
+        "../node_modules/dom-helpers/esm/height.js": {
+          "size": 91
+        },
+        "../node_modules/dom-helpers/esm/querySelectorAll.js": {
+          "size": 206
+        },
+        "../node_modules/dom-helpers/esm/matches.js": {
+          "size": 161
+        },
+        "../node_modules/dom-helpers/esm/closest.js": {
+          "size": 151
+        },
+        "../node_modules/lodash-es/_baseFindIndex.js": {
+          "size": 115
+        },
+        "../node_modules/lodash-es/_baseIsMatch.js": {
+          "size": 237
+        },
+        "../node_modules/lodash-es/_isStrictComparable.js": {
+          "size": 63
+        },
+        "../node_modules/lodash-es/_getMatchData.js": {
+          "size": 108
+        },
+        "../node_modules/lodash-es/_matchesStrictComparable.js": {
+          "size": 104
+        },
+        "../node_modules/lodash-es/_baseMatches.js": {
+          "size": 119
+        },
+        "../node_modules/lodash-es/_isKey.js": {
+          "size": 208
+        },
+        "../node_modules/lodash-es/memoize.js": {
+          "size": 222
+        },
+        "../node_modules/lodash-es/_stringToPath.js": {
+          "size": 259
+        },
+        "../node_modules/lodash-es/_memoizeCapped.js": {
+          "size": 97
+        },
+        "../node_modules/lodash-es/_arrayMap.js": {
+          "size": 114
+        },
+        "../node_modules/lodash-es/_baseToString.js": {
+          "size": 178
+        },
+        "../node_modules/lodash-es/toString.js": {
+          "size": 66
+        },
+        "../node_modules/lodash-es/_castPath.js": {
+          "size": 78
+        },
+        "../node_modules/lodash-es/_toKey.js": {
+          "size": 116
+        },
+        "../node_modules/lodash-es/_baseGet.js": {
+          "size": 118
+        },
+        "../node_modules/lodash-es/get.js": {
+          "size": 90
+        },
+        "../node_modules/lodash-es/_baseHasIn.js": {
+          "size": 75
+        },
+        "../node_modules/lodash-es/_hasPath.js": {
+          "size": 177
+        },
+        "../node_modules/lodash-es/hasIn.js": {
+          "size": 69
+        },
+        "../node_modules/lodash-es/_baseMatchesProperty.js": {
+          "size": 120
+        },
+        "../node_modules/lodash-es/identity.js": {
+          "size": 51
+        },
+        "../node_modules/lodash-es/_baseProperty.js": {
+          "size": 74
+        },
+        "../node_modules/lodash-es/_basePropertyDeep.js": {
+          "size": 62
+        },
+        "../node_modules/lodash-es/property.js": {
+          "size": 68
+        },
+        "../node_modules/lodash-es/_baseIteratee.js": {
+          "size": 116
+        },
+        "../node_modules/lodash-es/findIndex.js": {
+          "size": 141
+        },
+        "../node_modules/lodash-es/_baseRange.js": {
+          "size": 138
+        },
+        "../node_modules/lodash-es/range.js": {
+          "size": 52
+        },
+        "../node_modules/lodash-es/_createRange.js": {
+          "size": 136
+        },
+        "../node_modules/memoize-one/dist/memoize-one.esm.js": {
+          "size": 306
+        },
+        "../node_modules/lodash-es/_isFlattenable.js": {
+          "size": 114
+        },
+        "../node_modules/lodash-es/_baseFlatten.js": {
+          "size": 148
+        },
+        "../node_modules/lodash-es/_baseFor.js": {
+          "size": 52
+        },
+        "../node_modules/lodash-es/_createBaseFor.js": {
+          "size": 134
+        },
+        "../node_modules/lodash-es/_baseForOwn.js": {
+          "size": 63
+        },
+        "../node_modules/lodash-es/_baseEach.js": {
+          "size": 54
+        },
+        "../node_modules/lodash-es/_createBaseEach.js": {
+          "size": 144
+        },
+        "../node_modules/lodash-es/_baseMap.js": {
+          "size": 114
+        },
+        "../node_modules/lodash-es/_baseSortBy.js": {
+          "size": 98
+        },
+        "../node_modules/lodash-es/_compareAscending.js": {
+          "size": 175
+        },
+        "../node_modules/lodash-es/_compareMultiple.js": {
+          "size": 156
+        },
+        "../node_modules/lodash-es/_baseOrderBy.js": {
+          "size": 191
+        },
+        "../node_modules/lodash-es/_apply.js": {
+          "size": 129
+        },
+        "../node_modules/lodash-es/_overRest.js": {
+          "size": 187
+        },
+        "../node_modules/lodash-es/constant.js": {
+          "size": 55
+        },
+        "../node_modules/lodash-es/_defineProperty.js": {
+          "size": 105
+        },
+        "../node_modules/lodash-es/_baseSetToString.js": {
+          "size": 116
+        },
+        "../node_modules/lodash-es/_shortOut.js": {
+          "size": 172
+        },
+        "../node_modules/lodash-es/_setToString.js": {
+          "size": 54
+        },
+        "../node_modules/lodash-es/_baseRest.js": {
+          "size": 69
+        },
+        "../node_modules/lodash-es/sortBy.js": {
+          "size": 142
+        },
+        "../node_modules/dom-helpers/esm/scrollbarSize.js": {
+          "size": 216
+        },
+        "../node_modules/dom-helpers/esm/width.js": {
+          "size": 90
+        },
+        "../node_modules/@babel/runtime/helpers/esm/toArray.js": {
+          "size": 58
+        },
+        "../node_modules/dom-helpers/esm/removeClass.js": {
+          "size": 259
+        },
+        "../node_modules/lodash-es/_arrayEach.js": {
+          "size": 108
+        },
+        "../node_modules/lodash-es/_baseAssignValue.js": {
+          "size": 116
+        },
+        "../node_modules/lodash-es/_assignValue.js": {
+          "size": 133
+        },
+        "../node_modules/lodash-es/_copyObject.js": {
+          "size": 153
+        },
+        "../node_modules/lodash-es/_baseAssign.js": {
+          "size": 68
+        },
+        "../node_modules/lodash-es/_nativeKeysIn.js": {
+          "size": 99
+        },
+        "../node_modules/lodash-es/_baseKeysIn.js": {
+          "size": 157
+        },
+        "../node_modules/lodash-es/keysIn.js": {
+          "size": 70
+        },
+        "../node_modules/lodash-es/_baseAssignIn.js": {
+          "size": 68
+        },
+        "../node_modules/lodash-es/_cloneBuffer.js": {
+          "size": 217
+        },
+        "../node_modules/lodash-es/_copyArray.js": {
+          "size": 106
+        },
+        "../node_modules/lodash-es/_copySymbols.js": {
+          "size": 65
+        },
+        "../node_modules/lodash-es/_getPrototype.js": {
+          "size": 58
+        },
+        "../node_modules/lodash-es/_getSymbolsIn.js": {
+          "size": 116
+        },
+        "../node_modules/lodash-es/_copySymbolsIn.js": {
+          "size": 65
+        },
+        "../node_modules/lodash-es/_getAllKeysIn.js": {
+          "size": 61
+        },
+        "../node_modules/lodash-es/_initCloneArray.js": {
+          "size": 165
+        },
+        "../node_modules/lodash-es/_cloneArrayBuffer.js": {
+          "size": 101
+        },
+        "../node_modules/lodash-es/_cloneDataView.js": {
+          "size": 114
+        },
+        "../node_modules/lodash-es/_cloneRegExp.js": {
+          "size": 119
+        },
+        "../node_modules/lodash-es/_cloneSymbol.js": {
+          "size": 117
+        },
+        "../node_modules/lodash-es/_cloneTypedArray.js": {
+          "size": 113
+        },
+        "../node_modules/lodash-es/_initCloneByTag.js": {
+          "size": 257
+        },
+        "../node_modules/lodash-es/_baseCreate.js": {
+          "size": 137
+        },
+        "../node_modules/lodash-es/_initCloneObject.js": {
+          "size": 93
+        },
+        "../node_modules/lodash-es/_baseIsMap.js": {
+          "size": 78
+        },
+        "../node_modules/lodash-es/isMap.js": {
+          "size": 62
+        },
+        "../node_modules/lodash-es/_baseIsSet.js": {
+          "size": 78
+        },
+        "../node_modules/lodash-es/isSet.js": {
+          "size": 62
+        },
+        "../node_modules/lodash-es/_baseClone.js": {
+          "size": 572
+        },
+        "../node_modules/lodash-es/last.js": {
+          "size": 90
+        },
+        "../node_modules/lodash-es/_parent.js": {
+          "size": 81
+        },
+        "../node_modules/lodash-es/_baseUnset.js": {
+          "size": 97
+        },
+        "../node_modules/lodash-es/isPlainObject.js": {
+          "size": 224
+        },
+        "../node_modules/lodash-es/_customOmitClone.js": {
+          "size": 64
+        },
+        "../node_modules/lodash-es/flatten.js": {
+          "size": 80
+        },
+        "../node_modules/lodash-es/omit.js": {
+          "size": 186
+        },
+        "../node_modules/lodash-es/_flatRest.js": {
+          "size": 64
+        },
+        "../node_modules/lodash-es/defaults.js": {
+          "size": 236
+        },
+        "../node_modules/lodash-es/transform.js": {
+          "size": 172
+        },
+        "../node_modules/lodash-es/mapValues.js": {
+          "size": 138
+        },
+        "../node_modules/react-big-calendar/dist/react-big-calendar.esm.js": {
+          "size": 24087
+        },
+        "../node_modules/dom-helpers/esm/addClass.js": {
+          "size": 224
+        },
+        "../node_modules/dom-helpers/esm/hasClass.js": {
+          "size": 120
+        },
+        "../node_modules/uncontrollable/lib/esm/uncontrollable.js": {
+          "size": 1232
+        },
+        "../node_modules/warning/warning.js": {
+          "size": 265
+        },
+        "../node_modules/@mantine/core/src/components/Paper/Paper.tsx": {
+          "size": 367
+        },
+        "[sourceMappingURL]": {
+          "size": 67
+        },
+        "[EOLs]": {
+          "size": 2
+        }
+      }
+    },
+    {
+      "bundleName": "build/static/js/7706.867b6473.chunk.js",
+      "totalBytes": 21960,
+      "mappedBytes": 25045,
+      "eolBytes": 2,
+      "sourceMapCommentBytes": 67,
+      "files": {
+        "../node_modules/gridstack/src/utils.ts": {
+          "size": 3014
+        },
+        "../node_modules/gridstack/src/gridstack-engine.ts": {
+          "size": 4474
+        },
+        "../node_modules/gridstack/src/types.ts": {
+          "size": 290
+        },
+        "../node_modules/gridstack/src/dd-manager.ts": {
+          "size": 29
+        },
+        "../node_modules/gridstack/src/dd-touch.ts": {
+          "size": 543
+        },
+        "../node_modules/gridstack/src/dd-resizable-handle.ts": {
+          "size": 586
+        },
+        "../node_modules/gridstack/src/dd-base-impl.ts": {
+          "size": 177
+        },
+        "../node_modules/gridstack/src/dd-resizable.ts": {
+          "size": 1720
+        },
+        "../node_modules/gridstack/src/dd-draggable.ts": {
+          "size": 1989
+        },
+        "../node_modules/gridstack/src/dd-droppable.ts": {
+          "size": 801
+        },
+        "../node_modules/gridstack/src/dd-element.ts": {
+          "size": 352
+        },
+        "../node_modules/gridstack/src/dd-gridstack.ts": {
+          "size": 654
+        },
+        "../node_modules/gridstack/src/gridstack.ts": {
+          "size": 10416
+        },
+        "[sourceMappingURL]": {
+          "size": 67
+        },
+        "[EOLs]": {
+          "size": 2
+        }
+      }
+    }
+  ]
+}

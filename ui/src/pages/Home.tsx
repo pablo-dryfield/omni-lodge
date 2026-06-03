@@ -31,7 +31,7 @@ import {
 import { styled } from "@mui/material/styles";
 import { createTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import { GenericPageProps } from "../types/general/GenericPageProps";
@@ -39,7 +39,7 @@ import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { navigateToPage } from "../actions/navigationActions";
 import { selectAllowedNavigationPages } from "../selectors/accessControlSelectors";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
-import { GraphicCard, type VisualChartPoint } from "../components/dashboard/GraphicCard";
+import type { VisualChartPoint } from "../components/dashboard/GraphicCard";
 import { SpotlightCard } from "../components/dashboard/SpotlightCardParts";
 import type { NavigationIconKey } from "../types/general/NavigationState";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
@@ -69,6 +69,10 @@ import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
 
 dayjs.extend(isoWeek);
+
+const GraphicCard = lazy(() =>
+  import("../components/dashboard/GraphicCard").then((module) => ({ default: module.GraphicCard })),
+);
 
 const PAGE_SLUG = PAGE_SLUGS.dashboard;
 const DEFAULT_HOME_PREFERENCE: HomeDashboardPreferenceDto = {
@@ -4032,26 +4036,28 @@ const VisualDashboardCard = ({
       : undefined;
 
   return (
-    <GraphicCard
-      title={card.title}
-      config={config}
-      points={chartSample}
-      infoLabel={infoLabel}
-      periodRows={periodRows}
-      dateFieldLabel={dateFieldLabel ?? undefined}
-      dateFieldOptions={dateFieldMenuOptions}
-      activeDateField={activeDateField?.id}
-      onSelectDateField={onDateFieldChange}
-      periodLabel={hasPeriodConfig ? activeLabel ?? undefined : undefined}
-      periodOptions={periodOptions}
-      activePeriod={activePreset ?? undefined}
-      onSelectPeriod={canEdit ? (value) => onPeriodChange?.(value as VisualPeriodSelection) : undefined}
-      customInput={allowCustom ? customInputs : undefined}
-      onCustomInputChange={allowCustom && canEdit ? onCustomInputChange : undefined}
-      onApplyCustomRange={allowCustom && canEdit ? onApplyCustomRange : undefined}
-      isLinked={isLinked}
-      onToggleLink={onToggleLink}
-    />
+    <Suspense fallback={<Box sx={{ minHeight: 280, display: "flex", alignItems: "center", justifyContent: "center" }}><CircularProgress size={24} /></Box>}>
+      <GraphicCard
+        title={card.title}
+        config={config}
+        points={chartSample}
+        infoLabel={infoLabel}
+        periodRows={periodRows}
+        dateFieldLabel={dateFieldLabel ?? undefined}
+        dateFieldOptions={dateFieldMenuOptions}
+        activeDateField={activeDateField?.id}
+        onSelectDateField={onDateFieldChange}
+        periodLabel={hasPeriodConfig ? activeLabel ?? undefined : undefined}
+        periodOptions={periodOptions}
+        activePeriod={activePreset ?? undefined}
+        onSelectPeriod={canEdit ? (value) => onPeriodChange?.(value as VisualPeriodSelection) : undefined}
+        customInput={allowCustom ? customInputs : undefined}
+        onCustomInputChange={allowCustom && canEdit ? onCustomInputChange : undefined}
+        onApplyCustomRange={allowCustom && canEdit ? onApplyCustomRange : undefined}
+        isLinked={isLinked}
+        onToggleLink={onToggleLink}
+      />
+    </Suspense>
   );
 };
 

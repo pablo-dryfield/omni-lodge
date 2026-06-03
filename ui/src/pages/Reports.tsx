@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
@@ -73,23 +73,6 @@ import {
   IconTrash,
   IconX,
 } from "@tabler/icons-react";
-import {
-  Area,
-  Bar,
-  CartesianGrid,
-  ComposedChart,
-  Line,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Scatter,
-  Tooltip as RechartsTooltip,
-  XAxis,
-  YAxis,
-  Legend,
-  Cell,
-} from "recharts";
-import type { Formatter, Payload } from "recharts/types/component/DefaultTooltipContent";
 import { useAppDispatch } from "../store/hooks";
 import { navigateToPage } from "../actions/navigationActions";
 import { GenericPageProps } from "../types/general/GenericPageProps";
@@ -155,6 +138,8 @@ import {
 } from "../api/reports";
 
 dayjs.extend(isoWeek);
+
+const ReportsVisualChart = lazy(() => import("../components/reports/ReportsVisualChart"));
 
 const PAGE_SLUG = PAGE_SLUGS.reports;
 const DERIVED_FIELD_SENTINEL = "__derived__";
@@ -4925,19 +4910,17 @@ const getColumnLabel = useCallback(
     [],
   );
 
-  const tooltipFormatter = useCallback<Formatter<number, string>>(
-    (value, _name, entry) => {
-      const payload = entry as Payload<number, string> | undefined;
+  const tooltipFormatter = useCallback(
+    (value: number, _name: string, entry: unknown) => {
+      const payload = entry as { dataKey?: string } | undefined;
       const dataKey = typeof payload?.dataKey === "string" ? payload.dataKey : "";
       const label =
         dataKey === "primary" ? metricDisplayLabel : comparisonDisplayLabel ?? "Comparison";
-      return [formatNumberForDisplay(value ?? 0), label];
+      return [formatNumberForDisplay(value ?? 0), label] as [string, string];
     },
     [comparisonDisplayLabel, formatNumberForDisplay, metricDisplayLabel],
   );
 
-  const isStackedVisualization =
-    activeVisual.type === "stackedArea" || activeVisual.type === "stackedBar";
   const pieColors = [
     "#1c7ed6",
     "#4dabf7",
@@ -4954,116 +4937,6 @@ const getColumnLabel = useCallback(
     "#38d9a9",
     "#3bc9db",
   ];
-
-  const renderPrimarySeries = () => {
-    switch (activeVisual.type) {
-      case "area":
-      case "stackedArea":
-        return (
-          <Area
-            type="monotone"
-            dataKey="primary"
-            stroke="#1c7ed6"
-            fill="#a5d8ff"
-            name={metricDisplayLabel}
-            yAxisId="left"
-            stackId={activeVisual.type === "stackedArea" ? "stack" : undefined}
-          />
-        );
-      case "bar":
-      case "stackedBar":
-        return (
-          <Bar
-            dataKey="primary"
-            fill="#228be6"
-            barSize={26}
-            name={metricDisplayLabel}
-            yAxisId="left"
-            stackId={activeVisual.type === "stackedBar" ? "stack" : undefined}
-          />
-        );
-      case "scatter":
-        return (
-          <Scatter
-            dataKey="primary"
-            fill="#1c7ed6"
-            name={metricDisplayLabel}
-            yAxisId="left"
-            line
-          />
-        );
-      case "line":
-      default:
-        return (
-          <Line
-            type="monotone"
-            dataKey="primary"
-            stroke="#1c7ed6"
-            strokeWidth={2}
-            dot={false}
-            name={metricDisplayLabel}
-            yAxisId="left"
-          />
-        );
-    }
-  };
-
-  const renderComparisonSeries = () => {
-    if (!chartComparisonAlias || isPieVisualization) {
-      return null;
-    }
-    const comparisonYAxisId = isStackedVisualization ? "left" : "right";
-    const name = comparisonDisplayLabel ?? "Comparison";
-    switch (activeVisual.type) {
-      case "area":
-      case "stackedArea":
-        return (
-          <Area
-            type="monotone"
-            dataKey="secondary"
-            stroke="#2b8a3e"
-            fill="#d3f9d8"
-            name={name}
-            yAxisId={comparisonYAxisId}
-            stackId={activeVisual.type === "stackedArea" ? "stack" : undefined}
-          />
-        );
-      case "bar":
-      case "stackedBar":
-        return (
-          <Bar
-            dataKey="secondary"
-            fill="#82c91e"
-            barSize={26}
-            name={name}
-            yAxisId={comparisonYAxisId}
-            stackId={activeVisual.type === "stackedBar" ? "stack" : undefined}
-          />
-        );
-      case "scatter":
-        return (
-          <Scatter
-            dataKey="secondary"
-            fill="#2b8a3e"
-            name={name}
-            yAxisId={comparisonYAxisId}
-          />
-        );
-      case "line":
-      default:
-        return (
-          <Line
-            type="monotone"
-            dataKey="secondary"
-            stroke="#2b8a3e"
-            strokeWidth={2}
-            dot={false}
-            name={name}
-            yAxisId={comparisonYAxisId}
-          />
-        );
-    }
-  };
 
   const aggregationOptions = useMemo(
     () =>
@@ -12586,53 +12459,27 @@ const getColumnLabel = useCallback(
                                             </Text>
                                           </Flex>
                                         ) : hasChartData ? (
-                                          <ResponsiveContainer width="100%" height={240}>
-                                            {isPieVisualization ? (
-                                              <PieChart>
-                                                <RechartsTooltip
-                                                  formatter={tooltipFormatter}
-                                                  labelFormatter={(label) => `${dimensionLabel}: ${label}`}
-                                                />
-                                                <Legend />
-                                                <Pie
-                                                  data={chartData}
-                                                  dataKey="primary"
-                                                  nameKey="dimension"
-                                                  innerRadius={48}
-                                                  outerRadius={90}
-                                                  paddingAngle={2}
-                                                >
-                                                  {chartData.map((entry, index) => (
-                                                    <Cell
-                                                      key={`pie-${entry.dimension}-${index}`}
-                                                      fill={pieColors[index % pieColors.length]}
-                                                    />
-                                                  ))}
-                                                </Pie>
-                                              </PieChart>
-                                            ) : (
-                                              <ComposedChart data={chartData}>
-                                                <CartesianGrid stroke="#f1f3f5" strokeDasharray="4 4" />
-                                                <XAxis dataKey="dimension" tick={{ fontSize: 12 }} />
-                                                <YAxis yAxisId="left" tick={{ fontSize: 12 }} stroke="#1c7ed6" />
-                                                {chartComparisonAlias && !isStackedVisualization && (
-                                                  <YAxis
-                                                    yAxisId="right"
-                                                    orientation="right"
-                                                    tick={{ fontSize: 12 }}
-                                                    stroke="#2b8a3e"
-                                                  />
-                                                )}
-                                                <RechartsTooltip
-                                                  formatter={tooltipFormatter}
-                                                  labelFormatter={(label) => `${dimensionLabel}: ${label}`}
-                                                />
-                                                <Legend />
-                                                {renderPrimarySeries()}
-                                                {renderComparisonSeries()}
-                                              </ComposedChart>
-                                            )}
-                                          </ResponsiveContainer>
+                                          <Suspense
+                                            fallback={
+                                              <Flex align="center" justify="center" direction="column" h={240} gap="xs">
+                                                <Loader size="sm" color="blue" />
+                                                <Text c="dimmed" fz="sm">
+                                                  Loading chart...
+                                                </Text>
+                                              </Flex>
+                                            }
+                                          >
+                                            <ReportsVisualChart
+                                              chartComparisonAlias={chartComparisonAlias}
+                                              chartData={chartData}
+                                              chartType={activeVisual.type}
+                                              comparisonDisplayLabel={comparisonDisplayLabel}
+                                              dimensionLabel={dimensionLabel}
+                                              metricDisplayLabel={metricDisplayLabel}
+                                              pieColors={pieColors}
+                                              tooltipFormatter={tooltipFormatter}
+                                            />
+                                          </Suspense>
                                         ) : (
                                           <Flex align="center" justify="center" h={240}>
                                             <Text c="dimmed" fz="sm" ta="center">

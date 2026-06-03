@@ -1,0 +1,232 @@
+{
+  "results": [
+    {
+      "bundleName": "build/static/js/4582.b2fabe63.chunk.js",
+      "totalBytes": 56992,
+      "mappedBytes": 57722,
+      "eolBytes": 1,
+      "sourceMapCommentBytes": 67,
+      "files": {
+        "actions/navigationActions.ts": {
+          "size": 42
+        },
+        "[no source]": {
+          "size": 1254
+        },
+        "api/reports.ts": {
+          "size": 967
+        },
+        "components/access/PageAccessGuard.tsx": {
+          "size": 607
+        },
+        "utils/derivedFieldParser.ts": {
+          "size": 1167
+        },
+        "pages/Reports.tsx": {
+          "size": 53241
+        },
+        "selectors/accessControlSelectors.ts": {
+          "size": 444
+        },
+        "[sourceMappingURL]": {
+          "size": 67
+        },
+        "[EOLs]": {
+          "size": 1
+        }
+      }
+    },
+    {
+      "bundleName": "build/static/js/5222.20561495.chunk.js",
+      "totalBytes": 31395,
+      "mappedBytes": 31813,
+      "eolBytes": 1,
+      "sourceMapCommentBytes": 67,
+      "files": {
+        "actions/navigationActions.ts": {
+          "size": 42
+        },
+        "[no source]": {
+          "size": 764
+        },
+        "components/access/PageAccessGuard.tsx": {
+          "size": 606
+        },
+        "hooks/useModuleAccess.ts": {
+          "size": 271
+        },
+        "pages/BookingsManifestPage.tsx": {
+          "size": 29687
+        },
+        "selectors/accessControlSelectors.ts": {
+          "size": 443
+        },
+        "[sourceMappingURL]": {
+          "size": 67
+        },
+        "[EOLs]": {
+          "size": 1
+        }
+      }
+    },
+    {
+      "bundleName": "build/static/js/5437.76357345.chunk.js",
+      "totalBytes": 27156,
+      "mappedBytes": 30009,
+      "eolBytes": 1,
+      "sourceMapCommentBytes": 67,
+      "files": {
+        "actions/navigationActions.ts": {
+          "size": 42
+        },
+        "[no source]": {
+          "size": 860
+        },
+        "components/access/PageAccessGuard.tsx": {
+          "size": 606
+        },
+        "hooks/useModuleAccess.ts": {
+          "size": 271
+        },
+        "components/MobileBookingsList.tsx": {
+          "size": 1996
+        },
+        "components/BookingPopup.tsx": {
+          "size": 670
+        },
+        "components/BookingsGrid.tsx": {
+          "size": 3093
+        },
+        "components/bookings/BookingsSanityCheck.tsx": {
+          "size": 8297
+        },
+        "utils/prepareBookingGrid.ts": {
+          "size": 655
+        },
+        "pages/BookingsPage.tsx": {
+          "size": 13076
+        },
+        "selectors/accessControlSelectors.ts": {
+          "size": 443
+        },
+        "[sourceMappingURL]": {
+          "size": 67
+        },
+        "[EOLs]": {
+          "size": 1
+        }
+      }
+    },
+    {
+      "bundleName": "build/static/js/6116.db52814d.chunk.js",
+      "totalBytes": 21613,
+      "mappedBytes": 22699,
+      "eolBytes": 1,
+      "sourceMapCommentBytes": 67,
+      "files": {
+        "api/shiftRoles.ts": {
+          "size": 321
+        },
+        "[no source]": {
+          "size": 498
+        },
+        "components/scheduling/AddShiftInstanceModal.tsx": {
+          "size": 934
+        },
+        "components/scheduling/EditShiftInstanceModal.tsx": {
+          "size": 1792
+        },
+        "pages/scheduling/BuilderPage.tsx": {
+          "size": 18711
+        },
+        "selectors/accessControlSelectors.ts": {
+          "size": 443
+        },
+        "[sourceMappingURL]": {
+          "size": 67
+        },
+        "[EOLs]": {
+          "size": 1
+        }
+      }
+    },
+    {
+      "bundleName": "build/static/js/7645.c0282ef2.chunk.js",
+      "totalBytes": 34762,
+      "mappedBytes": 38656,
+      "eolBytes": 1,
+      "sourceMapCommentBytes": 67,
+      "files": {
+        "actions/navigationActions.ts": {
+          "size": 42
+        },
+        "[no source]": {
+          "size": 717
+        },
+        "components/access/PageAccessGuard.tsx": {
+          "size": 606
+        },
+        "pages/OpenBarControl.tsx": {
+          "size": 34147
+        },
+        "api/openBar.ts": {
+          "size": 2701
+        },
+        "selectors/accessControlSelectors.ts": {
+          "size": 443
+        },
+        "[sourceMappingURL]": {
+          "size": 67
+        },
+        "[EOLs]": {
+          "size": 1
+        }
+      }
+    },
+    {
+      "bundleName": "build/static/js/7878.28dffb83.chunk.js",
+      "totalBytes": 47330,
+      "mappedBytes": 49020,
+      "eolBytes": 1,
+      "sourceMapCommentBytes": 67,
+      "files": {
+        "actions/counterActions.ts": {
+          "size": 294
+        },
+        "[no source]": {
+          "size": 1553
+        },
+        "actions/nightReportActions.ts": {
+          "size": 778
+        },
+        "api/scheduling.ts": {
+          "size": 2116
+        },
+        "constants/nightReports.ts": {
+          "size": 58
+        },
+        "constants/walkInTicketTypes.ts": {
+          "size": 206
+        },
+        "pages/Counters.tsx": {
+          "size": 40457
+        },
+        "store/catalogSlice.ts": {
+          "size": 1156
+        },
+        "store/counterRegistrySlice.ts": {
+          "size": 2125
+        },
+        "utils/counterMetrics.ts": {
+          "size": 277
+        },
+        "[sourceMappingURL]": {
+          "size": 67
+        },
+        "[EOLs]": {
+          "size": 1
+        }
+      }
+    }
+  ]
+}
