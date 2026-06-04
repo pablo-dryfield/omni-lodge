@@ -742,6 +742,11 @@ const Cerebro = () => {
             <CerebroRichTextEditor
               value={entryForm.body}
               onChange={(value) => setEntryForm((prev) => ({ ...prev, body: value }))}
+              assetUploadContext={{
+                sectionId: entryForm.sectionId ? Number(entryForm.sectionId) : null,
+                entryTitle: entryForm.title,
+                kind: entryForm.kind,
+              }}
             />
           </Suspense>
           <Textarea label="Media lines" description="One per line: image|https://...|Caption" minRows={3} value={entryForm.mediaLines} onChange={(event) => setEntryForm((prev) => ({ ...prev, mediaLines: event.currentTarget.value }))} />
