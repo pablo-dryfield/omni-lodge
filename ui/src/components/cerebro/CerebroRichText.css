@@ -94,10 +94,15 @@
 .cerebro-editor-toolbar {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.5rem;
   padding: 0.75rem;
   border-bottom: 1px solid var(--mantine-color-gray-3);
   background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.92));
+}
+
+.cerebro-toolbar-select {
+  min-width: 110px;
 }
 
 .cerebro-editor-content {
