@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { ChangeEvent, useEffect, useRef, useState } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Color from '@tiptap/extension-color';
+import Highlight from '@tiptap/extension-highlight';
 import Link from '@tiptap/extension-link';
 import Image from '@tiptap/extension-image';
 import { Table } from '@tiptap/extension-table';
@@ -34,8 +35,10 @@ import {
   IconPhotoPlus,
   IconStrikethrough,
   IconTrash,
+  IconUpload,
   IconArrowBackUp,
   IconArrowForwardUp,
+  IconHighlight,
   IconTable,
   IconRowInsertBottom,
   IconRowRemove,
@@ -43,6 +46,7 @@ import {
   IconColumnRemove,
   IconTableMinus,
 } from '@tabler/icons-react';
+import { uploadCerebroAsset } from '../../api/cerebro';
 import { normalizeCerebroRichText } from '../../utils/cerebroRichText';
 import { CerebroTableCell, CerebroTableHeader, FontSize } from './cerebroRichTextExtensions';
 import './CerebroRichText.css';
@@ -58,6 +62,11 @@ type ToolbarAction = {
 type CerebroRichTextEditorProps = {
   value: string;
   onChange: (value: string) => void;
+  assetUploadContext?: {
+    sectionId: number | null;
+    entryTitle: string;
+    kind: 'faq' | 'tutorial' | 'playbook' | 'policy';
+  };
 };
 
 const FONT_SIZE_OPTIONS = [
@@ -83,15 +92,30 @@ const FONT_COLOR_OPTIONS = [
   { value: '#7c3aed', label: 'Purple' },
 ];
 
+const HIGHLIGHT_COLOR_OPTIONS = [
+  { value: '', label: 'Highlight' },
+  { value: '#fef08a', label: 'Yellow' },
+  { value: '#bbf7d0', label: 'Green' },
+  { value: '#bfdbfe', label: 'Blue' },
+  { value: '#fbcfe8', label: 'Pink' },
+  { value: '#fdba74', label: 'Orange' },
+];
+
 export const CerebroRichTextEditor = ({
   value,
   onChange,
+  assetUploadContext,
 }: CerebroRichTextEditorProps) => {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isUploadingAsset, setIsUploadingAsset] = useState(false);
   const editor = useEditor({
     extensions: [
       StarterKit,
       TextStyle,
       Color,
+      Highlight.configure({
+        multicolor: true,
+      }),
       FontSize,
       TextAlign.configure({
         types: ['heading', 'paragraph'],
@@ -159,6 +183,43 @@ export const CerebroRichTextEditor = ({
       return;
     }
     editor.chain().focus().setImage({ src: nextUrl.trim() }).run();
+  };
+
+  const openAssetFilePicker = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleAssetUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+
+    if (!file || !editor) {
+      return;
+    }
+
+    if (!assetUploadContext?.sectionId || !assetUploadContext.entryTitle.trim()) {
+      window.alert('Select a section and enter an article title before uploading images or GIFs.');
+      return;
+    }
+
+    try {
+      setIsUploadingAsset(true);
+      const result = await uploadCerebroAsset({
+        file,
+        sectionId: assetUploadContext.sectionId,
+        entryTitle: assetUploadContext.entryTitle.trim(),
+        kind: assetUploadContext.kind,
+      });
+      editor.chain().focus().setImage({ src: result.assetUrl, alt: file.name }).run();
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to upload the image or GIF.';
+      window.alert(message);
+    } finally {
+      setIsUploadingAsset(false);
+    }
   };
 
   const insertTable = () => {
@@ -247,7 +308,20 @@ export const CerebroRichTextEditor = ({
     editor.commands.setMark('textStyle', { color: color || null });
   };
 
+  const setHighlightColor = (color: string) => {
+    if (!editor) {
+      return;
+    }
+    editor.commands.focus();
+    if (!color) {
+      editor.commands.unsetHighlight();
+      return;
+    }
+    editor.commands.setHighlight({ color });
+  };
+
   const currentTextStyle = editor?.getAttributes('textStyle') as { fontSize?: string; color?: string } | undefined;
+  const currentHighlight = editor?.getAttributes('highlight') as { color?: string } | undefined;
   const currentCellAttributes = editor?.getAttributes('tableCell') as { textAlign?: string; verticalAlign?: string } | undefined;
   const currentHeaderAttributes = editor?.getAttributes('tableHeader') as { textAlign?: string; verticalAlign?: string } | undefined;
   const currentHorizontalAlign = editor?.isActive('table')
@@ -256,6 +330,7 @@ export const CerebroRichTextEditor = ({
   const currentVerticalAlign = currentCellAttributes?.verticalAlign ?? currentHeaderAttributes?.verticalAlign;
   const selectedFontSize = FONT_SIZE_OPTIONS.some((option) => option.value === currentTextStyle?.fontSize) ? currentTextStyle?.fontSize ?? '' : '';
   const selectedFontColor = FONT_COLOR_OPTIONS.some((option) => option.value === currentTextStyle?.color) ? currentTextStyle?.color ?? '' : '';
+  const selectedHighlightColor = HIGHLIGHT_COLOR_OPTIONS.some((option) => option.value === currentHighlight?.color) ? currentHighlight?.color ?? '' : '';
 
   const actions: ToolbarAction[] = editor
     ? [
@@ -268,8 +343,10 @@ export const CerebroRichTextEditor = ({
         { label: 'Numbered list', icon: IconListNumbers, active: editor.isActive('orderedList'), onClick: () => editor.chain().focus().toggleOrderedList().run() },
         { label: 'Blockquote', icon: IconBlockquote, active: editor.isActive('blockquote'), onClick: () => editor.chain().focus().toggleBlockquote().run() },
         { label: 'Code block', icon: IconCode, active: editor.isActive('codeBlock'), onClick: () => editor.chain().focus().toggleCodeBlock().run() },
+        { label: 'Highlight', icon: IconHighlight, active: editor.isActive('highlight'), onClick: () => (editor.isActive('highlight') ? editor.commands.unsetHighlight() : editor.commands.toggleHighlight()) },
         { label: 'Link', icon: IconLink, active: editor.isActive('link'), onClick: promptForLink },
-        { label: 'Image or GIF', icon: IconPhotoPlus, onClick: promptForImage },
+        { label: 'Image or GIF URL', icon: IconPhotoPlus, onClick: promptForImage },
+        { label: 'Upload image or GIF', icon: IconUpload, disabled: isUploadingAsset, onClick: openAssetFilePicker },
         { label: 'Insert table', icon: IconTable, active: editor.isActive('table'), onClick: insertTable },
         { label: 'Add row', icon: IconRowInsertBottom, disabled: !editor.isActive('table'), onClick: addRowAfter },
         { label: 'Remove row', icon: IconRowRemove, disabled: !editor.isActive('table'), onClick: deleteCurrentRow },
@@ -288,6 +365,13 @@ export const CerebroRichTextEditor = ({
         Body
       </Text>
       <Box className="cerebro-editor-shell">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          style={{ display: 'none' }}
+          onChange={handleAssetUpload}
+        />
         <Group className="cerebro-editor-toolbar" gap="xs">
           {actions.map((action) => (
             <Tooltip key={action.label} label={action.label}>
@@ -386,6 +470,13 @@ export const CerebroRichTextEditor = ({
             value={selectedFontColor}
             onChange={(event) => setFontColor(event.currentTarget.value)}
           />
+          <NativeSelect
+            aria-label="Highlight color"
+            className="cerebro-toolbar-select"
+            data={HIGHLIGHT_COLOR_OPTIONS}
+            value={selectedHighlightColor}
+            onChange={(event) => setHighlightColor(event.currentTarget.value)}
+          />
         </Group>
         <Divider />
         <Box className="cerebro-editor-content">
@@ -393,7 +484,7 @@ export const CerebroRichTextEditor = ({
         </Box>
       </Box>
       <Text size="xs" c="dimmed">
-        Add formatting, alignment, colors, tables, and hosted image or GIF URLs directly into the article body.
+        Add formatting, alignment, colors, tables, hosted URLs, or upload inline images and GIFs into the article body.
       </Text>
     </Stack>
   );
