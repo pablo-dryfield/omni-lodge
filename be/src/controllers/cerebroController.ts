@@ -10,6 +10,7 @@ import CerebroSection from '../models/CerebroSection.js';
 import Module from '../models/Module.js';
 import RoleModulePermission from '../models/RoleModulePermission.js';
 import UserType from '../models/UserType.js';
+import { openCerebroAssetStream, storeCerebroAsset } from '../services/cerebroAssetStorageService.js';
 import slugify from '../utils/slugify.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import type { ErrorWithMessage } from '../types/ErrorWithMessage.js';
@@ -629,6 +630,84 @@ export const submitCerebroQuiz = async (req: AuthenticatedRequest, res: Response
       submittedAt: attempt.submittedAt,
     });
   } catch (error) {
+    res.status(500).json([{ message: (error as ErrorWithMessage).message }]);
+  }
+};
+
+export const uploadCerebroAsset = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const file = req.file;
+    if (!file) {
+      res.status(400).json([{ message: 'No file uploaded.' }]);
+      return;
+    }
+
+    const sectionId = parseInteger(req.body?.sectionId, 0);
+    if (sectionId <= 0) {
+      res.status(400).json([{ message: 'A valid section is required before uploading assets.' }]);
+      return;
+    }
+
+    const section = await CerebroSection.findByPk(sectionId);
+    if (!section) {
+      res.status(400).json([{ message: 'Selected section does not exist.' }]);
+      return;
+    }
+
+    const entryTitle = parseString(req.body?.entryTitle);
+    if (!entryTitle) {
+      res.status(400).json([{ message: 'An article title is required before uploading assets.' }]);
+      return;
+    }
+
+    const kindCandidate = parseString(req.body?.kind) ?? 'faq';
+    const kind = ENTRY_KINDS.includes(kindCandidate as CerebroEntryKind)
+      ? (kindCandidate as CerebroEntryKind)
+      : 'faq';
+
+    const upload = await storeCerebroAsset({
+      sectionName: section.name,
+      entryTitle,
+      kind,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      data: file.buffer,
+    });
+
+    res.status(201).json(upload);
+  } catch (error) {
+    res.status(500).json([{ message: (error as ErrorWithMessage).message }]);
+  }
+};
+
+export const streamCerebroAsset = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const fileId = typeof req.params.fileId === 'string' ? req.params.fileId.trim() : '';
+    if (!/^[A-Za-z0-9_-]+$/.test(fileId)) {
+      res.status(400).json([{ message: 'Invalid asset identifier.' }]);
+      return;
+    }
+
+    const { stream, mimeType } = await openCerebroAssetStream(fileId);
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+
+    stream.on('error', () => {
+      if (!res.headersSent) {
+        res.status(500).json([{ message: 'Unable to read Cerebro asset.' }]);
+      } else {
+        res.end();
+      }
+    });
+
+    stream.pipe(res);
+  } catch (error) {
+    const code = (error as { code?: number })?.code;
+    if (code === 404) {
+      res.status(404).json([{ message: 'Asset not found.' }]);
+      return;
+    }
     res.status(500).json([{ message: (error as ErrorWithMessage).message }]);
   }
 };

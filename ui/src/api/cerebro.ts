@@ -102,6 +102,12 @@ export type CerebroBootstrap = {
   userTypes: CerebroUserType[];
 };
 
+export type CerebroAssetUploadResult = {
+  driveFileId: string;
+  assetUrl: string;
+  folderSegments: string[];
+};
+
 export const useCerebroBootstrap = () =>
   useQuery<CerebroBootstrap>({
     queryKey: ["cerebro", "bootstrap"],
@@ -137,6 +143,24 @@ export const createCerebroEntry = async (payload: Record<string, unknown>) => {
 
 export const updateCerebroEntry = async (entryId: number, payload: Record<string, unknown>) => {
   const response = await axiosInstance.put(`/cerebro/entries/${entryId}`, payload, {
+    withCredentials: true,
+  });
+  return response.data;
+};
+
+export const uploadCerebroAsset = async (params: {
+  file: File;
+  sectionId: number;
+  entryTitle: string;
+  kind: CerebroEntry["kind"];
+}) => {
+  const formData = new FormData();
+  formData.append("file", params.file);
+  formData.append("sectionId", String(params.sectionId));
+  formData.append("entryTitle", params.entryTitle);
+  formData.append("kind", params.kind);
+
+  const response = await axiosInstance.post<CerebroAssetUploadResult>("/cerebro/assets", formData, {
     withCredentials: true,
   });
   return response.data;

@@ -1,4 +1,5 @@
 import express, { NextFunction, Request, Response } from 'express';
+import multer from 'multer';
 import { param, validationResult } from 'express-validator';
 import authMiddleware from '../middleware/authMiddleware.js';
 import { authorizeModuleAction } from '../middleware/authorizationMiddleware.js';
@@ -12,12 +13,20 @@ import {
   getCerebroQuizzes,
   getCerebroSections,
   submitCerebroQuiz,
+  streamCerebroAsset,
+  uploadCerebroAsset,
   updateCerebroEntry,
   updateCerebroQuiz,
   updateCerebroSection,
 } from '../controllers/cerebroController.js';
 
 const router = express.Router();
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+  },
+});
 
 const validateId = [param('id').isInt({ gt: 0 }).withMessage('ID must be a positive integer')];
 
@@ -31,11 +40,13 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
 };
 
 router.get('/bootstrap', authMiddleware, authorizeModuleAction('cerebro-library', 'view'), getCerebroBootstrap);
+router.get('/assets/:fileId', authMiddleware, authorizeModuleAction('cerebro-library', 'view'), streamCerebroAsset);
 router.get('/sections', authMiddleware, authorizeModuleAction('cerebro-admin', 'view'), getCerebroSections);
 router.get('/entries', authMiddleware, authorizeModuleAction('cerebro-admin', 'view'), getCerebroEntries);
 router.get('/quizzes', authMiddleware, authorizeModuleAction('cerebro-admin', 'view'), getCerebroQuizzes);
 
 router.post('/sections', authMiddleware, authorizeModuleAction('cerebro-admin', 'create'), createCerebroSection);
+router.post('/assets', authMiddleware, authorizeModuleAction('cerebro-admin', 'create'), upload.single('file'), uploadCerebroAsset);
 router.put('/sections/:id', authMiddleware, authorizeModuleAction('cerebro-admin', 'update'), validateId, validate, updateCerebroSection);
 router.post('/entries', authMiddleware, authorizeModuleAction('cerebro-admin', 'create'), createCerebroEntry);
 router.put('/entries/:id', authMiddleware, authorizeModuleAction('cerebro-admin', 'update'), validateId, validate, updateCerebroEntry);
