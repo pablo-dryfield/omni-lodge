@@ -1,22 +1,27 @@
 import { useEffect } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
+import Color from '@tiptap/extension-color';
 import Link from '@tiptap/extension-link';
 import Image from '@tiptap/extension-image';
 import { Table } from '@tiptap/extension-table';
-import TableCell from '@tiptap/extension-table-cell';
-import TableHeader from '@tiptap/extension-table-header';
 import TableRow from '@tiptap/extension-table-row';
+import TextAlign from '@tiptap/extension-text-align';
+import { TextStyle } from '@tiptap/extension-text-style';
 import {
   ActionIcon,
   Box,
   Divider,
   Group,
+  NativeSelect,
   Stack,
   Text,
   Tooltip,
 } from '@mantine/core';
 import {
+  IconAlignCenter,
+  IconAlignLeft,
+  IconAlignRight,
   IconBlockquote,
   IconBold,
   IconCode,
@@ -39,6 +44,7 @@ import {
   IconTableMinus,
 } from '@tabler/icons-react';
 import { normalizeCerebroRichText } from '../../utils/cerebroRichText';
+import { CerebroTableCell, CerebroTableHeader, FontSize } from './cerebroRichTextExtensions';
 import './CerebroRichText.css';
 
 type ToolbarAction = {
@@ -54,6 +60,29 @@ type CerebroRichTextEditorProps = {
   onChange: (value: string) => void;
 };
 
+const FONT_SIZE_OPTIONS = [
+  { value: '', label: 'Font size' },
+  { value: '12px', label: '12 px' },
+  { value: '14px', label: '14 px' },
+  { value: '16px', label: '16 px' },
+  { value: '18px', label: '18 px' },
+  { value: '20px', label: '20 px' },
+  { value: '24px', label: '24 px' },
+  { value: '28px', label: '28 px' },
+  { value: '32px', label: '32 px' },
+];
+
+const FONT_COLOR_OPTIONS = [
+  { value: '', label: 'Font color' },
+  { value: '#111827', label: 'Black' },
+  { value: '#6b7280', label: 'Gray' },
+  { value: '#2563eb', label: 'Blue' },
+  { value: '#16a34a', label: 'Green' },
+  { value: '#dc2626', label: 'Red' },
+  { value: '#ea580c', label: 'Orange' },
+  { value: '#7c3aed', label: 'Purple' },
+];
+
 export const CerebroRichTextEditor = ({
   value,
   onChange,
@@ -61,6 +90,12 @@ export const CerebroRichTextEditor = ({
   const editor = useEditor({
     extensions: [
       StarterKit,
+      TextStyle,
+      Color,
+      FontSize,
+      TextAlign.configure({
+        types: ['heading', 'paragraph'],
+      }),
       Link.configure({
         autolink: true,
         openOnClick: false,
@@ -73,8 +108,8 @@ export const CerebroRichTextEditor = ({
         resizable: true,
       }),
       TableRow,
-      TableHeader,
-      TableCell,
+      CerebroTableHeader,
+      CerebroTableCell,
     ],
     content: normalizeCerebroRichText(value),
     immediatelyRender: false,
@@ -174,6 +209,54 @@ export const CerebroRichTextEditor = ({
     editor.commands.deleteColumn();
   };
 
+  const setHorizontalAlign = (alignment: 'left' | 'center' | 'right') => {
+    if (!editor) {
+      return;
+    }
+    if (editor.isActive('table')) {
+      editor.commands.focus();
+      editor.commands.updateAttributes('tableCell', { textAlign: alignment });
+      editor.commands.updateAttributes('tableHeader', { textAlign: alignment });
+      return;
+    }
+    editor.chain().focus().setTextAlign(alignment).run();
+  };
+
+  const setVerticalAlign = (alignment: 'top' | 'middle' | 'bottom') => {
+    if (!editor) {
+      return;
+    }
+    editor.commands.focus();
+    editor.commands.updateAttributes('tableCell', { verticalAlign: alignment });
+    editor.commands.updateAttributes('tableHeader', { verticalAlign: alignment });
+  };
+
+  const setFontSize = (fontSize: string) => {
+    if (!editor) {
+      return;
+    }
+    editor.commands.focus();
+    editor.commands.setMark('textStyle', { fontSize: fontSize || null });
+  };
+
+  const setFontColor = (color: string) => {
+    if (!editor) {
+      return;
+    }
+    editor.commands.focus();
+    editor.commands.setMark('textStyle', { color: color || null });
+  };
+
+  const currentTextStyle = editor?.getAttributes('textStyle') as { fontSize?: string; color?: string } | undefined;
+  const currentCellAttributes = editor?.getAttributes('tableCell') as { textAlign?: string; verticalAlign?: string } | undefined;
+  const currentHeaderAttributes = editor?.getAttributes('tableHeader') as { textAlign?: string; verticalAlign?: string } | undefined;
+  const currentHorizontalAlign = editor?.isActive('table')
+    ? currentCellAttributes?.textAlign ?? currentHeaderAttributes?.textAlign
+    : (['left', 'center', 'right'].find((alignment) => editor?.isActive({ textAlign: alignment })) as 'left' | 'center' | 'right' | undefined);
+  const currentVerticalAlign = currentCellAttributes?.verticalAlign ?? currentHeaderAttributes?.verticalAlign;
+  const selectedFontSize = FONT_SIZE_OPTIONS.some((option) => option.value === currentTextStyle?.fontSize) ? currentTextStyle?.fontSize ?? '' : '';
+  const selectedFontColor = FONT_COLOR_OPTIONS.some((option) => option.value === currentTextStyle?.color) ? currentTextStyle?.color ?? '' : '';
+
   const actions: ToolbarAction[] = editor
     ? [
         { label: 'Bold', icon: IconBold, active: editor.isActive('bold'), onClick: () => editor.chain().focus().toggleBold().run() },
@@ -220,6 +303,89 @@ export const CerebroRichTextEditor = ({
               </ActionIcon>
             </Tooltip>
           ))}
+          <Tooltip label="Align left">
+            <ActionIcon
+              type="button"
+              variant={currentHorizontalAlign === 'left' ? 'filled' : 'light'}
+              color={currentHorizontalAlign === 'left' ? 'blue' : 'gray'}
+              onClick={() => setHorizontalAlign('left')}
+              aria-label="Align left"
+            >
+              <IconAlignLeft size={16} />
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Align center">
+            <ActionIcon
+              type="button"
+              variant={currentHorizontalAlign === 'center' ? 'filled' : 'light'}
+              color={currentHorizontalAlign === 'center' ? 'blue' : 'gray'}
+              onClick={() => setHorizontalAlign('center')}
+              aria-label="Align center"
+            >
+              <IconAlignCenter size={16} />
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Align right">
+            <ActionIcon
+              type="button"
+              variant={currentHorizontalAlign === 'right' ? 'filled' : 'light'}
+              color={currentHorizontalAlign === 'right' ? 'blue' : 'gray'}
+              onClick={() => setHorizontalAlign('right')}
+              aria-label="Align right"
+            >
+              <IconAlignRight size={16} />
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Vertical align top">
+            <ActionIcon
+              type="button"
+              variant={currentVerticalAlign === 'top' ? 'filled' : 'light'}
+              color={currentVerticalAlign === 'top' ? 'blue' : 'gray'}
+              onClick={() => setVerticalAlign('top')}
+              disabled={!editor?.isActive('table')}
+              aria-label="Vertical align top"
+            >
+              <Text size="xs" fw={700}>T</Text>
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Vertical align middle">
+            <ActionIcon
+              type="button"
+              variant={currentVerticalAlign === 'middle' ? 'filled' : 'light'}
+              color={currentVerticalAlign === 'middle' ? 'blue' : 'gray'}
+              onClick={() => setVerticalAlign('middle')}
+              disabled={!editor?.isActive('table')}
+              aria-label="Vertical align middle"
+            >
+              <Text size="xs" fw={700}>M</Text>
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Vertical align bottom">
+            <ActionIcon
+              type="button"
+              variant={currentVerticalAlign === 'bottom' ? 'filled' : 'light'}
+              color={currentVerticalAlign === 'bottom' ? 'blue' : 'gray'}
+              onClick={() => setVerticalAlign('bottom')}
+              disabled={!editor?.isActive('table')}
+              aria-label="Vertical align bottom"
+            >
+              <Text size="xs" fw={700}>B</Text>
+            </ActionIcon>
+          </Tooltip>
+          <NativeSelect
+            aria-label="Font size"
+            className="cerebro-toolbar-select"
+            data={FONT_SIZE_OPTIONS}
+            value={selectedFontSize}
+            onChange={(event) => setFontSize(event.currentTarget.value)}
+          />
+          <NativeSelect
+            aria-label="Font color"
+            className="cerebro-toolbar-select"
+            data={FONT_COLOR_OPTIONS}
+            value={selectedFontColor}
+            onChange={(event) => setFontColor(event.currentTarget.value)}
+          />
         </Group>
         <Divider />
         <Box className="cerebro-editor-content">
@@ -227,7 +393,7 @@ export const CerebroRichTextEditor = ({
         </Box>
       </Box>
       <Text size="xs" c="dimmed">
-        Add formatting, links, tables, and hosted image or GIF URLs directly into the article body.
+        Add formatting, alignment, colors, tables, and hosted image or GIF URLs directly into the article body.
       </Text>
     </Stack>
   );
