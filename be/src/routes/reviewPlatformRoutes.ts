@@ -1,6 +1,6 @@
 import express, { Router } from 'express';
 import authMiddleware from '../middleware/authMiddleware.js';
-import { requireRoles } from '../middleware/authorizationMiddleware.js';
+import { authorizeModuleAction } from '../middleware/authorizationMiddleware.js';
 import {
   listReviewPlatforms,
   createReviewPlatform,
@@ -9,12 +9,14 @@ import {
 } from '../controllers/reviewPlatformController.js';
 
 const router: Router = express.Router();
-const adminGuard = requireRoles(['admin', 'owner']);
-const viewGuard = requireRoles(['admin', 'owner', 'manager', 'assistant-manager']);
+const viewGuard = authorizeModuleAction('review-platform-management', 'view');
+const createGuard = authorizeModuleAction('review-platform-management', 'create');
+const updateGuard = authorizeModuleAction('review-platform-management', 'update');
+const deleteGuard = authorizeModuleAction('review-platform-management', 'delete');
 
 router.get('/', authMiddleware, viewGuard, listReviewPlatforms);
-router.post('/', authMiddleware, adminGuard, createReviewPlatform);
-router.put('/:id', authMiddleware, adminGuard, updateReviewPlatform);
-router.delete('/:id', authMiddleware, adminGuard, deleteReviewPlatform);
+router.post('/', authMiddleware, createGuard, createReviewPlatform);
+router.put('/:id', authMiddleware, updateGuard, updateReviewPlatform);
+router.delete('/:id', authMiddleware, deleteGuard, deleteReviewPlatform);
 
 export default router;
