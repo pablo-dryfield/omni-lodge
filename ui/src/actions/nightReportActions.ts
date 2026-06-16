@@ -8,6 +8,8 @@ import type {
   NightReportCreatePayload,
   NightReportUpdatePayload,
   NightReportPhotoUploadResponse,
+  NightReportCostCreatePayload,
+  NightReportLinkableCost,
 } from '../types/nightReports/NightReport';
 
 const extractErrorMessage = (error: unknown): string => {
@@ -124,6 +126,44 @@ export const submitNightReport = createAsyncThunk<
   }
 });
 
+export const confirmNightReportNoExtraCost = createAsyncThunk<
+  NightReport,
+  number,
+  { rejectValue: string }
+>('nightReports/confirmNightReportNoExtraCost', async (reportId, { rejectWithValue }) => {
+  try {
+    const response = await axiosInstance.post<NightReport[]>(`/nightReports/${reportId}/costs/no-extra-cost`, null, {
+      withCredentials: true,
+    });
+    const updated = response.data?.[0];
+    if (!updated) {
+      throw new Error('Night report payload missing');
+    }
+    return updated;
+  } catch (error) {
+    return rejectWithValue(extractErrorMessage(error));
+  }
+});
+
+export const clearNightReportNoExtraCost = createAsyncThunk<
+  NightReport,
+  number,
+  { rejectValue: string }
+>('nightReports/clearNightReportNoExtraCost', async (reportId, { rejectWithValue }) => {
+  try {
+    const response = await axiosInstance.delete<NightReport[]>(`/nightReports/${reportId}/costs/no-extra-cost`, {
+      withCredentials: true,
+    });
+    const updated = response.data?.[0];
+    if (!updated) {
+      throw new Error('Night report payload missing');
+    }
+    return updated;
+  } catch (error) {
+    return rejectWithValue(extractErrorMessage(error));
+  }
+});
+
 export const uploadNightReportPhoto = createAsyncThunk<
   NightReportPhotoUploadResponse,
   { reportId: number; file: File; capturedAt?: string | null },
@@ -168,3 +208,93 @@ export const deleteNightReportPhoto = createAsyncThunk<
   }
 });
 
+export const createNightReportCost = createAsyncThunk<
+  NightReport,
+  { reportId: number; payload: NightReportCostCreatePayload },
+  { rejectValue: string }
+>('nightReports/createNightReportCost', async ({ reportId, payload }, { rejectWithValue }) => {
+  try {
+    const response = await axiosInstance.post<NightReport[]>(`/nightReports/${reportId}/costs`, payload, {
+      withCredentials: true,
+    });
+    const updated = response.data?.[0];
+    if (!updated) {
+      throw new Error('Night report payload missing');
+    }
+    return updated;
+  } catch (error) {
+    return rejectWithValue(extractErrorMessage(error));
+  }
+});
+
+export const fetchNightReportAvailableCosts = createAsyncThunk<
+  NightReportLinkableCost[],
+  number,
+  { rejectValue: string }
+>('nightReports/fetchNightReportAvailableCosts', async (reportId, { rejectWithValue }) => {
+  try {
+    const response = await axiosInstance.get<NightReportLinkableCost[]>(`/nightReports/${reportId}/costs/available`, {
+      withCredentials: true,
+    });
+    return response.data;
+  } catch (error) {
+    return rejectWithValue(extractErrorMessage(error));
+  }
+});
+
+export const linkNightReportCost = createAsyncThunk<
+  NightReport,
+  { reportId: number; transactionId: number },
+  { rejectValue: string }
+>('nightReports/linkNightReportCost', async ({ reportId, transactionId }, { rejectWithValue }) => {
+  try {
+    const response = await axiosInstance.post<NightReport[]>(`/nightReports/${reportId}/costs/${transactionId}/link`, null, {
+      withCredentials: true,
+    });
+    const updated = response.data?.[0];
+    if (!updated) {
+      throw new Error('Night report payload missing');
+    }
+    return updated;
+  } catch (error) {
+    return rejectWithValue(extractErrorMessage(error));
+  }
+});
+
+export const unlinkNightReportCost = createAsyncThunk<
+  NightReport,
+  { reportId: number; transactionId: number },
+  { rejectValue: string }
+>('nightReports/unlinkNightReportCost', async ({ reportId, transactionId }, { rejectWithValue }) => {
+  try {
+    const response = await axiosInstance.delete<NightReport[]>(`/nightReports/${reportId}/costs/${transactionId}/link`, {
+      withCredentials: true,
+    });
+    const updated = response.data?.[0];
+    if (!updated) {
+      throw new Error('Night report payload missing');
+    }
+    return updated;
+  } catch (error) {
+    return rejectWithValue(extractErrorMessage(error));
+  }
+});
+
+export const deleteNightReportCost = createAsyncThunk<
+  NightReport,
+  { reportId: number; transactionId: number },
+  { rejectValue: string }
+>('nightReports/deleteNightReportCost', async ({ reportId, transactionId }, { rejectWithValue }) => {
+  try {
+    const response = await axiosInstance.delete<NightReport[]>(`/nightReports/${reportId}/costs/${transactionId}`, {
+      withCredentials: true,
+    });
+    const updated = response.data?.[0];
+    if (!updated) {
+      throw new Error('Night report payload missing');
+    }
+    return updated;
+  } catch (error) {
+    return rejectWithValue(extractErrorMessage(error));
+  }
+});

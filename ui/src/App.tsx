@@ -41,6 +41,8 @@ const SectionLoader = () => (
   </Center>
 );
 
+const PUBLIC_ROUTE_PATHS = new Set(["/privacy-policy", "/data-deletion", "/terms", "/terms-and-conditions"]);
+
 const AppContent = () => {
   const location = useLocation();
   const { authenticated, checkingSession } = useAppSelector((state) => state.session);
@@ -62,6 +64,7 @@ const AppContent = () => {
   const serverDownStatusRef = useRef<number | undefined>(undefined);
   const retryTimerRef = useRef<number | null>(null);
   const checkInFlightRef = useRef(false);
+  const isPublicRoute = PUBLIC_ROUTE_PATHS.has(location.pathname);
 
   const rawNavbarSettings = useMemo(
     () => getNavbarSettings(currentPage, location.pathname),
@@ -282,6 +285,10 @@ const AppContent = () => {
             </Stack>
           </AppShell.Main>
         </AppShell>
+      ) : isPublicRoute ? (
+        <Suspense fallback={<SectionLoader />}>
+          <Routes />
+        </Suspense>
       ) : (
         <Suspense fallback={<FullscreenLoader />}>
           <Login />

@@ -13,8 +13,14 @@ import {
   createNightReport,
   updateNightReport,
   submitNightReport,
+  confirmNightReportNoExtraCost,
+  clearNightReportNoExtraCost,
   uploadNightReportPhoto,
   deleteNightReportPhoto,
+  createNightReportCost,
+  linkNightReportCost,
+  unlinkNightReportCost,
+  deleteNightReportCost,
 } from '../actions/nightReportActions';
 
 type NightReportDetailState = {
@@ -157,6 +163,40 @@ const nightReportSlice = createSlice({
           (action.payload as string | undefined) ?? action.error.message ?? 'Failed to submit night report';
       })
 
+      .addCase(confirmNightReportNoExtraCost.pending, (state) => {
+        state.ui.saving = true;
+        state.ui.lastError = null;
+      })
+      .addCase(confirmNightReportNoExtraCost.fulfilled, (state, action: PayloadAction<NightReport>) => {
+        state.ui.saving = false;
+        state.detail.data = action.payload;
+        state.detail.error = null;
+      })
+      .addCase(confirmNightReportNoExtraCost.rejected, (state, action) => {
+        state.ui.saving = false;
+        state.ui.lastError =
+          (action.payload as string | undefined) ??
+          action.error.message ??
+          'Failed to confirm no extra cost for night report';
+      })
+
+      .addCase(clearNightReportNoExtraCost.pending, (state) => {
+        state.ui.saving = true;
+        state.ui.lastError = null;
+      })
+      .addCase(clearNightReportNoExtraCost.fulfilled, (state, action: PayloadAction<NightReport>) => {
+        state.ui.saving = false;
+        state.detail.data = action.payload;
+        state.detail.error = null;
+      })
+      .addCase(clearNightReportNoExtraCost.rejected, (state, action) => {
+        state.ui.saving = false;
+        state.ui.lastError =
+          (action.payload as string | undefined) ??
+          action.error.message ??
+          'Failed to clear no extra cost confirmation for night report';
+      })
+
       .addCase(uploadNightReportPhoto.pending, (state) => {
         state.ui.uploadingPhoto = true;
         state.ui.lastError = null;
@@ -197,6 +237,66 @@ const nightReportSlice = createSlice({
           (action.payload as string | undefined) ??
           action.error.message ??
           'Failed to delete night report photo';
+      })
+
+      .addCase(createNightReportCost.pending, (state) => {
+        state.ui.saving = true;
+        state.ui.lastError = null;
+      })
+      .addCase(createNightReportCost.fulfilled, (state, action: PayloadAction<NightReport>) => {
+        state.ui.saving = false;
+        state.detail.data = action.payload;
+        state.detail.error = null;
+      })
+      .addCase(createNightReportCost.rejected, (state, action) => {
+        state.ui.saving = false;
+        state.ui.lastError =
+          (action.payload as string | undefined) ?? action.error.message ?? 'Failed to create night report cost';
+      })
+
+      .addCase(linkNightReportCost.pending, (state) => {
+        state.ui.saving = true;
+        state.ui.lastError = null;
+      })
+      .addCase(linkNightReportCost.fulfilled, (state, action: PayloadAction<NightReport>) => {
+        state.ui.saving = false;
+        state.detail.data = action.payload;
+        state.detail.error = null;
+      })
+      .addCase(linkNightReportCost.rejected, (state, action) => {
+        state.ui.saving = false;
+        state.ui.lastError =
+          (action.payload as string | undefined) ?? action.error.message ?? 'Failed to link night report cost';
+      })
+
+      .addCase(unlinkNightReportCost.pending, (state) => {
+        state.ui.saving = true;
+        state.ui.lastError = null;
+      })
+      .addCase(unlinkNightReportCost.fulfilled, (state, action: PayloadAction<NightReport>) => {
+        state.ui.saving = false;
+        state.detail.data = action.payload;
+        state.detail.error = null;
+      })
+      .addCase(unlinkNightReportCost.rejected, (state, action) => {
+        state.ui.saving = false;
+        state.ui.lastError =
+          (action.payload as string | undefined) ?? action.error.message ?? 'Failed to unlink night report cost';
+      })
+
+      .addCase(deleteNightReportCost.pending, (state) => {
+        state.ui.saving = true;
+        state.ui.lastError = null;
+      })
+      .addCase(deleteNightReportCost.fulfilled, (state, action: PayloadAction<NightReport>) => {
+        state.ui.saving = false;
+        state.detail.data = action.payload;
+        state.detail.error = null;
+      })
+      .addCase(deleteNightReportCost.rejected, (state, action) => {
+        state.ui.saving = false;
+        state.ui.lastError =
+          (action.payload as string | undefined) ?? action.error.message ?? 'Failed to delete night report cost';
       });
   },
 });

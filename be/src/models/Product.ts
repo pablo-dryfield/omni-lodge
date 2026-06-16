@@ -47,6 +47,11 @@ export default class Product extends Model {
   @Column(DataType.BOOLEAN)
   declare status: boolean;
 
+  @AllowNull(false)
+  @Default(false)
+  @Column({ field: 'requires_night_report_cost_reconciliation', type: DataType.BOOLEAN })
+  declare requiresNightReportCostReconciliation: boolean;
+
   @HasMany(() => ProductAddon, { foreignKey: 'product_id', as: 'productAddons' })
   declare productAddons?: ProductAddon[] | undefined;
 }

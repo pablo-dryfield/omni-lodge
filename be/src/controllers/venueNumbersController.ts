@@ -119,7 +119,7 @@ export const getVenueNumbersEntriesBootstrap = async (
       }
     }
 
-    const [counters, venues, reports, users] = await Promise.all([
+    const [counters, venues, reports, users, accounts, categories, vendors, clients] = await Promise.all([
       Counter.findAll({
         include: [
           { model: User, as: 'manager', attributes: ['id', 'firstName', 'lastName'] },
@@ -155,6 +155,16 @@ export const getVenueNumbersEntriesBootstrap = async (
           ['lastName', 'ASC'],
         ],
       }),
+      FinanceAccount.findAll({ order: [['name', 'ASC']] }),
+      FinanceCategory.findAll({
+        order: [
+          ['kind', 'ASC'],
+          ['parentId', 'ASC'],
+          ['name', 'ASC'],
+        ],
+      }),
+      FinanceVendor.findAll({ order: [['name', 'ASC']] }),
+      FinanceClient.findAll({ order: [['name', 'ASC']] }),
     ]);
 
     const managers = users
@@ -195,6 +205,12 @@ export const getVenueNumbersEntriesBootstrap = async (
           columns: NIGHT_REPORT_COLUMNS,
         },
       ],
+      finance: {
+        accounts,
+        categories,
+        vendors,
+        clients,
+      },
       managers,
     });
   } catch (error) {

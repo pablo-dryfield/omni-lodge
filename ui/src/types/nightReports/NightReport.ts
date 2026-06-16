@@ -8,6 +8,21 @@ export type NightReportSummary = {
   venuesCount: number;
   totalPeople: number;
   counterId: number;
+  productId: number | null;
+  productName: string | null;
+  requiresCostReconciliation: boolean;
+  costReconciliation: {
+    required: boolean;
+    resolved: boolean;
+    resolution: 'not_required' | 'linked_costs' | 'no_extra_cost_confirmed' | 'unresolved';
+    linkedCostCount: number;
+    noExtraCostConfirmed: boolean;
+    noExtraCostConfirmedAt: string | null;
+    noExtraCostConfirmedBy: {
+      id: number;
+      fullName: string;
+    } | null;
+  };
 };
 
 export type NightReportLeader = {
@@ -48,16 +63,132 @@ export type NightReportPhoto = {
   downloadUrl: string;
 };
 
+export type NightReportCost = {
+  id: number;
+  date: string;
+  serviceDate: string | null;
+  currency: string;
+  amountMinor: number;
+  status: 'planned' | 'approved' | 'awaiting_reimbursement' | 'paid' | 'reimbursed' | 'void';
+  paymentMethod: string | null;
+  description: string | null;
+  nightReportId: number | null;
+  productId: number | null;
+  productName: string | null;
+  linkOrigin: 'created' | 'linked';
+  linkedReport: {
+    id: number;
+    activityDate: string;
+    status: NightReportStatus;
+    leaderName: string | null;
+  } | null;
+  accountName: string | null;
+  categoryName: string | null;
+  vendorName: string | null;
+  invoiceFileId: number | null;
+  invoiceFile: {
+    id: number;
+    originalName: string;
+    mimeType: string;
+    sizeBytes: number;
+    driveFileId: string;
+    driveWebViewLink: string;
+    sha256: string;
+    uploadedBy: number;
+    uploadedAt: string;
+  } | null;
+};
+
+export type NightReportFinanceSummary = {
+  revenueAmount: number;
+  revenueCurrency: string;
+  revenueItems: Array<{
+    id: string;
+    label: string;
+    subtitle: string | null;
+    amount: number;
+    currency: string;
+  }>;
+  linkedCostAmount: number;
+  openBarCostAmount: number;
+  staffPayoutAmount: number;
+  totalCostAmount: number;
+  costCurrency: string;
+  costItems: Array<{
+    id: string;
+    kind: 'linked_cost' | 'open_bar' | 'staff_payout';
+    label: string;
+    subtitle: string | null;
+    amount: number;
+    currency: string;
+  }>;
+  earningsAmount: number;
+  earningsCurrency: string;
+};
+
+export type NightReportLinkableCost = {
+  id: number;
+  date: string;
+  serviceDate: string | null;
+  currency: string;
+  amountMinor: number;
+  status: 'planned' | 'approved' | 'awaiting_reimbursement' | 'paid' | 'reimbursed' | 'void';
+  paymentMethod: string | null;
+  description: string | null;
+  nightReportId: number | null;
+  productId: number | null;
+  productName: string | null;
+  linkOrigin: 'created' | 'linked';
+  linkedReport: {
+    id: number;
+    activityDate: string;
+    status: NightReportStatus;
+    leaderName: string | null;
+  } | null;
+  accountName: string | null;
+  categoryName: string | null;
+  vendorName: string | null;
+  invoiceFileId: number | null;
+  invoiceFile: {
+    id: number;
+    originalName: string;
+    mimeType: string;
+    sizeBytes: number;
+    driveFileId: string;
+    driveWebViewLink: string;
+    sha256: string;
+    uploadedBy: number;
+    uploadedAt: string;
+  } | null;
+};
+
 export type NightReport = {
   id: number;
   counterId: number;
   activityDate: string;
   status: NightReportStatus;
   notes: string | null;
+  productId: number | null;
+  productName: string | null;
+  requiresCostReconciliation: boolean;
+  costReconciliation: {
+    required: boolean;
+    resolved: boolean;
+    resolution: 'not_required' | 'linked_costs' | 'no_extra_cost_confirmed' | 'unresolved';
+    linkedCostCount: number;
+    noExtraCostConfirmed: boolean;
+    noExtraCostConfirmedAt: string | null;
+    noExtraCostConfirmedBy: {
+      id: number;
+      fullName: string;
+    } | null;
+  };
   leader: NightReportLeader | null;
   counter: NightReportCounterRef | null;
   venues: NightReportVenue[];
   photos: NightReportPhoto[];
+  costs: NightReportCost[];
+  financeSummary: NightReportFinanceSummary;
   submittedAt: string | null;
   createdAt: string;
   updatedAt: string | null;
@@ -96,4 +227,17 @@ export type NightReportPhotoUploadResponse = {
   fileSize: number;
   capturedAt: string | null;
   downloadUrl: string;
+};
+
+export type NightReportCostCreatePayload = {
+  date: string;
+  accountId: number;
+  currency: string;
+  amountMinor: number;
+  categoryId: number | null;
+  counterpartyId: number;
+  paymentMethod?: string | null;
+  status?: 'planned' | 'approved' | 'awaiting_reimbursement' | 'paid' | 'reimbursed' | 'void';
+  description?: string | null;
+  invoiceFileId?: number | null;
 };

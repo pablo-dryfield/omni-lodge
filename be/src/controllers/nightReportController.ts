@@ -1,17 +1,25 @@
-import type { Response } from 'express';
-import { Op, Transaction, fn, col } from 'sequelize';
+import type { Request, Response } from 'express';
+import { Op, Transaction, fn, col, where } from 'sequelize';
 import dayjs from 'dayjs';
+import Booking from '../models/Booking.js';
 import Counter from '../models/Counter.js';
 import NightReport, { type NightReportStatus } from '../models/NightReport.js';
 import NightReportVenue from '../models/NightReportVenue.js';
 import NightReportPhoto from '../models/NightReportPhoto.js';
 import User from '../models/User.js';
 import Venue from '../models/Venue.js';
+import Product from '../models/Product.js';
 import VenueCompensationTerm from '../models/VenueCompensationTerm.js';
 import VenueCompensationTermRate from '../models/VenueCompensationTermRate.js';
 import VenueCompensationCollectionLog from '../models/VenueCompensationCollectionLog.js';
 import VenueCompensationLedger from '../models/VenueCompensationLedger.js';
+import FinanceAccount from '../finance/models/FinanceAccount.js';
+import FinanceCategory from '../finance/models/FinanceCategory.js';
+import FinanceFile from '../finance/models/FinanceFile.js';
 import FinanceTransaction from '../finance/models/FinanceTransaction.js';
+import FinanceVendor from '../finance/models/FinanceVendor.js';
+import { recordFinanceAuditLog } from '../finance/services/auditLogService.js';
+import { createFinanceTransaction, updateFinanceTransaction } from '../finance/services/transactionService.js';
 import HttpError from '../errors/HttpError.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import logger from '../utils/logger.js';
@@ -24,6 +32,7 @@ import {
 } from '../services/nightReportStorageService.js';
 import { fetchLeaderNightReportStats } from '../services/nightReportMetricsService.js';
 import { getConfigValue } from '../services/configService.js';
+import { getCommissionByDateRange } from './reportController.js';
 
 const resolvePayoutCurrency = (): string =>
   String(getConfigValue('FINANCE_BASE_CURRENCY') ?? 'PLN')
@@ -79,6 +88,21 @@ type NightReportPayload = {
   activityDate: string;
   status: NightReportStatus;
   notes: string | null;
+  productId: number | null;
+  productName: string | null;
+  requiresCostReconciliation: boolean;
+  costReconciliation: {
+    required: boolean;
+    resolved: boolean;
+    resolution: 'not_required' | 'linked_costs' | 'no_extra_cost_confirmed' | 'unresolved';
+    linkedCostCount: number;
+    noExtraCostConfirmed: boolean;
+    noExtraCostConfirmedAt: string | null;
+    noExtraCostConfirmedBy: {
+      id: number;
+      fullName: string;
+    } | null;
+  };
   leader: {
     id: number;
     fullName: string;
@@ -113,9 +137,98 @@ type NightReportPayload = {
     capturedAt: string | null;
     downloadUrl: string;
   }>;
+  costs: Array<{
+    id: number;
+    date: string;
+    serviceDate: string | null;
+    currency: string;
+    amountMinor: number;
+    status: string;
+    paymentMethod: string | null;
+    description: string | null;
+    nightReportId: number | null;
+    productId: number | null;
+    productName: string | null;
+    linkOrigin: 'created' | 'linked';
+    linkedReport: {
+      id: number;
+      activityDate: string;
+      status: NightReportStatus;
+      leaderName: string | null;
+    } | null;
+    accountName: string | null;
+    categoryName: string | null;
+    vendorName: string | null;
+    invoiceFileId: number | null;
+    invoiceFile: {
+      id: number;
+      originalName: string;
+      mimeType: string;
+      sizeBytes: number;
+      driveFileId: string;
+      driveWebViewLink: string;
+      sha256: string;
+      uploadedBy: number;
+      uploadedAt: string;
+    } | null;
+  }>;
+  financeSummary: {
+    revenueAmount: number;
+    revenueCurrency: string;
+    revenueItems: Array<{
+      id: string;
+      label: string;
+      subtitle: string | null;
+      amount: number;
+      currency: string;
+    }>;
+    linkedCostAmount: number;
+    openBarCostAmount: number;
+    staffPayoutAmount: number;
+    totalCostAmount: number;
+    costCurrency: string;
+    costItems: Array<{
+      id: string;
+      kind: 'linked_cost' | 'open_bar' | 'staff_payout';
+      label: string;
+      subtitle: string | null;
+      amount: number;
+      currency: string;
+    }>;
+    earningsAmount: number;
+    earningsCurrency: string;
+  };
   submittedAt: string | null;
   createdAt: string;
   updatedAt: string | null;
+};
+
+type NightReportAvailableCostPayload = NightReportPayload['costs'][number];
+
+type NightReportCostReconciliationSummary = {
+  required: boolean;
+  resolved: boolean;
+  resolution: 'not_required' | 'linked_costs' | 'no_extra_cost_confirmed' | 'unresolved';
+  linkedCostCount: number;
+  noExtraCostConfirmed: boolean;
+  noExtraCostConfirmedAt: string | null;
+  noExtraCostConfirmedBy: {
+    id: number;
+    fullName: string;
+  } | null;
+};
+
+type NightReportCostPayload = {
+  date: string;
+  accountId: number;
+  currency: string;
+  amountMinor: number;
+  categoryId: number | null;
+  counterpartyId: number;
+  paymentMethod?: string | null;
+  status?: 'planned' | 'approved' | 'awaiting_reimbursement' | 'paid' | 'reimbursed' | 'void';
+  description?: string | null;
+  invoiceFileId?: number | null;
 };
 
 const ADMIN_ROLE_SLUGS = new Set(['admin', 'owner', 'super_admin']);
@@ -135,6 +248,241 @@ const convertMinorUnitsToMajor = (value: number | string | null | undefined): nu
   }
   return roundCurrencyValue(numeric / 100);
 };
+
+const parseMajorCurrency = (value: unknown): number => {
+  if (value === null || value === undefined || value === '') {
+    return 0;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const formatTicketTypeLabel = (ticketType: 'normal' | 'cocktail' | 'brunch' | 'generic'): string => {
+  switch (ticketType) {
+    case 'cocktail':
+      return 'Cocktail';
+    case 'brunch':
+      return 'Brunch';
+    case 'generic':
+      return 'Generic';
+    case 'normal':
+    default:
+      return 'Normal';
+  }
+};
+
+type CommissionSummarySnapshot = {
+  userId?: number | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  breakdown?: Array<{
+    counterId?: number | null;
+    commission?: number | string | null;
+  }>;
+  counterIncentiveTotals?: Record<string, number | string | null>;
+};
+
+type CommissionResponsePayload = Array<{
+  data?: CommissionSummarySnapshot[];
+}>;
+
+async function loadNightReportStaffPayoutSummary(
+  report: NightReport,
+  req: AuthenticatedRequest,
+): Promise<{
+  amount: number;
+  currency: string;
+  items: Array<{
+    id: string;
+    kind: 'staff_payout';
+    label: string;
+    subtitle: string | null;
+    amount: number;
+    currency: string;
+  }>;
+}> {
+  const counterId = Number(report.counterId ?? 0);
+  if (!Number.isInteger(counterId) || counterId <= 0) {
+    return {
+      amount: 0,
+      currency: resolvePayoutCurrency(),
+      items: [],
+    };
+  }
+
+  const rangeStart = dayjs(report.activityDate).startOf('month').format('YYYY-MM-DD');
+  const rangeEnd = dayjs(report.activityDate).endOf('month').format('YYYY-MM-DD');
+
+  let statusCode = 200;
+  let responsePayload: CommissionResponsePayload | null = null;
+
+  const mockReq = {
+    ...req,
+    query: {
+      startDate: rangeStart,
+      endDate: rangeEnd,
+    },
+    authContext: {
+      ...(req.authContext ?? {}),
+      roleSlug: 'admin',
+    },
+  } as unknown as Request & AuthenticatedRequest;
+
+  const mockRes = {
+    status(code: number) {
+      statusCode = code;
+      return this;
+    },
+    json(payload: CommissionResponsePayload) {
+      responsePayload = payload;
+      return this;
+    },
+  } as unknown as Response;
+
+  await getCommissionByDateRange(mockReq, mockRes);
+
+  const payloadArray = responsePayload as CommissionResponsePayload | null;
+  const firstPayloadEntry = statusCode === 200 && payloadArray && payloadArray.length > 0 ? payloadArray[0] : null;
+  const summaries = firstPayloadEntry && Array.isArray(firstPayloadEntry.data) ? firstPayloadEntry.data : null;
+
+  if (!summaries) {
+    return {
+      amount: 0,
+      currency: resolvePayoutCurrency(),
+      items: [],
+    };
+  }
+
+  const currency = resolvePayoutCurrency();
+  const items = summaries.reduce<Array<{
+    id: string;
+    kind: 'staff_payout';
+    label: string;
+    subtitle: string | null;
+    amount: number;
+    currency: string;
+  }>>((acc, summary: CommissionSummarySnapshot) => {
+      const commissionAmount = Array.isArray(summary.breakdown)
+        ? summary.breakdown.reduce((innerSum: number, item) => {
+            if (Number(item.counterId ?? 0) !== counterId) {
+              return innerSum;
+            }
+            return innerSum + parseMajorCurrency(item.commission);
+          }, 0)
+        : 0;
+
+      const incentiveAmount = parseMajorCurrency(summary.counterIncentiveTotals?.[String(counterId)]);
+      const totalAmount = roundCurrencyValue(commissionAmount + incentiveAmount);
+      if (totalAmount <= 0) {
+        return acc;
+      }
+
+      const fullName = `${summary.firstName ?? ''} ${summary.lastName ?? ''}`.trim() || `User #${summary.userId ?? 'unknown'}`;
+      const subtitleParts = [
+        commissionAmount > 0 ? `Commission ${currency} ${roundCurrencyValue(commissionAmount).toFixed(2)}` : null,
+        incentiveAmount > 0 ? `Incentive ${currency} ${roundCurrencyValue(incentiveAmount).toFixed(2)}` : null,
+      ].filter(Boolean);
+
+      acc.push({
+        id: `staff-${summary.userId ?? fullName}`,
+        kind: 'staff_payout',
+        label: fullName,
+        subtitle: subtitleParts.length > 0 ? subtitleParts.join(' • ') : null,
+        amount: totalAmount,
+        currency,
+      });
+      return acc;
+    }, []);
+
+  return {
+    amount: roundCurrencyValue(items.reduce((sum, item) => sum + item.amount, 0)),
+    currency,
+    items,
+  };
+}
+
+async function loadNightReportRevenueSummary(report: NightReport): Promise<{
+  amount: number;
+  currency: string;
+  items: Array<{
+    id: string;
+    label: string;
+    subtitle: string | null;
+    amount: number;
+    currency: string;
+  }>;
+}> {
+  const productId = report.counter?.productId ?? null;
+  if (!report.activityDate || productId == null) {
+    return { amount: 0, currency: resolvePayoutCurrency(), items: [] };
+  }
+
+  const bookings = await Booking.findAll({
+    where: {
+      productId,
+      experienceDate: report.activityDate,
+      status: {
+        [Op.ne]: 'cancelled',
+      },
+    },
+    attributes: [
+      'id',
+      'platform',
+      'platformOrderId',
+      'platformBookingId',
+      'guestFirstName',
+      'guestLastName',
+      'baseAmount',
+      'tipAmount',
+      'processingFee',
+      'currency',
+    ],
+    order: [
+      ['platformOrderId', 'ASC'],
+      ['platformBookingId', 'ASC'],
+      ['id', 'ASC'],
+    ],
+  });
+
+  if (bookings.length === 0) {
+    return { amount: 0, currency: resolvePayoutCurrency(), items: [] };
+  }
+
+  const currency =
+    bookings.find((booking) => typeof booking.currency === 'string' && booking.currency.trim().length > 0)?.currency?.trim().toUpperCase() ??
+    resolvePayoutCurrency();
+
+  const items = bookings.map((booking) => {
+    const baseAmount = parseMajorCurrency(booking.baseAmount);
+    const tipAmount = parseMajorCurrency(booking.tipAmount);
+    const processingFee = parseMajorCurrency(booking.processingFee);
+    const amount = roundCurrencyValue(baseAmount + tipAmount - processingFee);
+    const guestName = `${booking.guestFirstName ?? ''} ${booking.guestLastName ?? ''}`.trim() || null;
+    const bookingRef = booking.platformOrderId?.trim() || booking.platformBookingId?.trim() || `Booking #${booking.id}`;
+    const subtitle = [
+      guestName,
+      `Base ${currency} ${baseAmount.toFixed(2)}`,
+      tipAmount > 0 ? `Tip ${currency} ${tipAmount.toFixed(2)}` : null,
+      processingFee > 0 ? `Fee ${currency} ${processingFee.toFixed(2)}` : null,
+    ]
+      .filter(Boolean)
+      .join(' • ');
+
+    return {
+      id: `booking-${booking.id}`,
+      label: bookingRef,
+      subtitle: subtitle || null,
+      amount,
+      currency,
+    };
+  });
+
+  return {
+    amount: roundCurrencyValue(items.reduce((sum, item) => sum + item.amount, 0)),
+    currency,
+    items,
+  };
+}
 
 const parseAmountToMinor = (value: unknown): number => {
   if (value === null || value === undefined || value === '') {
@@ -271,7 +619,248 @@ const buildPhotoDownloadUrl = (req: AuthenticatedRequest, reportId: number, phot
   return `${normalizedBase}/${reportId}/photos/${photoId}/download`;
 };
 
-function serializeNightReport(report: NightReport, req: AuthenticatedRequest): NightReportPayload {
+async function listNightReportCosts(reportId: number) {
+  return FinanceTransaction.findAll({
+    where: {
+      kind: 'expense',
+      nightReportId: reportId,
+    },
+    include: [
+      { model: FinanceAccount, as: 'account', required: false },
+      { model: FinanceCategory, as: 'category', required: false },
+      { model: FinanceVendor, as: 'vendor', required: false },
+      { model: Product, as: 'product', required: false },
+      { model: FinanceFile, as: 'invoiceFile', required: false },
+    ],
+    order: [
+      ['date', 'DESC'],
+      ['id', 'DESC'],
+    ],
+  });
+}
+
+async function listNightReportCostCounts(reportIds: number[]): Promise<Map<number, number>> {
+  if (reportIds.length === 0) {
+    return new Map();
+  }
+
+  const rows = await FinanceTransaction.findAll({
+    attributes: ['nightReportId', [fn('COUNT', col('id')), 'count']],
+    where: {
+      kind: 'expense',
+      nightReportId: {
+        [Op.in]: reportIds,
+      },
+    },
+    group: ['nightReportId'],
+    raw: true,
+  });
+
+  const counts = new Map<number, number>();
+  rows.forEach((row) => {
+    const reportId = Number((row as { nightReportId?: number | null }).nightReportId);
+    const count = Number((row as { count?: string | number | null }).count ?? 0);
+    if (Number.isInteger(reportId) && reportId > 0) {
+      counts.set(reportId, Number.isFinite(count) ? count : 0);
+    }
+  });
+  return counts;
+}
+
+function getNightReportAttendanceFlags(report: NightReport): { didNotOperate: boolean; noVenueAttendance: boolean } {
+  const normalizedNotes = (report.notes ?? '').trim().toLowerCase();
+  const didNotOperate = normalizedNotes === DID_NOT_OPERATE_NOTE.toLowerCase();
+  const venues = report.venues ?? [];
+  const noVenueAttendance =
+    venues.length === 0 ||
+    venues.every((venue) => Math.max(0, Number(venue.totalPeople ?? 0)) === 0);
+  return { didNotOperate, noVenueAttendance };
+}
+
+function buildNightReportCostReconciliationSummary(
+  report: NightReport,
+  linkedCostCount: number,
+): NightReportCostReconciliationSummary {
+  const product = report.counter?.product ?? null;
+  const { didNotOperate, noVenueAttendance } = getNightReportAttendanceFlags(report);
+  const required = Boolean(product?.requiresNightReportCostReconciliation) && !didNotOperate && !noVenueAttendance;
+  const noExtraCostConfirmedBy = report.noExtraCostConfirmer
+    ? {
+        id: report.noExtraCostConfirmer.id,
+        fullName: `${report.noExtraCostConfirmer.firstName ?? ''} ${report.noExtraCostConfirmer.lastName ?? ''}`.trim(),
+      }
+    : null;
+
+  if (!required) {
+    return {
+      required: false,
+      resolved: true,
+      resolution: 'not_required',
+      linkedCostCount,
+      noExtraCostConfirmed: Boolean(report.noExtraCostConfirmed),
+      noExtraCostConfirmedAt: report.noExtraCostConfirmedAt ? report.noExtraCostConfirmedAt.toISOString() : null,
+      noExtraCostConfirmedBy,
+    };
+  }
+
+  if (linkedCostCount > 0) {
+    return {
+      required: true,
+      resolved: true,
+      resolution: 'linked_costs',
+      linkedCostCount,
+      noExtraCostConfirmed: Boolean(report.noExtraCostConfirmed),
+      noExtraCostConfirmedAt: report.noExtraCostConfirmedAt ? report.noExtraCostConfirmedAt.toISOString() : null,
+      noExtraCostConfirmedBy,
+    };
+  }
+
+  if (report.noExtraCostConfirmed) {
+    return {
+      required: true,
+      resolved: true,
+      resolution: 'no_extra_cost_confirmed',
+      linkedCostCount,
+      noExtraCostConfirmed: true,
+      noExtraCostConfirmedAt: report.noExtraCostConfirmedAt ? report.noExtraCostConfirmedAt.toISOString() : null,
+      noExtraCostConfirmedBy,
+    };
+  }
+
+  return {
+    required: true,
+    resolved: false,
+    resolution: 'unresolved',
+    linkedCostCount,
+    noExtraCostConfirmed: false,
+    noExtraCostConfirmedAt: null,
+    noExtraCostConfirmedBy,
+  };
+}
+
+function resolveNightReportCostLinkOrigin(cost: FinanceTransaction): 'created' | 'linked' {
+  return cost.meta?.source === 'night-report-cost' ? 'created' : 'linked';
+}
+
+function serializeNightReportCost(cost: FinanceTransaction): NightReportAvailableCostPayload {
+  const linkedReport =
+    cost.nightReport && cost.nightReportId
+      ? {
+          id: cost.nightReport.id,
+          activityDate: cost.nightReport.activityDate,
+          status: cost.nightReport.status,
+          leaderName: cost.nightReport.leader
+            ? `${cost.nightReport.leader.firstName ?? ''} ${cost.nightReport.leader.lastName ?? ''}`.trim()
+            : null,
+        }
+      : null;
+  return {
+    id: cost.id,
+    date: cost.date,
+    serviceDate: cost.serviceDate ?? null,
+    currency: cost.currency,
+    amountMinor: cost.amountMinor,
+    status: cost.status,
+    paymentMethod: cost.paymentMethod ?? null,
+    description: cost.description ?? null,
+    nightReportId: cost.nightReportId ?? null,
+    productId: cost.productId ?? null,
+    productName: cost.product?.name ?? null,
+    linkOrigin: resolveNightReportCostLinkOrigin(cost),
+    linkedReport,
+    accountName: cost.account?.name ?? null,
+    categoryName: cost.category?.name ?? null,
+    vendorName: cost.vendor?.name ?? null,
+    invoiceFileId: cost.invoiceFileId ?? null,
+    invoiceFile: cost.invoiceFile
+      ? {
+          id: cost.invoiceFile.id,
+          originalName: cost.invoiceFile.originalName,
+          mimeType: cost.invoiceFile.mimeType,
+          sizeBytes: cost.invoiceFile.sizeBytes,
+          driveFileId: cost.invoiceFile.driveFileId,
+          driveWebViewLink: cost.invoiceFile.driveWebViewLink,
+          sha256: cost.invoiceFile.sha256,
+          uploadedBy: cost.invoiceFile.uploadedBy,
+          uploadedAt:
+            cost.invoiceFile.uploadedAt instanceof Date
+              ? cost.invoiceFile.uploadedAt.toISOString()
+              : new Date(cost.invoiceFile.uploadedAt).toISOString(),
+        }
+      : null,
+  };
+}
+
+async function listLinkableNightReportCosts(report: NightReport): Promise<FinanceTransaction[]> {
+  const activityDate = dayjs(report.activityDate);
+  const reportProductId = report.counter?.productId ?? null;
+  const windowStart = activityDate.subtract(14, 'day').format('YYYY-MM-DD');
+  const windowEnd = activityDate.add(3, 'day').format('YYYY-MM-DD');
+
+  const orConditions: Array<Record<string, unknown>> = [
+    {
+      date: {
+        [Op.gte]: windowStart,
+        [Op.lte]: windowEnd,
+      },
+    },
+    {
+      serviceDate: report.activityDate,
+    },
+  ];
+
+  if (reportProductId) {
+    orConditions.push({ productId: reportProductId });
+  }
+
+  const rows = await FinanceTransaction.findAll({
+    where: {
+      kind: 'expense',
+      [Op.and]: [
+        {
+          [Op.or]: [
+            { nightReportId: null },
+            { nightReportId: { [Op.ne]: report.id } },
+          ],
+        },
+      ],
+      [Op.or]: orConditions,
+    },
+    include: [
+      { model: FinanceAccount, as: 'account', required: false },
+      { model: FinanceCategory, as: 'category', required: false },
+      { model: FinanceVendor, as: 'vendor', required: false },
+      { model: Product, as: 'product', required: false },
+      {
+        model: NightReport,
+        as: 'nightReport',
+        required: false,
+        include: [{ model: User, as: 'leader', required: false }],
+      },
+      { model: FinanceFile, as: 'invoiceFile', required: false },
+    ],
+    order: [
+      ['date', 'DESC'],
+      ['id', 'DESC'],
+    ],
+    limit: 100,
+  });
+
+  return rows.sort((left, right) => {
+    const score = (row: FinanceTransaction): number => {
+      let current = 0;
+      if (row.serviceDate === report.activityDate) current += 4;
+      if (reportProductId && row.productId === reportProductId) current += 3;
+      if (row.date === report.activityDate) current += 2;
+      if (row.invoiceFileId) current += 0.25;
+      if (row.nightReportId == null) current += 0.5;
+      return current;
+    };
+    return score(right) - score(left) || dayjs(right.date).valueOf() - dayjs(left.date).valueOf() || right.id - left.id;
+  });
+}
+
+async function serializeNightReport(report: NightReport, req: AuthenticatedRequest): Promise<NightReportPayload> {
   const leader = report.leader
     ? {
         id: report.leader.id,
@@ -285,6 +874,7 @@ function serializeNightReport(report: NightReport, req: AuthenticatedRequest): N
         date: report.counter.date,
       }
     : null;
+  const product = report.counter?.product ?? null;
 
   const venues = (report.venues ?? [])
     .slice()
@@ -317,16 +907,194 @@ function serializeNightReport(report: NightReport, req: AuthenticatedRequest): N
     downloadUrl: buildPhotoDownloadUrl(req, report.id, photo.id),
   }));
 
+  const costRows = await listNightReportCosts(report.id);
+  const costs = costRows.map(serializeNightReportCost);
+  const costReconciliation = buildNightReportCostReconciliationSummary(report, costs.length);
+  const requiresCostReconciliation = costReconciliation.required;
+  const linkedCostAmount = roundCurrencyValue(costs.reduce((sum, cost) => sum + convertMinorUnitsToMajor(cost.amountMinor), 0));
+  const openBarCostAmount = roundCurrencyValue(
+    venues.reduce((sum, venue) => {
+      if (
+        venue.isOpenBar !== true ||
+        venue.compensationType !== 'open_bar' ||
+        venue.payoutAmount == null ||
+        !Number.isFinite(Number(venue.payoutAmount))
+      ) {
+        return sum;
+      }
+      return sum + Number(venue.payoutAmount);
+    }, 0),
+  );
+  const staffPayoutSummary = await loadNightReportStaffPayoutSummary(report, req);
+  const revenueSummary = await loadNightReportRevenueSummary(report);
+  const openBarTermIds = Array.from(
+    new Set(
+      venues
+        .filter((venue) => venue.isOpenBar === true && venue.compensationType === 'open_bar' && venue.compensationTermId != null)
+        .map((venue) => Number(venue.compensationTermId))
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ),
+  );
+  const openBarTerms = openBarTermIds.length
+    ? await VenueCompensationTerm.findAll({
+        where: {
+          id: { [Op.in]: openBarTermIds },
+        },
+      })
+    : [];
+  const openBarTermMap = new Map<number, VenueCompensationTerm>();
+  openBarTerms.forEach((term) => openBarTermMap.set(term.id, term));
+  const openBarRates = openBarTermIds.length
+    ? await VenueCompensationTermRate.findAll({
+        where: {
+          termId: { [Op.in]: openBarTermIds },
+          isActive: true,
+        },
+        order: [
+          ['termId', 'ASC'],
+          ['productId', 'DESC'],
+          ['ticketType', 'ASC'],
+          ['validFrom', 'DESC'],
+          ['id', 'DESC'],
+        ],
+      })
+    : [];
+  const openBarRatesByTerm = new Map<number, VenueCompensationTermRate[]>();
+  openBarRates.forEach((rate) => {
+    if (!openBarRatesByTerm.has(rate.termId)) {
+      openBarRatesByTerm.set(rate.termId, []);
+    }
+    openBarRatesByTerm.get(rate.termId)!.push(rate);
+  });
+  const openBarCostItems = venues.flatMap((venue, index) => {
+    if (
+      venue.isOpenBar !== true ||
+      venue.compensationType !== 'open_bar' ||
+      venue.payoutAmount == null ||
+      !Number.isFinite(Number(venue.payoutAmount))
+    ) {
+      return [];
+    }
+
+      const term =
+        venue.compensationTermId != null ? openBarTermMap.get(Number(venue.compensationTermId)) ?? null : null;
+      const payoutBreakdown =
+        term != null
+          ? computeOpenBarPayout(
+              term,
+              openBarRatesByTerm.get(term.id) ?? [],
+              {
+                normal: venue.normalCount ?? 0,
+                cocktail: venue.cocktailsCount ?? 0,
+                brunch: venue.brunchCount ?? 0,
+              },
+              product?.id ?? report.counter?.productId ?? null,
+              report.activityDate,
+            )
+          : null;
+      const bucketBreakdown = payoutBreakdown?.breakdown ?? [];
+      const currency = (venue.currencyCode ?? 'PLN').trim().toUpperCase();
+
+      if (bucketBreakdown.length === 0) {
+        return [
+          {
+            id: `open-bar-${venue.id ?? index}`,
+            kind: 'open_bar' as const,
+            label: venue.venueName || 'Open Bar',
+            subtitle: term ? `Term #${term.id}` : null,
+            amount: roundCurrencyValue(Number(venue.payoutAmount)),
+            currency,
+          },
+        ];
+      }
+
+      return bucketBreakdown.map((entry: (typeof bucketBreakdown)[number], entryIndex: number) => {
+        const rateText = `${currency} ${roundCurrencyValue(entry.rateAmount).toFixed(2)}${entry.rateUnit === 'per_person' ? '/person' : ''}`;
+        const sourceText =
+          entry.source === 'ticket_rate'
+            ? 'rate band'
+            : entry.source === 'generic_rate'
+            ? 'generic band'
+            : 'term default';
+        const units = entry.rateUnit === 'flat' ? 1 : entry.count;
+        const amount = roundCurrencyValue(entry.rateAmount * units);
+
+        return {
+          id: `open-bar-${venue.id ?? index}-${entryIndex}`,
+          kind: 'open_bar' as const,
+          label: venue.venueName || 'Open Bar',
+          subtitle: [term ? `Term #${term.id}` : null, `${formatTicketTypeLabel(entry.ticketType)} x${entry.count} @ ${rateText} (${sourceText})`]
+            .filter(Boolean)
+            .join(' • '),
+          amount,
+          currency,
+        };
+      });
+    });
+  const linkedCostItems = costs.map((cost) => ({
+    id: `cost-${cost.id}`,
+    kind: 'linked_cost' as const,
+    label: cost.description?.trim() || 'Night report cost',
+    subtitle: [
+      dayjs(cost.date).format('MMM D, YYYY'),
+      cost.vendorName,
+      cost.categoryName,
+      cost.paymentMethod,
+    ]
+      .filter(Boolean)
+      .join(' • '),
+    amount: convertMinorUnitsToMajor(cost.amountMinor),
+    currency: cost.currency.trim().toUpperCase(),
+  }));
+  const costCurrency =
+    venues.find((venue) => typeof venue.currencyCode === 'string' && venue.currencyCode.trim().length > 0)?.currencyCode?.trim().toUpperCase() ??
+    revenueSummary.currency ??
+    resolvePayoutCurrency();
+  const venueCommissionAmount = roundCurrencyValue(
+    venues.reduce((sum, venue) => {
+      if (
+        venue.compensationType !== 'commission' ||
+        venue.compensationDirection !== 'receivable' ||
+        venue.payoutAmount == null ||
+        !Number.isFinite(Number(venue.payoutAmount))
+      ) {
+        return sum;
+      }
+      return sum + Number(venue.payoutAmount);
+    }, 0),
+  );
+  const totalRevenueAmount = roundCurrencyValue(revenueSummary.amount + venueCommissionAmount);
+  const totalCostAmount = roundCurrencyValue(linkedCostAmount + openBarCostAmount + staffPayoutSummary.amount);
+  const earningsAmount = roundCurrencyValue(totalRevenueAmount - totalCostAmount);
+
   return {
     id: report.id,
     counterId: report.counterId,
     activityDate: report.activityDate,
     status: report.status,
     notes: report.notes ?? null,
+    productId: product?.id ?? report.counter?.productId ?? null,
+    productName: product?.name ?? null,
+    requiresCostReconciliation,
+    costReconciliation,
     leader,
     counter,
     venues,
     photos,
+    costs,
+    financeSummary: {
+      revenueAmount: totalRevenueAmount,
+      revenueCurrency: revenueSummary.currency,
+      revenueItems: revenueSummary.items,
+      linkedCostAmount,
+      openBarCostAmount,
+      staffPayoutAmount: staffPayoutSummary.amount,
+      totalCostAmount,
+      costCurrency,
+      costItems: [...linkedCostItems, ...openBarCostItems, ...staffPayoutSummary.items],
+      earningsAmount,
+      earningsCurrency: revenueSummary.currency,
+    },
     submittedAt: report.submittedAt ? report.submittedAt.toISOString() : null,
     createdAt: report.createdAt instanceof Date ? report.createdAt.toISOString() : new Date(report.createdAt).toISOString(),
     updatedAt:
@@ -338,12 +1106,13 @@ function serializeNightReport(report: NightReport, req: AuthenticatedRequest): N
   };
 }
 
-function buildSummaryRow(report: NightReport) {
+function buildSummaryRow(report: NightReport, linkedCostCount = 0) {
   const leaderName = report.leader
     ? `${report.leader.firstName ?? ''} ${report.leader.lastName ?? ''}`.trim()
     : '';
   const venues = report.venues ?? [];
   const totalPeople = venues.reduce((acc, venue) => acc + (venue.totalPeople ?? 0), 0);
+  const costReconciliation = buildNightReportCostReconciliationSummary(report, linkedCostCount);
   return {
     id: report.id,
     activityDate: report.activityDate,
@@ -352,6 +1121,10 @@ function buildSummaryRow(report: NightReport) {
     venuesCount: venues.length,
     totalPeople,
     counterId: report.counterId,
+    productId: report.counter?.productId ?? null,
+    productName: report.counter?.product?.name ?? null,
+    requiresCostReconciliation: costReconciliation.required,
+    costReconciliation,
   };
 }
 
@@ -656,6 +1429,13 @@ function computeOpenBarPayout(
 ) {
   const dateValue = referenceDate;
   const contributions: number[] = [];
+  const breakdown: Array<{
+    ticketType: 'normal' | 'cocktail' | 'brunch' | 'generic';
+    count: number;
+    rateAmount: number;
+    rateUnit: 'per_person' | 'flat';
+    source: 'ticket_rate' | 'generic_rate' | 'term_default';
+  }> = [];
 
   const selectRate = (ticketType: string): VenueCompensationTermRate | null => {
     const filtered = rates.filter((rate) => {
@@ -697,11 +1477,27 @@ function computeOpenBarPayout(
         return;
       }
       const units = genericRate.rateUnit === 'flat' ? 1 : count;
-      contributions.push(roundToCents(Number(genericRate.rateAmount ?? 0) * units));
+      const rateAmount = roundToCents(Number(genericRate.rateAmount ?? 0));
+      contributions.push(roundToCents(rateAmount * units));
+      breakdown.push({
+        ticketType,
+        count,
+        rateAmount,
+        rateUnit: genericRate.rateUnit === 'flat' ? 'flat' : 'per_person',
+        source: 'generic_rate',
+      });
       return;
     }
     const units = rate.rateUnit === 'flat' ? 1 : count;
-    contributions.push(roundToCents(Number(rate.rateAmount ?? 0) * units));
+    const rateAmount = roundToCents(Number(rate.rateAmount ?? 0));
+    contributions.push(roundToCents(rateAmount * units));
+    breakdown.push({
+      ticketType,
+      count,
+      rateAmount,
+      rateUnit: rate.rateUnit === 'flat' ? 'flat' : 'per_person',
+      source: 'ticket_rate',
+    });
   };
 
   applyRate('normal', counts.normal);
@@ -712,26 +1508,47 @@ function computeOpenBarPayout(
     const fallbackRate = selectRate('generic');
     if (fallbackRate) {
       const units = fallbackRate.rateUnit === 'flat' ? 1 : Math.max(counts.normal + counts.cocktail + counts.brunch, 0);
-      contributions.push(roundToCents(Number(fallbackRate.rateAmount ?? 0) * units));
+      const rateAmount = roundToCents(Number(fallbackRate.rateAmount ?? 0));
+      contributions.push(roundToCents(rateAmount * units));
+      breakdown.push({
+        ticketType: 'generic',
+        count: Math.max(counts.normal + counts.cocktail + counts.brunch, 0),
+        rateAmount,
+        rateUnit: fallbackRate.rateUnit === 'flat' ? 'flat' : 'per_person',
+        source: 'generic_rate',
+      });
     } else {
       const baseRateRaw = typeof term.rateAmount === 'number' ? term.rateAmount : Number(term.rateAmount ?? 0);
       const rateApplied = roundToCents(baseRateRaw);
       const units = term.rateUnit === 'flat' ? 1 : Math.max(counts.normal + counts.cocktail + counts.brunch, 0);
       contributions.push(roundToCents(rateApplied * units));
+      breakdown.push({
+        ticketType: 'normal',
+        count: Math.max(counts.normal + counts.cocktail + counts.brunch, 0),
+        rateAmount: rateApplied,
+        rateUnit: term.rateUnit === 'flat' ? 'flat' : 'per_person',
+        source: 'term_default',
+      });
     }
   }
 
   return {
     total: contributions.reduce((sum, value) => sum + value, 0),
+    breakdown,
   };
 }
 
 async function getNightReportById(reportId: number): Promise<NightReport | null> {
   return NightReport.findByPk(reportId, {
     include: [
-      { model: Counter, as: 'counter' },
+      {
+        model: Counter,
+        as: 'counter',
+        include: [{ model: Product, as: 'product' }],
+      },
       { model: User, as: 'leader' },
       { model: User, as: 'reassignedBy' },
+      { model: User, as: 'noExtraCostConfirmer' },
       { model: NightReportVenue, as: 'venues' },
       { model: NightReportPhoto, as: 'photos' },
     ],
@@ -778,10 +1595,17 @@ export const listNightReports = async (req: AuthenticatedRequest, res: Response)
       include: [
         { model: User, as: 'leader', attributes: ['id', 'firstName', 'lastName'] },
         {
+          model: Counter,
+          as: 'counter',
+          attributes: ['id', 'date', 'productId'],
+          include: [{ model: Product, as: 'product', attributes: ['id', 'name', 'requiresNightReportCostReconciliation'] }],
+        },
+        {
           model: NightReportVenue,
           as: 'venues',
           attributes: ['id', 'orderIndex', 'totalPeople', 'isOpenBar'],
         },
+        { model: User, as: 'noExtraCostConfirmer', attributes: ['id', 'firstName', 'lastName'], required: false },
       ],
       order: [
         ['activityDate', 'DESC'],
@@ -789,7 +1613,8 @@ export const listNightReports = async (req: AuthenticatedRequest, res: Response)
       ],
     });
 
-    const data = reports.map(buildSummaryRow);
+    const linkedCostCounts = await listNightReportCostCounts(reports.map((report) => report.id));
+    const data = reports.map((report) => buildSummaryRow(report, linkedCostCounts.get(report.id) ?? 0));
 
     res.status(200).json([
       {
@@ -882,7 +1707,7 @@ export const createNightReport = async (req: AuthenticatedRequest, res: Response
       throw new HttpError(500, 'Failed to load created report');
     }
 
-    res.status(201).json([serializeNightReport(fullReport, req)]);
+    res.status(201).json([await serializeNightReport(fullReport, req)]);
   } catch (error) {
     if (error instanceof HttpError) {
       res.status(error.status).json([{ message: error.message }]);
@@ -906,7 +1731,7 @@ export const getNightReport = async (req: AuthenticatedRequest, res: Response): 
       return;
     }
 
-    res.status(200).json([serializeNightReport(report, req)]);
+    res.status(200).json([await serializeNightReport(report, req)]);
   } catch (error) {
     if (error instanceof HttpError) {
       res.status(error.status).json([{ message: error.message }]);
@@ -983,6 +1808,16 @@ export const updateNightReport = async (req: AuthenticatedRequest, res: Response
         await NightReport.update(updatePayload, { where: { id: reportId }, transaction });
       }
 
+      if (updatePayload.activityDate) {
+        await FinanceTransaction.update(
+          { serviceDate: effectiveActivityDate, productId: reportProductId, updatedAt: new Date() },
+          {
+            where: { nightReportId: reportId },
+            transaction,
+          },
+        );
+      }
+
       if (hasVenuesInput) {
         await NightReportVenue.destroy({ where: { reportId }, transaction });
         if (normalizedVenues.length > 0) {
@@ -1025,7 +1860,7 @@ export const updateNightReport = async (req: AuthenticatedRequest, res: Response
       throw new HttpError(500, 'Failed to reload report');
     }
 
-    res.status(200).json([serializeNightReport(fresh, req)]);
+    res.status(200).json([await serializeNightReport(fresh, req)]);
   } catch (error) {
     if (error instanceof HttpError) {
       res.status(error.status).json([{ message: error.message }]);
@@ -1096,6 +1931,24 @@ export const submitNightReport = async (req: AuthenticatedRequest, res: Response
       throw new HttpError(400, 'Upload the signed paper photo before submitting');
     }
 
+    const requiresCostReconciliation =
+      Boolean(report.counter?.product?.requiresNightReportCostReconciliation) && !didNotOperate && !noVenueAttendance;
+    if (requiresCostReconciliation) {
+      const linkedCostCount = await FinanceTransaction.count({
+        where: {
+          kind: 'expense',
+          nightReportId: reportId,
+        },
+      });
+      const resolved = linkedCostCount > 0 || Boolean(report.noExtraCostConfirmed);
+      if (!resolved) {
+        throw new HttpError(
+          400,
+          'This product requires cost reconciliation before submission. Add/link a cost or confirm no extra cost.',
+        );
+      }
+    }
+
     await NightReport.update(
       {
         status: 'submitted',
@@ -1110,7 +1963,7 @@ export const submitNightReport = async (req: AuthenticatedRequest, res: Response
       throw new HttpError(500, 'Failed to reload report');
     }
 
-    res.status(200).json([serializeNightReport(fresh, req)]);
+    res.status(200).json([await serializeNightReport(fresh, req)]);
   } catch (error) {
     if (error instanceof HttpError) {
       res.status(error.status).json([{ message: error.message }]);
@@ -1118,6 +1971,94 @@ export const submitNightReport = async (req: AuthenticatedRequest, res: Response
     }
     logger.error('Failed to submit night report', error);
     res.status(500).json([{ message: 'Failed to submit night report' }]);
+  }
+};
+
+export const confirmNightReportNoExtraCost = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const reportId = Number(req.params.id);
+    if (!Number.isInteger(reportId) || reportId <= 0) {
+      throw new HttpError(400, 'Invalid report id');
+    }
+
+    const report = await getNightReportById(reportId);
+    if (!report) {
+      res.status(404).json([{ message: 'Night report not found' }]);
+      return;
+    }
+
+    if (!canManageReport(report, actorId, req.authContext?.roleSlug)) {
+      throw new HttpError(403, 'You do not have permission to update cost reconciliation for this report');
+    }
+
+    await NightReport.update(
+      {
+        noExtraCostConfirmed: true,
+        noExtraCostConfirmedBy: actorId,
+        noExtraCostConfirmedAt: new Date(),
+        updatedBy: actorId,
+      },
+      { where: { id: reportId } },
+    );
+
+    const fresh = await getNightReportById(reportId);
+    if (!fresh) {
+      throw new HttpError(500, 'Failed to reload report');
+    }
+
+    res.status(200).json([await serializeNightReport(fresh, req)]);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to confirm no extra cost for night report', error);
+    res.status(500).json([{ message: 'Failed to confirm no extra cost for night report' }]);
+  }
+};
+
+export const clearNightReportNoExtraCost = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const reportId = Number(req.params.id);
+    if (!Number.isInteger(reportId) || reportId <= 0) {
+      throw new HttpError(400, 'Invalid report id');
+    }
+
+    const report = await getNightReportById(reportId);
+    if (!report) {
+      res.status(404).json([{ message: 'Night report not found' }]);
+      return;
+    }
+
+    if (!canManageReport(report, actorId, req.authContext?.roleSlug)) {
+      throw new HttpError(403, 'You do not have permission to update cost reconciliation for this report');
+    }
+
+    await NightReport.update(
+      {
+        noExtraCostConfirmed: false,
+        noExtraCostConfirmedBy: null,
+        noExtraCostConfirmedAt: null,
+        updatedBy: actorId,
+      },
+      { where: { id: reportId } },
+    );
+
+    const fresh = await getNightReportById(reportId);
+    if (!fresh) {
+      throw new HttpError(500, 'Failed to reload report');
+    }
+
+    res.status(200).json([await serializeNightReport(fresh, req)]);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to clear no extra cost confirmation for night report', error);
+    res.status(500).json([{ message: 'Failed to clear no extra cost confirmation for night report' }]);
   }
 };
 
@@ -1147,9 +2088,25 @@ export const deleteNightReport = async (req: AuthenticatedRequest, res: Response
 
     await sequelize.transaction(async (transaction) => {
       const photos = await NightReportPhoto.findAll({ where: { reportId }, transaction });
+      const costTransactions = await FinanceTransaction.findAll({
+        where: {
+          kind: 'expense',
+          nightReportId: reportId,
+        },
+        transaction,
+      });
       for (const photo of photos) {
         await removePhotoFromDisk(photo.storagePath).catch((error) => {
           logger.warn(`Failed to remove photo ${photo.id} from disk`, error);
+        });
+      }
+      for (const costTransaction of costTransactions) {
+        await FinanceTransaction.destroy({ where: { id: costTransaction.id }, transaction });
+        await recordFinanceAuditLog({
+          entity: 'finance_transaction',
+          entityId: costTransaction.id,
+          action: 'delete',
+          performedBy: actorId,
         });
       }
       await NightReportPhoto.destroy({ where: { reportId }, transaction });
@@ -1840,6 +2797,380 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
     }
     logger.error('Failed to generate venue payout summary', error);
     res.status(500).json([{ message: 'Failed to load venue payout summary' }]);
+  }
+};
+
+function parseNightReportCostPayload(body: Record<string, unknown>): NightReportCostPayload {
+  const date = typeof body.date === 'string' ? body.date.trim() : '';
+  if (!date || !dayjs(date).isValid()) {
+    throw new HttpError(400, 'Provide a valid cost date');
+  }
+
+  const accountId = Number(body.accountId);
+  if (!Number.isInteger(accountId) || accountId <= 0) {
+    throw new HttpError(400, 'Select a valid account');
+  }
+
+  const currency = typeof body.currency === 'string' ? body.currency.trim().toUpperCase() : '';
+  if (!currency || currency.length !== 3) {
+    throw new HttpError(400, 'Provide a valid currency');
+  }
+
+  const amountMinor = Number(body.amountMinor);
+  if (!Number.isFinite(amountMinor) || amountMinor <= 0) {
+    throw new HttpError(400, 'Provide a valid positive amount');
+  }
+
+  const categoryIdRaw = body.categoryId == null ? null : Number(body.categoryId);
+  if (categoryIdRaw != null && (!Number.isInteger(categoryIdRaw) || categoryIdRaw <= 0)) {
+    throw new HttpError(400, 'Select a valid category');
+  }
+
+  const counterpartyId = Number(body.counterpartyId);
+  if (!Number.isInteger(counterpartyId) || counterpartyId <= 0) {
+    throw new HttpError(400, 'Select a valid vendor');
+  }
+
+  const paymentMethod =
+    typeof body.paymentMethod === 'string' && body.paymentMethod.trim().length > 0
+      ? body.paymentMethod.trim()
+      : null;
+
+  const allowedStatuses = new Set(['planned', 'approved', 'awaiting_reimbursement', 'paid', 'reimbursed', 'void']);
+  const statusRaw = typeof body.status === 'string' ? body.status.trim() : '';
+  const status = allowedStatuses.has(statusRaw) ? (statusRaw as NightReportCostPayload['status']) : 'paid';
+
+  const description =
+    typeof body.description === 'string' && body.description.trim().length > 0
+      ? body.description.trim()
+      : null;
+
+  const invoiceFileIdRaw = body.invoiceFileId == null ? null : Number(body.invoiceFileId);
+  if (invoiceFileIdRaw != null && (!Number.isInteger(invoiceFileIdRaw) || invoiceFileIdRaw <= 0)) {
+    throw new HttpError(400, 'Invalid attached file');
+  }
+
+  return {
+    date,
+    accountId,
+    currency,
+    amountMinor: Math.round(amountMinor),
+    categoryId: categoryIdRaw,
+    counterpartyId,
+    paymentMethod,
+    status,
+    description,
+    invoiceFileId: invoiceFileIdRaw,
+  };
+}
+
+export const createNightReportCost = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const reportId = Number(req.params.id);
+    if (!Number.isInteger(reportId) || reportId <= 0) {
+      throw new HttpError(400, 'Invalid report id');
+    }
+
+    const report = await getNightReportById(reportId);
+    if (!report) {
+      res.status(404).json([{ message: 'Night report not found' }]);
+      return;
+    }
+
+    if (!canManageReport(report, actorId, req.authContext?.roleSlug)) {
+      throw new HttpError(403, 'You do not have permission to add costs to this report');
+    }
+
+    const payload = parseNightReportCostPayload((req.body ?? {}) as Record<string, unknown>);
+
+    if (payload.categoryId) {
+      const category = await FinanceCategory.findByPk(payload.categoryId);
+      if (!category || category.kind !== 'expense') {
+        throw new HttpError(400, 'Selected category must be an expense category');
+      }
+    }
+
+    if (payload.invoiceFileId) {
+      const fileExists = await FinanceFile.count({ where: { id: payload.invoiceFileId } });
+      if (!fileExists) {
+        throw new HttpError(400, 'Attached file was not found');
+      }
+    }
+
+    await createFinanceTransaction(
+      {
+        kind: 'expense',
+        date: payload.date,
+        accountId: payload.accountId,
+        currency: payload.currency,
+        amountMinor: payload.amountMinor,
+        categoryId: payload.categoryId,
+        counterpartyType: 'vendor',
+        counterpartyId: payload.counterpartyId,
+        paymentMethod: payload.paymentMethod ?? null,
+        status: payload.status ?? 'paid',
+        description: payload.description ?? null,
+        invoiceFileId: payload.invoiceFileId ?? null,
+        nightReportId: reportId,
+        productId: report.counter?.productId ?? null,
+        serviceDate: report.activityDate,
+        meta: {
+          source: 'night-report-cost',
+        },
+      },
+      actorId,
+    );
+
+    await NightReport.update(
+      {
+        noExtraCostConfirmed: false,
+        noExtraCostConfirmedBy: null,
+        noExtraCostConfirmedAt: null,
+        updatedBy: actorId,
+      },
+      { where: { id: reportId } },
+    );
+
+    const fresh = await getNightReportById(reportId);
+    if (!fresh) {
+      throw new HttpError(500, 'Failed to reload report');
+    }
+
+    res.status(201).json([await serializeNightReport(fresh, req)]);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to create night report cost', error);
+    res.status(500).json([{ message: 'Failed to create night report cost' }]);
+  }
+};
+
+export const getNightReportAvailableCosts = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const reportId = Number(req.params.id);
+    if (!Number.isInteger(reportId) || reportId <= 0) {
+      throw new HttpError(400, 'Invalid report id');
+    }
+
+    const report = await getNightReportById(reportId);
+    if (!report) {
+      res.status(404).json([{ message: 'Night report not found' }]);
+      return;
+    }
+
+    if (!canManageReport(report, actorId, req.authContext?.roleSlug)) {
+      throw new HttpError(403, 'You do not have permission to view available costs for this report');
+    }
+
+    const rows = await listLinkableNightReportCosts(report);
+    res.status(200).json(rows.map(serializeNightReportCost));
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to list available night report costs', error);
+    res.status(500).json([{ message: 'Failed to list available night report costs' }]);
+  }
+};
+
+export const linkNightReportCost = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const reportId = Number(req.params.id);
+    const transactionId = Number(req.params.transactionId);
+    if (!Number.isInteger(reportId) || reportId <= 0) {
+      throw new HttpError(400, 'Invalid report id');
+    }
+    if (!Number.isInteger(transactionId) || transactionId <= 0) {
+      throw new HttpError(400, 'Invalid transaction id');
+    }
+
+    const report = await getNightReportById(reportId);
+    if (!report) {
+      res.status(404).json([{ message: 'Night report not found' }]);
+      return;
+    }
+
+    if (!canManageReport(report, actorId, req.authContext?.roleSlug)) {
+      throw new HttpError(403, 'You do not have permission to link costs to this report');
+    }
+
+    const transaction = await FinanceTransaction.findByPk(transactionId);
+    if (!transaction || transaction.kind !== 'expense') {
+      res.status(404).json([{ message: 'Finance transaction not found' }]);
+      return;
+    }
+
+    if (transaction.nightReportId && transaction.nightReportId !== reportId) {
+      const sourceReport = await getNightReportById(transaction.nightReportId);
+      if (!sourceReport) {
+        throw new HttpError(409, 'This cost is linked to another night report that could not be loaded');
+      }
+      if (!canManageReport(sourceReport, actorId, req.authContext?.roleSlug)) {
+        throw new HttpError(403, 'You do not have permission to reassign this cost from its current night report');
+      }
+    }
+
+    await updateFinanceTransaction(
+      transactionId,
+      {
+        nightReportId: reportId,
+        productId: report.counter?.productId ?? transaction.productId ?? null,
+        serviceDate: report.activityDate,
+      },
+      actorId,
+    );
+
+    await NightReport.update(
+      {
+        noExtraCostConfirmed: false,
+        noExtraCostConfirmedBy: null,
+        noExtraCostConfirmedAt: null,
+        updatedBy: actorId,
+      },
+      { where: { id: reportId } },
+    );
+
+    const fresh = await getNightReportById(reportId);
+    if (!fresh) {
+      throw new HttpError(500, 'Failed to reload report');
+    }
+
+    res.status(200).json([await serializeNightReport(fresh, req)]);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to link night report cost', error);
+    res.status(500).json([{ message: 'Failed to link night report cost' }]);
+  }
+};
+
+export const unlinkNightReportCost = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const reportId = Number(req.params.id);
+    const transactionId = Number(req.params.transactionId);
+    if (!Number.isInteger(reportId) || reportId <= 0) {
+      throw new HttpError(400, 'Invalid report id');
+    }
+    if (!Number.isInteger(transactionId) || transactionId <= 0) {
+      throw new HttpError(400, 'Invalid transaction id');
+    }
+
+    const report = await getNightReportById(reportId);
+    if (!report) {
+      res.status(404).json([{ message: 'Night report not found' }]);
+      return;
+    }
+
+    if (!canManageReport(report, actorId, req.authContext?.roleSlug)) {
+      throw new HttpError(403, 'You do not have permission to unlink costs from this report');
+    }
+
+    const transaction = await FinanceTransaction.findOne({
+      where: {
+        id: transactionId,
+        kind: 'expense',
+        nightReportId: reportId,
+      },
+    });
+
+    if (!transaction) {
+      res.status(404).json([{ message: 'Night report cost not found' }]);
+      return;
+    }
+
+    if (resolveNightReportCostLinkOrigin(transaction) === 'created') {
+      throw new HttpError(400, 'Costs created from the night report must be deleted instead of unlinked');
+    }
+
+    await updateFinanceTransaction(
+      transactionId,
+      {
+        nightReportId: null,
+      },
+      actorId,
+    );
+
+    const fresh = await getNightReportById(reportId);
+    if (!fresh) {
+      throw new HttpError(500, 'Failed to reload report');
+    }
+
+    res.status(200).json([await serializeNightReport(fresh, req)]);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to unlink night report cost', error);
+    res.status(500).json([{ message: 'Failed to unlink night report cost' }]);
+  }
+};
+
+export const deleteNightReportCost = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const reportId = Number(req.params.id);
+    const transactionId = Number(req.params.transactionId);
+    if (!Number.isInteger(reportId) || reportId <= 0) {
+      throw new HttpError(400, 'Invalid report id');
+    }
+    if (!Number.isInteger(transactionId) || transactionId <= 0) {
+      throw new HttpError(400, 'Invalid transaction id');
+    }
+
+    const report = await getNightReportById(reportId);
+    if (!report) {
+      res.status(404).json([{ message: 'Night report not found' }]);
+      return;
+    }
+
+    if (!canManageReport(report, actorId, req.authContext?.roleSlug)) {
+      throw new HttpError(403, 'You do not have permission to delete costs from this report');
+    }
+
+    const transaction = await FinanceTransaction.findOne({
+      where: {
+        id: transactionId,
+        kind: 'expense',
+        nightReportId: reportId,
+      },
+    });
+
+    if (!transaction) {
+      res.status(404).json([{ message: 'Night report cost not found' }]);
+      return;
+    }
+
+    await FinanceTransaction.destroy({ where: { id: transactionId } });
+    await recordFinanceAuditLog({
+      entity: 'finance_transaction',
+      entityId: transactionId,
+      action: 'delete',
+      performedBy: actorId,
+    });
+
+    const fresh = await getNightReportById(reportId);
+    if (!fresh) {
+      throw new HttpError(500, 'Failed to reload report');
+    }
+
+    res.status(200).json([await serializeNightReport(fresh, req)]);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to delete night report cost', error);
+    res.status(500).json([{ message: 'Failed to delete night report cost' }]);
   }
 };
 

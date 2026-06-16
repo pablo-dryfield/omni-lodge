@@ -4257,7 +4257,7 @@ const ensureSummariesForUserIds = async (
   }
 
   const users = await User.findAll({
-    where: { id: { [Op.in]: missingIds }, status: true },
+    where: { id: { [Op.in]: missingIds } },
     attributes: ["id", "firstName", ...(includeLastName ? ["lastName"] : [])],
   });
 
@@ -6904,7 +6904,6 @@ const resolveAssignmentTargets = async (
     const users = await User.findAll({
       where: {
         id: { [Op.in]: Array.from(missingUserIds) },
-        status: true,
       },
       attributes: ["id", "firstName"],
     });
@@ -6930,7 +6929,7 @@ const fetchStaffTypeUserIds = async (
     return cache.get(staffType) ?? [];
   }
   const profiles = await StaffProfile.findAll({
-    where: { staffType, active: true },
+    where: { staffType },
     attributes: ["userId"],
   });
   const userIds = profiles.map((profile) => profile.userId);
@@ -6968,7 +6967,7 @@ const fetchUserTypeUserIds = async (
     return cache.get(userTypeId) ?? [];
   }
   const users = await User.findAll({
-    where: { userTypeId, status: true },
+    where: { userTypeId },
     attributes: ["id"],
   });
   const userIds = users.map((user) => user.id);
