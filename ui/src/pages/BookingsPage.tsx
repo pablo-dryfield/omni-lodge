@@ -1290,6 +1290,9 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     if (!modulePermissions.ready || !modulePermissions.canView) {
       return;
     }
+    if (activeTab !== "summary") {
+      return;
+    }
 
     const controller = new AbortController();
 
@@ -1326,10 +1329,13 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     return () => {
       controller.abort();
     };
-  }, [modulePermissions.ready, modulePermissions.canView]);
+  }, [modulePermissions.ready, modulePermissions.canView, activeTab]);
 
   useEffect(() => {
     if (!modulePermissions.ready || !modulePermissions.canView) {
+      return;
+    }
+    if (activeTab !== "calendar" && activeTab !== "summary") {
       return;
     }
 
@@ -1348,28 +1354,33 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       setCostsSummary(null);
 
       try {
-        const venueSummaryPromise = axiosInstance
-          .get("/venueNumbers/summary", {
-            params: {
-              period: "custom",
-              startDate: startIso,
-              endDate: endIso,
-            },
-            signal: controller.signal,
-            withCredentials: true,
-          })
-          .catch(() => null);
-        const paysSummaryPromise = axiosInstance
-          .get("/reports/getCommissionByDateRange", {
-            params: {
-              startDate: startIso,
-              endDate: endIso,
-              scope: "all",
-            },
-            signal: controller.signal,
-            withCredentials: true,
-          })
-          .catch(() => null);
+        const summaryTabActive = activeTab === "summary";
+        const venueSummaryPromise = summaryTabActive
+          ? axiosInstance
+              .get("/venueNumbers/summary", {
+                params: {
+                  period: "custom",
+                  startDate: startIso,
+                  endDate: endIso,
+                },
+                signal: controller.signal,
+                withCredentials: true,
+              })
+              .catch(() => null)
+          : Promise.resolve(null);
+        const paysSummaryPromise = summaryTabActive
+          ? axiosInstance
+              .get("/reports/getCommissionByDateRange", {
+                params: {
+                  startDate: startIso,
+                  endDate: endIso,
+                  scope: "all",
+                },
+                signal: controller.signal,
+                withCredentials: true,
+              })
+              .catch(() => null)
+          : Promise.resolve(null);
         const response = await axiosInstance.get("/bookings", {
           params: {
             pickupFrom: startIso,
@@ -1510,14 +1521,18 @@ const BookingsPage = ({ title }: GenericPageProps) => {
             ),
         );
         setCounterInsights(counterInsightsPayload as BookingCounterInsights | null);
-        setVenueCommissionTotals(venueTotalsPayload);
-        setVenueCommissionVenues(venueRowsPayload);
-        setCostsSummary({
-          currency: "PLN",
-          openBarPayouts: openBarPayoutsTotal,
-          staffPayments: staffPaymentsTotal,
-          miscellaneous: 3400,
-        });
+        setVenueCommissionTotals(summaryTabActive ? venueTotalsPayload : null);
+        setVenueCommissionVenues(summaryTabActive ? venueRowsPayload : null);
+        setCostsSummary(
+          summaryTabActive
+            ? {
+                currency: "PLN",
+                openBarPayouts: openBarPayoutsTotal,
+                staffPayments: staffPaymentsTotal,
+                miscellaneous: 3400,
+              }
+            : null,
+        );
         setFetchStatus("success");
       } catch (error) {
         if (controller.signal.aborted) {

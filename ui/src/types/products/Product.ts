@@ -8,4 +8,5 @@ export type Product = {
     createdBy: number;
     updatedBy: number;
     status: boolean;
+    requiresNightReportCostReconciliation: boolean;
 };

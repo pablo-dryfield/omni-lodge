@@ -8,6 +8,13 @@ import {
   updateNightReport,
   deleteNightReport,
   submitNightReport,
+  confirmNightReportNoExtraCost,
+  clearNightReportNoExtraCost,
+  getNightReportAvailableCosts,
+  createNightReportCost,
+  linkNightReportCost,
+  unlinkNightReportCost,
+  deleteNightReportCost,
   uploadNightReportPhoto,
   deleteNightReportPhoto,
   downloadNightReportPhoto,
@@ -33,6 +40,13 @@ router.get('/:id', authMiddleware, getNightReport);
 router.patch('/:id', authMiddleware, updateNightReport);
 router.delete('/:id', authMiddleware, deleteNightReport);
 router.post('/:id/submit', authMiddleware, submitNightReport);
+router.post('/:id/costs/no-extra-cost', authMiddleware, confirmNightReportNoExtraCost);
+router.delete('/:id/costs/no-extra-cost', authMiddleware, clearNightReportNoExtraCost);
+router.get('/:id/costs/available', authMiddleware, getNightReportAvailableCosts);
+router.post('/:id/costs', authMiddleware, createNightReportCost);
+router.post('/:id/costs/:transactionId/link', authMiddleware, linkNightReportCost);
+router.delete('/:id/costs/:transactionId/link', authMiddleware, unlinkNightReportCost);
+router.delete('/:id/costs/:transactionId', authMiddleware, deleteNightReportCost);
 router.post('/:id/photos', authMiddleware, upload.single('file'), uploadNightReportPhoto);
 router.delete('/:id/photos/:photoId', authMiddleware, deleteNightReportPhoto);
 router.get('/:id/photos/:photoId/download', authMiddleware, downloadNightReportPhoto);

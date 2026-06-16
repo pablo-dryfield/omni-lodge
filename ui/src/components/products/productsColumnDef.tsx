@@ -150,5 +150,27 @@ export const productsColumnDef = (
         Edit: ({ cell, row, table }) => <CustomEditSwitch cell={cell} row={row} table={table} />,
       },
     },
+    {
+      accessorKey: "requiresNightReportCostReconciliation",
+      modifications: {
+        id: "requiresNightReportCostReconciliation",
+        header: "Require Night Cost Reconciliation",
+        Header: ({ column }) => <div>{column.columnDef.header}</div>,
+        Cell: ({ cell }) => {
+          const label = resolveHeaderLabel(cell.column.columnDef.header);
+          return (
+            <Switch
+              checked={Boolean(cell.getValue<boolean>())}
+              onLabel="ON"
+              offLabel="OFF"
+              readOnly
+              label={label}
+              labelPosition="left"
+            />
+          );
+        },
+        Edit: ({ cell, row, table }) => <CustomEditSwitch cell={cell} row={row} table={table} />,
+      },
+    },
   ];
 };

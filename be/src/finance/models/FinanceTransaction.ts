@@ -12,6 +12,8 @@ import {
   Index,
 } from 'sequelize-typescript';
 import User from '../../models/User.js';
+import NightReport from '../../models/NightReport.js';
+import Product from '../../models/Product.js';
 import FinanceAccount from './FinanceAccount.js';
 import FinanceCategory from './FinanceCategory.js';
 import FinanceVendor from './FinanceVendor.js';
@@ -116,6 +118,29 @@ export default class FinanceTransaction extends Model {
   @AllowNull(true)
   @Column({ field: 'description', type: DataType.TEXT })
   declare description: string | null;
+
+  @Index('finance_transactions_night_report_id_idx')
+  @ForeignKey(() => NightReport)
+  @AllowNull(true)
+  @Column({ field: 'night_report_id', type: DataType.INTEGER })
+  declare nightReportId: number | null;
+
+  @BelongsTo(() => NightReport, 'nightReportId')
+  declare nightReport?: NightReport | null;
+
+  @Index('finance_transactions_product_id_idx')
+  @ForeignKey(() => Product)
+  @AllowNull(true)
+  @Column({ field: 'product_id', type: DataType.INTEGER })
+  declare productId: number | null;
+
+  @BelongsTo(() => Product, 'productId')
+  declare product?: Product | null;
+
+  @Index('finance_transactions_service_date_idx')
+  @AllowNull(true)
+  @Column({ field: 'service_date', type: DataType.DATEONLY })
+  declare serviceDate: string | null;
 
   @AllowNull(true)
   @Column({ field: 'tags', type: DataType.JSONB })

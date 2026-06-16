@@ -1,4 +1,7 @@
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Alert,
   Autocomplete,
   Box,
@@ -21,7 +24,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { ArrowBack, Add, Close, Delete, Edit, Save, Send, UploadFile, Visibility } from "@mui/icons-material";
+import { ArrowBack, Add, Close, Delete, Edit, ExpandMore, Save, Send, UploadFile, Visibility } from "@mui/icons-material";
 import dayjs from "dayjs";
 import { ChangeEvent, Fragment, SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -36,22 +39,43 @@ import {
   fetchNightReportById,
   submitNightReport,
   updateNightReport,
+  confirmNightReportNoExtraCost,
+  clearNightReportNoExtraCost,
+  createNightReportCost,
+  fetchNightReportAvailableCosts,
+  linkNightReportCost,
   uploadNightReportPhoto,
   deleteNightReportPhoto,
 } from "../../actions/nightReportActions";
 import { setCountersData } from "../../reducers/counterReducer";
+import { setFinanceBasics } from "../../reducers/financeReducer";
 import { setNightReportList } from "../../reducers/nightReportReducer";
 import { setVenuesData } from "../../reducers/venueReducer";
 import axiosInstance from "../../utils/axiosInstance";
 import { compressImageFile } from "../../utils/imageCompression";
 
-import type { NightReport, NightReportPhoto, NightReportSummary, NightReportVenueInput } from "../../types/nightReports/NightReport";
+import type {
+  NightReport,
+  NightReportLinkableCost,
+  NightReportPhoto,
+  NightReportSummary,
+  NightReportVenueInput,
+} from "../../types/nightReports/NightReport";
 import type { Counter } from "../../types/counters/Counter";
 import type { StaffOption } from "../../types/counters/CounterRegistry";
+import type { FinanceAccount } from "../../types/finance/Account";
+import type { FinanceCategory } from "../../types/finance/Category";
+import type { FinanceClient } from "../../types/finance/Client";
+import type { FinanceVendor } from "../../types/finance/Vendor";
 import type { ServerResponse } from "../../types/general/ServerResponse";
 import type { User } from "../../types/users/User";
 import type { Venue } from "../../types/venues/Venue";
 import { DID_NOT_OPERATE_NOTE } from "../../constants/nightReports";
+import {
+  selectFinanceAccounts,
+  selectFinanceCategories,
+  selectFinanceVendors,
+} from "../../selectors/financeSelectors";
 
 type EditableVenue = {
   tempKey: string;
@@ -73,6 +97,17 @@ type EditableReport = {
   venues: EditableVenue[];
 };
 
+type NightReportCostDraft = {
+  date: string;
+  accountId: string;
+  categoryId: string;
+  vendorId: string;
+  currency: string;
+  amount: string;
+  paymentMethod: string;
+  description: string;
+};
+
 const OPEN_BAR_INDEX = 0;
 const DATE_FORMAT = "YYYY-MM-DD";
 
@@ -87,6 +122,17 @@ const createEmptyVenue = (): EditableVenue => ({
   normalCount: "",
   cocktailsCount: "",
   brunchCount: "",
+});
+
+const createEmptyCostDraft = (activityDate?: string | null): NightReportCostDraft => ({
+  date: activityDate && dayjs(activityDate).isValid() ? dayjs(activityDate).format(DATE_FORMAT) : dayjs().format(DATE_FORMAT),
+  accountId: "",
+  categoryId: "",
+  vendorId: "",
+  currency: "PLN",
+  amount: "",
+  paymentMethod: "",
+  description: "",
 });
 
 const SELECT_OPEN_BAR_PLACEHOLDER = "Select Open Bar";
@@ -297,6 +343,9 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const nightReportUi = useAppSelector((state) => state.nightReports.ui);
   const countersState = useAppSelector((state) => state.counters[0]);
   const venuesState = useAppSelector((state) => state.venues[0]);
+  const financeAccounts = useAppSelector(selectFinanceAccounts);
+  const financeCategories = useAppSelector(selectFinanceCategories);
+  const financeVendors = useAppSelector(selectFinanceVendors);
 
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
   const [formState, setFormState] = useState<EditableReport>(() => toEditableReport(null));
@@ -325,6 +374,15 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [reportPage, setReportPage] = useState<number>(1);
   const [reportPageSize, setReportPageSize] = useState<number>(10);
+  const [costModalOpen, setCostModalOpen] = useState(false);
+  const [linkCostModalOpen, setLinkCostModalOpen] = useState(false);
+  const [costDraft, setCostDraft] = useState<NightReportCostDraft>(() => createEmptyCostDraft());
+  const [costSubmitting, setCostSubmitting] = useState(false);
+  const [costDialogError, setCostDialogError] = useState<string | null>(null);
+  const [availableCostsLoading, setAvailableCostsLoading] = useState(false);
+  const [availableCostsError, setAvailableCostsError] = useState<string | null>(null);
+  const [availableCosts, setAvailableCosts] = useState<NightReportLinkableCost[]>([]);
+  const [selectedAvailableCost, setSelectedAvailableCost] = useState<NightReportLinkableCost | null>(null);
 
   const requestedCounterId = useMemo(() => {
     const raw = searchParams.get("counterId");
@@ -443,6 +501,34 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     () => counters.find((counter) => counter.id === formState.counterId),
     [counters, formState.counterId],
   );
+  const financeAccountOptions = useMemo(
+    () =>
+      financeAccounts.data
+        .filter((account) => (account.isActive ?? true) && (account.type === "cash" || account.type === "bank"))
+        .map((account: FinanceAccount) => ({
+          value: String(account.id),
+          label: `${account.name} (${account.currency})`,
+        })),
+    [financeAccounts.data],
+  );
+  const financeExpenseCategoryOptions = useMemo(
+    () =>
+      financeCategories.data
+        .filter((category: FinanceCategory) => category.kind === "expense")
+        .map((category) => ({
+          value: String(category.id),
+          label: category.name,
+        })),
+    [financeCategories.data],
+  );
+  const financeVendorOptions = useMemo(
+    () =>
+      financeVendors.data.map((vendor: FinanceVendor) => ({
+        value: String(vendor.id),
+        label: vendor.name,
+      })),
+    [financeVendors.data],
+  );
   const openBarMode = useMemo(
     () => resolveOpenBarMode(currentCounter?.product?.name),
     [currentCounter?.product?.name],
@@ -482,6 +568,87 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     });
   }, [formState.venues, openBarMode, selectedReportId, didNotOperate, detailReportId]);
   const photos = useMemo(() => nightReportDetail.data?.photos ?? [], [nightReportDetail.data?.photos]);
+  const costs = useMemo(() => nightReportDetail.data?.costs ?? [], [nightReportDetail.data?.costs]);
+  const costReconciliation = nightReportDetail.data?.costReconciliation ?? null;
+  const totalCostsAmountMinor = useMemo(
+    () => costs.reduce((sum, cost) => sum + (Number.isFinite(cost.amountMinor) ? cost.amountMinor : 0), 0),
+    [costs],
+  );
+  const openBarPayoutSummary = useMemo(() => {
+    const openBarVenue = (nightReportDetail.data?.venues ?? []).find(
+      (venue) =>
+        venue.isOpenBar === true &&
+        venue.compensationType === "open_bar" &&
+        venue.payoutAmount != null &&
+        Number.isFinite(Number(venue.payoutAmount)),
+    );
+    if (!openBarVenue) {
+      return null;
+    }
+    return {
+      venueName: openBarVenue.venueName || "Open Bar",
+      payoutAmount: Number(openBarVenue.payoutAmount),
+      currencyCode: openBarVenue.currencyCode ?? "PLN",
+      rateApplied:
+        openBarVenue.rateApplied != null && Number.isFinite(Number(openBarVenue.rateApplied))
+          ? Number(openBarVenue.rateApplied)
+          : null,
+      rateUnit: openBarVenue.rateUnit ?? null,
+    };
+  }, [nightReportDetail.data?.venues]);
+  const fallbackFinanceSummary = useMemo(() => {
+    const venues = nightReportDetail.data?.venues ?? [];
+    const revenueEntries = venues.filter(
+      (venue) =>
+        venue.compensationDirection === "receivable" &&
+        venue.payoutAmount != null &&
+        Number.isFinite(Number(venue.payoutAmount)),
+    );
+
+    const revenueAmount = revenueEntries.reduce((sum, venue) => sum + Number(venue.payoutAmount ?? 0), 0);
+    const revenueCurrency =
+      revenueEntries.find((venue) => (venue.currencyCode ?? "").trim())?.currencyCode ??
+      openBarPayoutSummary?.currencyCode ??
+      "PLN";
+
+    const openBarCostAmount = openBarPayoutSummary?.payoutAmount ?? 0;
+    const linkedCostAmount = totalCostsAmountMinor / 100;
+    const totalCostAmount = linkedCostAmount + openBarCostAmount;
+    const costCurrency = openBarPayoutSummary?.currencyCode ?? revenueCurrency ?? "PLN";
+
+    return {
+      revenueAmount,
+      revenueCurrency,
+      openBarCostAmount,
+      revenueItems: [],
+      linkedCostAmount,
+      staffPayoutAmount: 0,
+      totalCostAmount,
+      costCurrency,
+      earningsAmount: revenueAmount - totalCostAmount,
+      costItems: [],
+      earningsCurrency: revenueCurrency,
+    };
+  }, [nightReportDetail.data?.venues, openBarPayoutSummary, totalCostsAmountMinor]);
+  const financeSummary = nightReportDetail.data?.financeSummary ?? fallbackFinanceSummary;
+  const formatLinkableCostLabel = useCallback((cost: NightReportLinkableCost) => {
+    const segments = [
+      dayjs(cost.date).format("MMM D, YYYY"),
+      `${(cost.amountMinor / 100).toFixed(2)} ${cost.currency}`,
+      cost.vendorName || "No vendor",
+      cost.description?.trim() || "No description",
+    ];
+    if (cost.productName) {
+      segments.push(cost.productName);
+    }
+    if (cost.serviceDate) {
+      segments.push(`service ${dayjs(cost.serviceDate).format("MMM D, YYYY")}`);
+    }
+    if (cost.linkedReport) {
+      segments.push(`linked to report #${cost.linkedReport.id}`);
+    }
+    return segments.join(" ? ");
+  }, []);
   const photoLimitReached = photos.length >= 1;
   const limitedPhotos = useMemo(() => photos.slice(0, 1), [photos]);
   const leaderOptions = useMemo(() => {
@@ -527,6 +694,12 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
         counters: Array<{ data: Partial<Counter>[]; columns: unknown[] }>;
         venues: Array<{ data: Venue[]; columns: unknown[] }>;
         nightReports: Array<{ data: NightReportSummary[]; columns: unknown[] }>;
+        finance: {
+          accounts: FinanceAccount[];
+          categories: FinanceCategory[];
+          vendors: FinanceVendor[];
+          clients: FinanceClient[];
+        };
         managers: StaffOption[];
       }>("/venueNumbers/bootstrap", {
         params: { tab: "entries" },
@@ -541,6 +714,16 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       }
       if (payload?.nightReports) {
         dispatch(setNightReportList(payload.nightReports as ServerResponse<NightReportSummary>));
+      }
+      if (payload?.finance) {
+        dispatch(
+          setFinanceBasics({
+            accounts: payload.finance.accounts ?? [],
+            categories: payload.finance.categories ?? [],
+            vendors: payload.finance.vendors ?? [],
+            clients: payload.finance.clients ?? [],
+          }),
+        );
       }
       setManagerOptions(payload?.managers ?? []);
     } catch (error) {
@@ -1365,6 +1548,479 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     [readOnly, didNotOperate, formState.leaderId, selectedLeaderOption],
   );
 
+  const openCostModal = () => {
+    const activityDate = nightReportDetail.data?.activityDate ?? formState.activityDate;
+    setCostDraft(createEmptyCostDraft(activityDate));
+    setCostDialogError(null);
+    setCostModalOpen(true);
+  };
+
+  const openLinkCostModal = async () => {
+    if (!selectedReportId) {
+      setValidationError("Select a report first.");
+      return;
+    }
+    setAvailableCostsLoading(true);
+    setAvailableCostsError(null);
+    setSelectedAvailableCost(null);
+    setLinkCostModalOpen(true);
+    try {
+      const rows = await dispatch(fetchNightReportAvailableCosts(selectedReportId)).unwrap();
+      setAvailableCosts(rows);
+    } catch (error) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "Failed to load available costs.";
+      setAvailableCostsError(message);
+      setAvailableCosts([]);
+    } finally {
+      setAvailableCostsLoading(false);
+    }
+  };
+
+  const handleCreateCost = async () => {
+    if (!selectedReportId) {
+      setValidationError("Select a report first.");
+      return;
+    }
+    if (!costDraft.accountId || !costDraft.categoryId || !costDraft.vendorId) {
+      setCostDialogError("Account, category, and vendor are required.");
+      return;
+    }
+    const amountValue = Number(costDraft.amount);
+    if (!Number.isFinite(amountValue) || amountValue <= 0) {
+      setCostDialogError("Enter a valid positive amount.");
+      return;
+    }
+    setCostDialogError(null);
+    setCostSubmitting(true);
+    try {
+      await dispatch(
+        createNightReportCost({
+          reportId: selectedReportId,
+          payload: {
+            date: costDraft.date,
+            accountId: Number(costDraft.accountId),
+            categoryId: Number(costDraft.categoryId),
+            counterpartyId: Number(costDraft.vendorId),
+            currency: costDraft.currency.trim().toUpperCase(),
+            amountMinor: Math.round(amountValue * 100),
+            paymentMethod: costDraft.paymentMethod.trim() || null,
+            status: "paid",
+            description: costDraft.description.trim() || null,
+          },
+        }),
+      ).unwrap();
+      setCostModalOpen(false);
+      setCostDraft(createEmptyCostDraft(nightReportDetail.data?.activityDate ?? formState.activityDate));
+    } catch (error) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "Failed to create cost.";
+      setCostDialogError(message);
+    } finally {
+      setCostSubmitting(false);
+    }
+  };
+
+  const handleLinkExistingCost = async () => {
+    if (!selectedReportId || !selectedAvailableCost) {
+      return;
+    }
+    setAvailableCostsError(null);
+    setCostSubmitting(true);
+    try {
+      await dispatch(
+        linkNightReportCost({
+          reportId: selectedReportId,
+          transactionId: selectedAvailableCost.id,
+        }),
+      ).unwrap();
+      setLinkCostModalOpen(false);
+      setAvailableCosts([]);
+      setSelectedAvailableCost(null);
+    } catch (error) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "Failed to link existing cost.";
+      setAvailableCostsError(message);
+    } finally {
+      setCostSubmitting(false);
+    }
+  };
+
+  const handleConfirmNoExtraCost = async () => {
+    if (!selectedReportId) {
+      return;
+    }
+    try {
+      await dispatch(confirmNightReportNoExtraCost(selectedReportId)).unwrap();
+    } catch (error) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "Failed to confirm no extra cost.";
+      setValidationError(message);
+    }
+  };
+
+  const handleClearNoExtraCost = async () => {
+    if (!selectedReportId) {
+      return;
+    }
+    try {
+      await dispatch(clearNightReportNoExtraCost(selectedReportId)).unwrap();
+    } catch (error) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "Failed to clear no extra cost confirmation.";
+      setValidationError(message);
+    }
+  };
+
+  const renderCostReconciliationPanel = () => {
+    if (!costReconciliation || !costReconciliation.required) {
+      return null;
+    }
+    const resolutionCopy =
+      costReconciliation.resolution === "linked_costs"
+        ? `Resolved by ${costReconciliation.linkedCostCount} linked cost${costReconciliation.linkedCostCount === 1 ? "" : "s"}.`
+        : costReconciliation.resolution === "no_extra_cost_confirmed"
+          ? `Resolved by explicit no extra cost confirmation${costReconciliation.noExtraCostConfirmedBy?.fullName ? ` from ${costReconciliation.noExtraCostConfirmedBy.fullName}` : ""}.`
+          : "This product requires cost reconciliation before submission.";
+    const severity: "warning" | "success" = costReconciliation.resolution === "unresolved" ? "warning" : "success";
+    return (
+      <Alert
+        severity={severity}
+        action={
+          costReconciliation.noExtraCostConfirmed ? (
+            <Button size="small" variant="outlined" onClick={handleClearNoExtraCost}>
+              Clear No Extra Cost
+            </Button>
+          ) : (
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={handleConfirmNoExtraCost}
+              disabled={costReconciliation.linkedCostCount > 0}
+            >
+              Confirm No Extra Cost
+            </Button>
+          )
+        }
+      >
+        <Stack spacing={0.5}>
+          <Typography variant="body2" fontWeight={600}>
+            Cost Reconciliation
+          </Typography>
+          <Typography variant="body2">{resolutionCopy}</Typography>
+        </Stack>
+      </Alert>
+    );
+  };
+
+  const renderFinanceSummaryTiles = () => {
+    const linkedCostItems = financeSummary.costItems.filter((item) => item.kind === "linked_cost");
+    const openBarItems = financeSummary.costItems.filter((item) => item.kind === "open_bar");
+    const staffPayoutItems = financeSummary.costItems.filter((item) => item.kind === "staff_payout");
+    const openBarTotal = openBarItems.reduce((sum, item) => sum + item.amount, 0);
+    const staffPayoutTotal = staffPayoutItems.reduce((sum, item) => sum + item.amount, 0);
+    const bookingRevenueTotal = financeSummary.revenueItems.reduce((sum, item) => sum + item.amount, 0);
+
+    const venueCommissionItems = (nightReportDetail.data?.venues ?? [])
+      .filter(
+        (venue) =>
+          venue.compensationType === "commission" &&
+          venue.compensationDirection === "receivable" &&
+          venue.payoutAmount != null &&
+          Number.isFinite(Number(venue.payoutAmount)),
+      )
+      .map((venue, index) => ({
+        id: `venue-commission-${venue.id ?? index}`,
+        label: venue.venueName || `Venue ${index + 1}`,
+        subtitle: [
+          venue.rateApplied != null
+            ? `Rate ${formatCurrencyLabel(Number(venue.rateApplied), venue.currencyCode ?? financeSummary.revenueCurrency)}${venue.rateUnit === "per_person" ? "/person" : venue.rateUnit === "flat" ? " flat" : ""}`
+            : null,
+          typeof venue.totalPeople === "number" ? `${venue.totalPeople} people` : null,
+        ]
+          .filter(Boolean)
+          .join(" • "),
+        amount: Number(venue.payoutAmount),
+        currency: (venue.currencyCode ?? financeSummary.revenueCurrency).toUpperCase(),
+      }));
+    const venueCommissionTotal = venueCommissionItems.reduce((sum, item) => sum + item.amount, 0);
+    const revenueDisplayTotal = Number((bookingRevenueTotal + venueCommissionTotal).toFixed(2));
+    const earningsDisplayTotal = Number((revenueDisplayTotal - financeSummary.totalCostAmount).toFixed(2));
+
+    return (
+      <Grid container spacing={1.5}>
+        <Grid size={{ xs: 12, md: 4 }}>
+          <Card variant="outlined">
+            <CardContent sx={{ display: "flex", flexDirection: "column", gap: 0.75 }}>
+              <Typography variant="overline" color="text.secondary" textAlign="center">
+                Costs
+              </Typography>
+              <Typography variant="h6" fontWeight={700} textAlign="center">
+                {formatCurrencyLabel(financeSummary.totalCostAmount, financeSummary.costCurrency)}
+              </Typography>
+              {linkedCostItems.length > 0 ? (
+                <Accordion
+                  disableGutters
+                  elevation={0}
+                  sx={{ mt: 0.5, border: 1, borderColor: "divider", borderRadius: 1, "&:before": { display: "none" } }}
+                >
+                  <AccordionSummary
+                    expandIcon={<ExpandMore />}
+                    sx={{ px: 1.5, minHeight: 44, "& .MuiAccordionSummary-content": { my: 0.75 } }}
+                  >
+                    <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center" width="100%">
+                      <Typography variant="body2" fontWeight={700}>
+                        Linked Costs
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" textAlign="center">
+                        {linkedCostItems.length} item{linkedCostItems.length === 1 ? "" : "s"} • {formatCurrencyLabel(financeSummary.linkedCostAmount, financeSummary.costCurrency)}
+                      </Typography>
+                    </Stack>
+                  </AccordionSummary>
+                  <AccordionDetails sx={{ pt: 0, px: 1.5, pb: 1.5 }}>
+                    <Stack spacing={0.75}>
+                      {linkedCostItems.map((item) => (
+                        <Stack key={item.id} direction="row" spacing={1} justifyContent="space-between" alignItems="flex-start">
+                          <Box sx={{ minWidth: 0, flex: 1 }}>
+                            <Typography variant="body2" fontWeight={600} noWrap>
+                              {item.label}
+                            </Typography>
+                            {item.subtitle ? (
+                              <Typography variant="caption" color="text.secondary">
+                                {item.subtitle}
+                              </Typography>
+                            ) : null}
+                          </Box>
+                          <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
+                            {formatCurrencyLabel(item.amount, item.currency)}
+                          </Typography>
+                        </Stack>
+                      ))}
+                    </Stack>
+                  </AccordionDetails>
+                </Accordion>
+              ) : null}
+              {openBarItems.length > 0 ? (
+                <Accordion
+                  disableGutters
+                  elevation={0}
+                  sx={{ mt: 0.5, border: 1, borderColor: "divider", borderRadius: 1, "&:before": { display: "none" } }}
+                >
+                  <AccordionSummary
+                    expandIcon={<ExpandMore />}
+                    sx={{ px: 1.5, minHeight: 44, "& .MuiAccordionSummary-content": { my: 0.75 } }}
+                  >
+                    <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center" width="100%">
+                      <Typography variant="body2" fontWeight={700}>
+                        Open Bar
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" textAlign="center">
+                        {openBarItems.length} item{openBarItems.length === 1 ? "" : "s"} • {formatCurrencyLabel(openBarTotal, financeSummary.costCurrency)}
+                      </Typography>
+                    </Stack>
+                  </AccordionSummary>
+                  <AccordionDetails sx={{ pt: 0, px: 1.5, pb: 1.5 }}>
+                    <Stack spacing={0.75}>
+                      {openBarItems.map((item) => (
+                        <Stack key={item.id} direction="row" spacing={1} justifyContent="space-between" alignItems="flex-start">
+                          <Box sx={{ minWidth: 0, flex: 1 }}>
+                            <Typography variant="body2" fontWeight={600} noWrap>
+                              {item.label}
+                            </Typography>
+                            {item.subtitle ? (
+                              <Typography variant="caption" color="text.secondary">
+                                {item.subtitle}
+                              </Typography>
+                            ) : null}
+                          </Box>
+                          <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
+                            {formatCurrencyLabel(item.amount, item.currency)}
+                          </Typography>
+                        </Stack>
+                      ))}
+                    </Stack>
+                  </AccordionDetails>
+                </Accordion>
+              ) : null}
+              {staffPayoutItems.length > 0 ? (
+                <Accordion
+                  disableGutters
+                  elevation={0}
+                  sx={{ mt: 0.5, border: 1, borderColor: "divider", borderRadius: 1, "&:before": { display: "none" } }}
+                >
+                  <AccordionSummary
+                    expandIcon={<ExpandMore />}
+                    sx={{ px: 1.5, minHeight: 44, "& .MuiAccordionSummary-content": { my: 0.75 } }}
+                  >
+                    <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center" width="100%">
+                      <Typography variant="body2" fontWeight={700}>
+                        Staff Payments
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" textAlign="center">
+                        {staffPayoutItems.length} item{staffPayoutItems.length === 1 ? "" : "s"} • {formatCurrencyLabel(staffPayoutTotal, financeSummary.costCurrency)}
+                      </Typography>
+                    </Stack>
+                  </AccordionSummary>
+                  <AccordionDetails sx={{ pt: 0, px: 1.5, pb: 1.5 }}>
+                    <Stack spacing={0.75}>
+                      {staffPayoutItems.map((item) => (
+                        <Stack key={item.id} direction="row" spacing={1} justifyContent="space-between" alignItems="flex-start">
+                          <Box sx={{ minWidth: 0, flex: 1 }}>
+                            <Typography variant="body2" fontWeight={600} noWrap>
+                              {item.label}
+                            </Typography>
+                            {item.subtitle ? (
+                              <Typography variant="caption" color="text.secondary">
+                                {item.subtitle}
+                              </Typography>
+                            ) : null}
+                          </Box>
+                          <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
+                            {formatCurrencyLabel(item.amount, item.currency)}
+                          </Typography>
+                        </Stack>
+                      ))}
+                    </Stack>
+                  </AccordionDetails>
+                </Accordion>
+              ) : null}
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid size={{ xs: 12, md: 4 }}>
+          <Card variant="outlined">
+            <CardContent sx={{ display: "flex", flexDirection: "column", gap: 0.75 }}>
+              <Typography variant="overline" color="text.secondary" textAlign="center">
+                Revenue
+              </Typography>
+              <Typography variant="h6" fontWeight={700} textAlign="center">
+                {formatCurrencyLabel(revenueDisplayTotal, financeSummary.revenueCurrency)}
+              </Typography>
+              {financeSummary.revenueItems.length > 0 ? (
+                <Accordion
+                  disableGutters
+                  elevation={0}
+                  sx={{ mt: 0.5, border: 1, borderColor: "divider", borderRadius: 1, "&:before": { display: "none" } }}
+                >
+                  <AccordionSummary
+                    expandIcon={<ExpandMore />}
+                    sx={{ px: 1.5, minHeight: 44, "& .MuiAccordionSummary-content": { my: 0.75 } }}
+                  >
+                    <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center" width="100%">
+                      <Typography variant="body2" fontWeight={700}>
+                        Bookings
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" textAlign="center">
+                        {financeSummary.revenueItems.length} booking{financeSummary.revenueItems.length === 1 ? "" : "s"} • {formatCurrencyLabel(bookingRevenueTotal, financeSummary.revenueCurrency)}
+                      </Typography>
+                    </Stack>
+                  </AccordionSummary>
+                  <AccordionDetails sx={{ pt: 0, px: 1.5, pb: 1.5 }}>
+                    <Stack spacing={0.75}>
+                      {financeSummary.revenueItems.map((item) => (
+                        <Stack key={item.id} direction="row" spacing={1} justifyContent="space-between" alignItems="flex-start">
+                          <Box sx={{ minWidth: 0, flex: 1 }}>
+                            <Typography variant="body2" fontWeight={600} noWrap>
+                              {item.label}
+                            </Typography>
+                            {item.subtitle ? (
+                              <Typography variant="caption" color="text.secondary">
+                                {item.subtitle}
+                              </Typography>
+                            ) : null}
+                          </Box>
+                          <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
+                            {formatCurrencyLabel(item.amount, item.currency)}
+                          </Typography>
+                        </Stack>
+                      ))}
+                    </Stack>
+                  </AccordionDetails>
+                </Accordion>
+              ) : null}
+              {venueCommissionItems.length > 0 ? (
+                <Accordion
+                  disableGutters
+                  elevation={0}
+                  sx={{ mt: 0.5, border: 1, borderColor: "divider", borderRadius: 1, "&:before": { display: "none" } }}
+                >
+                  <AccordionSummary
+                    expandIcon={<ExpandMore />}
+                    sx={{ px: 1.5, minHeight: 44, "& .MuiAccordionSummary-content": { my: 0.75 } }}
+                  >
+                    <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center" width="100%">
+                      <Typography variant="body2" fontWeight={700}>
+                        Venue Commission
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" textAlign="center">
+                        {venueCommissionItems.length} venue{venueCommissionItems.length === 1 ? "" : "s"} • {formatCurrencyLabel(venueCommissionTotal, financeSummary.revenueCurrency)}
+                      </Typography>
+                    </Stack>
+                  </AccordionSummary>
+                  <AccordionDetails sx={{ pt: 0, px: 1.5, pb: 1.5 }}>
+                    <Stack spacing={0.75}>
+                      {venueCommissionItems.map((item) => (
+                        <Stack key={item.id} direction="row" spacing={1} justifyContent="space-between" alignItems="flex-start">
+                          <Box sx={{ minWidth: 0, flex: 1 }}>
+                            <Typography variant="body2" fontWeight={600} noWrap>
+                              {item.label}
+                            </Typography>
+                            {item.subtitle ? (
+                              <Typography variant="caption" color="text.secondary">
+                                {item.subtitle}
+                              </Typography>
+                            ) : null}
+                          </Box>
+                          <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
+                            {formatCurrencyLabel(item.amount, item.currency)}
+                          </Typography>
+                        </Stack>
+                      ))}
+                    </Stack>
+                  </AccordionDetails>
+                </Accordion>
+              ) : null}
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid size={{ xs: 12, md: 4 }}>
+          <Card variant="outlined">
+            <CardContent sx={{ display: "flex", flexDirection: "column", gap: 0.75 }}>
+              <Typography variant="overline" color="text.secondary" textAlign="center">
+                Earnings
+              </Typography>
+              <Typography variant="h6" fontWeight={700} textAlign="center">
+                {formatCurrencyLabel(earningsDisplayTotal, financeSummary.earningsCurrency)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Revenue minus costs
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
+    );
+  };
   const renderReportDetails = () => {
     if (readOnly) {
       type DisplayVenue = {
@@ -1837,7 +2493,21 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
         </Card>
       );
 
-      const sections: JSX.Element[] = [overviewCard, readOnlyVenuesSection, readOnlyPhotosSection];
+      const financeSummarySection =
+        financeSummary.revenueAmount > 0 || financeSummary.totalCostAmount > 0 || financeSummary.earningsAmount !== 0 ? (
+          <Card variant="outlined" key="finance-summary">
+            <CardContent sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <Typography variant="h6" textAlign="center">Finance Summary</Typography>
+              {renderFinanceSummaryTiles()}
+            </CardContent>
+          </Card>
+        ) : null;
+
+      const sections: JSX.Element[] = [overviewCard, readOnlyVenuesSection];
+      if (financeSummarySection) {
+        sections.push(financeSummarySection);
+      }
+      sections.push(readOnlyPhotosSection);
 
       if (hasStandaloneNotes) {
         sections.push(
@@ -2298,9 +2968,30 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       </Card>
     );
 
+    const financeSection = (
+      <Card variant="outlined">
+        <CardContent sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <Typography variant="h6" textAlign="center">
+            Finance Summary
+          </Typography>
+          <Stack direction="row" spacing={1} flexWrap="wrap" justifyContent="center">
+            <Button variant="outlined" size="small" onClick={openCostModal} disabled={!selectedReportId || costSubmitting}>
+              Add Cost
+            </Button>
+            <Button variant="outlined" size="small" onClick={openLinkCostModal} disabled={!selectedReportId || costSubmitting}>
+              Link Existing Cost
+            </Button>
+          </Stack>
+          {renderCostReconciliationPanel()}
+          {renderFinanceSummaryTiles()}
+        </CardContent>
+      </Card>
+    );
+
     return (
       <Stack spacing={3}>
         {venuesSection}
+        {financeSection}
         {photosSection}
         {notesSection}
       </Stack>
@@ -2691,9 +3382,156 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
         </Stack>
         <DialogContent dividers sx={{ p: { xs: 2, sm: 3 } }}>{detailContent}</DialogContent>
       </Dialog>
+      <Dialog open={costModalOpen} onClose={() => (!costSubmitting ? setCostModalOpen(false) : undefined)} fullWidth maxWidth="sm">
+        <DialogContent>
+          <Stack spacing={2} pt={1}>
+            <Typography variant="h6">Add Cost</Typography>
+            {costDialogError ? <Alert severity="warning">{costDialogError}</Alert> : null}
+            <TextField
+              label="Date"
+              type="date"
+              value={costDraft.date}
+              onChange={(event) => setCostDraft((prev) => ({ ...prev, date: event.target.value }))}
+              InputLabelProps={{ shrink: true }}
+              fullWidth
+            />
+            <TextField
+              select
+              label="Account"
+              value={costDraft.accountId}
+              onChange={(event) => setCostDraft((prev) => ({ ...prev, accountId: event.target.value }))}
+              fullWidth
+              required
+            >
+              {financeAccountOptions.map((option) => (
+                <MenuItem key={option.value} value={option.value}>
+                  {option.label}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              select
+              label="Category"
+              value={costDraft.categoryId}
+              onChange={(event) => setCostDraft((prev) => ({ ...prev, categoryId: event.target.value }))}
+              fullWidth
+              required
+            >
+              {financeExpenseCategoryOptions.map((option) => (
+                <MenuItem key={option.value} value={option.value}>
+                  {option.label}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              select
+              label="Vendor"
+              value={costDraft.vendorId}
+              onChange={(event) => setCostDraft((prev) => ({ ...prev, vendorId: event.target.value }))}
+              fullWidth
+              required
+            >
+              {financeVendorOptions.map((option) => (
+                <MenuItem key={option.value} value={option.value}>
+                  {option.label}
+                </MenuItem>
+              ))}
+            </TextField>
+            <Grid container spacing={2}>
+              <Grid size={{ xs: 12, sm: 4 }}>
+                <TextField
+                  label="Currency"
+                  value={costDraft.currency}
+                  onChange={(event) => setCostDraft((prev) => ({ ...prev, currency: event.target.value.toUpperCase() }))}
+                  fullWidth
+                />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 8 }}>
+                <TextField
+                  label="Amount"
+                  type="number"
+                  inputProps={{ min: 0, step: "0.01" }}
+                  value={costDraft.amount}
+                  onChange={(event) => setCostDraft((prev) => ({ ...prev, amount: event.target.value }))}
+                  fullWidth
+                  required
+                />
+              </Grid>
+            </Grid>
+            <TextField
+              label="Payment Method"
+              value={costDraft.paymentMethod}
+              onChange={(event) => setCostDraft((prev) => ({ ...prev, paymentMethod: event.target.value }))}
+              fullWidth
+            />
+            <TextField
+              label="Description"
+              value={costDraft.description}
+              onChange={(event) => setCostDraft((prev) => ({ ...prev, description: event.target.value }))}
+              multiline
+              minRows={2}
+              fullWidth
+            />
+            <Stack direction="row" spacing={1} justifyContent="flex-end">
+              <Button onClick={() => setCostModalOpen(false)} disabled={costSubmitting}>
+                Cancel
+              </Button>
+              <Button variant="contained" onClick={handleCreateCost} disabled={costSubmitting}>
+                Create Cost
+              </Button>
+            </Stack>
+          </Stack>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={linkCostModalOpen} onClose={() => (!costSubmitting ? setLinkCostModalOpen(false) : undefined)} fullWidth maxWidth="md">
+        <DialogContent>
+          <Stack spacing={2} pt={1}>
+            <Typography variant="h6">Link Existing Cost</Typography>
+            {availableCostsError ? <Alert severity="warning">{availableCostsError}</Alert> : null}
+            {availableCostsLoading ? (
+              <Stack alignItems="center" py={2}>
+                <CircularProgress size={28} />
+              </Stack>
+            ) : availableCosts.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                No available costs found.
+              </Typography>
+            ) : (
+              <Autocomplete<NightReportLinkableCost>
+                options={availableCosts}
+                value={selectedAvailableCost}
+                onChange={(_, value) => setSelectedAvailableCost(value)}
+                getOptionLabel={formatLinkableCostLabel}
+                isOptionEqualToValue={(option, value) => option.id === value.id}
+                renderOption={(props, option) => (
+                  <li {...props} key={option.id}>
+                    {formatLinkableCostLabel(option)}
+                  </li>
+                )}
+                renderInput={(params) => <TextField {...params} label="Available Costs" fullWidth />}
+                fullWidth
+              />
+            )}
+            <Stack direction="row" spacing={1} justifyContent="flex-end">
+              <Button onClick={() => setLinkCostModalOpen(false)} disabled={costSubmitting}>
+                Cancel
+              </Button>
+              <Button
+                variant="contained"
+                onClick={handleLinkExistingCost}
+                disabled={costSubmitting || availableCostsLoading || !selectedAvailableCost}
+              >
+                Link Cost
+              </Button>
+            </Stack>
+          </Stack>
+        </DialogContent>
+      </Dialog>
       <NightReportPhotoPreviewDialog preview={activePhotoPreview} onClose={handleClosePhotoPreview} />
     </>
   );
 };
 
 export default VenueNumbersList;
+
+

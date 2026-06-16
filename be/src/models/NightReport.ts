@@ -56,6 +56,20 @@ export default class NightReport extends Model {
   @Column({ field: 'submitted_at', type: DataType.DATE })
   declare submittedAt: Date | null;
 
+  @AllowNull(false)
+  @Default(false)
+  @Column({ field: 'no_extra_cost_confirmed', type: DataType.BOOLEAN })
+  declare noExtraCostConfirmed: boolean;
+
+  @ForeignKey(() => User)
+  @AllowNull(true)
+  @Column({ field: 'no_extra_cost_confirmed_by', type: DataType.INTEGER })
+  declare noExtraCostConfirmedBy: number | null;
+
+  @AllowNull(true)
+  @Column({ field: 'no_extra_cost_confirmed_at', type: DataType.DATE })
+  declare noExtraCostConfirmedAt: Date | null;
+
   @ForeignKey(() => User)
   @AllowNull(true)
   @Column({ field: 'reassigned_by_id', type: DataType.INTEGER })
@@ -86,6 +100,9 @@ export default class NightReport extends Model {
 
   @BelongsTo(() => User, { foreignKey: 'reassignedById', as: 'reassignedBy' })
   declare reassignedBy?: User | null;
+
+  @BelongsTo(() => User, { foreignKey: 'noExtraCostConfirmedBy', as: 'noExtraCostConfirmer' })
+  declare noExtraCostConfirmer?: User | null;
   @HasMany(() => NightReportVenue, { foreignKey: 'reportId', as: 'venues', onDelete: 'CASCADE' })
   declare venues?: NightReportVenue[];
 

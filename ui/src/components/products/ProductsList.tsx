@@ -32,6 +32,13 @@ const coerceProductPayload = (payload: Partial<Product>) => {
     next.status = Boolean(next.status);
   }
 
+  if (
+    next.requiresNightReportCostReconciliation !== undefined &&
+    next.requiresNightReportCostReconciliation !== null
+  ) {
+    next.requiresNightReportCostReconciliation = Boolean(next.requiresNightReportCostReconciliation);
+  }
+
   return next;
 };
 

@@ -22,6 +22,9 @@ export type FinanceTransactionInput = {
   paymentMethod?: string | null;
   status?: FinanceTransactionStatus;
   description?: string | null;
+  nightReportId?: number | null;
+  productId?: number | null;
+  serviceDate?: string | null;
   tags?: Record<string, unknown> | null;
   meta?: Record<string, unknown> | null;
   invoiceFileId?: number | null;
@@ -102,6 +105,9 @@ export async function createFinanceTransaction(
       paymentMethod: data.paymentMethod ?? null,
       status: data.status ?? 'planned',
       description: data.description ?? null,
+      nightReportId: data.nightReportId ?? null,
+      productId: data.productId ?? null,
+      serviceDate: data.serviceDate ?? null,
       tags: data.tags ?? null,
       meta,
       invoiceFileId: data.invoiceFileId ?? null,
@@ -168,6 +174,9 @@ export async function updateFinanceTransaction(
     ...('paymentMethod' in changes ? { paymentMethod: changes.paymentMethod ?? null } : {}),
     ...('status' in changes ? { status: changes.status } : {}),
     ...('description' in changes ? { description: changes.description ?? null } : {}),
+    ...('nightReportId' in changes ? { nightReportId: changes.nightReportId ?? null } : {}),
+    ...('productId' in changes ? { productId: changes.productId ?? null } : {}),
+    ...('serviceDate' in changes ? { serviceDate: changes.serviceDate ?? null } : {}),
     ...('tags' in changes ? { tags: changes.tags ?? null } : {}),
     ...('meta' in changes ? { meta: ensureMeta(changes.meta) } : {}),
     ...('invoiceFileId' in changes ? { invoiceFileId: changes.invoiceFileId ?? null } : {}),
@@ -279,4 +288,3 @@ export async function createFinanceTransfer(
     return { debit, credit };
   });
 }
-
