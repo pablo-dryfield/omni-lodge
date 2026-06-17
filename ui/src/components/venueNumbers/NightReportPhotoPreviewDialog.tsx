@@ -40,6 +40,8 @@ const NightReportPhotoPreviewDialog = ({ preview, onClose }: Props) => {
 
   const zoomInDisabled = photoZoom >= MAX_ZOOM - 0.001;
   const zoomOutDisabled = photoZoom <= MIN_ZOOM + 0.001;
+  const isPdfPreview = (preview?.mimeType ?? "").toLowerCase().includes("pdf");
+  const isImagePreview = !isPdfPreview;
 
   const handleZoomIn = useCallback(() => {
     setPhotoZoom((prev) => clampZoom(prev + 0.1));
@@ -93,7 +95,7 @@ const NightReportPhotoPreviewDialog = ({ preview, onClose }: Props) => {
           </Box>
           <IconButton
             onClick={onClose}
-            aria-label="Close photo preview"
+            aria-label="Close file preview"
             sx={{
               color: "common.white",
               bgcolor: "rgba(255,255,255,0.1)",
@@ -113,22 +115,46 @@ const NightReportPhotoPreviewDialog = ({ preview, onClose }: Props) => {
             px: { xs: 2, md: 6 },
             pb: 6,
           }}
-          onWheel={handlePhotoWheelZoom}
+          onWheel={isImagePreview ? handlePhotoWheelZoom : undefined}
         >
-          <Box
-            component="img"
-            src={preview.src}
-            alt={preview.name}
-            sx={{
-              maxWidth: "100%",
-              maxHeight: "100%",
-              objectFit: "contain",
-              transform: `scale(${photoZoom})`,
-              transformOrigin: "center",
-              transition: "transform 120ms ease",
-              userSelect: "none",
-            }}
-          />
+          {isPdfPreview ? (
+            <Box
+              sx={{
+                width: "100%",
+                height: "100%",
+                minHeight: 480,
+                bgcolor: "common.white",
+                borderRadius: 1,
+                overflow: "hidden",
+              }}
+            >
+              <Box
+                component="iframe"
+                src={preview.src}
+                title={preview.name}
+                sx={{
+                  width: "100%",
+                  height: "100%",
+                  border: 0,
+                }}
+              />
+            </Box>
+          ) : (
+            <Box
+              component="img"
+              src={preview.src}
+              alt={preview.name}
+              sx={{
+                maxWidth: "100%",
+                maxHeight: "100%",
+                objectFit: "contain",
+                transform: `scale(${photoZoom})`,
+                transformOrigin: "center",
+                transition: "transform 120ms ease",
+                userSelect: "none",
+              }}
+            />
+          )}
         </Box>
         <Stack
           direction={{ xs: "column", sm: "row" }}
@@ -137,46 +163,50 @@ const NightReportPhotoPreviewDialog = ({ preview, onClose }: Props) => {
           justifyContent="space-between"
           sx={{ px: { xs: 2, md: 4 }, pb: { xs: 3, md: 4 } }}
         >
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Tooltip title="Zoom out">
-              <span>
-                <IconButton
-                  onClick={handleZoomOut}
-                  aria-label="Zoom out"
-                  disabled={zoomOutDisabled}
-                  sx={{
-                    color: "common.white",
-                    bgcolor: "rgba(255,255,255,0.1)",
-                    "&:hover": { bgcolor: "rgba(255,255,255,0.2)" },
-                  }}
-                >
-                  <ZoomOut />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Typography variant="body2" fontWeight={600}>
-              {Math.round(photoZoom * 100)}%
-            </Typography>
-            <Tooltip title="Zoom in">
-              <span>
-                <IconButton
-                  onClick={handleZoomIn}
-                  aria-label="Zoom in"
-                  disabled={zoomInDisabled}
-                  sx={{
-                    color: "common.white",
-                    bgcolor: "rgba(255,255,255,0.1)",
-                    "&:hover": { bgcolor: "rgba(255,255,255,0.2)" },
-                  }}
-                >
-                  <ZoomIn />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Button variant="text" color="inherit" onClick={handleZoomReset}>
-              Reset
-            </Button>
-          </Stack>
+          {isImagePreview ? (
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Tooltip title="Zoom out">
+                <span>
+                  <IconButton
+                    onClick={handleZoomOut}
+                    aria-label="Zoom out"
+                    disabled={zoomOutDisabled}
+                    sx={{
+                      color: "common.white",
+                      bgcolor: "rgba(255,255,255,0.1)",
+                      "&:hover": { bgcolor: "rgba(255,255,255,0.2)" },
+                    }}
+                  >
+                    <ZoomOut />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Typography variant="body2" fontWeight={600}>
+                {Math.round(photoZoom * 100)}%
+              </Typography>
+              <Tooltip title="Zoom in">
+                <span>
+                  <IconButton
+                    onClick={handleZoomIn}
+                    aria-label="Zoom in"
+                    disabled={zoomInDisabled}
+                    sx={{
+                      color: "common.white",
+                      bgcolor: "rgba(255,255,255,0.1)",
+                      "&:hover": { bgcolor: "rgba(255,255,255,0.2)" },
+                    }}
+                  >
+                    <ZoomIn />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Button variant="text" color="inherit" onClick={handleZoomReset}>
+                Reset
+              </Button>
+            </Stack>
+          ) : (
+            <Box />
+          )}
           {preview.downloadHref && (
             <Button
               variant="contained"

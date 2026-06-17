@@ -18,4 +18,5 @@ export type NightReportPhotoPreview = {
   name: string;
   capturedAt: string | null;
   downloadHref?: string;
+  mimeType?: string | null;
 };
