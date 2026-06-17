@@ -37,6 +37,7 @@ const buildTableColumns = (model: { getAttributes: () => Record<string, { type: 
 const NIGHT_REPORT_COLUMNS: TableColumn[] = [
   { header: 'ID', accessorKey: 'id', type: 'number' },
   { header: 'Date', accessorKey: 'activityDate', type: 'date' },
+  { header: 'Product', accessorKey: 'productName', type: 'text' },
   { header: 'Leader', accessorKey: 'leaderName', type: 'text' },
   { header: 'Status', accessorKey: 'status', type: 'text' },
   { header: 'Total Venues', accessorKey: 'venuesCount', type: 'number' },
@@ -53,6 +54,8 @@ const buildNightReportSummaryRow = (report: NightReport) => {
   return {
     id: report.id,
     activityDate: report.activityDate,
+    productName: report.counter?.product?.name ?? null,
+    requiresCostReconciliation: report.counter?.product?.requiresNightReportCostReconciliation ?? false,
     leaderName,
     status: report.status,
     venuesCount: venues.length,
@@ -141,6 +144,12 @@ export const getVenueNumbersEntriesBootstrap = async (
         include: [
           { model: User, as: 'leader', attributes: ['id', 'firstName', 'lastName'] },
           { model: NightReportVenue, as: 'venues', attributes: ['id', 'orderIndex', 'totalPeople', 'isOpenBar'] },
+          {
+            model: Counter,
+            as: 'counter',
+            attributes: ['id', 'productId'],
+            include: [{ model: Product, as: 'product', attributes: ['id', 'name', 'requiresNightReportCostReconciliation'] }],
+          },
         ],
         order: [
           ['activityDate', 'DESC'],

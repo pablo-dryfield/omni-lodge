@@ -342,8 +342,7 @@ const formatNightReportOptionLabel = (report: NightReportSummary): string => {
   const segments = [
     dayjs(report.activityDate).format("MMM D, YYYY"),
     report.productName?.trim() || null,
-    report.leaderName?.trim() ? `Leader: ${report.leaderName.trim()}` : null,
-    report.status ? report.status.charAt(0).toUpperCase() + report.status.slice(1) : null,
+    report.leaderName?.trim() || null,
   ].filter(Boolean);
   return segments.join(" • ");
 };
