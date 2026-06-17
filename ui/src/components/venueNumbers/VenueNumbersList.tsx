@@ -15,6 +15,7 @@ import {
   Divider,
   Grid,
   IconButton,
+  LinearProgress,
   List,
   ListItem,
   MenuItem,
@@ -44,9 +45,11 @@ import {
   createNightReportCost,
   fetchNightReportAvailableCosts,
   linkNightReportCost,
+  deleteNightReportCost,
   uploadNightReportPhoto,
   deleteNightReportPhoto,
 } from "../../actions/nightReportActions";
+import { uploadFinanceFile } from "../../actions/financeActions";
 import { setCountersData } from "../../reducers/counterReducer";
 import { setFinanceBasics } from "../../reducers/financeReducer";
 import { setNightReportList } from "../../reducers/nightReportReducer";
@@ -106,6 +109,8 @@ type NightReportCostDraft = {
   amount: string;
   paymentMethod: string;
   description: string;
+  invoiceFileId: number | null;
+  invoiceFileName: string;
 };
 
 const OPEN_BAR_INDEX = 0;
@@ -133,6 +138,8 @@ const createEmptyCostDraft = (activityDate?: string | null): NightReportCostDraf
   amount: "",
   paymentMethod: "",
   description: "",
+  invoiceFileId: null,
+  invoiceFileName: "",
 });
 
 const SELECT_OPEN_BAR_PLACEHOLDER = "Select Open Bar";
@@ -331,6 +338,26 @@ const formatUserFullName = (user: Partial<User> | StaffOption | undefined): stri
   return `${first} ${last}`.trim() || fallback;
 };
 
+const formatNightReportOptionLabel = (report: NightReportSummary): string => {
+  const segments = [
+    dayjs(report.activityDate).format("MMM D, YYYY"),
+    report.productName?.trim() || null,
+    report.leaderName?.trim() ? `Leader: ${report.leaderName.trim()}` : null,
+    report.status ? report.status.charAt(0).toUpperCase() + report.status.slice(1) : null,
+  ].filter(Boolean);
+  return segments.join(" • ");
+};
+
+const resolveErrorMessage = (error: unknown, fallback: string): string => {
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return fallback;
+};
+
 const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
@@ -376,13 +403,19 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const [reportPageSize, setReportPageSize] = useState<number>(10);
   const [costModalOpen, setCostModalOpen] = useState(false);
   const [linkCostModalOpen, setLinkCostModalOpen] = useState(false);
+  const [moveCostModalOpen, setMoveCostModalOpen] = useState(false);
   const [costDraft, setCostDraft] = useState<NightReportCostDraft>(() => createEmptyCostDraft());
   const [costSubmitting, setCostSubmitting] = useState(false);
   const [costDialogError, setCostDialogError] = useState<string | null>(null);
+  const [costUploadBusy, setCostUploadBusy] = useState(false);
+  const [costUploadProgress, setCostUploadProgress] = useState(0);
+  const [costUploadError, setCostUploadError] = useState<string | null>(null);
   const [availableCostsLoading, setAvailableCostsLoading] = useState(false);
   const [availableCostsError, setAvailableCostsError] = useState<string | null>(null);
   const [availableCosts, setAvailableCosts] = useState<NightReportLinkableCost[]>([]);
   const [selectedAvailableCost, setSelectedAvailableCost] = useState<NightReportLinkableCost | null>(null);
+  const [selectedMoveCostId, setSelectedMoveCostId] = useState<number | null>(null);
+  const [selectedMoveTargetReport, setSelectedMoveTargetReport] = useState<NightReportSummary | null>(null);
 
   const requestedCounterId = useMemo(() => {
     const raw = searchParams.get("counterId");
@@ -464,6 +497,10 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const reports = useMemo(
     () => (nightReportListState.data[0]?.data as NightReportSummary[] | undefined) ?? [],
     [nightReportListState.data],
+  );
+  const moveCostTargetReports = useMemo(
+    () => reports.filter((report) => report.id !== selectedReportId),
+    [reports, selectedReportId],
   );
   const totalReports = reports.length;
   const totalReportPages = useMemo(
@@ -1552,6 +1589,8 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     const activityDate = nightReportDetail.data?.activityDate ?? formState.activityDate;
     setCostDraft(createEmptyCostDraft(activityDate));
     setCostDialogError(null);
+    setCostUploadError(null);
+    setCostUploadProgress(0);
     setCostModalOpen(true);
   };
 
@@ -1579,6 +1618,85 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     } finally {
       setAvailableCostsLoading(false);
     }
+  };
+
+  const handleCostInvoiceSelected = async (file: File | null) => {
+    if (!file) {
+      return;
+    }
+
+    setCostUploadBusy(true);
+    setCostUploadProgress(0);
+    setCostUploadError(null);
+
+    let preparedFile = file;
+    if (file.type?.startsWith("image/")) {
+      try {
+        preparedFile = await compressImageFile(file, {
+          maxWidth: 1600,
+          maxHeight: 1600,
+          quality: 0.8,
+          maxSizeBytes: 700 * 1024,
+        });
+      } catch (compressionError) {
+        console.error("Failed to compress invoice before upload", compressionError);
+      }
+    }
+
+    const formData = new FormData();
+    formData.append("file", preparedFile);
+
+    try {
+      const result = await dispatch(
+        uploadFinanceFile({
+          formData,
+          onUploadProgress: (percent) => setCostUploadProgress(percent),
+        }),
+      );
+      if (uploadFinanceFile.fulfilled.match(result)) {
+        setCostDraft((prev) => ({
+          ...prev,
+          invoiceFileId: result.payload.id,
+          invoiceFileName: result.payload.originalName,
+        }));
+        return;
+      }
+      setCostUploadError(result.error.message ?? "Failed to upload invoice.");
+    } catch (error) {
+      setCostUploadError(resolveErrorMessage(error, "Failed to upload invoice."));
+    } finally {
+      setCostUploadBusy(false);
+      setCostUploadProgress(0);
+    }
+  };
+
+  const openCostInvoicePicker = (options?: { capture?: boolean }) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = options?.capture ? "image/*" : "image/*,application/pdf";
+    input.style.position = "fixed";
+    input.style.left = "-9999px";
+    input.style.top = "-9999px";
+    if (options?.capture) {
+      input.setAttribute("capture", "environment");
+    }
+
+    const cleanup = () => {
+      input.removeEventListener("change", handleChange);
+      if (input.parentNode) {
+        input.parentNode.removeChild(input);
+      }
+    };
+
+    const handleChange = () => {
+      const nextFile = input.files?.[0] ?? null;
+      void handleCostInvoiceSelected(nextFile);
+      cleanup();
+    };
+
+    input.addEventListener("change", handleChange, { once: true });
+    document.body.appendChild(input);
+    input.click();
   };
 
   const handleCreateCost = async () => {
@@ -1611,6 +1729,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
             paymentMethod: costDraft.paymentMethod.trim() || null,
             status: "paid",
             description: costDraft.description.trim() || null,
+            invoiceFileId: costDraft.invoiceFileId,
           },
         }),
       ).unwrap();
@@ -1653,6 +1772,80 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
             ? error.message
             : "Failed to link existing cost.";
       setAvailableCostsError(message);
+    } finally {
+      setCostSubmitting(false);
+    }
+  };
+
+  const openMoveCostModal = (transactionId: number) => {
+    setSelectedMoveCostId(transactionId);
+    setSelectedMoveTargetReport(null);
+    setCostDialogError(null);
+    setMoveCostModalOpen(true);
+  };
+
+  const handleMoveCost = async () => {
+    if (!selectedReportId) {
+      setValidationError("Select a report first.");
+      return;
+    }
+    if (!selectedMoveCostId || !selectedMoveTargetReport) {
+      setCostDialogError("Select the target night report.");
+      return;
+    }
+    setCostDialogError(null);
+    setValidationError(null);
+    setCostSubmitting(true);
+    try {
+      await axiosInstance.post(
+        `/nightReports/${selectedMoveTargetReport.id}/costs/${selectedMoveCostId}/link`,
+        null,
+        { withCredentials: true },
+      );
+      setMoveCostModalOpen(false);
+      setSelectedMoveCostId(null);
+      setSelectedMoveTargetReport(null);
+      await dispatch(fetchNightReportById(selectedReportId));
+      await dispatch(fetchNightReports());
+    } catch (error) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "Failed to move cost.";
+      setCostDialogError(message);
+    } finally {
+      setCostSubmitting(false);
+    }
+  };
+
+  const handleDeleteCost = async (transactionId: number) => {
+    if (!selectedReportId) {
+      setValidationError("Select a report first.");
+      return;
+    }
+    const confirmed = window.confirm("Delete this cost permanently?");
+    if (!confirmed) {
+      return;
+    }
+    setValidationError(null);
+    setCostSubmitting(true);
+    try {
+      await dispatch(
+        deleteNightReportCost({
+          reportId: selectedReportId,
+          transactionId,
+        }),
+      ).unwrap();
+    } catch (error) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "Failed to delete cost.";
+      setValidationError(message);
     } finally {
       setCostSubmitting(false);
     }
@@ -1734,7 +1927,21 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   };
 
   const renderFinanceSummaryTiles = () => {
-    const linkedCostItems = financeSummary.costItems.filter((item) => item.kind === "linked_cost");
+    const linkedCostItems = costs.map((cost) => ({
+      id: cost.id,
+      linkOrigin: cost.linkOrigin,
+      label: cost.description?.trim() || "Night report cost",
+      subtitle: [
+        dayjs(cost.date).format("MMM D, YYYY"),
+        cost.vendorName,
+        cost.categoryName,
+        cost.paymentMethod,
+      ]
+        .filter(Boolean)
+        .join(" • "),
+      amount: Number((cost.amountMinor ?? 0) / 100),
+      currency: (cost.currency ?? financeSummary.costCurrency).trim().toUpperCase(),
+    }));
     const openBarItems = financeSummary.costItems.filter((item) => item.kind === "open_bar");
     const staffPayoutItems = financeSummary.costItems.filter((item) => item.kind === "staff_payout");
     const openBarTotal = openBarItems.reduce((sum, item) => sum + item.amount, 0);
@@ -1811,9 +2018,33 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                               </Typography>
                             ) : null}
                           </Box>
-                          <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
-                            {formatCurrencyLabel(item.amount, item.currency)}
-                          </Typography>
+                          <Stack spacing={0.5} alignItems="flex-end">
+                            <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
+                              {formatCurrencyLabel(item.amount, item.currency)}
+                            </Typography>
+                            {!readOnly ? (
+                              <Stack direction="row" spacing={0.5}>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  color="primary"
+                                  disabled={costSubmitting || moveCostTargetReports.length === 0}
+                                  onClick={() => openMoveCostModal(item.id)}
+                                >
+                                  Move
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  color="error"
+                                  disabled={costSubmitting}
+                                  onClick={() => handleDeleteCost(item.id)}
+                                >
+                                  Delete
+                                </Button>
+                              </Stack>
+                            ) : null}
+                          </Stack>
                         </Stack>
                       ))}
                     </Stack>
@@ -3472,11 +3703,61 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
               minRows={2}
               fullWidth
             />
+            <Stack spacing={1}>
+              <Typography variant="subtitle2" fontWeight={600}>
+                Invoice / Receipt
+              </Typography>
+              {costUploadError ? <Alert severity="warning">{costUploadError}</Alert> : null}
+              {costUploadBusy ? <LinearProgress variant="determinate" value={costUploadProgress} /> : null}
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                <Button
+                  variant="outlined"
+                  startIcon={<UploadFile fontSize="small" />}
+                  onClick={() => openCostInvoicePicker()}
+                  disabled={costSubmitting || costUploadBusy}
+                >
+                  Upload Invoice
+                </Button>
+                <Button
+                  variant="outlined"
+                  startIcon={<UploadFile fontSize="small" />}
+                  onClick={() => openCostInvoicePicker({ capture: true })}
+                  disabled={costSubmitting || costUploadBusy}
+                >
+                  Take Photo
+                </Button>
+                {costDraft.invoiceFileId ? (
+                  <Button
+                    variant="text"
+                    color="inherit"
+                    onClick={() =>
+                      setCostDraft((prev) => ({
+                        ...prev,
+                        invoiceFileId: null,
+                        invoiceFileName: "",
+                      }))
+                    }
+                    disabled={costSubmitting || costUploadBusy}
+                  >
+                    Remove File
+                  </Button>
+                ) : null}
+              </Stack>
+              {costDraft.invoiceFileId ? (
+                <Typography variant="caption" color="text.secondary">
+                  Attached: {costDraft.invoiceFileName || `File #${costDraft.invoiceFileId}`}
+                </Typography>
+              ) : (
+                <Typography variant="caption" color="text.secondary">
+                  Optional. Upload a PDF/image or take a photo directly from the device camera.
+                </Typography>
+              )}
+            </Stack>
             <Stack direction="row" spacing={1} justifyContent="flex-end">
               <Button onClick={() => setCostModalOpen(false)} disabled={costSubmitting}>
                 Cancel
               </Button>
-              <Button variant="contained" onClick={handleCreateCost} disabled={costSubmitting}>
+              <Button variant="contained" onClick={handleCreateCost} disabled={costSubmitting || costUploadBusy}>
                 Create Cost
               </Button>
             </Stack>
@@ -3522,6 +3803,59 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                 disabled={costSubmitting || availableCostsLoading || !selectedAvailableCost}
               >
                 Link Cost
+              </Button>
+            </Stack>
+          </Stack>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={moveCostModalOpen}
+        onClose={() => (!costSubmitting ? setMoveCostModalOpen(false) : undefined)}
+        fullWidth
+        maxWidth="md"
+      >
+        <DialogContent>
+          <Stack spacing={2} pt={1}>
+            <Typography variant="h6">Move Cost</Typography>
+            {costDialogError ? <Alert severity="warning">{costDialogError}</Alert> : null}
+            {moveCostTargetReports.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                No other night reports are available as move targets.
+              </Typography>
+            ) : (
+              <Autocomplete<NightReportSummary>
+                options={moveCostTargetReports}
+                value={selectedMoveTargetReport}
+                onChange={(_, value) => setSelectedMoveTargetReport(value)}
+                getOptionLabel={formatNightReportOptionLabel}
+                isOptionEqualToValue={(option, value) => option.id === value.id}
+                renderOption={(props, option) => (
+                  <li {...props} key={option.id}>
+                    {formatNightReportOptionLabel(option)}
+                  </li>
+                )}
+                renderInput={(params) => <TextField {...params} label="Target Night Report" fullWidth />}
+                fullWidth
+              />
+            )}
+            <Stack direction="row" spacing={1} justifyContent="flex-end">
+              <Button
+                onClick={() => {
+                  setMoveCostModalOpen(false);
+                  setSelectedMoveCostId(null);
+                  setSelectedMoveTargetReport(null);
+                  setCostDialogError(null);
+                }}
+                disabled={costSubmitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="contained"
+                onClick={handleMoveCost}
+                disabled={costSubmitting || !selectedMoveTargetReport || !selectedMoveCostId}
+              >
+                Move Cost
               </Button>
             </Stack>
           </Stack>

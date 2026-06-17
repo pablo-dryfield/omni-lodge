@@ -26,6 +26,7 @@ import {
   TextInput,
   Switch,
   SegmentedControl,
+  Checkbox,
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
 import dayjs, { Dayjs } from 'dayjs';
@@ -36,6 +37,7 @@ import {
   type PlatformGuestTierBreakdown,
   type LockedComponentSummary,
   type PayReimbursementEntry,
+  type PayRecordedEntry,
 } from '../types/pays/Pay';
 import type { CompensationComponent } from '../types/compensation/CompensationComponent';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
@@ -44,8 +46,6 @@ import {
   fetchFinanceAccounts,
   fetchFinanceCategories,
   fetchFinanceVendors,
-  createFinanceTransaction,
-  updateFinanceTransaction,
 } from '../actions/financeActions';
 import { fetchCompensationComponents } from '../actions/compensationComponentActions';
 import { useModuleAccess } from '../hooks/useModuleAccess';
@@ -85,8 +85,6 @@ const formatCurrency = (value: number | undefined, currencyCode?: string): strin
   }
   return `${numberPart} zł`;
 };
-
-const toMinorUnits = (value: number): number => Math.round(value * 100);
 
 const computePreviousRange = (start: Dayjs, end: Dayjs) => {
   const diffDays = end.startOf('day').diff(start.startOf('day'), 'day');
@@ -468,6 +466,12 @@ type EntryModalState = {
   reimbursementCategoryId: string;
 };
 
+type PaidEntriesModalState = {
+  open: boolean;
+  staff: Pay | null;
+  selectedIds: number[];
+};
+
 const createEmptyEntryModalState = (): EntryModalState => ({
   open: false,
   staff: null,
@@ -488,6 +492,12 @@ const createEmptyEntryModalState = (): EntryModalState => ({
   reimbursementEntries: [],
   reimbursementsAwaitingAmount: 0,
   reimbursementCategoryId: '',
+});
+
+const createEmptyPaidEntriesModalState = (): PaidEntriesModalState => ({
+  open: false,
+  staff: null,
+  selectedIds: [],
 });
 
 const PAYMENT_BUCKET_METADATA: Record<
@@ -1070,6 +1080,60 @@ const ReimbursementEntriesTable = ({
   return table;
 };
 
+const PaidEntriesTable = ({
+  entries,
+  selectedIds,
+  onToggle,
+}: {
+  entries: PayRecordedEntry[];
+  selectedIds: number[];
+  onToggle: (entryId: number, checked: boolean) => void;
+}) => (
+  <Table striped highlightOnHover withColumnBorders>
+    <thead>
+      <tr>
+        <th style={{ width: 56, textAlign: 'center' }}>Select</th>
+        <th>Date</th>
+        <th>Component</th>
+        <th>Amount</th>
+        <th>Note</th>
+      </tr>
+    </thead>
+    <tbody>
+      {entries.map((entry) => (
+        <tr key={entry.id}>
+          <td style={{ textAlign: 'center' }}>
+            <Checkbox
+              checked={selectedIds.includes(entry.id)}
+              disabled={!entry.canDelete}
+              onChange={(event) => onToggle(entry.id, event.currentTarget.checked)}
+            />
+          </td>
+          <td>{dayjs(entry.date).format('MMM D, YYYY')}</td>
+          <td>
+            <Stack gap={0}>
+              <Text size="sm" fw={600}>
+                {entry.label}
+              </Text>
+              {entry.financeTransactionId ? (
+                <Text size="xs" c="dimmed">
+                  Finance TX #{entry.financeTransactionId}
+                </Text>
+              ) : null}
+            </Stack>
+          </td>
+          <td>{formatCurrency(entry.amount, entry.currency)}</td>
+          <td>
+            <Text size="sm" c={entry.note ? undefined : 'dimmed'}>
+              {entry.note || 'No note'}
+            </Text>
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </Table>
+);
+
 const renderReimbursements = (staff: Pay) => {
   const reimbursements = staff.reimbursements;
   if (!reimbursements || reimbursements.entries.length === 0) {
@@ -1382,8 +1446,11 @@ const Pays: React.FC = () => {
   ]);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
   const [entryModal, setEntryModal] = useState<EntryModalState>(createEmptyEntryModalState());
+  const [paidEntriesModal, setPaidEntriesModal] = useState<PaidEntriesModalState>(createEmptyPaidEntriesModalState());
   const [entryMessage, setEntryMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [entrySubmitting, setEntrySubmitting] = useState(false);
+  const [paidEntriesSubmitting, setPaidEntriesSubmitting] = useState(false);
+  const [paidEntriesMessage, setPaidEntriesMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [actionAlert, setActionAlert] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [baseOverridePending, setBaseOverridePending] = useState<Set<number>>(new Set());
   const friendlyError = error ? humanizeErrorMessage(error) : null;
@@ -1536,6 +1603,24 @@ const resolveStaffCounterpartyDefaults = useCallback(
   const canRecordPayments = isCanonicalRange;
   const canRecordStaffPayments = canRecordPayments && canViewFull;
 
+  const refetchPaysForRange = useCallback(
+    async (rangeStartOverride?: string, rangeEndOverride?: string) => {
+      const refetchStart = rangeStartOverride ?? startDate?.format('YYYY-MM-DD');
+      const refetchEnd = rangeEndOverride ?? endDate?.format('YYYY-MM-DD');
+      if (!refetchStart || !refetchEnd) {
+        return;
+      }
+      await dispatch(
+        fetchPays({
+          startDate: refetchStart,
+          endDate: refetchEnd,
+          scope: scopeParam,
+        }),
+      );
+    },
+    [dispatch, endDate, scopeParam, startDate],
+  );
+
   const handleCounterpartyChange = useCallback(
     (value: string | null) => {
       setEntryModal((prev) => {
@@ -1592,17 +1677,9 @@ const resolveStaffCounterpartyDefaults = useCallback(
           periodStart,
           baseOverrideApproved: true,
         });
-        const refetchStart =
-          startDate?.format('YYYY-MM-DD') ?? staff.range?.startDate ?? periodStart;
-        const refetchEnd =
-          endDate?.format('YYYY-MM-DD') ?? staff.range?.endDate ?? periodStart;
-        await dispatch(
-          fetchPays({
-            startDate: refetchStart,
-            endDate: refetchEnd,
-            scope: scopeParam,
-          }),
-        );
+        const refetchStart = startDate?.format('YYYY-MM-DD') ?? staff.range?.startDate ?? periodStart;
+        const refetchEnd = endDate?.format('YYYY-MM-DD') ?? staff.range?.endDate ?? periodStart;
+        await refetchPaysForRange(refetchStart, refetchEnd);
         setActionAlert({
           type: 'success',
           text: `Approved extra base days for ${staff.firstName ?? 'this staff member'}.`,
@@ -1617,7 +1694,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
         updateBaseOverridePending(staff.userId, false);
       }
     },
-    [dispatch, endDate, scopeParam, startDate, updateBaseOverridePending],
+    [endDate, refetchPaysForRange, startDate, updateBaseOverridePending],
   );
 
 
@@ -1769,8 +1846,53 @@ const resolveStaffCounterpartyDefaults = useCallback(
     ],
   );
 
+  const openPaidEntriesModal = useCallback(
+    (staff: Pay) => {
+      if (!canRecordPayments) {
+        setPaidEntriesMessage({
+          type: 'error',
+          text: 'Switch to a full-month range before adjusting recorded payouts.',
+        });
+        return;
+      }
+      if (!canViewFull) {
+        setPaidEntriesMessage({
+          type: 'error',
+          text: 'You do not have permission to adjust recorded payouts for this view.',
+        });
+        return;
+      }
+      const availableEntries = (staff.paidEntries ?? []).filter((entry) => entry.canDelete);
+      setPaidEntriesModal({
+        open: true,
+        staff,
+        selectedIds: availableEntries.map((entry) => entry.id),
+      });
+      setPaidEntriesMessage(null);
+    },
+    [canRecordPayments, canViewFull],
+  );
+
+  const closePaidEntriesModal = useCallback(() => {
+    setPaidEntriesModal(createEmptyPaidEntriesModalState());
+    setPaidEntriesMessage(null);
+  }, []);
+
+  const handleTogglePaidEntry = useCallback((entryId: number, checked: boolean) => {
+    setPaidEntriesModal((prev) => {
+      const nextSelected = checked
+        ? Array.from(new Set([...prev.selectedIds, entryId]))
+        : prev.selectedIds.filter((id) => id !== entryId);
+      return {
+        ...prev,
+        selectedIds: nextSelected,
+      };
+    });
+  }, []);
+
   const renderRecordAction = (item: Pay) => {
     const outstanding = item.payouts?.payableOutstanding ?? 0;
+    const hasRecordedEntries = (item.paidEntries?.length ?? 0) > 0;
     if (!canRecordPayments) {
       return (
         <Text size="xs" c="dimmed">
@@ -1781,9 +1903,16 @@ const resolveStaffCounterpartyDefaults = useCallback(
     if (outstanding > 0) {
       if (canRecordStaffPayments) {
         return (
-          <Button variant="light" size="xs" onClick={() => openEntryModal(item)}>
-            Record payment
-          </Button>
+          <Stack gap={6} align="flex-start">
+            <Button variant="light" size="xs" onClick={() => openEntryModal(item)}>
+              Record payment
+            </Button>
+            {hasRecordedEntries ? (
+              <Button variant="subtle" size="xs" color="red" onClick={() => openPaidEntriesModal(item)}>
+                Manage paid
+              </Button>
+            ) : null}
+          </Stack>
         );
       }
       return (
@@ -1791,9 +1920,16 @@ const resolveStaffCounterpartyDefaults = useCallback(
       );
     }
     return (
-      <Badge color="green" variant="light" w="fit-content">
-        Settled
-      </Badge>
+      <Stack gap={6} align="flex-start">
+        <Badge color="green" variant="light" w="fit-content">
+          Settled
+        </Badge>
+        {canRecordStaffPayments && hasRecordedEntries ? (
+          <Button variant="subtle" size="xs" color="red" onClick={() => openPaidEntriesModal(item)}>
+            Manage paid
+          </Button>
+        ) : null}
+      </Stack>
     );
   };
 
@@ -1969,6 +2105,9 @@ const resolveStaffCounterpartyDefaults = useCallback(
   }, [startDate, endDate, dispatch, permissionsReady, permissionsLoading, canViewFull, canViewSelf, scopeParam]);
 
   const handleEntrySubmit = async () => {
+    if (entrySubmitting) {
+      return;
+    }
     setEntryMessage(null);
     if (!entryModal.staff) {
       setEntryMessage({ type: 'error', text: 'Select a staff entry before recording a payout.' });
@@ -2024,116 +2163,102 @@ const resolveStaffCounterpartyDefaults = useCallback(
 
     setEntrySubmitting(true);
     try {
-      for (const line of selectedLines) {
-        const resolvedAccountId = Number(line.accountId ?? entryModal.accountId);
-        const accountRecord = financeAccountsById.get(resolvedAccountId);
-        const transactionCurrency = accountRecord?.currency ?? entryModal.currency;
-        const transaction = await dispatch(
-          createFinanceTransaction({
-            kind: 'expense',
-            date: dayjs(entryModal.date).format('YYYY-MM-DD'),
-            accountId: resolvedAccountId,
-            currency: transactionCurrency,
-            amountMinor: toMinorUnits(line.amount),
-            categoryId: Number(line.categoryId),
-            counterpartyType: 'vendor',
-            counterpartyId: Number(entryModal.counterpartyId),
-            status: 'paid',
-            description: line.description || entryModal.description || `${line.label} payout`,
-            meta: {
-              source: 'staff-payments',
-              rangeStart: entryModal.rangeStart,
-              rangeEnd: entryModal.rangeEnd,
-              staffUserId: entryModal.staff.userId ?? null,
-              lineLabel: line.label,
-            },
+      await axiosInstance.post(
+        '/reports/staffPayouts/batch',
+        {
+          staffProfileId: entryModal.staff.staffProfileId,
+          direction: 'payable',
+          counterpartyId: Number(entryModal.counterpartyId),
+          rangeStart: entryModal.rangeStart,
+          rangeEnd: entryModal.rangeEnd,
+          date: dayjs(entryModal.date).format('YYYY-MM-DD'),
+          lines: selectedLines.map((line) => {
+            const resolvedAccountId = Number(line.accountId ?? entryModal.accountId);
+            const accountRecord = financeAccountsById.get(resolvedAccountId);
+            return {
+              label: line.label,
+              amount: line.amount,
+              categoryId: Number(line.categoryId),
+              accountId: resolvedAccountId,
+              currency: accountRecord?.currency ?? entryModal.currency,
+              description: line.description || entryModal.description || `${line.label} payout`,
+            };
           }),
-        ).unwrap();
-
-        await axiosInstance.post(
-          '/reports/staffPayouts/collections',
-          {
-            staffProfileId: entryModal.staff.staffProfileId,
-            direction: 'payable',
-            currency: entryModal.currency,
-            amount: line.amount,
-            rangeStart: entryModal.rangeStart,
-            rangeEnd: entryModal.rangeEnd,
-            financeTransactionId: transaction.id,
-            note: line.description ?? entryModal.description ?? null,
-          },
-          { withCredentials: true },
-        );
-      }
-      if (totalReimbursementAmount > 0 && entryModal.accountId) {
-        const resolvedAccountId = Number(entryModal.accountId);
-        const accountRecord = financeAccountsById.get(resolvedAccountId);
-        const transactionCurrency = accountRecord?.currency ?? entryModal.currency;
-        const reimbursementTransaction = await dispatch(
-          createFinanceTransaction({
-            kind: 'expense',
-            date: dayjs(entryModal.date).format('YYYY-MM-DD'),
-            accountId: resolvedAccountId,
-            currency: transactionCurrency,
-            amountMinor: toMinorUnits(totalReimbursementAmount),
-            categoryId: Number(reimbursementCategoryIdForTransaction),
-            counterpartyType: 'vendor',
-            counterpartyId: Number(entryModal.counterpartyId),
-            status: 'paid',
-            description: `Reimbursements payout for ${entryModal.staff.firstName}`,
-            meta: {
-              source: 'staff-payments',
-              rangeStart: entryModal.rangeStart,
-              rangeEnd: entryModal.rangeEnd,
-              staffUserId: entryModal.staff.userId ?? null,
-              lineLabel: 'Reimbursements',
-            },
-          }),
-        ).unwrap();
-
-        await axiosInstance.post(
-          '/reports/staffPayouts/collections',
-          {
-            staffProfileId: entryModal.staff.staffProfileId,
-            direction: 'payable',
-            currency: entryModal.currency,
-            amount: totalReimbursementAmount,
-            rangeStart: entryModal.rangeStart,
-            rangeEnd: entryModal.rangeEnd,
-            financeTransactionId: reimbursementTransaction.id,
-            note: 'Staff reimbursements payout',
-          },
-          { withCredentials: true },
-        );
-
-        await Promise.all(
-          awaitingReimbursements.map((entry) =>
-            dispatch(
-              updateFinanceTransaction({
-                id: entry.transactionId,
-                changes: { status: 'reimbursed' },
-              }),
-            ).unwrap(),
-          ),
-        );
-      }
+          reimbursement:
+            totalReimbursementAmount > 0 && entryModal.accountId
+              ? {
+                  amount: totalReimbursementAmount,
+                  accountId: Number(entryModal.accountId),
+                  categoryId: Number(reimbursementCategoryIdForTransaction),
+                  description: 'Staff reimbursements payout',
+                  entries: awaitingReimbursements.map((entry) => ({
+                    transactionId: entry.transactionId,
+                    amount: entry.amount,
+                  })),
+                }
+              : null,
+        },
+        { withCredentials: true },
+      );
 
       closeEntryModal();
       const refetchStart = startDate ? startDate.format('YYYY-MM-DD') : entryModal.rangeStart;
       const refetchEnd = endDate ? endDate.format('YYYY-MM-DD') : entryModal.rangeEnd;
-      await dispatch(
-        fetchPays({
-          startDate: refetchStart,
-          endDate: refetchEnd,
-          scope: scopeParam,
-        }),
-      );
+      await refetchPaysForRange(refetchStart, refetchEnd);
     } catch (submissionError) {
       const message =
         submissionError instanceof Error ? submissionError.message : 'Unable to record payout.';
       setEntryMessage({ type: 'error', text: message });
     } finally {
       setEntrySubmitting(false);
+    }
+  };
+
+  const handleDeletePaidEntries = async () => {
+    if (!paidEntriesModal.staff?.staffProfileId) {
+      setPaidEntriesMessage({ type: 'error', text: 'Unable to determine the selected staff member.' });
+      return;
+    }
+    const rangeStartValue =
+      paidEntriesModal.staff.range?.startDate ?? startDate?.format('YYYY-MM-DD') ?? null;
+    const rangeEndValue =
+      paidEntriesModal.staff.range?.endDate ?? endDate?.format('YYYY-MM-DD') ?? null;
+    if (!rangeStartValue || !rangeEndValue) {
+      setPaidEntriesMessage({ type: 'error', text: 'Unable to determine the selected payout month.' });
+      return;
+    }
+    if (paidEntriesModal.selectedIds.length === 0) {
+      setPaidEntriesMessage({ type: 'error', text: 'Select at least one recorded component.' });
+      return;
+    }
+
+    try {
+      setPaidEntriesSubmitting(true);
+      setPaidEntriesMessage(null);
+      await axiosInstance.post(
+        '/reports/staffPayouts/deleteEntries',
+        {
+          staffProfileId: paidEntriesModal.staff.staffProfileId,
+          rangeStart: rangeStartValue,
+          rangeEnd: rangeEndValue,
+          entryIds: paidEntriesModal.selectedIds,
+        },
+        { withCredentials: true },
+      );
+      closePaidEntriesModal();
+      await refetchPaysForRange(rangeStartValue, rangeEndValue);
+      setActionAlert({
+        type: 'success',
+        text: `Removed ${paidEntriesModal.selectedIds.length} recorded payout component${
+          paidEntriesModal.selectedIds.length === 1 ? '' : 's'
+        } for ${paidEntriesModal.staff.firstName}.`,
+      });
+    } catch (deleteError) {
+      const message =
+        deleteError instanceof Error ? deleteError.message : 'Unable to delete paid components.';
+      setPaidEntriesMessage({ type: 'error', text: message });
+    } finally {
+      setPaidEntriesSubmitting(false);
     }
   };
 
@@ -2583,11 +2708,118 @@ const renderLedgerSnapshot = (staff: Pay) => {
       : 'selected period';
   const reimbursementAddon = entryModal.includeReimbursements ? entryModal.reimbursementsAwaitingAmount : 0;
   const modalTotalAmount = entryModal.amount + reimbursementAddon;
+  const paidModalEntries = paidEntriesModal.staff?.paidEntries ?? [];
+  const deletablePaidEntries = paidModalEntries.filter((entry) => entry.canDelete);
+  const selectedPaidEntries = paidModalEntries.filter((entry) => paidEntriesModal.selectedIds.includes(entry.id));
+  const selectedPaidEntriesAmount = selectedPaidEntries.reduce((sum, entry) => sum + entry.amount, 0);
+  const allPaidEntriesSelected =
+    deletablePaidEntries.length > 0 &&
+    deletablePaidEntries.every((entry) => paidEntriesModal.selectedIds.includes(entry.id));
 
   return (
     <PageAccessGuard pageSlug={PAGE_SLUG}>
       <>
         {content}
+        <Modal
+          opened={paidEntriesModal.open}
+          onClose={closePaidEntriesModal}
+          title={
+            paidEntriesModal.staff
+              ? `Recorded payouts for ${paidEntriesModal.staff.firstName}`
+              : 'Recorded payouts'
+          }
+          size={isDesktop ? '70vw' : '95vw'}
+          radius="lg"
+        >
+          <Stack gap="lg" pb="sm">
+            <SimpleGrid cols={{ base: 1, sm: 3 }}>
+              <Card padding="sm" radius="md" withBorder shadow="xs">
+                <Stack gap={2}>
+                  <Text size="xs" c="dimmed">
+                    Recorded lines
+                  </Text>
+                  <Text fw={600}>{paidModalEntries.length}</Text>
+                </Stack>
+              </Card>
+              <Card padding="sm" radius="md" withBorder shadow="xs">
+                <Stack gap={2}>
+                  <Text size="xs" c="dimmed">
+                    Selected
+                  </Text>
+                  <Text fw={600}>{paidEntriesModal.selectedIds.length}</Text>
+                </Stack>
+              </Card>
+              <Card padding="sm" radius="md" withBorder shadow="xs">
+                <Stack gap={2}>
+                  <Text size="xs" c="dimmed">
+                    Selected amount
+                  </Text>
+                  <Text fw={600}>
+                    {formatCurrency(
+                      selectedPaidEntriesAmount,
+                      paidEntriesModal.staff?.payouts?.currency ?? DEFAULT_CURRENCY,
+                    )}
+                  </Text>
+                </Stack>
+              </Card>
+            </SimpleGrid>
+
+            <Group justify="space-between" align="center">
+              <Text size="sm" c="dimmed">
+                Select the recorded components you want to remove from this payout month.
+              </Text>
+              <Group gap="xs">
+                <Button
+                  variant="subtle"
+                  size="xs"
+                  onClick={() =>
+                    setPaidEntriesModal((prev) => ({
+                      ...prev,
+                      selectedIds: allPaidEntriesSelected ? [] : deletablePaidEntries.map((entry) => entry.id),
+                    }))
+                  }
+                  disabled={deletablePaidEntries.length === 0}
+                >
+                  {allPaidEntriesSelected ? 'Clear selection' : 'Select all'}
+                </Button>
+              </Group>
+            </Group>
+
+            {paidModalEntries.length > 0 ? (
+              <ScrollArea mah={420} offsetScrollbars>
+                <PaidEntriesTable
+                  entries={paidModalEntries}
+                  selectedIds={paidEntriesModal.selectedIds}
+                  onToggle={handleTogglePaidEntry}
+                />
+              </ScrollArea>
+            ) : (
+              <Alert color="blue" variant="light">
+                No recorded payout components were found for this staff member in the selected month.
+              </Alert>
+            )}
+
+            {paidEntriesMessage ? (
+              <Alert color={paidEntriesMessage.type === 'error' ? 'red' : 'teal'} variant="light">
+                {paidEntriesMessage.text}
+              </Alert>
+            ) : null}
+
+            <Group justify="flex-end">
+              <Button variant="subtle" onClick={closePaidEntriesModal}>
+                Close
+              </Button>
+              <Button
+                color="red"
+                onClick={handleDeletePaidEntries}
+                loading={paidEntriesSubmitting}
+                disabled={paidEntriesModal.selectedIds.length === 0}
+              >
+                Delete selected
+              </Button>
+            </Group>
+          </Stack>
+        </Modal>
         <Modal
           opened={entryModal.open}
           onClose={closeEntryModal}
