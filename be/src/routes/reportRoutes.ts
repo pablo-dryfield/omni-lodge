@@ -4,7 +4,11 @@ import * as derivedFieldController from '../controllers/derivedFieldController.j
 import * as dashboardController from '../controllers/dashboardController.js';
 import * as templateScheduleController from '../controllers/templateScheduleController.js';
 import * as homePreferenceController from '../controllers/homePreferenceController.js';
-import { createStaffPayoutCollectionLog } from '../controllers/staffPayoutController.js';
+import {
+  createStaffPayoutBatch,
+  createStaffPayoutCollectionLog,
+  deleteStaffPayoutEntries,
+} from '../controllers/staffPayoutController.js';
 import { check, param, validationResult } from 'express-validator';
 import authMiddleware from '../middleware/authMiddleware.js'; // Adjust the import path as necessary
 import { requireRoles } from '../middleware/authorizationMiddleware.js';
@@ -28,6 +32,8 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
 
 router.get('/getCommissionByDateRange', authMiddleware, reportController.getCommissionByDateRange);
 router.post('/staffPayouts/collections', authMiddleware, createStaffPayoutCollectionLog);
+router.post('/staffPayouts/batch', authMiddleware, createStaffPayoutBatch);
+router.post('/staffPayouts/deleteEntries', authMiddleware, deleteStaffPayoutEntries);
 router.get('/models', authMiddleware, reportController.listReportModels);
 router.post('/preview', authMiddleware, reportController.runReportPreview);
 router.post('/query', authMiddleware, reportController.executeReportQuery);

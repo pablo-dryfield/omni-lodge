@@ -90,6 +90,18 @@ export type PayPayouts = {
   receivableOutstanding: number;
 };
 
+export type PayRecordedEntry = {
+  id: number;
+  financeTransactionId: number | null;
+  label: string;
+  amount: number;
+  currency: string;
+  date: string;
+  note: string | null;
+  createdAt: string;
+  canDelete: boolean;
+};
+
 export type Pay = {
   userId?: number;
   firstName: string;
@@ -134,4 +146,5 @@ export type Pay = {
   };
   rangeIsCanonical?: boolean;
   reimbursements?: PayReimbursementSummary;
+  paidEntries?: PayRecordedEntry[];
 };

@@ -203,6 +203,18 @@ type ReimbursementSummary = {
   entries: ReimbursementEntry[];
 };
 
+type PaidPayoutEntry = {
+  id: number;
+  financeTransactionId: number | null;
+  label: string;
+  amount: number;
+  currency: string;
+  date: string;
+  note: string | null;
+  createdAt: string;
+  canDelete: boolean;
+};
+
 type CommissionSummary = {
   userId: number;
   firstName: string;
@@ -234,6 +246,7 @@ type CommissionSummary = {
   openingBalance: number;
   closingBalance: number;
   reimbursements: ReimbursementSummary;
+  paidEntries: PaidPayoutEntry[];
 };
 
 type GuideDailyBreakdown = {
@@ -2005,6 +2018,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       number,
       { currency: string; receivable: number; payable: number }
     >();
+    const paidEntriesByStaffProfileId = new Map<number, PaidPayoutEntry[]>();
     let staffProfileIds: number[] = [];
     if (hydratedSummaryUserIds.length > 0) {
       const staffProfiles = (await StaffProfile.findAll({
@@ -2052,6 +2066,113 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             })) as unknown as StaffCollectionAggregate[])
           : [];
 
+      if (staffProfileIds.length > 0) {
+        const payoutLogRows = await StaffPayoutCollectionLog.findAll({
+          attributes: [
+            "id",
+            "staffProfileId",
+            "currencyCode",
+            "amountMinor",
+            "financeTransactionId",
+            "note",
+            "createdAt",
+          ],
+          where: {
+            staffProfileId: {
+              [Op.in]: staffProfileIds,
+            },
+            direction: "payable",
+            rangeStart: start.format("YYYY-MM-DD"),
+            rangeEnd: end.format("YYYY-MM-DD"),
+          },
+          order: [
+            ["createdAt", "ASC"],
+            ["id", "ASC"],
+          ],
+        });
+
+        const financeTransactionIds = Array.from(
+          new Set(
+            payoutLogRows
+              .map((row) => row.financeTransactionId)
+              .filter((value): value is number => Number.isInteger(value) && Number(value) > 0),
+          ),
+        );
+
+        const financeTransactionsById =
+          financeTransactionIds.length > 0
+            ? new Map(
+                (
+                  await FinanceTransaction.findAll({
+                    attributes: ["id", "date", "description", "meta"],
+                    where: { id: { [Op.in]: financeTransactionIds } },
+                  })
+                ).map((transaction) => [transaction.id, transaction]),
+              )
+            : new Map<number, FinanceTransaction>();
+
+        payoutLogRows.forEach((row) => {
+          const staffProfileId = Number(row.staffProfileId ?? NaN);
+          if (!Number.isFinite(staffProfileId)) {
+            return;
+          }
+
+          const linkedTransaction =
+            row.financeTransactionId && Number.isInteger(row.financeTransactionId)
+              ? financeTransactionsById.get(row.financeTransactionId)
+              : undefined;
+          const meta =
+            linkedTransaction?.meta && typeof linkedTransaction.meta === "object"
+              ? (linkedTransaction.meta as Record<string, unknown>)
+              : null;
+          const lineLabel =
+            typeof meta?.lineLabel === "string" && meta.lineLabel.trim().length > 0
+              ? meta.lineLabel.trim()
+              : null;
+          const description =
+            typeof linkedTransaction?.description === "string" && linkedTransaction.description.trim().length > 0
+              ? linkedTransaction.description.trim()
+              : null;
+          const note =
+            typeof row.note === "string" && row.note.trim().length > 0 ? row.note.trim() : null;
+          const reimbursementFingerprint = [lineLabel, description, note]
+            .filter((value): value is string => Boolean(value))
+            .some((value) => value.toLowerCase().includes("reimbursement"));
+
+          if (reimbursementFingerprint) {
+            return;
+          }
+
+          const currency =
+            typeof row.currencyCode === "string" && row.currencyCode.trim().length > 0
+              ? row.currencyCode.trim().toUpperCase()
+              : resolvePayoutCurrency();
+          const amount = convertMinorUnitsToMajor(row.amountMinor ?? 0);
+          const label = lineLabel ?? description ?? note ?? `Payment #${row.id}`;
+          const date =
+            typeof linkedTransaction?.date === "string" && linkedTransaction.date.trim().length > 0
+              ? linkedTransaction.date
+              : dayjs(row.createdAt).format("YYYY-MM-DD");
+          const createdAt = dayjs(row.createdAt).toISOString();
+          const existingEntries = paidEntriesByStaffProfileId.get(staffProfileId) ?? [];
+          existingEntries.push({
+            id: row.id,
+            financeTransactionId:
+              row.financeTransactionId && Number.isInteger(row.financeTransactionId)
+                ? row.financeTransactionId
+                : null,
+            label,
+            amount: roundCurrencyValue(amount),
+            currency,
+            date,
+            note,
+            createdAt,
+            canDelete: true,
+          });
+          paidEntriesByStaffProfileId.set(staffProfileId, existingEntries);
+        });
+      }
+
       collectionRows.forEach((row) => {
         const staffProfileId = Number(row.staffProfileId ?? NaN);
         if (!Number.isFinite(staffProfileId)) {
@@ -2090,6 +2211,9 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       summary.staffProfileId = staffProfileKey;
       summary.financeVendorId = profile?.financeVendorId ?? null;
       summary.financeClientId = profile?.financeClientId ?? null;
+      summary.paidEntries = staffProfileKey
+        ? (paidEntriesByStaffProfileId.get(staffProfileKey) ?? [])
+        : [];
 
       const payableDue =
         summary.totalPayout > 0 ? roundCurrencyValue(summary.totalPayout) : 0;
@@ -2352,6 +2476,10 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         dueAmount: periodDueAmount,
         paidAmount: periodPaidAmount,
         rangeIsCanonical: isCanonicalRange,
+        paidEntries: (entry.paidEntries ?? []).map((paidEntry) => ({
+          ...paidEntry,
+          amount: roundCurrencyValue(paidEntry.amount),
+        })),
       };
     });
 
@@ -4153,6 +4281,7 @@ const createEmptySummary = (userId: number, firstName: string, lastName = ""): C
     reimbursedAmount: 0,
     entries: [],
   },
+  paidEntries: [],
 });
 
 const recordCounterIncentiveMarker = (
