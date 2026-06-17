@@ -141,16 +141,6 @@ export async function updateFinanceTransaction(
     throw new Error('Transaction not found');
   }
 
-  const lockedStatuses: FinanceTransactionStatus[] = ['paid'];
-  if (lockedStatuses.includes(record.status)) {
-    const forbiddenFields: (keyof FinanceTransactionInput)[] = ['amountMinor', 'currency', 'fxRate'];
-    for (const field of forbiddenFields) {
-      if (field in changes && changes[field] !== undefined) {
-        throw new Error('Cannot modify amount, currency, or fxRate once transaction is paid');
-      }
-    }
-  }
-
   const nextCounterparty = changes.kind
     ? normalizeCounterparty({ ...record.toJSON(), ...changes } as FinanceTransactionInput)
     : {

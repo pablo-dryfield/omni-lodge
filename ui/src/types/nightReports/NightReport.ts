@@ -82,8 +82,11 @@ export type NightReportCost = {
     status: NightReportStatus;
     leaderName: string | null;
   } | null;
+  accountId: number | null;
   accountName: string | null;
+  categoryId: number | null;
   categoryName: string | null;
+  vendorId: number | null;
   vendorName: string | null;
   invoiceFileId: number | null;
   invoiceFile: {
@@ -145,8 +148,11 @@ export type NightReportLinkableCost = {
     status: NightReportStatus;
     leaderName: string | null;
   } | null;
+  accountId: number | null;
   accountName: string | null;
+  categoryId: number | null;
   categoryName: string | null;
+  vendorId: number | null;
   vendorName: string | null;
   invoiceFileId: number | null;
   invoiceFile: {

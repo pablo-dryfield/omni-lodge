@@ -25,7 +25,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { ArrowBack, Add, Close, Delete, Edit, ExpandMore, Save, Send, UploadFile, Visibility } from "@mui/icons-material";
+import { ArrowBack, Add, Close, Delete, Edit, ExpandMore, InsertDriveFile, PictureAsPdf, Save, Send, UploadFile, Visibility } from "@mui/icons-material";
 import dayjs from "dayjs";
 import { ChangeEvent, Fragment, SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -49,7 +49,7 @@ import {
   uploadNightReportPhoto,
   deleteNightReportPhoto,
 } from "../../actions/nightReportActions";
-import { uploadFinanceFile } from "../../actions/financeActions";
+import { updateFinanceTransaction, uploadFinanceFile } from "../../actions/financeActions";
 import { setCountersData } from "../../reducers/counterReducer";
 import { setFinanceBasics } from "../../reducers/financeReducer";
 import { setNightReportList } from "../../reducers/nightReportReducer";
@@ -59,6 +59,7 @@ import { compressImageFile } from "../../utils/imageCompression";
 
 import type {
   NightReport,
+  NightReportCost,
   NightReportLinkableCost,
   NightReportPhoto,
   NightReportSummary,
@@ -111,6 +112,9 @@ type NightReportCostDraft = {
   description: string;
   invoiceFileId: number | null;
   invoiceFileName: string;
+  invoicePreviewHref: string | null;
+  invoiceMimeType: string | null;
+  invoiceSizeBytes: number | null;
 };
 
 const OPEN_BAR_INDEX = 0;
@@ -140,6 +144,25 @@ const createEmptyCostDraft = (activityDate?: string | null): NightReportCostDraf
   description: "",
   invoiceFileId: null,
   invoiceFileName: "",
+  invoicePreviewHref: null,
+  invoiceMimeType: null,
+  invoiceSizeBytes: null,
+});
+
+const createCostDraftFromExistingCost = (cost: NightReportCost): NightReportCostDraft => ({
+  date: cost.date,
+  accountId: cost.accountId != null ? String(cost.accountId) : "",
+  categoryId: cost.categoryId != null ? String(cost.categoryId) : "",
+  vendorId: cost.vendorId != null ? String(cost.vendorId) : "",
+  currency: (cost.currency ?? "PLN").trim().toUpperCase(),
+  amount: ((cost.amountMinor ?? 0) / 100).toFixed(2),
+  paymentMethod: cost.paymentMethod ?? "",
+  description: cost.description ?? "",
+  invoiceFileId: cost.invoiceFileId ?? null,
+  invoiceFileName: cost.invoiceFile?.originalName ?? "",
+  invoicePreviewHref: cost.invoiceFile?.driveWebViewLink ?? null,
+  invoiceMimeType: cost.invoiceFile?.mimeType ?? null,
+  invoiceSizeBytes: cost.invoiceFile?.sizeBytes ?? null,
 });
 
 const SELECT_OPEN_BAR_PLACEHOLDER = "Select Open Bar";
@@ -178,6 +201,11 @@ const buildNightReportPhotoFileName = (
   const extension = extractFileExtension(originalName) ?? "jpg";
   const base = `${NIGHT_REPORT_FILE_PREFIX}_${dateSegment}_${productSegment}`;
   return `${base}.${extension}`;
+};
+
+const isPreviewableInvoiceMimeType = (mimeType: string | null | undefined): boolean => {
+  const normalized = (mimeType ?? "").toLowerCase();
+  return normalized.startsWith("image/") || normalized.includes("pdf");
 };
 
 const formatCurrencyLabel = (
@@ -277,13 +305,14 @@ const normalizeNumber = (value: string, fallback: number | null = null): number 
   return parsed;
 };
 
-const formatFileSize = (bytes: number): string => {
-  if (!Number.isFinite(bytes) || bytes <= 0) {
+const formatFileSize = (bytes: number | null | undefined): string => {
+  const numeric = Number(bytes);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
     return "0 B";
   }
   const units = ["B", "KB", "MB", "GB"];
   let unitIndex = 0;
-  let value = bytes;
+  let value = numeric;
   while (value >= 1024 && unitIndex < units.length - 1) {
     value /= 1024;
     unitIndex += 1;
@@ -403,6 +432,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const [costModalOpen, setCostModalOpen] = useState(false);
   const [linkCostModalOpen, setLinkCostModalOpen] = useState(false);
   const [moveCostModalOpen, setMoveCostModalOpen] = useState(false);
+  const [editingCostId, setEditingCostId] = useState<number | null>(null);
   const [costDraft, setCostDraft] = useState<NightReportCostDraft>(() => createEmptyCostDraft());
   const [costSubmitting, setCostSubmitting] = useState(false);
   const [costDialogError, setCostDialogError] = useState<string | null>(null);
@@ -1395,6 +1425,27 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     setActivePhotoPreview(null);
   }, []);
 
+  const handleOpenInvoicePreview = useCallback(
+    (file: {
+      originalName: string;
+      driveWebViewLink: string | null;
+      mimeType: string | null;
+    }) => {
+      if (!file.driveWebViewLink) {
+        setValidationError("Unable to open this invoice preview. Please try again.");
+        return;
+      }
+      setActivePhotoPreview({
+        src: file.driveWebViewLink,
+        name: file.originalName,
+        capturedAt: null,
+        downloadHref: file.driveWebViewLink,
+        mimeType: file.mimeType,
+      });
+    },
+    [setValidationError],
+  );
+
   const handleDidNotOperateToggle = () => {
     setValidationError(null);
     setPendingChanges(true);
@@ -1586,7 +1637,17 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
 
   const openCostModal = () => {
     const activityDate = nightReportDetail.data?.activityDate ?? formState.activityDate;
+    setEditingCostId(null);
     setCostDraft(createEmptyCostDraft(activityDate));
+    setCostDialogError(null);
+    setCostUploadError(null);
+    setCostUploadProgress(0);
+    setCostModalOpen(true);
+  };
+
+  const openEditCostModal = (cost: NightReportCost) => {
+    setEditingCostId(cost.id);
+    setCostDraft(createCostDraftFromExistingCost(cost));
     setCostDialogError(null);
     setCostUploadError(null);
     setCostUploadProgress(0);
@@ -1657,6 +1718,9 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
           ...prev,
           invoiceFileId: result.payload.id,
           invoiceFileName: result.payload.originalName,
+          invoicePreviewHref: result.payload.driveWebViewLink,
+          invoiceMimeType: result.payload.mimeType,
+          invoiceSizeBytes: result.payload.sizeBytes,
         }));
         return;
       }
@@ -1698,7 +1762,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     input.click();
   };
 
-  const handleCreateCost = async () => {
+  const handleSubmitCost = async () => {
     if (!selectedReportId) {
       setValidationError("Select a report first.");
       return;
@@ -1715,24 +1779,47 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     setCostDialogError(null);
     setCostSubmitting(true);
     try {
-      await dispatch(
-        createNightReportCost({
-          reportId: selectedReportId,
-          payload: {
-            date: costDraft.date,
-            accountId: Number(costDraft.accountId),
-            categoryId: Number(costDraft.categoryId),
-            counterpartyId: Number(costDraft.vendorId),
-            currency: costDraft.currency.trim().toUpperCase(),
-            amountMinor: Math.round(amountValue * 100),
-            paymentMethod: costDraft.paymentMethod.trim() || null,
-            status: "paid",
-            description: costDraft.description.trim() || null,
-            invoiceFileId: costDraft.invoiceFileId,
-          },
-        }),
-      ).unwrap();
+      if (editingCostId) {
+        await dispatch(
+          updateFinanceTransaction({
+            id: editingCostId,
+            changes: {
+              date: costDraft.date,
+              accountId: Number(costDraft.accountId),
+              categoryId: Number(costDraft.categoryId),
+              counterpartyType: "vendor",
+              counterpartyId: Number(costDraft.vendorId),
+              currency: costDraft.currency.trim().toUpperCase(),
+              amountMinor: Math.round(amountValue * 100),
+              paymentMethod: costDraft.paymentMethod.trim() || null,
+              status: "paid",
+              description: costDraft.description.trim() || null,
+              invoiceFileId: costDraft.invoiceFileId,
+            },
+          }),
+        ).unwrap();
+        await dispatch(fetchNightReportById(selectedReportId)).unwrap();
+      } else {
+        await dispatch(
+          createNightReportCost({
+            reportId: selectedReportId,
+            payload: {
+              date: costDraft.date,
+              accountId: Number(costDraft.accountId),
+              categoryId: Number(costDraft.categoryId),
+              counterpartyId: Number(costDraft.vendorId),
+              currency: costDraft.currency.trim().toUpperCase(),
+              amountMinor: Math.round(amountValue * 100),
+              paymentMethod: costDraft.paymentMethod.trim() || null,
+              status: "paid",
+              description: costDraft.description.trim() || null,
+              invoiceFileId: costDraft.invoiceFileId,
+            },
+          }),
+        ).unwrap();
+      }
       setCostModalOpen(false);
+      setEditingCostId(null);
       setCostDraft(createEmptyCostDraft(nightReportDetail.data?.activityDate ?? formState.activityDate));
     } catch (error) {
       const message =
@@ -1740,7 +1827,9 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
           ? error
           : error instanceof Error
             ? error.message
-            : "Failed to create cost.";
+            : editingCostId
+              ? "Failed to update cost."
+              : "Failed to create cost.";
       setCostDialogError(message);
     } finally {
       setCostSubmitting(false);
@@ -1929,17 +2018,21 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     const linkedCostItems = costs.map((cost) => ({
       id: cost.id,
       linkOrigin: cost.linkOrigin,
-      label: cost.description?.trim() || "Night report cost",
+      label: cost.vendorName?.trim() || cost.description?.trim() || "Night report cost",
       subtitle: [
         dayjs(cost.date).format("MMM D, YYYY"),
-        cost.vendorName,
         cost.categoryName,
+        cost.productName,
         cost.paymentMethod,
       ]
         .filter(Boolean)
         .join(" • "),
+      description: cost.description?.trim() || null,
       amount: Number((cost.amountMinor ?? 0) / 100),
       currency: (cost.currency ?? financeSummary.costCurrency).trim().toUpperCase(),
+      invoiceHref: cost.invoiceFile?.driveWebViewLink ?? null,
+      invoiceName: cost.invoiceFile?.originalName ?? null,
+      rawCost: cost,
     }));
     const openBarItems = financeSummary.costItems.filter((item) => item.kind === "open_bar");
     const staffPayoutItems = financeSummary.costItems.filter((item) => item.kind === "staff_payout");
@@ -2016,13 +2109,45 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                                 {item.subtitle}
                               </Typography>
                             ) : null}
+                            {item.description ? (
+                              <Typography variant="caption" color="text.secondary" display="block">
+                                {item.description}
+                              </Typography>
+                            ) : null}
                           </Box>
                           <Stack spacing={0.5} alignItems="flex-end">
                             <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
                               {formatCurrencyLabel(item.amount, item.currency)}
                             </Typography>
-                            {!readOnly ? (
-                              <Stack direction="row" spacing={0.5}>
+                            <Stack direction="row" spacing={0.5} flexWrap="wrap" justifyContent="flex-end">
+                              {item.invoiceHref ? (
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  color="inherit"
+                                  onClick={() =>
+                                    handleOpenInvoicePreview({
+                                      originalName: item.invoiceName ?? item.label,
+                                      driveWebViewLink: item.invoiceHref,
+                                      mimeType: item.rawCost.invoiceFile?.mimeType ?? null,
+                                    })
+                                  }
+                                >
+                                  Invoice
+                                </Button>
+                              ) : null}
+                              {!readOnly ? (
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  color="inherit"
+                                  disabled={costSubmitting}
+                                  onClick={() => openEditCostModal(item.rawCost)}
+                                >
+                                  Edit
+                                </Button>
+                              ) : null}
+                              {!readOnly ? (
                                 <Button
                                   size="small"
                                   variant="outlined"
@@ -2032,6 +2157,8 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                                 >
                                   Move
                                 </Button>
+                              ) : null}
+                              {!readOnly ? (
                                 <Button
                                   size="small"
                                   variant="outlined"
@@ -2041,8 +2168,8 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                                 >
                                   Delete
                                 </Button>
-                              </Stack>
-                            ) : null}
+                              ) : null}
+                            </Stack>
                           </Stack>
                         </Stack>
                       ))}
@@ -3612,10 +3739,20 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
         </Stack>
         <DialogContent dividers sx={{ p: { xs: 2, sm: 3 } }}>{detailContent}</DialogContent>
       </Dialog>
-      <Dialog open={costModalOpen} onClose={() => (!costSubmitting ? setCostModalOpen(false) : undefined)} fullWidth maxWidth="sm">
+      <Dialog
+        open={costModalOpen}
+        onClose={() => {
+          if (!costSubmitting) {
+            setCostModalOpen(false);
+            setEditingCostId(null);
+          }
+        }}
+        fullWidth
+        maxWidth="sm"
+      >
         <DialogContent>
           <Stack spacing={2} pt={1}>
-            <Typography variant="h6">Add Cost</Typography>
+            <Typography variant="h6">{editingCostId ? "Edit Cost" : "Add Cost"}</Typography>
             {costDialogError ? <Alert severity="warning">{costDialogError}</Alert> : null}
             <TextField
               label="Date"
@@ -3734,6 +3871,9 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                         ...prev,
                         invoiceFileId: null,
                         invoiceFileName: "",
+                        invoicePreviewHref: null,
+                        invoiceMimeType: null,
+                        invoiceSizeBytes: null,
                       }))
                     }
                     disabled={costSubmitting || costUploadBusy}
@@ -3743,9 +3883,81 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                 ) : null}
               </Stack>
               {costDraft.invoiceFileId ? (
-                <Typography variant="caption" color="text.secondary">
-                  Attached: {costDraft.invoiceFileName || `File #${costDraft.invoiceFileId}`}
-                </Typography>
+                <Card variant="outlined">
+                  <CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 } }}>
+                    <Stack spacing={1}>
+                      <Box
+                        sx={{
+                          width: "100%",
+                          height: 180,
+                          borderRadius: 1,
+                          bgcolor: "grey.100",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          overflow: "hidden",
+                          border: "1px solid",
+                          borderColor: "divider",
+                          position: "relative",
+                        }}
+                      >
+                        {costDraft.invoicePreviewHref && isPreviewableInvoiceMimeType(costDraft.invoiceMimeType) ? (
+                          (costDraft.invoiceMimeType ?? "").toLowerCase().includes("pdf") ? (
+                            <Stack spacing={1} alignItems="center" justifyContent="center" px={2}>
+                              <PictureAsPdf color="action" sx={{ fontSize: 52 }} />
+                              <Typography variant="caption" color="text.secondary" align="center">
+                                PDF preview available
+                              </Typography>
+                            </Stack>
+                          ) : (
+                            <Box
+                              component="img"
+                              src={costDraft.invoicePreviewHref}
+                              alt={costDraft.invoiceFileName || "Attached invoice"}
+                              sx={{ width: "100%", height: "100%", objectFit: "cover" }}
+                            />
+                          )
+                        ) : (
+                          <Stack spacing={1} alignItems="center" justifyContent="center" px={2}>
+                            <InsertDriveFile color="action" sx={{ fontSize: 48 }} />
+                            <Typography variant="caption" color="text.secondary" align="center">
+                              Preview unavailable
+                            </Typography>
+                          </Stack>
+                        )}
+                      </Box>
+                      <Stack direction="row" spacing={1} alignItems="flex-start">
+                        <Box flexGrow={1}>
+                          <Typography
+                            variant="body2"
+                            fontWeight={600}
+                            noWrap
+                            title={costDraft.invoiceFileName || `File #${costDraft.invoiceFileId}`}
+                          >
+                            {costDraft.invoiceFileName || `File #${costDraft.invoiceFileId}`}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {formatFileSize(costDraft.invoiceSizeBytes)}
+                          </Typography>
+                        </Box>
+                      </Stack>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        onClick={() =>
+                          handleOpenInvoicePreview({
+                            originalName: costDraft.invoiceFileName || `File #${costDraft.invoiceFileId}`,
+                            driveWebViewLink: costDraft.invoicePreviewHref,
+                            mimeType: costDraft.invoiceMimeType,
+                          })
+                        }
+                        disabled={!costDraft.invoicePreviewHref || !isPreviewableInvoiceMimeType(costDraft.invoiceMimeType)}
+                      >
+                        View Full Size
+                      </Button>
+                    </Stack>
+                  </CardContent>
+                </Card>
               ) : (
                 <Typography variant="caption" color="text.secondary">
                   Optional. Upload a PDF/image or take a photo directly from the device camera.
@@ -3753,11 +3965,17 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
               )}
             </Stack>
             <Stack direction="row" spacing={1} justifyContent="flex-end">
-              <Button onClick={() => setCostModalOpen(false)} disabled={costSubmitting}>
+              <Button
+                onClick={() => {
+                  setCostModalOpen(false);
+                  setEditingCostId(null);
+                }}
+                disabled={costSubmitting}
+              >
                 Cancel
               </Button>
-              <Button variant="contained" onClick={handleCreateCost} disabled={costSubmitting || costUploadBusy}>
-                Create Cost
+              <Button variant="contained" onClick={handleSubmitCost} disabled={costSubmitting || costUploadBusy}>
+                {editingCostId ? "Save Changes" : "Create Cost"}
               </Button>
             </Stack>
           </Stack>

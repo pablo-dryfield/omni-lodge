@@ -156,8 +156,11 @@ type NightReportPayload = {
       status: NightReportStatus;
       leaderName: string | null;
     } | null;
+    accountId: number | null;
     accountName: string | null;
+    categoryId: number | null;
     categoryName: string | null;
+    vendorId: number | null;
     vendorName: string | null;
     invoiceFileId: number | null;
     invoiceFile: {
@@ -768,8 +771,11 @@ function serializeNightReportCost(cost: FinanceTransaction): NightReportAvailabl
     productName: cost.product?.name ?? null,
     linkOrigin: resolveNightReportCostLinkOrigin(cost),
     linkedReport,
+    accountId: cost.accountId ?? null,
     accountName: cost.account?.name ?? null,
+    categoryId: cost.categoryId ?? null,
     categoryName: cost.category?.name ?? null,
+    vendorId: cost.counterpartyId ?? null,
     vendorName: cost.vendor?.name ?? null,
     invoiceFileId: cost.invoiceFileId ?? null,
     invoiceFile: cost.invoiceFile
